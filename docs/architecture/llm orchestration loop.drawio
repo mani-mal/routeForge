@@ -1,0 +1,365 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="Governed Architecture" id="FmZrdGjPU7tp48xjCQD9">
+    <mxGraphModel dx="521" dy="735" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="kikF6e1RAh_-10LFvaQg-1" parent="1" style="text;html=1;align=center;verticalAlign=middle;fontSize=24;fontColor=#0F172A;fontFamily=Helvetica;" value="&lt;b&gt;Unified LLM Orchestration and Governed Improvement Loop&lt;/b&gt;" vertex="1">
+          <mxGeometry height="38" width="1380" x="250" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-2" parent="1" style="text;html=1;align=center;verticalAlign=middle;fontSize=13;fontColor=#475569;fontFamily=Helvetica;" value="Privacy-first serving • conditional context optimization • model and backend routing • evaluated, reversible promotion" vertex="1">
+          <mxGeometry height="25" width="900" x="480" y="30" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#FFF7ED;strokeColor=#F97316;fontColor=#9A3412;fontSize=12;fontFamily=Helvetica;arcSize=12;" value="&lt;b&gt;Hard rules:&lt;/b&gt; inspect before any external call or trace • route under privacy, SLA and capacity constraints • keep Headroom CCR inside the approved residency boundary • never auto-deploy without evaluation and approval" vertex="1">
+          <mxGeometry height="42" width="1080" x="394" y="60" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-4" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#0000CC;arcSize=4;strokeWidth=2;" value="" vertex="1">
+          <mxGeometry height="1423" width="795" x="25" y="140" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#0000CC;arcSize=4;strokeWidth=2;" value="" vertex="1">
+          <mxGeometry height="1400" width="945" x="930" y="150" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-6" parent="1" style="text;html=1;align=left;verticalAlign=middle;fontSize=15;fontColor=#1E3A8A;fontFamily=Helvetica;" value="&lt;b&gt;SERVING PLANE&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;Synchronous runtime path. One request enters; a governed answer or action exits.&lt;/font&gt;" vertex="1">
+          <mxGeometry height="48" width="790" x="55" y="165" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-7" parent="1" style="text;html=1;align=left;verticalAlign=middle;fontSize=15;fontColor=#166534;fontFamily=Helvetica;" value="&lt;b&gt;IMPROVEMENT PLANE&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;Asynchronous analysis, experimentation, evaluation, approval and staged promotion.&lt;/font&gt;" vertex="1">
+          <mxGeometry height="48" width="835" x="960" y="165" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-8" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#FFFFFF;strokeColor=#64748B;strokeWidth=1.5;fontColor=#0F172A;fontSize=12;fontFamily=Helvetica;arcSize=12;" value="&lt;b&gt;1. Incoming Request&lt;/b&gt;&lt;br&gt;Application, user or API client" vertex="1">
+          <mxGeometry height="58" width="170" x="390" y="225" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-9" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#DBEAFE;strokeColor=#2563EB;strokeWidth=1.6;fontColor=#1E3A8A;fontSize=11;fontFamily=Helvetica;arcSize=10;" value="&lt;b&gt;2. Identity, Privacy and Policy Gate&lt;/b&gt;&lt;br&gt;Authenticate • authorize tenant • detect PII, PHI and secrets&lt;br&gt;classify sensitivity • redact/tokenize • determine residency&lt;br&gt;&lt;font color=&quot;#1D4ED8&quot;&gt;Presidio + NeMo Guardrails + OPA / deterministic policy rules&lt;/font&gt;" vertex="1">
+          <mxGeometry height="92" width="310" x="320" y="315" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-10" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#E0F2FE;strokeColor=#0284C7;strokeWidth=1.4;fontColor=#0C4A6E;fontSize=11;fontFamily=Helvetica;arcSize=10;" value="&lt;b&gt;3. Execution Policy Context&lt;/b&gt;&lt;br&gt;On-premises only or approved private/cloud destinations&lt;br&gt;Allowed models, tools, budgets, latency target and risk class" vertex="1">
+          <mxGeometry height="76" width="330" x="310" y="440" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-11" parent="1" style="rhombus;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#EDE9FE;strokeColor=#7C3AED;strokeWidth=1.6;fontColor=#4C1D95;fontSize=10;fontFamily=Helvetica;" value="&lt;b&gt;4. Task Mode Router&lt;/b&gt;&lt;br&gt;Direct response or multi-step workflow?&lt;br&gt;&lt;font color=&quot;#6D28D9&quot;&gt;NeMo Agent Toolkit Router Agent&lt;br&gt;rules first; small approved classifier when ambiguous&lt;/font&gt;" vertex="1">
+          <mxGeometry height="120" width="280" x="320" y="550" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-12" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#ECFDF5;strokeColor=#16A34A;strokeWidth=1.4;fontColor=#166534;fontSize=11;fontFamily=Helvetica;arcSize=10;" value="&lt;b&gt;Direct Response Path&lt;/b&gt;&lt;br&gt;One LLM call • no tool execution" vertex="1">
+          <mxGeometry height="50" width="270" x="65" y="710" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-13" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#FFEDD5;strokeColor=#EA580C;strokeWidth=1.6;fontColor=#7C2D12;fontSize=10;fontFamily=Helvetica;arcSize=10;" value="&lt;b&gt;Agent Runtime / Workflow Orchestrator&lt;/b&gt;&lt;br&gt;NeMo Agent Toolkit: state • tools • scoped credentials • approvals&lt;br&gt;retries/timeouts • max steps/spend • checkpoint/resume&lt;br&gt;&lt;font color=&quot;#C2410C&quot;&gt;Dynamo Runtime Intelligence, experimental: latency sensitivity, priority and cache hints&lt;/font&gt;" vertex="1">
+          <mxGeometry height="75" width="365" x="390" y="697.5" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-14" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#CCFBF1;strokeColor=#0D9488;strokeWidth=1.7;fontColor=#134E4A;fontSize=10;fontFamily=Helvetica;arcSize=10;" value="&lt;b&gt;5. Conditional Context Optimization&lt;/b&gt;&lt;br&gt;Compress large tool outputs, JSON, logs and long history • align stable prefixes&lt;br&gt;CCR keeps originals locally for retrieval • pass through short or high-risk content&lt;br&gt;&lt;font color=&quot;#0F766E&quot;&gt;Headroom library or per-pod sidecar proxy&lt;/font&gt;" vertex="1">
+          <mxGeometry height="76" width="390" x="190" y="835" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-15" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#EDE9FE;strokeColor=#7C3AED;strokeWidth=1.7;fontColor=#4C1D95;fontSize=10;fontFamily=Helvetica;arcSize=10;" value="&lt;b&gt;6. Adaptive Model and Backend Router, Every LLM Call&lt;/b&gt;&lt;br&gt;Expected quality + post-compression cost + latency + capacity + availability&lt;br&gt;Apply residency constraints • confidence threshold • strong default for high-risk work&lt;br&gt;&lt;font color=&quot;#6D28D9&quot;&gt;NeMo Switchyard / governed policy router across local and cloud serving paths&lt;/font&gt;" vertex="1">
+          <mxGeometry height="94" width="400" x="190" y="970" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-16" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#E2E8F0;strokeColor=#475569;strokeWidth=1.6;fontColor=#1E293B;fontSize=10;fontFamily=Helvetica;arcSize=10;" value="&lt;b&gt;7. Model Gateway and Provider Controls&lt;/b&gt;&lt;br&gt;Unified API • virtual keys • quotas/budgets • timeouts/retries • circuit breakers&lt;br&gt;&lt;font color=&quot;#334155&quot;&gt;Switchyard gateway, or LiteLLM / Envoy AI Gateway when broader edge controls are required&lt;/font&gt;" vertex="1">
+          <mxGeometry height="78" width="410" x="190" y="1100" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-19" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#DCFCE7;strokeColor=#16A34A;strokeWidth=1.5;fontColor=#166534;fontSize=9;fontFamily=Helvetica;arcSize=10;" value="&lt;b&gt;vLLM Semantic Router + vLLM&lt;/b&gt;&lt;br&gt;Semantic model-path selection • heterogeneous vLLM pool&lt;br&gt;OpenAI-compatible vLLM inference endpoints&lt;br&gt;&lt;font color=&quot;#166534&quot;&gt;Chosen vLLM inference path&lt;/font&gt;" vertex="1">
+          <mxGeometry height="71" width="225" x="332" y="1247" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-18" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#DCFCE7;strokeColor=#16A34A;strokeWidth=1.5;fontColor=#166534;fontSize=9;fontFamily=Helvetica;arcSize=10;" value="&lt;b&gt;NVIDIA Dynamo + TensorRT-LLM&lt;/b&gt;&lt;br&gt;Multi-GPU/node serving • KV-aware worker routing&lt;br&gt;disaggregated prefill/decode • SLA scaling&lt;br&gt;&lt;font color=&quot;#166534&quot;&gt;Chosen NVIDIA inference path&lt;/font&gt;" vertex="1">
+          <mxGeometry height="70" width="220" x="69" y="1247" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-20" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#DCFCE7;strokeColor=#16A34A;strokeWidth=1.5;fontColor=#166534;fontSize=9;fontFamily=Helvetica;arcSize=10;" value="&lt;b&gt;Managed Cloud Models&lt;/b&gt;&lt;br&gt;Approved Azure and AWS Bedrock endpoints&lt;br&gt;regional, private-link and provider controls" vertex="1">
+          <mxGeometry height="71" width="190" x="580" y="1246" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-21" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#FCE7F3;strokeColor=#DB2777;strokeWidth=1.5;fontColor=#831843;fontSize=10;fontFamily=Helvetica;arcSize=10;" value="&lt;b&gt;9. Output Controls and Selective Verification&lt;/b&gt;&lt;br&gt;Safety and leakage checks • citations and structured-output validation&lt;br&gt;escalate low-confidence/high-risk results • sample normal traffic for evaluation" vertex="1">
+          <mxGeometry height="52" width="370" x="300" y="1372" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-22" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#FFFFFF;strokeColor=#64748B;strokeWidth=1.4;fontColor=#0F172A;fontSize=10;fontFamily=Helvetica;arcSize=10;" value="&lt;b&gt;10. Governed Response / Action&lt;/b&gt;" vertex="1">
+          <mxGeometry height="46" width="207" x="381.5" y="1471" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-23" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#F8FAFC;strokeColor=#94A3B8;dashed=1;fontColor=#475569;fontSize=9;fontFamily=Helvetica;arcSize=8;" value="&lt;b&gt;Routing scopes&lt;/b&gt; • NAT Router Agent selects workflow mode • Switchyard selects model/backend • vLLM Semantic Router selects a vLLM model path • Dynamo selects/scales inference workers and KV placement" vertex="1">
+          <mxGeometry height="30" width="715" x="65" y="1520" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-24" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#FEF3C7;strokeColor=#D97706;strokeWidth=1.6;fontColor=#78350F;fontSize=10;fontFamily=Helvetica;arcSize=10;" value="&lt;b&gt;1. Measurement Intake&lt;/b&gt;&lt;br&gt;Redacted OpenTelemetry traces + task/model/backend route decisions + versions&lt;br&gt;tokens before/after Headroom • cost • latency • cache/CCR • tools • user/business outcomes&lt;br&gt;&lt;font color=&quot;#92400E&quot;&gt;Langfuse operational analysis and feedback backbone&lt;/font&gt;" vertex="1">
+          <mxGeometry height="92" width="394" x="1212" y="225" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-25" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#CCFBF1;strokeColor=#0D9488;strokeWidth=1.5;fontColor=#134E4A;fontSize=10;fontFamily=Helvetica;arcSize=10;" value="&lt;b&gt;2. Governed Evaluation and Training Dataset&lt;/b&gt;&lt;br&gt;Redact/minimize • consent and training-eligibility flags • retention/deletion&lt;br&gt;dataset versions and lineage • object storage • development and held-out sets&lt;br&gt;&lt;font color=&quot;#0F766E&quot;&gt;NeMo Curator + object store/lakehouse + dataset registry&lt;/font&gt;" vertex="1">
+          <mxGeometry height="90" width="382" x="1215" y="355" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-26" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#E0F2FE;strokeColor=#0284C7;strokeWidth=1.7;fontColor=#0C4A6E;fontSize=10;fontFamily=Helvetica;arcSize=10;" value="&lt;b&gt;3. Diagnose Before Changing the System&lt;/b&gt;&lt;br&gt;Cluster failures • compare human and automated scores • identify root cause&lt;br&gt;Prompt? Retrieval? Task router? Model router? Headroom? Model capability? Tool/runtime? Policy?" vertex="1">
+          <mxGeometry height="76" width="417" x="1188" y="485" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-27" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#F1F5F9;strokeColor=#64748B;strokeWidth=1.4;fontColor=#1E293B;fontSize=12;fontFamily=Helvetica;arcSize=10;" value="&lt;b&gt;4. Select the Cheapest Appropriate Intervention&lt;/b&gt;" vertex="1">
+          <mxGeometry height="48" width="290" x="1251.5" y="595" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-28" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#DCFCE7;strokeColor=#16A34A;fontColor=#166534;fontSize=10;fontFamily=Helvetica;arcSize=10;" value="&lt;b&gt;Prompt / Instructions&lt;/b&gt;&lt;br&gt;DSPy / NAT optimizer&lt;br&gt;templates and examples" vertex="1">
+          <mxGeometry height="72" width="175" x="1060" y="695" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-29" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#DCFCE7;strokeColor=#16A34A;fontColor=#166534;fontSize=10;fontFamily=Helvetica;arcSize=10;" value="&lt;b&gt;Retrieval / Context / Compression&lt;/b&gt;&lt;br&gt;chunking • hybrid search • reranking&lt;br&gt;Headroom thresholds and bypass policy" vertex="1">
+          <mxGeometry height="72" width="195" x="1320" y="690" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-30" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#EDE9FE;strokeColor=#7C3AED;fontColor=#4C1D95;fontSize=10;fontFamily=Helvetica;arcSize=10;" value="&lt;b&gt;Routing / Serving Policy&lt;/b&gt;&lt;br&gt;Switchyard thresholds and fallbacks&lt;br&gt;vLLM SR rules • Dynamo hints/config" vertex="1">
+          <mxGeometry height="72" width="255" x="1555" y="690" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-31" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#FFEDD5;strokeColor=#EA580C;fontColor=#7C2D12;fontSize=10;fontFamily=Helvetica;arcSize=10;" value="&lt;b&gt;Optional Advanced Model Training&lt;/b&gt;&lt;br&gt;Use only when prompt, retrieval and routing changes are insufficient&lt;br&gt;SFT/LoRA: NeMo AutoModel • orchestrator RL: ToolOrchestra / NeMo RL" vertex="1">
+          <mxGeometry height="76" width="340" x="1150" y="800" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-32" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#F1F5F9;strokeColor=#64748B;strokeWidth=1.4;fontColor=#1E293B;fontSize=10;fontFamily=Helvetica;arcSize=10;" value="&lt;b&gt;5. Versioned Candidate Artifacts&lt;/b&gt;&lt;br&gt;Prompts • retrieval/Headroom configuration • routing policies • workflow • optional model checkpoint" vertex="1">
+          <mxGeometry height="60" width="390" x="1190" y="920" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-33" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#FEE2E2;strokeColor=#DC2626;strokeWidth=1.7;fontColor=#7F1D1D;fontSize=10;fontFamily=Helvetica;arcSize=10;" value="&lt;b&gt;6. Offline Evaluation and Deployment Gate&lt;/b&gt;&lt;br&gt;Held-out regression • task/business success • safety/privacy/security&lt;br&gt;compression quality • task/model routing matrices • tool success • cost/latency/SLOs&lt;br&gt;&lt;font color=&quot;#991B1B&quot;&gt;NeMo Agent Toolkit Eval + Profiler • Langfuse datasets/feedback • custom evaluators&lt;/font&gt;" vertex="1">
+          <mxGeometry height="88" width="380" x="1195" y="1028" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-34" parent="1" style="rhombus;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#FEF3C7;strokeColor=#D97706;strokeWidth=1.5;fontColor=#78350F;fontSize=10;fontFamily=Helvetica;" value="All gates pass?" vertex="1">
+          <mxGeometry height="74" width="180" x="1295" y="1145" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-35" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#E0E7FF;strokeColor=#4F46E5;strokeWidth=1.5;fontColor=#312E81;fontSize=10;fontFamily=Helvetica;arcSize=10;" value="&lt;b&gt;7. Registry and Human Approval&lt;/b&gt;&lt;br&gt;MLflow / Git • lineage • owner • release notes • rollback target" vertex="1">
+          <mxGeometry height="60" width="250" x="1010" y="1260" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-36" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#D1FAE5;strokeColor=#059669;strokeWidth=1.6;fontColor=#065F46;fontSize=10;fontFamily=Helvetica;arcSize=10;" value="&lt;b&gt;8. Shadow → Canary / A-B → Production&lt;/b&gt;&lt;br&gt;Watch quality, privacy, cost and SLOs • automatic rollback on regression" vertex="1">
+          <mxGeometry height="60" width="290" x="1530" y="1260" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-37" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#FEF2F2;strokeColor=#F87171;dashed=1;fontColor=#991B1B;fontSize=9;fontFamily=Helvetica;arcSize=8;" value="&lt;b&gt;No direct auto-deploy&lt;/b&gt;&lt;br&gt;Every change is evaluated, registered, approved, staged and reversible." vertex="1">
+          <mxGeometry height="54" width="330" x="1240" y="1370" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-38" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#EFF6FF;strokeColor=#60A5FA;dashed=1;fontColor=#1E3A8A;fontSize=9;fontFamily=Helvetica;arcSize=8;" value="&lt;b&gt;Deployment mapping shown here&lt;/b&gt;&lt;br&gt;Dynamo is assigned to TensorRT-LLM and vLLM Semantic Router is assigned to vLLM. Dynamo also supports vLLM and SGLang, but those optional combinations are omitted for clarity." vertex="1">
+          <mxGeometry height="58" width="710" x="1035" y="1450" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-39" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748B;strokeWidth=1.4;endArrow=block;endFill=1;fontColor=#475569;fontSize=9;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-9" value="request + identity token">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-40" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#2563EB;strokeWidth=1.4;endArrow=block;endFill=1;fontColor=#1D4ED8;fontSize=9;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-10" value="authenticated, sanitized request">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-41" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#0284C7;strokeWidth=1.4;endArrow=block;endFill=1;fontColor=#0369A1;fontSize=9;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-11" value="request + execution policy">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-42" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-11" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#16A34A;strokeWidth=1.4;endArrow=block;endFill=1;fontColor=#166534;fontSize=10;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-12" value="Direct">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="360" y="690" />
+              <mxPoint x="200" y="690" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-43" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-11" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#EA580C;strokeWidth=1.4;endArrow=block;endFill=1;fontColor=#C2410C;fontSize=10;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-13" value="Multi-step / tools">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="560" y="685" />
+              <mxPoint x="660" y="685" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-44" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-12" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#0D9488;strokeWidth=1.4;endArrow=block;endFill=1;fontColor=#0F766E;fontSize=9;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-14" value="single-call prompt/context">
+          <mxGeometry relative="1" x="-0.3931" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="167" y="882" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-45" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-13" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#0D9488;strokeWidth=1.5;endArrow=block;endFill=1;fontColor=#0F766E;fontSize=9;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-14" value="prompt + history +&amp;nbsp;&lt;div&gt;tool outputs +&amp;nbsp;&lt;/div&gt;&lt;div&gt;Dynamo hints&lt;/div&gt;">
+          <mxGeometry relative="1" x="-0.5394" as="geometry">
+            <mxPoint y="1" as="offset" />
+            <Array as="points">
+              <mxPoint x="660" y="864" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-46" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-14" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#7C3AED;strokeWidth=1.5;endArrow=block;endFill=1;fontColor=#6D28D9;fontSize=9;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-15" value="optimized or pass-through context + policy/hints">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="390" y="921" />
+              <mxPoint x="390" y="921" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-47" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-15" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#475569;strokeWidth=1.4;endArrow=block;endFill=1;fontColor=#334155;fontSize=9;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-16" value="selected model, backend and fallback policy">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-48" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-16" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#16A34A;strokeWidth=1.3;endArrow=block;endFill=1;fontColor=#166534;fontSize=8;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-18" value="TensorRT-LLM route + NAT runtime hints">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="270" y="1205" />
+              <mxPoint x="175" y="1205" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-49" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-16" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#16A34A;strokeWidth=1.3;endArrow=block;endFill=1;fontColor=#166534;fontSize=8;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-19" value="vLLM route + semantic routing policy">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="522" y="1212.5" />
+              <mxPoint x="444.5" y="1212.5" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-50" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-16" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#16A34A;strokeWidth=1.3;endArrow=block;endFill=1;fontColor=#166534;fontSize=8;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-20" value="approved&amp;nbsp;&lt;div&gt;managed-provider&amp;nbsp;&lt;div&gt;route&lt;/div&gt;&lt;/div&gt;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="650" y="1160" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-51" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-18" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#DB2777;strokeWidth=1.2;endArrow=block;endFill=1;fontColor=#9D174D;fontSize=8;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-21" value="TensorRT-LLM&amp;nbsp;&lt;div&gt;generated&amp;nbsp;&lt;/div&gt;&lt;div&gt;output&lt;/div&gt;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="175" y="1335" />
+              <mxPoint x="330" y="1335" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-52" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-19" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#DB2777;strokeWidth=1.2;endArrow=block;endFill=1;fontColor=#9D174D;fontSize=8;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-21" value="vLLM generated&amp;nbsp;&lt;div&gt;output&lt;/div&gt;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-53" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-20" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#DB2777;strokeWidth=1.2;endArrow=block;endFill=1;fontColor=#9D174D;fontSize=8;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-21" value="managed-model&amp;nbsp;&lt;div&gt;generated&amp;nbsp;&lt;/div&gt;&lt;div&gt;output&lt;/div&gt;">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="735" y="1334" />
+              <mxPoint x="630" y="1334" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-54" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-21" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748B;strokeWidth=1.3;endArrow=block;endFill=1;fontColor=#475569;fontSize=8;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-22" value="validated response&amp;nbsp;&lt;div&gt;or approved action&lt;/div&gt;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-55" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-21" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#EA580C;strokeWidth=1.2;dashed=1;dashPattern=4 4;endArrow=block;endFill=1;fontColor=#C2410C;fontSize=8;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-13" value="tool result or next&amp;nbsp;&lt;div&gt;dependent step&lt;/div&gt;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="790" y="1375" />
+              <mxPoint x="790" y="720" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-56" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-14" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#D97706;strokeWidth=1.3;dashed=1;dashPattern=5 4;endArrow=block;endFill=1;fontColor=#92400E;fontSize=8;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-24" value="compression, prefix-cache and CCR metrics via OTel">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="915" y="900" />
+              <mxPoint x="915" y="270" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-57" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-22" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#D97706;strokeWidth=1.5;dashed=1;dashPattern=5 4;endArrow=block;endFill=1;fontColor=#92400E;fontSize=8;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-24" value="redacted trace,&amp;nbsp;&lt;div&gt;route,&amp;nbsp;&lt;div&gt;cost, latency&amp;nbsp;&lt;/div&gt;&lt;div&gt;and outcome&lt;/div&gt;&lt;/div&gt;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="960" y="1491" />
+              <mxPoint x="960" y="290" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-58" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-24" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#0D9488;strokeWidth=1.4;endArrow=block;endFill=1;fontColor=#0F766E;fontSize=9;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-25" value="eligible traces, feedback and outcomes">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-59" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-25" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#0284C7;strokeWidth=1.4;endArrow=block;endFill=1;fontColor=#0369A1;fontSize=9;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-26" value="versioned evaluation evidence">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-60" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-26" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748B;strokeWidth=1.3;endArrow=block;endFill=1;fontColor=#475569;fontSize=9;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-27" value="root-cause classification">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-61" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-27" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#16A34A;strokeWidth=1.1;endArrow=block;endFill=1;fontColor=#166534;fontSize=8;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-28" value="prompt or instruction defect">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1090" y="619" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-62" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-27" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#16A34A;strokeWidth=1.1;endArrow=block;endFill=1;fontColor=#166534;fontSize=8;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-29" value="retrieval or compression defect">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-63" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-27" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#7C3AED;strokeWidth=1.1;endArrow=block;endFill=1;fontColor=#6D28D9;fontSize=8;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-30" value="routing or serving-policy defect">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1680" y="621" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-64" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-27" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#EA580C;strokeWidth=1.1;endArrow=block;endFill=1;fontColor=#C2410C;fontSize=8;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-31" value="persistent&amp;nbsp;&lt;div&gt;model-capability&amp;nbsp;&lt;/div&gt;&lt;div&gt;gap&lt;/div&gt;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1280" y="750" />
+              <mxPoint x="1280" y="750" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-65" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-28" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#64748B;strokeWidth=1.0;endArrow=block;endFill=1;fontColor=#475569;fontSize=8;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-32" value="versioned prompt package">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1090" y="900" />
+              <mxPoint x="1190" y="900" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-66" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-29" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#64748B;strokeWidth=1.0;endArrow=block;endFill=1;fontColor=#475569;fontSize=8;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-32" value="versioned retrieval/&lt;div&gt;Headroom config&lt;/div&gt;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1550" y="726" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-67" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-30" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#64748B;strokeWidth=1.0;endArrow=block;endFill=1;fontColor=#475569;fontSize=8;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-32" value="versioned routing/serving config">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1680" y="900" />
+              <mxPoint x="1590" y="900" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-68" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-31" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#64748B;strokeWidth=1.0;endArrow=block;endFill=1;fontColor=#475569;fontSize=8;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-32" value="optional trained checkpoint">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-69" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-32" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#DC2626;strokeWidth=1.4;endArrow=block;endFill=1;fontColor=#B91C1C;fontSize=9;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-33" value="candidate release + baseline">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-70" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-33" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#D97706;strokeWidth=1.4;endArrow=block;endFill=1;fontColor=#92400E;fontSize=8;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-34" value="quality, safety, cost and latency results">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-71" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-34" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#DC2626;strokeWidth=1.3;dashed=1;dashPattern=4 4;endArrow=block;endFill=1;fontColor=#B91C1C;fontSize=9;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-26" value="No: failure evidence for revision">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1825" y="1180" />
+              <mxPoint x="1825" y="525" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-72" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-34" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#4F46E5;strokeWidth=1.4;endArrow=block;endFill=1;fontColor=#4338CA;fontSize=9;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-35" value="Yes: approved evaluation evidence">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1300" y="1240" />
+              <mxPoint x="1185" y="1240" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-73" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-35" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#059669;strokeWidth=1.4;endArrow=block;endFill=1;fontColor=#047857;fontSize=9;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-36" value="signed release + rollback target">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-74" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-36" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#DC2626;strokeWidth=1.3;dashed=1;dashPattern=6 4;endArrow=block;endFill=1;fontColor=#B91C1C;fontSize=8;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-13" value="approved workflow, prompt and task-mode policy">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1845" y="1290" />
+              <mxPoint x="1845" y="140" />
+              <mxPoint x="810" y="140" />
+              <mxPoint x="810" y="745" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-75" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-36" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#DC2626;strokeWidth=1.3;dashed=1;dashPattern=6 4;endArrow=block;endFill=1;fontColor=#B91C1C;fontSize=8;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-15" value="approved Switchyard and semantic-routing policy">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1860" y="1290" />
+              <mxPoint x="1860" y="120" />
+              <mxPoint x="880" y="120" />
+              <mxPoint x="880" y="1017" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-76" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-36" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#DC2626;strokeWidth=1.3;dashed=1;dashPattern=6 4;endArrow=block;endFill=1;fontColor=#B91C1C;fontSize=8;labelBackgroundColor=#FFFFFF;" target="kikF6e1RAh_-10LFvaQg-16" value="approved Dynamo, vLLM and gateway configuration">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1770" y="1530" />
+              <mxPoint x="990" y="1530" />
+              <mxPoint x="990" y="1139" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-78" edge="1" parent="1" source="kikF6e1RAh_-10LFvaQg-18" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.25;exitY=0;exitDx=0;exitDy=0;entryX=0.125;entryY=0.55;entryDx=0;entryDy=0;entryPerimeter=0;">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="125" y="1225" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="kikF6e1RAh_-10LFvaQg-82" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;fontStyle=1" value="8. Approved Inference Serving Paths" vertex="1">
+          <mxGeometry height="30" width="254" x="281" y="1175" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

@@ -1,0 +1,115 @@
+---
+name: greenlake-deploy
+description: Use when packaging or deploying the Serving Plane - Dockerfiles, docker-compose for local demo, Helm charts, and HPE GreenLake / Kubernetes deployment. Trigger on mentions of Docker, compose, Helm, Kubernetes, GreenLake, deployment, or packaging.
+---
+
+# Packaging & HPE GreenLake Deployment
+
+Two targets with different jobs. **Compose is what you demo from.** Helm proves it
+deploys to the customer's platform — but don't run a live customer demo off a fresh
+cluster deploy.
+
+## Docker Compose (local demo)
+
+Must reach a working demo in under 5 minutes on a laptop, no GPU.
+
+Services: `api` (FastAPI + NAT + Headroom library), `ui` (nginx-served React),
+`langfuse` + `postgres` + `clickhouse` (Langfuse self-hosted needs both), optional
+`vllm` under a `gpu` profile, optional `headroom` proxy sidecar when
+`context_optimization.mode: proxy`.
+
+```yaml
+services:
+  vllm:
+    profiles: ["gpu"]     # excluded unless explicitly requested
+```
+
+Default `inference_backend: mock` so `docker compose up` works with no GPU and no API
+keys. Healthchecks on every service; `depends_on: condition: service_healthy` so the
+API doesn't race Langfuse's migrations.
+
+Ship `.env.example`, never `.env`.
+
+## Images
+
+Multi-stage, non-root, pinned bases. Python: `uv` in builder, slim runtime.
+UI: node builder → nginx. Add a `HEALTHCHECK`. Target under 500MB for the API.
+
+## Helm chart
+
+```
+deploy/helm/serving-plane/
+├── Chart.yaml
+├── values.yaml
+├── values-greenlake.yaml
+└── templates/   # deployment, service, ingress, configmap, secret, hpa, NOTES.txt
+```
+
+Everything from `config/serving.yaml` must be settable through `values.yaml` — the
+whole point is switching backends without rebuilding images.
+
+```yaml
+servingPlane:
+  inferenceBackend: mock     # mock | vllm | dynamo | none
+  policy: {piiDetection: presidio}
+  contextOptimization:
+    enabled: false
+    mode: library              # library | proxy
+    ccr: {enabled: true, ttlHours: 24, storageClassName: "", size: 20Gi}
+  providers:
+    onprem: {enabled: true}
+    azure: {enabled: false}
+langfuse: {enabled: true, host: ""}
+```
+
+Secrets via existing K8s Secret references, never chart values. GreenLake customers
+will have opinions about secret management; don't fight them.
+
+## HPE GreenLake specifics
+
+GreenLake gives you managed Kubernetes — a conformant cluster, so standard Helm
+applies. The deltas worth handling explicitly:
+
+- **Storage** — set `storageClassName` explicitly in `values-greenlake.yaml`;
+  don't rely on a default existing. Langfuse's Postgres/ClickHouse need PVCs.
+- **Ingress** — confirm the controller class; parameterise `ingress.className`.
+- **Registry** — customers usually run a private registry. Parameterise
+  `image.repository` and support `imagePullSecrets`.
+- **GPU nodes** — only relevant for `vllm`/`dynamo`. Gate GPU workloads behind
+  `nodeSelector`/`tolerations` in values; the default path must schedule on CPU.
+- **CCR storage** — if compression is on, CCR needs a PVC **inside the cluster**.
+  Never point it at an external object store or cloud bucket; that breaks the
+  residency guarantee (hard rule 6). Set TTL via `contextOptimization.ccr.ttlHours`
+  and size the PVC for it.
+- **Headroom offline assets** — Headroom fetches the ONNX runtime and the
+  Kompress model from HuggingFace at first use. In air-gapped GreenLake, bake them
+  into the image or pre-download and set `HF_HUB_OFFLINE=1`. Running with
+  compression disabled needs neither asset — the safe fallback.
+- **SSL inspection** — behind a corporate MITM proxy, `HEADROOM_TLS_STRICT=0`
+  clears only the strict X.509 flag; chain, expiry and hostname checks stay on.
+- **Air-gapped** — assume no internet. Pre-pull images; set
+  `policy.piiDetection: regex` if the Presidio model can't be downloaded, or bake the
+  model into the image.
+- **Decision stream** — the UI's SSE/WebSocket carries every `DecisionRecord`
+  (tenants, entity types, costs, routing reasons). Fine on a demo laptop; in a
+  multi-tenant GreenLake deploy it is a metadata leak. Outside demo mode the decision
+  stream **requires auth and must be tenant-scoped** — a viewer sees only their own
+  tenant's records. `server.stream_decisions` stays on; put it behind the ingress
+  auth and a per-tenant filter.
+
+Verify current GreenLake specifics against HPE's docs at deploy time rather than
+trusting this file — the platform changes.
+
+## Dynamo on K8s
+
+If `inferenceBackend: dynamo`, don't write the deployment by hand. Use NVIDIA's
+verified skills (`dynamo-recipe-runner` for K8s recipes, `dynamo-interconnect-check`
+to validate NIXL/UCX/NCCL before blaming the app). Dynamo requires GPU nodes.
+
+## Pre-demo checklist
+
+1. `docker compose up` clean on a fresh machine → under 5 min
+2. Traffic generator runs; dashboard populates
+3. Langfuse reachable, traces landing, no raw PII
+4. Helm chart lints and dry-runs against the target cluster
+5. Rehearse offline — assume venue wifi fails

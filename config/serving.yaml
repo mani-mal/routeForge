@@ -1,0 +1,71 @@
+# Serving Plane — startup configuration.
+# INFRASTRUCTURE SWITCHES ONLY. Everything switchable here; no code changes to
+# change modes. Budgets/sensitivity/residency live in policy.yaml; scoring,
+# thresholds, the pool and escalation live in routing.yaml. Do not restate their
+# values here — the startup config lint (see CLAUDE.md §Config lint) fails the boot
+# if the same concern is owned by two files.
+
+# On-prem serving path. This is the ONLY serving-path axis (see inference-backends
+# skill). The cloud path (managed_cloud) is not selected here — its availability is
+# providers.azure.enabled / providers.bedrock.enabled below.
+inference_backend: mock          # mock | vllm | dynamo | none   (mock is the demo default)
+allow_backend_fallback: true     # false => exit(1) if backend unreachable
+
+vllm:
+  base_url: http://vllm:8000/v1
+  timeout_s: 60
+
+dynamo:
+  endpoint: http://dynamo-frontend:8080
+  router_mode: kv                # see NVIDIA dynamo-router-starter skill
+  timeout_s: 60
+
+# Step 5 — Conditional Context Optimization (Headroom). Infra switches only;
+# bypass thresholds that depend on policy classification read the canonical
+# sensitivity/risk enums owned by policy.yaml.
+context_optimization:
+  enabled: false                 # default OFF: demo shows before/after
+  mode: library                  # library | proxy (sidecar)
+  proxy_url: http://headroom:8787
+  min_tokens: 2000               # below this, bypass — overhead exceeds gain
+  bypass_on:
+    high_risk: true              # risk_class == high (see policy.yaml)
+    restricted_sensitivity: true # sensitivity == restricted (see policy.yaml enum)
+    user_prompt: true            # compress tool outputs/history, not the live question
+  ccr:
+    enabled: true
+    residency: local_only        # NEVER external object store — see hard rule 6
+    ttl_hours: 24                # enforced; unbounded cache = retention liability
+    export_to_telemetry: false   # must stay false
+  cache_alignment: true          # CacheAligner: stabilize prefixes for KV cache hits
+
+policy:
+  pii_detection: presidio        # presidio | regex | off
+  fail_closed: true              # never relax this
+  # sensitivity enum, default_sensitivity, budgets and residency: see policy.yaml
+
+observability:
+  langfuse:
+    enabled: true
+    host: ${LANGFUSE_HOST:-http://langfuse:3000}
+    redact_on_export: true       # mandatory; see nemo-agent-toolkit skill
+
+# Provider *availability* (infra on/off) only. Tier membership is defined by the
+# pool in routing.yaml — the single source of truth for which model is which tier.
+providers:
+  onprem:  {enabled: true}       # on-prem serving path per inference_backend above
+  azure:   {enabled: false}      # managed_cloud path
+  bedrock: {enabled: false}      # managed_cloud path
+
+agent:
+  runtime: nat                   # NeMo Agent Toolkit
+  # step/spend caps: see policy.yaml agent_budgets
+
+server:
+  host: 0.0.0.0
+  port: 8080
+  stream_decisions: true         # WebSocket/SSE for the UI (tenant-scoped + auth
+                                 # outside demo mode — see greenlake-deploy skill)
+  reject_stream_requests: true   # reject inbound `stream: true` in the demo (see
+                                 # output-controls skill); decision streaming above
+                                 # is a separate channel

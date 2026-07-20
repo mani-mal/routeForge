@@ -1,0 +1,31 @@
+# Secrets — never commit
+.env
+*.pem
+*.key
+sec.txt
+secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.uv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node / UI
+node_modules/
+ui/dist/
+ui/.vite/
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Local
+*.log

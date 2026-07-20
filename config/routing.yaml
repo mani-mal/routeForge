@@ -1,0 +1,43 @@
+# Scoring, thresholds, the model pool, and escalation. THIS FILE OWNS THEM.
+# Hot-reloadable — editing thresholds live and re-running traffic is a strong demo
+# moment. Keep the numbers legible. Budgets/residency/sensitivity are policy.yaml's;
+# infra switches are serving.yaml's. Provider names must be spelled `onprem` here,
+# identically to serving.yaml and pricing.yaml (the config lint enforces this).
+
+# Canonical tier list. There are exactly three tiers everywhere: cheap | mid |
+# frontier. There is no "strong" tier. Every tier named below must have >=1 member
+# in model_pool, and every risk_floor must name a tier that exists (config lint).
+tiers: [cheap, mid, frontier]
+
+score_on: post_compression       # MUST be post_compression when Headroom is on
+weights: {quality: 1.0, cost: 0.6, latency: 0.3, capacity: 0.2}
+
+complexity_thresholds:
+  cheap_max: 0.35
+  mid_max: 0.70
+  # above mid_max -> frontier
+
+# Confidence-driven escalation. ONE threshold, owned here. Below it, escalate one
+# tier and re-run; capped by max_escalations. See routing-and-gateway skill for what
+# "confidence" is (backend-reported).
+confidence_escalation_threshold: 0.60
+max_escalations: 1
+
+# Risk floor = the minimum tier a request may use, applied AFTER the residency
+# filter. Precedence: residency beats risk floor. An onprem_only high-risk request
+# floors to the best ALLOWED (on-prem) tier and sets require_verification — it is
+# never lifted to a cloud tier. See CLAUDE.md "Residency beats risk floor".
+risk_floors:
+  high: frontier                 # best cloud tier when cloud is permitted; else best on-prem
+  medium: mid
+  low: cheap
+
+model_pool:
+  - {name: local-8b,         provider: onprem,  tier: cheap}
+  - {name: local-32b,        provider: onprem,  tier: mid}
+  - {name: azure-gpt-mid,    provider: azure,   tier: mid}
+  - {name: bedrock-frontier, provider: bedrock, tier: frontier}
+
+fallback:
+  max_retries_same_provider: 1
+  backoff_base_ms: 100
