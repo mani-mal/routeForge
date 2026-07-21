@@ -21,17 +21,18 @@ live `uvicorn` smoke run.
 **In scope (fully built):** `app/` pipeline (steps 1–4 rules-only, 6, 7, 8-mock, 9,
 10), the cross-file config lint, `tests/`, and `scripts/`.
 
-**Scaffolded as typed stubs this pass** (later phases fill them): `app/compression/`
-(pass-through), `app/agent/` (returns "direct"), `ui/` (Vite skeleton), `deploy/compose`
-+ `deploy/helm` (skeletons), `tests/traffic/` (stub generator).
+**Scaffolded as typed stubs this pass** (later phases fill them, same interface):
+`app/agent/` (NAT → "direct"), `app/compression/` (Headroom pass-through), `app/obs/`
+(Langfuse export → no-op), `gateway/backends/{vllm,dynamo}.py`, `ui/` (Vite skeleton),
+`deploy/compose` + `deploy/helm` (skeletons), `tests/traffic/` (stub generator).
 
-**Out of scope (not in this repo at all):** the Improvement Plane. Also deferred to
-later phases: Langfuse/observability export, NAT agent runtime, Headroom, real UI,
-traffic generator logic, vLLM/Dynamo backends, packaging content.
+**Every tool is specified in §10** (role, integration point, config surface, interface,
+phase) even when its build is a later phase — the design is complete; only the build is
+sliced. The one thing genuinely **out of this repo entirely** is the Improvement Plane.
 
-Authoritative constraints live in `CLAUDE.md` and the eight skills under
-`.claude/skills/`. This spec does not restate rules; it specifies the slice's concrete
-shape. Config **values** live in `config/*.yaml` (single-sourced, lint-enforced).
+Authoritative *rules* live in `CLAUDE.md` and the eight skills under `.claude/skills/`;
+this spec does not restate them — §10 pins the *seams*, the skills own the *constraints*.
+Config **values** live in `config/*.yaml` (single-sourced, lint-enforced).
 
 ## 2. Directory layout
 
@@ -59,10 +60,13 @@ routeForge/
 │   │   ├── gateway.py            █ step 7: adapter dispatch; fallback re-checks allowed_providers
 │   │   └── backends/
 │   │       ├── base.py           █ InferenceBackend Protocol
-│   │       └── mock.py           █ step 8: seeded text/latency/cost/confidence
+│   │       ├── mock.py           █ step 8: seeded text/latency/cost/confidence
+│   │       ├── vllm.py           ░ stub → InferenceBackend (Phase 9; inference-backends skill)
+│   │       └── dynamo.py         ░ stub → InferenceBackend (Phase 9; NVIDIA skills)
 │   ├── output/verify.py          █ step 9: leakage re-scan, require_verification, stream reject
-│   ├── compression/__init__.py   ░ pass-through: tokens_after == tokens_before
-│   └── agent/__init__.py         ░ returns "direct"; typed interface only
+│   ├── compression/__init__.py   ░ Headroom pass-through: tokens_after == tokens_before (Phase 5b)
+│   ├── agent/__init__.py         ░ NAT runtime: returns "direct"; typed interface only (Phase 5)
+│   └── obs/export.py             ░ NAT→OTel→Langfuse redacting exporter; no-op now (Phase 4)
 ├── tests/
 │   ├── conftest.py               █ fixtures: settings w/ pii_detection=regex, mock backend, seed
 │   ├── test_config_lint.py       █
@@ -236,3 +240,133 @@ httpx:
   real backends (Phase 9).
 - Streaming: rejected in the demo; production incremental verification is a separate
   design.
+
+## 10. Tool & technology integration map
+
+Every third-party tool in the architecture, where it plugs in, and when it's built.
+Tool-specific rules are **not restated here** — they live in the named skill; this
+section pins down the *seam* so a stub exposes the exact interface its real version
+will fill. Status: `BUILT` this pass · `STUB` typed placeholder this pass.
+
+### 10.1 Presidio — PII/PHI detection · `BUILT`
+- **Role:** step 2 detection + anonymization (the privacy claim).
+- **Integration:** `app/policy/detectors.py` → `PresidioDetector` behind the `Detector`
+  protocol; `gate.py` calls `analyze()`/`anonymize()`. Selected by
+  `serving.policy.pii_detection: presidio`.
+- **Config surface:** `pii_detection` (`presidio | regex | off`); custom recognizers
+  (e.g. `EMPLOYEE_ID`) registered at startup.
+- **Interface:** `analyze(text) -> list[Entity]`, `anonymize(text, entities) ->
+  (redacted, redaction_map)`.
+- **This pass:** real, but tests use the `regex` sibling for offline determinism.
+- **Skill:** `privacy-gate`.
+
+### 10.2 NeMo Guardrails + OPA-style policy rules — gate reasoning · `STUB` (rules-only now)
+- **Role:** step 2 input/output guardrails and tenant policy decisions beyond entity
+  detection.
+- **Integration:** `app/policy/gate.py`. This pass uses **plain rules** from
+  `policy.yaml` (`sensitivity_rules`, residency, `require_verification`). NeMo
+  Guardrails rails and an OPA-style evaluator are the later, richer implementation
+  behind the same `gate.evaluate()` interface — no pipeline change when added.
+- **Config surface:** `policy.yaml` (rules) now; a `guardrails:` block later.
+- **Interface:** `gate.evaluate(request) -> ExecutionPolicyContext` (stable).
+- **Skill:** `privacy-gate`.
+
+### 10.3 NeMo Agent Toolkit (NAT, `nvidia-nat`) — agent runtime + telemetry source · `STUB` (Phase 5)
+- **Role:** multi-step workflows (step 4 → runtime); also the **origin of telemetry**
+  (it emits OpenTelemetry spans that Langfuse consumes).
+- **Integration:** `app/agent/__init__.py`. The key design fact (from the skill): the
+  **gateway is registered as NAT's model endpoint**, so every LLM call the agent makes
+  re-enters compression (5) and the router (6) — per-call, not per-request. This pass
+  the stub returns `"direct"` and no agent loop runs; `task_mode.py` never selects
+  multi-step yet.
+- **Config surface:** `serving.agent.runtime: nat`; caps in `policy.agent_budgets`
+  (`max_steps`, `max_spend_usd`, `per_call_timeout_s`).
+- **Interface:** `run(ctx, request, gateway) -> AgentResult` (hops → DecisionRecords).
+- **Skill:** `nemo-agent-toolkit`.
+
+### 10.4 Langfuse — observability sink · `STUB` (Phase 4)
+- **Role:** stores every trace with cost/latency and **redacted** PII (the observable
+  claim).
+- **Integration:** `app/obs/export.py` — a redacting span processor on the OTel export
+  path NAT feeds. Redaction runs at the **exporter** (egress), not only intake, and
+  CCR contents/redaction-map values are never exported. Self-hosted via compose
+  (Postgres + ClickHouse). This pass: a no-op exporter that satisfies the interface;
+  DecisionRecords are returned in the response trace instead.
+- **Config surface:** `serving.observability.langfuse` (`enabled`, `host`,
+  `redact_on_export: true` — mandatory).
+- **Interface:** `export(trace: list[DecisionRecord | VerificationRecord]) -> None`
+  with a redaction hook.
+- **Skill:** `nemo-agent-toolkit`.
+
+### 10.5 Headroom (`headroom-ai`) — conditional context compression · `STUB` (Phase 5b)
+- **Role:** step 5, the **second, independent savings lever** — compresses tool
+  outputs/history so the router prices fewer tokens.
+- **Integration:** `app/compression/__init__.py`, sitting **after** the gate (only sees
+  sanitized content) and **before** the router (which prices `tokens_after`). This pass
+  it is a **pass-through**: emits a `CompressionRecord` with `applied=False` and
+  `tokens_after == tokens_before`, so the router's post-compression pricing path is
+  wired and testable now. CCR (local-only, TTL, never in telemetry) and CacheAligner
+  are part of the real Phase-5b build. The canonical-tokenizer approximation (compress
+  once vs cheap-tier tokenizer) resolves the 5↔6 cycle.
+- **Config surface:** `serving.context_optimization` (`enabled`, `mode`, `min_tokens`,
+  `bypass_on`, `ccr`, `cache_alignment`).
+- **Interface:** `compress(messages, ctx) -> CompressionResult(messages, tokens_before,
+  tokens_after, record)`.
+- **Skill:** `headroom-compression`.
+
+### 10.6 vLLM — on-prem serving path · `STUB` (Phase 9)
+- **Role:** real on-prem inference (OpenAI-compatible), + Semantic Router model-path
+  selection within a vLLM pool.
+- **Integration:** `app/gateway/backends/vllm.py` behind the `InferenceBackend`
+  Protocol; an `AsyncOpenAI` client at `serving.vllm.base_url`. Selected by
+  `inference_backend: vllm`. Populates the on-prem tier from `/v1/models` at startup.
+- **This pass:** stub raising `NotImplementedError`; mock covers the on-prem tier.
+- **Skill:** `inference-backends`.
+
+### 10.7 NVIDIA Dynamo + TensorRT-LLM — multi-GPU serving path · `STUB` (Phase 9)
+- **Role:** load distribution / KV-aware routing / disaggregated prefill-decode across
+  TensorRT-LLM workers. GPU + K8s only; exercised in GreenLake, not on a laptop.
+- **Integration:** `app/gateway/backends/dynamo.py` behind `InferenceBackend`;
+  OpenAI-compatible frontend at `serving.dynamo.endpoint`. Selected by
+  `inference_backend: dynamo`. Deployment via NVIDIA's verified skills — not hand-rolled.
+- **Config surface:** `serving.dynamo` (`endpoint`, `router_mode`, `timeout_s`).
+- **This pass:** stub; the full `npx skills add nvidia/skills …` list lives in the
+  `inference-backends` skill.
+- **Skill:** `inference-backends` (+ NVIDIA `dynamo-*` skills).
+
+### 10.8 FastAPI · Pydantic v2 · uvicorn · uv — framework · `BUILT`
+- **Role:** the API surface (steps 1/10), typed boundaries, ASGI server, dependency mgmt.
+- **Integration:** `app/api/routes.py`, `app/models.py`, `app/main.py`; `pyproject.toml`.
+- **This pass:** real.
+
+### 10.9 React + Vite + Tailwind + Recharts — demo UI · `STUB` (Phase 6)
+- **Role:** flow visualizer, decision inspector, cost dashboard (routing vs compression
+  split), control panel. Consumes the SSE decision stream + DecisionRecords.
+- **Integration:** `ui/` — Vite skeleton renders a placeholder now; components land in
+  Phase 6.
+- **Config surface:** `serving.server.stream_decisions` (SSE/WebSocket).
+- **Skill:** `demo-ui`.
+
+### 10.10 Docker Compose + Helm — packaging · `STUB` (Phase 8)
+- **Role:** local demo (`docker compose up` < 5 min, no GPU) and HPE GreenLake/K8s deploy.
+- **Integration:** `deploy/compose/docker-compose.yml` (api + commented langfuse/vllm),
+  `deploy/helm/serving-plane/` (Chart, values, stub templates). Everything in
+  `serving.yaml` settable via Helm values.
+- **This pass:** skeletons only; healthchecks, images, GreenLake values in Phase 8.
+- **Skill:** `greenlake-deploy`.
+
+**Summary — built vs stubbed this pass:**
+
+| Tool | Module | This pass | Phase |
+|---|---|---|---|
+| Presidio | `policy/detectors.py` | **BUILT** (regex sibling for tests) | 2 |
+| Rules gate (Guardrails/OPA later) | `policy/gate.py` | **BUILT** (rules-only) | 2 |
+| FastAPI/Pydantic/uvicorn | `api`, `models`, `main` | **BUILT** | 1 |
+| Mock backend | `gateway/backends/mock.py` | **BUILT** | 3 |
+| NAT agent runtime | `agent/` | STUB → "direct" | 5 |
+| Langfuse export | `obs/export.py` | STUB → no-op | 4 |
+| Headroom | `compression/` | STUB → pass-through | 5b |
+| vLLM | `gateway/backends/vllm.py` | STUB | 9 |
+| Dynamo + TensorRT-LLM | `gateway/backends/dynamo.py` | STUB | 9 |
+| React UI | `ui/` | STUB → placeholder | 6 |
+| Compose + Helm | `deploy/` | STUB → skeleton | 8 |
