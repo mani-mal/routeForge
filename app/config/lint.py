@@ -3,8 +3,6 @@ import sys
 from app.config.loader import load_settings
 from app.config.schema import Settings
 
-_ORDER = {"cheap": 0, "mid": 1, "frontier": 2}
-
 
 def lint_settings(s: Settings) -> list[str]:
     errs: list[str] = []
@@ -38,8 +36,15 @@ def lint_settings(s: Settings) -> list[str]:
     for r in s.policy.sensitivity_rules:
         if r.sensitivity not in scale:
             errs.append(f"RULE_SENSITIVITY_UNKNOWN {r.sensitivity}")
-        if "on_prem" in r.residency:
-            errs.append(f"RESIDENCY_SPELLING {r.residency} (use onprem_only)")
+
+    valid_residency = {"any", "private_cloud_ok", "onprem_only"}
+    residency_values = [("rule", r.residency) for r in s.policy.sensitivity_rules]
+    residency_values += [(f"tenant:{name}", t.default_residency)
+                         for name, t in s.policy.tenants.items()]
+    for where, val in residency_values:
+        if val not in valid_residency:
+            errs.append(
+                f"RESIDENCY_UNKNOWN {where}={val} not in {sorted(valid_residency)}")
 
     return errs
 
