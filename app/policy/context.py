@@ -11,6 +11,9 @@ def _stricter(a: str, b: str) -> str:
 
 
 def _match_rule(settings: Settings, etypes: set[str]):
+    # Rules are ordered most-to-least severe in policy.yaml; return the first whose
+    # entity set overlaps. Entity sets are disjoint today, so order only matters if a
+    # future entity type appears in more than one rule.
     for rule in settings.policy.sensitivity_rules:
         if rule.entities and etypes & set(rule.entities):
             return rule
