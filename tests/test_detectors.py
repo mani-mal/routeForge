@@ -17,3 +17,13 @@ def test_null_detector_finds_nothing():
 
 def test_clean_text_no_entities():
     assert RegexDetector().analyze("what is the capital of france") == []
+
+
+def test_multi_entity_placeholders_number_left_to_right():
+    d = RegexDetector()
+    text = "call 111-222-3333 or 444-555-6666 thanks"
+    ents = d.analyze(text)
+    redacted, mapping = d.anonymize(text, ents)
+    assert mapping["<PHONE_NUMBER_1>"] == "111-222-3333"
+    assert mapping["<PHONE_NUMBER_2>"] == "444-555-6666"
+    assert redacted == "call <PHONE_NUMBER_1> or <PHONE_NUMBER_2> thanks"

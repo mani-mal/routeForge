@@ -33,17 +33,22 @@ class RegexDetector:
         for e in out:
             if e.start >= last_end:
                 deduped.append(e)
-                last_end = e.end
+            last_end = max(last_end, e.end)
         return deduped
 
     def anonymize(self, text: str, entities: list[Entity]) -> tuple[str, dict[str, str]]:
-        redacted = text
-        mapping: dict[str, str] = {}
+        # Pass 1 (left-to-right): assign stable placeholders in reading order.
         counters: dict[str, int] = {}
-        for e in sorted(entities, key=lambda e: e.start, reverse=True):
+        placeholders: list[tuple[Entity, str]] = []
+        mapping: dict[str, str] = {}
+        for e in sorted(entities, key=lambda e: e.start):
             counters[e.type] = counters.get(e.type, 0) + 1
             ph = f"<{e.type}_{counters[e.type]}>"
+            placeholders.append((e, ph))
             mapping[ph] = e.value
+        # Pass 2 (right-to-left): splice so earlier indices stay valid.
+        redacted = text
+        for e, ph in sorted(placeholders, key=lambda item: item[0].start, reverse=True):
             redacted = redacted[:e.start] + ph + redacted[e.end:]
         return redacted, mapping
 
@@ -61,9 +66,7 @@ class PresidioDetector:
 
     def __init__(self) -> None:
         from presidio_analyzer import AnalyzerEngine
-        from presidio_anonymizer import AnonymizerEngine
         self._analyzer = AnalyzerEngine()
-        self._anonymizer = AnonymizerEngine()
 
     def analyze(self, text: str) -> list[Entity]:
         results = self._analyzer.analyze(text=text, language="en")
