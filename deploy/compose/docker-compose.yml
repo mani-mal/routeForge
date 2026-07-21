@@ -1,0 +1,7 @@
+# Skeleton — see greenlake-deploy skill. Full compose lands in Phase 8.
+services:
+  api:
+    build: ..
+    ports: ["8080:8080"]
+    environment: [SP_INFERENCE_BACKEND=mock]
+  # langfuse / postgres / clickhouse / vllm added in Phase 8

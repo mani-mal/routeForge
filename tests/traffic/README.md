@@ -1,0 +1,1 @@
+Stub. See .claude/skills/traffic-and-tests. Built in Phase 7.

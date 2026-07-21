@@ -1,0 +1,1 @@
+Vite/React/Tailwind UI skeleton. See .claude/skills/demo-ui. Built in Phase 6.
