@@ -39,3 +39,28 @@ def test_high_risk_onprem_only_stays_on_prem():
                  tokens_after=20, complexity=0.1)
     assert d.chosen.provider == "onprem"
     assert d.chosen.tier == "mid"  # best on-prem tier, not frontier
+
+
+def test_nearest_up_when_target_tier_absent():
+    # only azure allowed; azure has no cheap-tier member -> nearest-up to mid
+    d = R.select(_ctx({"azure"}), tokens_after=20, complexity=0.1)
+    assert d.chosen.name == "azure-gpt-mid"
+    assert d.chosen.tier == "mid"
+
+
+def test_min_tier_escalation_raises_target_and_prefers_cheaper():
+    d = R.select(_ctx({"onprem", "azure", "bedrock"}), tokens_after=20,
+                 complexity=0.1, min_tier="mid")
+    assert d.chosen.tier == "mid"
+    assert d.chosen.name == "local-32b"  # free on-prem beats paid azure within mid
+
+
+def test_budget_exhaustion_raises():
+    ctx = ExecutionPolicyContext(
+        request_id="r", tenant_id="t", sensitivity="public", onprem_only=False,
+        allowed_providers=frozenset({"onprem", "azure", "bedrock"}),
+        allowed_models=frozenset(), max_cost_usd=0.0, max_latency_ms=15000,
+        risk_class="high", require_verification=False, detected_entities=(),
+        redaction_map_id=None)
+    with pytest.raises(ValueError):
+        R.select(ctx, tokens_after=20, complexity=0.1)

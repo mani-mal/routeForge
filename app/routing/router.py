@@ -62,10 +62,11 @@ class Router:
         if _ORDER[target] > best_allowed_order:
             target = next(t for t, o in _ORDER.items() if o == best_allowed_order)
         avail = sorted({c.tier for c in allowed}, key=lambda t: _ORDER[t])
+        # the clamp above guarantees a match exists; avail[-1] is a defensive fallback
         tier_pick = next((t for t in avail if _ORDER[t] >= _ORDER[target]), avail[-1])
 
         # 3. keep only the target tier; 4. drop over-budget
-        eligible: list[tuple] = []
+        eligible: list[tuple[PoolCandidate, float]] = []
         for c in allowed:
             if c.tier != tier_pick:
                 reason = ("below target tier" if _ORDER[c.tier] < _ORDER[tier_pick]
@@ -87,7 +88,7 @@ class Router:
         w = self._s.routing.weights
         max_cost = max((e for _, e in eligible), default=0.0)
 
-        def score(item):
+        def score(item: tuple[PoolCandidate, float]) -> float:
             c, est = item
             norm = est / max_cost if max_cost > 0 else 0.0
             return (w["quality"] * _Q[c.tier] - w["cost"] * norm
