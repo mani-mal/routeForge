@@ -23,11 +23,18 @@ class Gateway:
         max_esc = self._s.routing.max_escalations
         min_tier: str | None = None
         escalations = 0
+        failed_tiers: set[str] = set()
         result: GenerationResult | None = None
 
         while True:
             decision = self._router.select(ctx, tokens_after, complexity, min_tier)
             cand = decision.chosen
+            # Fail closed: if residency clamping keeps returning a tier that already
+            # failed (e.g. onprem_only can't advance past the best on-prem tier),
+            # stop rather than loop forever.
+            if cand.tier in failed_tiers:
+                raise RuntimeError(
+                    "backend failed on all reachable tiers for this request")
             price = self._s.pricing.models[cand.name]
             try:
                 result = await self._backend.generate(
@@ -38,6 +45,7 @@ class Gateway:
                     reason=f"{cand.name} failed; escalating/fallback",
                     rejected=decision.rejected, est_cost_usd=decision.est_cost_usd,
                     latency_ms=0.0, hop_index=len(records)))
+                failed_tiers.add(cand.tier)
                 nxt = _NEXT[cand.tier]
                 if nxt is None:
                     raise
@@ -50,10 +58,12 @@ class Gateway:
                 actual_cost_usd=result.cost_usd, latency_ms=result.latency_ms,
                 hop_index=len(records)))
 
+            # For onprem_only requests the router clamps an out-of-reach tier back
+            # down, so an escalation may re-issue the same tier — bounded by
+            # max_escalations, never reaching cloud.
             if (result.confidence < threshold and escalations < max_esc
                     and _NEXT[cand.tier] is not None):
                 escalations += 1
-                # For onprem_only requests the router clamps an out-of-reach tier back down, so an escalation may re-issue the same tier — bounded by max_escalations, never reaching cloud.
                 min_tier = _NEXT[cand.tier]
                 hint = {k: v for k, v in hint.items() if k != "mock_confidence"}
                 continue

@@ -29,3 +29,5 @@ def test_required_clean_passes():
     text, rec = verify(D, _ctx(True), "the answer is 4")
     assert rec.passed is True
     assert rec.performed is True
+    assert text == "the answer is 4"
+    assert text != ""

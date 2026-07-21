@@ -1,5 +1,7 @@
 import asyncio
 
+import pytest
+
 from app.config.loader import load_settings
 from app.gateway.backends.mock import MockBackend
 from app.gateway.gateway import Gateway
@@ -49,3 +51,13 @@ def test_escalation_cap_holds_when_confidence_stays_low():
         gw.run(_ctx({"onprem", "azure", "bedrock"}), msgs, 20, 0.1, {}))
     router_hops = [r for r in records if r.step == "router"]
     assert len(router_hops) == 2  # cap=max_escalations(1): initial + exactly one escalation
+
+
+def test_onprem_only_backend_failure_fails_closed_not_hang():
+    # onprem_only clamps to the best on-prem tier; a persistently failing backend
+    # must fail closed (raise), not loop forever.
+    gw = Gateway(S, MockBackend(S), Router(S))
+    msgs = [Message(role="user", content="hello")]
+    ctx = _ctx({"onprem"}, risk="high")  # only onprem allowed -> tier clamps to mid
+    with pytest.raises(Exception):
+        asyncio.run(gw.run(ctx, msgs, 20, 0.1, {"mock_fail": True}))
