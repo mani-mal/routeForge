@@ -3,8 +3,12 @@ from fastapi import FastAPI
 from app.api.routes import router
 from app.config.lint import enforce
 from app.config.loader import load_settings
+from app.gateway.backends.mock import MockBackend
+from app.gateway.gateway import Gateway
+from app.pipeline import Pipeline
 from app.policy.detectors import make_detector
 from app.policy.gate import Gate
+from app.routing.router import Router
 
 # static demo api-key -> tenant map (design §3). Unknown/missing -> default.
 API_KEYS = {"acme-key": "acme", "hospital-key": "hospital", "demo-key": "default"}
@@ -17,7 +21,14 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Serving Plane", version="0.1.0")
     app.state.settings = settings
     app.state.api_keys = API_KEYS
-    app.state.gate = Gate(settings, detector)
+    gate = Gate(settings, detector)
+    app.state.gate = gate
+    backend = MockBackend(settings)          # 'none'/vllm/dynamo handled in later phases
+    # named model_router (not router) to avoid shadowing the APIRouter imported above;
+    # app.include_router(router) below needs the APIRouter, not this Router instance.
+    model_router = Router(settings)
+    gateway = Gateway(settings, backend, model_router)
+    app.state.pipeline = Pipeline(settings, gate, detector, gateway)
     app.include_router(router)
     return app
 
