@@ -1808,9 +1808,9 @@ git commit -m "feat: gateway with confidence escalation and fallback"
 
 **Interfaces:**
 - Consumes: `Detector` (Task 6), `ExecutionPolicyContext`, `VerificationRecord`.
-- Produces: `app.output.verify.verify(detector, ctx, completion_text, escalate_fn) -> tuple[str, VerificationRecord]`.
+- Produces: `app.output.verify.verify(detector, ctx, completion_text) -> tuple[str, VerificationRecord]`.
   - Re-scan `completion_text`; if entities found, redact them (egress redaction) → `redacted_text`.
-  - If `ctx.require_verification` and entities were found: mark `performed=True`; the caller-supplied `escalate_fn()` is not re-run here (escalation happens in the gateway) — instead, if entities remain after redaction is impossible (they always can be redacted here), `passed=True` once redacted. For the slice, "unverifiable" is simulated when `completion_text` contains the literal token `"UNVERIFIABLE"` → `passed=False`, and the caller must return a safe error (Task 14).
+  - If `ctx.require_verification`: mark `performed=True`. Escalation on verification failure happens in the gateway, not here. For the slice, "unverifiable" is simulated when `completion_text` contains the literal token `"UNVERIFIABLE"` → `passed=False` and the returned text is empty, and the caller (Task 14) returns a safe error; otherwise `passed=True` with the redacted text.
   - Non-required requests: `performed = (sampling)`; for determinism the slice sets `performed=True` only when required, else `False`.
 
 - [ ] **Step 1: Write `app/output/verify.py`**
