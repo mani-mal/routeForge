@@ -2000,8 +2000,10 @@ from app.routing.router import Router
 ```
 ```python
     backend = MockBackend(settings)          # 'none'/vllm/dynamo handled in later phases
-    router = Router(settings)
-    gateway = Gateway(settings, backend, router)
+    # NOTE: name it model_router, not `router` — `router` is the imported APIRouter
+    # used by app.include_router(router); a local `router` would shadow it.
+    model_router = Router(settings)
+    gateway = Gateway(settings, backend, model_router)
     app.state.pipeline = Pipeline(settings, gate, detector, gateway)
 ```
 
