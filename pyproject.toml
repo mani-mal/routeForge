@@ -1,0 +1,26 @@
+[project]
+name = "serving-plane"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+  "pydantic>=2.9",
+  "pyyaml>=6.0",
+  "httpx>=0.27",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.3"]
+
+# Presidio is the real demo detector but heavy (pulls spaCy). Tests use the
+# regex detector, so keep it an opt-in extra: `uv sync --extra presidio`.
+[project.optional-dependencies]
+presidio = ["presidio-analyzer>=2.2", "presidio-anonymizer>=2.2"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.uv]
+package = false
