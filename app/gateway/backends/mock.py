@@ -1,0 +1,32 @@
+from __future__ import annotations
+
+import hashlib
+
+from app.config.schema import PriceCfg, Settings
+from app.gateway.backends.base import count_tokens
+from app.models import GenerationResult, Message
+
+_LATENCY_MS = {"cheap": 200.0, "mid": 500.0, "frontier": 2000.0}
+
+
+class MockBackend:
+    name = "mock"
+
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+
+    async def generate(self, model: str, messages: list[Message], price: PriceCfg,
+                        tier: str, hint: dict) -> GenerationResult:
+        if hint.get("mock_fail"):
+            raise RuntimeError("mock backend forced failure")
+        prompt = "\n".join(m.content for m in messages)
+        seed = int(hashlib.sha256((model + prompt).encode()).hexdigest(), 16)
+        tokens_in = sum(count_tokens(m.content) for m in messages)
+        tokens_out = 40 + seed % 161
+        cost = (tokens_in * price.input + tokens_out * price.output) / 1_000_000
+        confidence = float(hint.get("mock_confidence", 0.95))
+        return GenerationResult(
+            model=model, text=f"[mock:{model}] answer",
+            tokens_in=tokens_in, tokens_out=tokens_out,
+            latency_ms=_LATENCY_MS.get(tier, 500.0), cost_usd=cost,
+            confidence=confidence)
