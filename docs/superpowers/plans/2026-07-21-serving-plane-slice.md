@@ -83,7 +83,12 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8.3", "presidio-analyzer>=2.2", "presidio-anonymizer>=2.2"]
+dev = ["pytest>=8.3"]
+
+# Presidio is the real demo detector but heavy (pulls spaCy). Tests use the
+# regex detector, so keep it an opt-in extra: `uv sync --extra presidio`.
+[project.optional-dependencies]
+presidio = ["presidio-analyzer>=2.2", "presidio-anonymizer>=2.2"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
