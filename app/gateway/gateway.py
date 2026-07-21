@@ -5,7 +5,6 @@ from app.gateway.backends.base import InferenceBackend
 from app.models import DecisionRecord, ExecutionPolicyContext, GenerationResult, Message
 from app.routing.router import Router
 
-_ORDER = {"cheap": 0, "mid": 1, "frontier": 2}
 _NEXT = {"cheap": "mid", "mid": "frontier", "frontier": None}
 
 
@@ -54,6 +53,7 @@ class Gateway:
             if (result.confidence < threshold and escalations < max_esc
                     and _NEXT[cand.tier] is not None):
                 escalations += 1
+                # For onprem_only requests the router clamps an out-of-reach tier back down, so an escalation may re-issue the same tier — bounded by max_escalations, never reaching cloud.
                 min_tier = _NEXT[cand.tier]
                 hint = {k: v for k, v in hint.items() if k != "mock_confidence"}
                 continue
