@@ -1,3 +1,6 @@
+import os
+os.environ.setdefault("SP_PII_DETECTION", "regex")
+
 import pytest
 from fastapi.testclient import TestClient
 from app.main import create_app
