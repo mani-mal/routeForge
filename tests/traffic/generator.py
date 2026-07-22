@@ -4,16 +4,17 @@ Drives an `httpx.AsyncClient` against a *running* Serving Plane API — it
 never imports the pipeline directly, so it exercises the exact HTTP surface
 the UI watches (CLAUDE.md demo narrative step 5: the dashboard fills live).
 
-Tier resolution: `/v1/chat/completions`'s response body carries `cost` and
-`policy.onprem_only` but not the routing `tier` (that's resolved server-side
-in `app/api/routes.py` from `Settings.routing.model_pool` and stashed only
-in `HistoryStore`, on `app.state.history`). Rather than duplicate that
-model->tier mapping here (and risk it drifting from `config/routing.yaml`),
-this module fires all requests first, then does a single `GET
-/api/requests?limit=...` at the end and aggregates tier/cost/onprem straight
-from the server's own `RequestSummary` records, filtered down to just the
-ids this run produced. That keeps the generator thin and the numbers
-provably consistent with what the UI itself shows.
+Aggregation source: each `/v1/chat/completions` response carries everything
+the summary needs — `cost` (total/baseline/routing_saved/compression_saved)
+and `policy.onprem_only`. Tier is the one field the response omits, so we
+resolve `model -> tier` ONCE from `config/routing.yaml`'s `model_pool` (the
+same file the server itself loads) and map each response's `model`. We
+deliberately do NOT re-fetch `GET /api/requests` to aggregate: `HistoryStore`
+is a fixed 500-entry ring buffer, so a run of >500 requests would evict its
+own early entries before aggregation and silently under-count the demo's
+headline numbers — exactly the >=500-request volume this generator exists
+for. Aggregating straight from the responses we already hold is correct for
+any `n`.
 
 Latency (p50/p95) is measured client-side with `time.monotonic()` around
 each HTTP round trip — that's the number a demo audience actually feels,
@@ -29,6 +30,7 @@ from dataclasses import dataclass, field
 
 import httpx
 
+from app.config.loader import load_settings
 from tests.traffic.personas import Persona, load_personas, sample
 
 
@@ -54,13 +56,19 @@ def _percentile(sorted_vals: list[float], pct: float) -> float:
     return sorted_vals[idx]
 
 
+def _model_tier_map() -> dict[str, str]:
+    """model name -> tier, straight from config/routing.yaml's model_pool
+    (the same config the server loads — no drift risk)."""
+    return {c.name: c.tier for c in load_settings().routing.model_pool}
+
+
 async def _fire_one(
     client: httpx.AsyncClient,
     base_url: str,
     persona: Persona,
     rng: random.Random,
     latencies: list[float],
-    ok_ids: list[str],
+    results: list[dict],
     errors: list[dict],
 ) -> None:
     body = persona.build(rng)
@@ -74,14 +82,17 @@ async def _fire_one(
         errors.append({"persona": persona.name, "error": repr(exc)})
         return
     latencies.append((time.monotonic() - start) * 1000)
-    if resp.status_code == 200:
-        ok_ids.append(resp.json()["id"])
-    else:  # a 422/503/etc — does NOT crash the run
+    if resp.status_code != 200:  # a 422/503/etc — does NOT crash the run
         errors.append({
             "persona": persona.name,
             "status": resp.status_code,
             "body": resp.text[:200],
         })
+        return
+    try:  # a malformed 200 body must also not crash the run
+        results.append(resp.json())
+    except Exception as exc:
+        errors.append({"persona": persona.name, "error": f"bad body: {exc!r}"})
 
 
 async def run_traffic(
@@ -114,19 +125,21 @@ async def run_traffic(
             personas = load_personas()
         rng = random.Random(seed)
         picked = sample(personas, rng, n)
+        tier_map = _model_tier_map()
 
         latencies: list[float] = []
-        ok_ids: list[str] = []
+        results: list[dict] = []
         errors: list[dict] = []
 
         delay = (1.0 / rps) if rps and rps > 0 else 0.0
         tasks: list[asyncio.Task] = []
         for persona in picked:
             tasks.append(asyncio.create_task(
-                _fire_one(http, base_url, persona, rng, latencies, ok_ids, errors)))
+                _fire_one(http, base_url, persona, rng, latencies, results, errors)))
             if delay:
                 await asyncio.sleep(delay)
-        await asyncio.gather(*tasks)
+        # return_exceptions: a single task blowing up must not abort the burst
+        await asyncio.gather(*tasks, return_exceptions=True)
 
         tier_distribution: dict[str, int] = {}
         total_usd = 0.0
@@ -135,21 +148,18 @@ async def run_traffic(
         compression_saved_usd = 0.0
         onprem_count = 0
 
-        if ok_ids:
-            id_set = set(ok_ids)
-            resp = await http.get(
-                f"{base_url}/api/requests", params={"limit": max(n, len(ok_ids))})
-            resp.raise_for_status()
-            for s in resp.json():
-                if s["id"] not in id_set:
-                    continue
-                tier_distribution[s["tier"]] = tier_distribution.get(s["tier"], 0) + 1
-                total_usd += s["total_usd"]
-                baseline_usd += s["baseline_usd"]
-                routing_saved_usd += s["routing_saved_usd"]
-                compression_saved_usd += s["compression_saved_usd"]
-                if s["onprem_only"]:
-                    onprem_count += 1
+        # Aggregate straight from the responses we already hold — correct for
+        # any n, independent of the server's ring-buffer history size.
+        for r in results:
+            cost = r.get("cost", {})
+            tier = tier_map.get(r.get("model", ""), "?")
+            tier_distribution[tier] = tier_distribution.get(tier, 0) + 1
+            total_usd += cost.get("total_usd", 0.0)
+            baseline_usd += cost.get("baseline_usd", 0.0)
+            routing_saved_usd += cost.get("routing_saved_usd", 0.0)
+            compression_saved_usd += cost.get("compression_saved_usd", 0.0)
+            if r.get("policy", {}).get("onprem_only"):
+                onprem_count += 1
 
         pct_saved = (
             (baseline_usd - total_usd) / baseline_usd * 100.0
