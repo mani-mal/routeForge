@@ -59,6 +59,41 @@ class AgentResult(BaseModel):
     hops: list[DecisionRecord]
 
 
+class AgentCapExceeded(RuntimeError):
+    """Raised when NAT's `tool_calling_agent` exhausts `max_iterations`
+    without converging on a final answer.
+
+    NAT does NOT raise in this case: it internally catches its own
+    `GraphRecursionError` and returns a DEGRADED natural-language message
+    (e.g. "The tool calling agent could not produce a final answer within
+    N iterations...") as an ordinary `runner.result()` string, indistinguishable
+    from a real answer unless inspected. Serving that string as a normal
+    `AgentResult` would violate the fail-closed rule (CLAUDE.md rule 5) and
+    this task's "enforce max_iterations" intent, so `run()` detects it and
+    raises this instead, letting the pipeline (Task 5) map it to an error
+    response.
+    """
+
+
+# NAT's tool_calling_agent has no structured non-convergence signal (no
+# distinct exception, no status field on the result) — the only indicator
+# is this substring in the final answer text. It is coupled to nvidia-nat's
+# internal `tool_calling_agent` implementation and MUST be re-verified
+# whenever the `nat` dependency is upgraded.
+_CAP_EXCEEDED_MARKER = "could not produce a final answer within"
+
+
+def _is_cap_exceeded(text: str) -> bool:
+    """True if NAT's final answer is its own non-convergence message.
+
+    This is the PRIMARY and only detection signal — deliberately not
+    hop-count based. A legitimately hard question can take exactly
+    `max_iterations` hops and still converge to a real answer on the last
+    one; keying off hop count alone would false-positive on that case.
+    """
+    return _CAP_EXCEEDED_MARKER in (text or "").lower()
+
+
 async def run(ctx: ExecutionPolicyContext, request: ChatRequest, *, port: int) -> AgentResult:
     """Run the NAT `tool_calling_agent` workflow for one chat request.
 
@@ -67,6 +102,11 @@ async def run(ctx: ExecutionPolicyContext, request: ChatRequest, *, port: int) -
     the router (step 6) per hop using `ctx`. On any exception the per-run hop
     state is still drained (`HOPS.pop`) before re-raising — fail closed, the
     caller (pipeline) handles the error; we just must not leak run state.
+
+    Raises `AgentCapExceeded` if NAT's own `tool_calling_agent` exhausts
+    `max_iterations` without converging — NAT itself does not raise for
+    this, it swallows it internally and returns a DEGRADED text answer, so
+    we detect and re-raise it here (fail closed; see `_is_cap_exceeded`).
     """
     # Lazy import: nat is an optional extra (`--extra agent`); importing
     # app.agent must not require it to be installed.
@@ -98,6 +138,14 @@ async def run(ctx: ExecutionPolicyContext, request: ChatRequest, *, port: int) -
             finally:
                 await session_manager.shutdown()
     finally:
+        # Always drain the per-run hop collector, even when we are about to
+        # raise AgentCapExceeded below — fail closed without leaking state.
         hops = HOPS.pop(run_id)
+
+    if _is_cap_exceeded(text):
+        raise AgentCapExceeded(
+            f"NAT tool_calling_agent exceeded max_iterations without converging "
+            f"(run_id={run_id}): {text!r}"
+        )
 
     return AgentResult(text=text, hops=hops)
