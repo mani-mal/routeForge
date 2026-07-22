@@ -1,6 +1,39 @@
-"""Langfuse/NAT OTel exporter — STUB (design §10.4). No-op this pass."""
+"""Export a request's decision trace to Langfuse via OTel. Best-effort: never
+raises into the request path (telemetry != policy gate)."""
 from __future__ import annotations
 
+import logging
 
-def export(trace: list) -> None:  # redacting exporter lands in Phase 4
-    return None
+from app.obs.otel import get_tracer
+from app.obs.redact import redact_value
+
+log = logging.getLogger("serving.obs")
+
+
+def export_trace(*, request_id: str, tenant_id: str, model: str,
+                 cost: dict, policy: dict, trace: list[dict]) -> None:
+    try:
+        tracer = get_tracer()
+        with tracer.start_as_current_span("serving.request") as root:
+            root.set_attribute("sp.request_id", request_id)
+            root.set_attribute("sp.tenant_id", tenant_id)
+            root.set_attribute("sp.model", model)
+            root.set_attribute("sp.cost_total_usd", float(cost.get("total_usd", 0.0)))
+            root.set_attribute("sp.cost_baseline_usd", float(cost.get("baseline_usd", 0.0)))
+            root.set_attribute("sp.sensitivity", str(policy.get("sensitivity", "")))
+            root.set_attribute("sp.onprem_only", bool(policy.get("onprem_only", False)))
+            root.set_attribute("sp.detected_entities",
+                               ",".join(policy.get("detected_entities", [])))  # TYPES only
+            for i, rec in enumerate(trace):
+                step = str(rec.get("step", f"step-{i}"))
+                with tracer.start_as_current_span(f"serving.{step}") as sp:
+                    sp.set_attribute("sp.step", step)
+                    if rec.get("chosen") is not None:
+                        sp.set_attribute("sp.chosen", str(rec["chosen"]))
+                    if "reason" in rec:
+                        sp.set_attribute("sp.reason", redact_value(str(rec["reason"])))
+                    for k in ("hop_index", "actual_cost_usd", "est_cost_usd", "latency_ms"):
+                        if rec.get(k) is not None:
+                            sp.set_attribute(f"sp.{k}", float(rec[k]))
+    except Exception:  # telemetry must never break serving
+        log.exception("trace export failed for %s (swallowed)", request_id)
