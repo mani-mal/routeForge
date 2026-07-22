@@ -1,0 +1,51 @@
+{{/*
+Phase-9 PLACEHOLDER for an in-cluster vLLM/Dynamo GPU serving workload.
+Disabled by default (vllmStub.enabled=false) and NOT wired into the api
+Deployment's env automatically — when you do turn this on, also point
+servingPlane.vllm.baseUrl / servingPlane.dynamo.endpoint at this Service.
+
+Do not build this out by hand for `dynamo`: use NVIDIA's own K8s recipes
+(dynamo-recipe-runner skill) instead of hand-rolling that Deployment.
+
+This is the only place in the chart that ever requests a GPU node, and only
+when explicitly enabled — the default install (mock backend) never touches
+gpuWorkload.* and schedules on ordinary CPU nodes.
+*/}}
+{{- if .Values.vllmStub.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "serving-plane.componentFullname" (dict "root" . "component" "vllm-stub") }}
+  labels:
+    {{- include "serving-plane.componentLabels" (dict "root" . "component" "vllm-stub") | nindent 4 }}
+  annotations:
+    routeforge.io/note: "Phase 9 placeholder — replace with a real vLLM/Dynamo Deployment (or NVIDIA's Dynamo K8s recipe) before relying on this for GPU serving."
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "serving-plane.componentSelectorLabels" (dict "root" . "component" "vllm-stub") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "serving-plane.componentSelectorLabels" (dict "root" . "component" "vllm-stub") | nindent 8 }}
+    spec:
+      {{- with .Values.gpuWorkload.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.gpuWorkload.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: vllm
+          image: {{ .Values.vllmStub.image | quote }}
+          ports:
+            - name: http
+              containerPort: 8000
+          {{- with .Values.gpuWorkload.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}

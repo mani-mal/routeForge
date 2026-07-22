@@ -1,0 +1,20 @@
+apiVersion: v2
+name: serving-plane
+description: >-
+  HPE GreenLake / Kubernetes packaging for the routeForge Serving Plane —
+  privacy-first, cost-aware LLM request routing (steps 1-10). Deploys the
+  `serving-plane-api` and `serving-plane-ui` images built by the repo's
+  Dockerfile. Langfuse itself is deployed separately (compose ships a
+  self-hosted stack for the demo; on GreenLake, point `langfuse.host` at
+  wherever Langfuse is already running, or layer in a Langfuse chart).
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - llm
+  - routing
+  - hpe-greenlake
+  - serving-plane
+home: https://github.com/
+maintainers:
+  - name: routeForge

@@ -1,0 +1,68 @@
+routeForge Serving Plane installed as {{ include "serving-plane.fullname" . }} in namespace {{ .Release.Namespace }}.
+
+1. Reach the UI
+{{- if .Values.ingress.enabled }}
+   http{{ if .Values.ingress.tls.enabled }}s{{ end }}://{{ .Values.ingress.host }}/
+{{- else }}
+   Ingress is disabled. Port-forward instead:
+     kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "serving-plane.componentFullname" (dict "root" . "component" "ui") }} 3001:{{ .Values.service.ui.port }}
+   then open http://localhost:3001/
+{{- end }}
+
+2. Current configuration
+   inference backend : {{ .Values.servingPlane.inferenceBackend }}
+   PII detection      : {{ .Values.servingPlane.policy.piiDetection }}
+   compression (CCR)   : {{ .Values.servingPlane.contextOptimization.enabled }} ({{ .Values.servingPlane.contextOptimization.ccr.enabled }})
+   Langfuse host       : {{ .Values.langfuse.host }}
+
+3. Toggle backends / PII / compression without rebuilding images
+   helm upgrade {{ .Release.Name }} <chart> --reuse-values \
+     --set servingPlane.inferenceBackend=vllm \
+     --set servingPlane.policy.piiDetection=presidio \
+     --set servingPlane.contextOptimization.enabled=true \
+     --set servingPlane.contextOptimization.ccr.enabled=true
+
+   These are rendered into the {{ include "serving-plane.fullname" . }}-serving-config
+   ConfigMap (overlaying /app/config/serving.yaml) and, for the switches the
+   app also reads from env (inference backend, PII detection, port, context
+   optimization on/off), set directly on the api container too — the
+   Deployment's pod-template annotation forces a rollout on any config change.
+
+   Turning contextOptimization+ccr on for the first time provisions a new
+   in-cluster PVC ({{ include "serving-plane.fullname" . }}-ccr); turning
+   either off leaves any existing PVC in place (Helm does not delete PVCs
+   automatically) until removed manually.
+
+4. Where Langfuse is
+   This chart does NOT deploy Langfuse — point servingPlane at wherever
+   Langfuse already runs (self-hosted or managed) via `langfuse.host`, and
+   reference its API keys through an EXISTING Kubernetes Secret:
+     --set langfuse.existingSecret=<secret-name>
+   (Secret must have keys `langfuse-public-key` / `langfuse-secret-key`.)
+   Do not put keys in values.yaml or on the command line in a shared cluster;
+   `langfuse.createSecret.enabled` exists only for a disposable dev install.
+
+{{- if .Values.servingPlane.server.streamDecisions }}
+
+5. WARNING — decision stream (SSE) is enabled
+   servingPlane.server.streamDecisions=true exposes a live per-request
+   decision stream (tenant, entity, cost metadata) to the UI. This is fine for
+   a single-tenant demo. In any multi-tenant or customer-facing deployment,
+   this endpoint MUST sit behind authentication and be tenant-scoped at the
+   ingress/gateway layer — this chart does not implement that auth, it only
+   exposes the switch. Do not expose it unauthenticated outside a demo.
+{{- end }}
+
+{{- if and (eq .Values.servingPlane.inferenceBackend "vllm") (not .Values.vllmStub.enabled) }}
+
+6. inferenceBackend=vllm is set, but no in-cluster vLLM Deployment is enabled
+   (vllmStub.enabled=false) — servingPlane.vllm.baseUrl must point at a vLLM
+   endpoint that already exists (in- or out-of-cluster), or requests will
+   fail/fallback per servingPlane.allowBackendFallback.
+{{- end }}
+{{- if and (eq .Values.servingPlane.inferenceBackend "dynamo") (not .Values.vllmStub.enabled) }}
+
+6. inferenceBackend=dynamo is set — this chart does not deploy Dynamo.
+   Use NVIDIA's own Dynamo Kubernetes recipes to stand up the Dynamo
+   frontend/workers, then point servingPlane.dynamo.endpoint at it.
+{{- end }}

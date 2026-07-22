@@ -1,0 +1,39 @@
+{{/*
+Single entrypoint at the ui Service: nginx inside the ui image already
+proxies /api and /v1 through to the api Service (see ui/nginx.conf), so the
+ingress only needs one backend. Reaching the api Service directly from
+outside the cluster is intentionally not exposed here.
+*/}}
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "serving-plane.fullname" . }}
+  labels:
+    {{- include "serving-plane.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "serving-plane.componentFullname" (dict "root" . "component" "ui") }}
+                port:
+                  number: {{ .Values.service.ui.port }}
+{{- end }}

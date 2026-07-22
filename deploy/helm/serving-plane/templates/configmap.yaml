@@ -1,0 +1,73 @@
+{{/*
+Renders config/serving.yaml from .Values.servingPlane. This overlays the
+image's baked-in copy at /app/config/serving.yaml via a subPath volume mount
+(see deployment-api.yaml) — routing.yaml/policy.yaml/pricing.yaml are left as
+shipped in the image since they aren't infra switches (see CLAUDE.md's config
+ownership table). Field names/shape must match app/config/loader.py's raw
+dict access exactly.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "serving-plane.fullname" . }}-serving-config
+  labels:
+    {{- include "serving-plane.labels" . | nindent 4 }}
+data:
+  serving.yaml: |
+    inference_backend: {{ .Values.servingPlane.inferenceBackend | quote }}
+    allow_backend_fallback: {{ .Values.servingPlane.allowBackendFallback }}
+
+    vllm:
+      base_url: {{ .Values.servingPlane.vllm.baseUrl | quote }}
+      timeout_s: {{ .Values.servingPlane.vllm.timeoutS }}
+
+    dynamo:
+      endpoint: {{ .Values.servingPlane.dynamo.endpoint | quote }}
+      router_mode: {{ .Values.servingPlane.dynamo.routerMode | quote }}
+      timeout_s: {{ .Values.servingPlane.dynamo.timeoutS }}
+
+    context_optimization:
+      enabled: {{ .Values.servingPlane.contextOptimization.enabled }}
+      mode: {{ .Values.servingPlane.contextOptimization.mode | quote }}
+      proxy_url: {{ .Values.servingPlane.contextOptimization.proxyUrl | quote }}
+      min_tokens: {{ .Values.servingPlane.contextOptimization.minTokens }}
+      bypass_on:
+        high_risk: {{ .Values.servingPlane.contextOptimization.bypassOn.highRisk }}
+        restricted_sensitivity: {{ .Values.servingPlane.contextOptimization.bypassOn.restrictedSensitivity }}
+        user_prompt: {{ .Values.servingPlane.contextOptimization.bypassOn.userPrompt }}
+      ccr:
+        enabled: {{ .Values.servingPlane.contextOptimization.ccr.enabled }}
+        residency: {{ .Values.servingPlane.contextOptimization.ccr.residency | quote }}
+        ttl_hours: {{ .Values.servingPlane.contextOptimization.ccr.ttlHours }}
+        export_to_telemetry: {{ .Values.servingPlane.contextOptimization.ccr.exportToTelemetry }}
+      cache_alignment: {{ .Values.servingPlane.contextOptimization.cacheAlignment }}
+
+    policy:
+      pii_detection: {{ .Values.servingPlane.policy.piiDetection | quote }}
+      fail_closed: {{ .Values.servingPlane.policy.failClosed }}
+
+    observability:
+      langfuse:
+        enabled: {{ .Values.langfuse.enabled }}
+        # LANGFUSE_HOST env (set on the api container) still wins via the
+        # ${LANGFUSE_HOST:-...} expansion in app/config/loader.py; this value
+        # is the default baked into the rendered config.
+        host: {{ printf "${LANGFUSE_HOST:-%s}" .Values.langfuse.host | quote }}
+        redact_on_export: true   # mandatory — never make this settable
+
+    providers:
+      onprem:
+        enabled: {{ .Values.servingPlane.providers.onprem.enabled }}
+      azure:
+        enabled: {{ .Values.servingPlane.providers.azure.enabled }}
+      bedrock:
+        enabled: {{ .Values.servingPlane.providers.bedrock.enabled }}
+
+    agent:
+      runtime: {{ .Values.servingPlane.agent.runtime | quote }}
+
+    server:
+      host: {{ .Values.servingPlane.server.host | quote }}
+      port: {{ .Values.servingPlane.server.port }}
+      stream_decisions: {{ .Values.servingPlane.server.streamDecisions }}
+      reject_stream_requests: {{ .Values.servingPlane.server.rejectStreamRequests }}

@@ -1,0 +1,30 @@
+{{/*
+CCR (Conditional Context Retrieval) local cache — hard rule 6: this MUST be
+inside-cluster storage, never an external object store/cloud bucket, since it
+caches sanitized *originals* for retrieval and never leaves the residency
+boundary. Only provisioned when both compression and CCR are enabled;
+absent otherwise so a default install never carries this liability.
+
+Note: the current CCRStore (app/compression/ccr.py) is in-process/in-memory
+only — this PVC pre-provisions the in-cluster storage path
+(/var/lib/serving-plane/ccr, mounted in deployment-api.yaml) for when CCR
+gains on-disk persistence. TTL enforcement (contextOptimization.ccr.ttlHours)
+happens in application logic, not at the storage layer.
+*/}}
+{{- if and .Values.servingPlane.contextOptimization.enabled .Values.servingPlane.contextOptimization.ccr.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "serving-plane.fullname" . }}-ccr
+  labels:
+    {{- include "serving-plane.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.servingPlane.contextOptimization.ccr.storageClassName }}
+  storageClassName: {{ .Values.servingPlane.contextOptimization.ccr.storageClassName | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.servingPlane.contextOptimization.ccr.size }}
+{{- end }}
