@@ -3,6 +3,7 @@ import uuid
 from fastapi import APIRouter, HTTPException, Request
 
 from app.models import ChatRequest
+from app.obs.export import export_trace
 from app.pipeline import PipelineRejected
 
 router = APIRouter()
@@ -28,10 +29,16 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
     request_id = f"req-{uuid.uuid4().hex[:8]}"
     tenant = _tenant_of(request)
     try:
-        return await request.app.state.pipeline.run(request_id, tenant, body)
+        resp = await request.app.state.pipeline.run(request_id, tenant, body)
     except PipelineRejected as e:
         raise HTTPException(422, f"response failed verification: {e}")
     except HTTPException:
         raise
     except Exception:
         raise HTTPException(503, "policy evaluation unavailable")
+    try:
+        export_trace(request_id=resp["id"], tenant_id=tenant, model=resp["model"],
+                     cost=resp["cost"], policy=resp["policy"], trace=resp["trace"])
+    except Exception:
+        pass  # export_trace already swallows; this is belt-and-suspenders
+    return resp

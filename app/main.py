@@ -17,6 +17,8 @@ API_KEYS = {"acme-key": "acme", "hospital-key": "hospital", "demo-key": "default
 def create_app() -> FastAPI:
     settings = load_settings()
     enforce(settings)
+    from app.obs.otel import init_tracing
+    init_tracing(settings)
     detector = make_detector(settings.serving.pii_detection)
     app = FastAPI(title="Serving Plane", version="0.1.0")
     app.state.settings = settings
