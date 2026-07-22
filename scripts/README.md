@@ -1,5 +1,5 @@
 # scripts
-- dev-backend.sh  — run the API (uvicorn, reload)
+- dev-backend.sh  — run the API (uvicorn, reload). `uv sync`s deps first (creates .venv if missing). Defaults to the regex PII detector; `SP_PII_DETECTION=presidio` installs the extra + spaCy model.
 - dev-frontend.sh — run the UI dev server (stub UI this pass)
 - test.sh         — run pytest
 - smoke.sh        — boot API + live httpx checks
