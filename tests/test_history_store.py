@@ -8,7 +8,7 @@ def _resp(rid, model="local-8b", tier="cheap", total=0.0, base=0.001,
         "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"},
                      "finish_reason": "stop"}],
         "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
-        "trace": [{"step": "route", "chosen": model, "reason": "tier " + tier,
+        "trace": [{"step": "router", "chosen": model, "reason": "tier " + tier,
                    "latency_ms": 200.0, "tokens_priced": 10}],
         "cost": {"total_usd": total, "baseline_usd": base,
                  "routing_saved_usd": route_saved, "compression_saved_usd": comp_saved},
@@ -56,3 +56,27 @@ def test_stats_aggregate():
     assert s["onprem_count"] == 1
     assert abs(s["baseline_usd"] - 0.006) < 1e-9
     assert abs(s["compression_saved_usd"] - 0.001) < 1e-9
+
+
+def test_hops_counts_only_generation_records_not_all_trace():
+    """A direct request has 1 hop (one 'router' record); verify/compression
+    records must NOT inflate it. A multi-step run has one 'agent_hop' per LLM
+    call. The flow visualizer distinguishes single-call vs multi-step on this."""
+    h = HistoryStore()
+    direct = _resp("d")
+    direct["trace"] = [
+        {"step": "router", "chosen": "local-8b", "latency_ms": 200.0},
+        {"step": "verify", "passed": True},
+        {"step": "compression", "applied": False},
+    ]
+    assert h.record(direct, "acme", "cheap").hops == 1
+
+    multi = _resp("m")
+    multi["trace"] = [
+        {"step": "agent_hop", "chosen": "local-8b", "hop_index": 1, "latency_ms": 200.0},
+        {"step": "agent_hop", "chosen": "local-32b", "hop_index": 2, "latency_ms": 500.0},
+        {"step": "compression", "applied": True},
+        {"step": "compression", "applied": True},
+        {"step": "verify", "passed": True},
+    ]
+    assert h.record(multi, "acme", "cheap").hops == 2

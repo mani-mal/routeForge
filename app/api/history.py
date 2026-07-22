@@ -63,6 +63,12 @@ class HistoryStore:
         latency_ms = sum(
             float(rec.get("latency_ms", 0.0)) for rec in trace if rec.get("latency_ms") is not None
         )
+        # A "hop" is one model-generating routing decision: exactly 1 for a
+        # direct request (step "router"), N for a multi-step agent run (one
+        # "agent_hop" per LLM call). Counting raw trace records instead would
+        # inflate this (verify + compression records are not hops) and mislead
+        # the flow visualizer's single-call-vs-multi-step story.
+        hops = sum(1 for rec in trace if rec.get("step") in ("router", "agent_hop"))
 
         self._seq += 1
         summary = RequestSummary(
@@ -77,7 +83,7 @@ class HistoryStore:
             routing_saved_usd=float(cost.get("routing_saved_usd", 0.0)),
             compression_saved_usd=float(cost.get("compression_saved_usd", 0.0)),
             latency_ms=latency_ms,
-            hops=len(trace),
+            hops=hops,
             detected_entities=list(policy.get("detected_entities", [])),
             created_seq=self._seq,
         )

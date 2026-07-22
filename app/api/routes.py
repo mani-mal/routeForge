@@ -46,6 +46,9 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
     try:
         tier = next(
             (c.tier for c in s.routing.model_pool if c.name == resp["model"]), "?")
+        if tier == "?":  # model not in the pool — surfaces as a "?" tier bucket
+            logging.getLogger("serving.obs").debug(
+                "history: no tier for model %r (not in model_pool)", resp["model"])
         request.app.state.history.record(resp, tenant, tier)
     except Exception:  # history must never break serving
         logging.getLogger("serving.obs").exception(
