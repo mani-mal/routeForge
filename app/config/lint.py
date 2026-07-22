@@ -4,6 +4,10 @@ from app.config.loader import load_settings
 from app.config.schema import Settings
 
 
+class ConfigLintError(Exception):
+    """Raised when a startup config invariant is violated."""
+
+
 def lint_settings(s: Settings) -> list[str]:
     errs: list[str] = []
 
@@ -50,6 +54,12 @@ def lint_settings(s: Settings) -> list[str]:
 
 
 def enforce(s: Settings) -> None:
+    lf = s.serving.observability.langfuse
+    if lf.enabled and not lf.redact_on_export:
+        raise ConfigLintError(
+            "observability.langfuse.redact_on_export must be true when langfuse is "
+            "enabled (egress redaction is mandatory; see CLAUDE.md rule 2)")
+
     errs = lint_settings(s)
     if errs:
         for e in errs:

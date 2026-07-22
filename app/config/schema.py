@@ -57,6 +57,18 @@ class ProviderCfg(BaseModel):
     enabled: bool
 
 
+class LangfuseCfg(BaseModel):
+    enabled: bool
+    host: str
+    redact_on_export: bool
+    public_key: str | None = None
+    secret_key: str | None = None
+
+
+class ObservabilityCfg(BaseModel):
+    langfuse: LangfuseCfg
+
+
 class ServingCfg(BaseModel):
     inference_backend: str
     allow_backend_fallback: bool
@@ -64,6 +76,7 @@ class ServingCfg(BaseModel):
     pii_detection: str
     reject_stream_requests: bool
     context_optimization_enabled: bool
+    observability: ObservabilityCfg
 
 
 class Settings(BaseModel):
