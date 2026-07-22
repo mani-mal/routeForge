@@ -17,6 +17,16 @@ def test_ttl_expiry_evicts():
     t[0] = 11.0
     assert s.retrieve(cid, to_cloud=False) is None
     assert s.size == 0  # expired entry evicted
+    # a retrieve that returns nothing must NOT bump the honesty counters
+    assert s.retrievals == 0
+    assert s.retrievals_to_cloud == 0
+
+
+def test_missing_id_never_bumps_counters():
+    s = CCRStore(ttl_seconds=60, clock=lambda: 0.0)
+    assert s.retrieve("never-stored", to_cloud=True) is None
+    assert s.retrievals == 0
+    assert s.retrievals_to_cloud == 0
 
 
 def test_to_cloud_counter():
