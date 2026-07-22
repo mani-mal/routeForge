@@ -41,7 +41,7 @@ class Pipeline:
         mode = decide_mode(ctx, request)
 
         san_messages = [Message(role=request.messages[-1].role, content=sanitized)]
-        comp = compress(san_messages, ctx)
+        comp = compress(san_messages, ctx, self._s.serving.context_optimization)
 
         if mode == "multi_step":
             return await self._run_multi_step(request_id, ctx, request, san_messages, comp)
@@ -60,7 +60,7 @@ class Pipeline:
         total = sum(r.actual_cost_usd or 0.0 for r in records)
         baseline = self._baseline(comp.tokens_after)
         trace = [r.model_dump() for r in records] + [vrec.model_dump()]
-        trace.append({"step": "compression", **comp.record})
+        trace.append(comp.record.model_dump())
 
         return {
             "id": request_id,
@@ -113,7 +113,7 @@ class Pipeline:
         # compression prompt tokens at the all-frontier baseline model.
         baseline = sum(self._baseline(h.tokens_priced) for h in result.hops)
         trace = [h.model_dump() for h in result.hops] + [vrec.model_dump()]
-        trace.append({"step": "compression", **comp.record})
+        trace.append(comp.record.model_dump())
 
         model = result.hops[-1].chosen if result.hops else "auto"
         completion_tokens = count_tokens(result.text)
