@@ -26,6 +26,7 @@ observability = [
 ]
 agent = [
     "nvidia-nat[langchain]>=1.8,<2",
+    "nat_tools",
 ]
 
 [tool.pytest.ini_options]
@@ -34,3 +35,6 @@ addopts = "-q"
 
 [tool.uv]
 package = false
+
+[tool.uv.sources]
+nat_tools = { path = "nat_tools", editable = true }

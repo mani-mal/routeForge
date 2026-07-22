@@ -1885,6 +1885,17 @@ wheels = [
 ]
 
 [[package]]
+name = "nat-tools"
+version = "0.1.0"
+source = { editable = "nat_tools" }
+dependencies = [
+    { name = "nvidia-nat", extra = ["langchain"] },
+]
+
+[package.metadata]
+requires-dist = [{ name = "nvidia-nat", extras = ["langchain"], specifier = "~=1.8" }]
+
+[[package]]
 name = "nest-asyncio2"
 version = "1.7.2"
 source = { registry = "https://pypi.org/simple" }
@@ -3202,6 +3213,7 @@ dependencies = [
 
 [package.optional-dependencies]
 agent = [
+    { name = "nat-tools" },
     { name = "nvidia-nat", extra = ["langchain"] },
 ]
 observability = [
@@ -3224,6 +3236,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "langfuse", marker = "extra == 'observability'", specifier = ">=3.0" },
+    { name = "nat-tools", marker = "extra == 'agent'", editable = "nat_tools" },
     { name = "nvidia-nat", extras = ["langchain"], marker = "extra == 'agent'", specifier = ">=1.8,<2" },
     { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'observability'", specifier = ">=1.27" },
     { name = "opentelemetry-sdk", marker = "extra == 'observability'", specifier = ">=1.27" },
