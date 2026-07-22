@@ -26,8 +26,12 @@ class DeterministicCompressor:
     name = "deterministic"
 
     def compress_text(self, text: str) -> str:
-        text = _MULTI_BLANK.sub("\n\n", text)
+        # Strip trailing whitespace BEFORE collapsing blank runs: whitespace-only
+        # lines must become truly empty first, else _TRAILING_WS would create a
+        # fresh \n{3,} run that _MULTI_BLANK already passed over — breaking
+        # idempotence (a second call would collapse it and differ).
         text = _TRAILING_WS.sub(r"\1", text)
+        text = _MULTI_BLANK.sub("\n\n", text)
         text = _MULTI_SPACE.sub(" ", text)
         out_lines: list[str] = []
         prev: str | None = None
