@@ -49,8 +49,7 @@ export default function App() {
         });
         setSelectedId((curr) => curr ?? evt.request_id);
       }
-    });
-    setConnected(true);
+    }, (isConnected) => setConnected(isConnected));
 
     return () => {
       cancelled = true;
@@ -117,7 +116,8 @@ export default function App() {
   const allowedProviders = selectedDetail?.policy.allowed_providers ?? null;
   const onpremOnly = selectedDetail?.policy.onprem_only ?? selectedSummary?.onprem_only ?? null;
   const hops =
-    selectedSummary?.hops ?? effectiveTrace.filter((r) => r.step === "router").length ?? 0;
+    selectedSummary?.hops ??
+    effectiveTrace.filter((r) => r.step === "router" || r.step === "agent_hop").length;
 
   return (
     <div className="min-h-screen bg-ink text-gray-100 flex flex-col">

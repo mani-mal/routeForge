@@ -23,21 +23,36 @@ export function FlowVisualizer({
   onpremOnly: boolean | null;
   hops: number;
 }) {
-  const taken = new Set(trace.map((r) => r.step));
   const hasActivity = trace.length > 0;
+  // The trace only carries records for steps that emit one (router/agent_hop,
+  // gateway on fallback, compression, verify). But a completed request always
+  // traversed the gate, context, task-mode and returned a response — so those
+  // nodes light whenever there's activity. Map the emitted records onto the
+  // ten canonical nodes so the centrepiece (esp. the Policy Gate node that
+  // anchors the privacy story, and the Router node on multi-step) lights up.
+  const steps = new Set(trace.map((r) => r.step));
+  const generated = steps.has("router") || steps.has("agent_hop"); // a model ran
+  const lit = new Set<string>();
+  if (hasActivity) {
+    // pre-router steps + final response always happen for a completed request
+    ["request", "gate", "context", "task_mode", "response"].forEach((k) => lit.add(k));
+    if (steps.has("compression")) lit.add("compression");
+    if (generated) ["router", "gateway", "backend"].forEach((k) => lit.add(k));
+    if (steps.has("verify")) lit.add("verify");
+  }
   const excludedReason = onpremOnly ? "excluded by policy (residency)" : "excluded by policy";
 
   return (
     <Panel title="Flow visualizer" right={hasActivity ? <span className="text-xs text-gray-500">{trace.length} steps recorded</span> : undefined}>
       <div className="flex flex-wrap items-center gap-1">
         {STEPS.map((s, i) => {
-          const lit = taken.has(s.key);
+          const isLit = lit.has(s.key);
           const isRouter = s.key === "router";
           return (
             <div key={s.key} className="flex items-center gap-1">
               <div
                 className={`relative rounded-md border px-2 py-1.5 text-[11px] font-medium leading-tight text-center min-w-[74px] ${
-                  lit ? "border-cheap bg-cheap/10 text-gray-100" : "border-edge bg-ink/40 text-gray-500"
+                  isLit ? "border-cheap bg-cheap/10 text-gray-100" : "border-edge bg-ink/40 text-gray-500"
                 }`}
               >
                 {s.label}

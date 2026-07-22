@@ -125,8 +125,15 @@ export const api = {
 };
 
 // Subscribe to the live decision stream. Returns an unsubscribe fn.
-export function subscribeStream(onEvent: (e: StreamEvent) => void): () => void {
+// `onStatus` (optional) reports the live connection state so the UI's "live"
+// dot stays truthful — EventSource silently auto-reconnects on drop.
+export function subscribeStream(
+  onEvent: (e: StreamEvent) => void,
+  onStatus?: (connected: boolean) => void,
+): () => void {
   const es = new EventSource(`/api/stream`);
+  es.onopen = () => onStatus?.(true);
+  es.onerror = () => onStatus?.(false); // dropped; EventSource retries in bg
   es.onmessage = (m) => {
     try {
       onEvent(JSON.parse(m.data) as StreamEvent);
