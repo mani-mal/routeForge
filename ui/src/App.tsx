@@ -25,6 +25,7 @@ export default function App() {
   const [connected, setConnected] = useState(false);
   const [togglingHeadroom, setTogglingHeadroom] = useState(false);
   const [firingIndex, setFiringIndex] = useState<number | null>(null);
+  const [trafficRunning, setTrafficRunning] = useState(false);
 
   // Initial load + live stream subscription.
   useEffect(() => {
@@ -33,6 +34,7 @@ export default function App() {
     api.requests().then((rs) => !cancelled && setRequests(rs)).catch(() => {});
     api.stats().then((s) => !cancelled && setStats(s)).catch(() => {});
     api.controls().then((c) => !cancelled && setControls(c)).catch(() => {});
+    api.trafficStatus().then((t) => !cancelled && setTrafficRunning(t.running)).catch(() => {});
 
     const unsubscribe = subscribeStream((evt) => {
       if (evt.type === "request") {
@@ -58,10 +60,13 @@ export default function App() {
     };
   }, []);
 
-  // Cheap poll as a backstop in case SSE drops a stats refresh.
+  // Cheap poll as a backstop in case SSE drops a stats refresh; also polls
+  // the traffic-burst status so the "Run 100 burst" button's label flips
+  // back once the in-process burst task finishes.
   useEffect(() => {
     const t = setInterval(() => {
       api.stats().then(setStats).catch(() => {});
+      api.trafficStatus().then((s) => setTrafficRunning(s.running)).catch(() => {});
     }, 3000);
     return () => clearInterval(t);
   }, []);
@@ -110,6 +115,16 @@ export default function App() {
     }
   }
 
+  async function handleRunTraffic() {
+    setTrafficRunning(true); // optimistic; a 409 (already running) confirms the true state
+    try {
+      await api.startTraffic(100, 20);
+    } catch {
+      // 409 (already running) or a network hiccup — the 3s poll above will
+      // reconcile the real `running` state either way.
+    }
+  }
+
   const selectedSummary = requests.find((r) => r.id === selectedId) ?? null;
   const liveTrace = selectedId ? liveTraces[selectedId] ?? [] : [];
   const effectiveTrace = selectedDetail?.trace ?? liveTrace;
@@ -141,6 +156,8 @@ export default function App() {
         togglingHeadroom={togglingHeadroom}
         onFireScripted={handleFireScripted}
         firingIndex={firingIndex}
+        onRunTraffic={handleRunTraffic}
+        trafficRunning={trafficRunning}
       />
 
       <main className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4 p-4 items-start">
