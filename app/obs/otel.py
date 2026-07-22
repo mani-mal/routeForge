@@ -25,6 +25,7 @@ _provider = None  # module-level singleton
 
 
 def _build_exporter(lf):
+    """Deferred import: only reached from inside init_tracing's guarded try/except."""
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
     auth = base64.b64encode(f"{lf.public_key}:{lf.secret_key}".encode()).decode()
     return OTLPSpanExporter(
@@ -52,21 +53,40 @@ def init_tracing(settings: Settings):
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        exporter = RedactingSpanExporter(_build_exporter(lf)) if lf.redact_on_export \
+            else _build_exporter(lf)
     except ImportError:
         log.warning("observability extra not installed; telemetry export disabled")
         return None
     provider = TracerProvider(resource=Resource.create({"service.name": "serving-plane"}))
-    exporter = RedactingSpanExporter(_build_exporter(lf)) if lf.redact_on_export \
-        else _build_exporter(lf)
     provider.add_span_processor(BatchSpanProcessor(exporter))
     _provider = provider
     return provider
 
 
+class _NoOpSpan:
+    """Zero-dependency stand-in for an OTel span when telemetry is off."""
+
+    def set_attribute(self, *a, **k):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+class _NoOpTracer:
+    """Zero-dependency stand-in for an OTel tracer; never imports opentelemetry."""
+
+    def start_as_current_span(self, *a, **k):
+        return _NoOpSpan()
+
+
 def get_tracer():
     if _provider is None:
-        from opentelemetry.trace import NoOpTracer
-        return NoOpTracer()
+        return _NoOpTracer()
     return _provider.get_tracer("serving-plane")
 
 
