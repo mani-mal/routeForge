@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.agent.internal_endpoint import internal_router
+from app.api.bus import DecisionBus
 from app.api.history import HistoryStore
 from app.api.routes import router
 from app.api.ui_routes import router as ui_router
@@ -85,6 +86,10 @@ def create_app() -> FastAPI:
     # list/detail/stats views (app/api/history.py). Process-local; resets
     # on restart — this is a demo prototype, not durable storage.
     app.state.history = HistoryStore(capacity=500)
+    # Live decision stream (Phase 6a Task 2): in-process asyncio pub/sub
+    # feeding GET /api/stream (SSE) for the flow visualizer. Bounded,
+    # drop-oldest per-subscriber queues — see app/api/bus.py.
+    app.state.bus = DecisionBus()
     app.include_router(router)
     app.include_router(internal_router)
     app.include_router(ui_router)
