@@ -20,9 +20,22 @@ class CCRStore:
         self._retrievals_to_cloud = 0
 
     def store(self, original: str) -> str:
+        # Opportunistic TTL sweep on every write so the cache is bounded even
+        # when nothing ever retrieves (the demo's steady state — retrieval is a
+        # later flow). Without this, "enforced TTL" (CLAUDE.md rule 6) would be
+        # a claim the code doesn't back: expired originals would linger for the
+        # whole process lifetime.
+        self._sweep_expired()
         cid = uuid.uuid4().hex
         self._data[cid] = (original, self._clock())
         return cid
+
+    def _sweep_expired(self) -> None:
+        now = self._clock()
+        expired = [cid for cid, (_, stamped) in self._data.items()
+                   if now - stamped > self._ttl]
+        for cid in expired:
+            del self._data[cid]
 
     def retrieve(self, ccr_id: str, *, to_cloud: bool) -> str | None:
         entry = self._data.get(ccr_id)
