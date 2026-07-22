@@ -64,3 +64,32 @@ def test_onprem_only_ccr_never_to_cloud():
                  _ctx(onprem_only=True), cfg, ccr=ccr)
     assert r.record.ccr_retrievals_to_cloud == 0
     assert ccr.retrievals_to_cloud == 0
+
+
+def test_restricted_sensitivity_bypassed():
+    cfg = _cfg(enabled=True, min_tokens=1)
+    r = compress(_msgs("INFO line\n" * 500), _ctx(sensitivity="restricted"), cfg)
+    assert r.record.applied is False
+    assert r.record.bypass_reason == "restricted_sensitivity"
+
+
+def test_fail_open_on_compressor_error(monkeypatch):
+    """A compressor exception must fall back to UNCOMPRESSED (fail OPEN) — the
+    request still succeeds. Contrast the policy gate, which fails CLOSED."""
+    import app.compression as comp_mod
+
+    class _Boom:
+        name = "boom"
+
+        def compress_text(self, text: str) -> str:
+            raise RuntimeError("compressor exploded")
+
+    monkeypatch.setattr(comp_mod, "select_compressor", lambda cfg: _Boom())
+    cfg = _cfg(enabled=True, min_tokens=1)
+    cfg = cfg.model_copy(update={"bypass_on": cfg.bypass_on.model_copy(update={"user_prompt": False})})
+    original = [Message(role="assistant", content="INFO line\n" * 500)]
+    r = compress(original, _ctx(), cfg)
+    assert r.record.applied is False
+    assert r.record.bypass_reason == "compressor_error"
+    assert r.tokens_after == r.tokens_before
+    assert r.messages == original  # unchanged, not partially compressed
