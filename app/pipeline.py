@@ -105,11 +105,13 @@ class Pipeline:
         total = sum(
             h.actual_cost_usd if h.actual_cost_usd is not None else (h.est_cost_usd or 0.0)
             for h in result.hops)
-        # Per-hop token counts aren't carried on DecisionRecord, so the
-        # all-frontier baseline is computed over the final answer's tokens
-        # (acceptable per design — see task-5 brief) rather than summed hop
-        # tokens.
-        baseline = self._baseline(count_tokens(result.text))
+        # Baseline is summed over the SAME hops and SAME (post-compression)
+        # token basis as `total` above, via each hop's `tokens_priced` — the
+        # per-hop prompt token count the router actually priced/routed on.
+        # This keeps the multi-step baseline consistent with the direct
+        # path's self._baseline(comp.tokens_after): both price post-
+        # compression prompt tokens at the all-frontier baseline model.
+        baseline = sum(self._baseline(h.tokens_priced) for h in result.hops)
         trace = [h.model_dump() for h in result.hops] + [vrec.model_dump()]
         trace.append({"step": "compression", **comp.record})
 

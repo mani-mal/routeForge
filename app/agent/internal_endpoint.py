@@ -90,7 +90,7 @@ async def internal_chat_completions(run_id: str, request: Request):
     HOPS.record(run_id, DecisionRecord(
         step="agent_hop", chosen=decision.chosen.name, reason=decision.reason,
         rejected=decision.rejected, est_cost_usd=decision.est_cost_usd,
-        hop_index=hop_index))
+        hop_index=hop_index, tokens_priced=tokens_after))
 
     step = decide_agent_step(messages, tools)
     if step["kind"] == "tool_call":

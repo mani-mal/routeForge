@@ -38,4 +38,13 @@ def test_multistep_request_returns_multi_hop_trace(live_internal_server):
         h.get("actual_cost_usd") or h.get("est_cost_usd", 0) for h in hops)
     assert body["cost"]["total_usd"] == pytest.approx(expected_total)
 
+    # Baseline must be priced on the same per-hop, post-compression token
+    # basis as `total_usd` above (summed over the same hops), not on the
+    # final answer's token count — see task-5 finding. Since cheap on-prem
+    # hops (local-8b, price 0 in mock) route far below the all-frontier
+    # baseline model, the summed baseline is genuinely > summed total here,
+    # so routing_saved_usd is real, not a trivial 0.0 == 0.0.
+    assert body["cost"]["baseline_usd"] > 0
+    assert body["cost"]["routing_saved_usd"] > 0
+
     assert body["choices"][0]["message"]["content"]
