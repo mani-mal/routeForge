@@ -88,6 +88,17 @@ class ContextOptimizationCfg(BaseModel):
     ccr: CCRCfg
     cache_alignment: bool
 
+class VllmCfg(BaseModel):
+    base_url: str
+    timeout_s: int
+
+
+class DynamoCfg(BaseModel):
+    endpoint: str
+    router_mode: str
+    timeout_s: int
+
+
 class ServingCfg(BaseModel):
     inference_backend: str
     allow_backend_fallback: bool
@@ -96,6 +107,8 @@ class ServingCfg(BaseModel):
     reject_stream_requests: bool
     context_optimization: ContextOptimizationCfg
     observability: ObservabilityCfg
+    vllm: VllmCfg
+    dynamo: DynamoCfg
 
 
 class Settings(BaseModel):

@@ -25,3 +25,10 @@ def test_local_tier_is_free():
 
 def test_confidence_hint_respected():
     assert _gen("local-8b", "cheap", {"mock_confidence": 0.3}).confidence == 0.3
+
+
+def test_mock_backend_health_ok():
+    h = asyncio.run(MockBackend(S).health())
+    assert h.ok is True
+    assert "local-8b" in h.models
+    assert "local-32b" in h.models

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from pathlib import Path
@@ -14,7 +15,7 @@ from app.api.ui_routes import router as ui_router
 from app.compression.ccr import CCRStore
 from app.config.lint import enforce
 from app.config.loader import load_settings
-from app.gateway.backends.mock import MockBackend
+from app.gateway.backends.factory import resolve_backend
 from app.gateway.gateway import Gateway
 from app.pipeline import Pipeline
 from app.policy.detectors import make_detector
@@ -61,7 +62,15 @@ def create_app() -> FastAPI:
     app.state.api_keys = API_KEYS
     gate = Gate(settings, detector)
     app.state.gate = gate
-    backend = MockBackend(settings)          # 'none'/vllm/dynamo handled in later phases
+    # Phase 9 Task 4: select + health-validate the configured backend.
+    # create_app is sync but resolve_backend is async; this runs before
+    # uvicorn's event loop exists (at import time / test fixture setup, never
+    # from inside an already-running loop -- see app/gateway/backends/factory.py
+    # and app/gateway/backends/README.md), so asyncio.run() is safe here.
+    # mock/none never make a network call, so this is instant on the default
+    # (demo) config; only vllm/dynamo can fail health and trigger
+    # fallback-to-mock or sys.exit(1).
+    backend = asyncio.run(resolve_backend(settings))
     # named model_router (not router) to avoid shadowing the APIRouter imported above;
     # app.include_router(router) below needs the APIRouter, not this Router instance.
     model_router = Router(settings)

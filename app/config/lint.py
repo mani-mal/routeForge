@@ -53,7 +53,18 @@ def lint_settings(s: Settings) -> list[str]:
     return errs
 
 
+_VALID_BACKENDS = ("mock", "vllm", "dynamo", "none")
+
+
 def enforce(s: Settings) -> None:
+    # Fail closed on a typo'd backend with a NAMED violation rather than a raw
+    # traceback from make_backend() at boot (project rule: every drift class is
+    # a named boot failure).
+    if s.serving.inference_backend not in _VALID_BACKENDS:
+        raise ConfigLintError(
+            f"serving.inference_backend must be one of {_VALID_BACKENDS}; "
+            f"got {s.serving.inference_backend!r}")
+
     lf = s.serving.observability.langfuse
     if lf.enabled and not lf.redact_on_export:
         raise ConfigLintError(
