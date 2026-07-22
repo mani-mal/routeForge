@@ -55,7 +55,7 @@ From `app/main.py::API_KEYS`:
 | `hospital-key` | hospital | `onprem_only` |
 | `demo-key` | default | `any` |
 
-## Usage (Task 2 — generator lands next)
+## Usage
 
 ```bash
 python -m tests.traffic --requests 500 --rps 10 --seed 42 --profile demo
@@ -64,4 +64,26 @@ python -m tests.traffic --requests 500 --seed 42 --compare-compression  # A/B: H
 
 Same `--seed` always produces the same request stream (deterministic
 `random.Random(seed)` sampling over the weighted mix) so the demo's numbers
-are reproducible run to run.
+are reproducible run to run. On completion the CLI prints the demo's
+headline numbers: tier distribution, total vs. baseline (all-frontier) cost,
+% saved (split into routing-saved and compression-saved, tracked
+separately), on-prem count, and p50/p95 latency.
+
+## Generator (`tests/traffic/generator.py`)
+
+`run_traffic(base_url, *, n, rps, seed, personas=None, headroom=None,
+client=None) -> Summary` drives an `httpx.AsyncClient` against a *running*
+API — it talks only HTTP, never imports the pipeline directly, so it
+exercises the exact path the UI watches and the dashboard fills live. Errors
+(422/503/etc, or a network exception) are recorded in `Summary.errors` and
+do **not** crash the run.
+
+Tier resolution: the `/v1/chat/completions` response carries `cost` and
+`policy.onprem_only` but not the routing `tier` (that mapping lives
+server-side, in `HistoryStore`/`app/api/routes.py`). Rather than duplicate
+`config/routing.yaml`'s model->tier mapping here, the generator fires all
+requests first, then does a single `GET /api/requests?limit=...` and
+aggregates `tier_distribution`/`onprem_count`/costs from the returned
+`RequestSummary` records, filtered to just the ids this run produced. p50/p95
+latency, in contrast, is measured client-side with `time.monotonic()` around
+each HTTP round trip — the number a demo audience actually feels.
