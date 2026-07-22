@@ -70,7 +70,9 @@ USER app
 EXPOSE 8080
 
 HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=5 \
-    CMD curl -fsS http://127.0.0.1:8080/health || exit 1
+    CMD curl -fsS "http://127.0.0.1:${SP_SERVER_PORT:-8080}/health" || exit 1
 
 ENTRYPOINT ["tini", "--"]
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+# Honor SP_SERVER_PORT (Helm sets it from servingPlane.server.port) so the port
+# uvicorn binds, the healthcheck, and the probes never diverge. Defaults to 8080.
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${SP_SERVER_PORT:-8080}"]

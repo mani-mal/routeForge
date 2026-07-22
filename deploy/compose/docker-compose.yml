@@ -33,6 +33,9 @@ services:
       # (the API never blocks on it), so the API can start before Langfuse has
       # finished migrating — traces simply begin flowing once it's up.
       LANGFUSE_HOST: http://langfuse-web:3000
+      # Demo-only, non-sensitive: throwaway keys for the ephemeral localhost
+      # Langfuse in this stack — they grant access to nothing external. Rotate
+      # via .env for anything but a local demo. (Prod Helm uses K8s Secrets.)
       LANGFUSE_PUBLIC_KEY: pk-lf-local
       LANGFUSE_SECRET_KEY: sk-lf-local
     depends_on:
