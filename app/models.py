@@ -93,6 +93,21 @@ class VerificationRecord(BaseModel):
     latency_ms: float = 0.0
 
 
+class CompressionRecord(BaseModel):
+    step: str = "compression"
+    enabled: bool
+    applied: bool
+    bypass_reason: str | None = None
+    tokens_before: int
+    tokens_after: int
+    reduction_pct: float = 0.0
+    compressor: str | None = None
+    ccr_stored: bool = False
+    ccr_retrievals: int = 0
+    ccr_retrievals_to_cloud: int = 0  # must be 0 for onprem_only — honesty counter
+    latency_ms: float = 0.0
+
+
 class GenerationResult(BaseModel):
     model: str
     text: str

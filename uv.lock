@@ -170,6 +170,21 @@ wheels = [
 ]
 
 [[package]]
+name = "ast-grep-cli"
+version = "0.44.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/cf/b6/700b2a79eed7be029d3885ae2dda638604ee34970fc14ec154f5084915b7/ast_grep_cli-0.44.1.tar.gz", hash = "sha256:391e9d60f118d0a15c905b2de1287a162d1891c2f05d94919a37784230fab559", size = 278332, upload-time = "2026-07-04T14:13:29.529Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/67/50/94f0654fe86cff7ac2f52b94a417c9918632f324cada4a7b02d07906934e/ast_grep_cli-0.44.1-py3-none-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl", hash = "sha256:34fd5494fed41e5461e46a7932cd9a3e8c42136dd6b040ccc5ceca00c1c2e553", size = 16058060, upload-time = "2026-07-04T14:13:18.009Z" },
+    { url = "https://files.pythonhosted.org/packages/53/2e/185dff98167af423436556267af472674d400154a238141b4ba2f8f42e35/ast_grep_cli-0.44.1-py3-none-macosx_10_12_x86_64.whl", hash = "sha256:ce408938e3e4ba8570102a5a54a674dc18b8fa21bc9560dc859a66f7c96a4291", size = 8034861, upload-time = "2026-07-04T14:13:20.338Z" },
+    { url = "https://files.pythonhosted.org/packages/a9/30/6f1e5a379854a1be22983f964572a20d2229d695a63c5d6fd03570d7eab2/ast_grep_cli-0.44.1-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:54c21864c497275ed99c5fd9cf605aa9758cc3f21fc769fcde8c5ebc7c25d87d", size = 7882812, upload-time = "2026-07-04T14:13:21.819Z" },
+    { url = "https://files.pythonhosted.org/packages/7f/84/1ff86aded236180eedc3c3a3ec4edb2fed13c1928104432501e21a4f2efb/ast_grep_cli-0.44.1-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:ad11a5eb8d7bd557754b21a360a3be1bc1b19e7f4bed95b444ffc25b9451844f", size = 8184902, upload-time = "2026-07-04T14:13:23.544Z" },
+    { url = "https://files.pythonhosted.org/packages/bd/7a/796166f5ed48e2f665a85d62e260a209beef8a597ea4dd36129e5ef1452b/ast_grep_cli-0.44.1-py3-none-win32.whl", hash = "sha256:47356ab8eef7fb269e63a944427765d642bd93af20bdb966587fd706da0a61bb", size = 7716418, upload-time = "2026-07-04T14:13:25.123Z" },
+    { url = "https://files.pythonhosted.org/packages/23/f8/cbf9f39ec10be756bafc5f9def09083b6d4c3833f87a2d6818ffd2a53c48/ast_grep_cli-0.44.1-py3-none-win_amd64.whl", hash = "sha256:43dd6a281bf55269ad101460f291e7447f4dbfced794f92ced896610e5bfa589", size = 8212412, upload-time = "2026-07-04T14:13:26.665Z" },
+    { url = "https://files.pythonhosted.org/packages/6b/a7/e078c3c4a200984ac91590fc42f3c51418d02d168dbdb5a96148b11309c7/ast_grep_cli-0.44.1-py3-none-win_arm64.whl", hash = "sha256:ce18f7f13aee07e9ec169122458ce241910c876ef5536f9115d6fec8c42a4d86", size = 7937089, upload-time = "2026-07-04T14:13:28.224Z" },
+]
+
+[[package]]
 name = "attrs"
 version = "26.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -976,6 +991,30 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/01/ee/02a2c011bdab74c6fb3c75474d40b3052059d95df7e73351460c8588d963/h11-0.16.0.tar.gz", hash = "sha256:4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1", size = 101250, upload-time = "2025-04-24T03:35:25.427Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/04/4b/29cac41a4d98d144bf5f6d33995617b185d14b22401f75ca86f384e87ff1/h11-0.16.0-py3-none-any.whl", hash = "sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86", size = 37515, upload-time = "2025-04-24T03:35:24.344Z" },
+]
+
+[[package]]
+name = "headroom-ai"
+version = "0.32.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "ast-grep-cli" },
+    { name = "click" },
+    { name = "litellm", marker = "python_full_version < '3.14'" },
+    { name = "opentelemetry-api" },
+    { name = "pydantic" },
+    { name = "pyyaml" },
+    { name = "rich" },
+    { name = "tiktoken" },
+    { name = "tomlkit" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a1/b3/af494f2320111fa62f89724840f912ec8f4382a7768942bb9205a557b11f/headroom_ai-0.32.1.tar.gz", hash = "sha256:329dda3328f0fb45ec7128353f7fc9108f08e9676c9dc1873b4841c5c00c94bd", size = 2277688, upload-time = "2026-07-19T04:39:30.588Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5a/27/dac2f6bf405c7ed04e2421aeaa1a23e2f5e31171d817018770f191c954a8/headroom_ai-0.32.1-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:1a7d2d25622d5d4565ad5a563b0a2bb44fb2c1fd3b119cf8e4d333d5c81be41b", size = 13078702, upload-time = "2026-07-19T04:38:00.401Z" },
+    { url = "https://files.pythonhosted.org/packages/23/1d/2a99a3256f0e4966886dd8617e2624df764c360db32fd44b0c5e0d3b4eeb/headroom_ai-0.32.1-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:267ac8c7b8ddfdc92b51a3f7fca42f336b75b63ec6ff468fbcf0c796031c2b2d", size = 13071013, upload-time = "2026-07-19T04:38:09.862Z" },
+    { url = "https://files.pythonhosted.org/packages/48/26/ec080a7ea88e095063543506fe8e676c9ff94e2b1d6423d71df7de642616/headroom_ai-0.32.1-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:3e89f88c54b907febf9f947804df0cd7a4cc9b92dabdec4124997c82e1b750ea", size = 13094360, upload-time = "2026-07-19T04:38:39.773Z" },
+    { url = "https://files.pythonhosted.org/packages/58/20/95bd0854e1081cda23679cedaf6c4f093cff9ea0d79b762d2f74bb6e0cb7/headroom_ai-0.32.1-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:00190bb57ae063199bd1460ec8cf50845d9293a8724c21fcef4dfb5cca27df2e", size = 13231293, upload-time = "2026-07-19T04:39:09.335Z" },
+    { url = "https://files.pythonhosted.org/packages/8e/18/d0d53c88a44ba5015662e861d584a77fb003607355f0dc3e2d8f32b68e52/headroom_ai-0.32.1-cp310-abi3-win_amd64.whl", hash = "sha256:c32aac0054c871e998fbb35c3f46857738fe4a72031d7593fac276969dcec45d", size = 13178884, upload-time = "2026-07-19T04:39:26.453Z" },
 ]
 
 [[package]]
@@ -3216,6 +3255,9 @@ agent = [
     { name = "nat-tools" },
     { name = "nvidia-nat", extra = ["langchain"] },
 ]
+compression = [
+    { name = "headroom-ai" },
+]
 observability = [
     { name = "langfuse" },
     { name = "opentelemetry-exporter-otlp-proto-http" },
@@ -3234,6 +3276,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "headroom-ai", marker = "extra == 'compression'", specifier = ">=0.1" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "langfuse", marker = "extra == 'observability'", specifier = ">=3.0" },
     { name = "nat-tools", marker = "extra == 'agent'", editable = "nat_tools" },
@@ -3246,7 +3289,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
 ]
-provides-extras = ["presidio", "observability", "agent"]
+provides-extras = ["presidio", "observability", "agent", "compression"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8.3" }]
@@ -3627,6 +3670,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/6a/dd/631b21433c771b1382535326f0eca80b9c9cee2e64961dd993bc9ac4669e/tokenizers-0.23.1-cp310-abi3-win32.whl", hash = "sha256:93120a930b919416da7cd10a2f606ac9919cc69cacae7980fa2140e277660948", size = 2536263, upload-time = "2026-04-27T14:43:29.888Z" },
     { url = "https://files.pythonhosted.org/packages/97/c9/2553f72aaf65a2797d4229e37fa7fbe38ffbf3e32912d31bdd78b3323e59/tokenizers-0.23.1-cp310-abi3-win_amd64.whl", hash = "sha256:e7bfaf995c1bdbbd21d13539decb6650967013759318627d85daeb7881af16b7", size = 2798223, upload-time = "2026-04-27T14:43:28.51Z" },
     { url = "https://files.pythonhosted.org/packages/cd/2b/2be299bab55fc595e3d38567edb1a87f86e594842968fa9515a07bdcf422/tokenizers-0.23.1-cp310-abi3-win_arm64.whl", hash = "sha256:a26197957d8e4425dfba746315f3c425ea00cfa8367c5fbc4ec73447893dcea9", size = 2664127, upload-time = "2026-04-27T14:43:26.949Z" },
+]
+
+[[package]]
+name = "tomlkit"
+version = "0.15.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/94/96/e07752635b98536177fa1f37671c8f3cdde2e724c6bcf6034b2cfb571565/tomlkit-0.15.1.tar.gz", hash = "sha256:e25bbf38843005246210a12982776f27f99cb9be67160e14434d0c0d21ee1e97", size = 180129, upload-time = "2026-07-17T01:48:04.562Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl", hash = "sha256:177a05aece5a8ca5266fd3c448abb47b8d352f09d477d3ca8332db4d89b24304", size = 49449, upload-time = "2026-07-17T01:48:05.728Z" },
 ]
 
 [[package]]

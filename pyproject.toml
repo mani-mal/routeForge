@@ -29,6 +29,11 @@ agent = [
     "nat_tools",
 ]
 
+# Real Headroom ML compressor (Task 5b sibling of DeterministicCompressor). Opt-in,
+# lazily imported by select_compressor(); the default path is offline and never
+# requires this extra. Install with: `uv sync --extra compression`.
+compression = ["headroom-ai>=0.1"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

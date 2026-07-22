@@ -1,4 +1,5 @@
 from app.compression import compress
+from app.config.loader import load_settings
 from app.models import ChatRequest, ExecutionPolicyContext, Message
 from app.routing.task_mode import decide
 
@@ -10,11 +11,14 @@ CTX = ExecutionPolicyContext(
 
 
 def test_compression_is_passthrough():
+    # Default context_optimization.enabled is False (demo default) — disabled
+    # bypass is passthrough regardless of message size.
+    cfg = load_settings().serving.context_optimization
     msgs = [Message(role="user", content="a" * 400)]
-    res = compress(msgs, CTX)
+    res = compress(msgs, CTX, cfg)
     assert res.tokens_after == res.tokens_before
-    assert res.record["applied"] is False
-    assert res.record["ccr_retrievals_to_cloud"] == 0
+    assert res.record.applied is False
+    assert res.record.ccr_retrievals_to_cloud == 0
 
 
 def test_task_mode_is_direct():

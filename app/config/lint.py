@@ -60,6 +60,16 @@ def enforce(s: Settings) -> None:
             "observability.langfuse.redact_on_export must be true when langfuse is "
             "enabled (egress redaction is mandatory; see CLAUDE.md rule 2)")
 
+    ccr = s.serving.context_optimization.ccr
+    if ccr.enabled and ccr.residency != "local_only":
+        raise ConfigLintError(
+            "context_optimization.ccr.residency must be 'local_only' "
+            f"(CCR is a local cache of originals; got {ccr.residency!r})")
+    if ccr.enabled and ccr.export_to_telemetry is not False:
+        raise ConfigLintError(
+            "context_optimization.ccr.export_to_telemetry must be false "
+            "(CCR contents are originals and must never reach telemetry)")
+
     errs = lint_settings(s)
     if errs:
         for e in errs:

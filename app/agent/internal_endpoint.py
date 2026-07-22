@@ -25,8 +25,7 @@ from fastapi.responses import StreamingResponse
 
 from app.agent.mock_agent import decide_agent_step
 from app.agent.openai_sse import sse_final, sse_tool_call
-from app.gateway.backends.base import count_tokens
-from app.models import DecisionRecord, ExecutionPolicyContext
+from app.models import CompressionRecord, DecisionRecord, ExecutionPolicyContext, Message
 
 # Hosts allowed to call the internal endpoint. Real self-calls come from the
 # agent runtime's own process via 127.0.0.1 (see app/agent/runtime.py). The
@@ -47,16 +46,21 @@ class _RunState:
     ctx: ExecutionPolicyContext
     hop_index: int = 0
     records: list[DecisionRecord] = field(default_factory=list)
+    compressions: list[CompressionRecord] = field(default_factory=list)
 
 
 class HopCollector:
-    """Process-global, run-keyed store of per-hop `DecisionRecord`s.
+    """Process-global, run-keyed store of per-hop `DecisionRecord`s and
+    `CompressionRecord`s.
 
     The agent runtime calls `start(run_id, ctx)` once before kicking off a
     run, stashing the `ExecutionPolicyContext` so every subsequent hop
-    (an internal LLM call re-entering the router) can route with it. Each
-    hop calls `record(run_id, rec)`; `pop(run_id)` drains and returns the
-    accumulated records once the run completes.
+    (an internal LLM call re-entering compression and the router) can
+    compress/route with it. Each hop calls `record(run_id, rec)` and
+    `record_compression(run_id, rec)`; `pop_all(run_id)` drains and returns
+    both accumulated lists once the run completes. `pop(run_id)` is kept for
+    back-compat (decision records only) where callers don't need
+    compressions.
     """
 
     def __init__(self) -> None:
@@ -79,9 +83,22 @@ class HopCollector:
     def record(self, run_id: str, rec: DecisionRecord) -> None:
         self._runs[run_id].records.append(rec)
 
+    def record_compression(self, run_id: str, rec: CompressionRecord) -> None:
+        self._runs[run_id].compressions.append(rec)
+
     def pop(self, run_id: str) -> list[DecisionRecord]:
         state = self._runs.pop(run_id, None)
         return state.records if state else []
+
+    def pop_all(self, run_id: str) -> tuple[list[DecisionRecord], list[CompressionRecord]]:
+        """Atomically drain and delete the run state, returning both the
+        per-hop decision records and per-hop compression records. Used by
+        the agent runtime instead of `pop()` so compressions aren't lost to
+        the same deletion that drains decisions."""
+        state = self._runs.pop(run_id, None)
+        if state is None:
+            return [], []
+        return state.records, state.compressions
 
 
 HOPS = HopCollector()
@@ -109,7 +126,22 @@ async def internal_chat_completions(run_id: str, request: Request):
     ctx = HOPS.context(run_id)
     model_router = request.app.state.model_router
 
-    tokens_after = sum(count_tokens(m["content"]) for m in messages if m.get("content"))
+    # Local import: avoids an import cycle at module load (app.compression ->
+    # ... -> app.agent.internal_endpoint would be circular if imported at
+    # top level; app/pipeline.py imports compress() at top level because it
+    # has no such cycle back into this module).
+    from app.compression import compress
+
+    # M3 must-fix: every LLM call the agent makes must re-enter compression
+    # (step 5), not just the outer request — see CLAUDE.md. Compress THIS
+    # hop's messages before pricing/routing so tokens_priced is the
+    # post-compression count, matching the direct path.
+    co_cfg = request.app.state.co_cfg
+    ccr = getattr(request.app.state, "ccr", None)
+    hop_msgs = [Message(role=m.get("role", "user"), content=m["content"])
+                for m in messages if m.get("content")]
+    comp = compress(hop_msgs, ctx, co_cfg, ccr=ccr)
+    tokens_after = comp.tokens_after
     complexity = min(1.0, tokens_after / 2000)
     decision = model_router.select(ctx, tokens_after, complexity, None)
 
@@ -118,7 +150,12 @@ async def internal_chat_completions(run_id: str, request: Request):
         step="agent_hop", chosen=decision.chosen.name, reason=decision.reason,
         rejected=decision.rejected, est_cost_usd=decision.est_cost_usd,
         hop_index=hop_index, tokens_priced=tokens_after))
+    HOPS.record_compression(run_id, comp.record)
 
+    # SSE step decision (tool-call vs final-answer) MUST run on the ORIGINAL
+    # raw `messages` — tool-call detection needs the raw role/content
+    # structure, not the compressed text. Only pricing/routing above use the
+    # compressed count.
     step = decide_agent_step(messages, tools)
     if step["kind"] == "tool_call":
         gen = sse_tool_call(
