@@ -147,8 +147,10 @@ class Pipeline:
         baseline_after = sum(self._baseline(h.tokens_priced) for h in result.hops)
         # baseline_before prices each hop's PRE-compression token count — the
         # true all-frontier baseline before either lever runs. Falls back to
-        # baseline_after (so compression_saved_usd == 0) if no hop produced a
-        # compression record, e.g. every hop bypassed compression.
+        # baseline_after (so compression_saved_usd == 0) only when there are NO
+        # compression records at all, i.e. zero hops. (A hop that *bypassed*
+        # compression still emits a record with tokens_before == tokens_after,
+        # so it contributes equally to both sums and needs no special-casing.)
         if result.compressions:
             baseline_before = sum(self._baseline(cr.tokens_before) for cr in result.compressions)
         else:
