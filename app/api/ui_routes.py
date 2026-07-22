@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import logging
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -125,13 +126,19 @@ async def start_traffic(body: TrafficStart, request: Request) -> dict:
         # burst. Import lazily, inside the task, so app/ stays import-time
         # clean of tests/ (a layering oddity we accept rather than moving
         # the generator out of tests/).
-        from tests.traffic.generator import run_traffic
         try:
+            # Import INSIDE the try: if tests/ isn't on the path (e.g. a wheel
+            # that ships only app/ — see Phase 8 packaging note), the import
+            # itself raises, and the finally must still clear the flag or the
+            # UI is wedged at "running" forever with every retry → 409.
+            from tests.traffic.generator import run_traffic
             summary = await run_traffic(base_url, n=n, rps=rps, seed=_TRAFFIC_SEED)
             state.traffic_last_summary = dataclasses.asdict(summary)
+        except Exception:
+            logging.getLogger("serving.traffic").exception("traffic burst failed")
         finally:
-            # Always clears, even if run_traffic raised, so the UI never
-            # gets stuck showing "running" forever.
+            # Always clears, even if the import or run_traffic raised, so the
+            # UI never gets stuck showing "running" forever.
             state.traffic_running = False
 
     state.traffic_task = asyncio.create_task(_run())
