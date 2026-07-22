@@ -26,7 +26,13 @@ def _sample():
                 "actual_cost_usd": 0.0004, "latency_ms": 12.0}],
     )
 
-def test_export_emits_spans_without_raw_pii(mem_provider):
+def test_export_defense_in_depth_exporter_redacts(mem_provider):
+    """RedactingSpanExporter (2nd line of defense) also scrubs sp.reason on export.
+
+    This does NOT prove export_trace's own redact_value call works -- the
+    exporter wrapper would redact even if export.py's redaction were deleted.
+    See test_export_own_redaction_removes_pii for the isolated guarantee.
+    """
     export_mod.export_trace(**_sample())
     otel._provider.force_flush()
     spans = mem_provider.get_finished_spans()
@@ -35,13 +41,41 @@ def test_export_emits_spans_without_raw_pii(mem_provider):
     assert "123-45-6789" not in blob
     assert any(s.name == "serving.request" for s in spans)
 
+def test_export_own_redaction_removes_pii(monkeypatch):
+    """Isolates export_trace's OWN redact_value call (app/obs/export.py line 34).
+
+    Wires a BARE InMemorySpanExporter with NO RedactingSpanExporter wrapper, so
+    nothing else in the pipeline can scrub PII. If export_trace's redact_value
+    call were removed, the planted SSN would leak straight into the captured
+    span attributes and this test would fail.
+    """
+    mem = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(mem))  # no RedactingSpanExporter
+    monkeypatch.setattr(otel, "_provider", provider)
+
+    export_mod.export_trace(**_sample())
+    provider.force_flush()
+
+    spans = mem.get_finished_spans()
+    assert len(spans) >= 2  # root + one record
+    blob = "".join(str(dict(s.attributes)) + s.name for s in spans)
+    assert "123-45-6789" not in blob
+    reason_span = next(s for s in spans if "sp.reason" in s.attributes)
+    assert "123-45-6789" not in reason_span.attributes["sp.reason"]
+
 def test_export_noop_and_safe_when_disabled(monkeypatch):
     monkeypatch.setattr(otel, "_provider", None)
     # must not raise even though nothing is configured
     export_mod.export_trace(**_sample())
 
-def test_export_swallows_exporter_errors(mem_provider, monkeypatch):
+def test_export_swallows_exporter_errors(mem_provider, monkeypatch, caplog):
     def boom(*a, **k):
         raise RuntimeError("otlp down")
-    monkeypatch.setattr(otel, "get_tracer", boom)
-    export_mod.export_trace(**_sample())  # logged + swallowed, no raise
+    # export.py does `from app.obs.otel import get_tracer`, so the call site
+    # inside export_trace binds to export_mod.get_tracer, not otel.get_tracer.
+    # Patching otel.get_tracer would be a no-op; patch the name actually used.
+    monkeypatch.setattr(export_mod, "get_tracer", boom)
+    with caplog.at_level("ERROR", logger="serving.obs"):
+        export_mod.export_trace(**_sample())  # logged + swallowed, no raise
+    assert any("trace export failed" in r.message for r in caplog.records)
