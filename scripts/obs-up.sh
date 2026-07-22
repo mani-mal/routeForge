@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 [ -f .env ] || cp .env.example .env
 set -a; . ./.env; set +a
 docker compose -f deploy/compose/langfuse.yml up -d
-echo "Langfuse coming up at $LANGFUSE_HOST (login demo@local / demodemo)"
+echo "Langfuse coming up at $LANGFUSE_HOST (login demo@example.com / demodemo)"
 echo "waiting for health..."
 for i in $(seq 1 90); do
   curl -sf "$LANGFUSE_HOST/api/public/health" >/dev/null 2>&1 && { echo "ready"; exit 0; }

@@ -6,45 +6,61 @@ name: serving-plane-obs
 services:
   langfuse-web:
     image: langfuse/langfuse:3
-    depends_on: [postgres, clickhouse, redis, minio]
+    depends_on:
+      postgres: {condition: service_started}
+      clickhouse: {condition: service_started}
+      redis: {condition: service_started}
+      minio: {condition: service_started}
+      minio-init: {condition: service_completed_successfully}
     ports: ["3000:3000"]
     environment:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/postgres
       CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
       CLICKHOUSE_USER: default
       CLICKHOUSE_PASSWORD: clickhouse
       REDIS_CONNECTION_STRING: redis://redis:6379
       LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
       LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: us-east-1
       LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
       LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: miniosecret
       LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
       NEXTAUTH_URL: http://localhost:3000
       NEXTAUTH_SECRET: local-dev-secret
       SALT: local-dev-salt
-      ENCRYPTION_KEY: 0000000000000000000000000000000000000000000000000000000000000000
+      ENCRYPTION_KEY: "990fd1a2bc4b761112c44dc47f5cb88634d3e37c919dbef7c59b4f3ef8d2b464"
       LANGFUSE_INIT_ORG_ID: demo-org
       LANGFUSE_INIT_PROJECT_ID: demo-project
       LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-pk-lf-local}
       LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-sk-lf-local}
-      LANGFUSE_INIT_USER_EMAIL: demo@local
+      LANGFUSE_INIT_USER_EMAIL: demo@example.com
       LANGFUSE_INIT_USER_PASSWORD: demodemo
   langfuse-worker:
     image: langfuse/langfuse-worker:3
-    depends_on: [postgres, clickhouse, redis, minio]
+    depends_on:
+      postgres: {condition: service_started}
+      clickhouse: {condition: service_started}
+      redis: {condition: service_started}
+      minio: {condition: service_started}
+      minio-init: {condition: service_completed_successfully}
     environment:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/postgres
       CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
       CLICKHOUSE_USER: default
       CLICKHOUSE_PASSWORD: clickhouse
       REDIS_CONNECTION_STRING: redis://redis:6379
       LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
       LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: us-east-1
       LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
       LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: miniosecret
       LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
       SALT: local-dev-salt
-      ENCRYPTION_KEY: 0000000000000000000000000000000000000000000000000000000000000000
+      ENCRYPTION_KEY: "990fd1a2bc4b761112c44dc47f5cb88634d3e37c919dbef7c59b4f3ef8d2b464"
   postgres:
     image: postgres:16
     environment: {POSTGRES_PASSWORD: postgres}
@@ -60,4 +76,15 @@ services:
     command: server /data --console-address ":9001"
     environment: {MINIO_ROOT_USER: minio, MINIO_ROOT_PASSWORD: miniosecret}
     volumes: [obs-minio:/data]
+  # One-shot: wait for MinIO, then create the langfuse bucket so OTel event
+  # uploads succeed (Langfuse v3 does not auto-create the bucket).
+  minio-init:
+    image: minio/mc
+    depends_on: [minio]
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set local http://minio:9000 minio miniosecret; do echo 'waiting for minio'; sleep 2; done;
+      mc mb --ignore-existing local/langfuse;
+      echo 'bucket ready';
+      "
 volumes: {obs-pg: {}, obs-ch: {}, obs-minio: {}}
