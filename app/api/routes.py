@@ -43,4 +43,11 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
     except Exception:  # export_trace already swallows; this is belt-and-suspenders
         logging.getLogger("serving.obs").exception(
             "export_trace raised before its own guard (swallowed)")
+    try:
+        tier = next(
+            (c.tier for c in s.routing.model_pool if c.name == resp["model"]), "?")
+        request.app.state.history.record(resp, tenant, tier)
+    except Exception:  # history must never break serving
+        logging.getLogger("serving.obs").exception(
+            "history.record failed (swallowed)")
     return resp

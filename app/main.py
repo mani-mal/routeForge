@@ -4,9 +4,12 @@ from pathlib import Path
 
 import yaml
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.agent.internal_endpoint import internal_router
+from app.api.history import HistoryStore
 from app.api.routes import router
+from app.api.ui_routes import router as ui_router
 from app.compression.ccr import CCRStore
 from app.config.lint import enforce
 from app.config.loader import load_settings
@@ -78,8 +81,21 @@ def create_app() -> FastAPI:
     app.state.pipeline = Pipeline(
         settings, gate, detector, gateway, self_port=_self_port(),
         cfg=settings.serving.context_optimization, ccr=ccr)
+    # In-memory, redaction-safe request history for the Phase-6 UI's
+    # list/detail/stats views (app/api/history.py). Process-local; resets
+    # on restart — this is a demo prototype, not durable storage.
+    app.state.history = HistoryStore(capacity=500)
     app.include_router(router)
     app.include_router(internal_router)
+    app.include_router(ui_router)
+    # Dev convenience: allow the Vite dev server to call the API directly.
+    # Production serves the UI same-origin, where CORS is a no-op.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:5173"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     return app
 
 
