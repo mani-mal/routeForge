@@ -1,7 +1,66 @@
-# Skeleton — see greenlake-deploy skill. Full compose lands in Phase 8.
+# Serving Plane — full local demo stack (greenlake-deploy skill, Phase 8).
+#
+#   docker compose -f deploy/compose/docker-compose.yml up --build
+#
+# Brings up: api (FastAPI + NAT + Headroom), ui (nginx-served React), and the
+# self-hosted Langfuse stack (web/worker + postgres/clickhouse/redis/minio).
+# Default inference_backend=mock and regex PII detection → no GPU, no API keys,
+# works offline. The vLLM service is gated behind the `gpu` profile and only
+# starts with `--profile gpu` (Phase 9).
+#
+# Open http://localhost:3001 for the UI, http://localhost:3000 for Langfuse
+# (login demo@example.com / demodemo).
+name: serving-plane
+
+# The Langfuse stack (postgres/clickhouse/redis/minio/web/worker) with its four
+# boot fixes already applied — reused verbatim so there's one source of truth.
+include:
+  - langfuse.yml
+
 services:
   api:
-    build: ..
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      args:
+        EXTRAS: "agent,observability"   # NAT multi-step + Langfuse export
     ports: ["8080:8080"]
-    environment: [SP_INFERENCE_BACKEND=mock]
-  # langfuse / postgres / clickhouse / vllm added in Phase 8
+    environment:
+      SP_INFERENCE_BACKEND: mock        # mock | vllm | dynamo | none
+      SP_PII_DETECTION: regex           # offline-safe; presidio needs a model download
+      SP_SERVER_PORT: "8080"
+      # Point NAT/OTel export at the in-stack Langfuse. Export is best-effort
+      # (the API never blocks on it), so the API can start before Langfuse has
+      # finished migrating — traces simply begin flowing once it's up.
+      LANGFUSE_HOST: http://langfuse-web:3000
+      LANGFUSE_PUBLIC_KEY: pk-lf-local
+      LANGFUSE_SECRET_KEY: sk-lf-local
+    depends_on:
+      langfuse-web: {condition: service_started}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+
+  ui:
+    build:
+      context: ../../ui
+      dockerfile: Dockerfile
+    ports: ["3001:80"]
+    depends_on:
+      api: {condition: service_healthy}   # nginx proxies /api,/v1 → api
+
+  # On-prem serving path for Phase 9. GPU-only; excluded from the default demo.
+  # Enable with: docker compose --profile gpu up  (and set SP_INFERENCE_BACKEND=vllm)
+  vllm:
+    profiles: ["gpu"]
+    image: vllm/vllm-openai:latest
+    command: ["--model", "Qwen/Qwen2.5-7B-Instruct", "--port", "8000"]
+    ports: ["8000:8000"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - {driver: nvidia, count: 1, capabilities: [gpu]}
