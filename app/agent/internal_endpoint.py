@@ -20,13 +20,26 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from app.agent.mock_agent import decide_agent_step
 from app.agent.openai_sse import sse_final, sse_tool_call
 from app.gateway.backends.base import count_tokens
 from app.models import DecisionRecord, ExecutionPolicyContext
+
+# Hosts allowed to call the internal endpoint. Real self-calls come from the
+# agent runtime's own process via 127.0.0.1 (see app/agent/runtime.py). The
+# `TestClient`-based test suite presents host "testclient" (Starlette's
+# default ASGI-transport client tuple) — that's safe to allow because it is
+# not a network identity a remote caller can forge: TestClient drives the
+# ASGI app in-process, never over a real socket, so no external client can
+# ever cause `request.client.host` to read "testclient".
+_ALLOWED_INTERNAL_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
+
+
+def _is_loopback(host: str | None) -> bool:
+    return host is not None and host in _ALLOWED_INTERNAL_HOSTS
 
 
 @dataclass
@@ -52,6 +65,9 @@ class HopCollector:
     def start(self, run_id: str, ctx: ExecutionPolicyContext) -> None:
         self._runs[run_id] = _RunState(ctx=ctx)
 
+    def has(self, run_id: str) -> bool:
+        return run_id in self._runs
+
     def context(self, run_id: str) -> ExecutionPolicyContext:
         return self._runs[run_id].ctx
 
@@ -75,6 +91,17 @@ internal_router = APIRouter(include_in_schema=False)
 
 @internal_router.post("/internal/v1/{run_id}/chat/completions")
 async def internal_chat_completions(run_id: str, request: Request):
+    # Loopback guard: this route is not part of the customer-facing API and
+    # must be unreachable by external/customer clients even though it shares
+    # the same 0.0.0.0:8080 listener as the public API (include_in_schema
+    # only hides it from OpenAPI, it doesn't restrict who can call it).
+    client_host = request.client.host if request.client else None
+    if not _is_loopback(client_host):
+        raise HTTPException(status_code=403, detail="internal endpoint: loopback only")
+
+    if not HOPS.has(run_id):
+        raise HTTPException(status_code=404, detail="unknown run")
+
     body = await request.json()
     messages: list[dict] = body.get("messages", [])
     tools: list[dict] = body.get("tools", [])
