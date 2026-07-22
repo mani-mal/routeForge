@@ -5,8 +5,9 @@ from pathlib import Path
 import yaml
 
 from app.config.schema import (
-    BypassCfg, CCRCfg, ContextOptimizationCfg, LangfuseCfg, ObservabilityCfg,
-    PolicyCfg, PricingCfg, RoutingCfg, ServingCfg, Settings,
+    BypassCfg, CCRCfg, ContextOptimizationCfg, DynamoCfg, LangfuseCfg,
+    ObservabilityCfg, PolicyCfg, PricingCfg, RoutingCfg, ServingCfg, Settings,
+    VllmCfg,
 )
 
 _ENV_PAT = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)(?::-([^}]*))?\}")
@@ -66,6 +67,8 @@ def load_settings(config_dir: str = "config") -> Settings:
             cache_alignment=co_raw["cache_alignment"],
         ),
         observability=observability,
+        vllm=VllmCfg(**serving_raw["vllm"]),
+        dynamo=DynamoCfg(**serving_raw["dynamo"]),
     )
     routing = RoutingCfg(**routing_raw)
     policy = PolicyCfg(**policy_raw)

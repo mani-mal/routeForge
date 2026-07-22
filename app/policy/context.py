@@ -32,6 +32,13 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
     onprem_only = residency == "onprem_only"
 
     enabled = {p for p, c in settings.serving.providers.items() if c.enabled}
+    # `inference_backend: none` => no on-prem serving path exists, regardless of
+    # providers.onprem.enabled. Drop it from `enabled` so an onprem_only request
+    # resolves to an empty allowed set and is rejected downstream by the router's
+    # existing "no candidates after residency filter" path -- never silently routed
+    # to cloud (CLAUDE.md backend rule; inference-backends skill).
+    if settings.serving.inference_backend == "none":
+        enabled = enabled - {"onprem"}
     onprem_providers = {c.provider for c in settings.routing.model_pool
                         if c.provider == "onprem"}
     if onprem_only:
