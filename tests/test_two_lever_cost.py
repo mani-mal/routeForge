@@ -53,7 +53,7 @@ def test_routing_saved_goes_negative_under_escalation_identity_holds():
     co = s.serving.context_optimization
     pipe = Pipeline(s, Gate(s, det), det,
                     Gateway(s, MockBackend(s), Router(s)),
-                    self_port=8080, cfg=co, ccr=CCRStore(3600))
+                    self_port=8080, co_cfg_provider=lambda: co, ccr=CCRStore(3600))
 
     req = ChatRequest(messages=[Message(role="user", content="Email john.doe@example.com re: Q3")])
     object.__setattr__(req, "mock_confidence", 0.1)  # force escalation to frontier

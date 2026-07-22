@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Callable
+
 from app.config.schema import ContextOptimizationCfg, Settings
 from app.gateway.backends.base import count_tokens
 from app.gateway.gateway import Gateway
@@ -21,7 +23,8 @@ class PipelineRejected(Exception):
 class Pipeline:
     def __init__(self, settings: Settings, gate: Gate, detector: Detector,
                  gateway: Gateway, self_port: int,
-                 cfg: ContextOptimizationCfg, ccr: CCRStore) -> None:
+                 co_cfg_provider: Callable[[], ContextOptimizationCfg],
+                 ccr: CCRStore) -> None:
         self._s = settings
         self._gate = gate
         self._detector = detector
@@ -30,9 +33,16 @@ class Pipeline:
         # drives a real NAT agent whose LLM calls self-call our own internal
         # endpoint at 127.0.0.1:{self._self_port} — see app/agent/runtime.py.
         self._self_port = self_port
-        # Step 5 (compression) config + the local, TTL-bounded CCR store used
-        # by the direct path — see app/compression/__init__.py, ccr.py.
-        self._co_cfg = cfg
+        # Step 5 (compression) config, read dynamically on every call instead
+        # of a frozen value captured at construction — so a runtime toggle
+        # via POST /api/controls (which mutates app.state.co_cfg) takes
+        # effect on the NEXT direct-path request without a restart. The
+        # internal per-hop endpoint (app/agent/internal_endpoint.py) already
+        # reads request.app.state.co_cfg directly; main.py wires this
+        # provider to the SAME mutable app.state.co_cfg so both paths share
+        # one source of truth. The local, TTL-bounded CCR store used by the
+        # direct path — see app/compression/__init__.py, ccr.py.
+        self._co_cfg_provider = co_cfg_provider
         self._ccr = ccr
 
     def _baseline(self, tokens_after: int) -> float:
@@ -57,7 +67,7 @@ class Pipeline:
             # still goes to the agent — each hop compresses its own view.
             return await self._run_multi_step(request_id, ctx, request, san_messages)
 
-        comp = compress(san_messages, ctx, self._co_cfg, ccr=self._ccr)
+        comp = compress(san_messages, ctx, self._co_cfg_provider(), ccr=self._ccr)
         complexity = min(1.0, comp.tokens_after / 2000)
 
         hint = {k: getattr(request, k) for k in ("mock_confidence", "mock_fail")

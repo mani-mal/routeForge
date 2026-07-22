@@ -20,6 +20,7 @@ venv/
 node_modules/
 ui/dist/
 ui/.vite/
+ui/tsconfig.tsbuildinfo
 
 # OS / editor
 .DS_Store

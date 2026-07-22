@@ -45,7 +45,7 @@ def compression_on_pipeline() -> Pipeline:
     gateway = Gateway(settings, backend, model_router)
     ccr = CCRStore(ttl_seconds=co.ccr.ttl_hours * 3600)
     return Pipeline(settings, gate, detector, gateway, self_port=8080,
-                     cfg=co, ccr=ccr)
+                     co_cfg_provider=lambda: co, ccr=ccr)
 
 
 @pytest.fixture
