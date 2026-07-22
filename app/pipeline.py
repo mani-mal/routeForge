@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.config.schema import Settings
+from app.config.schema import ContextOptimizationCfg, Settings
 from app.gateway.backends.base import count_tokens
 from app.gateway.gateway import Gateway
 from app.models import (
@@ -10,6 +10,7 @@ from app.output.verify import verify
 from app.policy.detectors import Detector
 from app.policy.gate import Gate
 from app.compression import compress
+from app.compression.ccr import CCRStore
 from app.routing.task_mode import decide as decide_mode
 
 
@@ -19,7 +20,8 @@ class PipelineRejected(Exception):
 
 class Pipeline:
     def __init__(self, settings: Settings, gate: Gate, detector: Detector,
-                 gateway: Gateway, self_port: int) -> None:
+                 gateway: Gateway, self_port: int,
+                 cfg: ContextOptimizationCfg, ccr: CCRStore) -> None:
         self._s = settings
         self._gate = gate
         self._detector = detector
@@ -28,6 +30,10 @@ class Pipeline:
         # drives a real NAT agent whose LLM calls self-call our own internal
         # endpoint at 127.0.0.1:{self._self_port} — see app/agent/runtime.py.
         self._self_port = self_port
+        # Step 5 (compression) config + the local, TTL-bounded CCR store used
+        # by the direct path — see app/compression/__init__.py, ccr.py.
+        self._co_cfg = cfg
+        self._ccr = ccr
 
     def _baseline(self, tokens_after: int) -> float:
         p = self._s.pricing.models[self._s.pricing.baseline_model]
@@ -41,7 +47,7 @@ class Pipeline:
         mode = decide_mode(ctx, request)
 
         san_messages = [Message(role=request.messages[-1].role, content=sanitized)]
-        comp = compress(san_messages, ctx, self._s.serving.context_optimization)
+        comp = compress(san_messages, ctx, self._co_cfg, ccr=self._ccr)
 
         if mode == "multi_step":
             return await self._run_multi_step(request_id, ctx, request, san_messages, comp)
@@ -58,7 +64,17 @@ class Pipeline:
             raise PipelineRejected(vrec.reason)
 
         total = sum(r.actual_cost_usd or 0.0 for r in records)
-        baseline = self._baseline(comp.tokens_after)
+        # Two-lever accounting (CLAUDE.md: "don't attribute all savings to
+        # routing"): baseline_usd prices tokens_before (true all-frontier
+        # baseline before either lever runs); compression_saved is the drop
+        # from tokens_before->tokens_after at that baseline price;
+        # routing_saved is the remaining drop from baseline_after->actual
+        # total. With compression off, tokens_before == tokens_after, so
+        # baseline_usd is unchanged from before and compression_saved == 0.
+        baseline_usd = self._baseline(comp.tokens_before)
+        baseline_after = self._baseline(comp.tokens_after)
+        compression_saved = max(0.0, baseline_usd - baseline_after)
+        routing_saved = max(0.0, baseline_after - total)
         trace = [r.model_dump() for r in records] + [vrec.model_dump()]
         trace.append(comp.record.model_dump())
 
@@ -73,8 +89,9 @@ class Pipeline:
                            total_tokens=result.tokens_in + result.tokens_out
                            ).model_dump(),
             "trace": trace,
-            "cost": {"total_usd": total, "baseline_usd": baseline,
-                     "routing_saved_usd": max(0.0, baseline - total)},
+            "cost": {"total_usd": total, "baseline_usd": baseline_usd,
+                     "routing_saved_usd": routing_saved,
+                     "compression_saved_usd": compression_saved},
             "policy": {"sensitivity": ctx.sensitivity, "onprem_only": ctx.onprem_only,
                        "allowed_providers": sorted(ctx.allowed_providers),
                        "detected_entities": list(ctx.detected_entities)},

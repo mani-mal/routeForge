@@ -7,6 +7,7 @@ from fastapi import FastAPI
 
 from app.agent.internal_endpoint import internal_router
 from app.api.routes import router
+from app.compression.ccr import CCRStore
 from app.config.lint import enforce
 from app.config.loader import load_settings
 from app.gateway.backends.mock import MockBackend
@@ -62,7 +63,14 @@ def create_app() -> FastAPI:
     model_router = Router(settings)
     app.state.model_router = model_router
     gateway = Gateway(settings, backend, model_router)
-    app.state.pipeline = Pipeline(settings, gate, detector, gateway, self_port=_self_port())
+    # Step 5 (Headroom compression): local, TTL-bounded CCR store — never
+    # exported to telemetry, contents never leave this process. See
+    # app/compression/ccr.py and CLAUDE.md rule 6.
+    ccr = CCRStore(
+        ttl_seconds=settings.serving.context_optimization.ccr.ttl_hours * 3600)
+    app.state.pipeline = Pipeline(
+        settings, gate, detector, gateway, self_port=_self_port(),
+        cfg=settings.serving.context_optimization, ccr=ccr)
     app.include_router(router)
     app.include_router(internal_router)
     return app
