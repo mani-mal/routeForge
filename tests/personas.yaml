@@ -1,0 +1,43 @@
+# Weighted persona mix — single source of truth (traffic-and-tests skill).
+# The weighting is the demo's argument: most traffic is cheap, so most spend
+# should be too. Read by tests/traffic/personas.py::load_personas().
+#
+# api_key maps to app/main.py::API_KEYS -> tenant:
+#   acme-key     -> acme     (default_residency: private_cloud_ok)
+#   hospital-key -> hospital (default_residency: onprem_only)
+#   demo-key     -> default  (default_residency: any)
+#
+# expect_onprem documents test/demo intent (not enforced by the loader) — the
+# pii_bearing/high_risk personas carry synthetic PII/high-risk content that the
+# policy gate (config/policy.yaml sensitivity_rules) routes to onprem_only.
+
+personas:
+  - name: simple_qa
+    weight: 45
+    api_key: acme-key
+    expect_onprem: false
+
+  - name: moderate
+    weight: 20
+    api_key: acme-key
+    expect_onprem: false
+
+  - name: pii_bearing
+    weight: 15
+    api_key: hospital-key
+    expect_onprem: true
+
+  - name: multi_step
+    weight: 12
+    api_key: acme-key
+    expect_onprem: false
+
+  - name: high_risk
+    weight: 5
+    api_key: hospital-key
+    expect_onprem: true
+
+  - name: low_confidence
+    weight: 3
+    api_key: acme-key
+    expect_onprem: false
