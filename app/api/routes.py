@@ -1,3 +1,4 @@
+import logging
 import uuid
 
 from fastapi import APIRouter, HTTPException, Request
@@ -39,6 +40,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
     try:
         export_trace(request_id=resp["id"], tenant_id=tenant, model=resp["model"],
                      cost=resp["cost"], policy=resp["policy"], trace=resp["trace"])
-    except Exception:
-        pass  # export_trace already swallows; this is belt-and-suspenders
+    except Exception:  # export_trace already swallows; this is belt-and-suspenders
+        logging.getLogger("serving.obs").exception(
+            "export_trace raised before its own guard (swallowed)")
     return resp

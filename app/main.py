@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import FastAPI
 
 from app.api.routes import router
@@ -18,7 +20,11 @@ def create_app() -> FastAPI:
     settings = load_settings()
     enforce(settings)
     from app.obs.otel import init_tracing
-    init_tracing(settings)
+    try:
+        init_tracing(settings)
+    except Exception:  # telemetry must never break serving, not even at boot
+        logging.getLogger("serving.obs").exception(
+            "init_tracing failed (swallowed); telemetry disabled")
     detector = make_detector(settings.serving.pii_detection)
     app = FastAPI(title="Serving Plane", version="0.1.0")
     app.state.settings = settings

@@ -29,7 +29,10 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                 with tracer.start_as_current_span(f"serving.{step}") as sp:
                     sp.set_attribute("sp.step", step)
                     if rec.get("chosen") is not None:
-                        sp.set_attribute("sp.chosen", str(rec["chosen"]))
+                        # chosen is a model id / enum, never free text — redact
+                        # defensively anyway (idempotent on clean text) so this
+                        # attribute can't leak if a future record widens it.
+                        sp.set_attribute("sp.chosen", redact_value(str(rec["chosen"])))
                     if "reason" in rec:
                         sp.set_attribute("sp.reason", redact_value(str(rec["reason"])))
                     for k in ("hop_index", "actual_cost_usd", "est_cost_usd", "latency_ms"):
