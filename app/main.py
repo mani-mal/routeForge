@@ -1,5 +1,8 @@
 import logging
+import os
+from pathlib import Path
 
+import yaml
 from fastapi import FastAPI
 
 from app.agent.internal_endpoint import internal_router
@@ -15,6 +18,27 @@ from app.routing.router import Router
 
 # static demo api-key -> tenant map (design §3). Unknown/missing -> default.
 API_KEYS = {"acme-key": "acme", "hospital-key": "hospital", "demo-key": "default"}
+
+_DEFAULT_SERVER_PORT = 8080
+
+
+def _self_port() -> int:
+    """Port THIS app is listening on — the agent runtime's internal endpoint
+    self-call target (see app/agent/runtime.py, app/pipeline.py).
+
+    `SP_SERVER_PORT` wins when set (e.g. by tests/conftest.py's
+    `live_internal_server` fixture, which boots on an ephemeral port and
+    exports it so the app can self-call itself); otherwise falls back to
+    `server.port` in config/serving.yaml, then a hardcoded default.
+    """
+    env = os.environ.get("SP_SERVER_PORT")
+    if env is not None:
+        return int(env)
+    try:
+        raw = yaml.safe_load(Path("config/serving.yaml").read_text()) or {}
+        return int(raw.get("server", {}).get("port", _DEFAULT_SERVER_PORT))
+    except Exception:
+        return _DEFAULT_SERVER_PORT
 
 
 def create_app() -> FastAPI:
@@ -38,7 +62,7 @@ def create_app() -> FastAPI:
     model_router = Router(settings)
     app.state.model_router = model_router
     gateway = Gateway(settings, backend, model_router)
-    app.state.pipeline = Pipeline(settings, gate, detector, gateway)
+    app.state.pipeline = Pipeline(settings, gate, detector, gateway, self_port=_self_port())
     app.include_router(router)
     app.include_router(internal_router)
     return app

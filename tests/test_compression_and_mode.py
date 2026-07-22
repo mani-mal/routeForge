@@ -20,3 +20,18 @@ def test_compression_is_passthrough():
 def test_task_mode_is_direct():
     req = ChatRequest(messages=[Message(role="user", content="hi")])
     assert decide(CTX, req) == "direct"
+
+def test_task_mode_multi_step_on_mock_multistep_flag():
+    req = ChatRequest(messages=[Message(role="user", content="hi")],
+                      mock_multistep=True)
+    assert decide(CTX, req) == "multi_step"
+
+def test_task_mode_multi_step_on_trigger_phrase():
+    req = ChatRequest(messages=[Message(role="user",
+                                        content="Look up account 42 please")])
+    assert decide(CTX, req) == "multi_step"
+
+def test_task_mode_multi_step_on_step_by_step_phrase():
+    req = ChatRequest(messages=[Message(
+        role="user", content="Solve this step by step: 2+2")])
+    assert decide(CTX, req) == "multi_step"

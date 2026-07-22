@@ -43,6 +43,11 @@ def live_internal_server():
 
     os.environ["SP_PII_DETECTION"] = "regex"
     port = _free_port()
+    # The agent runtime (multi-step pipeline path) makes real HTTP self-calls
+    # to this app's own internal endpoint at 127.0.0.1:{port} — SP_SERVER_PORT
+    # must be set BEFORE create_app() so app/main.py wires that exact port
+    # into Pipeline. See app/main.py's _self_port() and app/pipeline.py.
+    os.environ["SP_SERVER_PORT"] = str(port)
     config = uvicorn.Config(create_app(), host="127.0.0.1", port=port, log_level="warning")
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
@@ -64,3 +69,4 @@ def live_internal_server():
     finally:
         server.should_exit = True
         thread.join(timeout=5)
+        os.environ.pop("SP_SERVER_PORT", None)
