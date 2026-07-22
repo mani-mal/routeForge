@@ -48,7 +48,7 @@ from pydantic import BaseModel
 
 from app.agent.internal_endpoint import HOPS
 from app.config.loader import load_settings
-from app.models import ChatRequest, DecisionRecord, ExecutionPolicyContext
+from app.models import ChatRequest, CompressionRecord, DecisionRecord, ExecutionPolicyContext
 
 NAT_WORKFLOW_CONFIG = "config/nat_workflow.yaml"
 DEFAULT_MAX_STEPS = 5
@@ -57,6 +57,10 @@ DEFAULT_MAX_STEPS = 5
 class AgentResult(BaseModel):
     text: str
     hops: list[DecisionRecord]
+    # Per-hop CompressionRecords (Task 7 / M3): every LLM call the agent
+    # makes re-enters compression, so this list is 1:1 with `hops` — see
+    # app/agent/internal_endpoint.py's compress() call per hop.
+    compressions: list[CompressionRecord] = []
 
 
 class AgentCapExceeded(RuntimeError):
@@ -140,7 +144,9 @@ async def run(ctx: ExecutionPolicyContext, request: ChatRequest, *, port: int) -
     finally:
         # Always drain the per-run hop collector, even when we are about to
         # raise AgentCapExceeded below — fail closed without leaking state.
-        hops = HOPS.pop(run_id)
+        # pop_all() atomically drains both decision and compression records
+        # in the same deletion (see HopCollector.pop_all's docstring).
+        hops, compressions = HOPS.pop_all(run_id)
 
     if _is_cap_exceeded(text):
         raise AgentCapExceeded(
@@ -148,4 +154,4 @@ async def run(ctx: ExecutionPolicyContext, request: ChatRequest, *, port: int) -
             f"(run_id={run_id}): {text!r}"
         )
 
-    return AgentResult(text=text, hops=hops)
+    return AgentResult(text=text, hops=hops, compressions=compressions)

@@ -48,6 +48,43 @@ def compression_on_pipeline() -> Pipeline:
                      cfg=co, ccr=ccr)
 
 
+@pytest.fixture
+def internal_client_with_compression_on():
+    """TestClient for the internal per-hop endpoint (Task 7 / M3) with
+    context_optimization forced on (enabled=True, min_tokens=1,
+    bypass_on.user_prompt=False) via app.state.co_cfg — mirrors
+    `compression_on_pipeline` above but exercises
+    `/internal/v1/{run_id}/chat/completions` directly instead of the direct
+    pipeline path, so a hop's compression can be asserted in isolation.
+
+    Starts a HOPS run with a non-onprem ExecutionPolicyContext and yields
+    `(client, run_id)`; the TestClient's ASGI-transport host ("testclient")
+    is on the internal endpoint's loopback allowlist, same as `client`.
+    """
+    from app.agent.internal_endpoint import HOPS
+    from app.models import ExecutionPolicyContext
+
+    app = create_app()
+    bypass_on = app.state.co_cfg.bypass_on.model_copy(update={"user_prompt": False})
+    app.state.co_cfg = app.state.co_cfg.model_copy(
+        update={"enabled": True, "min_tokens": 1, "bypass_on": bypass_on})
+
+    tc = TestClient(app)
+    run_id = "run-compress-hop"
+    ctx = ExecutionPolicyContext(
+        request_id="req-compress", tenant_id="acme", sensitivity="internal",
+        onprem_only=False, allowed_providers=frozenset({"onprem", "azure", "bedrock"}),
+        allowed_models=frozenset(), max_cost_usd=1.0, max_latency_ms=10000,
+        risk_class="low", require_verification=False, detected_entities=(),
+        redaction_map_id=None)
+    HOPS.start(run_id, ctx)
+    try:
+        yield tc, run_id
+    finally:
+        if HOPS.has(run_id):
+            HOPS.pop(run_id)  # avoid leaking run state if a test fails early
+
+
 def _free_port() -> int:
     s = socket.socket()
     s.bind(("127.0.0.1", 0))

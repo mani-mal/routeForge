@@ -47,11 +47,17 @@ class Pipeline:
         mode = decide_mode(ctx, request)
 
         san_messages = [Message(role=request.messages[-1].role, content=sanitized)]
-        comp = compress(san_messages, ctx, self._co_cfg, ccr=self._ccr)
 
         if mode == "multi_step":
-            return await self._run_multi_step(request_id, ctx, request, san_messages, comp)
+            # No outer compress() here: the agent runtime re-enters
+            # compression per hop (app/agent/internal_endpoint.py, Task 7 /
+            # M3), so an outer pass on san_messages alone would be wasted
+            # work and its tokens_after would not reflect the real per-hop
+            # pricing basis. san_messages (sanitized, not yet compressed)
+            # still goes to the agent — each hop compresses its own view.
+            return await self._run_multi_step(request_id, ctx, request, san_messages)
 
+        comp = compress(san_messages, ctx, self._co_cfg, ccr=self._ccr)
         complexity = min(1.0, comp.tokens_after / 2000)
 
         hint = {k: getattr(request, k) for k in ("mock_confidence", "mock_fail")
@@ -71,10 +77,19 @@ class Pipeline:
         # routing_saved is the remaining drop from baseline_after->actual
         # total. With compression off, tokens_before == tokens_after, so
         # baseline_usd is unchanged from before and compression_saved == 0.
+        #
+        # routing_saved is intentionally NOT clamped to 0: under escalation
+        # `total` can exceed `baseline_after` (a costlier tier was chosen on
+        # purpose, e.g. a high-risk re-route), and clamping routing_saved to
+        # 0 while compression_saved stays positive would break the additive
+        # identity compression_saved + routing_saved == baseline_usd - total
+        # and show fake positive net savings. compression_saved IS clamped,
+        # but harmlessly so — tokens_after <= tokens_before always holds, so
+        # it is >= 0 anyway.
         baseline_usd = self._baseline(comp.tokens_before)
         baseline_after = self._baseline(comp.tokens_after)
         compression_saved = max(0.0, baseline_usd - baseline_after)
-        routing_saved = max(0.0, baseline_after - total)
+        routing_saved = baseline_after - total
         trace = [r.model_dump() for r in records] + [vrec.model_dump()]
         trace.append(comp.record.model_dump())
 
@@ -98,8 +113,7 @@ class Pipeline:
         }
 
     async def _run_multi_step(self, request_id: str, ctx: ExecutionPolicyContext,
-                              request: ChatRequest, san_messages: list[Message],
-                              comp) -> dict:
+                              request: ChatRequest, san_messages: list[Message]) -> dict:
         # Lazy import: nat is an optional extra; importing app.pipeline must not
         # require it to be installed (mirrors app/agent/runtime.py's own lazy
         # import of the nat package itself).
@@ -122,18 +136,41 @@ class Pipeline:
         total = sum(
             h.actual_cost_usd if h.actual_cost_usd is not None else (h.est_cost_usd or 0.0)
             for h in result.hops)
-        # Baseline is summed over the SAME hops and SAME (post-compression)
-        # token basis as `total` above, via each hop's `tokens_priced` — the
-        # per-hop prompt token count the router actually priced/routed on.
-        # This keeps the multi-step baseline consistent with the direct
-        # path's self._baseline(comp.tokens_after): both price post-
-        # compression prompt tokens at the all-frontier baseline model.
-        baseline = sum(self._baseline(h.tokens_priced) for h in result.hops)
-        trace = [h.model_dump() for h in result.hops] + [vrec.model_dump()]
-        trace.append(comp.record.model_dump())
+        # Two-lever accounting for multi-step (M3 / Task 7): each hop now
+        # re-enters compression itself (app/agent/internal_endpoint.py), so
+        # `result.compressions` is 1:1 with `result.hops` instead of a single
+        # outer compression of the initial request.
+        #
+        # baseline_after prices the SAME (post-compression) token basis as
+        # `total` above, via each hop's `tokens_priced` — consistent with the
+        # direct path's self._baseline(comp.tokens_after).
+        baseline_after = sum(self._baseline(h.tokens_priced) for h in result.hops)
+        # baseline_before prices each hop's PRE-compression token count — the
+        # true all-frontier baseline before either lever runs. Falls back to
+        # baseline_after (so compression_saved_usd == 0) if no hop produced a
+        # compression record, e.g. every hop bypassed compression.
+        if result.compressions:
+            baseline_before = sum(self._baseline(cr.tokens_before) for cr in result.compressions)
+        else:
+            baseline_before = baseline_after
+        compression_saved_usd = max(0.0, baseline_before - baseline_after)
+        # NOT clamped to 0 — see the direct path's identical rationale above:
+        # under escalation `total` can exceed `baseline_after`, and clamping
+        # here while compression_saved_usd stays positive would break the
+        # additive identity compression_saved_usd + routing_saved_usd ==
+        # baseline_usd - total_usd.
+        routing_saved_usd = baseline_after - total
+
+        trace = [h.model_dump() for h in result.hops]
+        trace += [cr.model_dump() for cr in result.compressions]
+        trace.append(vrec.model_dump())
 
         model = result.hops[-1].chosen if result.hops else "auto"
         completion_tokens = count_tokens(result.text)
+        # Prompt tokens actually priced across all hops (post-compression) —
+        # there is no longer a single outer comp.tokens_after now that each
+        # hop compresses its own view.
+        prompt_tokens = sum(h.tokens_priced for h in result.hops)
 
         return {
             "id": request_id,
@@ -141,13 +178,17 @@ class Pipeline:
             "choices": [Choice(index=0,
                                message=Message(role="assistant", content=text)
                                ).model_dump()],
-            "usage": Usage(prompt_tokens=comp.tokens_after,
+            "usage": Usage(prompt_tokens=prompt_tokens,
                            completion_tokens=completion_tokens,
-                           total_tokens=comp.tokens_after + completion_tokens
+                           total_tokens=prompt_tokens + completion_tokens
                            ).model_dump(),
             "trace": trace,
-            "cost": {"total_usd": total, "baseline_usd": baseline,
-                     "routing_saved_usd": max(0.0, baseline - total)},
+            # baseline_usd is reported pre-both-levers (baseline_before), so
+            # the headline baseline is consistent with the direct path's
+            # baseline_usd (self._baseline(comp.tokens_before)).
+            "cost": {"total_usd": total, "baseline_usd": baseline_before,
+                     "routing_saved_usd": routing_saved_usd,
+                     "compression_saved_usd": compression_saved_usd},
             "policy": {"sensitivity": ctx.sensitivity, "onprem_only": ctx.onprem_only,
                        "allowed_providers": sorted(ctx.allowed_providers),
                        "detected_entities": list(ctx.detected_entities)},

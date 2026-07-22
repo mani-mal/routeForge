@@ -68,6 +68,13 @@ def create_app() -> FastAPI:
     # app/compression/ccr.py and CLAUDE.md rule 6.
     ccr = CCRStore(
         ttl_seconds=settings.serving.context_optimization.ccr.ttl_hours * 3600)
+    # Stashed so the internal per-hop endpoint (app/agent/internal_endpoint.py)
+    # can compress each agent hop's messages too — every LLM call the agent
+    # makes must re-enter compression (5) and the router (6), not just the
+    # outer request (CLAUDE.md). Reuses this same CCRStore instance, not a
+    # second one, so CCR TTL/retrieval accounting is process-wide-consistent.
+    app.state.co_cfg = settings.serving.context_optimization
+    app.state.ccr = ccr
     app.state.pipeline = Pipeline(
         settings, gate, detector, gateway, self_port=_self_port(),
         cfg=settings.serving.context_optimization, ccr=ccr)

@@ -1,0 +1,56 @@
+"""Task 7 (M3 must-fix): every LLM call the agent makes must re-enter
+compression, not just the outer request. The internal endpoint
+(app/agent/internal_endpoint.py) now compresses each hop's messages before
+pricing/routing, so `tokens_priced` on the resulting DecisionRecord is the
+POST-compression count, matching the direct path's compression behaviour
+(see CLAUDE.md: "every LLM call the agent makes re-enters compression (5)
+and the router (6) — per-call, not per-request")."""
+from app.agent.internal_endpoint import HOPS
+
+
+def test_hop_prices_post_compression(internal_client_with_compression_on):
+    client, run_id = internal_client_with_compression_on
+    verbose = "INFO log line\n" * 800
+    body = {"messages": [{"role": "assistant", "content": verbose},
+                         {"role": "user", "content": "summarize"}],
+            "tools": []}
+    resp = client.post(f"/internal/v1/{run_id}/chat/completions", json=body)
+    assert resp.status_code == 200
+    recs = HOPS.pop(run_id)
+    assert recs and recs[0].tokens_priced < 800  # far below the raw ~800+ token count
+
+
+def test_hop_compression_record_captured():
+    """The internal endpoint must also record a per-hop CompressionRecord
+    (not just the DecisionRecord) so the multi-step trace can show
+    compression per hop — see HopCollector.pop_all in internal_endpoint.py."""
+    from app.main import create_app
+    from fastapi.testclient import TestClient
+    from app.models import ExecutionPolicyContext
+
+    app = create_app()
+    bypass_on = app.state.co_cfg.bypass_on.model_copy(update={"user_prompt": False})
+    app.state.co_cfg = app.state.co_cfg.model_copy(
+        update={"enabled": True, "min_tokens": 1, "bypass_on": bypass_on})
+    client = TestClient(app)
+
+    run_id = "run-compress-record"
+    ctx = ExecutionPolicyContext(
+        request_id="req-y", tenant_id="acme", sensitivity="internal", onprem_only=False,
+        allowed_providers=frozenset({"onprem", "azure", "bedrock"}), allowed_models=frozenset(),
+        max_cost_usd=1.0, max_latency_ms=10000, risk_class="low",
+        require_verification=False, detected_entities=(), redaction_map_id=None)
+    HOPS.start(run_id, ctx)
+
+    verbose = "INFO log line\n" * 800
+    body = {"messages": [{"role": "assistant", "content": verbose},
+                         {"role": "user", "content": "summarize"}],
+            "tools": []}
+    resp = client.post(f"/internal/v1/{run_id}/chat/completions", json=body)
+    assert resp.status_code == 200
+
+    _decisions, compressions = HOPS.pop_all(run_id)
+    assert len(compressions) == 1
+    cr = compressions[0]
+    assert cr.applied is True
+    assert cr.tokens_after < cr.tokens_before
