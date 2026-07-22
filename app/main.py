@@ -79,8 +79,13 @@ def create_app() -> FastAPI:
     # second one, so CCR TTL/retrieval accounting is process-wide-consistent.
     app.state.co_cfg = settings.serving.context_optimization
     app.state.ccr = ccr
+    # Computed once and reused for both the agent runtime's self-call
+    # (Pipeline below) and the /api/traffic control's self-call (Phase 7
+    # Task 4, app/api/ui_routes.py) — same own-port, single source.
+    self_port = _self_port()
+    app.state.self_port = self_port
     app.state.pipeline = Pipeline(
-        settings, gate, detector, gateway, self_port=_self_port(),
+        settings, gate, detector, gateway, self_port=self_port,
         co_cfg_provider=lambda: app.state.co_cfg, ccr=ccr)
     # In-memory, redaction-safe request history for the Phase-6 UI's
     # list/detail/stats views (app/api/history.py). Process-local; resets
@@ -90,6 +95,9 @@ def create_app() -> FastAPI:
     # feeding GET /api/stream (SSE) for the flow visualizer. Bounded,
     # drop-oldest per-subscriber queues — see app/api/bus.py.
     app.state.bus = DecisionBus()
+    # Phase 7 Task 4: /api/traffic control state (app/api/ui_routes.py).
+    app.state.traffic_running = False
+    app.state.traffic_last_summary: dict | None = None
     app.include_router(router)
     app.include_router(internal_router)
     app.include_router(ui_router)

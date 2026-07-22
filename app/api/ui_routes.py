@@ -12,7 +12,9 @@ requests as they complete instead of polling.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
+import logging
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -90,6 +92,66 @@ def set_controls(update: ControlsUpdate, request: Request) -> dict:
     request.app.state.co_cfg = request.app.state.co_cfg.model_copy(
         update={"enabled": update.headroom_enabled})
     return _controls_state(request)
+
+
+class TrafficStart(BaseModel):
+    requests: int = 100
+    rps: int = 20
+
+
+# Fixed seed for the live "Run burst" demo control: the same button always
+# fires the same reproducible persona stream (Global Constraints: seeded +
+# reproducible), matching the CLI generator's own default behavior.
+_TRAFFIC_SEED = 42
+
+
+@router.post("/traffic")
+async def start_traffic(body: TrafficStart, request: Request) -> dict:
+    """Launch the traffic-generator burst in-process, self-calling this same
+    server over real HTTP (like the agent runtime's internal hops) so the
+    live dashboard fills exactly as it would from an operator running the
+    CLI. Refuses (409) if a run is already in progress."""
+    state = request.app.state
+    if getattr(state, "traffic_running", False):
+        raise HTTPException(409, "a traffic run is already in progress")
+
+    state.traffic_running = True
+    base_url = f"http://127.0.0.1:{state.self_port}"
+    n = body.requests
+    rps = body.rps
+
+    async def _run() -> None:
+        # The traffic generator lives under tests/ (traffic-and-tests skill)
+        # — it's test infrastructure reused here to drive the live demo
+        # burst. Import lazily, inside the task, so app/ stays import-time
+        # clean of tests/ (a layering oddity we accept rather than moving
+        # the generator out of tests/).
+        try:
+            # Import INSIDE the try: if tests/ isn't on the path (e.g. a wheel
+            # that ships only app/ — see Phase 8 packaging note), the import
+            # itself raises, and the finally must still clear the flag or the
+            # UI is wedged at "running" forever with every retry → 409.
+            from tests.traffic.generator import run_traffic
+            summary = await run_traffic(base_url, n=n, rps=rps, seed=_TRAFFIC_SEED)
+            state.traffic_last_summary = dataclasses.asdict(summary)
+        except Exception:
+            logging.getLogger("serving.traffic").exception("traffic burst failed")
+        finally:
+            # Always clears, even if the import or run_traffic raised, so the
+            # UI never gets stuck showing "running" forever.
+            state.traffic_running = False
+
+    state.traffic_task = asyncio.create_task(_run())
+    return {"status": "started", "requests": n}
+
+
+@router.get("/traffic")
+def traffic_status(request: Request) -> dict:
+    state = request.app.state
+    return {
+        "running": getattr(state, "traffic_running", False),
+        "last_summary": getattr(state, "traffic_last_summary", None),
+    }
 
 
 @router.get("/stream")

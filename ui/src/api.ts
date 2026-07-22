@@ -96,6 +96,16 @@ export interface Controls {
   deferred_controls: string[];
 }
 
+export interface TrafficStartResult {
+  status: string;
+  requests: number;
+}
+
+export interface TrafficStatus {
+  running: boolean;
+  last_summary: Record<string, unknown> | null;
+}
+
 export type StreamEvent =
   | { type: "request"; summary: RequestSummary }
   | { type: "step"; request_id: string; record: TraceRecord; index: number };
@@ -122,6 +132,15 @@ export const api = {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify(body),
     }).then(j<ChatResponse>),
+  // Fires the live traffic burst (Phase 7 Task 4): the server self-calls
+  // its own /v1/chat/completions in-process, so the dashboard fills live.
+  startTraffic: (requests = 100, rps = 20) =>
+    fetch(`/api/traffic`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ requests, rps }),
+    }).then(j<TrafficStartResult>),
+  trafficStatus: () => fetch(`/api/traffic`).then(j<TrafficStatus>),
 };
 
 // Subscribe to the live decision stream. Returns an unsubscribe fn.
