@@ -69,13 +69,32 @@ class ObservabilityCfg(BaseModel):
     langfuse: LangfuseCfg
 
 
+class BypassCfg(BaseModel):
+    high_risk: bool
+    restricted_sensitivity: bool
+    user_prompt: bool
+
+class CCRCfg(BaseModel):
+    enabled: bool
+    residency: str
+    ttl_hours: int
+    export_to_telemetry: bool
+
+class ContextOptimizationCfg(BaseModel):
+    enabled: bool
+    mode: str
+    min_tokens: int
+    bypass_on: BypassCfg
+    ccr: CCRCfg
+    cache_alignment: bool
+
 class ServingCfg(BaseModel):
     inference_backend: str
     allow_backend_fallback: bool
     providers: dict[str, ProviderCfg]
     pii_detection: str
     reject_stream_requests: bool
-    context_optimization_enabled: bool
+    context_optimization: ContextOptimizationCfg
     observability: ObservabilityCfg
 
 

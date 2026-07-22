@@ -1,7 +1,7 @@
 import copy
 import pytest
 
-from app.config.lint import enforce, lint_settings
+from app.config.lint import ConfigLintError, enforce, lint_settings
 from app.config.loader import load_settings
 
 
@@ -34,3 +34,10 @@ def test_bad_rule_residency_is_caught():
     s = copy.deepcopy(load_settings())
     s.policy.sensitivity_rules[0].residency = "onpremonly"
     assert any("RESIDENCY_UNKNOWN" in e for e in lint_settings(s))
+
+
+def test_lint_rejects_ccr_telemetry_export():
+    s = copy.deepcopy(load_settings())
+    s.serving.context_optimization.ccr.export_to_telemetry = True
+    with pytest.raises(ConfigLintError, match="export_to_telemetry"):
+        enforce(s)

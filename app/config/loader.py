@@ -5,8 +5,8 @@ from pathlib import Path
 import yaml
 
 from app.config.schema import (
-    LangfuseCfg, ObservabilityCfg, PolicyCfg, PricingCfg, RoutingCfg,
-    ServingCfg, Settings,
+    BypassCfg, CCRCfg, ContextOptimizationCfg, LangfuseCfg, ObservabilityCfg,
+    PolicyCfg, PricingCfg, RoutingCfg, ServingCfg, Settings,
 )
 
 _ENV_PAT = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)(?::-([^}]*))?\}")
@@ -39,6 +39,7 @@ def load_settings(config_dir: str = "config") -> Settings:
         )
     )
 
+    co_raw = serving_raw["context_optimization"]
     serving = ServingCfg(
         inference_backend=os.environ.get(
             "SP_INFERENCE_BACKEND", serving_raw["inference_backend"]),
@@ -47,7 +48,14 @@ def load_settings(config_dir: str = "config") -> Settings:
         pii_detection=os.environ.get(
             "SP_PII_DETECTION", serving_raw["policy"]["pii_detection"]),
         reject_stream_requests=serving_raw["server"]["reject_stream_requests"],
-        context_optimization_enabled=serving_raw["context_optimization"]["enabled"],
+        context_optimization=ContextOptimizationCfg(
+            enabled=co_raw["enabled"],
+            mode=co_raw["mode"],
+            min_tokens=co_raw["min_tokens"],
+            bypass_on=BypassCfg(**co_raw["bypass_on"]),
+            ccr=CCRCfg(**co_raw["ccr"]),
+            cache_alignment=co_raw["cache_alignment"],
+        ),
         observability=observability,
     )
     routing = RoutingCfg(**routing_raw)
