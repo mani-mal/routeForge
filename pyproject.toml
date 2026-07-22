@@ -24,10 +24,28 @@ observability = [
   "opentelemetry-exporter-otlp-proto-http>=1.27",
   "langfuse>=3.0",
 ]
+agent = [
+    "nvidia-nat[langchain]>=1.8,<2",
+    "nat_tools",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+# Narrowly silence two known third-party deprecations we don't own — do NOT
+# blanket-ignore DeprecationWarning, that would hide our own future warnings.
+filterwarnings = [
+  # FastAPI's TestClient still imports starlette.testclient's deprecated httpx path.
+  # Matched on message only: it fires once at import time and pytest reports the
+  # importlib machinery as the "module", not starlette, so a module/category-path
+  # restriction is unreliable here — the message text is already narrow and unique.
+  "ignore:Using `httpx` with `starlette.testclient` is deprecated.*",
+  # langsmith (transitive dep of nvidia-nat[langchain]) uses the removed ast.Str API.
+  "ignore:ast.Str is deprecated.*:DeprecationWarning:langsmith.*",
+]
 
 [tool.uv]
 package = false
+
+[tool.uv.sources]
+nat_tools = { path = "nat_tools", editable = true }

@@ -7,3 +7,4 @@
 - traffic.sh      — run the traffic generator (stub this pass)
 - obs-up.sh       — start local Langfuse (Postgres/ClickHouse/Redis/MinIO)
 - smoke-obs.sh    — prove a PII request lands in Langfuse with the SSN redacted
+- smoke-agent.sh  — prove a mock_multistep request runs the real NAT agent and yields >=2 routed agent_hop records

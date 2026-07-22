@@ -78,6 +78,7 @@ class DecisionRecord(BaseModel):
     actual_cost_usd: float | None = None
     latency_ms: float = 0.0
     hop_index: int = 0
+    tokens_priced: int = 0
 
 
 class VerificationRecord(BaseModel):
