@@ -75,3 +75,47 @@ def test_stream_endpoint_returns_event_stream(live_internal_server):
         assert b"connected" in line
     finally:
         conn.close()
+
+
+def test_chat_completion_publishes_to_stream(live_internal_server):
+    """End-to-end: a POST to /v1/chat/completions must fan a `request` event
+    (and per-step events) out to a connected /api/stream subscriber. This is
+    the whole point of the stream; the publish block's broad except would
+    otherwise let a regression go dark with every unit test still green.
+    """
+    import json
+
+    port = live_internal_server.port
+    stream = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    try:
+        stream.request("GET", "/api/stream")
+        sresp = stream.getresponse()
+        assert sresp.status == 200
+        assert b"connected" in sresp.readline()  # preamble; subscriber now live
+
+        # Fire a request on a separate connection; publish happens before it returns.
+        post = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        try:
+            body = json.dumps({"messages": [{"role": "user", "content": "capital of France?"}]})
+            post.request("POST", "/v1/chat/completions", body=body,
+                         headers={"Authorization": "Bearer demo-key",
+                                  "Content-Type": "application/json"})
+            assert post.getresponse().status == 200
+        finally:
+            post.close()
+
+        # Drain the SSE stream until we see the request event (bounded).
+        saw_request = False
+        for _ in range(50):
+            line = sresp.readline()
+            if not line:
+                break
+            if line.startswith(b"data:"):
+                evt = json.loads(line[len(b"data:"):].strip())
+                if evt.get("type") == "request":
+                    assert evt["summary"]["model"]  # redaction-safe summary present
+                    saw_request = True
+                    break
+        assert saw_request, "no 'request' event reached the /api/stream subscriber"
+    finally:
+        stream.close()
