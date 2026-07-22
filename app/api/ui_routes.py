@@ -16,8 +16,34 @@ import json
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/api")
+
+# Controls deferred for this phase (Task 3) — documented in the GET response
+# so the UI can render them as disabled/coming-soon rather than silently
+# missing. cost_weight: the router is complexity/risk-tiered, not
+# cost-tiered, so a cost slider wouldn't honestly shift tiers.
+# provider_toggles: per-request `rejected[]` already greys out ineligible
+# providers in the visualizer; a separate runtime toggle is redundant for
+# the demo.
+_DEFERRED_CONTROLS = [
+    "cost_weight (router is complexity/risk-tiered, not cost-tiered)",
+    "provider_toggles (per-request rejected[] already greys exclusions)",
+]
+
+
+class ControlsUpdate(BaseModel):
+    headroom_enabled: bool
+
+
+def _controls_state(request: Request) -> dict:
+    co_cfg = request.app.state.co_cfg
+    return {
+        "headroom_enabled": co_cfg.enabled,
+        "min_tokens": co_cfg.min_tokens,
+        "deferred_controls": _DEFERRED_CONTROLS,
+    }
 
 # How long to wait for the next bus event before emitting an SSE comment
 # heartbeat. Keeps intermediary proxies / browsers from treating the
@@ -44,6 +70,26 @@ def get_request(request_id: str, request: Request) -> dict:
 def get_stats(request: Request) -> dict:
     history = request.app.state.history
     return history.stats()
+
+
+@router.get("/controls")
+def get_controls(request: Request) -> dict:
+    """Current runtime-mutable controls state. Only `headroom_enabled` is
+    mutable this phase (see `_DEFERRED_CONTROLS`). Reflects
+    `app.state.co_cfg` — the single mutable source shared by both the
+    direct pipeline path (via `Pipeline`'s `co_cfg_provider` callback) and
+    the internal per-hop endpoint (which reads `app.state.co_cfg` directly)."""
+    return _controls_state(request)
+
+
+@router.post("/controls")
+def set_controls(update: ControlsUpdate, request: Request) -> dict:
+    """Toggle Headroom on/off at runtime. Mutates `app.state.co_cfg` in
+    place (via `model_copy`) so the NEXT request on either path picks up
+    the new value — no restart required."""
+    request.app.state.co_cfg = request.app.state.co_cfg.model_copy(
+        update={"enabled": update.headroom_enabled})
+    return _controls_state(request)
 
 
 @router.get("/stream")
