@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "serving-plane.componentFullname" (dict "root" . "component" "ui") }}
+  labels:
+    {{- include "serving-plane.componentLabels" (dict "root" . "component" "ui") | nindent 4 }}
+spec:
+  type: {{ .Values.service.ui.type }}
+  ports:
+    - port: {{ .Values.service.ui.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "serving-plane.componentSelectorLabels" (dict "root" . "component" "ui") | nindent 4 }}

@@ -1,0 +1,119 @@
+{{- $ccrEnabled := and .Values.servingPlane.contextOptimization.enabled .Values.servingPlane.contextOptimization.ccr.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "serving-plane.componentFullname" (dict "root" . "component" "api") }}
+  labels:
+    {{- include "serving-plane.componentLabels" (dict "root" . "component" "api") | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount.api }}
+  selector:
+    matchLabels:
+      {{- include "serving-plane.componentSelectorLabels" (dict "root" . "component" "api") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "serving-plane.componentSelectorLabels" (dict "root" . "component" "api") | nindent 8 }}
+      annotations:
+        # Forces a rollout when the rendered serving.yaml changes, so
+        # `--set servingPlane.*` actually takes effect without a manual restart.
+        checksum/serving-config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      # Default (CPU) path: no nodeSelector/tolerations required. GPU
+      # scheduling only ever applies to a vllm/dynamo serving workload (see
+      # gpuWorkload in values.yaml + the Phase-9 stub Deployment) — never to
+      # this api Pod, which just talks HTTP to that backend.
+      containers:
+        - name: api
+          image: {{ include "serving-plane.apiImage" . }}
+          imagePullPolicy: {{ .Values.image.api.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext.api | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.servingPlane.server.port }}
+              protocol: TCP
+          env:
+            # Same override switches the Dockerfile documents (env wins over
+            # the mounted config/serving.yaml — see app/config/loader.py) so
+            # `--set servingPlane.inferenceBackend=vllm` works with no rebuild
+            # even before a pod restart re-reads the ConfigMap.
+            - name: SP_INFERENCE_BACKEND
+              value: {{ .Values.servingPlane.inferenceBackend | quote }}
+            - name: SP_PII_DETECTION
+              value: {{ .Values.servingPlane.policy.piiDetection | quote }}
+            - name: SP_SERVER_PORT
+              value: {{ .Values.servingPlane.server.port | quote }}
+            - name: SP_CONTEXT_OPT
+              value: {{ ternary "on" "off" .Values.servingPlane.contextOptimization.enabled | quote }}
+            {{- if .Values.langfuse.enabled }}
+            - name: LANGFUSE_HOST
+              value: {{ .Values.langfuse.host | quote }}
+            - name: LANGFUSE_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "serving-plane.langfuseSecretName" . }}
+                  key: langfuse-public-key
+            - name: LANGFUSE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "serving-plane.langfuseSecretName" . }}
+                  key: langfuse-secret-key
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - name: serving-config
+              mountPath: /app/config/serving.yaml
+              subPath: serving.yaml
+              readOnly: true
+            {{- if $ccrEnabled }}
+            - name: ccr-store
+              mountPath: /var/lib/serving-plane/ccr
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources.api | nindent 12 }}
+      volumes:
+        - name: serving-config
+          configMap:
+            name: {{ include "serving-plane.fullname" . }}-serving-config
+        {{- if $ccrEnabled }}
+        - name: ccr-store
+          persistentVolumeClaim:
+            claimName: {{ include "serving-plane.fullname" . }}-ccr
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

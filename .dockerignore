@@ -1,0 +1,27 @@
+# Keep the build context small and secret-free.
+.git
+.gitignore
+.venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+.mypy_cache
+
+# UI build artifacts + node deps (the UI has its own image)
+ui/node_modules
+ui/dist
+
+# Secrets & local env — NEVER in an image
+.env
+sec.txt
+
+# Docs / scratch / superpowers ledger
+docs/
+scratch-nat-spike/
+.superpowers/
+deploy/
+
+# Local Docker artifacts
+Dockerfile
+.dockerignore

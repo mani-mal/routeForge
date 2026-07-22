@@ -1,0 +1,54 @@
+# HPE GreenLake overlay. Merge on top of values.yaml:
+#   helm install serving-plane deploy/helm/serving-plane \
+#     -f deploy/helm/serving-plane/values-greenlake.yaml \
+#     --set langfuse.existingSecret=langfuse-keys
+#
+# Verify these against HPE's current GreenLake docs at deploy time — storage
+# class names, ingress controller, and registry conventions vary by tenant
+# and the platform evolves (see greenlake-deploy skill).
+
+image:
+  api:
+    repository: registry.greenlake.example.com/routeforge/serving-plane-api
+    tag: ""
+    pullPolicy: IfNotPresent
+  ui:
+    repository: registry.greenlake.example.com/routeforge/serving-plane-ui
+    tag: ""
+    pullPolicy: IfNotPresent
+
+imagePullSecrets:
+  - name: greenlake-registry-cred
+
+servingPlane:
+  contextOptimization:
+    ccr:
+      # GreenLake gives you a conformant cluster but does not guarantee a
+      # default StorageClass — set this explicitly rather than relying on one
+      # existing. Confirm the class name with the platform team; it must be
+      # in-cluster block/file storage, never an S3-compatible/object-store
+      # class (hard rule 6 — CCR never leaves the residency boundary).
+      storageClassName: "greenlake-block-storage"
+      size: 20Gi
+
+ingress:
+  className: "nginx"    # confirm the installed controller's IngressClass name
+  host: serving-plane.greenlake.example.com
+  tls:
+    enabled: true
+    secretName: serving-plane-tls
+
+# Air-gapped GreenLake installs typically can't reach HuggingFace at runtime.
+# If context_optimization.enabled=true here, bake Headroom's ONNX runtime +
+# Kompress model into the image ahead of time and set HF_HUB_OFFLINE=1 (see
+# greenlake-deploy skill "Headroom offline assets"). Left commented since the
+# default inherited from values.yaml has compression disabled.
+# extraEnv:
+#   - name: HF_HUB_OFFLINE
+#     value: "1"
+
+# If Presidio's model can't be downloaded in an air-gapped install, fall back
+# to regex detection or bake the model into the image instead:
+# servingPlane:
+#   policy:
+#     piiDetection: regex

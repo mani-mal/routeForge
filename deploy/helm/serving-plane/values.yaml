@@ -1,0 +1,225 @@
+# Default values for serving-plane.
+# This is the demo-safe / CPU-only default: mock inference backend, regex PII
+# detection, Headroom compression off, no GPU nodes required anywhere.
+#
+# Everything under `servingPlane:` maps 1:1 onto config/serving.yaml (see
+# templates/configmap.yaml) so switching backends/PII/compression/providers
+# never requires an image rebuild:
+#   helm upgrade serving-plane deploy/helm/serving-plane --reuse-values \
+#     --set servingPlane.inferenceBackend=vllm
+
+nameOverride: ""
+fullnameOverride: ""
+
+replicaCount:
+  api: 1
+  ui: 1
+
+image:
+  api:
+    repository: serving-plane-api
+    tag: ""          # defaults to .Chart.AppVersion
+    pullPolicy: IfNotPresent
+  ui:
+    repository: serving-plane-ui
+    tag: ""
+    pullPolicy: IfNotPresent
+
+# Referenced on both Deployments. Populate for a private registry (GreenLake
+# customers usually run one) — see values-greenlake.yaml.
+imagePullSecrets: []
+# - name: my-registry-cred
+
+# ---------------------------------------------------------------------------
+# servingPlane: every knob in config/serving.yaml, settable here. Rendered
+# verbatim into the ConfigMap (templates/configmap.yaml) which overlays
+# /app/config/serving.yaml in the api Pod via a subPath mount — routing.yaml,
+# policy.yaml and pricing.yaml keep the values baked into the image, since
+# only serving.yaml is an infra-switch file (see CLAUDE.md config ownership
+# table).
+# ---------------------------------------------------------------------------
+servingPlane:
+  inferenceBackend: mock        # mock | vllm | dynamo | none (mock = demo default, no GPU)
+  allowBackendFallback: true    # false => api exits non-zero if backend unreachable
+
+  vllm:
+    baseUrl: http://vllm:8000/v1
+    timeoutS: 60
+
+  dynamo:
+    endpoint: http://dynamo-frontend:8080
+    routerMode: kv
+    timeoutS: 60
+
+  policy:
+    piiDetection: presidio       # presidio | regex | off
+    failClosed: true             # never relax this (CLAUDE.md rule 5)
+
+  contextOptimization:
+    enabled: false               # Headroom. Default OFF: demo shows before/after
+    mode: library                # library | proxy (sidecar)
+    proxyUrl: http://headroom:8787
+    minTokens: 2000
+    bypassOn:
+      highRisk: true
+      restrictedSensitivity: true
+      userPrompt: true
+    ccr:
+      enabled: true
+      residency: local_only      # NEVER external object store — hard rule 6
+      ttlHours: 24
+      exportToTelemetry: false   # must stay false
+      # Inside-cluster PVC sizing/class for the CCR store. Only provisioned
+      # when contextOptimization.enabled AND ccr.enabled are both true.
+      storageClassName: ""       # "" = cluster default; set explicitly on GreenLake
+      size: 20Gi
+    cacheAlignment: true
+
+  providers:
+    onprem:  {enabled: true}
+    azure:   {enabled: false}
+    bedrock: {enabled: false}
+
+  agent:
+    runtime: nat
+
+  server:
+    host: 0.0.0.0
+    port: 8080
+    # SSE decision stream for the UI. OUTSIDE demo mode this carries
+    # tenant/entity/cost metadata per request and MUST sit behind
+    # authentication + tenant scoping at the ingress (see greenlake-deploy
+    # skill and NOTES.txt) — this chart does not implement that auth, it only
+    # surfaces the switch and a written warning.
+    streamDecisions: true
+    rejectStreamRequests: true
+
+# ---------------------------------------------------------------------------
+# Langfuse — this chart does not deploy Langfuse itself (compose does, for
+# the local demo). Point host at an existing Langfuse install and reference
+# its API keys via an existing K8s Secret; never put them in values.
+# ---------------------------------------------------------------------------
+langfuse:
+  enabled: true
+  host: "http://langfuse-web:3000"
+
+  # Secret containing keys `langfuse-public-key` / `langfuse-secret-key`.
+  # Preferred path: point at a Secret your platform team already manages.
+  existingSecret: ""
+
+  # DEV/DEMO ONLY: create a Secret from plaintext values below when you have
+  # no existing Secret and no external secret manager wired up yet. Leave
+  # false anywhere near production — GreenLake customers should reference an
+  # existing Secret instead (see templates/secret.yaml and the skill's
+  # "Secrets via existing K8s Secret references, never chart values" rule).
+  createSecret:
+    enabled: false
+    publicKey: ""
+    secretKey: ""
+
+# ---------------------------------------------------------------------------
+# GPU gating. Only ever applied to a workload when servingPlane.inferenceBackend
+# is vllm or dynamo. The default (mock/none) path schedules on ordinary CPU
+# nodes — nothing in this chart requires a GPU node by default.
+#
+# The api/ui Deployments never receive these — they're CPU services that talk
+# to vLLM/Dynamo over HTTP. This section only feeds the optional Phase-9 stub
+# Deployment below (and is documented here so a real vLLM/Dynamo Deployment
+# added later has the plumbing ready).
+# ---------------------------------------------------------------------------
+gpuWorkload:
+  nodeSelector: {}
+  # nodeSelector:
+  #   nvidia.com/gpu.present: "true"
+  tolerations: []
+  # tolerations:
+  #   - key: "nvidia.com/gpu"
+  #     operator: "Exists"
+  #     effect: "NoSchedule"
+  resources: {}
+  # resources:
+  #   limits:
+  #     nvidia.com/gpu: 1
+
+# Values-gated PLACEHOLDER Deployment for the on-prem GPU serving path
+# (vLLM/Dynamo). Real workload arrives in Phase 9 — see the inference-backends
+# skill and NVIDIA's own Dynamo K8s recipes (don't hand-roll that Deployment).
+# Disabled by default; enabling it only makes sense once inferenceBackend is
+# vllm or dynamo, and it will need nodeSelector/tolerations from gpuWorkload
+# above set to match real GPU nodes before it can schedule.
+vllmStub:
+  enabled: false
+  image: "vllm/vllm-openai:latest"
+
+# Extra raw env vars on the api container (e.g. HF_HUB_OFFLINE=1 or
+# HEADROOM_TLS_STRICT=0 for air-gapped/MITM-proxied GreenLake installs — see
+# values-greenlake.yaml and the greenlake-deploy skill).
+extraEnv: []
+# - name: HF_HUB_OFFLINE
+#   value: "1"
+
+resources:
+  api:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {cpu: "1", memory: 1Gi}
+  ui:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 250m, memory: 128Mi}
+
+securityContext:
+  # api: the Dockerfile already creates and USERs a dedicated non-root "app"
+  # account (uid/gid assigned by groupadd/useradd --system), so this is a
+  # true non-root container.
+  api:
+    runAsNonRoot: true
+    allowPrivilegeEscalation: false
+    seccompProfile:
+      type: RuntimeDefault
+    capabilities:
+      drop: ["ALL"]
+  # ui: stock nginx:1.27-alpine binds port 80 as root in its entrypoint (the
+  # image isn't the "-unprivileged" variant and ui/Dockerfile doesn't set
+  # USER — see docker-compose.yml, which also runs it unmodified). Forcing
+  # runAsNonRoot here would CrashLoopBackOff on startup. Still drop all
+  # capabilities except the one needed to bind the privileged port, and block
+  # privilege escalation. Revisit if ui/Dockerfile switches to
+  # nginxinc/nginx-unprivileged.
+  ui:
+    runAsNonRoot: false
+    allowPrivilegeEscalation: false
+    seccompProfile:
+      type: RuntimeDefault
+    capabilities:
+      drop: ["ALL"]
+      add: ["NET_BIND_SERVICE"]
+
+podSecurityContext:
+  fsGroup: 1000
+
+service:
+  api:
+    type: ClusterIP
+    port: 8080
+  ui:
+    type: ClusterIP
+    port: 80
+
+ingress:
+  enabled: true
+  className: ""            # set explicitly on GreenLake (nginx, etc.) — see values-greenlake.yaml
+  annotations: {}
+  host: serving-plane.local
+  tls:
+    enabled: false
+    secretName: ""
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
