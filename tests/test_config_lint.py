@@ -48,3 +48,10 @@ def test_lint_rejects_ccr_residency_drift():
     s.serving.context_optimization.ccr.residency = "cloud_ok"
     with pytest.raises(ConfigLintError, match="residency"):
         enforce(s)
+
+
+def test_lint_rejects_unknown_inference_backend():
+    s = copy.deepcopy(load_settings())
+    s.serving.inference_backend = "vLLM"  # typo (wrong case) — not a valid enum
+    with pytest.raises(ConfigLintError, match="inference_backend"):
+        enforce(s)
