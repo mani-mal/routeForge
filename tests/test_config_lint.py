@@ -41,3 +41,10 @@ def test_lint_rejects_ccr_telemetry_export():
     s.serving.context_optimization.ccr.export_to_telemetry = True
     with pytest.raises(ConfigLintError, match="export_to_telemetry"):
         enforce(s)
+
+
+def test_lint_rejects_ccr_residency_drift():
+    s = copy.deepcopy(load_settings())
+    s.serving.context_optimization.ccr.residency = "cloud_ok"
+    with pytest.raises(ConfigLintError, match="residency"):
+        enforce(s)
