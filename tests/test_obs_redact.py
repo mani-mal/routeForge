@@ -2,8 +2,8 @@ from app.obs.redact import redact, redact_value
 
 
 def test_redacts_ssn_email_phone():
-    out = redact("SSN 123-45-6789, mail a@b.com, call 415-555-0100")
-    assert "123-45-6789" not in out
+    out = redact("SSN 482-73-1946, mail a@b.com, call 415-555-0100")
+    assert "482-73-1946" not in out
     assert "a@b.com" not in out
     assert "415-555-0100" not in out
     assert "<US_SSN>" in out or "<SSN>" in out

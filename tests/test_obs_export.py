@@ -22,7 +22,7 @@ def _sample():
         policy={"sensitivity": "restricted", "onprem_only": True,
                 "allowed_providers": ["onprem"], "detected_entities": ["US_SSN"]},
         trace=[{"step": "route", "chosen": "local-32b",
-                "reason": "leaked SSN 123-45-6789 in reason text", "hop_index": 0,
+                "reason": "leaked SSN 482-73-1946 in reason text", "hop_index": 0,
                 "actual_cost_usd": 0.0004, "latency_ms": 12.0}],
     )
 
@@ -38,7 +38,7 @@ def test_export_defense_in_depth_exporter_redacts(mem_provider):
     spans = mem_provider.get_finished_spans()
     assert len(spans) >= 2  # root + one record
     blob = "".join(str(dict(s.attributes)) + s.name for s in spans)
-    assert "123-45-6789" not in blob
+    assert "482-73-1946" not in blob
     assert any(s.name == "serving.request" for s in spans)
 
 def test_export_own_redaction_removes_pii(monkeypatch):
@@ -60,9 +60,9 @@ def test_export_own_redaction_removes_pii(monkeypatch):
     spans = mem.get_finished_spans()
     assert len(spans) >= 2  # root + one record
     blob = "".join(str(dict(s.attributes)) + s.name for s in spans)
-    assert "123-45-6789" not in blob
+    assert "482-73-1946" not in blob
     reason_span = next(s for s in spans if "sp.reason" in s.attributes)
-    assert "123-45-6789" not in reason_span.attributes["sp.reason"]
+    assert "482-73-1946" not in reason_span.attributes["sp.reason"]
 
 def test_export_noop_and_safe_when_disabled(monkeypatch):
     monkeypatch.setattr(otel, "_provider", None)

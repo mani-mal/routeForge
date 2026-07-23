@@ -1,0 +1,253 @@
+##
+## routeForge API + UI for the DGX lab.
+##
+## The API points at the in-cluster vLLM (local-8b) and Langfuse deployed by the
+## sibling manifests in this directory. Only serving.yaml is overridden (via a
+## ConfigMap subPath mount) — policy/routing/pricing stay baked into the image,
+## matching the Helm chart's config-ownership split. base_url and
+## allow_backend_fallback are NOT env-overridable in the loader, which is why the
+## whole serving.yaml is mounted rather than set through env vars.
+##
+## Images live in ghcr.io/mani-mal (private) — the ghcr-pull secret must exist:
+##   kubectl create secret docker-registry ghcr-pull -n runai-routeforge \
+##     --docker-server=ghcr.io --docker-username=mani-mal --docker-password=<TOKEN>
+##
+## Deploy:
+##   kubectl apply -f deploy/dgx_lab/routeforge-app.yaml -n runai-routeforge
+##
+## UI:  http://10.89.197.201:30800
+## API: http://10.89.197.201:30808   (/health, /v1/chat/completions, /api/*)
+##
+apiVersion: v1
+kind: List
+items:
+
+# --- serving.yaml override (infra switches only) -----------------------------
+# allow_backend_fallback:false so an unreachable vLLM makes the API exit(1)
+# loudly instead of silently dropping to mock — the right setting for a GPU
+# smoke test (see deploy/dgx_lab README / backends README).
+- apiVersion: v1
+  kind: ConfigMap
+  metadata:
+    name: routeforge-serving-config
+  data:
+    serving.yaml: |
+      inference_backend: vllm
+      allow_backend_fallback: false
+
+      vllm:
+        base_url: http://vllm-local-8b:8000/v1
+        timeout_s: 60
+
+      dynamo:
+        endpoint: http://dynamo-frontend:8080
+        router_mode: kv
+        timeout_s: 60
+
+      context_optimization:
+        enabled: false
+        mode: library
+        proxy_url: http://headroom:8787
+        min_tokens: 2000
+        bypass_on:
+          high_risk: true
+          restricted_sensitivity: true
+          user_prompt: true
+        ccr:
+          enabled: true
+          residency: local_only
+          ttl_hours: 24
+          export_to_telemetry: false
+        cache_alignment: true
+
+      policy:
+        pii_detection: presidio
+        fail_closed: true
+
+      observability:
+        langfuse:
+          enabled: true
+          host: http://langfuse-web:3000
+          redact_on_export: true
+
+      providers:
+        onprem:  {enabled: true}
+        azure:   {enabled: false}
+        bedrock: {enabled: false}
+
+      agent:
+        runtime: nat
+
+      server:
+        host: 0.0.0.0
+        port: 8080
+        stream_decisions: true
+        reject_stream_requests: true
+
+# --- API ---------------------------------------------------------------------
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: routeforge-api
+    labels: {app: routeforge-api}
+  spec:
+    replicas: 1
+    selector:
+      matchLabels: {app: routeforge-api}
+    template:
+      metadata:
+        labels: {app: routeforge-api}
+      spec:
+        imagePullSecrets:
+        - name: ghcr-pull
+        containers:
+        - name: api
+          image: ghcr.io/mani-mal/serving-plane-api:0.1.1
+          ports: [{name: http, containerPort: 8080}]
+          env:
+          - {name: SP_SERVER_PORT, value: "8080"}
+          # The image bakes demo-safe ENV defaults (SP_INFERENCE_BACKEND=mock,
+          # SP_PII_DETECTION=regex), and the loader gives env precedence OVER the
+          # mounted serving.yaml — so these MUST be set here or the ConfigMap's
+          # inference_backend/pii_detection are silently ignored. base_url and
+          # allow_backend_fallback are not env-settable and still come from the
+          # mounted file.
+          - {name: SP_INFERENCE_BACKEND, value: "vllm"}
+          - {name: SP_PII_DETECTION, value: "presidio"}
+          # Langfuse export credentials (demo keys seeded by langfuse.yaml).
+          - name: LANGFUSE_PUBLIC_KEY
+            valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: LANGFUSE_PUBLIC_KEY}}
+          - name: LANGFUSE_SECRET_KEY
+            valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: LANGFUSE_SECRET_KEY}}
+          volumeMounts:
+          - name: serving-config
+            mountPath: /app/config/serving.yaml
+            subPath: serving.yaml
+          resources:
+            requests: {cpu: "500m", memory: 2Gi}
+            # Presidio (spaCy en_core_web_lg) + the NAT/LangChain stack are
+            # memory-heavy; 2Gi was too tight once real traffic + the vLLM
+            # httpx client are live.
+            limits: {cpu: "2", memory: 6Gi}
+          startupProbe:
+            httpGet: {path: /health, port: 8080}
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: {path: /health, port: 8080}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /health, port: 8080}
+            periodSeconds: 30
+        volumes:
+        - name: serving-config
+          configMap:
+            name: routeforge-serving-config
+
+# Service named `api` so the UI's nginx.conf (proxy_pass http://api:8080)
+# resolves it unmodified.
+- apiVersion: v1
+  kind: Service
+  metadata: {name: api}
+  spec:
+    selector: {app: routeforge-api}
+    ports: [{name: http, port: 8080, targetPort: 8080}]
+
+- apiVersion: v1
+  kind: Service
+  metadata: {name: routeforge-api-nodeport}
+  spec:
+    type: NodePort
+    selector: {app: routeforge-api}
+    ports: [{name: http, port: 8080, targetPort: 8080, nodePort: 30808}]
+
+# --- UI nginx config (Kubernetes variant) ------------------------------------
+# ui/nginx.conf hardcodes `resolver 127.0.0.11` (Docker Compose's embedded DNS)
+# and the short upstream name `api` — neither works in Kubernetes: the cluster
+# DNS is different, and nginx's resolver does NOT apply /etc/resolv.conf search
+# domains, so the service must be addressed by FQDN. This ConfigMap overrides
+# the baked config with a K8s-correct one. (The Helm chart's UI needs the same
+# treatment for GreenLake — the image's nginx.conf is Compose-specific.)
+- apiVersion: v1
+  kind: ConfigMap
+  metadata:
+    name: routeforge-ui-nginx
+  data:
+    serving-plane.conf: |
+      resolver 10.150.0.10 valid=10s ipv6=off;
+      server {
+          listen 80;
+          server_name _;
+          root /usr/share/nginx/html;
+          index index.html;
+          location / { try_files $uri $uri/ /index.html; }
+          location /api/stream {
+              set $up http://api.runai-routeforge.svc.cluster.local:8080;
+              proxy_pass $up$request_uri;
+              proxy_http_version 1.1;
+              proxy_set_header Connection "";
+              proxy_buffering off;
+              proxy_cache off;
+              proxy_read_timeout 3600s;
+          }
+          location /api/ {
+              set $up http://api.runai-routeforge.svc.cluster.local:8080;
+              proxy_pass $up$request_uri;
+          }
+          location /v1/ {
+              set $up http://api.runai-routeforge.svc.cluster.local:8080;
+              proxy_pass $up$request_uri;
+          }
+      }
+
+# --- UI ----------------------------------------------------------------------
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: routeforge-ui
+    labels: {app: routeforge-ui}
+  spec:
+    replicas: 1
+    selector:
+      matchLabels: {app: routeforge-ui}
+    template:
+      metadata:
+        labels: {app: routeforge-ui}
+      spec:
+        imagePullSecrets:
+        - name: ghcr-pull
+        containers:
+        - name: ui
+          image: ghcr.io/mani-mal/serving-plane-ui:0.1.0
+          ports: [{name: http, containerPort: 80}]
+          resources:
+            requests: {cpu: "50m", memory: 64Mi}
+            limits: {cpu: "500m", memory: 256Mi}
+          volumeMounts:
+          - name: nginx-conf
+            mountPath: /etc/nginx/conf.d/serving-plane.conf
+            subPath: serving-plane.conf
+          readinessProbe:
+            httpGet: {path: /, port: 80}
+            periodSeconds: 10
+        # nginx:alpine binds :80 as root; no securityContext hardening here to
+        # match the chart's documented ui exception.
+        volumes:
+        - name: nginx-conf
+          configMap:
+            name: routeforge-ui-nginx
+
+- apiVersion: v1
+  kind: Service
+  metadata: {name: routeforge-ui}
+  spec:
+    selector: {app: routeforge-ui}
+    ports: [{name: http, port: 80, targetPort: 80}]
+
+- apiVersion: v1
+  kind: Service
+  metadata: {name: routeforge-ui-nodeport}
+  spec:
+    type: NodePort
+    selector: {app: routeforge-ui}
+    ports: [{name: http, port: 80, targetPort: 80, nodePort: 30800}]

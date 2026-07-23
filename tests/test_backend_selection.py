@@ -66,6 +66,43 @@ def test_healthy_vllm_resolves_to_vllm_backend(monkeypatch):
     assert isinstance(b, VllmBackend)
 
 
+def test_resolved_backend_client_not_bound_to_resolve_loop():
+    """resolve_backend must not hand back a client bound to its (throwaway) loop.
+
+    main.py runs resolve_backend under asyncio.run(), whose loop closes on
+    return, while requests are served on uvicorn's loop. httpx binds a client's
+    pool to the loop of its first request, so the SERVING client must be
+    untouched by the startup health probe — otherwise the first real call dies
+    with "Event loop is closed". This drives that exact two-loop split and
+    would have caught the DGX outage.
+    """
+    s = _s("vllm", fallback=False)
+
+    # Loop A: resolve (health probe runs here and binds+closes the probe client).
+    async def _probe():
+        async def ok(self):
+            from app.gateway.backends.base import BackendHealth
+            return BackendHealth(ok=True, models=["local-8b"])
+        from unittest.mock import patch
+        with patch.object(VllmBackend, "health", ok):
+            return await resolve_backend(s)
+    backend = asyncio.run(_probe())  # loop A now closed
+
+    # Loop B: exercise the serving client. It must bind cleanly to THIS loop.
+    # A refused connection (ConnectError) is fine — that proves the client is
+    # live on loop B. "Event loop is closed" (RuntimeError) is the failure.
+    async def _serve():
+        import httpx
+        from app.models import Message
+        price = s.pricing.models["local-8b"]
+        try:
+            await backend.generate("local-8b", [Message(role="user", content="hi")],
+                                    price, "cheap", {})
+        except httpx.HTTPError:
+            pass  # network-level failure = client is loop-B-bound, which is the point
+    asyncio.run(_serve())  # must NOT raise RuntimeError: Event loop is closed
+
+
 def test_mock_and_none_never_unhealthy():
     # mock/none health is always ok -> resolve_backend never falls back for them.
     b_mock = asyncio.run(resolve_backend(_s("mock", fallback=False)))

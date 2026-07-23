@@ -90,7 +90,7 @@ def test_pii_request_never_calls_a_cloud_provider_at_the_backend():
     pipe = _pipeline(rec, settings)
 
     req = ChatRequest(messages=[
-        Message(role="user", content="My SSN is 123-45-6789, please summarize this.")])
+        Message(role="user", content="My SSN is 482-73-1946, please summarize this.")])
     out = asyncio.run(pipe.run("r1", "hospital", req))
 
     assert out["policy"]["onprem_only"] is True
@@ -143,7 +143,7 @@ def test_bedrock_enabled_pii_stays_onprem_while_clean_request_can_reach_cloud():
     rec_pii = RecordingBackend(MockBackend(settings))
     pipe_pii = _pipeline(rec_pii, settings)
     pii_req = ChatRequest(messages=[
-        Message(role="user", content="My SSN is 123-45-6789, please summarize this.")])
+        Message(role="user", content="My SSN is 482-73-1946, please summarize this.")])
     pii_out = asyncio.run(pipe_pii.run("r3", "hospital", pii_req))
 
     assert pii_out["policy"]["onprem_only"] is True
@@ -224,7 +224,7 @@ def test_residency_filter_is_what_keeps_pii_onprem_not_provider_availability():
         rec = RecordingBackend(MockBackend(settings))
         pipe = _pipeline(rec, settings)
         req = ChatRequest(messages=[
-            Message(role="user", content="My SSN is 123-45-6789, please summarize this.")])
+            Message(role="user", content="My SSN is 482-73-1946, please summarize this.")])
         out = asyncio.run(pipe.run("r5", "hospital", req))
         # onprem_only is still reported True (the context itself still sets
         # it), but with the filter removed the router can now reach bedrock
@@ -265,7 +265,7 @@ def test_multistep_pii_request_stays_onprem_at_decision_level(live_internal_serv
             "mock_multistep": True,
             "messages": [
                 {"role": "user",
-                 "content": "My SSN is 123-45-6789. Look up account 42 then summarize."},
+                 "content": "My SSN is 482-73-1946. Look up account 42 then summarize."},
             ],
         },
         timeout=30.0,

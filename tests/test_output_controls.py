@@ -14,8 +14,8 @@ def _ctx(require):
 
 
 def test_pii_in_completion_is_redacted():
-    text, rec = verify(D, _ctx(False), "here is 123-45-6789")
-    assert "123-45-6789" not in text
+    text, rec = verify(D, _ctx(False), "here is 482-73-1946")
+    assert "482-73-1946" not in text
     assert "US_SSN" in rec.entities_found
 
 

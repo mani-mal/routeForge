@@ -1,0 +1,379 @@
+##
+## Langfuse v3 for the DGX lab — Kubernetes port of deploy/compose/langfuse.yml.
+## CPU-only; nothing here touches a GPU.
+##
+## Stack: langfuse-web + langfuse-worker, backed by Postgres, ClickHouse, Redis
+## and MinIO (v3 uploads OTel events to S3-compatible storage and does NOT
+## auto-create its bucket, hence the minio-init Job — same as compose).
+##
+## Deploy:
+##   kubectl apply -f deploy/dgx_lab/langfuse.yaml -n runai-routeforge
+##
+## Delete:
+##   kubectl delete -f deploy/dgx_lab/langfuse.yaml -n runai-routeforge
+##
+## UI:  http://10.89.197.201:30300   login demo@example.com / demodemo
+## In-cluster host for the API's LANGFUSE_HOST: http://langfuse-web:3000
+##
+## NOTE ON CREDENTIALS: everything in the Secret below is demo-only, matching
+## deploy/compose/.env.example. This is a lab namespace on an internal cluster.
+## For GreenLake use deploy/helm/serving-plane with langfuse.existingSecret
+## pointing at a platform-managed Secret — never these values.
+##
+## NOTE ON MINIO: this object store holds Langfuse event uploads only. It must
+## never be used for the Headroom CCR cache (CLAUDE.md hard rule 6 — CCR stays
+## on in-cluster block/file storage inside the residency boundary).
+##
+apiVersion: v1
+kind: List
+items:
+
+# --- demo-only credentials ---------------------------------------------------
+- apiVersion: v1
+  kind: Secret
+  metadata:
+    name: langfuse-demo-creds
+  stringData:
+    POSTGRES_PASSWORD: postgres
+    CLICKHOUSE_PASSWORD: clickhouse
+    MINIO_ROOT_USER: minio
+    MINIO_ROOT_PASSWORD: miniosecret
+    NEXTAUTH_SECRET: local-dev-secret
+    SALT: local-dev-salt
+    ENCRYPTION_KEY: "990fd1a2bc4b761112c44dc47f5cb88634d3e37c919dbef7c59b4f3ef8d2b464"
+    # These two are what the routeForge API authenticates with.
+    LANGFUSE_PUBLIC_KEY: pk-lf-local
+    LANGFUSE_SECRET_KEY: sk-lf-local
+
+# --- Postgres ----------------------------------------------------------------
+- apiVersion: v1
+  kind: PersistentVolumeClaim
+  metadata:
+    name: langfuse-postgres
+  spec:
+    accessModes: [ReadWriteOnce]
+    storageClassName: local-path
+    resources:
+      requests:
+        storage: 20Gi
+
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: langfuse-postgres
+    labels: {app: langfuse-postgres}
+  spec:
+    replicas: 1
+    selector:
+      matchLabels: {app: langfuse-postgres}
+    template:
+      metadata:
+        labels: {app: langfuse-postgres}
+      spec:
+        containers:
+        - name: postgres
+          image: postgres:16
+          env:
+          - name: POSTGRES_PASSWORD
+            valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: POSTGRES_PASSWORD}}
+          - name: PGDATA
+            value: /var/lib/postgresql/data/pgdata
+          ports: [{containerPort: 5432}]
+          volumeMounts:
+          - {name: data, mountPath: /var/lib/postgresql/data}
+          resources:
+            requests: {cpu: "500m", memory: 1Gi}
+            limits: {cpu: "2", memory: 4Gi}
+        volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: langfuse-postgres}
+
+- apiVersion: v1
+  kind: Service
+  metadata: {name: langfuse-postgres}
+  spec:
+    selector: {app: langfuse-postgres}
+    ports: [{name: pg, port: 5432, targetPort: 5432}]
+
+# --- ClickHouse --------------------------------------------------------------
+- apiVersion: v1
+  kind: PersistentVolumeClaim
+  metadata:
+    name: langfuse-clickhouse
+  spec:
+    accessModes: [ReadWriteOnce]
+    storageClassName: local-path
+    resources:
+      requests:
+        storage: 50Gi
+
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: langfuse-clickhouse
+    labels: {app: langfuse-clickhouse}
+  spec:
+    replicas: 1
+    selector:
+      matchLabels: {app: langfuse-clickhouse}
+    template:
+      metadata:
+        labels: {app: langfuse-clickhouse}
+      spec:
+        containers:
+        - name: clickhouse
+          image: clickhouse/clickhouse-server:24
+          env:
+          - name: CLICKHOUSE_PASSWORD
+            valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: CLICKHOUSE_PASSWORD}}
+          ports:
+          - {name: http, containerPort: 8123}
+          - {name: native, containerPort: 9000}
+          volumeMounts:
+          - {name: data, mountPath: /var/lib/clickhouse}
+          resources:
+            requests: {cpu: "1", memory: 4Gi}
+            limits: {cpu: "4", memory: 16Gi}
+        volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: langfuse-clickhouse}
+
+- apiVersion: v1
+  kind: Service
+  metadata: {name: langfuse-clickhouse}
+  spec:
+    selector: {app: langfuse-clickhouse}
+    ports:
+    - {name: http, port: 8123, targetPort: 8123}
+    - {name: native, port: 9000, targetPort: 9000}
+
+# --- Redis -------------------------------------------------------------------
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: langfuse-redis
+    labels: {app: langfuse-redis}
+  spec:
+    replicas: 1
+    selector:
+      matchLabels: {app: langfuse-redis}
+    template:
+      metadata:
+        labels: {app: langfuse-redis}
+      spec:
+        containers:
+        - name: redis
+          image: redis:7
+          ports: [{containerPort: 6379}]
+          resources:
+            requests: {cpu: "100m", memory: 256Mi}
+            limits: {cpu: "1", memory: 2Gi}
+
+- apiVersion: v1
+  kind: Service
+  metadata: {name: langfuse-redis}
+  spec:
+    selector: {app: langfuse-redis}
+    ports: [{name: redis, port: 6379, targetPort: 6379}]
+
+# --- MinIO -------------------------------------------------------------------
+- apiVersion: v1
+  kind: PersistentVolumeClaim
+  metadata:
+    name: langfuse-minio
+  spec:
+    accessModes: [ReadWriteOnce]
+    storageClassName: local-path
+    resources:
+      requests:
+        storage: 20Gi
+
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: langfuse-minio
+    labels: {app: langfuse-minio}
+  spec:
+    replicas: 1
+    selector:
+      matchLabels: {app: langfuse-minio}
+    template:
+      metadata:
+        labels: {app: langfuse-minio}
+      spec:
+        containers:
+        - name: minio
+          image: minio/minio
+          args: ["server", "/data", "--console-address", ":9001"]
+          env:
+          - name: MINIO_ROOT_USER
+            valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: MINIO_ROOT_USER}}
+          - name: MINIO_ROOT_PASSWORD
+            valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: MINIO_ROOT_PASSWORD}}
+          ports:
+          - {name: api, containerPort: 9000}
+          - {name: console, containerPort: 9001}
+          volumeMounts:
+          - {name: data, mountPath: /data}
+          resources:
+            requests: {cpu: "250m", memory: 512Mi}
+            limits: {cpu: "2", memory: 4Gi}
+        volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: langfuse-minio}
+
+- apiVersion: v1
+  kind: Service
+  metadata: {name: langfuse-minio}
+  spec:
+    selector: {app: langfuse-minio}
+    ports:
+    - {name: api, port: 9000, targetPort: 9000}
+    - {name: console, port: 9001, targetPort: 9001}
+
+# Langfuse v3 does not create its own bucket — same one-shot as compose.
+- apiVersion: batch/v1
+  kind: Job
+  metadata:
+    name: langfuse-minio-init
+  spec:
+    backoffLimit: 10
+    template:
+      spec:
+        restartPolicy: OnFailure
+        containers:
+        - name: mc
+          image: minio/mc
+          command: ["/bin/sh", "-c"]
+          args:
+          - |
+            until mc alias set local http://langfuse-minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"; do
+              echo 'waiting for minio'; sleep 3;
+            done
+            mc mb --ignore-existing local/langfuse
+            echo 'bucket ready'
+          env:
+          - name: MINIO_ROOT_USER
+            valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: MINIO_ROOT_USER}}
+          - name: MINIO_ROOT_PASSWORD
+            valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: MINIO_ROOT_PASSWORD}}
+
+# --- Langfuse web ------------------------------------------------------------
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: langfuse-web
+    labels: {app: langfuse-web}
+  spec:
+    replicas: 1
+    selector:
+      matchLabels: {app: langfuse-web}
+    template:
+      metadata:
+        labels: {app: langfuse-web}
+      spec:
+        containers:
+        - name: web
+          image: langfuse/langfuse:3
+          ports: [{name: http, containerPort: 3000}]
+          env:
+          - {name: DATABASE_URL, value: "postgresql://postgres:postgres@langfuse-postgres:5432/postgres"}
+          - {name: CLICKHOUSE_URL, value: "http://langfuse-clickhouse:8123"}
+          - {name: CLICKHOUSE_MIGRATION_URL, value: "clickhouse://langfuse-clickhouse:9000"}
+          - {name: CLICKHOUSE_CLUSTER_ENABLED, value: "false"}
+          - {name: CLICKHOUSE_USER, value: "default"}
+          - name: CLICKHOUSE_PASSWORD
+            valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: CLICKHOUSE_PASSWORD}}
+          - {name: REDIS_CONNECTION_STRING, value: "redis://langfuse-redis:6379"}
+          - {name: LANGFUSE_S3_EVENT_UPLOAD_BUCKET, value: "langfuse"}
+          - {name: LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT, value: "http://langfuse-minio:9000"}
+          - {name: LANGFUSE_S3_EVENT_UPLOAD_REGION, value: "us-east-1"}
+          - name: LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID
+            valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: MINIO_ROOT_USER}}
+          - name: LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY
+            valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: MINIO_ROOT_PASSWORD}}
+          - {name: LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE, value: "true"}
+          # Must match the URL the browser actually uses, or auth redirects break.
+          - {name: NEXTAUTH_URL, value: "http://10.89.197.201:30300"}
+          - name: NEXTAUTH_SECRET
+            valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: NEXTAUTH_SECRET}}
+          - name: SALT
+            valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: SALT}}
+          - name: ENCRYPTION_KEY
+            valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: ENCRYPTION_KEY}}
+          # Seed org/project/user so the API's keys work with no manual UI setup.
+          - {name: LANGFUSE_INIT_ORG_ID, value: "demo-org"}
+          - {name: LANGFUSE_INIT_PROJECT_ID, value: "demo-project"}
+          - name: LANGFUSE_INIT_PROJECT_PUBLIC_KEY
+            valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: LANGFUSE_PUBLIC_KEY}}
+          - name: LANGFUSE_INIT_PROJECT_SECRET_KEY
+            valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: LANGFUSE_SECRET_KEY}}
+          - {name: LANGFUSE_INIT_USER_EMAIL, value: "demo@example.com"}
+          - {name: LANGFUSE_INIT_USER_PASSWORD, value: "demodemo"}
+          resources:
+            requests: {cpu: "500m", memory: 1Gi}
+            limits: {cpu: "2", memory: 4Gi}
+          startupProbe:
+            httpGet: {path: /api/public/health, port: 3000}
+            periodSeconds: 10
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: {path: /api/public/health, port: 3000}
+            periodSeconds: 15
+
+- apiVersion: v1
+  kind: Service
+  metadata: {name: langfuse-web}
+  spec:
+    selector: {app: langfuse-web}
+    ports: [{name: http, port: 3000, targetPort: 3000}]
+
+- apiVersion: v1
+  kind: Service
+  metadata: {name: langfuse-web-nodeport}
+  spec:
+    type: NodePort
+    selector: {app: langfuse-web}
+    ports: [{name: http, port: 3000, targetPort: 3000, nodePort: 30300}]
+
+# --- Langfuse worker ---------------------------------------------------------
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: langfuse-worker
+    labels: {app: langfuse-worker}
+  spec:
+    replicas: 1
+    selector:
+      matchLabels: {app: langfuse-worker}
+    template:
+      metadata:
+        labels: {app: langfuse-worker}
+      spec:
+        containers:
+        - name: worker
+          image: langfuse/langfuse-worker:3
+          env:
+          - {name: DATABASE_URL, value: "postgresql://postgres:postgres@langfuse-postgres:5432/postgres"}
+          - {name: CLICKHOUSE_URL, value: "http://langfuse-clickhouse:8123"}
+          - {name: CLICKHOUSE_MIGRATION_URL, value: "clickhouse://langfuse-clickhouse:9000"}
+          - {name: CLICKHOUSE_CLUSTER_ENABLED, value: "false"}
+          - {name: CLICKHOUSE_USER, value: "default"}
+          - name: CLICKHOUSE_PASSWORD
+            valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: CLICKHOUSE_PASSWORD}}
+          - {name: REDIS_CONNECTION_STRING, value: "redis://langfuse-redis:6379"}
+          - {name: LANGFUSE_S3_EVENT_UPLOAD_BUCKET, value: "langfuse"}
+          - {name: LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT, value: "http://langfuse-minio:9000"}
+          - {name: LANGFUSE_S3_EVENT_UPLOAD_REGION, value: "us-east-1"}
+          - name: LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID
+            valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: MINIO_ROOT_USER}}
+          - name: LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY
+            valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: MINIO_ROOT_PASSWORD}}
+          - {name: LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE, value: "true"}
+          - name: SALT
+            valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: SALT}}
+          - name: ENCRYPTION_KEY
+            valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: ENCRYPTION_KEY}}
+          resources:
+            requests: {cpu: "500m", memory: 1Gi}
+            limits: {cpu: "2", memory: 4Gi}

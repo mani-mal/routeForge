@@ -49,22 +49,40 @@ def make_backend(settings: Settings) -> InferenceBackend:
     raise ValueError(f"unknown inference_backend: {kind!r}")
 
 
+async def _aclose(backend: InferenceBackend) -> None:
+    """Close a backend's httpx client if it has one (mock/none don't)."""
+    client = getattr(backend, "_client", None)
+    if client is not None:
+        await client.aclose()
+
+
 async def resolve_backend(settings: Settings) -> InferenceBackend:
-    backend = make_backend(settings)
-    health = await backend.health()  # called once; reused for the banner below
+    # IMPORTANT: probe with one instance, SERVE with a fresh one.
+    #
+    # app/main.py runs resolve_backend under asyncio.run(...), whose event loop
+    # is closed the moment it returns — but requests are later served on
+    # uvicorn's own loop. An httpx.AsyncClient binds its connection pool to the
+    # loop of its FIRST request, so if the health probe below and request
+    # serving shared one backend instance, the first real /v1/chat/completions
+    # would raise "RuntimeError: Event loop is closed" (intermittently — httpx
+    # sometimes reconnects, sometimes not, which is exactly how this presented).
+    # So we health-check a throwaway `probe`, discard its now-loop-bound client,
+    # and return a fresh instance whose client binds lazily to the serving loop.
+    probe = make_backend(settings)
+    health = await probe.health()  # called once; reused for the banner below
+    await _aclose(probe)
     if not health.ok:
         if settings.serving.allow_backend_fallback:
             log.warning(
                 "backend_unavailable_falling_back backend=%s detail=%s",
                 settings.serving.inference_backend, health.detail)
-            backend = MockBackend(settings)
-            health = await backend.health()  # trivial: mock never makes a network call
-        else:
-            log.error(
-                "backend_unavailable_no_fallback backend=%s detail=%s",
-                settings.serving.inference_backend, health.detail)
-            sys.exit(1)
+            log.info("serving.backend active backend=mock models=[]")
+            return MockBackend(settings)  # mock has no client; loop-safe as-is
+        log.error(
+            "backend_unavailable_no_fallback backend=%s detail=%s",
+            settings.serving.inference_backend, health.detail)
+        sys.exit(1)
     log.info(
         "serving.backend active backend=%s models=%s",
-        backend.name, health.models)
-    return backend
+        probe.name, health.models)
+    return make_backend(settings)

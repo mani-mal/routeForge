@@ -42,6 +42,15 @@ RUN EXTRA_FLAGS=""; \
     for e in $(echo "${EXTRAS}" | tr ',' ' '); do EXTRA_FLAGS="$EXTRA_FLAGS --extra $e"; done; \
     uv sync --frozen ${EXTRA_FLAGS}
 
+# Presidio's AnalyzerEngine loads a spaCy pipeline at construction time and the
+# model is NOT a pip dependency — without this the presidio build installs
+# cleanly and then dies on the first request with OSError: [E050] Can't find
+# model 'en_core_web_lg'. Only paid for when presidio is actually requested.
+RUN case ",${EXTRAS}," in \
+      *,presidio,*) /app/.venv/bin/python -m spacy download en_core_web_lg ;; \
+      *) echo "presidio extra not requested; skipping spaCy model" ;; \
+    esac
+
 # ---- runtime ---------------------------------------------------------------
 FROM python:${PYTHON_VERSION}-slim-bookworm AS runtime
 

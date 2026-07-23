@@ -23,12 +23,12 @@ def test_pii_request_exports_redacted_trace(client, monkeypatch):
                     headers={"authorization": "Bearer hospital-key"},
                     json={"model": "auto",
                           "messages": [{"role": "user",
-                                        "content": "my SSN is 123-45-6789"}]})
+                                        "content": "my SSN is 482-73-1946"}]})
     assert r.status_code == 200
     provider.force_flush()
     blob = "".join(str(dict(s.attributes)) + s.name
                    for s in mem.get_finished_spans())
-    assert "123-45-6789" not in blob
+    assert "482-73-1946" not in blob
     assert "serving.request" in blob
 
 def test_request_succeeds_even_if_export_raises(client, monkeypatch):

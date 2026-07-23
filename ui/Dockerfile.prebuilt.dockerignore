@@ -1,0 +1,9 @@
+# Per-Dockerfile ignore (BuildKit uses <dockerfile>.dockerignore when present).
+# Unlike the hermetic build, this image NEEDS dist/ in the context — it packages
+# the host-built artifact — so dist/ is deliberately NOT ignored here.
+node_modules
+.dockerignore
+Dockerfile
+Dockerfile.prebuilt
+Dockerfile.prebuilt.dockerignore
+src

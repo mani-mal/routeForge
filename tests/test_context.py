@@ -8,7 +8,7 @@ S = load_settings()
 
 
 def test_ssn_forces_onprem_only():
-    ents = [Entity(type="US_SSN", start=0, end=11, value="123-45-6789")]
+    ents = [Entity(type="US_SSN", start=0, end=11, value="482-73-1946")]
     ctx = build_context(S, "r1", "default", ents, "map1")
     assert ctx.sensitivity == "restricted"
     assert ctx.onprem_only is True
@@ -16,7 +16,7 @@ def test_ssn_forces_onprem_only():
     assert "bedrock" not in ctx.allowed_providers
     assert ctx.require_verification is True
     assert ctx.detected_entities == ("US_SSN",)
-    assert "123-45-6789" not in ctx.detected_entities
+    assert "482-73-1946" not in ctx.detected_entities
 
 
 def test_clean_request_includes_cloud_when_enabled():
@@ -35,7 +35,7 @@ def test_onprem_only_excludes_cloud_even_when_enabled():
     s = copy.deepcopy(S)
     s.serving.providers["azure"].enabled = True
     s.serving.providers["bedrock"].enabled = True
-    ents = [Entity(type="US_SSN", start=0, end=11, value="123-45-6789")]
+    ents = [Entity(type="US_SSN", start=0, end=11, value="482-73-1946")]
     ctx = build_context(s, "r1", "default", ents, "map1")
     assert ctx.onprem_only is True
     assert ctx.allowed_providers == frozenset({"onprem"})  # cloud excluded by construction

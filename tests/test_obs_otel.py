@@ -25,9 +25,9 @@ def test_redacting_exporter_strips_pii_from_attributes():
     provider.add_span_processor(SimpleSpanProcessor(RedactingSpanExporter(mem)))
     tracer = provider.get_tracer("t")
     with tracer.start_as_current_span("root") as span:
-        span.set_attribute(REDACT_KEYS[0], "patient SSN 123-45-6789")
+        span.set_attribute(REDACT_KEYS[0], "patient SSN 482-73-1946")
     provider.force_flush()
     spans = mem.get_finished_spans()
     assert len(spans) == 1
     dumped = str(dict(spans[0].attributes))
-    assert "123-45-6789" not in dumped
+    assert "482-73-1946" not in dumped

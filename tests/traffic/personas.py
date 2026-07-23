@@ -36,11 +36,36 @@ _LARGE_LOG_BLOCK = "\n".join([_LOG_LINE] * 400)
 # high_risk personas actually trip the policy gate.
 # ---------------------------------------------------------------------------
 
+# SSNs Presidio's UsSsnRecognizer refuses to flag as PII. It invalidates any
+# number that is a well-known sample, so a generator that emits these produces
+# traffic the gate silently treats as clean. See fake_ssn below.
+_PRESIDIO_INVALID_SSNS = frozenset({"123456789", "078051120"})
+
+
 def fake_ssn(rng: random.Random) -> str:
-    """Synthetic SSN shaped NNN-NN-NNNN (matches RegexDetector US_SSN)."""
-    return (f"{rng.randint(0, 999):03d}-"
-            f"{rng.randint(0, 99):02d}-"
-            f"{rng.randint(0, 9999):04d}")
+    """Synthetic SSN shaped NNN-NN-NNNN, valid under BOTH detectors.
+
+    RegexDetector only checks the shape, but Presidio's UsSsnRecognizer also
+    applies SSA allocation rules and rejects anything that can't be a real SSN:
+    area 000/666/9xx, group 00, serial 0000, all-identical digits, and a
+    blocklist of famous sample numbers. An unconstrained randint(0, 999) run
+    produced ~11% such numbers — each one a high_risk persona request that
+    Presidio scores as clean, which quietly understates the gate's hit rate in
+    the 500-request burst. Generating only allocatable SSNs keeps the traffic
+    honest whichever detector is configured.
+    """
+    while True:
+        area = rng.randint(1, 899)
+        if area == 666:
+            continue
+        group = rng.randint(1, 99)
+        serial = rng.randint(1, 9999)
+        digits = f"{area:03d}{group:02d}{serial:04d}"
+        if digits in _PRESIDIO_INVALID_SSNS:
+            continue
+        if len(set(digits)) == 1:
+            continue
+        return f"{area:03d}-{group:02d}-{serial:04d}"
 
 
 def fake_email(rng: random.Random) -> str:

@@ -1,0 +1,177 @@
+##
+## vLLM serving the routeForge `local-8b` pool member (cheap tier).
+## Targets the H200 node (acl-dgxh200-1, NVIDIA-H200). Total: 1 GPU + 8 CPU + 64Gi.
+##
+## The served model name is `local-8b` ON PURPOSE: config/routing.yaml:36 defines
+## the pool member by that name, and app/gateway/backends/vllm.py:32 passes the
+## router's chosen model name straight through to /v1/chat/completions. Serving
+## under the alias keeps routing.yaml and pricing.yaml untouched.
+##
+## Deploy:
+##   kubectl apply -f deploy/k8s/vllm-local-8b.yaml -n runai-routeforge
+##
+## Delete:
+##   kubectl delete -f deploy/k8s/vllm-local-8b.yaml -n runai-routeforge
+##
+## Watch the model download + load (first start pulls ~15GB from HuggingFace):
+##   kubectl logs -f deploy/vllm-local-8b -n runai-routeforge
+##
+## Test (in-cluster name is vllm-local-8b:8000):
+##   kubectl exec -it deploy/vllm-local-8b -n runai-routeforge -- \
+##     curl -s http://localhost:8000/v1/models
+##
+##   curl http://10.89.197.201:30810/v1/chat/completions \
+##     -H "Content-Type: application/json" \
+##     -d '{"model":"local-8b","messages":[{"role":"user","content":"Hello"}]}'
+##
+apiVersion: v1
+kind: List
+items:
+
+# --- HuggingFace model cache -------------------------------------------------
+# local-path (node-local disk) rather than the default nfs-csi: model weights are
+# large and latency-sensitive on load, and this cache is disposable — it only
+# saves re-downloading from HuggingFace on restart.
+- apiVersion: v1
+  kind: PersistentVolumeClaim
+  metadata:
+    name: vllm-local-8b-cache
+  spec:
+    accessModes:
+      - ReadWriteOnce
+    storageClassName: local-path
+    resources:
+      requests:
+        storage: 60Gi
+
+# --- vLLM server -------------------------------------------------------------
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: vllm-local-8b
+    labels:
+      app: vllm-local-8b
+  spec:
+    replicas: 1
+    selector:
+      matchLabels:
+        app: vllm-local-8b
+    template:
+      metadata:
+        labels:
+          app: vllm-local-8b
+      spec:
+        containers:
+        - name: vllm
+          image: vllm/vllm-openai:latest
+          args:
+            - --model
+            - Qwen/Qwen2.5-7B-Instruct
+            # Serve under BOTH onprem pool names (routing.yaml: local-8b=cheap,
+            # local-32b=mid). Only the 8b is deployed for now, so it answers to
+            # both aliases — otherwise any request the router targets at the mid
+            # tier selects `local-32b`, 404s on this server, and the gateway
+            # fails "on all reachable tiers". STAND-IN: cheap and mid both hit
+            # the 8b until a real 32b is deployed; the cost-tier differentiation
+            # in the demo is representative, not yet distinct.
+            - --served-model-name
+            - local-8b
+            - local-32b
+            - --host
+            - "0.0.0.0"
+            - --port
+            - "8000"
+            - --max-model-len
+            - "32768"
+            - --gpu-memory-utilization
+            - "0.90"
+          ports:
+          - name: http
+            containerPort: 8000
+          env:
+          # Gated repos need this; ungated Qwen does not, but the token is
+          # already in the namespace and raises the anonymous rate limit.
+          - name: HF_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: genericsecret-hf-token
+                key: HF_TOKEN
+          - name: HF_HOME
+            value: /models
+          resources:
+            requests:
+              cpu: "8"
+              memory: 64Gi
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "16"
+              memory: 64Gi
+              nvidia.com/gpu: "1"
+          volumeMounts:
+          - name: model-cache
+            mountPath: /models
+          # vLLM uses shared memory for its worker IPC; the 64MB default /dev/shm
+          # will fail at load time.
+          - name: dshm
+            mountPath: /dev/shm
+          # Model download + CUDA graph capture takes minutes on a cold cache.
+          # startupProbe gives it up to 30 min before liveness starts policing.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 15
+            failureThreshold: 120
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 30
+        volumes:
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: vllm-local-8b-cache
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Gi
+        nodeSelector:
+          nvidia.com/gpu.product: NVIDIA-H200
+        tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+
+# --- Services ----------------------------------------------------------------
+# ClusterIP is what config/serving.yaml's vllm.base_url points at in-cluster.
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: vllm-local-8b
+  spec:
+    selector:
+      app: vllm-local-8b
+    ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+
+# NodePort so the API can be driven from the laptop before it moves in-cluster.
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: vllm-local-8b-nodeport
+  spec:
+    type: NodePort
+    selector:
+      app: vllm-local-8b
+    ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      nodePort: 30810

@@ -1,6 +1,6 @@
 def test_ssn_request_is_onprem_only(client):
     r = client.post("/v1/chat/completions", json={
-        "messages": [{"role": "user", "content": "verify SSN 123-45-6789"}]})
+        "messages": [{"role": "user", "content": "verify SSN 482-73-1946"}]})
     body = r.json()
     assert body["policy"]["onprem_only"] is True
     assert body["policy"]["allowed_providers"] == ["onprem"]
@@ -23,5 +23,5 @@ def test_stream_rejected(client):
 
 def test_no_ssn_value_in_response(client):
     r = client.post("/v1/chat/completions", json={
-        "messages": [{"role": "user", "content": "SSN 123-45-6789"}]})
-    assert "123-45-6789" not in r.text
+        "messages": [{"role": "user", "content": "SSN 482-73-1946"}]})
+    assert "482-73-1946" not in r.text

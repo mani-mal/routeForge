@@ -32,7 +32,7 @@ def test_missing_request_returns_404(client):
 
 
 def test_pii_request_never_leaks_raw_ssn(client):
-    ssn = "123-45-6789"
+    ssn = "482-73-1946"
     r = client.post("/v1/chat/completions", headers={"Authorization": "Bearer hospital-key"},
                      json={"messages": [{"role": "user", "content": f"verify SSN {ssn}"}]})
     assert r.status_code == 200
