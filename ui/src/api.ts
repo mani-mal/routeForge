@@ -95,20 +95,23 @@ export interface Stats {
   latency_p95_ms: number;
 }
 
+export interface FleetRow {
+  app: string;
+  count: number;
+  total_usd: number;
+  baseline_usd: number;
+  routing_saved_usd: number;
+  compression_saved_usd: number;
+  onprem_count: number;
+  pii_count: number;
+  latency_p50_ms: number;
+  tier_distribution: Record<string, number>;
+}
+
 export interface Controls {
   headroom_enabled: boolean;
   min_tokens: number;
   deferred_controls: string[];
-}
-
-export interface TrafficStartResult {
-  status: string;
-  requests: number;
-}
-
-export interface TrafficStatus {
-  running: boolean;
-  last_summary: Record<string, unknown> | null;
 }
 
 export type StreamEvent =
@@ -121,7 +124,10 @@ async function j<T>(r: Response): Promise<T> {
 }
 
 export const api = {
-  requests: (limit = 100) => fetch(`/api/requests?limit=${limit}`).then(j<RequestSummary[]>),
+  requests: (limit = 100, app?: string) =>
+    fetch(`/api/requests?limit=${limit}${app ? `&app=${encodeURIComponent(app)}` : ""}`)
+      .then(j<RequestSummary[]>),
+  fleet: () => fetch(`/api/fleet`).then(j<FleetRow[]>),
   request: (id: string) => fetch(`/api/requests/${id}`).then(j<ChatResponse>),
   stats: () => fetch(`/api/stats`).then(j<Stats>),
   controls: () => fetch(`/api/controls`).then(j<Controls>),
@@ -137,15 +143,6 @@ export const api = {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify(body),
     }).then(j<ChatResponse>),
-  // Fires the live traffic burst (Phase 7 Task 4): the server self-calls
-  // its own /v1/chat/completions in-process, so the dashboard fills live.
-  startTraffic: (requests = 100, rps = 20) =>
-    fetch(`/api/traffic`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ requests, rps }),
-    }).then(j<TrafficStartResult>),
-  trafficStatus: () => fetch(`/api/traffic`).then(j<TrafficStatus>),
 };
 
 // Subscribe to the live decision stream. Returns an unsubscribe fn.
@@ -281,40 +278,3 @@ export const TIER_COLOR: Record<string, string> = {
   frontier: "#ef4444",
   "?": "#6b7280",
 };
-
-// Scripted requests for the control panel (canned bodies; keys map to personas).
-export const SCRIPTED: { label: string; apiKey: string; body: object; hint: string }[] = [
-  {
-    label: "Clean question",
-    apiKey: "acme-key",
-    body: { messages: [{ role: "user", content: "What is the capital of France?" }] },
-    hint: "public → cheap local tier",
-  },
-  {
-    label: "PII (SSN)",
-    apiKey: "hospital-key",
-    body: {
-      messages: [{ role: "user", content: "My SSN is 123-45-6789 — summarize my account status." }],
-    },
-    hint: "restricted → onprem_only, cloud greyed out",
-  },
-  {
-    label: "Multi-step task",
-    apiKey: "acme-key",
-    body: {
-      messages: [{ role: "user", content: "Look up account 42 then compute 12 * 7." }],
-      mock_multistep: true,
-    },
-    hint: "agent hops re-enter the router",
-  },
-  {
-    label: "High-risk (PHI)",
-    apiKey: "hospital-key",
-    body: {
-      messages: [
-        { role: "user", content: "Patient medical license ML-4471 — advise on treatment plan." },
-      ],
-    },
-    hint: "high-risk onprem → require_verification",
-  },
-];

@@ -143,31 +143,49 @@ function PolicyEditor({ app, onSaved }: { app: AdminApp; onSaved: () => void }) 
   );
 }
 
-function AppDetail({ app, onChanged }: { app: AdminApp; onChanged: () => void }) {
+// Reusable per-application config UI: policy editor + token management.
+// Fetches its own copy of the app (there is no single-get in adminApi, so it
+// lists and finds by id) and re-fetches after every mutation. `onChanged` is
+// an optional passthrough so a parent that keeps its own app list (e.g.
+// ApplicationsPanel's left-hand list) can stay in sync too.
+export function AppConfig({ appId, onChanged }: { appId: string; onChanged?: () => void }) {
+  const [apps, setApps] = useState<AdminApp[]>([]);
+  const [loading, setLoading] = useState(true);
   const [newToken, setNewToken] = useState<string | null>(null);
 
+  async function load() {
+    setLoading(true);
+    try {
+      const rows = await adminApi.apps();
+      setApps(rows);
+    } finally {
+      setLoading(false);
+    }
+  }
+  useEffect(() => { load().catch(() => {}); }, [appId]);
+
+  const app = apps.find((a) => a.id === appId) ?? null;
+
+  async function refresh() {
+    await load();
+    onChanged?.();
+  }
+
   async function addToken() {
-    const r = await adminApi.createToken(app.id, "manual");
+    const r = await adminApi.createToken(appId, "manual");
     setNewToken(r.token);
-    onChanged();
+    await refresh();
   }
   async function revoke(id: string) {
     await adminApi.revokeToken(id);
-    onChanged();
+    await refresh();
   }
+
+  if (loading) return <p className="text-sm text-gray-500">Loading…</p>;
+  if (!app) return <p className="text-sm text-frontier">Application not found.</p>;
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="text-sm font-semibold text-gray-100">{app.name} <span className="text-gray-500">({app.id})</span></div>
-          <div className="text-xs text-gray-500">
-            status {app.status} · default residency {app.default_residency}
-            {app.langfuse_project_id ? ` · langfuse: ${app.langfuse_project_id}` : " · langfuse: shared"}
-          </div>
-        </div>
-      </div>
-
       <section>
         <div className="text-xs uppercase tracking-wide text-gray-500 mb-1">Tokens</div>
         <ul className="flex flex-col gap-1">
@@ -188,8 +206,26 @@ function AppDetail({ app, onChanged }: { app: AdminApp; onChanged: () => void })
 
       <section>
         <div className="text-xs uppercase tracking-wide text-gray-500 mb-1">Policy</div>
-        <PolicyEditor app={app} onSaved={onChanged} />
+        <PolicyEditor app={app} onSaved={refresh} />
       </section>
+    </div>
+  );
+}
+
+function AppDetail({ app, onChanged }: { app: AdminApp; onChanged: () => void }) {
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="text-sm font-semibold text-gray-100">{app.name} <span className="text-gray-500">({app.id})</span></div>
+          <div className="text-xs text-gray-500">
+            status {app.status} · default residency {app.default_residency}
+            {app.langfuse_project_id ? ` · langfuse: ${app.langfuse_project_id}` : " · langfuse: shared"}
+          </div>
+        </div>
+      </div>
+
+      <AppConfig appId={app.id} onChanged={onChanged} />
     </div>
   );
 }

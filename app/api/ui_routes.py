@@ -54,9 +54,9 @@ _HEARTBEAT_SECONDS = 15
 
 
 @router.get("/requests")
-def list_requests(request: Request, limit: int = 100) -> list:
+def list_requests(request: Request, limit: int = 100, app: str | None = None) -> list:
     history = request.app.state.history
-    return history.list(limit=limit)
+    return history.list(limit=limit, app=app)
 
 
 @router.get("/requests/{request_id}")
@@ -72,6 +72,11 @@ def get_request(request_id: str, request: Request) -> dict:
 def get_stats(request: Request) -> dict:
     history = request.app.state.history
     return history.stats()
+
+
+@router.get("/fleet")
+def fleet(request: Request) -> list:
+    return request.app.state.history.fleet()
 
 
 @router.get("/controls")

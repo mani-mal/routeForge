@@ -93,12 +93,54 @@ class HistoryStore:
         self._full[summary.id] = resp
         return summary
 
-    def list(self, limit: int = 100) -> list[RequestSummary]:
-        """Newest first."""
-        return list(reversed(self._summaries))[:limit]
+    def list(self, limit: int = 100, app: str | None = None) -> list[RequestSummary]:
+        """Newest first. `app`, when set, restricts to summaries whose
+        `tenant_id == app` (Task 1: per-app filter for the admin console).
+        `limit <= 0` returns `[]`, matching the old slice-based `[:limit]`
+        behavior for non-positive limits."""
+        if limit <= 0:
+            return []
+        items = reversed(self._summaries)
+        if app is not None:
+            items = (s for s in items if s.tenant_id == app)
+        out: list[RequestSummary] = []
+        for s in items:
+            out.append(s)
+            if len(out) >= limit:
+                break
+        return out
 
     def get(self, request_id: str) -> dict | None:
         return self._full.get(request_id)
+
+    def fleet(self) -> list[dict]:
+        """One aggregate row per `tenant_id` (application) seen, sorted by
+        `count` desc, for the fleet-overview table (Task 2)."""
+        from collections import defaultdict
+        import statistics
+        groups: dict[str, list[RequestSummary]] = defaultdict(list)
+        for s in self._summaries:
+            groups[s.tenant_id].append(s)
+        rows = []
+        for app, items in groups.items():
+            lat = sorted(s.latency_ms for s in items)
+            tiers: dict[str, int] = defaultdict(int)
+            for s in items:
+                tiers[s.tier] += 1
+            rows.append({
+                "app": app,
+                "count": len(items),
+                "total_usd": sum(s.total_usd for s in items),
+                "baseline_usd": sum(s.baseline_usd for s in items),
+                "routing_saved_usd": sum(s.routing_saved_usd for s in items),
+                "compression_saved_usd": sum(s.compression_saved_usd for s in items),
+                "onprem_count": sum(1 for s in items if s.onprem_only),
+                "pii_count": sum(1 for s in items if s.detected_entities),
+                "latency_p50_ms": statistics.median(lat) if lat else 0.0,
+                "tier_distribution": dict(tiers),
+            })
+        rows.sort(key=lambda r: r["count"], reverse=True)
+        return rows
 
     def stats(self) -> dict:
         summaries = list(self._summaries)
