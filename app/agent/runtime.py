@@ -42,6 +42,8 @@ package to be installed.
 """
 from __future__ import annotations
 
+import logging
+import os
 import uuid
 
 from pydantic import BaseModel
@@ -50,8 +52,38 @@ from app.agent.internal_endpoint import HOPS
 from app.config.loader import load_settings
 from app.models import ChatRequest, CompressionRecord, DecisionRecord, ExecutionPolicyContext
 
+log = logging.getLogger("serving.obs")
+
 NAT_WORKFLOW_CONFIG = "config/nat_workflow.yaml"
 DEFAULT_MAX_STEPS = 5
+
+
+def _maybe_enable_langfuse(config) -> None:
+    """Enable NAT-native telemetry so the agent's FULL trajectory (per-hop model
+    calls, tool inputs/outputs, tokens, latency) exports to the same Langfuse the
+    request-level DecisionRecords go to (app/obs/export.py) — not just summarized
+    router decisions.
+
+    Best-effort and fail-safe: only enabled when all three LANGFUSE_* vars are
+    set, and any error configuring it is swallowed (telemetry must never break an
+    agent run). This is why it is injected here rather than baked into
+    config/nat_workflow.yaml — the `langfuse` exporter raises on missing keys,
+    which would break keyless dev runs and `nat validate`.
+    """
+    host = os.environ.get("LANGFUSE_HOST")
+    public_key = os.environ.get("LANGFUSE_PUBLIC_KEY")
+    secret_key = os.environ.get("LANGFUSE_SECRET_KEY")
+    if not (host and public_key and secret_key):
+        return
+    try:
+        from nat.plugins.opentelemetry.register import LangfuseTelemetryExporter
+        config.general.telemetry.tracing["langfuse"] = LangfuseTelemetryExporter(
+            endpoint=f"{host.rstrip('/')}/api/public/otel/v1/traces",
+            public_key=public_key,
+            secret_key=secret_key,
+        )
+    except Exception:  # telemetry must never break an agent run
+        log.warning("could not enable NAT langfuse telemetry (non-fatal)", exc_info=True)
 
 
 class AgentResult(BaseModel):
@@ -132,6 +164,8 @@ async def run(ctx: ExecutionPolicyContext, request: ChatRequest, *, port: int) -
         config.llms["sp_router"].base_url = f"http://127.0.0.1:{port}/internal/v1/{run_id}"
         config.llms["sp_router"].api_key = SecretStr("sk-internal")
         config.workflow.max_iterations = max_steps
+        # Export the agent's full trajectory to Langfuse when keys are present.
+        _maybe_enable_langfuse(config)
 
         async with WorkflowBuilder.from_config(config=config) as builder:
             session_manager = await SessionManager.create(config=config, shared_builder=builder)

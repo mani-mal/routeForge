@@ -53,7 +53,8 @@ class Gateway:
                 continue
 
             records.append(DecisionRecord(
-                step="router", chosen=cand.name, reason=decision.reason,
+                step="router", chosen=cand.name,
+                chosen_display_name=cand.display_name, reason=decision.reason,
                 rejected=decision.rejected, est_cost_usd=decision.est_cost_usd,
                 actual_cost_usd=result.cost_usd, latency_ms=result.latency_ms,
                 hop_index=len(records)))

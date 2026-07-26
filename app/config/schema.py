@@ -5,6 +5,10 @@ class PoolCandidate(BaseModel):
     name: str
     provider: str
     tier: str
+    # Human-facing model name shown in the UI (e.g. "Qwen2.5-7B-Instruct (local)").
+    # `name` stays the stable slug that pricing/tier lookups and the served vLLM
+    # model id key on — never render `name` to customers, never route on this.
+    display_name: str | None = None
 
 
 class RoutingCfg(BaseModel):
@@ -59,8 +63,13 @@ class ProviderCfg(BaseModel):
 
 class LangfuseCfg(BaseModel):
     enabled: bool
-    host: str
+    host: str  # in-cluster URL for OTLP export (e.g. http://langfuse-web:3000)
     redact_on_export: bool
+    project_id: str = "demo-project"  # for building trace deep-link URLs for the UI
+    # Browser-reachable Langfuse URL for the UI deep-link (e.g. a NodePort/ingress).
+    # `host` is in-cluster and unreachable from the user's browser; when this is unset
+    # the deep-link falls back to `host`.
+    public_host: str | None = None
     public_key: str | None = None
     secret_key: str | None = None
 

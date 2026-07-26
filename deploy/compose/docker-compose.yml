@@ -33,11 +33,20 @@ services:
       # (the API never blocks on it), so the API can start before Langfuse has
       # finished migrating — traces simply begin flowing once it's up.
       LANGFUSE_HOST: http://langfuse-web:3000
+      # Browser-reachable Langfuse URL for the UI's "Langfuse trace" deep-link
+      # (LANGFUSE_HOST above is the in-container OTLP name; the browser hits this).
+      LANGFUSE_PUBLIC_URL: http://localhost:3000
       # Demo-only, non-sensitive: throwaway keys for the ephemeral localhost
       # Langfuse in this stack — they grant access to nothing external. Rotate
       # via .env for anything but a local demo. (Prod Helm uses K8s Secrets.)
       LANGFUSE_PUBLIC_KEY: pk-lf-local
       LANGFUSE_SECRET_KEY: sk-lf-local
+      # Multi-tenant store: defaults to an in-container SQLite file (offline,
+      # no extra service). To reuse this stack's Postgres instead, set:
+      #   DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/postgres
+      # Admin dashboard login (demo defaults — change for anything real).
+      ADMIN_EMAIL: admin@routeforge.local
+      ADMIN_PASSWORD: changeme
     depends_on:
       langfuse-web: {condition: service_started}
     healthcheck:

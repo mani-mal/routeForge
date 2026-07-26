@@ -47,6 +47,7 @@ class Router:
             else:
                 rejected.append(RejectedCandidate(
                     name=c.name, provider=c.provider, tier=c.tier,
+                    display_name=c.display_name,
                     reason="excluded by policy (residency)"))
         if not allowed:
             raise ValueError("no candidates after residency filter")
@@ -72,13 +73,14 @@ class Router:
                 reason = ("below target tier" if _ORDER[c.tier] < _ORDER[tier_pick]
                           else "above target tier")
                 rejected.append(RejectedCandidate(
-                    name=c.name, provider=c.provider, tier=c.tier, reason=reason))
+                    name=c.name, provider=c.provider, tier=c.tier,
+                    display_name=c.display_name, reason=reason))
                 continue
             est = self._est_cost(c, tokens_after)
             if est > ctx.max_cost_usd:
                 rejected.append(RejectedCandidate(
                     name=c.name, provider=c.provider, tier=c.tier,
-                    reason="over budget"))
+                    display_name=c.display_name, reason="over budget"))
             else:
                 eligible.append((c, est))
         if not eligible:
@@ -98,7 +100,8 @@ class Router:
         chosen, est = eligible[0]
         for c, _e in eligible[1:]:
             rejected.append(RejectedCandidate(
-                name=c.name, provider=c.provider, tier=c.tier, reason="lower score"))
+                name=c.name, provider=c.provider, tier=c.tier,
+                display_name=c.display_name, reason="lower score"))
         return RoutingDecision(
             chosen=chosen, est_cost_usd=est,
             reason=f"tier {chosen.tier} (target {target})", rejected=rejected)

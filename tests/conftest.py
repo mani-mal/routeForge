@@ -1,5 +1,9 @@
 import os
 os.environ.setdefault("SP_PII_DETECTION", "regex")
+# Each create_app() gets its own in-memory SQLite (StaticPool → one connection
+# per engine → isolated DB), so the application/token/usage store never leaks
+# state across tests and no DB server is needed.
+os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite://")
 
 import socket
 import threading

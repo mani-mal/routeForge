@@ -102,7 +102,7 @@ items:
         - name: ghcr-pull
         containers:
         - name: api
-          image: ghcr.io/mani-mal/serving-plane-api:0.1.1
+          image: ghcr.io/mani-mal/serving-plane-api:0.1.2
           ports: [{name: http, containerPort: 8080}]
           env:
           - {name: SP_SERVER_PORT, value: "8080"}
@@ -119,6 +119,28 @@ items:
             valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: LANGFUSE_PUBLIC_KEY}}
           - name: LANGFUSE_SECRET_KEY
             valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: LANGFUSE_SECRET_KEY}}
+          # Browser-reachable Langfuse URL for the UI's "Langfuse trace" deep-link.
+          # host (serving.yaml) is the in-cluster OTLP name; this is the NodePort a
+          # laptop browser actually hits. Must match langfuse.yaml's NEXTAUTH_URL.
+          - {name: LANGFUSE_PUBLIC_URL, value: "http://10.89.197.201:30300"}
+          # Multi-tenant application/token/usage store (spec 2026-07-25): reuse
+          # the in-cluster Langfuse Postgres. routeForge's tables (applications,
+          # app_tokens, app_policies, usage_records, admin_users) coexist with
+          # Langfuse's under distinct names. Needs the image's `postgres` extra
+          # (asyncpg) — build with EXTRAS including `postgres`.
+          - {name: DATABASE_URL, value: "postgresql+asyncpg://postgres:postgres@langfuse-postgres:5432/postgres"}
+          # Admin dashboard login. CHANGE THESE — demo defaults only.
+          - {name: ADMIN_EMAIL, value: "admin@routeforge.local"}
+          - {name: ADMIN_PASSWORD, value: "changeme"}
+          # Optional: to auto-provision a Langfuse PROJECT per application, set an
+          # organization-scoped API key pair here (Langfuse org settings -> API
+          # keys). Absent -> apps share the default project (still works).
+          # - {name: LANGFUSE_ORG_PUBLIC_KEY, value: "pk-lf-org-..."}
+          # - {name: LANGFUSE_ORG_SECRET_KEY, value: "sk-lf-org-..."}
+          # ENCRYPTION_KEY (reused from the langfuse secret) encrypts stored
+          # per-app project secrets at rest.
+          - name: ENCRYPTION_KEY
+            valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: ENCRYPTION_KEY}}
           volumeMounts:
           - name: serving-config
             mountPath: /app/config/serving.yaml
@@ -198,6 +220,10 @@ items:
               set $up http://api.runai-routeforge.svc.cluster.local:8080;
               proxy_pass $up$request_uri;
           }
+          location /admin/ {
+              set $up http://api.runai-routeforge.svc.cluster.local:8080;
+              proxy_pass $up$request_uri;
+          }
       }
 
 # --- UI ----------------------------------------------------------------------
@@ -218,7 +244,7 @@ items:
         - name: ghcr-pull
         containers:
         - name: ui
-          image: ghcr.io/mani-mal/serving-plane-ui:0.1.0
+          image: ghcr.io/mani-mal/serving-plane-ui:0.1.2
           ports: [{name: http, containerPort: 80}]
           resources:
             requests: {cpu: "50m", memory: 64Mi}

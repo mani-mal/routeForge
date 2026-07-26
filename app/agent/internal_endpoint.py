@@ -147,7 +147,8 @@ async def internal_chat_completions(run_id: str, request: Request):
 
     hop_index = HOPS.next_hop_index(run_id)
     HOPS.record(run_id, DecisionRecord(
-        step="agent_hop", chosen=decision.chosen.name, reason=decision.reason,
+        step="agent_hop", chosen=decision.chosen.name,
+        chosen_display_name=decision.chosen.display_name, reason=decision.reason,
         rejected=decision.rejected, est_cost_usd=decision.est_cost_usd,
         hop_index=hop_index, tokens_priced=tokens_after))
     HOPS.record_compression(run_id, comp.record)

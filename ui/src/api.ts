@@ -10,6 +10,7 @@ export interface RequestSummary {
   sensitivity: string;
   onprem_only: boolean;
   model: string;
+  model_display: string; // human-facing model name; UI renders this, `model` is the slug
   tier: Tier;
   total_usd: number;
   baseline_usd: number;
@@ -26,12 +27,14 @@ export interface RejectedCandidate {
   provider: string;
   tier: string;
   reason: string;
+  display_name?: string | null; // human-facing name; falls back to `name`
 }
 
 // A trace record is one of several step shapes; fields are optional per step.
 export interface TraceRecord {
   step: string;
   chosen?: string | null;
+  chosen_display_name?: string | null; // human-facing name for `chosen`
   reason?: string;
   rejected?: RejectedCandidate[];
   est_cost_usd?: number;
@@ -61,6 +64,8 @@ export interface TraceRecord {
 export interface ChatResponse {
   id: string;
   model: string;
+  model_display?: string; // human-facing model name (falls back to `model`)
+  langfuse_url?: string | null; // live deep-link to this request's Langfuse trace
   choices: { index: number; message: { role: string; content: string }; finish_reason: string }[];
   usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
   trace: TraceRecord[];
@@ -163,19 +168,112 @@ export function subscribeStream(
   return () => es.close();
 }
 
-// The ten serving-plane steps, in order, for the flow visualizer.
-export const STEPS: { key: string; label: string }[] = [
-  { key: "request", label: "1 · Request" },
-  { key: "gate", label: "2 · Policy Gate" },
-  { key: "context", label: "3 · Policy Context" },
-  { key: "task_mode", label: "4 · Task Mode" },
-  { key: "compression", label: "5 · Compression" },
-  { key: "router", label: "6 · Model Router" },
-  { key: "gateway", label: "7 · Gateway" },
-  { key: "backend", label: "8 · Backend" },
-  { key: "verify", label: "9 · Verify" },
-  { key: "response", label: "10 · Response" },
+// --- Admin API (multi-tenant console; spec 2026-07-25) ---------------------
+
+export interface AdminToken {
+  id: string;
+  prefix: string;
+  name: string;
+  status: string;
+  created_at: string | null;
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
+
+export interface AdminPolicy {
+  allowed_tiers: string[] | null;
+  allowed_providers: string[] | null;
+  allowed_models: string[] | null;
+  residency: string | null;
+  max_spend_usd_per_day: number | null;
+  max_rpm: number | null;
+}
+
+export interface AdminApp {
+  id: string;
+  name: string;
+  owner_email: string | null;
+  status: string;
+  default_residency: string;
+  langfuse_project_id: string | null;
+  created_at: string | null;
+  policy: AdminPolicy | null;
+  tokens: AdminToken[];
+}
+
+export interface UsageSummary {
+  count: number;
+  rejected_count: number;
+  total_usd: number;
+  baseline_usd: number;
+  total_tokens: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  onprem_count: number;
+  tier_distribution: Record<string, number>;
+  model_distribution: Record<string, number>;
+  application_distribution: Record<string, number>;
+  latency_p50_ms: number;
+  latency_p95_ms: number;
+}
+
+// Admin routes use a session cookie; same-origin (Vite proxies /admin) so the
+// browser sends it automatically. `credentials: "same-origin"` is the default,
+// set explicitly for clarity.
+const opts = (method: string, body?: object): RequestInit => ({
+  method,
+  credentials: "same-origin",
+  headers: { "Content-Type": "application/json" },
+  ...(body ? { body: JSON.stringify(body) } : {}),
+});
+
+export const adminApi = {
+  me: () => fetch("/admin/me", { credentials: "same-origin" }).then(j<{ admin_id: string }>),
+  login: (email: string, password: string) =>
+    fetch("/admin/login", opts("POST", { email, password })).then(j<{ email: string }>),
+  logout: () => fetch("/admin/logout", opts("POST")).then(j<{ ok: boolean }>),
+  apps: () => fetch("/admin/applications", { credentials: "same-origin" }).then(j<AdminApp[]>),
+  createApp: (body: { id: string; name: string; owner_email?: string; default_residency?: string }) =>
+    fetch("/admin/applications", opts("POST", body)).then(j<{ application: AdminApp; token: string }>),
+  updateApp: (id: string, body: Partial<{ name: string; owner_email: string; status: string; default_residency: string }>) =>
+    fetch(`/admin/applications/${id}`, opts("PATCH", body)).then(j<AdminApp>),
+  setPolicy: (id: string, body: AdminPolicy) =>
+    fetch(`/admin/applications/${id}/policy`, opts("PUT", body)).then(j<AdminApp>),
+  createToken: (id: string, name: string) =>
+    fetch(`/admin/applications/${id}/tokens`, opts("POST", { name })).then(j<{ token: string; id: string; prefix: string }>),
+  revokeToken: (tokenId: string) =>
+    fetch(`/admin/tokens/${tokenId}/revoke`, opts("POST")).then(j<{ ok: boolean }>),
+  usage: (applicationId?: string, hours?: number) => {
+    const q = new URLSearchParams();
+    if (applicationId) q.set("application_id", applicationId);
+    if (hours) q.set("hours", String(hours));
+    return fetch(`/admin/usage?${q.toString()}`, { credentials: "same-origin" }).then(j<UsageSummary>);
+  },
+};
+
+// The ten serving-plane steps, in order, for the flow visualizer. `caption` is
+// the one-line "what this step does", shown on the node and in the step inspector.
+export interface StepMeta {
+  key: string;
+  label: string;
+  caption: string;
+}
+export const STEPS: StepMeta[] = [
+  { key: "request", label: "Request", caption: "Incoming OpenAI-compatible call" },
+  { key: "gate", label: "Policy Gate", caption: "Detect & redact PII/PHI, set residency" },
+  { key: "context", label: "Policy Context", caption: "Immutable policy travels with the request" },
+  { key: "task_mode", label: "Task Mode", caption: "Direct answer vs. multi-step agent" },
+  { key: "compression", label: "Compression", caption: "Headroom shrinks tool output & history" },
+  { key: "router", label: "Model Router", caption: "Picks model + tier per call, by cost & risk" },
+  { key: "gateway", label: "Gateway", caption: "Quotas, breakers, fallback on failure" },
+  { key: "backend", label: "Backend", caption: "Runs on the chosen serving path" },
+  { key: "verify", label: "Verify", caption: "Leakage check on the completion" },
+  { key: "response", label: "Response", caption: "Governed answer + full decision trace" },
 ];
+
+export function stepMeta(key: string): StepMeta | undefined {
+  return STEPS.find((s) => s.key === key);
+}
 
 export const TIER_COLOR: Record<string, string> = {
   cheap: "#22c55e",

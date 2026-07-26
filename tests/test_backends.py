@@ -19,8 +19,13 @@ def test_mock_is_deterministic():
     assert a.tokens_out == b.tokens_out and a.cost_usd == b.cost_usd
 
 
-def test_local_tier_is_free():
-    assert _gen("local-8b", "cheap").cost_usd == 0.0
+def test_local_tier_is_cheap_but_not_free():
+    # On-prem is priced at a small representative amortized rate (not $0) so the
+    # cost dashboard shows believable spend + routing savings on a real backend.
+    local = _gen("local-8b", "cheap").cost_usd
+    frontier = _gen("bedrock-frontier", "frontier").cost_usd
+    assert local > 0.0
+    assert local < frontier / 10  # local is dramatically cheaper than frontier
 
 
 def test_confidence_hint_respected():

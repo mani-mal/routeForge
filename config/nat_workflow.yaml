@@ -7,6 +7,13 @@
 # router/gateway (steps 5-7). `max_iterations` is the step cap; the runtime enforces
 # the real cap from policy.yaml's `agent_budgets.max_steps` at load time — this
 # literal default is only used for standalone `nat validate`/`nat run`.
+# NAT-native telemetry (full agent trajectory → Langfuse) is injected at runtime
+# by app/agent/runtime.py, ONLY when LANGFUSE_HOST/PUBLIC_KEY/SECRET_KEY are set,
+# using the full OTel endpoint. It is deliberately NOT a static block here: the
+# `langfuse` exporter raises when keys are unset, which would break `nat validate`
+# and every multi-step request in a keyless dev run. See runtime.py's
+# `_maybe_enable_langfuse`.
+
 functions:
   calculator:
     _type: calculator

@@ -49,9 +49,20 @@ class Pipeline:
         p = self._s.pricing.models[self._s.pricing.baseline_model]
         return tokens_after / 1_000_000 * (p.input + p.output)
 
+    def _display_name(self, model_slug: str) -> str:
+        """Resolve a routing-pool slug (e.g. `local-8b`) to its human-facing
+        model name (e.g. `Qwen2.5-7B-Instruct (local)`) for the UI. Falls back
+        to the slug when no display name is configured or the slug is unknown
+        (e.g. the multi-step `"auto"` sentinel)."""
+        for c in self._s.routing.model_pool:
+            if c.name == model_slug:
+                return c.display_name or c.name
+        return model_slug
+
     async def run(self, request_id: str, tenant_id: str,
-                  request: ChatRequest) -> dict:
-        ctx, sanitized, _map = self._gate.evaluate(request_id, tenant_id, request)
+                  request: ChatRequest, app_policy=None) -> dict:
+        ctx, sanitized, _map = self._gate.evaluate(
+            request_id, tenant_id, request, app_policy=app_policy)
         # NOTE: task-mode is a rules-only stub today. If a real LLM classifier replaces it,
         # it must receive SANITIZED content (not the raw request) — see CLAUDE.md.
         mode = decide_mode(ctx, request)
@@ -106,6 +117,7 @@ class Pipeline:
         return {
             "id": request_id,
             "model": result.model,
+            "model_display": self._display_name(result.model),
             "choices": [Choice(index=0,
                                message=Message(role="assistant", content=text)
                                ).model_dump()],
@@ -187,6 +199,7 @@ class Pipeline:
         return {
             "id": request_id,
             "model": model,
+            "model_display": self._display_name(model),
             "choices": [Choice(index=0,
                                message=Message(role="assistant", content=text)
                                ).model_dump()],

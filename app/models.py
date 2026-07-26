@@ -67,11 +67,13 @@ class RejectedCandidate(BaseModel):
     provider: str
     tier: str
     reason: str
+    display_name: str | None = None  # human-facing model name; falls back to name in UI
 
 
 class DecisionRecord(BaseModel):
     step: str
     chosen: str | None
+    chosen_display_name: str | None = None  # human-facing name for `chosen`
     reason: str
     rejected: list[RejectedCandidate] = Field(default_factory=list)
     est_cost_usd: float = 0.0

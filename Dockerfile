@@ -23,7 +23,9 @@ ENV UV_COMPILE_BYTECODE=1 \
 
 WORKDIR /app
 
-ARG EXTRAS="agent,observability"
+# `postgres` (asyncpg) is included by default so the multi-tenant store can use
+# the shared Langfuse Postgres via DATABASE_URL; dev/tests fall back to SQLite.
+ARG EXTRAS="agent,observability,postgres"
 
 # Copy only what's needed to resolve/install deps first, so the (slow) dep
 # layer caches across source-only changes.
