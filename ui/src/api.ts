@@ -95,6 +95,19 @@ export interface Stats {
   latency_p95_ms: number;
 }
 
+export interface FleetRow {
+  app: string;
+  count: number;
+  total_usd: number;
+  baseline_usd: number;
+  routing_saved_usd: number;
+  compression_saved_usd: number;
+  onprem_count: number;
+  pii_count: number;
+  latency_p50_ms: number;
+  tier_distribution: Record<string, number>;
+}
+
 export interface Controls {
   headroom_enabled: boolean;
   min_tokens: number;
@@ -121,7 +134,10 @@ async function j<T>(r: Response): Promise<T> {
 }
 
 export const api = {
-  requests: (limit = 100) => fetch(`/api/requests?limit=${limit}`).then(j<RequestSummary[]>),
+  requests: (limit = 100, app?: string) =>
+    fetch(`/api/requests?limit=${limit}${app ? `&app=${encodeURIComponent(app)}` : ""}`)
+      .then(j<RequestSummary[]>),
+  fleet: () => fetch(`/api/fleet`).then(j<FleetRow[]>),
   request: (id: string) => fetch(`/api/requests/${id}`).then(j<ChatResponse>),
   stats: () => fetch(`/api/stats`).then(j<Stats>),
   controls: () => fetch(`/api/controls`).then(j<Controls>),
