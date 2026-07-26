@@ -11,6 +11,8 @@ import { DecisionInspector } from "./components/DecisionInspector";
 import { FlowVisualizer } from "./components/FlowVisualizer";
 import { RequestList } from "./components/RequestList";
 import { AdminConsole } from "./admin/AdminConsole";
+import { RouteForgeLogo, CdwMark, ThemeToggle } from "./components/BrandLogo";
+import { useTheme } from "./theme";
 
 type View = "live" | "admin";
 
@@ -31,6 +33,7 @@ export default function App() {
   const [firingIndex, setFiringIndex] = useState<number | null>(null);
   const [trafficRunning, setTrafficRunning] = useState(false);
   const [view, setView] = useState<View>("live");
+  const [theme, toggleTheme] = useTheme();
 
   // Initial load + live stream subscription.
   useEffect(() => {
@@ -144,7 +147,7 @@ export default function App() {
     <div className="min-h-screen bg-ink text-gray-100 flex flex-col">
       <header className="border-b border-edge px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <h1 className="text-xl font-bold tracking-tight">routeForge</h1>
+          <RouteForgeLogo />
           <nav className="flex items-center gap-1">
             <button
               onClick={() => setView("live")}
@@ -165,6 +168,11 @@ export default function App() {
           <span className="flex items-center gap-2">
             <span className={`h-2.5 w-2.5 rounded-full ${connected ? "bg-cheap" : "bg-gray-600"}`} />
             {connected ? "live" : "disconnected"}
+          </span>
+          <ThemeToggle theme={theme} onToggle={toggleTheme} />
+          <span className="flex items-center gap-2 pl-4 border-l border-edge">
+            <span className="text-[10px] uppercase tracking-wide text-gray-500">powered by</span>
+            <CdwMark className="h-5 w-auto" />
           </span>
         </div>
       </header>

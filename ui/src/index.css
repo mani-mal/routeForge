@@ -2,11 +2,47 @@
 @tailwind components;
 @tailwind utilities;
 
-:root { color-scheme: dark; }
+/* Palette channels (space-separated RGB) consumed by tailwind.config.js.
+   The neutral ramp is used semantically as "prominence": low numbers are the
+   most prominent text. On dark that means bright; on light it must mean dark —
+   so the light ramp is the dark ramp inverted around gray-500 (the pivot that
+   reads on either background). One class swap re-themes the whole app. */
+:root,
+:root.dark {
+  color-scheme: dark;
+  --c-ink: 11 15 25;
+  --c-panel: 17 24 39;
+  --c-edge: 31 41 55;
+  --c-accent: 56 189 248;   /* sky-400 */
+  --c-gray-100: 243 244 246;
+  --c-gray-200: 229 231 235;
+  --c-gray-300: 209 213 219;
+  --c-gray-400: 156 163 175;
+  --c-gray-500: 107 114 128; /* pivot */
+  --c-gray-600: 75 85 99;
+  --c-gray-700: 55 65 81;
+}
+
+:root.light {
+  color-scheme: light;
+  --c-ink: 244 246 249;     /* soft page background */
+  --c-panel: 255 255 255;   /* white card surface */
+  --c-edge: 223 228 234;    /* hairline borders */
+  --c-accent: 2 132 199;    /* sky-600 — deeper for contrast on white */
+  --c-gray-100: 17 24 39;   /* prominent text (was brightest) */
+  --c-gray-200: 31 41 55;
+  --c-gray-300: 55 65 81;
+  --c-gray-400: 75 85 99;
+  --c-gray-500: 107 114 128; /* pivot — reads on either background */
+  --c-gray-600: 156 163 175;
+  --c-gray-700: 226 232 240; /* light chip / track fill (was dark fill) */
+}
+
 html, body, #root { height: 100%; }
 body {
   margin: 0;
-  background: #0b0f19;
-  color: #e5e7eb;
+  background: rgb(var(--c-ink));
+  color: rgb(var(--c-gray-100));
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }

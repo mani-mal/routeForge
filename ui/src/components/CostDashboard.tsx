@@ -17,12 +17,24 @@ import {
 } from "recharts";
 import type { RequestSummary, Stats } from "../api";
 import { TIER_COLOR } from "../api";
+import { useTheme } from "../theme";
 import { Panel, StatTile, formatMs, formatPct, formatUsd } from "./common";
 
 const ROUTING_COLOR = "#38bdf8";
 const COMPRESSION_COLOR = "#f59e0b";
 
 export function CostDashboard({ stats, requests }: { stats: Stats | null; requests: RequestSummary[] }) {
+  // Recharts needs concrete colours, so chart chrome follows the active theme.
+  const [theme] = useTheme();
+  const dark = theme === "dark";
+  const gridStroke = dark ? "#1f2937" : "#e2e8f0";
+  const baselineStroke = dark ? "#6b7280" : "#94a3b8";
+  const tooltipStyle = {
+    background: dark ? "#111827" : "#ffffff",
+    border: `1px solid ${dark ? "#1f2937" : "#e2e8f0"}`,
+    color: dark ? "#e5e7eb" : "#111827",
+    fontSize: 12,
+  };
   const totalUsd = stats?.total_usd ?? 0;
   const baselineUsd = stats?.baseline_usd ?? 0;
   const pctSaved = baselineUsd > 0 ? ((baselineUsd - totalUsd) / baselineUsd) * 100 : 0;
@@ -67,10 +79,7 @@ export function CostDashboard({ stats, requests }: { stats: Stats | null; reques
             <BarChart data={savingsData} layout="vertical" margin={{ top: 4, right: 8, bottom: 4, left: 8 }}>
               <XAxis type="number" hide />
               <YAxis type="category" dataKey="name" hide />
-              <Tooltip
-                contentStyle={{ background: "#111827", border: "1px solid #1f2937", fontSize: 12 }}
-                formatter={(v: number) => formatUsd(v)}
-              />
+              <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => formatUsd(v)} />
               <Bar dataKey="routing" name="routing saved" fill={ROUTING_COLOR} radius={[3, 3, 3, 3]} barSize={16} />
               <Bar dataKey="compression" name="compression saved" fill={COMPRESSION_COLOR} radius={[3, 3, 3, 3]} barSize={16} />
             </BarChart>
@@ -99,7 +108,7 @@ export function CostDashboard({ stats, requests }: { stats: Stats | null; reques
                     <Cell key={d.name} fill={d.color} />
                   ))}
                 </Pie>
-                <Tooltip contentStyle={{ background: "#111827", border: "1px solid #1f2937", fontSize: 12 }} />
+                <Tooltip contentStyle={tooltipStyle} />
               </PieChart>
             </ResponsiveContainer>
           </div>
@@ -109,14 +118,11 @@ export function CostDashboard({ stats, requests }: { stats: Stats | null; reques
           <div className="h-32 w-full">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={lineData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
-                <CartesianGrid stroke="#1f2937" strokeDasharray="3 3" />
+                <CartesianGrid stroke={gridStroke} strokeDasharray="3 3" />
                 <XAxis dataKey="seq" hide />
                 <YAxis hide />
-                <Tooltip
-                  contentStyle={{ background: "#111827", border: "1px solid #1f2937", fontSize: 12 }}
-                  formatter={(v: number) => formatUsd(v)}
-                />
-                <Line type="monotone" dataKey="baseline" stroke="#6b7280" dot={false} strokeWidth={1.5} name="baseline" />
+                <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => formatUsd(v)} />
+                <Line type="monotone" dataKey="baseline" stroke={baselineStroke} dot={false} strokeWidth={1.5} name="baseline" />
                 <Line type="monotone" dataKey="total" stroke="#22c55e" dot={false} strokeWidth={2} name="actual" />
               </LineChart>
             </ResponsiveContainer>
