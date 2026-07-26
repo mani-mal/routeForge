@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.apps.admin_auth import seed_admin
 from app.apps.store import add_token, create_application, get_application
 
 # (app_id, display name, default residency, legacy token)
@@ -33,3 +34,9 @@ async def seed_demo_apps(session: AsyncSession) -> None:
         await create_application(
             session, app_id=app_id, name=name, default_residency=residency)
         await add_token(session, application_id=app_id, raw_token=token, name="seed")
+
+
+async def seed_all(session: AsyncSession) -> None:
+    """Everything the Database seeds on first boot: demo apps + one admin."""
+    await seed_demo_apps(session)
+    await seed_admin(session)

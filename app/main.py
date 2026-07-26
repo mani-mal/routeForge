@@ -8,9 +8,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.agent.internal_endpoint import internal_router
+from app.api.admin_routes import admin_router
 from app.api.bus import DecisionBus
 from app.api.history import HistoryStore
-from app.apps.bootstrap import seed_demo_apps
+from app.apps.admin_auth import SessionStore
+from app.apps.bootstrap import seed_all
 from app.apps.db import Database
 from app.apps.policy import RateLimiter
 from app.api.routes import router
@@ -63,9 +65,11 @@ def create_app() -> FastAPI:
     # is created here (no I/O); schema + demo seeding happen lazily on first DB
     # access inside the serving loop, so nothing binds to create_app's throwaway
     # asyncio.run loop used by resolve_backend below.
-    app.state.db = Database(seed=seed_demo_apps)
+    app.state.db = Database(seed=seed_all)
     # Per-application rate limiter (in-memory sliding window; spec 2026-07-25).
     app.state.rate_limiter = RateLimiter()
+    # Admin dashboard sessions (in-memory; single-node, admin-only).
+    app.state.admin_sessions = SessionStore()
     gate = Gate(settings, detector)
     app.state.gate = gate
     # Phase 9 Task 4: select + health-validate the configured backend.
@@ -116,6 +120,7 @@ def create_app() -> FastAPI:
     app.include_router(router)
     app.include_router(internal_router)
     app.include_router(ui_router)
+    app.include_router(admin_router)
     # Dev convenience: allow the Vite dev server to call the API directly.
     # Production serves the UI same-origin, where CORS is a no-op.
     app.add_middleware(
