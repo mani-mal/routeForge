@@ -93,9 +93,18 @@ class HistoryStore:
         self._full[summary.id] = resp
         return summary
 
-    def list(self, limit: int = 100) -> list[RequestSummary]:
-        """Newest first."""
-        return list(reversed(self._summaries))[:limit]
+    def list(self, limit: int = 100, app: str | None = None) -> list[RequestSummary]:
+        """Newest first. `app`, when set, restricts to summaries whose
+        `tenant_id == app` (Task 1: per-app filter for the admin console)."""
+        items = reversed(self._summaries)
+        if app is not None:
+            items = (s for s in items if s.tenant_id == app)
+        out: list[RequestSummary] = []
+        for s in items:
+            out.append(s)
+            if len(out) >= limit:
+                break
+        return out
 
     def get(self, request_id: str) -> dict | None:
         return self._full.get(request_id)

@@ -52,3 +52,15 @@ def test_pii_request_never_leaks_raw_ssn(client):
     assert ssn not in detail.text
     assert "US_SSN" in detail.json()["policy"]["detected_entities"] or \
         detail.json()["policy"]["detected_entities"]
+
+
+def test_requests_endpoint_filters_by_app(client):
+    # seeded tokens acme-key / hospital-key drive one request each
+    client.post("/v1/chat/completions", headers={"Authorization": "Bearer acme-key"},
+                json={"messages": [{"role": "user", "content": "hi"}]})
+    client.post("/v1/chat/completions", headers={"Authorization": "Bearer hospital-key"},
+                json={"messages": [{"role": "user", "content": "hi"}]})
+    r = client.get("/api/requests?app=acme")
+    assert r.status_code == 200
+    assert all(row["tenant_id"] == "acme" for row in r.json())
+    assert len(r.json()) >= 1

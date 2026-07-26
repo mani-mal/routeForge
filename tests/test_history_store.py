@@ -80,3 +80,16 @@ def test_hops_counts_only_generation_records_not_all_trace():
         {"step": "verify", "passed": True},
     ]
     assert h.record(multi, "acme", "cheap").hops == 2
+
+
+def test_list_filters_by_app():
+    from app.api.history import HistoryStore
+    store = HistoryStore()
+    base = {"id": "x", "trace": [], "cost": {}, "policy": {}, "model": "m",
+            "model_display": "M", "usage": {}}
+    store.record({**base, "id": "a1"}, tenant_id="acme", tier="cheap")
+    store.record({**base, "id": "h1"}, tenant_id="hospital", tier="mid")
+    store.record({**base, "id": "a2"}, tenant_id="acme", tier="cheap")
+    ids = [s.id for s in store.list(app="acme")]
+    assert ids == ["a2", "a1"]           # newest-first, hospital excluded
+    assert len(store.list()) == 3        # unfiltered unchanged
