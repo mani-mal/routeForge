@@ -12,6 +12,7 @@ import asyncio
 import http.client
 
 from app.api.bus import DecisionBus
+from tests.conftest import admin_cookie
 
 
 def test_bus_fanout_and_drop_oldest():
@@ -65,9 +66,10 @@ def test_stream_endpoint_returns_event_stream(live_internal_server):
     then close — the close triggers the server's disconnect path
     (`CancelledError` -> `finally: bus.unsubscribe(queue)`).
     """
+    cookie = admin_cookie(live_internal_server.port)  # /api/* is admin-gated
     conn = http.client.HTTPConnection("127.0.0.1", live_internal_server.port, timeout=5)
     try:
-        conn.request("GET", "/api/stream")
+        conn.request("GET", "/api/stream", headers={"Cookie": cookie})
         resp = conn.getresponse()
         assert resp.status == 200
         assert resp.getheader("content-type", "").startswith("text/event-stream")
@@ -86,9 +88,10 @@ def test_chat_completion_publishes_to_stream(live_internal_server):
     import json
 
     port = live_internal_server.port
+    cookie = admin_cookie(port)  # /api/* is admin-gated
     stream = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
     try:
-        stream.request("GET", "/api/stream")
+        stream.request("GET", "/api/stream", headers={"Cookie": cookie})
         sresp = stream.getresponse()
         assert sresp.status == 200
         assert b"connected" in sresp.readline()  # preamble; subscriber now live

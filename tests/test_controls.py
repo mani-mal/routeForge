@@ -16,8 +16,12 @@ import asyncio
 
 from app.models import ChatRequest, Message
 
+_ADMIN = {"email": "admin@routeforge.local", "password": "changeme"}
+
 
 def test_toggle_headroom_runtime(client):
+    # /api/* is admin-gated; log in so the session cookie rides the TestClient.
+    assert client.post("/admin/login", json=_ADMIN).status_code == 200
     got = client.get("/api/controls").json()
     assert got["headroom_enabled"] is False  # config/serving.yaml default
     assert got["min_tokens"] == 2000

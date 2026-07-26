@@ -89,6 +89,24 @@ def internal_client_with_compression_on():
             HOPS.pop(run_id)  # avoid leaking run state if a test fails early
 
 
+def admin_cookie(port: int) -> str:
+    """Log in the seeded admin on a live (real-socket) server and return the
+    `Cookie` header value (e.g. `rf_admin_session=...`). The console read
+    surface (/api/*) is admin-gated, so raw http.client / httpx callers that
+    aren't the TestClient need this to reach it."""
+    import json as _json
+
+    conn = urllib.request.Request(
+        f"http://127.0.0.1:{port}/admin/login",
+        data=_json.dumps({"email": "admin@routeforge.local",
+                          "password": "changeme"}).encode(),
+        headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(conn, timeout=5) as resp:
+        assert resp.status == 200, f"admin login failed: {resp.status}"
+        set_cookie = resp.headers.get("Set-Cookie") or ""
+    return set_cookie.split(";", 1)[0]
+
+
 def _free_port() -> int:
     s = socket.socket()
     s.bind(("127.0.0.1", 0))

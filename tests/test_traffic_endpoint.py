@@ -22,10 +22,14 @@ import time
 
 import httpx
 
+_ADMIN = {"email": "admin@routeforge.local", "password": "changeme"}
+
 
 def test_traffic_endpoint_starts_runs_and_fills_stats(live_internal_server):
     base = f"http://127.0.0.1:{live_internal_server.port}"
     with httpx.Client(base_url=base, timeout=10.0) as client:
+        # /api/* is admin-gated; login cookie persists on this httpx client.
+        assert client.post("/admin/login", json=_ADMIN).status_code == 200
         resp = client.post("/api/traffic", json={"requests": 10, "rps": 50})
         assert resp.status_code == 200
         assert resp.json() == {"status": "started", "requests": 10}
@@ -54,5 +58,6 @@ def test_traffic_endpoint_starts_runs_and_fills_stats(live_internal_server):
 def test_traffic_status_before_any_run(live_internal_server):
     base = f"http://127.0.0.1:{live_internal_server.port}"
     with httpx.Client(base_url=base, timeout=10.0) as client:
+        assert client.post("/admin/login", json=_ADMIN).status_code == 200
         status = client.get("/api/traffic").json()
         assert status == {"running": False, "last_summary": None}

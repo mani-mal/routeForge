@@ -16,11 +16,18 @@ import dataclasses
 import json
 import logging
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-router = APIRouter(prefix="/api")
+from app.apps.admin_auth import require_admin
+
+# The whole /api/* console surface is admin-gated: it exposes cross-tenant
+# metadata (per-app spend, PII/entity-type counts, request traces). The browser
+# console calls these with credentials:"same-origin" so the admin session cookie
+# rides along — including the SSE /api/stream (EventSource sends cookies too).
+# The serving path (/v1/*) uses per-app bearer tokens and is unaffected.
+router = APIRouter(prefix="/api", dependencies=[Depends(require_admin)])
 
 # Controls deferred for this phase (Task 3) — documented in the GET response
 # so the UI can render them as disabled/coming-soon rather than silently
