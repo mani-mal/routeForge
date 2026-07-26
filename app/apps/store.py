@@ -28,7 +28,9 @@ async def resolve_application(session: AsyncSession, raw_token: str | None
     stmt = (
         select(AppToken)
         .where(AppToken.token_hash == token_hash, AppToken.status == "active")
-        .options(selectinload(AppToken.application))
+        # eager-load the application AND its policy so callers can build an
+        # AppPolicyView after the session closes (no lazy load in async).
+        .options(selectinload(AppToken.application).selectinload(Application.policy))
     )
     token = (await session.execute(stmt)).scalar_one_or_none()
     if token is None or token.application is None:

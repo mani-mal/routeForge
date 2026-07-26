@@ -12,6 +12,7 @@ from app.api.bus import DecisionBus
 from app.api.history import HistoryStore
 from app.apps.bootstrap import seed_demo_apps
 from app.apps.db import Database
+from app.apps.policy import RateLimiter
 from app.api.routes import router
 from app.api.ui_routes import router as ui_router
 from app.compression.ccr import CCRStore
@@ -63,6 +64,8 @@ def create_app() -> FastAPI:
     # access inside the serving loop, so nothing binds to create_app's throwaway
     # asyncio.run loop used by resolve_backend below.
     app.state.db = Database(seed=seed_demo_apps)
+    # Per-application rate limiter (in-memory sliding window; spec 2026-07-25).
+    app.state.rate_limiter = RateLimiter()
     gate = Gate(settings, detector)
     app.state.gate = gate
     # Phase 9 Task 4: select + health-validate the configured backend.

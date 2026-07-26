@@ -4,6 +4,7 @@ import uuid
 from fastapi import APIRouter, HTTPException, Request
 
 from app.apps import store
+from app.apps.policy import AppPolicyView, day_spend_usd, policy_view_from
 from app.models import ChatRequest
 from app.obs.export import export_trace
 from app.pipeline import PipelineRejected
@@ -11,20 +12,20 @@ from app.pipeline import PipelineRejected
 router = APIRouter()
 
 
-async def _resolve_application(request: Request) -> str | None:
-    """Resolve the bearer token to an application id, or None (fail closed).
-
-    Replaces the old static api-key -> tenant dict. Unknown/missing/revoked
-    token or a disabled application -> None -> 401. The application id equals
-    the tenant slug, so downstream policy (policy.yaml tenants) is unchanged."""
+async def _authenticate(request: Request) -> tuple[str, AppPolicyView] | None:
+    """Resolve the bearer token to (application id, policy view), or None (fail
+    closed). Unknown/missing/revoked token or a disabled application -> None ->
+    401. The application id equals the tenant slug, so downstream policy
+    (policy.yaml tenants) is unchanged."""
     raw = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
     async with request.app.state.db.session() as session:
         app = await store.resolve_application(session, raw)
         if app is None:
             return None
-        app_id = app.id  # read before the session closes / object detaches
+        app_id = app.id
+        policy = policy_view_from(app)  # app.policy eager-loaded in the query
         await session.commit()  # persist last_used_at
-        return app_id
+        return app_id, policy
 
 
 @router.get("/health")
@@ -40,13 +41,42 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
     if body.stream and s.serving.reject_stream_requests:
         raise HTTPException(400, "streaming is not supported in the demo")
     request_id = f"req-{uuid.uuid4().hex[:8]}"
-    tenant = await _resolve_application(request)
-    if tenant is None:
+    auth = await _authenticate(request)
+    if auth is None:
         # Fail closed: no valid token -> reject. Never fall through to a
         # default tenant (that was the old fail-open behavior).
         raise HTTPException(401, "invalid or missing API token")
+    tenant, app_policy = auth
+
+    # Per-application quotas (fail closed). Rate limit first (cheap, in-memory),
+    # then the daily spend cap (one indexed sum). Both reject with 429; the
+    # budget rejection is recorded as a usage row so it shows in the dashboard.
+    if not request.app.state.rate_limiter.allow(tenant, app_policy.max_rpm):
+        raise HTTPException(429, "rate limit exceeded for this application")
+    if app_policy.max_spend_usd_per_day is not None:
+        try:
+            async with request.app.state.db.session() as session:
+                spent = await day_spend_usd(session, tenant)
+        except Exception:  # budget read must not hard-fail serving on a DB hiccup
+            spent = 0.0
+        if spent >= app_policy.max_spend_usd_per_day:
+            try:
+                async with request.app.state.db.session() as session:
+                    await store.record_usage(
+                        session, application_id=tenant, request_id=request_id,
+                        model="-", provider="-", tier="-", prompt_tokens=0,
+                        completion_tokens=0, total_tokens=0, cost_usd=0.0,
+                        baseline_usd=0.0, latency_ms=0.0, sensitivity="-",
+                        onprem_only=False, status="rejected")
+                    await session.commit()
+            except Exception:
+                logging.getLogger("serving.obs").exception(
+                    "rejected-usage record failed (swallowed)")
+            raise HTTPException(429, "daily budget exceeded for this application")
+
     try:
-        resp = await request.app.state.pipeline.run(request_id, tenant, body)
+        resp = await request.app.state.pipeline.run(
+            request_id, tenant, body, app_policy=app_policy)
     except PipelineRejected as e:
         raise HTTPException(422, f"response failed verification: {e}")
     except HTTPException:

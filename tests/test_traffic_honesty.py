@@ -196,9 +196,13 @@ def test_residency_filter_is_what_keeps_pii_onprem_not_provider_availability():
     # test_agent_runtime.py for app.agent.mock_agent.decide_agent_step).
     original_build_context = gate_module.build_context
 
-    def _leaky_build_context(settings, request_id, tenant_id, entities, redaction_map_id):
+    def _leaky_build_context(settings, request_id, tenant_id, entities,
+                             redaction_map_id, app_policy=None):
         """Reimplements build_context but WITHOUT the onprem residency
-        filter, to prove the guard above would catch this exact regression."""
+        filter, to prove the guard above would catch this exact regression.
+        (Signature mirrors build_context, incl. the app_policy param the gate
+        now passes; this leaky version ignores it — the demo tenants carry no
+        per-app policy row, so residency still comes from policy.yaml.)"""
         etypes = {e.type for e in entities}
         rule = context_module._match_rule(settings, etypes)
         tenant = settings.policy.tenants.get(

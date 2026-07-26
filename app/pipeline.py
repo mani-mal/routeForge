@@ -60,8 +60,9 @@ class Pipeline:
         return model_slug
 
     async def run(self, request_id: str, tenant_id: str,
-                  request: ChatRequest) -> dict:
-        ctx, sanitized, _map = self._gate.evaluate(request_id, tenant_id, request)
+                  request: ChatRequest, app_policy=None) -> dict:
+        ctx, sanitized, _map = self._gate.evaluate(
+            request_id, tenant_id, request, app_policy=app_policy)
         # NOTE: task-mode is a rules-only stub today. If a real LLM classifier replaces it,
         # it must receive SANITIZED content (not the raw request) — see CLAUDE.md.
         mode = decide_mode(ctx, request)
