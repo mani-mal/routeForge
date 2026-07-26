@@ -1,5 +1,13 @@
 # Traffic generator
 
+> **This is a load / seed tool, not the product's user model.** The *personas*
+> here simulate many client applications hammering the router so the dashboard
+> fills with realistic traffic — they are test fixtures, not real accounts. A
+> real application integrates via an admin-issued API token; see
+> [`docs/help/integrating-an-app.md`](../../docs/help/integrating-an-app.md).
+> The personas send the legacy seeded tokens (`acme-key`, `hospital-key`,
+> `demo-key`), which map to the seeded demo applications.
+
 Fires a seeded, weighted mix of synthetic requests at the live Serving Plane
 API so the demo dashboard fills with realistic traffic (CLAUDE.md demo
 narrative step 5). Two pieces:

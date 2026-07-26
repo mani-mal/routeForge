@@ -41,6 +41,12 @@ services:
       # via .env for anything but a local demo. (Prod Helm uses K8s Secrets.)
       LANGFUSE_PUBLIC_KEY: pk-lf-local
       LANGFUSE_SECRET_KEY: sk-lf-local
+      # Multi-tenant store: defaults to an in-container SQLite file (offline,
+      # no extra service). To reuse this stack's Postgres instead, set:
+      #   DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/postgres
+      # Admin dashboard login (demo defaults — change for anything real).
+      ADMIN_EMAIL: admin@routeforge.local
+      ADMIN_PASSWORD: changeme
     depends_on:
       langfuse-web: {condition: service_started}
     healthcheck:
