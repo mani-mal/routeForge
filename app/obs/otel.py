@@ -23,6 +23,11 @@ REDACT_KEYS: tuple[str, ...] = (
 
 _provider = None  # module-level singleton
 _trace_base: str | None = None  # "{host}/project/{project_id}/traces/" for deep-links
+_deeplink_host: str | None = None  # browser-reachable Langfuse host (public_host)
+# Per-application TracerProviders keyed by the app's Langfuse public key, so each
+# application's decision traces export to ITS OWN project (spec 2026-07-25,
+# Phase 5). None means "tried and failed / SDK missing" — don't retry.
+_app_providers: dict[str, object] = {}
 
 
 def trace_url(trace_id: int) -> str | None:
@@ -34,17 +39,55 @@ def trace_url(trace_id: int) -> str | None:
     return f"{_trace_base}{trace_id:032x}"
 
 
-def _build_exporter(lf):
-    """Deferred import: only reached from inside init_tracing's guarded try/except."""
+def app_trace_url(project_id: str, trace_id: int) -> str | None:
+    """Deep-link for a trace in a specific application's Langfuse project. Uses
+    the same browser-reachable host as the shared link, only the project differs."""
+    if _deeplink_host is None or not project_id:
+        return None
+    return f"{_deeplink_host}/project/{project_id}/traces/{trace_id:032x}"
+
+
+def _build_exporter_kv(host: str, public_key: str, secret_key: str):
+    """OTLP->Langfuse exporter for an explicit (host, project key) pair."""
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-    auth = base64.b64encode(f"{lf.public_key}:{lf.secret_key}".encode()).decode()
+    auth = base64.b64encode(f"{public_key}:{secret_key}".encode()).decode()
     return OTLPSpanExporter(
-        endpoint=f"{lf.host.rstrip('/')}/api/public/otel/v1/traces",
+        endpoint=f"{host.rstrip('/')}/api/public/otel/v1/traces",
         headers={
             "Authorization": f"Basic {auth}",
             "x-langfuse-ingestion-version": "4",
         },
     )
+
+
+def _build_exporter(lf):
+    """Deferred import: only reached from inside init_tracing's guarded try/except."""
+    return _build_exporter_kv(lf.host, lf.public_key, lf.secret_key)
+
+
+def get_app_tracer(host: str, public_key: str, secret_key: str):
+    """Return a tracer that exports to one application's Langfuse project,
+    building (and caching) a dedicated TracerProvider the first time. Returns
+    None if the observability SDK isn't installed. Reuses the same redacting
+    exporter as the shared pipeline, so per-app traces are redacted too."""
+    if public_key in _app_providers:
+        p = _app_providers[public_key]
+        return p.get_tracer("serving-plane") if p is not None else None
+    try:
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        base = _build_exporter_kv(host, public_key, secret_key)
+        exporter = RedactingSpanExporter(base) if RedactingSpanExporter else base
+        provider = TracerProvider(
+            resource=Resource.create({"service.name": "serving-plane"}))
+        provider.add_span_processor(BatchSpanProcessor(exporter))
+    except Exception:  # SDK missing or misconfigured — never break serving
+        log.warning("per-app tracer build failed for a Langfuse project (non-fatal)")
+        _app_providers[public_key] = None
+        return None
+    _app_providers[public_key] = provider
+    return provider.get_tracer("serving-plane")
 
 
 def init_tracing(settings: Settings):
@@ -71,10 +114,11 @@ def init_tracing(settings: Settings):
     provider = TracerProvider(resource=Resource.create({"service.name": "serving-plane"}))
     provider.add_span_processor(BatchSpanProcessor(exporter))
     _provider = provider
-    global _trace_base
+    global _trace_base, _deeplink_host
     # Deep-links open in the user's browser, so prefer the browser-reachable
     # public_host over the in-cluster OTLP host.
     deeplink_host = (lf.public_host or lf.host).rstrip("/")
+    _deeplink_host = deeplink_host
     _trace_base = f"{deeplink_host}/project/{lf.project_id}/traces/"
     # Register as the process-global tracer provider so any OTel-instrumented
     # library in-process (e.g. the NAT agent runtime's own spans) exports through

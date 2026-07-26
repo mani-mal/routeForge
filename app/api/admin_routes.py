@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from app.apps import store
 from app.apps.admin_auth import SESSION_COOKIE
+from app.apps.langfuse_provision import LangfuseProvisioner, encrypt_secret
 from app.apps.tokens import new_token
 
 admin_router = APIRouter(prefix="/admin", tags=["admin"])
@@ -147,9 +148,26 @@ async def create_application(body: CreateAppIn, request: Request,
         raw = new_token()
         await store.add_token(session, application_id=body.id, raw_token=raw,
                               name="default")
+        # Best-effort: provision a dedicated Langfuse project so the owner sees
+        # only their own traces. No-op (and never fails app creation) when the
+        # org API isn't configured — traces then fall back to the shared project.
+        provisioned = await _maybe_provision_langfuse(body.id, body.name)
+        if provisioned is not None:
+            await store.update_application(
+                session, body.id,
+                langfuse_project_id=provisioned.project_id,
+                langfuse_public_key=provisioned.public_key,
+                langfuse_secret_key_enc=encrypt_secret(provisioned.secret_key))
         await session.commit()
         full = await store.get_application_with_policy(session, body.id)
         return {"application": _app_dict(full), "token": raw}
+
+
+async def _maybe_provision_langfuse(app_id: str, name: str):
+    try:
+        return await LangfuseProvisioner().provision(app_id, name)
+    except Exception:  # provisioning must never break app creation
+        return None
 
 
 @admin_router.get("/applications/{app_id}")

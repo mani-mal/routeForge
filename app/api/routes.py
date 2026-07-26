@@ -4,6 +4,7 @@ import uuid
 from fastapi import APIRouter, HTTPException, Request
 
 from app.apps import store
+from app.apps.langfuse_provision import load_app_langfuse
 from app.apps.policy import AppPolicyView, day_spend_usd, policy_view_from
 from app.models import ChatRequest
 from app.obs.export import export_trace
@@ -12,11 +13,12 @@ from app.pipeline import PipelineRejected
 router = APIRouter()
 
 
-async def _authenticate(request: Request) -> tuple[str, AppPolicyView] | None:
-    """Resolve the bearer token to (application id, policy view), or None (fail
-    closed). Unknown/missing/revoked token or a disabled application -> None ->
-    401. The application id equals the tenant slug, so downstream policy
-    (policy.yaml tenants) is unchanged."""
+async def _authenticate(request: Request
+                        ) -> tuple[str, AppPolicyView, object | None] | None:
+    """Resolve the bearer token to (application id, policy view, per-app Langfuse
+    or None), or None (fail closed). Unknown/missing/revoked token or a disabled
+    application -> None -> 401. The application id equals the tenant slug, so
+    downstream policy (policy.yaml tenants) is unchanged."""
     raw = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
     async with request.app.state.db.session() as session:
         app = await store.resolve_application(session, raw)
@@ -24,8 +26,9 @@ async def _authenticate(request: Request) -> tuple[str, AppPolicyView] | None:
             return None
         app_id = app.id
         policy = policy_view_from(app)  # app.policy eager-loaded in the query
+        app_langfuse = load_app_langfuse(app)  # None if no project provisioned
         await session.commit()  # persist last_used_at
-        return app_id, policy
+        return app_id, policy, app_langfuse
 
 
 @router.get("/health")
@@ -46,7 +49,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
         # Fail closed: no valid token -> reject. Never fall through to a
         # default tenant (that was the old fail-open behavior).
         raise HTTPException(401, "invalid or missing API token")
-    tenant, app_policy = auth
+    tenant, app_policy, app_langfuse = auth
 
     # Per-application quotas (fail closed). Rate limit first (cheap, in-memory),
     # then the daily spend cap (one indexed sum). Both reject with 429; the
@@ -86,7 +89,8 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
     try:
         lf_url = export_trace(
             request_id=resp["id"], tenant_id=tenant, model=resp["model"],
-            cost=resp["cost"], policy=resp["policy"], trace=resp["trace"])
+            cost=resp["cost"], policy=resp["policy"], trace=resp["trace"],
+            application_id=tenant, app_langfuse=app_langfuse)
         # Live deep-link for the UI's "Langfuse trace" button (None when
         # telemetry is off → the UI hides it). Set before history.record so the
         # inspector's full detail carries it.
