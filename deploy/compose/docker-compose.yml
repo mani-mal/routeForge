@@ -33,6 +33,9 @@ services:
       # (the API never blocks on it), so the API can start before Langfuse has
       # finished migrating — traces simply begin flowing once it's up.
       LANGFUSE_HOST: http://langfuse-web:3000
+      # Browser-reachable Langfuse URL for the UI's "Langfuse trace" deep-link
+      # (LANGFUSE_HOST above is the in-container OTLP name; the browser hits this).
+      LANGFUSE_PUBLIC_URL: http://localhost:3000
       # Demo-only, non-sensitive: throwaway keys for the ephemeral localhost
       # Langfuse in this stack — they grant access to nothing external. Rotate
       # via .env for anything but a local demo. (Prod Helm uses K8s Secrets.)

@@ -52,7 +52,7 @@ def test_min_tier_escalation_raises_target_and_prefers_cheaper():
     d = R.select(_ctx({"onprem", "azure", "bedrock"}), tokens_after=20,
                  complexity=0.1, min_tier="mid")
     assert d.chosen.tier == "mid"
-    assert d.chosen.name == "local-32b"  # free on-prem beats paid azure within mid
+    assert d.chosen.name == "local-32b"  # cheaper on-prem beats pricier azure within mid
 
 
 def test_budget_exhaustion_raises():

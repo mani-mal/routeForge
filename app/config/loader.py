@@ -35,6 +35,12 @@ def load_settings(config_dir: str = "config") -> Settings:
             enabled=lf_raw["enabled"],
             host=_expand_env(str(lf_raw["host"])),
             redact_on_export=lf_raw["redact_on_export"],
+            project_id=os.environ.get(
+                "LANGFUSE_PROJECT_ID",
+                _expand_env(str(lf_raw.get("project_id", "demo-project")))),
+            public_host=(os.environ.get("LANGFUSE_PUBLIC_URL")
+                         or (_expand_env(str(lf_raw["public_host"]))
+                             if lf_raw.get("public_host") else None) or None),
             public_key=os.environ.get("LANGFUSE_PUBLIC_KEY"),
             secret_key=os.environ.get("LANGFUSE_SECRET_KEY"),
         )

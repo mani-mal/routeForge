@@ -24,6 +24,7 @@ class RequestSummary(BaseModel):
     sensitivity: str
     onprem_only: bool
     model: str
+    model_display: str
     tier: str
     total_usd: float
     baseline_usd: float
@@ -77,6 +78,7 @@ class HistoryStore:
             sensitivity=policy.get("sensitivity", "?"),
             onprem_only=bool(policy.get("onprem_only", False)),
             model=resp.get("model", "?"),
+            model_display=resp.get("model_display", resp.get("model", "?")),
             tier=tier,
             total_usd=float(cost.get("total_usd", 0.0)),
             baseline_usd=float(cost.get("baseline_usd", 0.0)),

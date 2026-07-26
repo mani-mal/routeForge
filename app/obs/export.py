@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import logging
 
-from app.obs.otel import get_tracer
+from app.obs.otel import get_tracer, trace_url
 from app.obs.redact import redact_value
 
 log = logging.getLogger("serving.obs")
 
 
 def export_trace(*, request_id: str, tenant_id: str, model: str,
-                 cost: dict, policy: dict, trace: list[dict]) -> None:
+                 cost: dict, policy: dict, trace: list[dict]) -> str | None:
+    """Export the request's decision trace as spans and return the Langfuse UI
+    URL for the resulting trace (or None when telemetry is disabled), so the
+    caller can hand the UI a live "Langfuse trace" deep-link."""
     try:
         tracer = get_tracer()
         with tracer.start_as_current_span("serving.request") as root:
@@ -38,5 +41,12 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                     for k in ("hop_index", "actual_cost_usd", "est_cost_usd", "latency_ms"):
                         if rec.get(k) is not None:
                             sp.set_attribute(f"sp.{k}", float(rec[k]))
+            # Capture the trace id for the UI deep-link. The NoOp span (telemetry
+            # off) has no get_span_context, so this stays None and the UI hides
+            # the link.
+            get_ctx = getattr(root, "get_span_context", None)
+            if get_ctx is not None:
+                return trace_url(get_ctx().trace_id)
     except Exception:  # telemetry must never break serving
         log.exception("trace export failed for %s (swallowed)", request_id)
+    return None

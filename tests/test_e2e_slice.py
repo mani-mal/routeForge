@@ -23,5 +23,7 @@ def test_cost_accumulates_and_baseline_present(client):
     r = client.post("/v1/chat/completions", json={
         "messages": [{"role": "user", "content": "hello"}]})
     cost = r.json()["cost"]
-    assert cost["total_usd"] == 0.0        # cheap on-prem tier is free
-    assert cost["baseline_usd"] > 0.0      # frontier baseline is not
+    # On-prem is cheap-but-not-free (representative amortized cost), and far
+    # below the all-frontier baseline — that gap is the routing savings story.
+    assert cost["total_usd"] > 0.0
+    assert cost["baseline_usd"] > cost["total_usd"]

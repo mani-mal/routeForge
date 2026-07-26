@@ -17,6 +17,7 @@ const LIVE_TRACE_CAP = 50;
 export default function App() {
   const [requests, setRequests] = useState<RequestSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedStep, setSelectedStep] = useState<string | null>(null);
   const [selectedDetail, setSelectedDetail] = useState<ChatResponse | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -73,6 +74,7 @@ export default function App() {
 
   // Fetch the full trace for whichever request is selected.
   useEffect(() => {
+    setSelectedStep(null); // switching requests clears the focused step
     if (!selectedId) {
       setSelectedDetail(null);
       return;
@@ -162,12 +164,26 @@ export default function App() {
 
       <main className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4 p-4 items-start">
         <div className="lg:col-span-4 flex flex-col gap-4">
-          <FlowVisualizer trace={effectiveTrace} allowedProviders={allowedProviders} onpremOnly={onpremOnly} hops={hops} />
+          <FlowVisualizer
+            trace={effectiveTrace}
+            allowedProviders={allowedProviders}
+            onpremOnly={onpremOnly}
+            hops={hops}
+            selectedStep={selectedStep}
+            onSelectStep={(k) => setSelectedStep((curr) => (curr === k ? null : k))}
+          />
           <RequestList requests={requests} selectedId={selectedId} onSelect={setSelectedId} />
         </div>
 
         <div className="lg:col-span-4 flex flex-col gap-4">
-          <DecisionInspector requestId={selectedId} detail={selectedDetail} loading={detailLoading} />
+          <DecisionInspector
+            requestId={selectedId}
+            detail={selectedDetail}
+            loading={detailLoading}
+            selectedStep={selectedStep}
+            onClearStep={() => setSelectedStep(null)}
+            hops={hops}
+          />
           <CompressionView detail={selectedDetail} />
         </div>
 

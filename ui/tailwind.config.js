@@ -11,6 +11,7 @@ export default {
         ink: "#0b0f19",       // page background (dark, projector-legible)
         panel: "#111827",
         edge: "#1f2937",
+        accent: "#38bdf8",    // selection / focus highlight (matches routing bar)
       },
     },
   },

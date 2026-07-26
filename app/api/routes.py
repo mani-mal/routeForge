@@ -38,8 +38,14 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
     except Exception:
         raise HTTPException(503, "policy evaluation unavailable")
     try:
-        export_trace(request_id=resp["id"], tenant_id=tenant, model=resp["model"],
-                     cost=resp["cost"], policy=resp["policy"], trace=resp["trace"])
+        lf_url = export_trace(
+            request_id=resp["id"], tenant_id=tenant, model=resp["model"],
+            cost=resp["cost"], policy=resp["policy"], trace=resp["trace"])
+        # Live deep-link for the UI's "Langfuse trace" button (None when
+        # telemetry is off → the UI hides it). Set before history.record so the
+        # inspector's full detail carries it.
+        if lf_url:
+            resp["langfuse_url"] = lf_url
     except Exception:  # export_trace already swallows; this is belt-and-suspenders
         logging.getLogger("serving.obs").exception(
             "export_trace raised before its own guard (swallowed)")

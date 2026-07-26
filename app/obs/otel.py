@@ -22,6 +22,16 @@ REDACT_KEYS: tuple[str, ...] = (
 )
 
 _provider = None  # module-level singleton
+_trace_base: str | None = None  # "{host}/project/{project_id}/traces/" for deep-links
+
+
+def trace_url(trace_id: int) -> str | None:
+    """Build the Langfuse UI URL for a trace id (the UI's live "Langfuse trace"
+    deep-link). Returns None when telemetry is disabled/unconfigured, so the UI
+    hides the link rather than pointing at a dead page."""
+    if _provider is None or _trace_base is None:
+        return None
+    return f"{_trace_base}{trace_id:032x}"
 
 
 def _build_exporter(lf):
@@ -61,6 +71,20 @@ def init_tracing(settings: Settings):
     provider = TracerProvider(resource=Resource.create({"service.name": "serving-plane"}))
     provider.add_span_processor(BatchSpanProcessor(exporter))
     _provider = provider
+    global _trace_base
+    # Deep-links open in the user's browser, so prefer the browser-reachable
+    # public_host over the in-cluster OTLP host.
+    deeplink_host = (lf.public_host or lf.host).rstrip("/")
+    _trace_base = f"{deeplink_host}/project/{lf.project_id}/traces/"
+    # Register as the process-global tracer provider so any OTel-instrumented
+    # library in-process (e.g. the NAT agent runtime's own spans) exports through
+    # the SAME redacting pipeline and lands in the same Langfuse project. Guarded:
+    # never let a telemetry setup error break boot.
+    try:
+        from opentelemetry import trace as _ot_trace
+        _ot_trace.set_tracer_provider(provider)
+    except Exception:  # pragma: no cover - defensive
+        log.warning("could not register global tracer provider (non-fatal)")
     return provider
 
 

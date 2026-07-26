@@ -30,7 +30,7 @@ export function RequestList({
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2 min-w-0">
                     <TierDot tier={r.tier} />
-                    <span className="font-medium truncate">{r.model}</span>
+                    <span className="font-medium truncate" title={r.model}>{r.model_display ?? r.model}</span>
                     {r.onprem_only && (
                       <span className="shrink-0 rounded bg-mid/20 text-mid text-[10px] font-semibold px-1.5 py-0.5">
                         on-prem

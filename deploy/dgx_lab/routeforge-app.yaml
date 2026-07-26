@@ -102,7 +102,7 @@ items:
         - name: ghcr-pull
         containers:
         - name: api
-          image: ghcr.io/mani-mal/serving-plane-api:0.1.1
+          image: ghcr.io/mani-mal/serving-plane-api:0.1.2
           ports: [{name: http, containerPort: 8080}]
           env:
           - {name: SP_SERVER_PORT, value: "8080"}
@@ -119,6 +119,10 @@ items:
             valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: LANGFUSE_PUBLIC_KEY}}
           - name: LANGFUSE_SECRET_KEY
             valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: LANGFUSE_SECRET_KEY}}
+          # Browser-reachable Langfuse URL for the UI's "Langfuse trace" deep-link.
+          # host (serving.yaml) is the in-cluster OTLP name; this is the NodePort a
+          # laptop browser actually hits. Must match langfuse.yaml's NEXTAUTH_URL.
+          - {name: LANGFUSE_PUBLIC_URL, value: "http://10.89.197.201:30300"}
           volumeMounts:
           - name: serving-config
             mountPath: /app/config/serving.yaml
@@ -218,7 +222,7 @@ items:
         - name: ghcr-pull
         containers:
         - name: ui
-          image: ghcr.io/mani-mal/serving-plane-ui:0.1.0
+          image: ghcr.io/mani-mal/serving-plane-ui:0.1.2
           ports: [{name: http, containerPort: 80}]
           resources:
             requests: {cpu: "50m", memory: 64Mi}

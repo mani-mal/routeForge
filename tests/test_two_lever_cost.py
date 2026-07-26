@@ -29,7 +29,7 @@ def test_routing_saved_goes_negative_under_escalation_identity_holds():
     savings. Re-adding a max(0,...) clamp would fabricate a $0 routing figure
     and hide that the request cost more than baseline — this test guards that.
 
-    The default demo config disables cloud providers (everything routes to free
+    The default demo config disables cloud providers (everything routes to cheap
     on-prem), so this scenario needs bedrock enabled + a private_cloud_ok
     (confidential/email) request + low confidence to force a mid->frontier
     escalation onto bedrock-frontier.
