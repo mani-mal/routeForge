@@ -10,6 +10,9 @@ import { CompressionView } from "./components/CompressionView";
 import { DecisionInspector } from "./components/DecisionInspector";
 import { FlowVisualizer } from "./components/FlowVisualizer";
 import { RequestList } from "./components/RequestList";
+import { AdminConsole } from "./admin/AdminConsole";
+
+type View = "live" | "admin";
 
 const REQUEST_CAP = 200;
 const LIVE_TRACE_CAP = 50;
@@ -27,6 +30,7 @@ export default function App() {
   const [togglingHeadroom, setTogglingHeadroom] = useState(false);
   const [firingIndex, setFiringIndex] = useState<number | null>(null);
   const [trafficRunning, setTrafficRunning] = useState(false);
+  const [view, setView] = useState<View>("live");
 
   // Initial load + live stream subscription.
   useEffect(() => {
@@ -139,12 +143,25 @@ export default function App() {
   return (
     <div className="min-h-screen bg-ink text-gray-100 flex flex-col">
       <header className="border-b border-edge px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <h1 className="text-xl font-bold tracking-tight">Serving Plane</h1>
-          <span className="text-xs text-gray-500">Phase-6 demo</span>
+        <div className="flex items-center gap-4">
+          <h1 className="text-xl font-bold tracking-tight">routeForge</h1>
+          <nav className="flex items-center gap-1">
+            <button
+              onClick={() => setView("live")}
+              className={`px-3 py-1 rounded-md text-sm ${view === "live" ? "bg-accent/15 text-accent" : "text-gray-400 hover:text-gray-200"}`}
+            >
+              Live
+            </button>
+            <button
+              onClick={() => setView("admin")}
+              className={`px-3 py-1 rounded-md text-sm ${view === "admin" ? "bg-accent/15 text-accent" : "text-gray-400 hover:text-gray-200"}`}
+            >
+              Admin
+            </button>
+          </nav>
         </div>
         <div className="flex items-center gap-4 text-sm text-gray-400">
-          <span>{requests.length} requests</span>
+          {view === "live" && <span>{requests.length} requests</span>}
           <span className="flex items-center gap-2">
             <span className={`h-2.5 w-2.5 rounded-full ${connected ? "bg-cheap" : "bg-gray-600"}`} />
             {connected ? "live" : "disconnected"}
@@ -152,45 +169,51 @@ export default function App() {
         </div>
       </header>
 
-      <ControlPanel
-        controls={controls}
-        onToggleHeadroom={handleToggleHeadroom}
-        togglingHeadroom={togglingHeadroom}
-        onFireScripted={handleFireScripted}
-        firingIndex={firingIndex}
-        onRunTraffic={handleRunTraffic}
-        trafficRunning={trafficRunning}
-      />
-
-      <main className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4 p-4 items-start">
-        <div className="lg:col-span-4 flex flex-col gap-4">
-          <FlowVisualizer
-            trace={effectiveTrace}
-            allowedProviders={allowedProviders}
-            onpremOnly={onpremOnly}
-            hops={hops}
-            selectedStep={selectedStep}
-            onSelectStep={(k) => setSelectedStep((curr) => (curr === k ? null : k))}
+      {view === "admin" ? (
+        <AdminConsole />
+      ) : (
+        <>
+          <ControlPanel
+            controls={controls}
+            onToggleHeadroom={handleToggleHeadroom}
+            togglingHeadroom={togglingHeadroom}
+            onFireScripted={handleFireScripted}
+            firingIndex={firingIndex}
+            onRunTraffic={handleRunTraffic}
+            trafficRunning={trafficRunning}
           />
-          <RequestList requests={requests} selectedId={selectedId} onSelect={setSelectedId} />
-        </div>
 
-        <div className="lg:col-span-4 flex flex-col gap-4">
-          <DecisionInspector
-            requestId={selectedId}
-            detail={selectedDetail}
-            loading={detailLoading}
-            selectedStep={selectedStep}
-            onClearStep={() => setSelectedStep(null)}
-            hops={hops}
-          />
-          <CompressionView detail={selectedDetail} />
-        </div>
+          <main className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4 p-4 items-start">
+            <div className="lg:col-span-4 flex flex-col gap-4">
+              <FlowVisualizer
+                trace={effectiveTrace}
+                allowedProviders={allowedProviders}
+                onpremOnly={onpremOnly}
+                hops={hops}
+                selectedStep={selectedStep}
+                onSelectStep={(k) => setSelectedStep((curr) => (curr === k ? null : k))}
+              />
+              <RequestList requests={requests} selectedId={selectedId} onSelect={setSelectedId} />
+            </div>
 
-        <div className="lg:col-span-4">
-          <CostDashboard stats={stats} requests={requests} />
-        </div>
-      </main>
+            <div className="lg:col-span-4 flex flex-col gap-4">
+              <DecisionInspector
+                requestId={selectedId}
+                detail={selectedDetail}
+                loading={detailLoading}
+                selectedStep={selectedStep}
+                onClearStep={() => setSelectedStep(null)}
+                hops={hops}
+              />
+              <CompressionView detail={selectedDetail} />
+            </div>
+
+            <div className="lg:col-span-4">
+              <CostDashboard stats={stats} requests={requests} />
+            </div>
+          </main>
+        </>
+      )}
     </div>
   );
 }
