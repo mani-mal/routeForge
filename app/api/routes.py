@@ -3,6 +3,7 @@ import uuid
 
 from fastapi import APIRouter, HTTPException, Request
 
+from app.apps import store
 from app.models import ChatRequest
 from app.obs.export import export_trace
 from app.pipeline import PipelineRejected
@@ -10,9 +11,20 @@ from app.pipeline import PipelineRejected
 router = APIRouter()
 
 
-def _tenant_of(request: Request) -> str:
-    key = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
-    return request.app.state.api_keys.get(key, "default")
+async def _resolve_application(request: Request) -> str | None:
+    """Resolve the bearer token to an application id, or None (fail closed).
+
+    Replaces the old static api-key -> tenant dict. Unknown/missing/revoked
+    token or a disabled application -> None -> 401. The application id equals
+    the tenant slug, so downstream policy (policy.yaml tenants) is unchanged."""
+    raw = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+    async with request.app.state.db.session() as session:
+        app = await store.resolve_application(session, raw)
+        if app is None:
+            return None
+        app_id = app.id  # read before the session closes / object detaches
+        await session.commit()  # persist last_used_at
+        return app_id
 
 
 @router.get("/health")
@@ -28,7 +40,11 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
     if body.stream and s.serving.reject_stream_requests:
         raise HTTPException(400, "streaming is not supported in the demo")
     request_id = f"req-{uuid.uuid4().hex[:8]}"
-    tenant = _tenant_of(request)
+    tenant = await _resolve_application(request)
+    if tenant is None:
+        # Fail closed: no valid token -> reject. Never fall through to a
+        # default tenant (that was the old fail-open behavior).
+        raise HTTPException(401, "invalid or missing API token")
     try:
         resp = await request.app.state.pipeline.run(request_id, tenant, body)
     except PipelineRejected as e:
@@ -60,6 +76,44 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
     except Exception:  # history must never break serving
         logging.getLogger("serving.obs").exception(
             "history.record failed (swallowed)")
+    try:
+        # Durable per-application usage row (spec 2026-07-25). The in-memory
+        # HistoryStore above is the UI's hot cache; this is the persistent
+        # record that survives restarts and feeds per-app dashboards. Guarded:
+        # metering must never break serving.
+        pool = s.routing.model_pool
+        model = resp.get("model", "?")
+        tier = next((c.tier for c in pool if c.name == model), "?")
+        provider = next((c.provider for c in pool if c.name == model), "?")
+        usage = resp.get("usage", {})
+        cost = resp.get("cost", {})
+        policy = resp.get("policy", {})
+        trace = resp.get("trace") or []
+        latency_ms = sum(
+            float(r.get("latency_ms", 0.0)) for r in trace
+            if r.get("latency_ms") is not None)
+        async with request.app.state.db.session() as session:
+            await store.record_usage(
+                session,
+                application_id=tenant,
+                request_id=resp["id"],
+                model=model,
+                provider=provider,
+                tier=tier,
+                prompt_tokens=int(usage.get("prompt_tokens", 0)),
+                completion_tokens=int(usage.get("completion_tokens", 0)),
+                total_tokens=int(usage.get("total_tokens", 0)),
+                cost_usd=float(cost.get("total_usd", 0.0)),
+                baseline_usd=float(cost.get("baseline_usd", 0.0)),
+                latency_ms=latency_ms,
+                sensitivity=str(policy.get("sensitivity", "?")),
+                onprem_only=bool(policy.get("onprem_only", False)),
+                status="ok",
+            )
+            await session.commit()
+    except Exception:  # usage metering must never break serving
+        logging.getLogger("serving.obs").exception(
+            "usage record failed (swallowed)")
     try:
         # Live decision stream for the UI's flow visualizer (Phase 6a Task
         # 2). Same redaction-safe data history already stored — no raw PII,

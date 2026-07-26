@@ -10,6 +10,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.agent.internal_endpoint import internal_router
 from app.api.bus import DecisionBus
 from app.api.history import HistoryStore
+from app.apps.bootstrap import seed_demo_apps
+from app.apps.db import Database
 from app.api.routes import router
 from app.api.ui_routes import router as ui_router
 from app.compression.ccr import CCRStore
@@ -21,9 +23,6 @@ from app.pipeline import Pipeline
 from app.policy.detectors import make_detector
 from app.policy.gate import Gate
 from app.routing.router import Router
-
-# static demo api-key -> tenant map (design §3). Unknown/missing -> default.
-API_KEYS = {"acme-key": "acme", "hospital-key": "hospital", "demo-key": "default"}
 
 _DEFAULT_SERVER_PORT = 8080
 
@@ -59,7 +58,11 @@ def create_app() -> FastAPI:
     detector = make_detector(settings.serving.pii_detection)
     app = FastAPI(title="Serving Plane", version="0.1.0")
     app.state.settings = settings
-    app.state.api_keys = API_KEYS
+    # Multi-tenant application/token/usage store (spec 2026-07-25). The engine
+    # is created here (no I/O); schema + demo seeding happen lazily on first DB
+    # access inside the serving loop, so nothing binds to create_app's throwaway
+    # asyncio.run loop used by resolve_backend below.
+    app.state.db = Database(seed=seed_demo_apps)
     gate = Gate(settings, detector)
     app.state.gate = gate
     # Phase 9 Task 4: select + health-validate the configured backend.

@@ -1,5 +1,8 @@
+_AUTH = {"Authorization": "Bearer demo-key"}
+
+
 def test_simple_qa_uses_cheap_tier(client):
-    r = client.post("/v1/chat/completions", json={
+    r = client.post("/v1/chat/completions", headers=_AUTH, json={
         "messages": [{"role": "user", "content": "capital of France?"}]})
     body = r.json()
     assert r.status_code == 200
@@ -9,7 +12,7 @@ def test_simple_qa_uses_cheap_tier(client):
 
 
 def test_pii_request_excludes_cloud_in_trace(client):
-    r = client.post("/v1/chat/completions", json={
+    r = client.post("/v1/chat/completions", headers=_AUTH, json={
         "messages": [{"role": "user", "content": "verify SSN 482-73-1946"}]})
     body = r.json()
     assert body["policy"]["onprem_only"] is True
@@ -20,7 +23,7 @@ def test_pii_request_excludes_cloud_in_trace(client):
 
 
 def test_cost_accumulates_and_baseline_present(client):
-    r = client.post("/v1/chat/completions", json={
+    r = client.post("/v1/chat/completions", headers=_AUTH, json={
         "messages": [{"role": "user", "content": "hello"}]})
     cost = r.json()["cost"]
     # On-prem is cheap-but-not-free (representative amortized cost), and far
