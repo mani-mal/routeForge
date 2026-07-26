@@ -93,3 +93,18 @@ def test_list_filters_by_app():
     ids = [s.id for s in store.list(app="acme")]
     assert ids == ["a2", "a1"]           # newest-first, hospital excluded
     assert len(store.list()) == 3        # unfiltered unchanged
+
+
+def test_list_non_positive_limit_returns_empty():
+    """Regression: the newest-first/early-break loop must not append before
+    checking `limit`, or `limit=0` (a reachable `GET /api/requests?limit=0`)
+    would return 1 item instead of `[]` like the old `[:limit]` slice did."""
+    from app.api.history import HistoryStore
+    store = HistoryStore()
+    base = {"id": "x", "trace": [], "cost": {}, "policy": {}, "model": "m",
+            "model_display": "M", "usage": {}}
+    store.record({**base, "id": "a1"}, tenant_id="acme", tier="cheap")
+    store.record({**base, "id": "a2"}, tenant_id="acme", tier="cheap")
+    assert store.list(limit=0) == []
+    assert store.list(limit=-1) == []
+    assert store.list(app="acme", limit=0) == []

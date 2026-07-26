@@ -95,7 +95,11 @@ class HistoryStore:
 
     def list(self, limit: int = 100, app: str | None = None) -> list[RequestSummary]:
         """Newest first. `app`, when set, restricts to summaries whose
-        `tenant_id == app` (Task 1: per-app filter for the admin console)."""
+        `tenant_id == app` (Task 1: per-app filter for the admin console).
+        `limit <= 0` returns `[]`, matching the old slice-based `[:limit]`
+        behavior for non-positive limits."""
+        if limit <= 0:
+            return []
         items = reversed(self._summaries)
         if app is not None:
             items = (s for s in items if s.tenant_id == app)
