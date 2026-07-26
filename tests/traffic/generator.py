@@ -24,6 +24,7 @@ not the server's internal per-step trace latency.
 from __future__ import annotations
 
 import asyncio
+import os
 import random
 import time
 from dataclasses import dataclass, field
@@ -117,6 +118,15 @@ async def run_traffic(
     http = client if client is not None else httpx.AsyncClient(timeout=30.0)
     try:
         if headroom is not None:
+            # /api/controls is admin-gated (app/apps/admin_auth.require_admin),
+            # so authenticate first — the session cookie then persists on this
+            # httpx client. The per-request /v1 calls below carry their own
+            # bearer token and are unaffected by the admin cookie.
+            login = await http.post(f"{base_url}/admin/login", json={
+                "email": os.environ.get("ADMIN_EMAIL", "admin@routeforge.local"),
+                "password": os.environ.get("ADMIN_PASSWORD", "changeme"),
+            })
+            login.raise_for_status()
             resp = await http.post(
                 f"{base_url}/api/controls", json={"headroom_enabled": headroom})
             resp.raise_for_status()

@@ -13,6 +13,7 @@ import uuid
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
+from fastapi import HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +23,18 @@ _ph = PasswordHasher()
 
 SESSION_COOKIE = "rf_admin_session"
 _SESSION_TTL_S = 12 * 3600
+
+
+async def require_admin(request: Request) -> str:
+    """FastAPI dependency: resolve the admin session cookie to an admin id or
+    raise 401. Shared by both the /admin/* surface and the /api/* console read
+    surface — the console exposes cross-tenant metadata (spend, PII counts,
+    entity types) so it is admin-gated, not public."""
+    sid = request.cookies.get(SESSION_COOKIE)
+    admin_id = request.app.state.admin_sessions.get(sid)
+    if admin_id is None:
+        raise HTTPException(401, "admin login required")
+    return admin_id
 
 
 def hash_password(password: str) -> str:

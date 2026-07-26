@@ -123,17 +123,25 @@ async function j<T>(r: Response): Promise<T> {
   return (await r.json()) as T;
 }
 
+// The /api/* console surface is admin-gated (app/apps/admin_auth.require_admin).
+// Every read/control call must carry the admin session cookie. `same-origin` is
+// the Fetch default, but state it explicitly so intent survives refactors and a
+// reverse-proxy deploy (UI nginx proxies /api same-origin to the API pod).
+const CRED: RequestCredentials = "same-origin";
+
 export const api = {
   requests: (limit = 100, app?: string) =>
-    fetch(`/api/requests?limit=${limit}${app ? `&app=${encodeURIComponent(app)}` : ""}`)
+    fetch(`/api/requests?limit=${limit}${app ? `&app=${encodeURIComponent(app)}` : ""}`,
+      { credentials: CRED })
       .then(j<RequestSummary[]>),
-  fleet: () => fetch(`/api/fleet`).then(j<FleetRow[]>),
-  request: (id: string) => fetch(`/api/requests/${id}`).then(j<ChatResponse>),
-  stats: () => fetch(`/api/stats`).then(j<Stats>),
-  controls: () => fetch(`/api/controls`).then(j<Controls>),
+  fleet: () => fetch(`/api/fleet`, { credentials: CRED }).then(j<FleetRow[]>),
+  request: (id: string) => fetch(`/api/requests/${id}`, { credentials: CRED }).then(j<ChatResponse>),
+  stats: () => fetch(`/api/stats`, { credentials: CRED }).then(j<Stats>),
+  controls: () => fetch(`/api/controls`, { credentials: CRED }).then(j<Controls>),
   setControls: (headroom_enabled: boolean) =>
     fetch(`/api/controls`, {
       method: "POST",
+      credentials: CRED,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ headroom_enabled }),
     }).then(j<Controls>),

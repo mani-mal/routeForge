@@ -12,21 +12,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from app.apps import store
-from app.apps.admin_auth import SESSION_COOKIE
+from app.apps.admin_auth import SESSION_COOKIE, require_admin
 from app.apps.langfuse_provision import LangfuseProvisioner, encrypt_secret
 from app.apps.tokens import new_token
 
 admin_router = APIRouter(prefix="/admin", tags=["admin"])
-
-
-# --- auth dependency --------------------------------------------------------
-
-async def require_admin(request: Request) -> str:
-    sid = request.cookies.get(SESSION_COOKIE)
-    admin_id = request.app.state.admin_sessions.get(sid)
-    if admin_id is None:
-        raise HTTPException(401, "admin login required")
-    return admin_id
 
 
 # --- serialization helpers --------------------------------------------------

@@ -1,4 +1,26 @@
+"""Console read surface (/api/*). Admin-gated: every /api/* route requires an
+admin session cookie (see app/apps/admin_auth.require_admin). Each test logs in
+first; test_api_requires_admin_login pins the gate itself."""
+
+_ADMIN = {"email": "admin@routeforge.local", "password": "changeme"}
+
+
+def _login(client):
+    r = client.post("/admin/login", json=_ADMIN)
+    assert r.status_code == 200
+    return r
+
+
+def test_api_requires_admin_login(client):
+    # No login -> the whole console read surface is 401, not readable.
+    assert client.get("/api/requests").status_code == 401
+    assert client.get("/api/fleet").status_code == 401
+    assert client.get("/api/stats").status_code == 401
+    assert client.get("/api/requests/anything").status_code == 401
+
+
 def test_list_detail_stats_for_clean_request(client):
+    _login(client)
     r = client.post("/v1/chat/completions", headers={"Authorization": "Bearer demo-key"},
                      json={"messages": [{"role": "user", "content": "capital of France?"}]})
     assert r.status_code == 200
@@ -27,11 +49,13 @@ def test_list_detail_stats_for_clean_request(client):
 
 
 def test_missing_request_returns_404(client):
+    _login(client)
     r = client.get("/api/requests/does-not-exist")
     assert r.status_code == 404
 
 
 def test_pii_request_never_leaks_raw_ssn(client):
+    _login(client)
     ssn = "482-73-1946"
     r = client.post("/v1/chat/completions", headers={"Authorization": "Bearer hospital-key"},
                      json={"messages": [{"role": "user", "content": f"verify SSN {ssn}"}]})
@@ -55,6 +79,7 @@ def test_pii_request_never_leaks_raw_ssn(client):
 
 
 def test_fleet_endpoint(client):
+    _login(client)
     client.post("/v1/chat/completions", headers={"Authorization": "Bearer acme-key"},
                 json={"messages": [{"role": "user", "content": "hi"}]})
     r = client.get("/api/fleet")
@@ -64,6 +89,7 @@ def test_fleet_endpoint(client):
 
 
 def test_requests_endpoint_filters_by_app(client):
+    _login(client)
     # seeded tokens acme-key / hospital-key drive one request each
     client.post("/v1/chat/completions", headers={"Authorization": "Bearer acme-key"},
                 json={"messages": [{"role": "user", "content": "hi"}]})
