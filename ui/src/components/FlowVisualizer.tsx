@@ -69,7 +69,7 @@ export function FlowVisualizer({
     >
       {!hasActivity && (
         <p className="text-sm text-gray-500">
-          No active request — fire one from the control panel to watch it flow through the ten steps.
+          No active request — when a connected application calls the API, watch it flow through the ten steps here.
         </p>
       )}
 

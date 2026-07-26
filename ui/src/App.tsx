@@ -2,9 +2,8 @@
 // Phase-6a backend. See src/api.ts for the contract and
 // .claude/skills/demo-ui/SKILL.md for the design brief this follows.
 import { useEffect, useState } from "react";
-import { api, SCRIPTED, subscribeStream } from "./api";
+import { api, subscribeStream } from "./api";
 import type { ChatResponse, Controls, RequestSummary, Stats, TraceRecord } from "./api";
-import { ControlPanel } from "./components/ControlPanel";
 import { CostDashboard } from "./components/CostDashboard";
 import { CompressionView } from "./components/CompressionView";
 import { DecisionInspector } from "./components/DecisionInspector";
@@ -30,8 +29,6 @@ export default function App() {
   const [liveTraces, setLiveTraces] = useState<Record<string, TraceRecord[]>>({});
   const [connected, setConnected] = useState(false);
   const [togglingHeadroom, setTogglingHeadroom] = useState(false);
-  const [firingIndex, setFiringIndex] = useState<number | null>(null);
-  const [trafficRunning, setTrafficRunning] = useState(false);
   const [view, setView] = useState<View>("live");
   const [theme, toggleTheme] = useTheme();
 
@@ -42,7 +39,6 @@ export default function App() {
     api.requests().then((rs) => !cancelled && setRequests(rs)).catch(() => {});
     api.stats().then((s) => !cancelled && setStats(s)).catch(() => {});
     api.controls().then((c) => !cancelled && setControls(c)).catch(() => {});
-    api.trafficStatus().then((t) => !cancelled && setTrafficRunning(t.running)).catch(() => {});
 
     const unsubscribe = subscribeStream((evt) => {
       if (evt.type === "request") {
@@ -68,13 +64,10 @@ export default function App() {
     };
   }, []);
 
-  // Cheap poll as a backstop in case SSE drops a stats refresh; also polls
-  // the traffic-burst status so the "Run 100 burst" button's label flips
-  // back once the in-process burst task finishes.
+  // Cheap poll as a backstop in case SSE drops a stats refresh.
   useEffect(() => {
     const t = setInterval(() => {
       api.stats().then(setStats).catch(() => {});
-      api.trafficStatus().then((s) => setTrafficRunning(s.running)).catch(() => {});
     }, 3000);
     return () => clearInterval(t);
   }, []);
@@ -108,29 +101,6 @@ export default function App() {
       // demo-safe: leave controls as-is on failure
     } finally {
       setTogglingHeadroom(false);
-    }
-  }
-
-  async function handleFireScripted(index: number) {
-    const s = SCRIPTED[index];
-    if (!s) return;
-    setFiringIndex(index);
-    try {
-      await api.chat(s.body, s.apiKey);
-    } catch {
-      // result also streams via SSE; a failed fetch just means no new event
-    } finally {
-      setFiringIndex(null);
-    }
-  }
-
-  async function handleRunTraffic() {
-    setTrafficRunning(true); // optimistic; a 409 (already running) confirms the true state
-    try {
-      await api.startTraffic(100, 20);
-    } catch {
-      // 409 (already running) or a network hiccup — the 3s poll above will
-      // reconcile the real `running` state either way.
     }
   }
 
@@ -180,18 +150,7 @@ export default function App() {
       {view === "admin" ? (
         <AdminConsole />
       ) : (
-        <>
-          <ControlPanel
-            controls={controls}
-            onToggleHeadroom={handleToggleHeadroom}
-            togglingHeadroom={togglingHeadroom}
-            onFireScripted={handleFireScripted}
-            firingIndex={firingIndex}
-            onRunTraffic={handleRunTraffic}
-            trafficRunning={trafficRunning}
-          />
-
-          <main className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4 p-4 items-start">
+        <main className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4 p-4 items-start">
             <div className="lg:col-span-4 flex flex-col gap-4">
               <FlowVisualizer
                 trace={effectiveTrace}
@@ -213,14 +172,18 @@ export default function App() {
                 onClearStep={() => setSelectedStep(null)}
                 hops={hops}
               />
-              <CompressionView detail={selectedDetail} />
+              <CompressionView
+                detail={selectedDetail}
+                headroomEnabled={controls?.headroom_enabled ?? null}
+                onToggleHeadroom={handleToggleHeadroom}
+                toggling={togglingHeadroom}
+              />
             </div>
 
             <div className="lg:col-span-4">
               <CostDashboard stats={stats} requests={requests} />
             </div>
-          </main>
-        </>
+        </main>
       )}
     </div>
   );

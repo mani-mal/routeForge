@@ -14,7 +14,7 @@ export function RequestList({
   return (
     <Panel title="Requests" right={<span className="text-xs text-gray-500">{requests.length}</span>} className="flex-1 min-h-0">
       {requests.length === 0 ? (
-        <p className="text-sm text-gray-500">No requests yet — fire one from the control panel.</p>
+        <p className="text-sm text-gray-500">No requests yet — they appear here as connected applications call the API.</p>
       ) : (
         <div className="flex flex-col gap-1.5 overflow-y-auto max-h-[420px] pr-1">
           {requests.map((r) => {
