@@ -74,6 +74,11 @@ def get_stats(request: Request) -> dict:
     return history.stats()
 
 
+@router.get("/fleet")
+def fleet(request: Request) -> list:
+    return request.app.state.history.fleet()
+
+
 @router.get("/controls")
 def get_controls(request: Request) -> dict:
     """Current runtime-mutable controls state. Only `headroom_enabled` is

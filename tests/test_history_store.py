@@ -95,6 +95,27 @@ def test_list_filters_by_app():
     assert len(store.list()) == 3        # unfiltered unchanged
 
 
+def test_fleet_groups_by_app():
+    from app.api.history import HistoryStore
+    store = HistoryStore()
+    def rec(id, tenant, entities):
+        store.record({"id": id, "trace": [{"step": "router", "latency_ms": 10}],
+                      "cost": {"total_usd": 1.0, "baseline_usd": 3.0,
+                               "routing_saved_usd": 1.5, "compression_saved_usd": 0.5},
+                      "policy": {"onprem_only": tenant == "hospital",
+                                 "detected_entities": entities},
+                      "model": "m", "model_display": "M", "usage": {}},
+                     tenant_id=tenant, tier="cheap")
+    rec("a1", "acme", [])
+    rec("h1", "hospital", ["US_SSN"])
+    rec("a2", "acme", ["EMAIL"])
+    rows = {r["app"]: r for r in store.fleet()}
+    assert rows["acme"]["count"] == 2
+    assert rows["acme"]["pii_count"] == 1
+    assert rows["hospital"]["onprem_count"] == 1
+    assert store.fleet()[0]["count"] >= store.fleet()[-1]["count"]  # sorted desc
+
+
 def test_list_non_positive_limit_returns_empty():
     """Regression: the newest-first/early-break loop must not append before
     checking `limit`, or `limit=0` (a reachable `GET /api/requests?limit=0`)

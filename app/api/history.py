@@ -113,6 +113,35 @@ class HistoryStore:
     def get(self, request_id: str) -> dict | None:
         return self._full.get(request_id)
 
+    def fleet(self) -> list[dict]:
+        """One aggregate row per `tenant_id` (application) seen, sorted by
+        `count` desc, for the fleet-overview table (Task 2)."""
+        from collections import defaultdict
+        import statistics
+        groups: dict[str, list[RequestSummary]] = defaultdict(list)
+        for s in self._summaries:
+            groups[s.tenant_id].append(s)
+        rows = []
+        for app, items in groups.items():
+            lat = sorted(s.latency_ms for s in items)
+            tiers: dict[str, int] = defaultdict(int)
+            for s in items:
+                tiers[s.tier] += 1
+            rows.append({
+                "app": app,
+                "count": len(items),
+                "total_usd": sum(s.total_usd for s in items),
+                "baseline_usd": sum(s.baseline_usd for s in items),
+                "routing_saved_usd": sum(s.routing_saved_usd for s in items),
+                "compression_saved_usd": sum(s.compression_saved_usd for s in items),
+                "onprem_count": sum(1 for s in items if s.onprem_only),
+                "pii_count": sum(1 for s in items if s.detected_entities),
+                "latency_p50_ms": statistics.median(lat) if lat else 0.0,
+                "tier_distribution": dict(tiers),
+            })
+        rows.sort(key=lambda r: r["count"], reverse=True)
+        return rows
+
     def stats(self) -> dict:
         summaries = list(self._summaries)
         count = len(summaries)

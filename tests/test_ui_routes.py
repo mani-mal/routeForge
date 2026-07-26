@@ -54,6 +54,15 @@ def test_pii_request_never_leaks_raw_ssn(client):
         detail.json()["policy"]["detected_entities"]
 
 
+def test_fleet_endpoint(client):
+    client.post("/v1/chat/completions", headers={"Authorization": "Bearer acme-key"},
+                json={"messages": [{"role": "user", "content": "hi"}]})
+    r = client.get("/api/fleet")
+    assert r.status_code == 200
+    rows = r.json()
+    assert any(row["app"] == "acme" and row["count"] >= 1 for row in rows)
+
+
 def test_requests_endpoint_filters_by_app(client):
     # seeded tokens acme-key / hospital-key drive one request each
     client.post("/v1/chat/completions", headers={"Authorization": "Bearer acme-key"},
