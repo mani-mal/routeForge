@@ -407,6 +407,37 @@ The two cloud models exist **in the pool so the routing story is visible** — t
 in the **rejected / greyed-out** list with a reason. A model that was *chosen and served*
 is always one of the local pair today.
 
+### "How do I turn Headroom (compression) on? There's no button."
+
+**Correct — there is no console control for it today.** The old demo UI had a
+"Headroom on/off" toggle; it was dropped when the per-application console replaced the
+3-column layout, and no equivalent was added back. The backend still supports a **live**
+toggle — it's just not wired to any button.
+
+| Layer | Toggle present? |
+|---|---|
+| Backend `POST /api/controls` | ✅ Mutates `app.state.co_cfg` in place — next request picks it up, **no restart** (`app/api/ui_routes.py:99`). Admin-gated. |
+| API client `api.setControls()` | ✅ Present (`ui/src/api.ts:141`). |
+| Console UI | ❌ Nothing renders/calls it on any tab. |
+
+Two ways to enable it until a control is added:
+
+```bash
+# 1. Live, via the admin-gated API (needs the admin session cookie):
+curl -X POST http://<api-host>:30808/api/controls \
+  -H 'Content-Type: application/json' -b 'rf_admin_session=<cookie>' \
+  -d '{"headroom_enabled": true}'
+
+# 2. At startup: config/serving.yaml → context_optimization.enabled: true
+#    (defaults OFF so the demo can show before/after). Requires a restart.
+```
+
+**Caveat:** this switch is **global** (`app.state.co_cfg`, server-wide), **not
+per-application** — one lever for the whole server, not per-tenant. Because the demo
+narrative depends on toggling Headroom live (story step 4 in `CLAUDE.md`), the missing
+button is a known gap; the natural fix is a Headroom toggle in the app **Settings** tab
+or a global control in the console header.
+
 ### "Why does multi-step latency read 0 ms?"
 
 **Known bug** (Traffic tab and drill-down). Per-hop latency on the agent path isn't yet
