@@ -40,8 +40,30 @@ Sign-in ──▶ Console Shell ──▶ Fleet Overview ──▶ Application P
 - **Application Page** (`AppPage.tsx`) — the per-app "answer desk": six tabs, scoped to
   **one** application's traffic.
 
-The top-right chrome (`● connected/disconnected`, light/dark toggle, **Sign out**,
-**POWERED BY CDW**) is the outer app frame, above the console shell.
+The top-right chrome (`● live/disconnected`, light/dark toggle, **Sign out**, **POWERED
+BY CDW**) is the outer app frame (`App.tsx`), above the console shell.
+
+### 0a. The live/disconnected indicator
+
+The dot next to the logo reports whether the browser has an open **SSE (Server-Sent
+Events)** channel to `/api/stream` — the push channel that streams new requests into the
+console in real time (`App.tsx:59` / `api.ts` `subscribeStream`).
+
+| State | Dot | Meaning |
+|---|---|---|
+| **live** | 🟢 green | Stream open (`EventSource.onopen`) — new requests appear instantly. |
+| **disconnected** | ⚪ grey | Stream dropped or never opened (`EventSource.onerror`). |
+
+**"disconnected" does not mean the app is broken.** Every screen still loads via its
+normal `fetch` calls and a **3-second poll**, so data still appears — it just isn't
+real-time, and new requests won't stream in live. EventSource **auto-reconnects in the
+background**, so the dot often flips back to "live" on its own.
+
+If it stays grey while everything else loads, the usual causes are: (1) the admin session
+isn't valid — `/api/stream` is admin-gated, so an expired/absent session cookie makes the
+stream 401 (sign in again); (2) the reverse proxy is buffering SSE on the DGX deploy —
+`/api/stream` needs `proxy_buffering off` in `ui/nginx.conf`; or (3) a transient drop that
+self-heals on reconnect.
 
 ---
 
