@@ -467,6 +467,12 @@ renders raw input**. The **answer** is shown at the Response step; the prompts l
 
 ---
 
+**Known gaps & deferred UI work:** see `docs/ui-open-items.md` — includes the planned
+redesign of the "What happened" band (§7b), the missing Headroom toggle, the 0 ms
+multi-step latency bug, per-request `$0.0000` precision, and the two-blues recolour.
+
+---
+
 *Source of truth: `ui/src/console/` (screens), `ui/src/console/sections/` (tabs),
 `ui/src/console/aggregate.ts` (the per-tab math), `ui/src/api.ts` (the API contract),
 `app/api/ui_routes.py` (backend). Design brief: `.claude/skills/demo-ui/`.*
