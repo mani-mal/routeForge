@@ -60,6 +60,11 @@ class ExecutionPolicyContext(BaseModel):
     require_verification: bool
     detected_entities: tuple[str, ...]  # TYPES only
     redaction_map_id: str | None
+    # Per-app Headroom (step 5) override, resolved at gate time so it travels
+    # with the request into BOTH the direct pipeline and the per-hop agent
+    # endpoint. None = inherit the live global co_cfg toggle; True/False =
+    # force compression on/off for this app. Safety bypasses still apply.
+    compression_override: bool | None = None
 
 
 class RejectedCandidate(BaseModel):

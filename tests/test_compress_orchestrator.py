@@ -73,6 +73,76 @@ def test_restricted_sensitivity_bypassed():
     assert r.record.bypass_reason == "restricted_sensitivity"
 
 
+def _reducible_cfg():
+    """enabled globally, min_tokens=1, user prompt not protected — so a long
+    single message actually compresses when the app override lets it."""
+    cfg = _cfg(enabled=True, min_tokens=1)
+    return cfg.model_copy(
+        update={"bypass_on": cfg.bypass_on.model_copy(update={"user_prompt": False})})
+
+
+def test_app_override_off_while_global_on():
+    # Global Headroom ON, but this app forces it OFF → passthrough, reason
+    # "disabled", exactly as if the global toggle were off for this app alone.
+    cfg = _reducible_cfg()
+    r = compress([Message(role="assistant", content="INFO\n" * 800)],
+                 _ctx(compression_override=False), cfg)
+    assert r.record.applied is False
+    assert r.record.bypass_reason == "disabled"
+    assert r.record.enabled is False
+    assert r.tokens_after == r.tokens_before
+
+
+def test_app_override_on_while_global_off():
+    # Global Headroom OFF, but this app forces it ON → compression runs.
+    cfg = _cfg(enabled=False, min_tokens=1)
+    cfg = cfg.model_copy(
+        update={"bypass_on": cfg.bypass_on.model_copy(update={"user_prompt": False})})
+    r = compress([Message(role="assistant", content="INFO log line\n" * 800)],
+                 _ctx(compression_override=True), cfg)
+    assert r.record.applied is True
+    assert r.record.enabled is True
+    assert r.tokens_after < r.tokens_before
+
+
+def test_app_override_none_inherits_live_global():
+    body = [Message(role="assistant", content="INFO\n" * 800)]
+    # None (inherit) tracks whatever the passed-in (live) co_cfg says.
+    off = _cfg(enabled=False, min_tokens=1)
+    r_off = compress(body, _ctx(compression_override=None), off)
+    assert r_off.record.bypass_reason == "disabled"
+    on = _reducible_cfg()
+    r_on = compress(body, _ctx(compression_override=None), on)
+    assert r_on.record.applied is True
+
+
+def test_app_override_on_still_obeys_safety_bypass():
+    # Forcing compression ON per-app must NOT override the high-risk / restricted
+    # safety bypasses — an app can't push high-stakes content through Headroom.
+    cfg = _cfg(enabled=False, min_tokens=1)
+    r_hr = compress([Message(role="assistant", content="INFO\n" * 800)],
+                    _ctx(compression_override=True, risk_class="high"), cfg)
+    assert r_hr.record.applied is False
+    assert r_hr.record.bypass_reason == "high_risk"
+
+    r_rs = compress([Message(role="assistant", content="INFO\n" * 800)],
+                    _ctx(compression_override=True, sensitivity="restricted"), cfg)
+    assert r_rs.record.applied is False
+    assert r_rs.record.bypass_reason == "restricted_sensitivity"
+
+
+def test_app_override_on_onprem_only_ccr_never_to_cloud():
+    cfg = _cfg(enabled=False, min_tokens=1)
+    cfg = cfg.model_copy(
+        update={"bypass_on": cfg.bypass_on.model_copy(update={"user_prompt": False})})
+    ccr = CCRStore(ttl_seconds=60, clock=lambda: 0.0)
+    r = compress([Message(role="assistant", content="INFO\n" * 800)],
+                 _ctx(onprem_only=True, compression_override=True), cfg, ccr=ccr)
+    assert r.record.applied is True
+    assert r.record.ccr_retrievals_to_cloud == 0
+    assert ccr.retrievals_to_cloud == 0
+
+
 def test_fail_open_on_compressor_error(monkeypatch):
     """A compressor exception must fall back to UNCOMPRESSED (fail OPEN) — the
     request still succeeds. Contrast the policy gate, which fails CLOSED."""

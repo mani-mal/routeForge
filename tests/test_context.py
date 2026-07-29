@@ -45,3 +45,17 @@ def test_tenant_residency_tightens():
     # hospital defaults to onprem_only even with no entities
     ctx = build_context(S, "hospital", "hospital", [], None)
     assert ctx.onprem_only is True
+
+
+def test_compression_override_from_app_policy():
+    from app.apps.policy import AppPolicyView
+    # No app policy → inherit (None on the context).
+    assert build_context(S, "r", "default", [], None).compression_override is None
+    # Per-app True/False propagates onto the immutable context so it travels
+    # into both the direct and per-hop compression call sites.
+    on = build_context(S, "r", "acme", [], None,
+                       app_policy=AppPolicyView(compression_enabled=True))
+    assert on.compression_override is True
+    off = build_context(S, "r", "acme", [], None,
+                        app_policy=AppPolicyView(compression_enabled=False))
+    assert off.compression_override is False

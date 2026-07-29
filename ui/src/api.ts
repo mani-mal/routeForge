@@ -192,6 +192,7 @@ export interface AdminPolicy {
   residency: string | null;
   max_spend_usd_per_day: number | null;
   max_rpm: number | null;
+  compression_enabled: boolean | null;   // null = inherit global Headroom toggle
 }
 
 export interface AdminApp {

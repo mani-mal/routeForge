@@ -111,3 +111,27 @@ def test_http_provider_restriction_reflected_in_policy(tmp_path):
             assert r.json()["policy"]["allowed_providers"] == ["onprem"]
     finally:
         restore()
+
+
+def _compression_record(trace):
+    # CompressionRecord is the only trace entry carrying tokens_before.
+    return next(e for e in trace if "tokens_before" in e)
+
+
+def test_http_per_app_compression_override(tmp_path):
+    # Global Headroom default is OFF (serving.yaml). Forcing it ON for acme must
+    # flow DB -> policy_view -> context -> compress: the request's compression
+    # record then bypasses on "below_min_tokens" (short prompt) instead of
+    # "disabled" — observable proof the per-app column is wired end-to-end.
+    db_url, restore = _with_db(tmp_path)
+    try:
+        _seed_policy(db_url, "acme", compression_enabled=True)
+        with TestClient(create_app()) as c:
+            r = c.post("/v1/chat/completions",
+                       headers={"Authorization": "Bearer acme-key"}, json=_CLEAN)
+            assert r.status_code == 200
+            rec = _compression_record(r.json()["trace"])
+            assert rec["enabled"] is True
+            assert rec["bypass_reason"] == "below_min_tokens"
+    finally:
+        restore()

@@ -80,6 +80,7 @@ function PolicyEditor({ app, onSaved }: { app: AdminApp; onSaved: () => void }) 
     app.policy ?? {
       allowed_tiers: null, allowed_providers: null, allowed_models: null,
       residency: null, max_spend_usd_per_day: null, max_rpm: null,
+      compression_enabled: null,
     });
   const [busy, setBusy] = useState(false);
 
@@ -120,6 +121,23 @@ function PolicyEditor({ app, onSaved }: { app: AdminApp; onSaved: () => void }) 
           <option value="">(app default)</option>
           {RESIDENCIES.map((r) => <option key={r} value={r}>{r}</option>)}
         </select>
+      </div>
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-xs text-gray-500 w-20">Headroom</span>
+        <select
+          value={p.compression_enabled === null ? "" : p.compression_enabled ? "on" : "off"}
+          onChange={(e) => setP({
+            ...p,
+            compression_enabled: e.target.value === "" ? null : e.target.value === "on",
+          })}
+          className="rounded bg-ink border border-edge px-2 py-1 text-xs text-gray-100">
+          <option value="">(global default)</option>
+          <option value="on">on</option>
+          <option value="off">off</option>
+        </select>
+        <span className="text-[10px] text-gray-600">
+          per-app context compression; safety bypasses still apply
+        </span>
       </div>
       <div className="flex items-center gap-4 flex-wrap">
         <label className="flex items-center gap-2 text-xs text-gray-500">

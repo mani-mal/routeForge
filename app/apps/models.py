@@ -95,6 +95,12 @@ class AppPolicy(Base):
     residency: Mapped[str | None] = mapped_column(String(32), nullable=True)
     max_spend_usd_per_day: Mapped[float | None] = mapped_column(Float, nullable=True)
     max_rpm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Per-app Headroom (step 5) override. null = inherit the live global toggle
+    # (app.state.co_cfg.enabled); True/False = force on/off for this app. Only
+    # ever gates whether compression is *attempted* — the residency/high-risk/
+    # restricted bypass rules (config/serving.yaml) still fire on top, so an app
+    # can never force compression onto content the safety rules exclude.
+    compression_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
     application: Mapped[Application] = relationship(back_populates="policy")
 

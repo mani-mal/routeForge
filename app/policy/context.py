@@ -94,4 +94,6 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
         require_verification=rule.require_verification,
         detected_entities=tuple(sorted(etypes)),
         redaction_map_id=redaction_map_id,
+        compression_override=(app_policy.compression_enabled
+                              if app_policy is not None else None),
     )

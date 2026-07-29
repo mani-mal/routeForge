@@ -36,7 +36,8 @@ def _policy_dict(p) -> dict | None:
         return None
     return {"allowed_tiers": p.allowed_tiers, "allowed_providers": p.allowed_providers,
             "allowed_models": p.allowed_models, "residency": p.residency,
-            "max_spend_usd_per_day": p.max_spend_usd_per_day, "max_rpm": p.max_rpm}
+            "max_spend_usd_per_day": p.max_spend_usd_per_day, "max_rpm": p.max_rpm,
+            "compression_enabled": p.compression_enabled}
 
 
 def _app_dict(app, *, with_children: bool = True) -> dict:
@@ -79,6 +80,7 @@ class PolicyIn(BaseModel):
     residency: str | None = None
     max_spend_usd_per_day: float | None = None
     max_rpm: int | None = None
+    compression_enabled: bool | None = None   # None = inherit global Headroom toggle
 
 
 class TokenIn(BaseModel):
