@@ -42,8 +42,6 @@ package to be installed.
 """
 from __future__ import annotations
 
-import logging
-import os
 import uuid
 
 from pydantic import BaseModel
@@ -52,38 +50,37 @@ from app.agent.internal_endpoint import HOPS
 from app.config.loader import load_settings
 from app.models import ChatRequest, CompressionRecord, DecisionRecord, ExecutionPolicyContext
 
-log = logging.getLogger("serving.obs")
-
 NAT_WORKFLOW_CONFIG = "config/nat_workflow.yaml"
 DEFAULT_MAX_STEPS = 5
 
 
-def _maybe_enable_langfuse(config) -> None:
-    """Enable NAT-native telemetry so the agent's FULL trajectory (per-hop model
-    calls, tool inputs/outputs, tokens, latency) exports to the same Langfuse the
-    request-level DecisionRecords go to (app/obs/export.py) — not just summarized
-    router decisions.
+def _configure_nat_telemetry(config) -> None:
+    """Intentionally does NOT enable NAT's native Langfuse span export.
 
-    Best-effort and fail-safe: only enabled when all three LANGFUSE_* vars are
-    set, and any error configuring it is swallowed (telemetry must never break an
-    agent run). This is why it is injected here rather than baked into
-    config/nat_workflow.yaml — the `langfuse` exporter raises on missing keys,
-    which would break keyless dev runs and `nat validate`.
+    NAT's built-in `LangfuseTelemetryExporter` emits the agent's FULL trajectory
+    — per-hop prompts, completions, and tool I/O — as RAW text through NAT's own
+    OTLP pipeline (`langfuse_telemetry_exporter` -> `OTLPSpanAdapterExporter`),
+    which bypasses BOTH:
+      - our egress redaction (`app/obs/otel.py` RedactingSpanExporter), so a
+        `hospital` multi-step request would push an SSN-bearing tool output or
+        completion into Langfuse UNREDACTED — a CLAUDE.md rule 2 violation
+        (telemetry redacted on egress); and
+      - our per-application project routing (`app/obs/otel.py` get_app_tracer),
+        so it lands in the single shared project regardless of tenant.
+
+    It is also redundant: every request — direct AND multi-step — already emits a
+    redacted, per-app, per-hop `serving.request` trace via `app/obs/export.py`
+    (each `agent_hop` becomes a `serving.agent_hop` child span). NAT's exporter
+    was a second, raw copy of the same run.
+
+    NAT provides `OTLPSpanHeaderRedactionAdapterExporter`, but it is not wired to
+    any `@register_telemetry_exporter` config type, so it can't be selected via
+    `config.general.telemetry.tracing`. Capturing full per-hop I/O for eval is a
+    separate, deliberately-gated feature (redacted|full, residency-bounded) — see
+    docs/eval-logging-backlog.md — NOT this accidental raw firehose. So we leave
+    NAT's native exporter OFF and rely on our own redacted export path.
     """
-    host = os.environ.get("LANGFUSE_HOST")
-    public_key = os.environ.get("LANGFUSE_PUBLIC_KEY")
-    secret_key = os.environ.get("LANGFUSE_SECRET_KEY")
-    if not (host and public_key and secret_key):
-        return
-    try:
-        from nat.plugins.opentelemetry.register import LangfuseTelemetryExporter
-        config.general.telemetry.tracing["langfuse"] = LangfuseTelemetryExporter(
-            endpoint=f"{host.rstrip('/')}/api/public/otel/v1/traces",
-            public_key=public_key,
-            secret_key=secret_key,
-        )
-    except Exception:  # telemetry must never break an agent run
-        log.warning("could not enable NAT langfuse telemetry (non-fatal)", exc_info=True)
+    return None
 
 
 class AgentResult(BaseModel):
@@ -164,8 +161,9 @@ async def run(ctx: ExecutionPolicyContext, request: ChatRequest, *, port: int) -
         config.llms["sp_router"].base_url = f"http://127.0.0.1:{port}/internal/v1/{run_id}"
         config.llms["sp_router"].api_key = SecretStr("sk-internal")
         config.workflow.max_iterations = max_steps
-        # Export the agent's full trajectory to Langfuse when keys are present.
-        _maybe_enable_langfuse(config)
+        # NAT's native Langfuse exporter stays OFF (rule 2 + per-app routing):
+        # our own redacted per-hop trace covers this. See _configure_nat_telemetry.
+        _configure_nat_telemetry(config)
 
         async with WorkflowBuilder.from_config(config=config) as builder:
             session_manager = await SessionManager.create(config=config, shared_builder=builder)
