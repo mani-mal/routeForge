@@ -37,10 +37,11 @@ def make_backend(settings: Settings) -> InferenceBackend:
     kind = settings.serving.inference_backend
     if kind == "mock":
         return MockBackend(settings)
+    temp = settings.routing.confidence_logprob_temperature
     if kind == "vllm":
-        return VllmBackend(settings.serving.vllm)
+        return VllmBackend(settings.serving.vllm, logprob_temperature=temp)
     if kind == "dynamo":
-        return DynamoBackend(settings.serving.dynamo)
+        return DynamoBackend(settings.serving.dynamo, logprob_temperature=temp)
     if kind == "none":
         # See module docstring: 'none' rejection is enforced in context.py,
         # not here. This is a working object, never actually asked to serve

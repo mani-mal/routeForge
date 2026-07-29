@@ -17,6 +17,14 @@ class RoutingCfg(BaseModel):
     weights: dict[str, float]
     complexity_thresholds: dict[str, float]
     confidence_escalation_threshold: float
+    # Softening applied to a real backend's mean-token-logprob before it becomes
+    # a [0,1] confidence: confidence = exp(mean_logprob / T). T=1 is the raw
+    # geometric-mean token probability (systematically ~0.4-0.6 even for fluent
+    # answers, so it trips the escalation threshold on nearly every response —
+    # see routeforge-router-targets-mid). T>1 calibrates it so only genuinely
+    # high-perplexity answers fall below the threshold. Ignored by the mock
+    # backend (its confidence is seeded/persona-driven, not logprob-derived).
+    confidence_logprob_temperature: float = 1.0
     max_escalations: int
     risk_floors: dict[str, str]
     model_pool: list[PoolCandidate]

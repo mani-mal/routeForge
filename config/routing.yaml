@@ -21,6 +21,14 @@ complexity_thresholds:
 # tier and re-run; capped by max_escalations. See routing-and-gateway skill for what
 # "confidence" is (backend-reported).
 confidence_escalation_threshold: 0.60
+# Calibrates a REAL backend's mean-token-logprob into confidence:
+# confidence = exp(mean_logprob / T). T=1 is raw geometric-mean token probability
+# (~0.4-0.6 even for fluent answers → escalates almost everything, collapsing the
+# "~70% to cheap" story — see routeforge-router-targets-mid). T=4 with the 0.60
+# threshold means escalation fires only when mean per-token perplexity > ~7.7
+# (genuinely uncertain output), so confident cheap-tier answers stay put. The mock
+# backend ignores this (its confidence is seeded per persona).
+confidence_logprob_temperature: 4.0
 max_escalations: 1
 
 # Risk floor = the minimum tier a request may use, applied AFTER the residency
