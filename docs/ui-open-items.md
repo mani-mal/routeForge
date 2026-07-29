@@ -48,16 +48,20 @@ region currently behaves.
 
 ---
 
-## 2. No Headroom (compression) toggle in the console — PARTLY DONE (:0.3.0)
+## 2. No Headroom (compression) toggle in the console — DONE (per-app :0.3.0, global :0.4.0)
 
-**Per-app half shipped (B1, `:0.3.0`):** the app **Settings** tab now has a tri-state
-Headroom control — `(global default) / on / off` — backed by a nullable
+**Per-app half (B1, `:0.3.0`):** the app **Settings** tab has a tri-state Headroom
+control — `(global default) / on / off` — backed by a nullable
 `AppPolicy.compression_enabled` that overrides the live global toggle per application
 (null = inherit). Safety bypasses (high-risk / restricted / min-tokens) still apply on
 top; see `app/compression/__init__.py` `_effective_enabled`.
 
-**Still open:** a **global** master toggle in the console header. The backend live toggle
-(`POST /api/controls`, no restart) exists but no header control calls it.
+**Global half (`:0.4.0`, pending deploy):** a master Headroom switch now lives in the
+console header (`ui/src/components/HeadroomToggle.tsx`, mounted in `App.tsx` when signed
+in). It reads `GET /api/controls` on mount and flips via `POST /api/controls` (optimistic,
+reverts on error), mutating `app.state.co_cfg` live — the next request on either the
+direct or per-hop path picks it up, no restart. Per-app overrides win over it; the tooltip
+says so. Item closed.
 
 ## 3. Multi-step requests report 0 ms latency — FIXED IN CODE (pending :0.4.0)
 
