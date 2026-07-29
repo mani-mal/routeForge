@@ -11,7 +11,7 @@
 import type { ReactNode } from "react";
 import { STEPS, stepMeta } from "../api";
 import type { ChatResponse, TraceRecord } from "../api";
-import { Panel, StatTile, TierDot, formatUsd, formatMs, formatPct } from "../components/common";
+import { Panel, StatTile, TierDot, formatUsd, formatUsdPrecise, formatMs, formatPct } from "../components/common";
 
 const PROVIDERS: { key: string; label: string }[] = [
   { key: "onprem", label: "On-Prem" },
@@ -66,7 +66,7 @@ function Chosen({ r, cumulative }: { r: TraceRecord; cumulative?: number }) {
         </div>
       )}
       <div className="mt-2 flex items-center gap-3 text-[11px] text-gray-500">
-        {r.actual_cost_usd != null && <span>cost {formatUsd(r.actual_cost_usd)}</span>}
+        {r.actual_cost_usd != null && <span>cost {formatUsdPrecise(r.actual_cost_usd)}</span>}
         {r.est_cost_usd != null && <span>est {formatUsd(r.est_cost_usd)}</span>}
         {r.latency_ms != null && r.latency_ms > 0 && <span>{formatMs(r.latency_ms)}</span>}
         {r.tokens_priced ? <span>{r.tokens_priced} tok priced</span> : null}
@@ -246,7 +246,7 @@ function StepBody({ stepKey, detail, hops }: { stepKey: string; detail: ChatResp
       return (
         <>
           <Row label="tokens">{detail.usage.total_tokens} total</Row>
-          <Row label="actual spend">{formatUsd(detail.cost.total_usd)}</Row>
+          <Row label="actual spend">{formatUsdPrecise(detail.cost.total_usd)}</Row>
           <Row label="all-frontier baseline">{formatUsd(detail.cost.baseline_usd)}</Row>
           <Row label="routing saved">{formatUsd(detail.cost.routing_saved_usd)}</Row>
           <Row label="compression saved">{formatUsd(detail.cost.compression_saved_usd)}</Row>
@@ -308,7 +308,7 @@ function PlainSummary({ detail }: { detail: ChatResponse }) {
         <span className="font-semibold text-gray-50">
           {verify ? (verify.passed ? "verified clean" : "flagged for review") : "not verified"}
         </span>
-        , in {formatMs(totalLatencyMs)} for {formatUsd(detail.cost.total_usd)}.
+        , in {formatMs(totalLatencyMs)} for {formatUsdPrecise(detail.cost.total_usd)}.
       </p>
       <ProviderStrip allowedProviders={p.allowed_providers} onpremOnly={p.onprem_only} />
     </Panel>

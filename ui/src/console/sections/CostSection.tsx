@@ -9,7 +9,10 @@ import { Panel, StatTile, formatPct, formatUsd } from "../../components/common";
 import { useTheme } from "../../theme";
 import { costAgg } from "../aggregate";
 
-const ROUTING_COLOR = "#38bdf8";
+// Violet, not sky-blue: the old #38bdf8 collided with the mid-tier dot #3b82f6
+// (a tier vs a savings lever — unrelated meanings). Keeps it distinct from the
+// amber compression lever and the green/blue/red tier dots on a projector.
+const ROUTING_COLOR = "#8b5cf6";
 const COMPRESSION_COLOR = "#f59e0b";
 
 export function CostSection({ requests }: { requests: RequestSummary[] }) {

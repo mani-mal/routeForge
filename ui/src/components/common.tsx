@@ -44,6 +44,19 @@ export function formatUsd(v: number | null | undefined): string {
   return `$${v.toFixed(4)}`;
 }
 
+// Per-request "answer" figures: a sub-$0.00005 cost rounds to "$0.0000" at 4 dp
+// and reads as *free*, which is a display artifact, not a claim. For those
+// prominent per-request lines, fall back to a sub-cent unit (e.g. "0.003¢").
+// Aggregate totals keep formatUsd's 4 dp — there the magnitudes are real.
+export function formatUsdPrecise(v: number | null | undefined): string {
+  if (v === null || v === undefined || Number.isNaN(v)) return "–";
+  if (v > 0 && v < 0.0001) {
+    const cents = v * 100;
+    return cents < 0.001 ? "<0.001¢" : `${cents.toFixed(3)}¢`;
+  }
+  return `$${v.toFixed(4)}`;
+}
+
 export function formatMs(v: number | null | undefined): string {
   if (v === null || v === undefined || Number.isNaN(v)) return "–";
   return `${Math.round(v)} ms`;

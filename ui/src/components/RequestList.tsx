@@ -1,6 +1,6 @@
 // Panel 1 (bottom half) — newest-first request list. Click a row to inspect it.
 import type { RequestSummary } from "../api";
-import { Panel, TierDot, formatUsd, formatMs } from "./common";
+import { Panel, TierDot, formatUsdPrecise, formatMs } from "./common";
 
 export function RequestList({
   requests,
@@ -42,7 +42,7 @@ export function RequestList({
                       </span>
                     )}
                   </div>
-                  <span className="shrink-0 text-xs text-gray-400">{formatUsd(r.total_usd)}</span>
+                  <span className="shrink-0 text-xs text-gray-400">{formatUsdPrecise(r.total_usd)}</span>
                 </div>
                 <div className="mt-1 flex items-center justify-between text-xs text-gray-500">
                   <span>{r.sensitivity}</span>
