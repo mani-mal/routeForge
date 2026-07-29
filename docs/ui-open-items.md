@@ -48,28 +48,48 @@ region currently behaves.
 
 ---
 
-## 2. No Headroom (compression) toggle in the console
+## 2. No Headroom (compression) toggle in the console — PARTLY DONE (:0.3.0)
 
-The per-app console dropped the old on/off control. Backend supports a **live** toggle
-(`POST /api/controls`, no restart) but nothing in the UI calls it. Natural home: a toggle
-in the app **Settings** tab or a global control in the console header. Full detail +
-enable-it-meanwhile instructions in `docs/help/ui-guide.md` FAQ.
+**Per-app half shipped (B1, `:0.3.0`):** the app **Settings** tab now has a tri-state
+Headroom control — `(global default) / on / off` — backed by a nullable
+`AppPolicy.compression_enabled` that overrides the live global toggle per application
+(null = inherit). Safety bypasses (high-risk / restricted / min-tokens) still apply on
+top; see `app/compression/__init__.py` `_effective_enabled`.
 
-## 3. Multi-step requests report 0 ms latency
+**Still open:** a **global** master toggle in the console header. The backend live toggle
+(`POST /api/controls`, no restart) exists but no header control calls it.
 
-Agent/multi-step (`N hops`) requests show `0 ms` everywhere (request row, "What happened"
-band, Traffic p50/p95). Per-hop latency isn't summed into the request-level total.
-Locus: `app/agent/internal_endpoint.py` / `app/agent/runtime.py` (per-hop timing) and
-`app/pipeline.py` (request `latency_ms`). Fix = time each hop, accumulate into the total.
+## 3. Multi-step requests report 0 ms latency — FIXED IN CODE (pending :0.4.0)
 
-## 4. Per-request cost shows "$0.0000" for cheap requests
+Per-hop latency was never summed into the request total because the internal agent
+endpoint fakes the completion (never calls `generate`) and so recorded no `latency_ms`.
+Fixed: each `agent_hop` DecisionRecord now carries the per-tier modeled latency
+(`seeded_latency_ms`, single-sourced in `app/gateway/backends/base.py`), which
+`routes.py` already sums. In the working tree, not yet on the live `:0.3.0` image.
 
-4-dp formatting (`formatUsd`) rounds sub-$0.00005 requests to `$0.0000`, which reads as
-"free". Consider a sub-cent unit ("0.003¢") or more precision on the **per-request** line
-while keeping 4 dp on aggregate totals.
+## 4. Per-request cost shows "$0.0000" for cheap requests — FIXED IN CODE (pending :0.4.0)
 
-## 5. Two blues collide
+Added `formatUsdPrecise` (`ui/src/components/common.tsx`): sub-$0.0001 per-request
+figures now render in cents (e.g. `0.003¢`) instead of `$0.0000`; aggregate totals keep
+4-dp `formatUsd`. Applied to the request row, the per-hop cost, the actual-spend headline,
+and the "What happened" sentence. In the working tree, not yet on the live image.
 
-Mid-tier dot `#3b82f6` and the routing-savings lever `#38bdf8` are both blue but mean
-unrelated things (a tier vs a savings lever). They never share a panel, but recolour one
-(e.g. routing → teal/violet) so they never read as related on a projector.
+## 5. Two blues collide — FIXED IN CODE (pending :0.4.0)
+
+`ROUTING_COLOR` recoloured sky-blue `#38bdf8` → violet `#8b5cf6`
+(`ui/src/console/sections/CostSection.tsx`) so it no longer reads as related to the
+mid-tier dot `#3b82f6`. In the working tree, not yet on the live image.
+
+## 6. Fleet ⚠️ "sensitive traffic not all kept on-prem" is over-eager
+
+The per-app warning fires on `pii_count > 0 && onprem_count < pii_count`
+(`ui/src/console/FleetOverview.tsx:47`), so a `private_cloud_ok` tenant carrying only
+`confidential` entities (e.g. Acme: LOCATION/DATE_TIME from innocuous questions → 161 PII,
+0 on-prem) warns even though sending redacted low-risk PII to (private) cloud is
+**policy-compliant**, not a leak. It conflates "any PII entity detected" with "must be
+on-prem", and undersells the nuanced-routing story. Fix = flag only a genuine residency
+violation: a request classified **`restricted`/`onprem_only`** that went off-prem — not
+every detected entity. Needs the per-request sensitivity/residency (not just
+`pii_count`/`onprem_count`) surfaced to the fleet aggregate (`ui/src/console/aggregate.ts`,
+`FleetOverview.tsx`). Full explanation in `docs/demo-dashboard-notes.md`. Left as-is on
+purpose for now.
