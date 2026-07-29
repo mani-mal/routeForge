@@ -65,6 +65,15 @@ class LangfuseCfg(BaseModel):
     enabled: bool
     host: str  # in-cluster URL for OTLP export (e.g. http://langfuse-web:3000)
     redact_on_export: bool
+    # Eval-capture switch for request/response I/O attached to the serving.request
+    # root span (docs/eval-logging-backlog.md). `off` = today's behaviour (no I/O
+    # captured — the demo default, keeps rule 2 intact). `redacted` = attach
+    # redact()'d prompt/completion (entity VALUES masked to <TYPE>; structure kept,
+    # eval-usable, no raw PII). `full` = raw prompt/completion for eval — gated by
+    # the config lint to a residency-local Langfuse (rejected when any tenant is
+    # onprem_only; see app/config/lint.py) and NOT redacted on egress for the I/O
+    # keys (see app/obs/otel.py _capture_io_full). Owned here (observability infra).
+    capture_io: str = "off"  # off | redacted | full
     project_id: str = "demo-project"  # for building trace deep-link URLs for the UI
     # Browser-reachable Langfuse URL for the UI deep-link (e.g. a NodePort/ingress).
     # `host` is in-cluster and unreachable from the user's browser; when this is unset

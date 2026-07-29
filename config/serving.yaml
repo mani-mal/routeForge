@@ -50,6 +50,16 @@ observability:
     host: ${LANGFUSE_HOST:-http://langfuse:3000}
     redact_on_export: true       # mandatory; see nemo-agent-toolkit skill
     project_id: ${LANGFUSE_PROJECT_ID:-demo-project}  # for UI trace deep-links
+    # Eval-capture of request/response I/O on the serving.request trace.
+    #   off      — capture nothing (demo default; Input column blank, rule 2 intact)
+    #   redacted — attach prompt/completion with entity VALUES masked to <TYPE>
+    #              (eval-usable structure, no raw PII); still re-redacted on egress
+    #   full     — attach RAW prompt/completion for eval; the config lint REJECTS
+    #              this whenever any tenant is onprem_only (residency beats eval —
+    #              rule 6), and it must target a residency-local Langfuse only.
+    # Env override: SP_CAPTURE_IO (see loader). See docs/eval-logging-backlog.md.
+    # Quoted: bare `off` is a YAML boolean, but this is a string enum.
+    capture_io: "off"   # off | redacted | full
 
 # Provider *availability* (infra on/off) only. Tier membership is defined by the
 # pool in routing.yaml — the single source of truth for which model is which tier.

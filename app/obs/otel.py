@@ -21,6 +21,15 @@ REDACT_KEYS: tuple[str, ...] = (
     "input.value", "output.value", "tool.output", "gen_ai.prompt", "gen_ai.completion",
 )
 
+# The Langfuse Input/Output attribute keys. Normally redacted on egress like any
+# other free-text key (defence in depth). When capture_io == "full" the operator
+# has DELIBERATELY opted into raw eval capture and the config lint has already
+# proven no onprem_only tenant is exposed (app/config/lint.py), so the egress
+# redactor leaves these two keys alone — otherwise `full` mode would be identical
+# to `redacted`. Every other key in REDACT_KEYS is still redacted.
+_IO_KEYS: frozenset[str] = frozenset({"input.value", "output.value"})
+_capture_io_full: bool = False  # set once at init_tracing from serving.yaml
+
 _provider = None  # module-level singleton
 _trace_base: str | None = None  # "{host}/project/{project_id}/traces/" for deep-links
 _deeplink_host: str | None = None  # browser-reachable Langfuse host (public_host)
@@ -92,10 +101,18 @@ def get_app_tracer(host: str, public_key: str, secret_key: str):
 
 def init_tracing(settings: Settings):
     """Idempotent. Returns the provider, or None when disabled / extra missing."""
-    global _provider
+    global _provider, _capture_io_full
+    lf = settings.serving.observability.langfuse
+    # Record the eval-capture mode for the exporter BEFORE the guards below can
+    # early-return — the flag must reflect config even when export is off, and
+    # the per-app exporters (get_app_tracer) read this same module flag.
+    _capture_io_full = (lf.capture_io == "full")
+    if _capture_io_full:
+        log.warning("capture_io='full': RAW request/response I/O will be exported "
+                    "to Langfuse UNREDACTED (lint-gated to residency-local; see "
+                    "app/config/lint.py)")
     if _provider is not None:
         return _provider
-    lf = settings.serving.observability.langfuse
     if not lf.enabled:
         return None
     if not (lf.public_key and lf.secret_key):
@@ -183,7 +200,11 @@ def _make_redacting_exporter():
             attrs = getattr(span, "_attributes", None)
             if not attrs:
                 return
-            keys_to_redact = [k for k in attrs.keys() if k in REDACT_KEYS]
+            # In capture_io='full' the I/O keys are intentionally left raw
+            # (lint-gated, residency-local); everything else still redacts.
+            skip = _IO_KEYS if _capture_io_full else frozenset()
+            keys_to_redact = [k for k in attrs.keys()
+                              if k in REDACT_KEYS and k not in skip]
             if not keys_to_redact:
                 return
             was_immutable = getattr(attrs, "_immutable", False)

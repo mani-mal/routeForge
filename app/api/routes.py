@@ -87,10 +87,23 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
     except Exception:
         raise HTTPException(503, "policy evaluation unavailable")
     try:
+        # Eval-capture (docs/eval-logging-backlog.md): when capture_io is
+        # redacted|full, attach the request prompt + response completion to the
+        # trace. `off` (demo default) passes empty strings and sets nothing.
+        # The raw body prompt is redacted inside export_trace for `redacted`
+        # mode — routes.py never decides what leaves; the exporter path does.
+        capture_io = s.serving.observability.langfuse.capture_io
+        prompt = body.messages[-1].content if body.messages else ""
+        completion = ""
+        try:
+            completion = resp["choices"][0]["message"]["content"] or ""
+        except (KeyError, IndexError, TypeError):
+            completion = ""
         lf_url = export_trace(
             request_id=resp["id"], tenant_id=tenant, model=resp["model"],
             cost=resp["cost"], policy=resp["policy"], trace=resp["trace"],
-            application_id=tenant, app_langfuse=app_langfuse)
+            application_id=tenant, app_langfuse=app_langfuse,
+            capture_io=capture_io, prompt=prompt, completion=completion)
         # Live deep-link for the UI's "Langfuse trace" button (None when
         # telemetry is off → the UI hides it). Set before history.record so the
         # inspector's full detail carries it.
