@@ -204,7 +204,7 @@ def test_residency_filter_is_what_keeps_pii_onprem_not_provider_availability():
         now passes; this leaky version ignores it — the demo tenants carry no
         per-app policy row, so residency still comes from policy.yaml.)"""
         etypes = {e.type for e in entities}
-        rule = context_module._match_rule(settings, etypes)
+        rule = context_module._match_rule(settings.policy.sensitivity_rules, etypes)
         tenant = settings.policy.tenants.get(
             tenant_id, settings.policy.tenants["default"])
         residency = context_module._stricter(rule.residency, tenant.default_residency)
