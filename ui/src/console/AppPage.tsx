@@ -123,7 +123,11 @@ export function AppPage({ appId, onBack }: { appId: string; onBack: () => void }
         {tab === "requests" && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
             <RequestList requests={requests} selectedId={selectedId} onSelect={setSelectedId} />
-            <RequestDrilldown detail={selectedDetail} loading={detailLoading} />
+            <RequestDrilldown
+              detail={selectedDetail}
+              summary={requests.find((r) => r.id === selectedId) ?? null}
+              loading={detailLoading}
+            />
           </div>
         )}
         {tab === "settings" && <AppConfig appId={appId} key={appId} />}

@@ -44,6 +44,10 @@ class Entity(BaseModel):
     start: int
     end: int
     value: str  # never leaves the gate
+    # Optional confidence, set by CustomRecognizer so EffectiveDetector's dedupe
+    # can break same-span/same-length ties deterministically (highest wins).
+    # Built-in RegexDetector entities leave this None (longest-span-wins only).
+    score: float | None = None
 
 
 class ExecutionPolicyContext(BaseModel):
@@ -60,6 +64,11 @@ class ExecutionPolicyContext(BaseModel):
     require_verification: bool
     detected_entities: tuple[str, ...]  # TYPES only
     redaction_map_id: str | None
+    # Per-app Headroom (step 5) override, resolved at gate time so it travels
+    # with the request into BOTH the direct pipeline and the per-hop agent
+    # endpoint. None = inherit the live global co_cfg toggle; True/False =
+    # force compression on/off for this app. Safety bypasses still apply.
+    compression_override: bool | None = None
 
 
 class RejectedCandidate(BaseModel):

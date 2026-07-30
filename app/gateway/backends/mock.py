@@ -3,10 +3,8 @@ from __future__ import annotations
 import hashlib
 
 from app.config.schema import PriceCfg, Settings
-from app.gateway.backends.base import BackendHealth, count_tokens
+from app.gateway.backends.base import BackendHealth, count_tokens, seeded_latency_ms
 from app.models import GenerationResult, Message
-
-_LATENCY_MS = {"cheap": 200.0, "mid": 500.0, "frontier": 2000.0}
 
 
 class MockBackend:
@@ -28,7 +26,7 @@ class MockBackend:
         return GenerationResult(
             model=model, text=f"[mock:{model}] answer",
             tokens_in=tokens_in, tokens_out=tokens_out,
-            latency_ms=_LATENCY_MS.get(tier, 500.0), cost_usd=cost,
+            latency_ms=seeded_latency_ms(tier), cost_usd=cost,
             confidence=confidence)
 
     async def health(self) -> BackendHealth:

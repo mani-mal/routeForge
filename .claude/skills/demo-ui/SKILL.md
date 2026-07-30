@@ -54,11 +54,19 @@ Fed by the traffic generator, so numbers move while the room watches.
 ## Control panel
 
 Live controls that visibly change behaviour:
-- Cost-weight slider → watch traffic shift tiers. Best interactive moment in the demo.
 - **Headroom on/off toggle** → re-run the same request, watch token counts collapse.
-- Toggle providers on/off → watch the pool shrink.
 - Fire single scripted requests (clean / PII / multi-step / high-risk).
 - Start/stop traffic burst.
+
+**Deliberately NOT shipped** (tracked in `app/api/ui_routes.py` `_DEFERRED_CONTROLS`,
+surfaced in `GET /api/controls`):
+- *Cost-weight slider.* This router is **complexity/risk-tiered, not cost-tiered** — the
+  target tier is `max(complexity_tier, risk_floor, min_tier)`, then cheapest-within-tier.
+  A cost-weight slider wouldn't honestly shift tiers, so shipping one would be a demo lie.
+  If a truly cost-weighted score is ever added, the slider comes back with it.
+- *Provider on/off toggles.* The per-request `rejected[]` list already greys out excluded
+  providers with reasons (the privacy-story visual), so a manual pool toggle is redundant
+  and risks contradicting policy-driven exclusion.
 
 ## Design
 

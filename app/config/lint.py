@@ -2,6 +2,7 @@ import sys
 
 from app.config.loader import load_settings
 from app.config.schema import Settings
+from app.policy.enums import RESIDENCY as valid_residency
 
 
 class ConfigLintError(Exception):
@@ -41,7 +42,6 @@ def lint_settings(s: Settings) -> list[str]:
         if r.sensitivity not in scale:
             errs.append(f"RULE_SENSITIVITY_UNKNOWN {r.sensitivity}")
 
-    valid_residency = {"any", "private_cloud_ok", "onprem_only"}
     residency_values = [("rule", r.residency) for r in s.policy.sensitivity_rules]
     residency_values += [(f"tenant:{name}", t.default_residency)
                          for name, t in s.policy.tenants.items()]
@@ -70,6 +70,36 @@ def enforce(s: Settings) -> None:
         raise ConfigLintError(
             "observability.langfuse.redact_on_export must be true when langfuse is "
             "enabled (egress redaction is mandatory; see CLAUDE.md rule 2)")
+
+    # Eval-capture mode. Enum first (a typo must fail closed with a named
+    # violation, not silently behave as `off`).
+    _valid_capture = ("off", "redacted", "full")
+    if lf.capture_io not in _valid_capture:
+        raise ConfigLintError(
+            f"observability.langfuse.capture_io must be one of {_valid_capture}; "
+            f"got {lf.capture_io!r}")
+    # `full` writes RAW prompts/completions into telemetry — a second copy of
+    # sensitive data (CLAUDE.md rule 2/6). Residency beats eval convenience: if
+    # ANY tenant is onprem_only, that tenant's raw PHI would land in the (single,
+    # shared) Langfuse project, leaving the boundary. Reject at boot rather than
+    # leak silently. `redacted` is the eval-safe mode for a shared project.
+    if lf.enabled and lf.capture_io == "full":
+        onprem_tenants = sorted(
+            name for name, t in s.policy.tenants.items()
+            if t.default_residency == "onprem_only")
+        if onprem_tenants:
+            raise ConfigLintError(
+                "observability.langfuse.capture_io='full' captures RAW request I/O "
+                "into telemetry, but these tenants are onprem_only and would leave "
+                f"the residency boundary: {onprem_tenants}. Use 'redacted', or point "
+                "at a residency-local Langfuse with no onprem_only tenant "
+                "(CLAUDE.md rule 6 — residency beats the eval-capture convenience).")
+        # No onprem tenant, but raw capture is still on — make it loud.
+        import logging
+        logging.getLogger("serving.obs").warning(
+            "observability.langfuse.capture_io='full': RAW request/response I/O is "
+            "being written to Langfuse for eval. Ensure the target project is "
+            "residency-local and access-controlled with a retention TTL.")
 
     ccr = s.serving.context_optimization.ccr
     if ccr.enabled and ccr.residency != "local_only":

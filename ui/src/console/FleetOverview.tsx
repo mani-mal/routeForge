@@ -44,7 +44,11 @@ function joinRows(apps: AdminApp[], fleet: FleetRow[]): JoinedRow[] {
       onprem_count,
       latency_p50_ms: f?.latency_p50_ms ?? 0,
       tier_distribution: f?.tier_distribution ?? {},
-      warn: pii_count > 0 && onprem_count < pii_count,
+      // Warn ONLY on a genuine residency breach — a request that had to stay
+      // on-prem (onprem_only) but was served off-prem. Detecting *any* PII that
+      // wasn't kept local (the old rule) cried wolf on private_cloud_ok tenants
+      // carrying low-risk entities, which is compliant, not a leak.
+      warn: (f?.onprem_violations ?? 0) > 0,
     };
   });
 }
@@ -246,8 +250,8 @@ export function FleetOverview({ onOpenApp }: { onOpenApp: (appId: string) => voi
                 <TierMiniBar dist={row.tier_distribution} />
                 {row.warn ? (
                   <span
-                    className="text-amber-400"
-                    title="Sensitive traffic not all kept on-prem"
+                    className="text-frontier"
+                    title="Residency breach: a request that must stay on-prem was served off-prem"
                   >
                     ⚠
                   </span>

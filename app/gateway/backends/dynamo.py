@@ -26,13 +26,18 @@ from app.models import GenerationResult, Message
 class DynamoBackend:
     name = "dynamo"
 
-    def __init__(self, cfg: DynamoCfg, *, client: httpx.AsyncClient | None = None) -> None:
+    def __init__(self, cfg: DynamoCfg, *, client: httpx.AsyncClient | None = None,
+                 logprob_temperature: float = 1.0) -> None:
         self._cfg = cfg
+        # Confidence calibration (routing.confidence_logprob_temperature) — passed
+        # through to openai_generate; the factory wires the configured value.
+        self._logprob_temperature = logprob_temperature
         self._client = client or httpx.AsyncClient(base_url=cfg.endpoint, timeout=cfg.timeout_s)
 
     async def generate(self, model: str, messages: list[Message], price: PriceCfg,
                         tier: str, hint: dict) -> GenerationResult:
-        return await openai_generate(self._client, "v1/chat/completions", model, messages, price, tier)
+        return await openai_generate(self._client, "v1/chat/completions", model, messages,
+                                     price, tier, self._logprob_temperature)
 
     async def health(self) -> BackendHealth:
         return await openai_health(self._client, "v1/models")

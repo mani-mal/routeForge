@@ -36,8 +36,17 @@ def select_compressor(cfg: ContextOptimizationCfg) -> Compressor:
     return DeterministicCompressor()
 
 
+def _effective_enabled(cfg, ctx) -> bool:
+    """Per-app override wins over the live global toggle. None on the context
+    means 'inherit', so we fall back to the co_cfg the caller passed in — which
+    is the LIVE `app.state.co_cfg` on both the direct and per-hop paths, so the
+    inherit case still tracks a runtime POST /api/controls flip."""
+    override = getattr(ctx, "compression_override", None)
+    return cfg.enabled if override is None else override
+
+
 def _bypass(cfg, ctx, tokens_before) -> str | None:
-    if not cfg.enabled:
+    if not _effective_enabled(cfg, ctx):
         return "disabled"
     if cfg.bypass_on.high_risk and ctx.risk_class == "high":
         return "high_risk"
@@ -56,7 +65,7 @@ def compress(messages: list[Message], ctx: ExecutionPolicyContext,
 
     reason = _bypass(cfg, ctx, tokens_before)
     if reason is not None:
-        rec = CompressionRecord(enabled=cfg.enabled, applied=False,
+        rec = CompressionRecord(enabled=_effective_enabled(cfg, ctx), applied=False,
                                 bypass_reason=reason, tokens_before=tokens_before,
                                 tokens_after=tokens_before, reduction_pct=0.0,
                                 latency_ms=(time.monotonic() - t0) * 1000)
@@ -81,7 +90,7 @@ def compress(messages: list[Message], ctx: ExecutionPolicyContext,
             out.append(Message(role=m.role, content=compressed))
     except Exception:
         log.exception("compression failed; falling back to uncompressed")
-        rec = CompressionRecord(enabled=cfg.enabled, applied=False,
+        rec = CompressionRecord(enabled=_effective_enabled(cfg, ctx), applied=False,
                                 bypass_reason="compressor_error",
                                 tokens_before=tokens_before, tokens_after=tokens_before,
                                 compressor=None, latency_ms=(time.monotonic() - t0) * 1000)
@@ -92,7 +101,7 @@ def compress(messages: list[Message], ctx: ExecutionPolicyContext,
         0.0, (tokens_before - tokens_after) / tokens_before * 100)
     applied = tokens_after < tokens_before
     rec = CompressionRecord(
-        enabled=cfg.enabled, applied=applied,
+        enabled=_effective_enabled(cfg, ctx), applied=applied,
         bypass_reason=None if applied else "no_reduction",
         tokens_before=tokens_before, tokens_after=tokens_after,
         reduction_pct=round(reduction, 2),

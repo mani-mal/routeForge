@@ -17,6 +17,12 @@ _PATTERNS = {
 class Detector(Protocol):
     def analyze(self, text: str) -> list[Entity]: ...
     def anonymize(self, text: str, entities: list[Entity]) -> tuple[str, dict[str, str]]: ...
+    def warmup(self) -> None: ...
+
+
+# Exercises a recognizer and the NLP pipeline so lazy first-call loading happens
+# at boot, not on the first real request. Kept small and PII-shaped on purpose.
+_WARMUP_TEXT = "Warm up the analyzer: email a@b.co, ssn 123-45-6789."
 
 
 class RegexDetector:
@@ -52,6 +58,10 @@ class RegexDetector:
             redacted = redacted[:e.start] + ph + redacted[e.end:]
         return redacted, mapping
 
+    def warmup(self) -> None:
+        # Regex patterns compile at module import; nothing to warm.
+        return None
+
 
 class NullDetector:
     def analyze(self, text: str) -> list[Entity]:
@@ -59,6 +69,9 @@ class NullDetector:
 
     def anonymize(self, text: str, entities: list[Entity]) -> tuple[str, dict[str, str]]:
         return text, {}
+
+    def warmup(self) -> None:
+        return None
 
 
 class PresidioDetector:
@@ -76,6 +89,14 @@ class PresidioDetector:
     def anonymize(self, text: str, entities: list[Entity]) -> tuple[str, dict[str, str]]:
         # reuse the deterministic placeholder scheme for map symmetry
         return RegexDetector().anonymize(text, entities)
+
+    def warmup(self) -> None:
+        # AnalyzerEngine() (in __init__) loads the spaCy model, but the NLP
+        # pipeline and recognizer registry lazy-initialize on the FIRST analyze()
+        # call — that first call is what paid cold-start latency and occasionally
+        # tripped the fail-closed gate into a 503 on a demo's opening request.
+        # Run one throwaway analyze at boot so real traffic never pays it.
+        self.analyze(_WARMUP_TEXT)
 
 
 def make_detector(mode: str) -> Detector:

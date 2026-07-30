@@ -25,6 +25,7 @@ from fastapi.responses import StreamingResponse
 
 from app.agent.mock_agent import decide_agent_step
 from app.agent.openai_sse import sse_final, sse_tool_call
+from app.gateway.backends.base import seeded_latency_ms
 from app.models import CompressionRecord, DecisionRecord, ExecutionPolicyContext, Message
 
 # Hosts allowed to call the internal endpoint. Real self-calls come from the
@@ -146,10 +147,15 @@ async def internal_chat_completions(run_id: str, request: Request):
     decision = model_router.select(ctx, tokens_after, complexity, None)
 
     hop_index = HOPS.next_hop_index(run_id)
+    # Attribute the same per-tier modeled latency the direct path gets from the
+    # backend (MockBackend.generate) — this endpoint fakes the completion and
+    # never calls generate, so without this every agent_hop record carries 0 ms
+    # and multi-step requests report 0 ms total latency across the console.
     HOPS.record(run_id, DecisionRecord(
         step="agent_hop", chosen=decision.chosen.name,
         chosen_display_name=decision.chosen.display_name, reason=decision.reason,
         rejected=decision.rejected, est_cost_usd=decision.est_cost_usd,
+        latency_ms=seeded_latency_ms(decision.chosen.tier),
         hop_index=hop_index, tokens_priced=tokens_after))
     HOPS.record_compression(run_id, comp.record)
 

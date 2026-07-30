@@ -15,6 +15,9 @@ dependencies = [
   "aiosqlite>=0.20",
   # Password + token hashing for admin auth and API tokens.
   "argon2-cffi>=23.1",
+  # Custom regex recognizers (per-app privacy rules): per-match timeout=
+  # support for a ReDoS-safe matcher, which stdlib `re` lacks.
+  "regex>=2024.0.0",
 ]
 
 [dependency-groups]

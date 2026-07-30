@@ -78,8 +78,24 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
             raise HTTPException(429, "daily budget exceeded for this application")
 
     try:
+        # Per-app privacy profile (custom recognizers + sensitivity rules,
+        # Task 7), now cache-aware (Task 9): app.state.profile_cache is
+        # checked first; a miss loads from the DB and populates the cache so
+        # subsequent requests for the same app skip the DB round trip. The
+        # admin PUT (Task 10) calls cache.clear(app_id) on writes so edits
+        # take effect on the next request. A profile-load failure must not
+        # silently fall back to the base detector/global rules for a request
+        # an app has customized -- so this is inside the same try/except
+        # that already maps any non-PipelineRejected exception to a
+        # fail-closed 503 below.
+        cache = request.app.state.profile_cache
+        profile = cache.get(tenant)
+        if profile is None:
+            async with request.app.state.db.session() as session:
+                profile = await store.get_privacy_profile(session, tenant)
+            cache.put(tenant, profile)
         resp = await request.app.state.pipeline.run(
-            request_id, tenant, body, app_policy=app_policy)
+            request_id, tenant, body, app_policy=app_policy, profile=profile)
     except PipelineRejected as e:
         raise HTTPException(422, f"response failed verification: {e}")
     except HTTPException:
@@ -87,10 +103,28 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
     except Exception:
         raise HTTPException(503, "policy evaluation unavailable")
     try:
+        # Eval-capture (docs/eval-logging-backlog.md): when capture_io is
+        # redacted|full, attach the request prompt + response completion to the
+        # trace. `off` (demo default) passes empty strings and sets nothing.
+        # The raw body prompt is redacted inside export_trace for `redacted`
+        # mode — routes.py never decides what leaves; the exporter path does.
+        capture_io = s.serving.observability.langfuse.capture_io
+        prompt = body.messages[-1].content if body.messages else ""
+        completion = ""
+        try:
+            completion = resp["choices"][0]["message"]["content"] or ""
+        except (KeyError, IndexError, TypeError):
+            completion = ""
         lf_url = export_trace(
             request_id=resp["id"], tenant_id=tenant, model=resp["model"],
             cost=resp["cost"], policy=resp["policy"], trace=resp["trace"],
-            application_id=tenant, app_langfuse=app_langfuse)
+            application_id=tenant, app_langfuse=app_langfuse,
+            capture_io=capture_io, prompt=prompt, completion=completion,
+            # Task 8: thread the app's custom recognizers (already resolved
+            # above for the pipeline run, Task 7) into egress redaction so a
+            # custom entity type (e.g. a hospital's MRN pattern) is masked in
+            # telemetry, not just the built-in RegexDetector patterns.
+            recognizers=profile.recognizers)
         # Live deep-link for the UI's "Langfuse trace" button (None when
         # telemetry is off → the UI hides it). Set before history.record so the
         # inspector's full detail carries it.
@@ -106,7 +140,12 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
         if tier == "?":  # model not in the pool — surfaces as a "?" tier bucket
             logging.getLogger("serving.obs").debug(
                 "history: no tier for model %r (not in model_pool)", resp["model"])
-        summary = request.app.state.history.record(resp, tenant, tier)
+        # Serving provider of the chosen model — lets the fleet aggregate spot a
+        # genuine residency breach (an onprem_only request served off-prem), so
+        # the warning flags real violations, not merely any detected entity.
+        provider = next(
+            (c.provider for c in s.routing.model_pool if c.name == resp["model"]), "?")
+        summary = request.app.state.history.record(resp, tenant, tier, provider)
     except Exception:  # history must never break serving
         logging.getLogger("serving.obs").exception(
             "history.record failed (swallowed)")

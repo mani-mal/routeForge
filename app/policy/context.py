@@ -15,22 +15,28 @@ def _stricter(a: str, b: str) -> str:
     return a if _RESIDENCY_RANK[a] >= _RESIDENCY_RANK[b] else b
 
 
-def _match_rule(settings: Settings, etypes: set[str]):
-    # Rules are ordered most-to-least severe in policy.yaml; return the first whose
-    # entity set overlaps. Entity sets are disjoint today, so order only matters if a
-    # future entity type appears in more than one rule.
-    for rule in settings.policy.sensitivity_rules:
+def _match_rule(rules, etypes: set[str]):
+    # Rules are ordered most-to-least severe; return the first whose entity set
+    # overlaps. Entity sets are disjoint today, so order only matters if a future
+    # entity type appears in more than one rule. `rules` may be either the config
+    # SensitivityRule list (`.entities` is a list) or a list of SensitivityRuleView
+    # (`.entities` is a frozenset) -- `set(...)` normalizes both for the `&`.
+    for rule in rules:
         if rule.entities and etypes & set(rule.entities):
             return rule
-    return settings.policy.sensitivity_rules[-1]  # the public/empty rule
+    return rules[-1]  # the public/empty rule
 
 
 def build_context(settings: Settings, request_id: str, tenant_id: str,
                   entities: list[Entity], redaction_map_id: str | None,
-                  app_policy: "AppPolicyView | None" = None
+                  app_policy: "AppPolicyView | None" = None,
+                  app_rules: list | None = None,
                   ) -> ExecutionPolicyContext:
     etypes = {e.type for e in entities}
-    rule = _match_rule(settings, etypes)
+    if app_rules is not None:
+        rule = _match_rule(app_rules, etypes)
+    else:
+        rule = _match_rule(settings.policy.sensitivity_rules, etypes)
 
     # Residency: stricter of the entity rule and the application's own residency.
     # With a per-app policy we take residency from it (seeded to match
@@ -94,4 +100,6 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
         require_verification=rule.require_verification,
         detected_entities=tuple(sorted(etypes)),
         redaction_map_id=redaction_map_id,
+        compression_override=(app_policy.compression_enabled
+                              if app_policy is not None else None),
     )

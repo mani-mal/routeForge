@@ -35,6 +35,12 @@ def load_settings(config_dir: str = "config") -> Settings:
             enabled=lf_raw["enabled"],
             host=_expand_env(str(lf_raw["host"])),
             redact_on_export=lf_raw["redact_on_export"],
+            # SP_CAPTURE_IO overrides observability.langfuse.capture_io — same
+            # env-override pattern as SP_INFERENCE_BACKEND/SP_PII_DETECTION, so
+            # eval capture can be flipped per-deploy without editing the YAML.
+            capture_io=os.environ.get(
+                "SP_CAPTURE_IO",
+                _expand_env(str(lf_raw.get("capture_io", "off")))).strip().lower(),
             project_id=os.environ.get(
                 "LANGFUSE_PROJECT_ID",
                 _expand_env(str(lf_raw.get("project_id", "demo-project")))),

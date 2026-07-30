@@ -19,11 +19,14 @@ from app.models import GenerationResult, Message
 
 # Documented default confidence when the server doesn't return logprobs
 # (e.g. logprobs disabled server-side) -- a safe, non-committal signal.
+# Above confidence_escalation_threshold so a missing signal never escalates
+# (routing-and-gateway skill: "fail toward not spending more").
 DEFAULT_CONFIDENCE = 0.9
 
 
 async def openai_generate(client: httpx.AsyncClient, chat_path: str, model: str,
-                           messages: list[Message], price: PriceCfg, tier: str) -> GenerationResult:
+                           messages: list[Message], price: PriceCfg, tier: str,
+                           logprob_temperature: float = 1.0) -> GenerationResult:
     payload = {
         "model": model,
         "messages": [{"role": m.role, "content": m.content} for m in messages],
@@ -47,7 +50,13 @@ async def openai_generate(client: httpx.AsyncClient, chat_path: str, model: str,
     logprobs = (choice.get("logprobs") or {}).get("content")
     if logprobs:
         mean_logprob = sum(t["logprob"] for t in logprobs) / len(logprobs)
-        confidence = min(1.0, math.exp(mean_logprob))
+        # exp(mean_logprob) is the geometric-mean per-token probability, which
+        # sits ~0.4-0.6 for perfectly fluent text and would trip the escalation
+        # threshold on almost every answer. Soften by a configured temperature
+        # (routing.confidence_logprob_temperature) so only genuinely uncertain
+        # (high-perplexity) output escalates — see routeforge-router-targets-mid.
+        t = logprob_temperature if logprob_temperature > 0 else 1.0
+        confidence = min(1.0, math.exp(mean_logprob / t))
     else:
         confidence = DEFAULT_CONFIDENCE
 

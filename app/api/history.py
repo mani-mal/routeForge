@@ -17,6 +17,14 @@ from collections import deque
 
 from pydantic import BaseModel
 
+# Providers that keep a request inside the residency boundary. Anything else
+# serving an `onprem_only` request is a genuine Rule-3 breach (see CLAUDE.md #3).
+# `mock` is the demo local stand-in; `?`/`-`/`""` are unknown/placeholder and
+# never counted as a violation (fail toward not crying wolf — pool integrity is
+# the config lint's job, not this honesty counter's). Any concrete cloud
+# provider (azure, bedrock, …) is absent here and so correctly flags.
+_LOCAL_PROVIDERS = frozenset({"onprem", "mock", "?", "-", ""})
+
 
 class RequestSummary(BaseModel):
     id: str
@@ -26,6 +34,7 @@ class RequestSummary(BaseModel):
     model: str
     model_display: str
     tier: str
+    provider: str = "?"  # serving provider of the chosen model (onprem/azure/…)
     total_usd: float
     baseline_usd: float
     routing_saved_usd: float
@@ -51,7 +60,8 @@ class HistoryStore:
         self._full: dict[str, dict] = {}
         self._seq = 0
 
-    def record(self, resp: dict, tenant_id: str, tier: str) -> RequestSummary:
+    def record(self, resp: dict, tenant_id: str, tier: str,
+               provider: str = "?") -> RequestSummary:
         # Evict the oldest full-response entry in lockstep with the deque's
         # own eviction, so `_full` never outlives `_summaries`.
         if len(self._summaries) == self._capacity and self._summaries:
@@ -80,6 +90,7 @@ class HistoryStore:
             model=resp.get("model", "?"),
             model_display=resp.get("model_display", resp.get("model", "?")),
             tier=tier,
+            provider=provider,
             total_usd=float(cost.get("total_usd", 0.0)),
             baseline_usd=float(cost.get("baseline_usd", 0.0)),
             routing_saved_usd=float(cost.get("routing_saved_usd", 0.0)),
@@ -136,6 +147,13 @@ class HistoryStore:
                 "compression_saved_usd": sum(s.compression_saved_usd for s in items),
                 "onprem_count": sum(1 for s in items if s.onprem_only),
                 "pii_count": sum(1 for s in items if s.detected_entities),
+                # Genuine residency breach: a request that MUST stay on-prem
+                # (onprem_only — which already subsumes restricted entities)
+                # but was served by an off-prem provider. 0 by construction;
+                # >0 is a real alarm, unlike the old "any PII off-prem" heuristic.
+                "onprem_violations": sum(
+                    1 for s in items
+                    if s.onprem_only and s.provider not in _LOCAL_PROVIDERS),
                 "latency_p50_ms": statistics.median(lat) if lat else 0.0,
                 "tier_distribution": dict(tiers),
             })

@@ -104,6 +104,7 @@ export interface FleetRow {
   compression_saved_usd: number;
   onprem_count: number;
   pii_count: number;
+  onprem_violations: number; // onprem_only requests served off-prem — a real Rule-3 breach
   latency_p50_ms: number;
   tier_distribution: Record<string, number>;
 }
@@ -192,6 +193,7 @@ export interface AdminPolicy {
   residency: string | null;
   max_spend_usd_per_day: number | null;
   max_rpm: number | null;
+  compression_enabled: boolean | null;   // null = inherit global Headroom toggle
 }
 
 export interface AdminApp {
@@ -255,6 +257,50 @@ export const adminApi = {
     return fetch(`/admin/usage?${q.toString()}`, { credentials: "same-origin" }).then(j<UsageSummary>);
   },
 };
+
+// --- Per-app privacy rules (custom recognizers + sensitivity rules) --------
+// Backend: app/api/admin_routes.py — GET/PUT /admin/applications/{id}/privacy.
+
+export interface Recognizer {
+  name: string;
+  regex: string;
+  score: number;
+}
+
+export interface SensitivityRule {
+  entities: string[];
+  sensitivity: string;
+  risk_class: string;
+  residency: string;
+  require_verification: boolean;
+}
+
+export interface PrivacyProfile {
+  recognizers: Recognizer[];
+  rules: SensitivityRule[];
+}
+
+export async function getPrivacy(appId: string): Promise<PrivacyProfile> {
+  return fetch(`/admin/applications/${appId}/privacy`, { credentials: "same-origin" }).then(j<PrivacyProfile>);
+}
+
+// The backend's PUT handler only ever returns `{"ok": true}` on success — it
+// does not echo the stored profile. Callers must re-fetch via getPrivacy() to
+// see what was actually persisted (and, on Reset, the global-fallback rules
+// the server now serves).
+export async function putPrivacy(appId: string, profile: PrivacyProfile): Promise<void> {
+  const r = await fetch(`/admin/applications/${appId}/privacy`, opts("PUT", profile));
+  if (!r.ok) {
+    let detail = `${r.status} ${r.statusText}`;
+    try {
+      const body = await r.json();
+      if (body?.detail) detail = body.detail;
+    } catch {
+      /* non-JSON error body; keep the status line */
+    }
+    throw new Error(detail);
+  }
+}
 
 // The ten serving-plane steps, in order, for the flow visualizer. `caption` is
 // the one-line "what this step does", shown on the node and in the step inspector.

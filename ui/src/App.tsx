@@ -6,6 +6,7 @@ import { adminApi, subscribeStream } from "./api";
 import { AdminLogin } from "./admin/AdminLogin";
 import { ConsoleShell } from "./console/ConsoleShell";
 import { RouteForgeLogo, CdwMark, ThemeToggle } from "./components/BrandLogo";
+import { HeadroomToggle } from "./components/HeadroomToggle";
 import { useTheme } from "./theme";
 
 type Auth = "checking" | "in" | "out";
@@ -60,6 +61,7 @@ export default function App() {
             <span className={`h-2.5 w-2.5 rounded-full ${connected ? "bg-cheap" : "bg-gray-600"}`} />
             {connected ? "live" : "disconnected"}
           </span>
+          {auth === "in" && <HeadroomToggle />}
           <ThemeToggle theme={theme} onToggle={toggleTheme} />
           {auth === "in" && (
             <button onClick={handleLogout} className="text-xs text-gray-500 hover:text-gray-300">

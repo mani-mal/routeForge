@@ -17,6 +17,14 @@ class RoutingCfg(BaseModel):
     weights: dict[str, float]
     complexity_thresholds: dict[str, float]
     confidence_escalation_threshold: float
+    # Softening applied to a real backend's mean-token-logprob before it becomes
+    # a [0,1] confidence: confidence = exp(mean_logprob / T). T=1 is the raw
+    # geometric-mean token probability (systematically ~0.4-0.6 even for fluent
+    # answers, so it trips the escalation threshold on nearly every response —
+    # see routeforge-router-targets-mid). T>1 calibrates it so only genuinely
+    # high-perplexity answers fall below the threshold. Ignored by the mock
+    # backend (its confidence is seeded/persona-driven, not logprob-derived).
+    confidence_logprob_temperature: float = 1.0
     max_escalations: int
     risk_floors: dict[str, str]
     model_pool: list[PoolCandidate]
@@ -65,6 +73,15 @@ class LangfuseCfg(BaseModel):
     enabled: bool
     host: str  # in-cluster URL for OTLP export (e.g. http://langfuse-web:3000)
     redact_on_export: bool
+    # Eval-capture switch for request/response I/O attached to the serving.request
+    # root span (docs/eval-logging-backlog.md). `off` = today's behaviour (no I/O
+    # captured — the demo default, keeps rule 2 intact). `redacted` = attach
+    # redact()'d prompt/completion (entity VALUES masked to <TYPE>; structure kept,
+    # eval-usable, no raw PII). `full` = raw prompt/completion for eval — gated by
+    # the config lint to a residency-local Langfuse (rejected when any tenant is
+    # onprem_only; see app/config/lint.py) and NOT redacted on egress for the I/O
+    # keys (see app/obs/otel.py _capture_io_full). Owned here (observability infra).
+    capture_io: str = "off"  # off | redacted | full
     project_id: str = "demo-project"  # for building trace deep-link URLs for the UI
     # Browser-reachable Langfuse URL for the UI deep-link (e.g. a NodePort/ingress).
     # `host` is in-cluster and unreachable from the user's browser; when this is unset

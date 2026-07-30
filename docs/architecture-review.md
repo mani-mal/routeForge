@@ -20,13 +20,15 @@ forward-looking work is consolidated in the new **§4 — What still needs build
 **Current verdict.** The prototype is built and internally consistent. The privacy
 ordering (gate → compression → router), fail-closed defaults, post-compression
 pricing, and dual savings attribution are all implemented and enforced by tests and
-the config lint. Real-backend validation (§4.2) and the Langfuse deep-link (§4.7) — both
-open at the last revision — are now **done and verified live on the DGX**. What remains
-is **tuning and hardening**, not architecture: one demo-correctness bug (trivial
-questions land on the *mid* tier, not *cheap* — §4.1), Presidio warm-up to kill a
-first-request cold-start (§4.4, seen live as 1/80 transient 503s), the Dynamo/TensorRT
-path still unexercised on hardware (§4.2), and a short list of deliberately-deferred
-production concerns (§4.3, §4.5–§4.6). Nothing outstanding threatens the demo's honesty
+the config lint. Real-backend validation (§4.2), the Langfuse deep-link (§4.7), and the
+top demo-correctness bug (trivial questions landing on *mid*, not *cheap* — §4.1) — all
+open at earlier revisions — are now **done**: the first two verified live on the DGX,
+and §4.1 closed by the per-application privacy-rules feature demoting `LOCATION`/
+`DATE_TIME` in the seeded demo profiles. What remains is **tuning and hardening**, not
+architecture: Presidio warm-up to kill a first-request cold-start (§4.4, seen live as
+1/80 transient 503s), the Dynamo/TensorRT path still unexercised on hardware (§4.2), and
+a short list of deliberately-deferred production concerns (§4.3, §4.5–§4.6). Nothing
+outstanding threatens the demo's honesty
 claims.
 
 **Status legend:** ✅ resolved · 🟡 open (demo-relevant) · ⬜ deferred (production-track,
@@ -145,15 +147,32 @@ skill"). Auth/tenant-scoping is **not implemented** and is tracked as GreenLake 
 
 Architecture is done; this is the remaining work, most demo-relevant first.
 
-### 4.1 🟡 Trivial questions land on the *mid* tier, not *cheap* — top demo concern
+### 4.1 ✅ Trivial questions land on the *mid* tier, not *cheap* — closed by per-application privacy rules
 The demo's opening beat is "simple question → **cheap** local model → fractions of a
-cent." Today a clean public question routes to `local-32b` (**mid**) instead of
-`local-8b` (cheap) — visible in the current UI (a `public` request showing `local-32b`).
-The cause is complexity scoring pushing trivial prompts above
-`complexity_thresholds.cheap_max: 0.35`. **Fix options:** recalibrate the complexity
-scorer / raise `cheap_max`, or adjust the narrative. Until this is tuned, story beat #1
-undersells the routing lever. *(This is the single most important open item — it's the
-first thing a customer sees.)*
+cent." This was blocked because the *global* `config/policy.yaml` mapped `LOCATION` (with
+`DATE_TIME`, `PERSON`, `EMAIL_ADDRESS`, `PHONE_NUMBER`) → `confidential` →
+`risk_class: medium` → `risk_floors.medium: mid`, so "What is the capital of France?"
+floored to `local-32b` (mid) purely because Presidio tagged "France" as a `LOCATION`
+entity — complexity was already correctly `cheap`.
+
+**Fix shipped:** the per-application privacy-rules feature
+(`docs/superpowers/specs/2026-07-30-per-app-privacy-rules-design.md`) makes
+classification **per-app** instead of global-only. Each application can now carry its own
+custom recognizers and sensitivity-rule overrides (entity → sensitivity/risk/residency/
+require_verification), edited via the Settings-tab **Privacy rules** panel (§6) and
+enforced through an `EffectiveDetector` that both the gate (step 2) and output
+verification (step 9) consult, with a `_stricter`-only backstop so no rule can loosen a
+tenant's residency floor. The seeded demo profiles use this to close 4.1 directly: **RAG
+Agent** (`acme`) and **Support Agent** (`default`) demote `LOCATION` and `DATE_TIME` to
+`internal` / `low` / residency `any`, while `PERSON`/`EMAIL_ADDRESS`/`PHONE_NUMBER` and
+real PII (`US_SSN`, financial) stay `confidential`/`restricted` as before. With that
+demotion in place, "What is the capital of France?" on RAG or Support Agent no longer
+trips the medium risk floor and targets **cheap → local-8b**, landing the opening beat
+without weakening PII handling anywhere else. Hospital Agent (`hospital`) is unaffected —
+its `onprem_only` tenant default and new custom `MRN` recognizer (`restricted`/`high`/
+`onprem_only`) keep everything on-prem regardless of per-app rule edits, demonstrating the
+backstop. Covered by the router regression test (the "4.1 test") and the seeding tests
+that assert the demo apps get the expected profiles idempotently on first boot.
 
 ### 4.2 ✅ Real-backend validation on GPUs — done (vLLM, verified live 2026-07-25)
 The `vllm` and `dynamo` adapters (`app/gateway/backends/`, `make_backend` factory,
@@ -179,15 +198,15 @@ Presidio hiccup) — fail-closed working correctly, but a startup warm-up would 
 first/cold calls and remove the one-off error. Add a startup warm-up (the `regex`
 fallback already exists for air-gapped runs). Small polish, not blocking.
 
-### 4.5 ◆ Reconcile deferred UI controls with the skill/plan docs
-`BUILD_PLAN.md` Phase 6 and the `demo-ui` skill still call for a **cost-weight slider**
-("best interactive moment"). The build deliberately dropped it: the router is
+### 4.5 ✅ Reconcile deferred UI controls with the skill/plan docs — done (2026-07-30)
+`BUILD_PLAN.md` Phase 6 and the `demo-ui` skill used to call for a **cost-weight slider**
+("best interactive moment") the build deliberately dropped: the router is
 **complexity/risk-tiered, not cost-tiered**, so a cost slider wouldn't honestly shift
-tiers (see `_DEFERRED_CONTROLS` in `app/api/ui_routes.py`, surfaced to the user as the
-"coming later" note). Provider toggles were dropped for the same reason (the
-per-request `rejected[]` already greys exclusions). **Action:** update the `demo-ui`
-skill and `BUILD_PLAN.md` so they stop promising a control that won't ship — otherwise
-the next builder re-adds a dishonest slider.
+tiers (see `_DEFERRED_CONTROLS` in `app/api/ui_routes.py`, surfaced via `GET /api/controls`).
+Provider toggles were dropped for the same reason (the per-request `rejected[]` already
+greys exclusions). **Fixed:** both `BUILD_PLAN.md` Phase 6 and the `demo-ui` skill's
+Control panel now document these as deliberately-not-shipped, with the reason, so the next
+builder doesn't re-add a dishonest slider.
 
 ### 4.6 ◆ Production detokenization path (if ever needed)
 Per §2.1 — the demo returns placeholders by design. A production mode that re-inserts
@@ -219,9 +238,9 @@ mechanisms (separate savings levers, the critical assertions as tests, never-cut
 came through the build intact.
 
 The prototype is **demo-ready on both the mock backend and the real vLLM path** — the
-latter now validated end to end on the DGX (§4.2). The one thing standing between it and
-a clean run of the five-minute narrative is §4.1 — get trivial questions onto the cheap
-tier so the opening beat lands (still visible live: ~half the burst landed on *mid*).
-After that, the remaining work (§4.4 Presidio warm-up, the Dynamo/TensorRT path in §4.2,
-§4.3 stream auth, §4.5 doc reconciliation) is refinement and production-widening, not
-architecture.
+latter now validated end to end on the DGX (§4.2). §4.1, the one thing standing between
+it and a clean run of the five-minute narrative, is now closed: the per-application
+privacy-rules feature demotes `LOCATION`/`DATE_TIME` in the seeded demo profiles so the
+opening beat lands on the cheap tier. The remaining work (§4.4 Presidio warm-up, the
+Dynamo/TensorRT path in §4.2, §4.3 stream auth, §4.5 doc reconciliation) is refinement
+and production-widening, not architecture.

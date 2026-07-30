@@ -15,6 +15,8 @@ from app.apps import store
 from app.apps.admin_auth import SESSION_COOKIE, require_admin
 from app.apps.langfuse_provision import LangfuseProvisioner, encrypt_secret
 from app.apps.tokens import new_token
+from app.policy.enums import RESIDENCY, RISK_CLASS, SENSITIVITY
+from app.policy.recognizers import PRESIDIO_BUILTINS, validate_recognizer
 
 admin_router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -36,7 +38,8 @@ def _policy_dict(p) -> dict | None:
         return None
     return {"allowed_tiers": p.allowed_tiers, "allowed_providers": p.allowed_providers,
             "allowed_models": p.allowed_models, "residency": p.residency,
-            "max_spend_usd_per_day": p.max_spend_usd_per_day, "max_rpm": p.max_rpm}
+            "max_spend_usd_per_day": p.max_spend_usd_per_day, "max_rpm": p.max_rpm,
+            "compression_enabled": p.compression_enabled}
 
 
 def _app_dict(app, *, with_children: bool = True) -> dict:
@@ -79,10 +82,59 @@ class PolicyIn(BaseModel):
     residency: str | None = None
     max_spend_usd_per_day: float | None = None
     max_rpm: int | None = None
+    compression_enabled: bool | None = None   # None = inherit global Headroom toggle
 
 
 class TokenIn(BaseModel):
     name: str = "default"
+
+
+class RecognizerIn(BaseModel):
+    name: str
+    regex: str
+    score: float = 0.85
+    enabled: bool = True
+
+
+class RuleIn(BaseModel):
+    entities: list[str]
+    sensitivity: str
+    risk_class: str
+    residency: str
+    require_verification: bool = False
+
+
+class PrivacyProfileIn(BaseModel):
+    recognizers: list[RecognizerIn] = []
+    rules: list[RuleIn] = []
+
+
+def _validate_profile(body: PrivacyProfileIn) -> None:
+    """Whole-profile validation, run BEFORE any persistence. Raises ValueError
+    (caught by the caller -> 422) on the first violation found."""
+    if len(body.recognizers) > 32:
+        raise ValueError("too many recognizers (max 32)")
+    if len(body.rules) > 64:
+        raise ValueError("too many rules (max 64)")
+    names: set[str] = set()
+    for r in body.recognizers:
+        if not (0.0 <= r.score <= 1.0):
+            raise ValueError(f"recognizer {r.name!r} score {r.score!r} out of range [0.0, 1.0]")
+        validate_recognizer(r.name, r.regex)  # raises ValueError
+        if r.name in names:
+            raise ValueError(f"duplicate recognizer {r.name!r}")
+        names.add(r.name)
+    known = PRESIDIO_BUILTINS | names
+    for rule in body.rules:
+        if rule.sensitivity not in SENSITIVITY:
+            raise ValueError(f"bad sensitivity {rule.sensitivity!r}")
+        if rule.risk_class not in RISK_CLASS:
+            raise ValueError(f"bad risk_class {rule.risk_class!r}")
+        if rule.residency not in RESIDENCY:
+            raise ValueError(f"bad residency {rule.residency!r}")
+        for e in rule.entities:
+            if e not in known:
+                raise ValueError(f"unknown entity {e!r}")
 
 
 # --- auth endpoints ---------------------------------------------------------
@@ -233,3 +285,41 @@ async def usage(request: Request, application_id: str | None = None,
     async with request.app.state.db.session() as session:
         return await store.usage_summary(
             session, application_id=application_id, since=since)
+
+
+# --- per-app privacy profile (recognizers + sensitivity rules) --------------
+
+@admin_router.get("/applications/{app_id}/privacy")
+async def get_privacy(app_id: str, request: Request,
+                      _: str = Depends(require_admin)) -> dict:
+    async with request.app.state.db.session() as session:
+        if await store.get_application(session, app_id) is None:
+            raise HTTPException(404, "application not found")
+        prof = await store.get_privacy_profile(session, app_id)
+    return {
+        "recognizers": [{"name": r.name, "regex": r.pattern, "score": r.score}
+                        for r in prof.recognizers],
+        "rules": [{"entities": sorted(r.entities), "sensitivity": r.sensitivity,
+                   "risk_class": r.risk_class, "residency": r.residency,
+                   "require_verification": r.require_verification}
+                  for r in prof.rules],
+    }
+
+
+@admin_router.put("/applications/{app_id}/privacy")
+async def put_privacy(app_id: str, body: PrivacyProfileIn, request: Request,
+                      _: str = Depends(require_admin)) -> dict:
+    try:
+        _validate_profile(body)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    async with request.app.state.db.session() as session:
+        if await store.get_application(session, app_id) is None:
+            raise HTTPException(404, "application not found")
+        await store.replace_privacy_profile(
+            session, app_id,
+            recognizers=[r.model_dump() for r in body.recognizers],
+            rules=[r.model_dump() for r in body.rules])
+        await session.commit()
+    request.app.state.profile_cache.clear(app_id)
+    return {"ok": True}
