@@ -67,6 +67,7 @@ class CustomRecognizer:
     def __init__(self, name: str, pattern: str, score: float = 0.85) -> None:
         self.name = name
         self.score = score
+        self.pattern = pattern
         self._rx = regex.compile(pattern)
 
     def find(self, text: str) -> list[Entity]:
