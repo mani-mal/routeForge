@@ -119,7 +119,12 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
         if tier == "?":  # model not in the pool — surfaces as a "?" tier bucket
             logging.getLogger("serving.obs").debug(
                 "history: no tier for model %r (not in model_pool)", resp["model"])
-        summary = request.app.state.history.record(resp, tenant, tier)
+        # Serving provider of the chosen model — lets the fleet aggregate spot a
+        # genuine residency breach (an onprem_only request served off-prem), so
+        # the warning flags real violations, not merely any detected entity.
+        provider = next(
+            (c.provider for c in s.routing.model_pool if c.name == resp["model"]), "?")
+        summary = request.app.state.history.record(resp, tenant, tier, provider)
     except Exception:  # history must never break serving
         logging.getLogger("serving.obs").exception(
             "history.record failed (swallowed)")

@@ -104,6 +104,7 @@ export interface FleetRow {
   compression_saved_usd: number;
   onprem_count: number;
   pii_count: number;
+  onprem_violations: number; // onprem_only requests served off-prem — a real Rule-3 breach
   latency_p50_ms: number;
   tier_distribution: Record<string, number>;
 }

@@ -116,6 +116,52 @@ def test_fleet_groups_by_app():
     assert store.fleet()[0]["count"] >= store.fleet()[-1]["count"]  # sorted desc
 
 
+def test_fleet_onprem_violation_flags_only_real_breach():
+    """The fleet warning must fire only on a genuine residency breach — an
+    onprem_only request served off-prem — never on any detected entity. A
+    private_cloud_ok tenant carrying low-risk entities and served on (private)
+    cloud is compliant and must NOT be flagged (docs/ui-open-items.md #6)."""
+    from app.api.history import HistoryStore
+    store = HistoryStore()
+
+    def rec(id, tenant, onprem, provider, entities):
+        store.record({"id": id, "trace": [{"step": "router", "latency_ms": 10}],
+                      "cost": {"total_usd": 1.0, "baseline_usd": 3.0,
+                               "routing_saved_usd": 1.5, "compression_saved_usd": 0.5},
+                      "policy": {"onprem_only": onprem, "detected_entities": entities},
+                      "model": "m", "model_display": "M", "usage": {}},
+                     tenant, "cheap", provider)
+
+    # Acme: low-risk PII, cloud-eligible, served on (private) cloud — COMPLIANT.
+    rec("a1", "acme", False, "azure", ["LOCATION"])
+    rec("a2", "acme", False, "azure", ["DATE_TIME"])
+    # Hospital: onprem_only, served on-prem — COMPLIANT (kept local).
+    rec("h1", "hospital", True, "onprem", ["US_SSN"])
+    # A genuine breach: an onprem_only request served off-prem (bedrock).
+    rec("bad", "hospital", True, "bedrock", ["US_SSN"])
+
+    rows = {r["app"]: r for r in store.fleet()}
+    # Acme has PII but zero violations — the old heuristic wrongly warned here.
+    assert rows["acme"]["pii_count"] == 2
+    assert rows["acme"]["onprem_violations"] == 0
+    # Hospital: 2 onprem_only requests, exactly one escaped → one violation.
+    assert rows["hospital"]["onprem_count"] == 2
+    assert rows["hospital"]["onprem_violations"] == 1
+
+
+def test_fleet_unknown_provider_not_a_violation():
+    """A '?'/placeholder provider (model not in the pool) must not be counted
+    as a breach — pool integrity is the config lint's job, and we fail toward
+    not crying wolf."""
+    from app.api.history import HistoryStore
+    store = HistoryStore()
+    store.record({"id": "u1", "trace": [], "cost": {}, "model": "m",
+                  "model_display": "M", "usage": {},
+                  "policy": {"onprem_only": True, "detected_entities": ["US_SSN"]}},
+                 "hospital", "cheap")  # provider defaults to "?"
+    assert store.fleet()[0]["onprem_violations"] == 0
+
+
 def test_list_non_positive_limit_returns_empty():
     """Regression: the newest-first/early-break loop must not append before
     checking `limit`, or `limit=0` (a reachable `GET /api/requests?limit=0`)
