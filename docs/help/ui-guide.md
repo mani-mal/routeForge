@@ -325,6 +325,28 @@ sensitivity, residency, budgets) and **API tokens** (create / revoke; the full t
 shown once at creation, only its prefix thereafter). This is CRUD over `/admin/*`, not a
 read view.
 
+### 8a. Privacy rules
+
+`admin/PrivacyRulesEditor.tsx`, mounted below the policy/token fields on the Settings
+tab. Lets an owner override this **one application's** classification without touching
+the global `config/policy.yaml` — the same rules that both the policy gate (step 2) and
+output verification (step 9) consult for this app. Backed by
+`GET`/`PUT /admin/applications/{id}/privacy`.
+
+| Section | What it does |
+|---|---|
+| **Custom recognizers** | Add app-specific PII patterns: a **name** and a **regex** (plus a match-score field). These extend Presidio's built-in entity types with ones only this app cares about (e.g. an MRN pattern for a hospital app). |
+| **Sensitivity rules** | An ordered list — **first match wins** — mapping one or more **entities** (chips, built-in + this app's custom names) to a **sensitivity** (`public`/`internal`/`confidential`/`restricted`), **risk** (`low`/`medium`/`high`), **residency** (`any`/`private_cloud_ok`/`onprem_only`), and a **require verification** checkbox. Reorder rules with **↑/↓**; the order determines which rule fires for an entity. |
+| **Downgrade warning** | An amber banner appears whenever a rule maps a sensitive-looking entity (SSN, card, bank number, medical license, name, email, phone) to residency **"any"** — i.e. it would let that entity type leave on-prem. It only *flags* the deliberate downgrade; it does not block saving. A tenant's residency floor still can't be loosened underneath it — the backend only ever applies an app rule if it is **at least as strict** as the tenant default. |
+| **Test against sample text** | A client-side-only box: type or paste sample text and it highlights matches from the recognizers above, entirely in the browser. Nothing is sent to the server — it previews regexes, it does not query live redaction. |
+| **Save / Reset to global defaults** | **Save privacy rules** persists the recognizers + rules for this app. **Reset to global defaults** clears both lists so the app falls back to classifying exactly like the global `policy.yaml` (identical to an app with no profile at all). |
+
+No custom recognizers or rules means the app classifies with the global defaults only —
+the panel says so under each empty list. This is the mechanism behind
+architecture-review.md §4.1: the seeded RAG/Support Agent profiles demote `LOCATION`/
+`DATE_TIME` to `internal`/`low` so a casual place-name mention (e.g. "capital of France")
+no longer trips the medium risk floor and stays on the cheap tier.
+
 ---
 
 ## 9. Colour & label legend

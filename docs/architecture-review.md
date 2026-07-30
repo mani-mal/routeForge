@@ -20,13 +20,15 @@ forward-looking work is consolidated in the new **§4 — What still needs build
 **Current verdict.** The prototype is built and internally consistent. The privacy
 ordering (gate → compression → router), fail-closed defaults, post-compression
 pricing, and dual savings attribution are all implemented and enforced by tests and
-the config lint. Real-backend validation (§4.2) and the Langfuse deep-link (§4.7) — both
-open at the last revision — are now **done and verified live on the DGX**. What remains
-is **tuning and hardening**, not architecture: one demo-correctness bug (trivial
-questions land on the *mid* tier, not *cheap* — §4.1), Presidio warm-up to kill a
-first-request cold-start (§4.4, seen live as 1/80 transient 503s), the Dynamo/TensorRT
-path still unexercised on hardware (§4.2), and a short list of deliberately-deferred
-production concerns (§4.3, §4.5–§4.6). Nothing outstanding threatens the demo's honesty
+the config lint. Real-backend validation (§4.2), the Langfuse deep-link (§4.7), and the
+top demo-correctness bug (trivial questions landing on *mid*, not *cheap* — §4.1) — all
+open at earlier revisions — are now **done**: the first two verified live on the DGX,
+and §4.1 closed by the per-application privacy-rules feature demoting `LOCATION`/
+`DATE_TIME` in the seeded demo profiles. What remains is **tuning and hardening**, not
+architecture: Presidio warm-up to kill a first-request cold-start (§4.4, seen live as
+1/80 transient 503s), the Dynamo/TensorRT path still unexercised on hardware (§4.2), and
+a short list of deliberately-deferred production concerns (§4.3, §4.5–§4.6). Nothing
+outstanding threatens the demo's honesty
 claims.
 
 **Status legend:** ✅ resolved · 🟡 open (demo-relevant) · ⬜ deferred (production-track,
@@ -145,28 +147,32 @@ skill"). Auth/tenant-scoping is **not implemented** and is tracked as GreenLake 
 
 Architecture is done; this is the remaining work, most demo-relevant first.
 
-### 4.1 🟡 Trivial questions land on the *mid* tier, not *cheap* — top demo concern
+### 4.1 ✅ Trivial questions land on the *mid* tier, not *cheap* — closed by per-application privacy rules
 The demo's opening beat is "simple question → **cheap** local model → fractions of a
-cent." Today "What is the capital of France?" routes to `local-32b` (**mid**), rejecting
-`local-8b` (cheap) as "below target tier".
+cent." This was blocked because the *global* `config/policy.yaml` mapped `LOCATION` (with
+`DATE_TIME`, `PERSON`, `EMAIL_ADDRESS`, `PHONE_NUMBER`) → `confidential` →
+`risk_class: medium` → `risk_floors.medium: mid`, so "What is the capital of France?"
+floored to `local-32b` (mid) purely because Presidio tagged "France" as a `LOCATION`
+entity — complexity was already correctly `cheap`.
 
-**Root cause (re-diagnosed live on :0.5.0, 2026-07-30 — the earlier "complexity scoring /
-raise `cheap_max`" theory was wrong):** complexity is correctly `cheap` (0.0045) and there
-is **no** confidence escalation. Presidio tags **"France" as a `LOCATION` entity**, and
-`config/policy.yaml` maps `LOCATION` (with `DATE_TIME`, `PERSON`, `EMAIL_ADDRESS`,
-`PHONE_NUMBER`) → `confidential` → `risk_class: medium` → `risk_floors.medium: mid`. The
-risk floor, not complexity, forces the mid tier. Any prompt mentioning a place-name or a
-date is floored to mid. The same over-classification inflates Acme's "confidential" counts
-(`docs/demo-dashboard-notes.md`). Raising `cheap_max` would change nothing.
-
-**Fix options (a product/policy call — surfaced to the owner 2026-07-30):**
-(a) demote `LOCATION`/`DATE_TIME` to a low-risk bucket (`risk_class: low`, residency any) so
-casual place/date mentions stay cheap-eligible, while real PII (SSN, financial, and
-arguably PERSON/EMAIL/PHONE) stays `confidential` — fixes the cheap beat *and* the Acme
-over-count; (b) lower `risk_floors.medium` to `cheap` (broad — removes the floor for all
-confidential traffic); (c) change the demo's opening question to an entity-free one
-(narrative-only, leaves the over-classification in place). *(Single most important open
-item — first thing a customer sees.)*
+**Fix shipped:** the per-application privacy-rules feature
+(`docs/superpowers/specs/2026-07-30-per-app-privacy-rules-design.md`) makes
+classification **per-app** instead of global-only. Each application can now carry its own
+custom recognizers and sensitivity-rule overrides (entity → sensitivity/risk/residency/
+require_verification), edited via the Settings-tab **Privacy rules** panel (§6) and
+enforced through an `EffectiveDetector` that both the gate (step 2) and output
+verification (step 9) consult, with a `_stricter`-only backstop so no rule can loosen a
+tenant's residency floor. The seeded demo profiles use this to close 4.1 directly: **RAG
+Agent** (`acme`) and **Support Agent** (`default`) demote `LOCATION` and `DATE_TIME` to
+`internal` / `low` / residency `any`, while `PERSON`/`EMAIL_ADDRESS`/`PHONE_NUMBER` and
+real PII (`US_SSN`, financial) stay `confidential`/`restricted` as before. With that
+demotion in place, "What is the capital of France?" on RAG or Support Agent no longer
+trips the medium risk floor and targets **cheap → local-8b**, landing the opening beat
+without weakening PII handling anywhere else. Hospital Agent (`hospital`) is unaffected —
+its `onprem_only` tenant default and new custom `MRN` recognizer (`restricted`/`high`/
+`onprem_only`) keep everything on-prem regardless of per-app rule edits, demonstrating the
+backstop. Covered by the router regression test (the "4.1 test") and the seeding tests
+that assert the demo apps get the expected profiles idempotently on first boot.
 
 ### 4.2 ✅ Real-backend validation on GPUs — done (vLLM, verified live 2026-07-25)
 The `vllm` and `dynamo` adapters (`app/gateway/backends/`, `make_backend` factory,
@@ -232,9 +238,9 @@ mechanisms (separate savings levers, the critical assertions as tests, never-cut
 came through the build intact.
 
 The prototype is **demo-ready on both the mock backend and the real vLLM path** — the
-latter now validated end to end on the DGX (§4.2). The one thing standing between it and
-a clean run of the five-minute narrative is §4.1 — get trivial questions onto the cheap
-tier so the opening beat lands (still visible live: ~half the burst landed on *mid*).
-After that, the remaining work (§4.4 Presidio warm-up, the Dynamo/TensorRT path in §4.2,
-§4.3 stream auth, §4.5 doc reconciliation) is refinement and production-widening, not
-architecture.
+latter now validated end to end on the DGX (§4.2). §4.1, the one thing standing between
+it and a clean run of the five-minute narrative, is now closed: the per-application
+privacy-rules feature demotes `LOCATION`/`DATE_TIME` in the seeded demo profiles so the
+opening beat lands on the cheap tier. The remaining work (§4.4 Presidio warm-up, the
+Dynamo/TensorRT path in §4.2, §4.3 stream auth, §4.5 doc reconciliation) is refinement
+and production-widening, not architecture.
