@@ -78,8 +78,16 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
             raise HTTPException(429, "daily budget exceeded for this application")
 
     try:
+        # Per-app privacy profile (custom recognizers + sensitivity rules,
+        # Task 7): resolved fresh per request until Task 9 adds a cache. A
+        # profile-load failure must not silently fall back to the base
+        # detector/global rules for a request an app has customized -- so
+        # this is inside the same try/except that already maps any
+        # non-PipelineRejected exception to a fail-closed 503 below.
+        async with request.app.state.db.session() as session:
+            profile = await store.get_privacy_profile(session, tenant)
         resp = await request.app.state.pipeline.run(
-            request_id, tenant, body, app_policy=app_policy)
+            request_id, tenant, body, app_policy=app_policy, profile=profile)
     except PipelineRejected as e:
         raise HTTPException(422, f"response failed verification: {e}")
     except HTTPException:

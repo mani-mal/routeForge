@@ -10,7 +10,9 @@ from app.models import (
 )
 from app.output.verify import verify
 from app.policy.detectors import Detector
+from app.policy.effective import EffectiveDetector
 from app.policy.gate import Gate
+from app.apps.privacy import AppPrivacyProfile, effective_rules
 from app.compression import compress
 from app.compression.ccr import CCRStore
 from app.routing.task_mode import decide as decide_mode
@@ -60,9 +62,22 @@ class Pipeline:
         return model_slug
 
     async def run(self, request_id: str, tenant_id: str,
-                  request: ChatRequest, app_policy=None) -> dict:
+                  request: ChatRequest, app_policy=None,
+                  profile: AppPrivacyProfile | None = None) -> dict:
+        # Per-app effective detector + rules (Task 7): when the caller supplies
+        # the app's privacy profile, layer its custom recognizers on top of the
+        # base detector and use its resolved sensitivity rules for BOTH
+        # classification (the gate) and egress verification (verify(), both
+        # call sites below) -- a custom entity type the base detector can't
+        # see must not silently skip the output leakage check either.
+        if profile is not None:
+            det = EffectiveDetector(self._detector, list(profile.recognizers))
+            rules = effective_rules(profile, self._s)
+        else:
+            det, rules = self._detector, None
         ctx, sanitized, _map = self._gate.evaluate(
-            request_id, tenant_id, request, app_policy=app_policy)
+            request_id, tenant_id, request, app_policy=app_policy,
+            detector=det, rules=rules)
         # NOTE: task-mode is a rules-only stub today. If a real LLM classifier replaces it,
         # it must receive SANITIZED content (not the raw request) — see CLAUDE.md.
         mode = decide_mode(ctx, request)
@@ -76,7 +91,7 @@ class Pipeline:
             # work and its tokens_after would not reflect the real per-hop
             # pricing basis. san_messages (sanitized, not yet compressed)
             # still goes to the agent — each hop compresses its own view.
-            return await self._run_multi_step(request_id, ctx, request, san_messages)
+            return await self._run_multi_step(request_id, ctx, request, san_messages, det)
 
         comp = compress(san_messages, ctx, self._co_cfg_provider(), ccr=self._ccr)
         complexity = min(1.0, comp.tokens_after / 2000)
@@ -86,7 +101,7 @@ class Pipeline:
         result, records = await self._gateway.run(
             ctx, comp.messages, comp.tokens_after, complexity, hint)
 
-        text, vrec = verify(self._detector, ctx, result.text)
+        text, vrec = verify(det, ctx, result.text)
         if not vrec.passed:
             raise PipelineRejected(vrec.reason)
 
@@ -135,7 +150,8 @@ class Pipeline:
         }
 
     async def _run_multi_step(self, request_id: str, ctx: ExecutionPolicyContext,
-                              request: ChatRequest, san_messages: list[Message]) -> dict:
+                              request: ChatRequest, san_messages: list[Message],
+                              det: Detector) -> dict:
         # Lazy import: nat is an optional extra; importing app.pipeline must not
         # require it to be installed (mirrors app/agent/runtime.py's own lazy
         # import of the nat package itself).
@@ -151,7 +167,7 @@ class Pipeline:
         # non-PipelineRejected exception to a handled error response.
         result = await agent_run(ctx, sanitized_request, port=self._self_port)
 
-        text, vrec = verify(self._detector, ctx, result.text)
+        text, vrec = verify(det, ctx, result.text)
         if not vrec.passed:
             raise PipelineRejected(vrec.reason)
 
