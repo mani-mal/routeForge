@@ -157,6 +157,66 @@ def test_put_never_persists_on_validation_failure(client):
     assert got["recognizers"][0]["name"] == "MRN"
 
 
+def test_put_rejects_too_many_recognizers(client):
+    """Spec §5: caps on number of recognizers/rules per app. >32 recognizers -> 422."""
+    _login(client)
+    _make_app(client, "toomanyrecog")
+    body = {
+        "recognizers": [
+            {"name": f"REC{i}", "regex": r"\d+"} for i in range(33)
+        ],
+        "rules": [],
+    }
+    r = client.put("/admin/applications/toomanyrecog/privacy", json=body)
+    assert r.status_code == 422
+
+
+def test_put_rejects_too_many_rules(client):
+    """Spec §5: caps on number of recognizers/rules per app. >64 rules -> 422."""
+    _login(client)
+    _make_app(client, "toomanyrules")
+    body = {
+        "recognizers": [],
+        "rules": [
+            {"entities": [], "sensitivity": "public", "risk_class": "low",
+             "residency": "any"} for _ in range(65)
+        ],
+    }
+    r = client.put("/admin/applications/toomanyrules/privacy", json=body)
+    assert r.status_code == 422
+
+
+def test_put_rejects_out_of_range_score(client):
+    _login(client)
+    _make_app(client, "badscorehigh")
+    _make_app(client, "badscorelow")
+    body_high = {"recognizers": [{"name": "MRN", "regex": r"\d+", "score": 1.5}], "rules": []}
+    r = client.put("/admin/applications/badscorehigh/privacy", json=body_high)
+    assert r.status_code == 422
+
+    body_low = {"recognizers": [{"name": "MRN", "regex": r"\d+", "score": -0.1}], "rules": []}
+    r = client.put("/admin/applications/badscorelow/privacy", json=body_low)
+    assert r.status_code == 422
+
+
+def test_put_accepts_boundary_caps_and_scores(client):
+    """32 recognizers / 64 rules / score 1.0 and 0.0 are all still valid (inclusive bounds)."""
+    _login(client)
+    _make_app(client, "boundaryapp")
+    recognizers = [
+        {"name": f"REC{i}", "regex": r"\d+",
+         "score": 1.0 if i % 2 == 0 else 0.0}
+        for i in range(32)
+    ]
+    rules = [
+        {"entities": [], "sensitivity": "public", "risk_class": "low", "residency": "any"}
+        for _ in range(64)
+    ]
+    body = {"recognizers": recognizers, "rules": rules}
+    r = client.put("/admin/applications/boundaryapp/privacy", json=body)
+    assert r.status_code == 200
+
+
 def test_put_clears_profile_cache(client):
     _login(client)
     _make_app(client, "cacheapp")

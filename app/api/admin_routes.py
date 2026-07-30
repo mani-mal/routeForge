@@ -112,8 +112,14 @@ class PrivacyProfileIn(BaseModel):
 def _validate_profile(body: PrivacyProfileIn) -> None:
     """Whole-profile validation, run BEFORE any persistence. Raises ValueError
     (caught by the caller -> 422) on the first violation found."""
+    if len(body.recognizers) > 32:
+        raise ValueError("too many recognizers (max 32)")
+    if len(body.rules) > 64:
+        raise ValueError("too many rules (max 64)")
     names: set[str] = set()
     for r in body.recognizers:
+        if not (0.0 <= r.score <= 1.0):
+            raise ValueError(f"recognizer {r.name!r} score {r.score!r} out of range [0.0, 1.0]")
         validate_recognizer(r.name, r.regex)  # raises ValueError
         if r.name in names:
             raise ValueError(f"duplicate recognizer {r.name!r}")
