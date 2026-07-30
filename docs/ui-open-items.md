@@ -6,7 +6,23 @@ region currently behaves.
 
 ---
 
-## 1. Redesign the "What happened" summary band  ← current focus
+## 1. Redesign the "What happened" summary band — DONE (code; pending deploy)
+
+**Built 2026-07-30.** Replaced the run-on sentence in `PlainSummary`
+(`ui/src/console/RequestDrilldown.tsx`) with labelled **outcome cards**: two
+"story" cards (Privacy, Model) each carry an icon, a bold verdict, and a one-line
+plain-language *why*, plus a compact trio (Verification, Cost, Latency). A
+colour-coded left accent encodes each verdict's meaning — green = cloud-eligible /
+verified clean, amber = sensitive-but-kept-on-prem (a WIN, not an error, so neither
+green nor red), red = verification flagged, tier colour on the Model card. The Model
+card's *why* now states the routing rationale ("cheapest model in the {tier} tier —
+the lowest tier that met this task's risk bar"), so "cloud-eligible but ran local"
+stops looking contradictory. Cost uses `formatUsdPrecise` (kills "$0.0000"); latency
+sums per-hop (item 3). `AppPage` now passes the request's `RequestSummary` down so the
+Model card can name the tier. Honesty rules kept: entity **types** only, no raw PII, no
+CCR. The `ProviderStrip` (greyed excluded providers) is retained below the cards.
+
+<details><summary>original write-up (the problem this solved)</summary>
 
 **Where:** request drill-down, top band (`ui/src/console/RequestDrilldown.tsx` →
 `PlainSummary`).
@@ -46,6 +62,8 @@ region currently behaves.
   it. Honesty rules unchanged: entity **types** only, no raw PII, no CCR contents.
 - Use the `frontend-design` skill and the `demo-ui` skill constraints when building.
 
+</details>
+
 ---
 
 ## 2. No Headroom (compression) toggle in the console — DONE (per-app :0.3.0, global :0.4.0)
@@ -84,16 +102,21 @@ and the "What happened" sentence. In the working tree, not yet on the live image
 (`ui/src/console/sections/CostSection.tsx`) so it no longer reads as related to the
 mid-tier dot `#3b82f6`. In the working tree, not yet on the live image.
 
-## 6. Fleet ⚠️ "sensitive traffic not all kept on-prem" is over-eager
+## 6. Fleet ⚠️ "sensitive traffic not all kept on-prem" is over-eager — DONE (code; pending deploy)
 
-The per-app warning fires on `pii_count > 0 && onprem_count < pii_count`
-(`ui/src/console/FleetOverview.tsx:47`), so a `private_cloud_ok` tenant carrying only
-`confidential` entities (e.g. Acme: LOCATION/DATE_TIME from innocuous questions → 161 PII,
-0 on-prem) warns even though sending redacted low-risk PII to (private) cloud is
-**policy-compliant**, not a leak. It conflates "any PII entity detected" with "must be
-on-prem", and undersells the nuanced-routing story. Fix = flag only a genuine residency
-violation: a request classified **`restricted`/`onprem_only`** that went off-prem — not
-every detected entity. Needs the per-request sensitivity/residency (not just
-`pii_count`/`onprem_count`) surfaced to the fleet aggregate (`ui/src/console/aggregate.ts`,
-`FleetOverview.tsx`). Full explanation in `docs/demo-dashboard-notes.md`. Left as-is on
-purpose for now.
+**Fixed 2026-07-30.** The warning now fires only on a genuine residency breach — an
+`onprem_only` request served **off-prem** — instead of the old
+`pii_count > 0 && onprem_count < pii_count`, which conflated "any PII entity detected"
+with "must be on-prem" and cried wolf on `private_cloud_ok` tenants (Acme: 161 low-risk
+PII, 0 on-prem → wrongly warned).
+
+Implementation: `HistoryStore.RequestSummary` gained a `provider` field (the chosen
+model's serving provider, computed in `routes.py` and threaded through `history.record`);
+`fleet()` now emits `onprem_violations = count(onprem_only AND provider ∉ local set)`
+where local = `{onprem, mock, ?, -, ""}` (unknown never counts — pool integrity is the
+config lint's job). `FleetOverview.warn = onprem_violations > 0`, and the glyph is now
+`text-frontier` (red) with a "Residency breach" tooltip, since it's a real alarm, not a
+soft nudge. `onprem_only` requests can't reach cloud by construction (Rule 3), so this is
+0 in the demo — the point is it no longer misfires, and it *would* catch a real leak.
+Covered by `tests/test_history_store.py::test_fleet_onprem_violation_flags_only_real_breach`
+and `::test_fleet_unknown_provider_not_a_violation`.
