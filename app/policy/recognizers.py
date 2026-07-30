@@ -74,7 +74,7 @@ class CustomRecognizer:
         try:
             for m in self._rx.finditer(text, timeout=_MATCH_TIMEOUT_S):
                 out.append(Entity(type=self.name, start=m.start(), end=m.end(),
-                                  value=m.group()))
+                                  value=m.group(), score=self.score))
         except TimeoutError as e:
             raise RecognizerTimeout(self.name) from e
         return out

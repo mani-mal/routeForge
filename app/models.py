@@ -44,6 +44,10 @@ class Entity(BaseModel):
     start: int
     end: int
     value: str  # never leaves the gate
+    # Optional confidence, set by CustomRecognizer so EffectiveDetector's dedupe
+    # can break same-span/same-length ties deterministically (highest wins).
+    # Built-in RegexDetector entities leave this None (longest-span-wins only).
+    score: float | None = None
 
 
 class ExecutionPolicyContext(BaseModel):
