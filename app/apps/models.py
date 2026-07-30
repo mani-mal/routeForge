@@ -21,6 +21,7 @@ from sqlalchemy import (
     Integer,
     LargeBinary,
     String,
+    Text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -56,6 +57,10 @@ class Application(Base):
         back_populates="application", cascade="all, delete-orphan")
     policy: Mapped["AppPolicy | None"] = relationship(
         back_populates="application", uselist=False, cascade="all, delete-orphan")
+    recognizers: Mapped[list["AppRecognizer"]] = relationship(
+        cascade="all, delete-orphan")
+    sensitivity_rules: Mapped[list["AppSensitivityRule"]] = relationship(
+        cascade="all, delete-orphan")
 
 
 class AppToken(Base):
@@ -103,6 +108,33 @@ class AppPolicy(Base):
     compression_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
     application: Mapped[Application] = relationship(back_populates="policy")
+
+
+class AppRecognizer(Base):
+    """A customer-defined entity recognizer: a named regex whose matches are
+    tagged with `name` (a custom entity type) and fed into classification."""
+    __tablename__ = "app_recognizers"
+    application_id: Mapped[str] = mapped_column(
+        ForeignKey("applications.id", ondelete="CASCADE"), primary_key=True)
+    name: Mapped[str] = mapped_column(String(32), primary_key=True)
+    regex: Mapped[str] = mapped_column(Text)
+    score: Mapped[float] = mapped_column(Float, default=0.85)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class AppSensitivityRule(Base):
+    """Per-app classification rule. `position` orders rules most-severe-first,
+    mirroring config/policy.yaml. Overrides the global sensitivity_rules for
+    this application when any row exists."""
+    __tablename__ = "app_sensitivity_rules"
+    application_id: Mapped[str] = mapped_column(
+        ForeignKey("applications.id", ondelete="CASCADE"), primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    entities: Mapped[list] = mapped_column(JSON)
+    sensitivity: Mapped[str] = mapped_column(String(16))
+    risk_class: Mapped[str] = mapped_column(String(8))
+    residency: Mapped[str] = mapped_column(String(24))
+    require_verification: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class UsageRecord(Base):
