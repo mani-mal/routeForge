@@ -79,13 +79,21 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
 
     try:
         # Per-app privacy profile (custom recognizers + sensitivity rules,
-        # Task 7): resolved fresh per request until Task 9 adds a cache. A
-        # profile-load failure must not silently fall back to the base
-        # detector/global rules for a request an app has customized -- so
-        # this is inside the same try/except that already maps any
-        # non-PipelineRejected exception to a fail-closed 503 below.
-        async with request.app.state.db.session() as session:
-            profile = await store.get_privacy_profile(session, tenant)
+        # Task 7), now cache-aware (Task 9): app.state.profile_cache is
+        # checked first; a miss loads from the DB and populates the cache so
+        # subsequent requests for the same app skip the DB round trip. The
+        # admin PUT (Task 10) calls cache.clear(app_id) on writes so edits
+        # take effect on the next request. A profile-load failure must not
+        # silently fall back to the base detector/global rules for a request
+        # an app has customized -- so this is inside the same try/except
+        # that already maps any non-PipelineRejected exception to a
+        # fail-closed 503 below.
+        cache = request.app.state.profile_cache
+        profile = cache.get(tenant)
+        if profile is None:
+            async with request.app.state.db.session() as session:
+                profile = await store.get_privacy_profile(session, tenant)
+            cache.put(tenant, profile)
         resp = await request.app.state.pipeline.run(
             request_id, tenant, body, app_policy=app_policy, profile=profile)
     except PipelineRejected as e:

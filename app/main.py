@@ -78,6 +78,11 @@ def create_app() -> FastAPI:
     app.state.db = Database(seed=seed_all)
     # Per-application rate limiter (in-memory sliding window; spec 2026-07-25).
     app.state.rate_limiter = RateLimiter()
+    # Per-app privacy profile cache (Task 9): in-memory, single-node, cleared
+    # on the admin PUT (Task 10). routes.py reads it before pipeline.run;
+    # a miss loads from the DB and populates it. See app/apps/privacy.py.
+    from app.apps.privacy import ProfileCache
+    app.state.profile_cache = ProfileCache()
     # Admin dashboard sessions (in-memory; single-node, admin-only).
     app.state.admin_sessions = SessionStore()
     gate = Gate(settings, detector)
