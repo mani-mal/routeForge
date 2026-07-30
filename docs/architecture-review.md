@@ -179,15 +179,15 @@ Presidio hiccup) — fail-closed working correctly, but a startup warm-up would 
 first/cold calls and remove the one-off error. Add a startup warm-up (the `regex`
 fallback already exists for air-gapped runs). Small polish, not blocking.
 
-### 4.5 ◆ Reconcile deferred UI controls with the skill/plan docs
-`BUILD_PLAN.md` Phase 6 and the `demo-ui` skill still call for a **cost-weight slider**
-("best interactive moment"). The build deliberately dropped it: the router is
+### 4.5 ✅ Reconcile deferred UI controls with the skill/plan docs — done (2026-07-30)
+`BUILD_PLAN.md` Phase 6 and the `demo-ui` skill used to call for a **cost-weight slider**
+("best interactive moment") the build deliberately dropped: the router is
 **complexity/risk-tiered, not cost-tiered**, so a cost slider wouldn't honestly shift
-tiers (see `_DEFERRED_CONTROLS` in `app/api/ui_routes.py`, surfaced to the user as the
-"coming later" note). Provider toggles were dropped for the same reason (the
-per-request `rejected[]` already greys exclusions). **Action:** update the `demo-ui`
-skill and `BUILD_PLAN.md` so they stop promising a control that won't ship — otherwise
-the next builder re-adds a dishonest slider.
+tiers (see `_DEFERRED_CONTROLS` in `app/api/ui_routes.py`, surfaced via `GET /api/controls`).
+Provider toggles were dropped for the same reason (the per-request `rejected[]` already
+greys exclusions). **Fixed:** both `BUILD_PLAN.md` Phase 6 and the `demo-ui` skill's
+Control panel now document these as deliberately-not-shipped, with the reason, so the next
+builder doesn't re-add a dishonest slider.
 
 ### 4.6 ◆ Production detokenization path (if ever needed)
 Per §2.1 — the demo returns placeholders by design. A production mode that re-inserts

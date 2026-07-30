@@ -54,8 +54,11 @@ reaches Langfuse.
 
 ## Phase 6 — UI (6h) — *skill: demo-ui*
 Flow visualizer with SSE/WebSocket streaming, decision inspector, cost dashboard with
-**routing vs compression savings split**, control panel with cost-weight slider and
-Headroom toggle.
+**routing vs compression savings split**, control panel with the Headroom toggle.
+(The cost-weight slider and provider toggles were **deliberately dropped** — this router
+is complexity/risk-tiered, not cost-tiered, so a cost slider wouldn't honestly shift
+tiers, and per-request `rejected[]` already greys excluded providers. See
+`_DEFERRED_CONTROLS` in `app/api/ui_routes.py` and the demo-ui skill's Control panel.)
 **Verify:** PII request visibly greys out cloud providers; multi-step visibly loops;
 compression A/B is one click.
 
