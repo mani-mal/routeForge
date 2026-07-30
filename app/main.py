@@ -59,6 +59,16 @@ def create_app() -> FastAPI:
         logging.getLogger("serving.obs").exception(
             "init_tracing failed (swallowed); telemetry disabled")
     detector = make_detector(settings.serving.pii_detection)
+    # Force the detector's lazy first-call loading (spaCy pipeline + recognizer
+    # registry for Presidio) at boot, so the demo's opening request doesn't pay
+    # cold-start latency — which was observed tripping the fail-closed gate into a
+    # one-off 503 on the first live call. Non-fatal: the gate is fail-closed and
+    # the regex fallback exists, so a warmup hiccup must never block serving.
+    try:
+        detector.warmup()
+    except Exception:
+        logging.getLogger("serving.policy").exception(
+            "detector warmup failed (swallowed); first request may pay cold-start")
     app = FastAPI(title="Serving Plane", version="0.1.0")
     app.state.settings = settings
     # Multi-tenant application/token/usage store (spec 2026-07-25). The engine

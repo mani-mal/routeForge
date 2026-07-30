@@ -1,6 +1,6 @@
 import pytest
 
-from app.policy.detectors import RegexDetector, make_detector
+from app.policy.detectors import NullDetector, RegexDetector, make_detector
 
 # The SSN used across the demo and this suite. It must be detectable by EVERY
 # configured detector, not just the regex one the tests happen to run on.
@@ -78,3 +78,36 @@ def test_presidio_blocklists_sample_ssns():
     assert not any(e.type == "US_SSN" for e in ents), (
         "Presidio now flags sample SSNs; fake_ssn's constraints can be relaxed"
     )
+
+
+# --- warmup (startup cold-start avoidance) ---------------------------------
+# create_app() calls detector.warmup() at boot so the demo's first request
+# doesn't pay Presidio's lazy first-call latency (which was observed tripping
+# the fail-closed gate into a one-off 503). Warmup must be a safe no-op on the
+# lightweight detectors and must not perturb subsequent analyze().
+
+
+@pytest.mark.parametrize("detector", ["regex", "off"])
+def test_warmup_is_a_harmless_noop_on_light_detectors(detector):
+    d = make_detector(detector)
+    assert d.warmup() is None
+    # still fully functional afterward
+    d.analyze(f"my ssn is {DEMO_SSN}")
+
+
+def test_every_detector_exposes_warmup():
+    for d in (RegexDetector(), NullDetector()):
+        assert callable(getattr(d, "warmup", None))
+
+
+def test_presidio_warmup_runs_and_leaves_analyze_working():
+    """Warmup must not raise and must not change detection behaviour.
+
+    Runs only where the presidio extra is installed (image + DGX have it).
+    """
+    pytest.importorskip("presidio_analyzer")
+    d = make_detector("presidio")
+    d.warmup()  # must not raise
+    # idempotent: a real analyze still flags the demo SSN after warmup
+    ents = d.analyze(f"my ssn is {DEMO_SSN} ok")
+    assert any(e.type == "US_SSN" for e in ents)
