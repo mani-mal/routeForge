@@ -8,12 +8,17 @@ from __future__ import annotations
 import datetime as dt
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.apps.models import Application, AppPolicy, AppToken, UsageRecord, utcnow
+from app.apps.models import (
+    Application, AppPolicy, AppRecognizer, AppSensitivityRule, AppToken,
+    UsageRecord, utcnow,
+)
+from app.apps.privacy import AppPrivacyProfile, SensitivityRuleView
 from app.apps.tokens import hash_token, token_prefix
+from app.policy.recognizers import CustomRecognizer
 
 
 async def resolve_application(session: AsyncSession, raw_token: str | None
@@ -235,3 +240,45 @@ async def usage_summary(session: AsyncSession, *, application_id: str | None = N
         "latency_p50_ms": _pctile(latencies, 0.50),
         "latency_p95_ms": _pctile(latencies, 0.95),
     }
+
+
+# --- per-app privacy profile (recognizers + sensitivity rules) ---
+
+async def get_privacy_profile(session: AsyncSession, app_id: str) -> AppPrivacyProfile:
+    """Load an application's enabled recognizers and ordered sensitivity rules.
+    Empty `rules` (no rows) signals "fall back to global" — see effective_rules."""
+    recs = (await session.execute(
+        select(AppRecognizer).where(
+            AppRecognizer.application_id == app_id,
+            AppRecognizer.enabled.is_(True)))).scalars().all()
+    rules = (await session.execute(
+        select(AppSensitivityRule).where(
+            AppSensitivityRule.application_id == app_id)
+        .order_by(AppSensitivityRule.position))).scalars().all()
+    return AppPrivacyProfile(
+        recognizers=tuple(CustomRecognizer(r.name, r.regex, r.score) for r in recs),
+        rules=tuple(SensitivityRuleView(
+            frozenset(r.entities), r.sensitivity, r.risk_class,
+            r.residency, r.require_verification) for r in rules))
+
+
+async def replace_privacy_profile(session: AsyncSession, app_id: str,
+                                  recognizers: list[dict], rules: list[dict]) -> None:
+    """Replace an application's recognizers and sensitivity rules wholesale:
+    delete existing rows, insert the new set (caller commits). Caller is
+    responsible for validating `recognizers`/`rules` before calling this
+    (e.g. via validate_recognizer) — this function trusts its input."""
+    await session.execute(
+        delete(AppRecognizer).where(AppRecognizer.application_id == app_id))
+    await session.execute(
+        delete(AppSensitivityRule).where(AppSensitivityRule.application_id == app_id))
+    for r in recognizers:
+        session.add(AppRecognizer(
+            application_id=app_id, name=r["name"], regex=r["regex"],
+            score=r.get("score", 0.85), enabled=r.get("enabled", True)))
+    for i, r in enumerate(rules):
+        session.add(AppSensitivityRule(
+            application_id=app_id, position=i, entities=r["entities"],
+            sensitivity=r["sensitivity"], risk_class=r["risk_class"],
+            residency=r["residency"],
+            require_verification=r.get("require_verification", False)))
