@@ -16,11 +16,11 @@ def test_rejects_builtin_name_collision():
 
 def test_rejects_uncompilable_regex():
     with pytest.raises(ValueError):
-        validate_recognizer("X", r"(unterminated")
+        validate_recognizer("XX", r"(unterminated")
 
 def test_rejects_catastrophic_regex():
     with pytest.raises(ValueError):
-        validate_recognizer("X", r"(a+)+$")   # classic ReDoS shape
+        validate_recognizer("XX", r"(a+)+$")   # classic ReDoS shape
 
 def test_custom_recognizer_finds_entities():
     r = CustomRecognizer("BADGE_ID", r"\bEMP-\d{6}\b", 0.9)
