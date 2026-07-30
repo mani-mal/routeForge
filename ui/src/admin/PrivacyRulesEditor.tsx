@@ -141,8 +141,13 @@ export function PrivacyRulesEditor({ appId }: { appId: string }) {
     setErr(null);
     setSaved(false);
     try {
-      const stored = await putPrivacy(appId, next);
-      setProfile(stored);
+      // The PUT handler only returns {"ok": true} — it does not echo the
+      // stored profile. Re-fetch so `profile` always reflects what the
+      // server actually persisted (and, on Reset, the global-fallback rules
+      // it now serves), never the raw `{ok: true}` response body.
+      await putPrivacy(appId, next);
+      const fresh = await getPrivacy(appId);
+      setProfile(fresh);
       setSaved(true);
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Save failed.");
@@ -154,37 +159,42 @@ export function PrivacyRulesEditor({ appId }: { appId: string }) {
   if (loading) return <p className="text-sm text-gray-500">Loading privacy rules…</p>;
   if (!profile) return <p className="text-sm text-frontier">{err ?? "Could not load privacy rules."}</p>;
 
-  const customNames = profile.recognizers.map((r) => r.name).filter(Boolean);
+  // Defensive: normalize to arrays here so a future shape surprise from the
+  // server (or the {ok:true} response, if a future refactor reintroduces
+  // that mistake) degrades gracefully instead of crashing the render.
+  const recognizers = profile.recognizers ?? [];
+  const rules = profile.rules ?? [];
+  const customNames = recognizers.map((r) => r.name).filter(Boolean);
   const entityOptions = [...BUILTIN_ENTITIES, ...customNames.filter((n) => !BUILTIN_ENTITIES.includes(n))];
-  const hasDowngrade = profile.rules.some(ruleIsDowngrade);
+  const hasDowngrade = rules.some(ruleIsDowngrade);
 
   function updateRecognizer(i: number, patch: Partial<Recognizer>) {
-    const recognizers = profile!.recognizers.map((r, idx) => (idx === i ? { ...r, ...patch } : r));
-    setProfile({ ...profile!, recognizers });
+    const next = recognizers.map((r, idx) => (idx === i ? { ...r, ...patch } : r));
+    setProfile({ ...profile!, recognizers: next });
   }
   function addRecognizer() {
-    setProfile({ ...profile!, recognizers: [...profile!.recognizers, emptyRecognizer()] });
+    setProfile({ ...profile!, recognizers: [...recognizers, emptyRecognizer()] });
   }
   function deleteRecognizer(i: number) {
-    setProfile({ ...profile!, recognizers: profile!.recognizers.filter((_, idx) => idx !== i) });
+    setProfile({ ...profile!, recognizers: recognizers.filter((_, idx) => idx !== i) });
   }
 
   function updateRule(i: number, patch: Partial<SensitivityRule>) {
-    const rules = profile!.rules.map((r, idx) => (idx === i ? { ...r, ...patch } : r));
-    setProfile({ ...profile!, rules });
+    const next = rules.map((r, idx) => (idx === i ? { ...r, ...patch } : r));
+    setProfile({ ...profile!, rules: next });
   }
   function addRule() {
-    setProfile({ ...profile!, rules: [...profile!.rules, emptyRule()] });
+    setProfile({ ...profile!, rules: [...rules, emptyRule()] });
   }
   function deleteRule(i: number) {
-    setProfile({ ...profile!, rules: profile!.rules.filter((_, idx) => idx !== i) });
+    setProfile({ ...profile!, rules: rules.filter((_, idx) => idx !== i) });
   }
   function moveRule(i: number, dir: -1 | 1) {
     const j = i + dir;
-    if (j < 0 || j >= profile!.rules.length) return;
-    const rules = [...profile!.rules];
-    [rules[i], rules[j]] = [rules[j], rules[i]];
-    setProfile({ ...profile!, rules });
+    if (j < 0 || j >= rules.length) return;
+    const next = [...rules];
+    [next[i], next[j]] = [next[j], next[i]];
+    setProfile({ ...profile!, rules: next });
   }
 
   async function resetToGlobal() {
@@ -212,7 +222,7 @@ export function PrivacyRulesEditor({ appId }: { appId: string }) {
       <section>
         <div className="text-xs uppercase tracking-wide text-gray-500 mb-1">Custom recognizers</div>
         <div className="flex flex-col gap-1.5">
-          {profile.recognizers.map((r, i) => (
+          {recognizers.map((r, i) => (
             <div key={i} className="flex items-center gap-2 flex-wrap">
               <input value={r.name} onChange={(e) => updateRecognizer(i, { name: e.target.value })}
                 placeholder="name"
@@ -226,7 +236,7 @@ export function PrivacyRulesEditor({ appId }: { appId: string }) {
               <button onClick={() => deleteRecognizer(i)} className="text-xs text-frontier hover:underline">delete</button>
             </div>
           ))}
-          {profile.recognizers.length === 0 && (
+          {recognizers.length === 0 && (
             <p className="text-xs text-gray-600">No custom recognizers — using global defaults only.</p>
           )}
         </div>
@@ -237,7 +247,7 @@ export function PrivacyRulesEditor({ appId }: { appId: string }) {
         <div className="text-xs uppercase tracking-wide text-gray-500 mb-1">Sensitivity rules</div>
         <p className="text-[10px] text-gray-600 mb-2">Evaluated top to bottom — the first matching rule wins.</p>
         <div className="flex flex-col gap-3">
-          {profile.rules.map((rule, i) => {
+          {rules.map((rule, i) => {
             const downgrade = ruleIsDowngrade(rule);
             return (
               <div key={i}
@@ -248,7 +258,7 @@ export function PrivacyRulesEditor({ appId }: { appId: string }) {
                   <div className="flex items-center gap-1">
                     <button onClick={() => moveRule(i, -1)} disabled={i === 0}
                       className="text-xs text-gray-400 hover:text-gray-100 disabled:opacity-30">↑</button>
-                    <button onClick={() => moveRule(i, 1)} disabled={i === profile.rules.length - 1}
+                    <button onClick={() => moveRule(i, 1)} disabled={i === rules.length - 1}
                       className="text-xs text-gray-400 hover:text-gray-100 disabled:opacity-30">↓</button>
                     <button onClick={() => deleteRule(i)} className="text-xs text-frontier hover:underline ml-2">delete</button>
                   </div>
@@ -292,7 +302,7 @@ export function PrivacyRulesEditor({ appId }: { appId: string }) {
               </div>
             );
           })}
-          {profile.rules.length === 0 && (
+          {rules.length === 0 && (
             <p className="text-xs text-gray-600">No app-specific rules — using global defaults only.</p>
           )}
         </div>
@@ -301,11 +311,11 @@ export function PrivacyRulesEditor({ appId }: { appId: string }) {
 
       <section>
         <div className="text-xs uppercase tracking-wide text-gray-500 mb-1">Test against sample text</div>
-        <TestBox recognizers={profile.recognizers} />
+        <TestBox recognizers={recognizers} />
       </section>
 
       <div className="flex items-center gap-3">
-        <button onClick={() => save(profile)} disabled={busy}
+        <button onClick={() => save({ recognizers, rules })} disabled={busy}
           className="rounded-md border border-accent bg-accent/20 text-accent px-3 py-1.5 text-xs disabled:opacity-50">
           {busy ? "saving…" : "Save privacy rules"}
         </button>

@@ -284,7 +284,11 @@ export async function getPrivacy(appId: string): Promise<PrivacyProfile> {
   return fetch(`/admin/applications/${appId}/privacy`, { credentials: "same-origin" }).then(j<PrivacyProfile>);
 }
 
-export async function putPrivacy(appId: string, profile: PrivacyProfile): Promise<PrivacyProfile> {
+// The backend's PUT handler only ever returns `{"ok": true}` on success — it
+// does not echo the stored profile. Callers must re-fetch via getPrivacy() to
+// see what was actually persisted (and, on Reset, the global-fallback rules
+// the server now serves).
+export async function putPrivacy(appId: string, profile: PrivacyProfile): Promise<void> {
   const r = await fetch(`/admin/applications/${appId}/privacy`, opts("PUT", profile));
   if (!r.ok) {
     let detail = `${r.status} ${r.statusText}`;
@@ -296,7 +300,6 @@ export async function putPrivacy(appId: string, profile: PrivacyProfile): Promis
     }
     throw new Error(detail);
   }
-  return r.json() as Promise<PrivacyProfile>;
 }
 
 // The ten serving-plane steps, in order, for the flow visualizer. `caption` is
