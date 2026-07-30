@@ -9,8 +9,8 @@
 // are TYPES only (never raw values/text), CCR fields are COUNTS only (never
 // cached content), and excluded providers are greyed with their reason.
 import type { ReactNode } from "react";
-import { STEPS, stepMeta } from "../api";
-import type { ChatResponse, TraceRecord } from "../api";
+import { STEPS, stepMeta, TIER_COLOR } from "../api";
+import type { ChatResponse, RequestSummary, TraceRecord } from "../api";
 import { Panel, StatTile, TierDot, formatUsd, formatUsdPrecise, formatMs, formatPct } from "../components/common";
 
 const PROVIDERS: { key: string; label: string }[] = [
@@ -288,28 +288,154 @@ function ProviderStrip({ allowedProviders, onpremOnly }: { allowedProviders: str
   );
 }
 
-// Band 1 — plain-language, owner-facing summary. No step numbers, no jargon.
-function PlainSummary({ detail }: { detail: ChatResponse }) {
+// Verdict colours. Tier colours (cheap/mid/frontier) are reused from TIER_COLOR
+// so the Model card matches the pie and dots everywhere else. Privacy and
+// verification are orthogonal to tiers, so they get their own semantics:
+//   green  = all-clear (cloud-eligible / verified clean)
+//   amber  = specially handled but fine (sensitive data kept on-prem)
+//   red    = needs attention (verification flagged)
+// Amber is a deliberate choice: "kept on-prem" is the privacy WIN, not an
+// error, so it must read as neither the green all-clear nor the red alarm.
+const CLEAR = "#22c55e";
+const SHIELD = "#f59e0b";
+const ALARM = "#ef4444";
+const NEUTRAL = "#6b7280";
+
+// Small stroke icons (currentColor), so a card's accent colour flows straight
+// through. Kept minimal — one recognisable glyph per verdict, nothing more.
+const svg = "h-4 w-4 shrink-0";
+const svgProps = {
+  viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2,
+  strokeLinecap: "round" as const, strokeLinejoin: "round" as const, className: svg,
+};
+const IconShield = () => (<svg {...svgProps}><path d="M12 3l7 3v5c0 4.6-3 7.7-7 9-4-1.3-7-4.4-7-9V6l7-3z" /></svg>);
+const IconChip = () => (
+  <svg {...svgProps}>
+    <rect x="7" y="7" width="10" height="10" rx="1.5" />
+    <path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3" />
+  </svg>
+);
+const IconCheck = () => (<svg {...svgProps}><circle cx="12" cy="12" r="9" /><path d="M8.5 12.5l2.5 2.5 4.5-5" /></svg>);
+const IconFlag = () => (<svg {...svgProps}><path d="M12 3l9 16H3l9-16z" /><path d="M12 10v4M12 17h.01" /></svg>);
+const IconDash = () => (<svg {...svgProps}><circle cx="12" cy="12" r="9" /><path d="M8 12h8" /></svg>);
+
+// A "story" card: icon + label in the accent colour, a bold verdict, and one
+// plain-language line saying WHY. The left accent bar carries the verdict's
+// meaning at a glance.
+function OutcomeCard({ icon, accent, label, verdict, why, children }: {
+  icon: ReactNode; accent: string; label: string; verdict: ReactNode; why: string; children?: ReactNode;
+}) {
+  return (
+    <div className="relative overflow-hidden rounded-lg border border-edge bg-ink/40 p-3 pl-4">
+      <span className="absolute inset-y-0 left-0 w-1" style={{ backgroundColor: accent }} />
+      <div className="flex items-center gap-1.5" style={{ color: accent }}>
+        {icon}
+        <span className="text-[11px] font-semibold uppercase tracking-wide">{label}</span>
+      </div>
+      <div className="mt-1 text-base font-semibold leading-tight text-gray-50">{verdict}</div>
+      <p className="mt-0.5 text-xs leading-snug text-gray-400">{why}</p>
+      {children}
+    </div>
+  );
+}
+
+// A compact fact chip. `accent` colours the label icon + value (used for the
+// verification verdict); cost/latency pass none and stay neutral.
+function MetricChip({ icon, accent, label, value, sub }: {
+  icon?: ReactNode; accent?: string; label: string; value: string; sub?: string;
+}) {
+  return (
+    <div className="rounded-lg border border-edge bg-ink/40 px-3 py-2">
+      <div className="flex items-center gap-1 text-[11px] uppercase tracking-wide text-gray-500">
+        {icon && <span style={{ color: accent }}>{icon}</span>}
+        {label}
+      </div>
+      <div className="mt-0.5 text-lg font-bold leading-tight" style={{ color: accent ?? "#f3f4f6" }}>{value}</div>
+      {sub && <div className="text-[11px] text-gray-500 truncate">{sub}</div>}
+    </div>
+  );
+}
+
+// Band 1 — owner-facing summary as labelled outcome cards. No step numbers, no
+// jargon, no run-on sentence: each card answers one question an app owner asks
+// ("was it private? which model, and why? was the output clean? what did it
+// cost?"). `summary` carries the already-computed tier so the Model card can
+// name it; detail is the source of truth for everything else.
+function PlainSummary({ detail, summary }: { detail: ChatResponse; summary: RequestSummary | null }) {
   const p = detail.policy;
   const entities = p.detected_entities;
   const verify = detail.trace.find((r) => r.step === "verify");
-  const modelDisplay = detail.model_display ?? detail.model;
-  const totalLatencyMs = detail.trace.reduce((sum, r) => sum + (r.latency_ms ?? 0), 0);
+  const modelDisplay = summary?.model_display ?? detail.model_display ?? detail.model;
+  const tier = summary?.tier ?? "?";
+  const hops =
+    summary?.hops ??
+    Math.max(detail.trace.filter((r) => r.step === "router" || r.step === "agent_hop").length, 1);
+  const totalLatencyMs =
+    summary?.latency_ms ?? detail.trace.reduce((sum, r) => sum + (r.latency_ms ?? 0), 0);
+
+  // Privacy — residency verdict.
+  const privacyAccent = p.onprem_only ? SHIELD : CLEAR;
+  const privacyVerdict = p.onprem_only ? "Kept on-prem" : "Cloud-eligible";
+  const privacyWhy = p.onprem_only
+    ? "Sensitive data detected — this request never left your infrastructure."
+    : "No sensitive data found, so every provider was eligible.";
+
+  // Model — states WHY this model won, so "cloud-eligible but ran local" stops
+  // looking contradictory. Truthful to the router: target tier = max(task
+  // complexity, risk floor), then the cheapest model in that tier wins (on-prem
+  // is cheaper, so it usually does).
+  const tierLabel = tier === "?" ? "" : `${tier} tier`;
+  const modelWhy =
+    hops > 1
+      ? `${hops} hops, each routed on its own — final answer from this model.`
+      : p.onprem_only
+        ? `Cheapest qualifying model in the ${tier} tier, kept on-prem.`
+        : `Cheapest model in the ${tier} tier — the lowest tier that met this task's risk bar.`;
+
+  // Verification — egress leakage check.
+  const vState = !verify ? "none" : verify.passed ? "ok" : "flag";
+  const verify_ = {
+    ok: { accent: CLEAR, icon: <IconCheck />, verdict: "Clean", sub: "checked on egress" },
+    flag: { accent: ALARM, icon: <IconFlag />, verdict: "Flagged", sub: "held for review" },
+    none: { accent: NEUTRAL, icon: <IconDash />, verdict: "Not checked", sub: "not required" },
+  }[vState];
 
   return (
     <Panel title="What happened">
-      <p className="text-base leading-relaxed text-gray-100">
-        Checked for sensitive data (
-        <span className="font-semibold text-gray-50">
-          {entities.length ? `found ${entities.join(", ")}` : "none"}
-        </span>
-        ) → <span className="font-semibold text-gray-50">{p.onprem_only ? "kept on your infrastructure" : "eligible for cloud"}</span> →
-        answered by <span className="font-semibold text-gray-50">{modelDisplay}</span> →{" "}
-        <span className="font-semibold text-gray-50">
-          {verify ? (verify.passed ? "verified clean" : "flagged for review") : "not verified"}
-        </span>
-        , in {formatMs(totalLatencyMs)} for {formatUsdPrecise(detail.cost.total_usd)}.
-      </p>
+      <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+        <OutcomeCard icon={<IconShield />} accent={privacyAccent} label="Privacy"
+          verdict={privacyVerdict} why={privacyWhy}>
+          {entities.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1">
+              {entities.map((e) => (
+                <span key={e} className="rounded px-1.5 py-0.5 text-[11px] font-semibold"
+                  style={{ backgroundColor: `${privacyAccent}22`, color: privacyAccent }}>
+                  {e}
+                </span>
+              ))}
+            </div>
+          )}
+        </OutcomeCard>
+        <OutcomeCard icon={<IconChip />} accent={TIER_COLOR[tier] ?? NEUTRAL} label="Model"
+          verdict={
+            <span className="flex items-center gap-2">
+              <TierDot tier={tier} />
+              <span className="truncate">{modelDisplay}</span>
+              {tierLabel && <span className="text-xs font-normal text-gray-500">{tierLabel}</span>}
+            </span>
+          }
+          why={modelWhy} />
+      </div>
+
+      <div className="grid grid-cols-3 gap-2.5">
+        <MetricChip icon={verify_.icon} accent={verify_.accent} label="Verified"
+          value={verify_.verdict} sub={verify_.sub} />
+        <MetricChip label="Cost" value={formatUsdPrecise(detail.cost.total_usd)}
+          sub={`vs ${formatUsd(detail.cost.baseline_usd)} all-frontier`} />
+        <MetricChip label="Latency" value={formatMs(totalLatencyMs)}
+          sub={hops > 1 ? `${hops} hops` : "end to end"} />
+      </div>
+
       <ProviderStrip allowedProviders={p.allowed_providers} onpremOnly={p.onprem_only} />
     </Panel>
   );
@@ -366,7 +492,9 @@ function TechnicalTrace({ detail }: { detail: ChatResponse }) {
   );
 }
 
-export function RequestDrilldown({ detail, loading }: { detail: ChatResponse | null; loading: boolean }) {
+export function RequestDrilldown(
+  { detail, summary = null, loading }: { detail: ChatResponse | null; summary?: RequestSummary | null; loading: boolean },
+) {
   if (loading) {
     return (
       <Panel title="Request">
@@ -384,7 +512,7 @@ export function RequestDrilldown({ detail, loading }: { detail: ChatResponse | n
 
   return (
     <div className="flex flex-col gap-4">
-      <PlainSummary detail={detail} />
+      <PlainSummary detail={detail} summary={summary} />
       <TechnicalTrace detail={detail} />
     </div>
   );
