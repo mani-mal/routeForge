@@ -2,6 +2,7 @@ import sys
 
 from app.config.loader import load_settings
 from app.config.schema import Settings
+from app.policy.enums import RESIDENCY as valid_residency
 
 
 class ConfigLintError(Exception):
@@ -41,7 +42,6 @@ def lint_settings(s: Settings) -> list[str]:
         if r.sensitivity not in scale:
             errs.append(f"RULE_SENSITIVITY_UNKNOWN {r.sensitivity}")
 
-    valid_residency = {"any", "private_cloud_ok", "onprem_only"}
     residency_values = [("rule", r.residency) for r in s.policy.sensitivity_rules]
     residency_values += [(f"tenant:{name}", t.default_residency)
                          for name, t in s.policy.tenants.items()]
