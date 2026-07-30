@@ -114,6 +114,12 @@ items:
           # mounted file.
           - {name: SP_INFERENCE_BACKEND, value: "vllm"}
           - {name: SP_PII_DETECTION, value: "presidio"}
+          # Attach request/response I/O to the serving.request Langfuse trace so
+          # traces are usable as an eval dataset. `redacted` runs the egress
+          # redactor (entity values -> <TYPE>, no raw PII). NOT `full`: full is a
+          # boot failure here because the `hospital` tenant is onprem_only (the
+          # capture_io residency lint). Default (serving.yaml) is off => blank Input.
+          - {name: SP_CAPTURE_IO, value: "redacted"}
           # Langfuse export credentials (demo keys seeded by langfuse.yaml).
           - name: LANGFUSE_PUBLIC_KEY
             valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: LANGFUSE_PUBLIC_KEY}}
