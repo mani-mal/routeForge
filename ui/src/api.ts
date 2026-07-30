@@ -258,6 +258,47 @@ export const adminApi = {
   },
 };
 
+// --- Per-app privacy rules (custom recognizers + sensitivity rules) --------
+// Backend: app/api/admin_routes.py — GET/PUT /admin/applications/{id}/privacy.
+
+export interface Recognizer {
+  name: string;
+  regex: string;
+  score: number;
+}
+
+export interface SensitivityRule {
+  entities: string[];
+  sensitivity: string;
+  risk_class: string;
+  residency: string;
+  require_verification: boolean;
+}
+
+export interface PrivacyProfile {
+  recognizers: Recognizer[];
+  rules: SensitivityRule[];
+}
+
+export async function getPrivacy(appId: string): Promise<PrivacyProfile> {
+  return fetch(`/admin/applications/${appId}/privacy`, { credentials: "same-origin" }).then(j<PrivacyProfile>);
+}
+
+export async function putPrivacy(appId: string, profile: PrivacyProfile): Promise<PrivacyProfile> {
+  const r = await fetch(`/admin/applications/${appId}/privacy`, opts("PUT", profile));
+  if (!r.ok) {
+    let detail = `${r.status} ${r.statusText}`;
+    try {
+      const body = await r.json();
+      if (body?.detail) detail = body.detail;
+    } catch {
+      /* non-JSON error body; keep the status line */
+    }
+    throw new Error(detail);
+  }
+  return r.json() as Promise<PrivacyProfile>;
+}
+
 // The ten serving-plane steps, in order, for the flow visualizer. `caption` is
 // the one-line "what this step does", shown on the node and in the step inspector.
 export interface StepMeta {

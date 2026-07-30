@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { adminApi } from "../api";
 import type { AdminApp, AdminPolicy } from "../api";
 import { Panel } from "../components/common";
+import { PrivacyRulesEditor } from "./PrivacyRulesEditor";
 
 const TIERS = ["cheap", "mid", "frontier"];
 const PROVIDERS = ["onprem", "azure", "bedrock"];
@@ -225,6 +226,11 @@ export function AppConfig({ appId, onChanged }: { appId: string; onChanged?: () 
       <section>
         <div className="text-xs uppercase tracking-wide text-gray-500 mb-1">Policy</div>
         <PolicyEditor app={app} onSaved={refresh} />
+      </section>
+
+      <section>
+        <div className="text-xs uppercase tracking-wide text-gray-500 mb-1">Privacy rules</div>
+        <PrivacyRulesEditor appId={appId} />
       </section>
     </div>
   );
