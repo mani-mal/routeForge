@@ -6,7 +6,7 @@ region currently behaves.
 
 ---
 
-## 1. Redesign the "What happened" summary band — DONE (code; pending deploy)
+## 1. Redesign the "What happened" summary band — DONE (shipped :0.5.0)
 
 **Built 2026-07-30.** Replaced the run-on sentence in `PlainSummary`
 (`ui/src/console/RequestDrilldown.tsx`) with labelled **outcome cards**: two
@@ -102,7 +102,7 @@ and the "What happened" sentence. In the working tree, not yet on the live image
 (`ui/src/console/sections/CostSection.tsx`) so it no longer reads as related to the
 mid-tier dot `#3b82f6`. In the working tree, not yet on the live image.
 
-## 6. Fleet ⚠️ "sensitive traffic not all kept on-prem" is over-eager — DONE (code; pending deploy)
+## 6. Fleet ⚠️ "sensitive traffic not all kept on-prem" is over-eager — DONE (shipped :0.5.0)
 
 **Fixed 2026-07-30.** The warning now fires only on a genuine residency breach — an
 `onprem_only` request served **off-prem** — instead of the old
