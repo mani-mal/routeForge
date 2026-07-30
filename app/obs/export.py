@@ -10,7 +10,8 @@ from app.obs.redact import redact, redact_value
 log = logging.getLogger("serving.obs")
 
 
-def _set_io(root, capture_io: str, prompt: str, completion: str) -> None:
+def _set_io(root, capture_io: str, prompt: str, completion: str,
+            recognizers=None) -> None:
     """Attach request/response I/O to the root span per the eval-capture mode
     (docs/eval-logging-backlog.md). `input.value`/`output.value` are the OTel
     attributes Langfuse reads as a trace's Input/Output.
@@ -19,13 +20,17 @@ def _set_io(root, capture_io: str, prompt: str, completion: str) -> None:
     - redacted → run the SAME egress redactor as every other attribute, so
                  entity values become <TYPE> — eval-usable, no raw PII. The
                  RedactingSpanExporter also re-redacts these keys (idempotent).
+                 `recognizers` (an app's custom recognizers, Task 7) are
+                 threaded through so a per-app custom entity type (e.g. an
+                 MRN pattern) is masked here too, not just built-ins.
     - full     → set raw text. Only reachable when the config lint has cleared
                  it (no onprem_only tenant); the exporter then skips redacting
                  the I/O keys (app/obs/otel.py _capture_io_full)."""
     if capture_io == "off":
         return
     if capture_io == "redacted":
-        prompt, completion = redact(prompt), redact(completion)
+        prompt = redact(prompt, recognizers=recognizers)
+        completion = redact(completion, recognizers=recognizers)
     # `full`: leave prompt/completion raw (lint-gated, residency-local only).
     if prompt:
         root.set_attribute("input.value", prompt)
@@ -37,7 +42,7 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                  cost: dict, policy: dict, trace: list[dict],
                  application_id: str = "", app_langfuse=None,
                  capture_io: str = "off", prompt: str = "",
-                 completion: str = "") -> str | None:
+                 completion: str = "", recognizers=None) -> str | None:
     """Export the request's decision trace as spans and return the Langfuse UI
     URL for the resulting trace (or None when telemetry is disabled), so the
     caller can hand the UI a live "Langfuse trace" deep-link.
@@ -45,7 +50,11 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
     When `app_langfuse` (the application's own Langfuse project) is provided,
     the trace is exported to THAT project and the deep-link points there — each
     application owner sees only their own traces (Phase 5). Otherwise it falls
-    back to the shared project."""
+    back to the shared project.
+
+    `recognizers` (an app's AppPrivacyProfile.recognizers, Task 7) is threaded
+    into the `redacted` capture_io path so a per-app custom entity type is
+    masked in telemetry, not just the built-in RegexDetector patterns."""
     try:
         per_app = None
         if app_langfuse is not None:
@@ -63,7 +72,7 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
             root.set_attribute("sp.onprem_only", bool(policy.get("onprem_only", False)))
             root.set_attribute("sp.detected_entities",
                                ",".join(policy.get("detected_entities", [])))  # TYPES only
-            _set_io(root, capture_io, prompt, completion)
+            _set_io(root, capture_io, prompt, completion, recognizers=recognizers)
             for i, rec in enumerate(trace):
                 step = str(rec.get("step", f"step-{i}"))
                 with tracer.start_as_current_span(f"serving.{step}") as sp:
