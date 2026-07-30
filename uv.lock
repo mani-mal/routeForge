@@ -3353,6 +3353,7 @@ dependencies = [
     { name = "httpx" },
     { name = "pydantic" },
     { name = "pyyaml" },
+    { name = "regex" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -3400,6 +3401,7 @@ requires-dist = [
     { name = "presidio-anonymizer", marker = "extra == 'presidio'", specifier = ">=2.2" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "pyyaml", specifier = ">=6.0" },
+    { name = "regex", specifier = ">=2024.0.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
 ]
