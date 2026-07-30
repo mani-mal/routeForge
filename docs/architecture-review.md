@@ -147,13 +147,26 @@ Architecture is done; this is the remaining work, most demo-relevant first.
 
 ### 4.1 🟡 Trivial questions land on the *mid* tier, not *cheap* — top demo concern
 The demo's opening beat is "simple question → **cheap** local model → fractions of a
-cent." Today a clean public question routes to `local-32b` (**mid**) instead of
-`local-8b` (cheap) — visible in the current UI (a `public` request showing `local-32b`).
-The cause is complexity scoring pushing trivial prompts above
-`complexity_thresholds.cheap_max: 0.35`. **Fix options:** recalibrate the complexity
-scorer / raise `cheap_max`, or adjust the narrative. Until this is tuned, story beat #1
-undersells the routing lever. *(This is the single most important open item — it's the
-first thing a customer sees.)*
+cent." Today "What is the capital of France?" routes to `local-32b` (**mid**), rejecting
+`local-8b` (cheap) as "below target tier".
+
+**Root cause (re-diagnosed live on :0.5.0, 2026-07-30 — the earlier "complexity scoring /
+raise `cheap_max`" theory was wrong):** complexity is correctly `cheap` (0.0045) and there
+is **no** confidence escalation. Presidio tags **"France" as a `LOCATION` entity**, and
+`config/policy.yaml` maps `LOCATION` (with `DATE_TIME`, `PERSON`, `EMAIL_ADDRESS`,
+`PHONE_NUMBER`) → `confidential` → `risk_class: medium` → `risk_floors.medium: mid`. The
+risk floor, not complexity, forces the mid tier. Any prompt mentioning a place-name or a
+date is floored to mid. The same over-classification inflates Acme's "confidential" counts
+(`docs/demo-dashboard-notes.md`). Raising `cheap_max` would change nothing.
+
+**Fix options (a product/policy call — surfaced to the owner 2026-07-30):**
+(a) demote `LOCATION`/`DATE_TIME` to a low-risk bucket (`risk_class: low`, residency any) so
+casual place/date mentions stay cheap-eligible, while real PII (SSN, financial, and
+arguably PERSON/EMAIL/PHONE) stays `confidential` — fixes the cheap beat *and* the Acme
+over-count; (b) lower `risk_floors.medium` to `cheap` (broad — removes the floor for all
+confidential traffic); (c) change the demo's opening question to an entity-free one
+(narrative-only, leaves the over-classification in place). *(Single most important open
+item — first thing a customer sees.)*
 
 ### 4.2 ✅ Real-backend validation on GPUs — done (vLLM, verified live 2026-07-25)
 The `vllm` and `dynamo` adapters (`app/gateway/backends/`, `make_backend` factory,
