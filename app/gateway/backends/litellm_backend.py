@@ -91,6 +91,17 @@ class LiteLLMBackend:
             tool_calls=tool_calls)
 
     async def health(self) -> BackendHealth:
-        # Implemented in Task 5 (probes the onprem endpoint). Placeholder here so
-        # the class satisfies the Protocol; Task 5 replaces this body.
-        return BackendHealth(ok=True, detail="litellm")
+        ib = self._s.serving.inference_backend
+        if ib == "none":
+            return BackendHealth(ok=True, detail="onprem disabled (none)")
+        base = self._s.serving.vllm.base_url if ib == "vllm" else self._s.serving.dynamo.endpoint
+        models_url = base.rstrip("/") + "/models" if ib == "vllm" else base.rstrip("/") + "/v1/models"
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=5) as c:
+                resp = await c.get(models_url)
+                resp.raise_for_status()
+                models = [m["id"] for m in resp.json().get("data", [])]
+            return BackendHealth(ok=True, models=models)
+        except Exception as e:
+            return BackendHealth(ok=False, detail=str(e))

@@ -37,7 +37,7 @@ def test_routing_saved_goes_negative_under_escalation_identity_holds():
     import asyncio
     from app.compression.ccr import CCRStore
     from app.config.loader import load_settings
-    from app.gateway.backends.mock import MockBackend
+    from tests._litellm_fake import _DeterministicLiteLLM
     from app.gateway.gateway import Gateway
     from app.pipeline import Pipeline
     from app.policy.detectors import make_detector
@@ -52,7 +52,7 @@ def test_routing_saved_goes_negative_under_escalation_identity_holds():
     det = make_detector("regex")
     co = s.serving.context_optimization
     pipe = Pipeline(s, Gate(s, det), det,
-                    Gateway(s, MockBackend(s), Router(s)),
+                    Gateway(s, _DeterministicLiteLLM(s), Router(s)),
                     self_port=8080, co_cfg_provider=lambda: co, ccr=CCRStore(3600))
 
     req = ChatRequest(messages=[Message(role="user", content="Email john.doe@example.com re: Q3")])

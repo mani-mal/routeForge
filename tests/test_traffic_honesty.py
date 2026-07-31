@@ -36,25 +36,24 @@ import pytest
 from app.compression.ccr import CCRStore
 from app.config.loader import load_settings
 from app.config.schema import Settings
-from app.gateway.backends.mock import MockBackend
 from app.gateway.gateway import Gateway
 from app.models import ChatRequest, Message
 from app.pipeline import Pipeline
 from app.policy.detectors import make_detector
 from app.policy.gate import Gate
 from app.routing.router import Router
+from tests._litellm_fake import _DeterministicLiteLLM
 
 
 class RecordingBackend:
-    """Wraps MockBackend, recording every model it's asked to generate for.
-
-    Matches `InferenceBackend.generate`'s exact signature (see
-    app/gateway/backends/base.py's Protocol and mock.py's implementation):
-    `generate(self, model: str, messages, price, tier, hint)`.
+    """Wraps `_DeterministicLiteLLM`, recording every model it's asked to
+    generate for. Matches `InferenceBackend.generate`'s exact signature (see
+    app/gateway/backends/base.py's Protocol): `generate(self, model: str,
+    messages, price, tier, hint)`.
     """
     name = "recording"
 
-    def __init__(self, inner: MockBackend) -> None:
+    def __init__(self, inner: _DeterministicLiteLLM) -> None:
         self.inner = inner
         self.models_called: list[str] = []
 
@@ -86,7 +85,7 @@ def _with_bedrock_enabled(settings: Settings) -> Settings:
 
 def test_pii_request_never_calls_a_cloud_provider_at_the_backend():
     settings = load_settings()
-    rec = RecordingBackend(MockBackend(settings))
+    rec = RecordingBackend(_DeterministicLiteLLM(settings))
     pipe = _pipeline(rec, settings)
 
     req = ChatRequest(messages=[
@@ -105,7 +104,7 @@ def test_high_risk_request_never_calls_a_cloud_provider_at_the_backend():
     guard as the SSN case, for the other onprem_only-triggering entity
     family (bank numbers), not just SSNs."""
     settings = load_settings()
-    rec = RecordingBackend(MockBackend(settings))
+    rec = RecordingBackend(_DeterministicLiteLLM(settings))
     pipe = _pipeline(rec, settings)
 
     req = ChatRequest(messages=[
@@ -140,7 +139,7 @@ def test_bedrock_enabled_pii_stays_onprem_while_clean_request_can_reach_cloud():
     settings = _with_bedrock_enabled(load_settings())
 
     # --- PII / onprem_only, cloud available but must not be touched ---
-    rec_pii = RecordingBackend(MockBackend(settings))
+    rec_pii = RecordingBackend(_DeterministicLiteLLM(settings))
     pipe_pii = _pipeline(rec_pii, settings)
     pii_req = ChatRequest(messages=[
         Message(role="user", content="My SSN is 482-73-1946, please summarize this.")])
@@ -153,7 +152,7 @@ def test_bedrock_enabled_pii_stays_onprem_while_clean_request_can_reach_cloud():
         f"{rec_pii.models_called}")
 
     # --- clean acme request, same cloud-enabled settings, CAN escalate ---
-    rec_clean = RecordingBackend(MockBackend(settings))
+    rec_clean = RecordingBackend(_DeterministicLiteLLM(settings))
     pipe_clean = _pipeline(rec_clean, settings)
     clean_req = ChatRequest(messages=[
         Message(role="user", content="Email john.doe@example.com re: Q3 planning")])
@@ -226,7 +225,7 @@ def test_residency_filter_is_what_keeps_pii_onprem_not_provider_availability():
 
     gate_module.build_context = _leaky_build_context
     try:
-        rec = RecordingBackend(MockBackend(settings))
+        rec = RecordingBackend(_DeterministicLiteLLM(settings))
         pipe = _pipeline(rec, settings)
         req = ChatRequest(messages=[
             Message(role="user", content="My SSN is 482-73-1946, please summarize this.")])

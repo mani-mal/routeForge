@@ -62,7 +62,7 @@ def lint_settings(s: Settings) -> list[str]:
     return errs
 
 
-_VALID_BACKENDS = ("mock", "vllm", "dynamo", "none")
+_VALID_BACKENDS = ("vllm", "dynamo", "none")
 
 
 def enforce(s: Settings) -> None:

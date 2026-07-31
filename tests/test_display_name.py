@@ -9,20 +9,20 @@ import asyncio
 
 from app.compression.ccr import CCRStore
 from app.config.loader import load_settings
-from app.gateway.backends.mock import MockBackend
 from app.gateway.gateway import Gateway
 from app.models import ChatRequest, Message
 from app.pipeline import Pipeline
 from app.policy.detectors import make_detector
 from app.policy.gate import Gate
 from app.routing.router import Router
+from tests._litellm_fake import _DeterministicLiteLLM
 
 
 def _pipeline(settings):
     det = make_detector("regex")
     co = settings.serving.context_optimization
     return Pipeline(settings, Gate(settings, det), det,
-                    Gateway(settings, MockBackend(settings), Router(settings)),
+                    Gateway(settings, _DeterministicLiteLLM(settings), Router(settings)),
                     self_port=8080, co_cfg_provider=lambda: co,
                     ccr=CCRStore(3600))
 

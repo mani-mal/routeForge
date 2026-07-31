@@ -92,10 +92,11 @@ def create_app() -> FastAPI:
     # uvicorn's event loop exists (at import time / test fixture setup, never
     # from inside an already-running loop -- see app/gateway/backends/factory.py
     # and app/gateway/backends/README.md), so asyncio.run() is safe here.
-    # mock/none never make a network call, so this is instant on the default
-    # (demo) config; only vllm/dynamo can fail health and trigger
-    # fallback-to-mock or sys.exit(1).
+    # `none` never makes a network call, so this is instant on that config;
+    # only vllm/dynamo can fail health, and an unreachable endpoint is a
+    # fail-closed sys.exit(1) -- mock is gone, there is no fallback.
     backend = asyncio.run(resolve_backend(settings))
+    app.state.backend = backend
     # named model_router (not router) to avoid shadowing the APIRouter imported above;
     # app.include_router(router) below needs the APIRouter, not this Router instance.
     model_router = Router(settings)

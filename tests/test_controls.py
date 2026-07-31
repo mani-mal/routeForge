@@ -69,7 +69,7 @@ def test_pipeline_honors_runtime_cfg_toggle_between_calls():
     """
     from app.compression.ccr import CCRStore
     from app.config.loader import load_settings
-    from app.gateway.backends.mock import MockBackend
+    from tests._litellm_fake import _DeterministicLiteLLM
     from app.gateway.gateway import Gateway
     from app.pipeline import Pipeline
     from app.policy.detectors import make_detector
@@ -87,7 +87,7 @@ def test_pipeline_honors_runtime_cfg_toggle_between_calls():
 
     detector = make_detector(settings.serving.pii_detection)
     gate = Gate(settings, detector)
-    backend = MockBackend(settings)
+    backend = _DeterministicLiteLLM(settings)
     model_router = Router(settings)
     gateway = Gateway(settings, backend, model_router)
     ccr = CCRStore(ttl_seconds=co_off.ccr.ttl_hours * 3600)

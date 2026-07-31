@@ -1,95 +1,62 @@
-"""Backend factory + startup health-validation/fallback (Phase 9 Task 4).
+"""Backend factory + startup health validation (Phase 9 Task 4; cut over to
+LiteLLM in the litellm-gateway-swap plan's Task 5).
 
-`make_backend` maps `serving.inference_backend` to a concrete
-`InferenceBackend` instance. `resolve_backend` then health-checks it and
-applies the CLAUDE.md / inference-backends-skill startup-validation rule:
-unreachable + `allow_backend_fallback: true` -> warn + fall back to
-`MockBackend`; unreachable + fallback disabled -> exit non-zero. Never
+`make_backend` builds the single `LiteLLMBackend` for the configured
+`serving.inference_backend`. `resolve_backend` then health-checks it and
+applies the fail-closed startup rule: unreachable onprem (`vllm`/`dynamo`) is
+a boot error (`sys.exit(1)`) -- there is no mock fallback any more. Never
 silently degrade in a customer demo.
 
-`none` semantics: `make_backend` returns a *working* `MockBackend` for
-`inference_backend: none` -- this is intentional, not a bug. The `none`
-REJECTION behaviour (onprem_only requests must be rejected, never silently
-routed to cloud) is enforced structurally in `app/policy/context.py` (Task 1):
-when `inference_backend == "none"`, "onprem" is dropped from the enabled
-provider set, so an onprem_only request's `allowed_providers` is empty and
-the router rejects it downstream. The backend object itself just needs to
-exist so public/cloud-eligible requests still get served; it is never
-actually asked to serve an onprem_only request. `mock`/`none` health() is
-always `ok=True` (no external server involved), so they never trigger the
-fallback/exit path below -- only `vllm`/`dynamo` can fail health.
+`none` semantics: `inference_backend: none` still returns a working
+`LiteLLMBackend` -- `health()` reports `ok=True` without a network probe
+(there is no onprem server to check). The `none` REJECTION behaviour
+(onprem_only requests must be rejected, never silently routed to cloud) is
+enforced structurally in `app/policy/context.py` (Task 1): when
+`inference_backend == "none"`, "onprem" is dropped from the enabled provider
+set, so an onprem_only request's `allowed_providers` is empty and the router
+rejects it downstream. The backend object itself just needs to exist so
+public/cloud-eligible requests still get served; it is never actually asked
+to serve an onprem_only request.
+
+`SP_SKIP_BACKEND_HEALTHCHECK`: test-only escape hatch, see `resolve_backend`.
 """
 from __future__ import annotations
 
 import logging
+import os
 import sys
 
 from app.config.schema import Settings
-from app.gateway.backends.base import InferenceBackend
-from app.gateway.backends.dynamo import DynamoBackend
-from app.gateway.backends.mock import MockBackend
-from app.gateway.backends.vllm import VllmBackend
+from app.gateway.backends.litellm_backend import LiteLLMBackend
 
 log = logging.getLogger("serving.backend")
 
 
-def make_backend(settings: Settings) -> InferenceBackend:
-    kind = settings.serving.inference_backend
-    if kind == "mock":
-        return MockBackend(settings)
+def make_backend(settings: Settings) -> LiteLLMBackend:
     temp = settings.routing.confidence_logprob_temperature
-    if kind == "vllm":
-        return VllmBackend(settings.serving.vllm, logprob_temperature=temp)
-    if kind == "dynamo":
-        return DynamoBackend(settings.serving.dynamo, logprob_temperature=temp)
-    if kind == "none":
-        # See module docstring: 'none' rejection is enforced in context.py,
-        # not here. This is a working object, never actually asked to serve
-        # an onprem_only request.
-        return MockBackend(settings)
-    raise ValueError(f"unknown inference_backend: {kind!r}")
+    return LiteLLMBackend(settings, logprob_temperature=temp)
 
 
-async def _aclose(backend: InferenceBackend) -> None:
-    """Close a backend's httpx client if it has one (mock/none don't)."""
-    client = getattr(backend, "_client", None)
-    if client is not None:
-        await client.aclose()
-
-
-async def resolve_backend(settings: Settings) -> InferenceBackend:
-    # IMPORTANT: probe with one instance, SERVE with a fresh one.
+async def resolve_backend(settings: Settings) -> LiteLLMBackend:
+    # Probe with a throwaway instance (loop-safety, see README), serve with a
+    # fresh one. No mock fallback exists any more: an unreachable onprem
+    # backend is a fail-closed boot error (never silently degrade in a
+    # customer deploy).
     #
-    # app/main.py runs resolve_backend under asyncio.run(...), whose event loop
-    # is closed the moment it returns — but requests are later served on
-    # uvicorn's own loop. An httpx.AsyncClient binds its connection pool to the
-    # loop of its FIRST request, so if the health probe below and request
-    # serving shared one backend instance, the first real /v1/chat/completions
-    # would raise "RuntimeError: Event loop is closed" (intermittently — httpx
-    # sometimes reconnects, sometimes not, which is exactly how this presented).
-    # So we health-check a throwaway `probe`, discard its now-loop-bound client,
-    # and return a fresh instance whose client binds lazily to the serving loop.
+    # SP_SKIP_BACKEND_HEALTHCHECK: test escape hatch. app/main.py builds
+    # `app = create_app()` at IMPORT time (before any test fixture/monkeypatch),
+    # so a real vllm/dynamo probe would hang or sys.exit(1) at test collection.
+    # Tests set this to build the backend without a network probe; generation
+    # is driven by a monkeypatched litellm.acompletion. Never set in
+    # production.
+    if os.environ.get("SP_SKIP_BACKEND_HEALTHCHECK"):
+        return make_backend(settings)
     probe = make_backend(settings)
-    health = await probe.health()  # called once; reused for the banner below
-    await _aclose(probe)
+    health = await probe.health()
     if not health.ok:
-        # `allow_backend_fallback` was removed from ServingCfg (Task 2 of the
-        # LiteLLM gateway swap; config/serving.yaml no longer sets it). This
-        # getattr keeps existing behaviour (default: fall back to mock) intact
-        # for the transition window and for tests/test_backend_selection.py,
-        # which still exercises the explicit on/off toggle via model_copy.
-        # Task 5 (cutover) removes this shim along with the mock-fallback path.
-        if getattr(settings.serving, "allow_backend_fallback", True):
-            log.warning(
-                "backend_unavailable_falling_back backend=%s detail=%s",
-                settings.serving.inference_backend, health.detail)
-            log.info("serving.backend active backend=mock models=[]")
-            return MockBackend(settings)  # mock has no client; loop-safe as-is
-        log.error(
-            "backend_unavailable_no_fallback backend=%s detail=%s",
-            settings.serving.inference_backend, health.detail)
+        log.error("backend_unavailable_no_fallback backend=%s detail=%s",
+                  settings.serving.inference_backend, health.detail)
         sys.exit(1)
-    log.info(
-        "serving.backend active backend=%s models=%s",
-        probe.name, health.models)
+    log.info("serving.backend active backend=litellm inference=%s models=%s",
+              settings.serving.inference_backend, health.models)
     return make_backend(settings)

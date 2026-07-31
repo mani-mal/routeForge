@@ -1,4 +1,5 @@
-"""Phase 9 Task 4 — make_backend factory + startup health-validation/fallback.
+"""Phase 9 Task 4 — make_backend factory + startup health-validation
+(cut over to LiteLLM in the litellm-gateway-swap plan's Task 5).
 
 No pytest-asyncio/anyio plugin is installed (see conftest.py / other test
 files) -- async paths are driven with asyncio.run(...) inside ordinary sync
@@ -9,103 +10,98 @@ import pytest
 
 from app.config.loader import load_settings
 from app.gateway.backends.factory import make_backend, resolve_backend
-from app.gateway.backends.mock import MockBackend
-from app.gateway.backends.vllm import VllmBackend
+from app.gateway.backends.litellm_backend import LiteLLMBackend
 
 
-def _s(backend, fallback=True):
+def _s(backend):
     s = load_settings()
     return s.model_copy(update={"serving": s.serving.model_copy(
-        update={"inference_backend": backend, "allow_backend_fallback": fallback})})
+        update={"inference_backend": backend})})
 
 
-def test_factory_selects_by_config():
-    assert isinstance(make_backend(_s("mock")), MockBackend)
-    assert isinstance(make_backend(_s("vllm")), VllmBackend)
+def test_make_backend_is_litellm():
+    assert isinstance(make_backend(_s("vllm")), LiteLLMBackend)
+    assert isinstance(make_backend(_s("none")), LiteLLMBackend)
 
 
-def test_factory_dynamo_and_none():
-    from app.gateway.backends.dynamo import DynamoBackend
-    assert isinstance(make_backend(_s("dynamo")), DynamoBackend)
-    # 'none' still returns a working backend object -- the REJECTION of
-    # onprem_only requests is enforced in context.py (Task 1), not here.
-    assert isinstance(make_backend(_s("none")), MockBackend)
-
-
-def test_unreachable_vllm_with_fallback_returns_mock(monkeypatch):
-    s = _s("vllm", fallback=True)
-
-    # force health() unhealthy
-    async def bad(self):
-        from app.gateway.backends.base import BackendHealth
-        return BackendHealth(ok=False, detail="refused")
-    monkeypatch.setattr(VllmBackend, "health", bad)
-    b = asyncio.run(resolve_backend(s))
-    assert isinstance(b, MockBackend)
-
-
-def test_unreachable_vllm_no_fallback_exits(monkeypatch):
-    s = _s("vllm", fallback=False)
+def test_unreachable_onprem_exits(monkeypatch):
+    # conftest.py sets SP_SKIP_BACKEND_HEALTHCHECK process-wide so create_app()
+    # never hangs during test collection; that would bypass the very probe
+    # this test exercises, so unset it here.
+    monkeypatch.delenv("SP_SKIP_BACKEND_HEALTHCHECK", raising=False)
 
     async def bad(self):
         from app.gateway.backends.base import BackendHealth
-        return BackendHealth(ok=False, detail="refused")
-    monkeypatch.setattr(VllmBackend, "health", bad)
+        return BackendHealth(ok=False, detail="down")
+    monkeypatch.setattr(LiteLLMBackend, "health", bad)
     with pytest.raises(SystemExit):
-        asyncio.run(resolve_backend(s))
+        asyncio.run(resolve_backend(_s("vllm")))
 
 
-def test_healthy_vllm_resolves_to_vllm_backend(monkeypatch):
-    s = _s("vllm", fallback=True)
+def test_reachable_onprem_resolves_to_litellm_backend(monkeypatch):
+    monkeypatch.delenv("SP_SKIP_BACKEND_HEALTHCHECK", raising=False)
 
     async def ok(self):
         from app.gateway.backends.base import BackendHealth
         return BackendHealth(ok=True, detail="ok", models=["local-8b"])
-    monkeypatch.setattr(VllmBackend, "health", ok)
-    b = asyncio.run(resolve_backend(s))
-    assert isinstance(b, VllmBackend)
+    monkeypatch.setattr(LiteLLMBackend, "health", ok)
+    b = asyncio.run(resolve_backend(_s("vllm")))
+    assert isinstance(b, LiteLLMBackend)
 
 
-def test_resolved_backend_client_not_bound_to_resolve_loop():
-    """resolve_backend must not hand back a client bound to its (throwaway) loop.
+def test_none_backend_never_unhealthy(monkeypatch):
+    # 'none' skips the network probe entirely (see LiteLLMBackend.health) --
+    # resolve_backend never exits for it, regardless of the skip flag.
+    monkeypatch.delenv("SP_SKIP_BACKEND_HEALTHCHECK", raising=False)
+    b = asyncio.run(resolve_backend(_s("none")))
+    assert isinstance(b, LiteLLMBackend)
+
+
+def test_skip_healthcheck_flag_bypasses_the_probe(monkeypatch):
+    # Explicit unit test for the escape hatch itself (conftest.py relies on
+    # this behaviour to keep create_app() offline in every fixture).
+    monkeypatch.setenv("SP_SKIP_BACKEND_HEALTHCHECK", "1")
+
+    async def bad(self):
+        from app.gateway.backends.base import BackendHealth
+        return BackendHealth(ok=False, detail="down")
+    monkeypatch.setattr(LiteLLMBackend, "health", bad)  # would exit if probed
+    b = asyncio.run(resolve_backend(_s("vllm")))
+    assert isinstance(b, LiteLLMBackend)
+
+
+def test_resolved_backend_client_not_bound_to_resolve_loop(monkeypatch):
+    """resolve_backend must not hand back something whose network layer is
+    bound to its (throwaway) loop.
 
     main.py runs resolve_backend under asyncio.run(), whose loop closes on
-    return, while requests are served on uvicorn's loop. httpx binds a client's
-    pool to the loop of its first request, so the SERVING client must be
-    untouched by the startup health probe — otherwise the first real call dies
-    with "Event loop is closed". This drives that exact two-loop split and
-    would have caught the DGX outage.
+    return, while requests are served on uvicorn's loop. LiteLLMBackend holds
+    no persistent client (litellm.acompletion opens its own connections per
+    call), so there is no cross-loop state to leak -- this test pins that
+    invariant so a future change that adds a persistent client on the class
+    is forced to reconsider the probe/serve split documented in
+    app/gateway/backends/factory.py.
     """
-    s = _s("vllm", fallback=False)
+    monkeypatch.delenv("SP_SKIP_BACKEND_HEALTHCHECK", raising=False)
 
-    # Loop A: resolve (health probe runs here and binds+closes the probe client).
-    async def _probe():
-        async def ok(self):
-            from app.gateway.backends.base import BackendHealth
-            return BackendHealth(ok=True, models=["local-8b"])
-        from unittest.mock import patch
-        with patch.object(VllmBackend, "health", ok):
-            return await resolve_backend(s)
-    backend = asyncio.run(_probe())  # loop A now closed
+    async def ok(self):
+        from app.gateway.backends.base import BackendHealth
+        return BackendHealth(ok=True, models=["local-8b"])
+    monkeypatch.setattr(LiteLLMBackend, "health", ok)
 
-    # Loop B: exercise the serving client. It must bind cleanly to THIS loop.
-    # A refused connection (ConnectError) is fine — that proves the client is
-    # live on loop B. "Event loop is closed" (RuntimeError) is the failure.
+    backend = asyncio.run(resolve_backend(_s("vllm")))  # loop A now closed
+    assert not hasattr(backend, "_client")
+
+    # Loop B: exercise generate() on a fresh loop -- must not raise
+    # "Event loop is closed".
+    from app.gateway.backends import litellm_backend
+    from tests._litellm_fake import fake_acompletion
+    monkeypatch.setattr(litellm_backend, "acompletion", fake_acompletion)
+
     async def _serve():
-        import httpx
         from app.models import Message
+        s = _s("vllm")
         price = s.pricing.models["local-8b"]
-        try:
-            await backend.generate("local-8b", [Message(role="user", content="hi")],
-                                    price, "cheap", {})
-        except httpx.HTTPError:
-            pass  # network-level failure = client is loop-B-bound, which is the point
-    asyncio.run(_serve())  # must NOT raise RuntimeError: Event loop is closed
-
-
-def test_mock_and_none_never_unhealthy():
-    # mock/none health is always ok -> resolve_backend never falls back for them.
-    b_mock = asyncio.run(resolve_backend(_s("mock", fallback=False)))
-    assert isinstance(b_mock, MockBackend)
-    b_none = asyncio.run(resolve_backend(_s("none", fallback=False)))
-    assert isinstance(b_none, MockBackend)
+        await backend.generate("local-8b", [Message(role="user", content="hi")],
+                                price, "cheap", {})
+    asyncio.run(_serve())

@@ -1,11 +1,18 @@
 import os
 os.environ.setdefault("SP_PII_DETECTION", "regex")
-# config/serving.yaml's shipped default is now `vllm` (LiteLLM gateway swap,
+# config/serving.yaml's shipped default is `vllm` (LiteLLM gateway swap,
 # Task 2) so the demo boots against a real backend. Tests must stay offline
-# and fast, so pin the mock backend here — same reasoning/pattern as
-# SP_PII_DETECTION above. Without this, every create_app() (via the `client`
-# fixture) health-checks an unreachable vllm host and hangs.
-os.environ.setdefault("SP_INFERENCE_BACKEND", "mock")
+# and fast: keep onprem enabled (SP_INFERENCE_BACKEND=vllm, same as
+# production) so serving tests still route to onprem candidates, but skip
+# the real network health probe that `create_app()` would otherwise run at
+# import time (every `client`/`live_internal_server` fixture) — mock is gone,
+# so there is no fallback, and an unprobed real vllm host would hang or
+# sys.exit(1) at test collection. See app/gateway/backends/factory.py's
+# resolve_backend docstring for the flag's contract. Generation itself is
+# driven by the autouse `_fake_acompletion` fixture below (a monkeypatched
+# litellm.acompletion), never a real network call.
+os.environ.setdefault("SP_INFERENCE_BACKEND", "vllm")
+os.environ.setdefault("SP_SKIP_BACKEND_HEALTHCHECK", "1")
 # Each create_app() gets its own in-memory SQLite (StaticPool → one connection
 # per engine → isolated DB), so the application/token/usage store never leaks
 # state across tests and no DB server is needed.
@@ -22,12 +29,26 @@ from fastapi.testclient import TestClient
 from app.main import create_app
 from app.compression.ccr import CCRStore
 from app.config.loader import load_settings
-from app.gateway.backends.mock import MockBackend
+from app.gateway.backends import litellm_backend
 from app.gateway.gateway import Gateway
 from app.pipeline import Pipeline
 from app.policy.detectors import make_detector
 from app.policy.gate import Gate
 from app.routing.router import Router
+from tests._litellm_fake import _DeterministicLiteLLM, fake_acompletion
+
+
+@pytest.fixture(autouse=True)
+def _fake_acompletion(monkeypatch):
+    """Autouse: any test that builds the real pipeline/`client` and actually
+    generates gets a canned completion instead of a network call. Tests that
+    need specific content/confidence/logprobs monkeypatch `litellm_backend.
+    acompletion` locally (that local monkeypatch wins — it's applied after
+    this fixture's, in the same test body). Tests that use
+    `_DeterministicLiteLLM` never call `acompletion` at all, so this fixture
+    is a no-op for them.
+    """
+    monkeypatch.setattr(litellm_backend, "acompletion", fake_acompletion)
 
 
 @pytest.fixture
@@ -50,7 +71,7 @@ def compression_on_pipeline() -> Pipeline:
 
     detector = make_detector(settings.serving.pii_detection)
     gate = Gate(settings, detector)
-    backend = MockBackend(settings)
+    backend = _DeterministicLiteLLM(settings)
     model_router = Router(settings)
     gateway = Gateway(settings, backend, model_router)
     ccr = CCRStore(ttl_seconds=co.ccr.ttl_hours * 3600)

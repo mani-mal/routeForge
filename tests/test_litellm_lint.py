@@ -19,3 +19,13 @@ def test_disabled_provider_without_prefix_is_ok():
 
 def test_shipped_config_lints_clean():
     enforce(load_settings())  # must not raise
+
+
+def test_mock_backend_is_now_rejected():
+    from app.config.lint import ConfigLintError
+    import pytest
+    s = load_settings()
+    s = s.model_copy(update={
+        "serving": s.serving.model_copy(update={"inference_backend": "mock"})})
+    with pytest.raises(ConfigLintError):
+        enforce(s)

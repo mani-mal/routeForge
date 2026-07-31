@@ -147,10 +147,10 @@ async def internal_chat_completions(run_id: str, request: Request):
     decision = model_router.select(ctx, tokens_after, complexity, None)
 
     hop_index = HOPS.next_hop_index(run_id)
-    # Attribute the same per-tier modeled latency the direct path gets from the
-    # backend (MockBackend.generate) — this endpoint fakes the completion and
-    # never calls generate, so without this every agent_hop record carries 0 ms
-    # and multi-step requests report 0 ms total latency across the console.
+    # Attribute the same per-tier modeled latency tests/_litellm_fake.py's
+    # _DeterministicLiteLLM.generate uses — this endpoint fakes the completion
+    # and never calls generate, so without this every agent_hop record carries
+    # 0 ms and multi-step requests report 0 ms total latency across the console.
     HOPS.record(run_id, DecisionRecord(
         step="agent_hop", chosen=decision.chosen.name,
         chosen_display_name=decision.chosen.display_name, reason=decision.reason,

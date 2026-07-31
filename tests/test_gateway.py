@@ -3,16 +3,16 @@ import asyncio
 import pytest
 
 from app.config.loader import load_settings
-from app.gateway.backends.mock import MockBackend
 from app.gateway.gateway import Gateway
 from app.models import ExecutionPolicyContext, Message
 from app.routing.router import Router
+from tests._litellm_fake import _DeterministicLiteLLM
 
 S = load_settings()
 
 
-class _AlwaysLowBackend(MockBackend):
-    async def generate(self, model, messages, price, tier, hint):
+class _AlwaysLowBackend(_DeterministicLiteLLM):
+    async def generate(self, model, messages, price, tier, hint, tools=None):
         r = await super().generate(model, messages, price, tier, {})
         return r.model_copy(update={"confidence": 0.1})
 
@@ -26,7 +26,7 @@ def _ctx(providers, risk="low"):
 
 
 def _run(ctx, hint):
-    gw = Gateway(S, MockBackend(S), Router(S))
+    gw = Gateway(S, _DeterministicLiteLLM(S), Router(S))
     msgs = [Message(role="user", content="hello")]
     return asyncio.run(gw.run(ctx, msgs, 20, 0.1, hint))
 
@@ -56,7 +56,7 @@ def test_escalation_cap_holds_when_confidence_stays_low():
 def test_onprem_only_backend_failure_fails_closed_not_hang():
     # onprem_only clamps to the best on-prem tier; a persistently failing backend
     # must fail closed (raise), not loop forever.
-    gw = Gateway(S, MockBackend(S), Router(S))
+    gw = Gateway(S, _DeterministicLiteLLM(S), Router(S))
     msgs = [Message(role="user", content="hello")]
     ctx = _ctx({"onprem"}, risk="high")  # only onprem allowed -> tier clamps to mid
     with pytest.raises(Exception):

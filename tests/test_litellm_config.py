@@ -28,10 +28,10 @@ def test_allow_backend_fallback_field_removed():
 
 
 def test_default_inference_backend_is_vllm(monkeypatch):
-    # tests/conftest.py pins SP_INFERENCE_BACKEND=mock so the suite stays
-    # offline/fast (see its comment) — unset it here to check the shipped
-    # config/serving.yaml default itself, same pattern as
-    # test_compression_config.py::test_sp_context_opt_env_override.
+    # tests/conftest.py pins SP_INFERENCE_BACKEND=vllm (+ the health-probe
+    # skip flag) so the suite stays offline/fast (see its comment) — unset it
+    # here to check the shipped config/serving.yaml default itself, same
+    # pattern as test_compression_config.py::test_sp_context_opt_env_override.
     monkeypatch.delenv("SP_INFERENCE_BACKEND", raising=False)
     s = load_settings()
     assert s.serving.inference_backend == "vllm"
