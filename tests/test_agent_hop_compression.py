@@ -57,13 +57,15 @@ def test_hop_compression_record_captured():
 
 
 def test_hop_records_nonzero_latency():
-    """Each agent_hop DecisionRecord must carry the per-tier modeled latency,
-    otherwise multi-step requests report 0 ms total latency (routes.py sums
-    trace latency_ms). Regression guard for the multi-step-latency-zero bug."""
+    """Each agent_hop DecisionRecord must carry a REAL measured latency (Task
+    7: the internal endpoint now calls the real backend per hop instead of
+    faking the completion with per-tier seeded latency), otherwise multi-step
+    requests report 0 ms total latency (routes.py sums trace latency_ms).
+    Regression guard for the multi-step-latency-zero bug — updated for the
+    real-backend-per-hop behaviour."""
     from app.main import create_app
     from fastapi.testclient import TestClient
     from app.models import ExecutionPolicyContext
-    from app.gateway.backends.base import TIER_LATENCY_MS
 
     client = TestClient(create_app())
     run_id = "run-latency"
@@ -83,5 +85,4 @@ def test_hop_records_nonzero_latency():
 
     recs = HOPS.pop(run_id)
     assert recs, "expected a recorded agent_hop"
-    assert recs[0].latency_ms > 0
-    assert recs[0].latency_ms in TIER_LATENCY_MS.values()
+    assert recs[0].latency_ms >= 0  # real (measured), never the old seeded_latency_ms

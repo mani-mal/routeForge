@@ -26,8 +26,20 @@ def _ctx():
         risk_class="low", require_verification=False, detected_entities=(),
         redaction_map_id=None)
 
-def test_hop_routes_records_and_streams(client):
+def test_hop_routes_records_and_streams(client, monkeypatch):
     from app.agent.internal_endpoint import HOPS
+    from app.gateway.backends import litellm_backend
+    from tests._litellm_fake import make_response
+
+    # Task 7: the endpoint now calls the REAL backend per hop, so a tool-call
+    # SSE response requires the (fake, monkeypatched) completion to actually
+    # return tool_calls — the old decide_agent_step content heuristic is gone.
+    tc = [{"id": "call-1", "type": "function",
+           "function": {"name": "calculator", "arguments": '{"expression":"12*7"}'}}]
+    async def _call(**k):
+        return make_response(content=None, tool_calls=tc)
+    monkeypatch.setattr(litellm_backend, "acompletion", _call)
+
     run_id = "run-abc"
     HOPS.start(run_id, _ctx())
     body = {"model": "auto", "stream": True,

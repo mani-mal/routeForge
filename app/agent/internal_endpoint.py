@@ -17,15 +17,12 @@ agent runtime process calls it).
 """
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from app.agent.mock_agent import decide_agent_step
 from app.agent.openai_sse import sse_final, sse_tool_call
-from app.gateway.backends.base import seeded_latency_ms
 from app.models import CompressionRecord, DecisionRecord, ExecutionPolicyContext, Message
 
 # Hosts allowed to call the internal endpoint. Real self-calls come from the
@@ -147,28 +144,31 @@ async def internal_chat_completions(run_id: str, request: Request):
     decision = model_router.select(ctx, tokens_after, complexity, None)
 
     hop_index = HOPS.next_hop_index(run_id)
-    # Attribute the same per-tier modeled latency tests/_litellm_fake.py's
-    # _DeterministicLiteLLM.generate uses — this endpoint fakes the completion
-    # and never calls generate, so without this every agent_hop record carries
-    # 0 ms and multi-step requests report 0 ms total latency across the console.
+
+    settings = request.app.state.settings
+    backend = request.app.state.backend
+    price = settings.pricing.models[decision.chosen.name]
+    gen = await backend.generate(
+        decision.chosen.name, hop_msgs, price, decision.chosen.tier, {}, tools=tools)
+
     HOPS.record(run_id, DecisionRecord(
         step="agent_hop", chosen=decision.chosen.name,
         chosen_display_name=decision.chosen.display_name, reason=decision.reason,
         rejected=decision.rejected, est_cost_usd=decision.est_cost_usd,
-        latency_ms=seeded_latency_ms(decision.chosen.tier),
+        actual_cost_usd=gen.cost_usd,        # REAL per-hop cost (was None + seeded latency)
+        latency_ms=gen.latency_ms,           # REAL latency (no more seeded_latency_ms)
         hop_index=hop_index, tokens_priced=tokens_after))
     HOPS.record_compression(run_id, comp.record)
 
-    # SSE step decision (tool-call vs final-answer) MUST run on the ORIGINAL
-    # raw `messages` — tool-call detection needs the raw role/content
-    # structure, not the compressed text. Only pricing/routing above use the
-    # compressed count.
-    step = decide_agent_step(messages, tools)
-    if step["kind"] == "tool_call":
-        gen = sse_tool_call(
-            model=decision.chosen.name, call_id=f"call-{hop_index}",
-            tool_name=step["tool_name"], arguments_json=json.dumps(step["arguments"]))
+    # Per-hop = ONE real call, no escalation/fallback here — escalation stays a
+    # direct-path (Gateway.run) feature, unchanged from the previously-faked
+    # multi-step behaviour. Serialize the REAL completion to SSE: a tool_calls
+    # message drives NAT's tool execution; otherwise it's the final answer.
+    if gen.tool_calls:
+        first = gen.tool_calls[0]
+        stream = sse_tool_call(
+            model=decision.chosen.name, call_id=first.get("id", f"call-{hop_index}"),
+            tool_name=first["function"]["name"], arguments_json=first["function"]["arguments"])
     else:
-        gen = sse_final(model=decision.chosen.name, content=step["content"])
-
-    return StreamingResponse(gen, media_type="text/event-stream")
+        stream = sse_final(model=decision.chosen.name, content=gen.text)
+    return StreamingResponse(stream, media_type="text/event-stream")
