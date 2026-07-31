@@ -148,8 +148,16 @@ async def internal_chat_completions(run_id: str, request: Request):
     settings = request.app.state.settings
     backend = request.app.state.backend
     price = settings.pricing.models[decision.chosen.name]
+    # The model must receive the COMPRESSED content, not the raw hop_msgs —
+    # compress() returns a NEW list and never mutates its input, so passing
+    # hop_msgs here would send uncompressed text to the backend while
+    # tokens_priced/tokens_after (used for routing/pricing bookkeeping above)
+    # reflect the compressed count. That divergence breaks the two-lever cost
+    # story and CLAUDE.md's "router must price post-compression tokens; the
+    # model gets compressed content" rule. Matches the direct path
+    # (app/pipeline.py passes comp.messages into Gateway.run -> backend.generate).
     gen = await backend.generate(
-        decision.chosen.name, hop_msgs, price, decision.chosen.tier, {}, tools=tools)
+        decision.chosen.name, comp.messages, price, decision.chosen.tier, {}, tools=tools)
 
     HOPS.record(run_id, DecisionRecord(
         step="agent_hop", chosen=decision.chosen.name,
