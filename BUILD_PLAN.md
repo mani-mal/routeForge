@@ -22,6 +22,8 @@ residency rules, `allowed_providers` computed here, fail-closed handler.
 Scoring with configurable weights, model pool from config, mock backend with
 per-tier latency/cost, `DecisionRecord` with rejected candidates, cost accumulator
 plus all-frontier baseline.
+*(The mock backend named here is superseded by the LiteLLM gateway swap,
+2026-07-30 — mock is removed; egress is `LiteLLMBackend` for every provider.)*
 **Verify:** clean → cheap tier; PII → on-prem only; high-risk (cloud allowed) →
 frontier; high-risk + `onprem_only` → best on-prem tier + `require_verification`, never
 cloud.
@@ -75,6 +77,9 @@ Multi-stage Dockerfiles, compose with healthchecks, Helm chart, GreenLake values
 vLLM adapter (+ Semantic Router path), Dynamo + TensorRT-LLM adapter (use NVIDIA
 skills), managed-cloud path, startup validation and fallback.
 **Verify:** each backend satisfies the Protocol; `none` + `onprem_only` → rejected.
+*(Superseded by the LiteLLM gateway swap, 2026-07-30 — the per-backend hand-rolled
+adapters above were replaced by a single `LiteLLMBackend`; startup "fallback" is gone
+too, unreachable onprem is now a fail-closed `sys.exit(1)`.)*
 
 ## Cut list
 

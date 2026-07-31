@@ -7,7 +7,10 @@
 
 # On-prem serving path. This is the ONLY serving-path axis (see inference-backends
 # skill). The cloud path (managed_cloud) is not selected here — its availability is
-# providers.azure.enabled / providers.bedrock.enabled below.
+# providers.azure.enabled / providers.bedrock.enabled below. LiteLLM is the single
+# egress path for every provider (onprem/azure/bedrock alike) — there is no more
+# hand-rolled per-backend adapter. mock is removed: an unreachable onprem endpoint
+# at boot is a fail-closed `sys.exit(1)`, never a silent fallback.
 inference_backend: vllm          # vllm | dynamo | none   (mock removed — LiteLLM is the single egress path)
 
 vllm:

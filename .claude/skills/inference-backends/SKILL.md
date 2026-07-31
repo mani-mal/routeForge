@@ -1,12 +1,21 @@
 ---
 name: inference-backends
-description: Use when implementing or switching the inference backend - mock, vLLM, NVIDIA Dynamo with TensorRT-LLM, or none. Trigger on mentions of Dynamo, vLLM, TensorRT, inference backend, load distribution, GPU serving, or backend fallback.
+description: Use when implementing or switching the inference backend - vLLM, NVIDIA Dynamo with TensorRT-LLM, or none - all egressing through the single LiteLLM SDK path. Trigger on mentions of Dynamo, vLLM, TensorRT, inference backend, load distribution, GPU serving, or backend fallback.
 ---
 
-# Inference Backends — mock | vllm | dynamo | none
+# Inference Backends — vllm | dynamo | none
 
-Selected at startup by `inference_backend` in `config/serving.yaml`. **One interface,
-four implementations.** No code changes to switch.
+Selected at startup by `inference_backend` in `config/serving.yaml`. **One egress
+implementation** (`LiteLLMBackend`, `app/gateway/backends/litellm_backend.py`) serves
+every value of this axis — LiteLLM (the SDK, not `litellm.Router`) is called directly
+with a per-request model/provider mapping, never a hand-rolled per-backend adapter.
+`inference_backend` only changes which on-prem endpoint that mapping points at (or
+disables on-prem entirely). No code changes to switch.
+
+**`mock` is removed** (superseded by the LiteLLM gateway swap, 2026-07-30). There is
+no more deterministic canned-response path for a live demo run — `vllm` is the
+default, and tests that need determinism fake the LiteLLM SDK call itself
+(`tests/_litellm_fake.py`), not a `MockBackend` class.
 
 ## The two serving paths — one axis, not two
 
@@ -14,18 +23,22 @@ There is exactly **one** serving-path axis. Don't reintroduce a parallel
 `serving_paths` block; a second knob makes states like "backend vllm, path disabled"
 representable and meaningless.
 
-- **On-prem path** = `inference_backend`: `mock | vllm | dynamo | none`. `mock` is a
-  first-class path (the demo/dev path), not an afterthought — it is what every live
-  customer demo actually runs on. `vllm` → vLLM + Semantic Router; `dynamo` → Dynamo
-  + TensorRT-LLM; `none` → on-prem disabled.
+- **On-prem path** = `inference_backend`: `vllm | dynamo | none`. `vllm` → vLLM +
+  Semantic Router; `dynamo` → Dynamo + TensorRT-LLM; `none` → on-prem disabled.
 - **Cloud path** (managed_cloud, Azure/Bedrock) is **not** selected by
   `inference_backend`. Its availability is `providers.azure.enabled` /
   `providers.bedrock.enabled`, and the per-request router (step 6) picks it only for
   cloud-permitted requests. That's why `inference_backend` enumerates on-prem options
   only.
 
-"What's real vs simulated?" → `mock` is simulated (seeded); `vllm`/`dynamo` are real
-on-prem; managed_cloud is real cloud. Say so plainly.
+All providers — onprem, azure, bedrock — egress through the **same** `LiteLLMBackend`
+as an SDK call, always **behind the policy gate** (step 2 clears the request first;
+CLAUDE.md hard rule 1). What differs per provider is only the `litellm_prefix` /
+model-slug mapping in `config/serving.yaml` + `config/routing.yaml`'s pool, not the
+code path. "What's real vs simulated?" → `vllm`/`dynamo` are real on-prem;
+managed_cloud is real cloud; nothing here is a demo-safe simulation any more —
+if you need determinism for a test, fake the LiteLLM SDK call, don't reach for a mock
+backend class.
 
 ```python
 class InferenceBackend(Protocol):
@@ -35,20 +48,13 @@ class InferenceBackend(Protocol):
     def available_models(self) -> list[ModelInfo]: ...
 ```
 
-## mock (default)
+`LiteLLMBackend` is the sole implementer of this Protocol.
 
-Demo-safe: deterministic, no GPU, no network, never fails live. Seed responses by
-prompt hash; simulate per-tier latency and token counts so cost math stays realistic.
-Cheap tier ~200ms, frontier ~2s — the UI needs visible spread.
+## vllm (default)
 
-**Use this for the customer demo.** Real backends are for proving the integration,
-not for the live run.
-
-## vllm
-
-vLLM exposes an OpenAI-compatible server, so the adapter is thin — point an
-`AsyncOpenAI` client at `vllm.base_url`. Read `/v1/models` at startup to populate the
-on-prem tier.
+vLLM exposes an OpenAI-compatible server. `LiteLLMBackend` addresses it through
+LiteLLM's `openai/` prefix pointed at `vllm.base_url` (see `providers.onprem` in
+`config/serving.yaml`) — there is no separate `AsyncOpenAI`-based adapter anymore.
 
 ## dynamo
 
@@ -73,29 +79,33 @@ path only in GreenLake.
 
 ## none
 
-No local inference. On-prem tier is **disabled**, and `onprem_only` requests must be
-**rejected with a clear error**. Never silently route them to cloud — that inverts
-the entire privacy claim. Test this explicitly.
+No local inference. `LiteLLMBackend` still constructs (its `health()` reports
+`ok=True` with no network probe — there's no onprem server to check), but on-prem is
+dropped from the enabled provider set structurally in `app/policy/context.py`, so an
+`onprem_only` request's `allowed_providers` is empty and the router rejects it
+downstream. Never silently route it to cloud — that inverts the entire privacy claim.
+Test this explicitly.
 
-## Startup validation
+## Startup validation — fail-closed, no fallback
+
+`allow_backend_fallback` **no longer exists.** An unreachable onprem endpoint
+(`vllm`/`dynamo`) at boot is always a hard failure:
 
 ```python
 health = await backend.health()
 if not health.ok:
-    if cfg.allow_backend_fallback:
-        log.warning("backend_unavailable_falling_back", backend=cfg.inference_backend)
-        backend = MockBackend()
-    else:
-        sys.exit(1)
+    log.error("backend_unavailable_no_fallback", backend=cfg.inference_backend)
+    sys.exit(1)
 ```
 
-Validate before serving traffic. Print the active backend and model list in the
-banner — when a demo misbehaves, the first question is always "which backend is it
-actually on?"
+There is no mock to fall back to. Validate before serving traffic. Print the active
+backend and model list in the banner — when a demo misbehaves, the first question is
+always "which backend is it actually on?"
 
 ## Tests
 
-- Each backend satisfies the Protocol
-- `none` + `onprem_only` → rejected, no cloud call
-- Unreachable backend + `allow_backend_fallback: false` → non-zero exit
-- Unreachable backend + fallback true → mock, warning logged
+- `LiteLLMBackend` satisfies the Protocol for every `inference_backend` value
+- `none` + `onprem_only` → `allowed_providers` empty, rejected, no cloud call
+  (`tests/test_none_backend.py`)
+- Unreachable onprem endpoint at boot → non-zero exit, no fallback of any kind
+- The config lint rejects `mock` as a value of `inference_backend` outright
