@@ -1,6 +1,7 @@
 # Serving Plane API image — multi-stage, non-root, pinned bases.
-# Default runtime is the demo-safe path: inference_backend=mock, regex PII
-# detector, deterministic compressor — no GPU, no network, no API keys.
+# Default runtime is the safe-boot path: inference_backend=none (on-prem disabled),
+# regex PII detector — no GPU, no network, no API keys. Real deploys set
+# SP_INFERENCE_BACKEND=vllm|dynamo; every LLM call egresses via LiteLLM.
 #
 # EXTRAS build-arg controls which optional dependency groups are installed:
 #   "agent,observability"  (default) — NAT multi-step agent + Langfuse export
@@ -72,8 +73,11 @@ COPY --from=builder --chown=app:app /app /app
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
-    # Demo-safe defaults; override via compose/Helm env.
-    SP_INFERENCE_BACKEND=mock \
+    # Safe-boot defaults; override via compose/Helm/K8s env. `none` disables the
+    # on-prem path so a bare `docker run` boots with no external deps (mock was
+    # removed in the LiteLLM gateway swap — it is no longer a valid value and the
+    # config lint would reject it). Real deploys set SP_INFERENCE_BACKEND=vllm|dynamo.
+    SP_INFERENCE_BACKEND=none \
     SP_PII_DETECTION=regex \
     SP_SERVER_PORT=8080
 

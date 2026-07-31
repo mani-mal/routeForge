@@ -23,9 +23,12 @@ kind: List
 items:
 
 # --- serving.yaml override (infra switches only) -----------------------------
-# allow_backend_fallback:false so an unreachable vLLM makes the API exit(1)
-# loudly instead of silently dropping to mock — the right setting for a GPU
-# smoke test (see deploy/dgx_lab README / backends README).
+# inference_backend:vllm points every onprem LLM call at the in-cluster vLLM via
+# LiteLLM. mock is gone (LiteLLM gateway swap, 2026-07-30): an unreachable vLLM at
+# boot is a fail-closed sys.exit(1), never a silent fallback — allow_backend_fallback
+# no longer exists. Every ENABLED provider must carry a litellm_prefix map (the
+# config lint fails the boot otherwise), which is why the providers block below is
+# fully specified rather than {enabled: true}.
 - apiVersion: v1
   kind: ConfigMap
   metadata:
@@ -33,7 +36,6 @@ items:
   data:
     serving.yaml: |
       inference_backend: vllm
-      allow_backend_fallback: false
 
       vllm:
         base_url: http://vllm-local-8b:8000/v1
@@ -70,10 +72,14 @@ items:
           host: http://langfuse-web:3000
           redact_on_export: true
 
+      # LiteLLM egress map. onprem enabled -> MUST have litellm_prefix (openai, for
+      # the vLLM OpenAI-compatible endpoint above); its api key reads SP_ONPREM_API_KEY
+      # (unset -> LiteLLMBackend defaults to sk-noauth, which vLLM accepts). azure/
+      # bedrock disabled here; their prefixes are declared for a one-flag enable later.
       providers:
-        onprem:  {enabled: true}
-        azure:   {enabled: false}
-        bedrock: {enabled: false}
+        onprem:  {enabled: true,  litellm_prefix: openai,  api_key_env: SP_ONPREM_API_KEY}
+        azure:   {enabled: false, litellm_prefix: azure,   api_base_env: AZURE_API_BASE, api_key_env: AZURE_API_KEY, api_version_env: AZURE_API_VERSION}
+        bedrock: {enabled: false, litellm_prefix: bedrock}
 
       agent:
         runtime: nat
@@ -102,16 +108,15 @@ items:
         - name: ghcr-pull
         containers:
         - name: api
-          image: ghcr.io/mani-mal/serving-plane-api:0.5.0
+          image: ghcr.io/mani-mal/serving-plane-api:0.6.0
           ports: [{name: http, containerPort: 8080}]
           env:
           - {name: SP_SERVER_PORT, value: "8080"}
-          # The image bakes demo-safe ENV defaults (SP_INFERENCE_BACKEND=mock,
-          # SP_PII_DETECTION=regex), and the loader gives env precedence OVER the
+          # The image bakes SP_INFERENCE_BACKEND=none / SP_PII_DETECTION=regex (safe
+          # boot with no external deps), and the loader gives env precedence OVER the
           # mounted serving.yaml — so these MUST be set here or the ConfigMap's
-          # inference_backend/pii_detection are silently ignored. base_url and
-          # allow_backend_fallback are not env-settable and still come from the
-          # mounted file.
+          # inference_backend/pii_detection are silently ignored. base_url is not
+          # env-settable and still comes from the mounted file.
           - {name: SP_INFERENCE_BACKEND, value: "vllm"}
           - {name: SP_PII_DETECTION, value: "presidio"}
           # Attach request/response I/O to the serving.request Langfuse trace so
@@ -250,7 +255,7 @@ items:
         - name: ghcr-pull
         containers:
         - name: ui
-          image: ghcr.io/mani-mal/serving-plane-ui:0.5.0
+          image: ghcr.io/mani-mal/serving-plane-ui:0.6.0
           ports: [{name: http, containerPort: 80}]
           resources:
             requests: {cpu: "50m", memory: 64Mi}
