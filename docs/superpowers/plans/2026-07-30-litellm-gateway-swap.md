@@ -250,31 +250,33 @@ git commit -m "feat(config): provider->LiteLLM map, drop allow_backend_fallback,
 
 ---
 
-## Task 3: Config lint — drop mock, drop fallback, require connection config
+## Task 3: Config lint — require LiteLLM map for enabled providers
+
+> **CONTROLLER AMENDMENT (2026-07-31):** This task no longer rejects the `mock`
+> backend — that move is deferred to Task 5. Reason: Task 2 pinned
+> `SP_INFERENCE_BACKEND=mock` in `tests/conftest.py` to stop the import-time
+> `create_app()` from hanging on a network health probe (now that the default is
+> `vllm`). If Task 3 made the lint reject `mock`, every test's `create_app()` →
+> `enforce()` would raise `ConfigLintError` and the whole suite would break —
+> while Task 3's own steps only run the lint tests and wouldn't catch it. Task 5
+> removes `MockBackend`, drops `mock` from `_VALID_BACKENDS`, and fixes conftest
+> atomically. So Task 3 does ONLY the provider-map check and leaves
+> `_VALID_BACKENDS` untouched.
 
 **Files:**
-- Modify: `app/config/lint.py:56` (`_VALID_BACKENDS`), `lint_settings`/`enforce`
+- Modify: `app/config/lint.py` — `lint_settings` only (new provider-map check; do **NOT** touch `_VALID_BACKENDS`)
 - Test: `tests/test_litellm_lint.py`
 
 **Interfaces:**
 - Consumes: `ProviderCfg.litellm_prefix` (Task 2).
-- Produces: named lint violations `BACKEND_MOCK_REMOVED` (via existing enum check), `PROVIDER_NO_LITELLM_MAP`.
+- Produces: named lint violation `PROVIDER_NO_LITELLM_MAP`. (The `mock`-backend rejection is Task 5's, not this task's.)
 
 - [ ] **Step 1: Write the failing test**
 
 ```python
 # tests/test_litellm_lint.py
-import pytest
 from app.config.loader import load_settings
-from app.config.lint import enforce, lint_settings, ConfigLintError
-
-
-def test_mock_backend_is_now_rejected():
-    s = load_settings()
-    s = s.model_copy(update={
-        "serving": s.serving.model_copy(update={"inference_backend": "mock"})})
-    with pytest.raises(ConfigLintError):
-        enforce(s)
+from app.config.lint import enforce, lint_settings
 
 
 def test_enabled_provider_without_litellm_prefix_is_a_violation():
@@ -299,13 +301,11 @@ def test_shipped_config_lints_clean():
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `uv run pytest tests/test_litellm_lint.py -q`
-Expected: FAIL (mock still valid; no PROVIDER_NO_LITELLM_MAP rule).
+Expected: FAIL (no PROVIDER_NO_LITELLM_MAP rule yet).
 
 - [ ] **Step 3: Update the lint**
 
-`app/config/lint.py`:
-- `_VALID_BACKENDS = ("vllm", "dynamo", "none")` (drop `"mock"`).
-- In `lint_settings`, before `return errs`, add:
+`app/config/lint.py` — in `lint_settings`, before `return errs`, add (do **NOT** modify `_VALID_BACKENDS`; `mock` stays valid until Task 5 removes `MockBackend`):
 
 ```python
     # Every ENABLED provider must have a LiteLLM route, or the backend can't
@@ -320,14 +320,14 @@ Expected: FAIL (mock still valid; no PROVIDER_NO_LITELLM_MAP rule).
 
 - [ ] **Step 4: Run to verify pass**
 
-Run: `uv run pytest tests/test_litellm_lint.py tests/test_config_lint.py -q`
-Expected: PASS (new file; existing lint tests still green — if any asserted `mock` valid, this task fixes them).
+Run: `uv run pytest tests/test_litellm_lint.py tests/test_config_lint.py -q` then the full suite `uv run pytest -q`.
+Expected: PASS. The full suite must stay green (this task adds a check that does not fire on the shipped config, and leaves `mock` valid). The pre-existing `test_nat_workflow_config.py::test_workflow_validates` may fail if the `nat` CLI is absent — ignore only that one.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add app/config/lint.py tests/test_litellm_lint.py
-git commit -m "feat(lint): reject mock backend, require litellm map for enabled providers"
+git commit -m "feat(lint): require litellm map for enabled providers"
 ```
 
 ---
@@ -630,14 +630,33 @@ git commit -m "feat(gateway): LiteLLMBackend.generate (mapping, cost, confidence
 
 This is the atomic cutover: it starts green (old adapters still present, `LiteLLMBackend` added in Task 4) and ends green (adapters gone, every test on `LiteLLMBackend`). Large but coherent — review the whole diff.
 
+> **CONTROLLER AMENDMENT (2026-07-31):** This task now ALSO owns two things moved
+> here from Task 3 / surfaced by Task 2:
+> 1. **Drop `mock` from `_VALID_BACKENDS` in `app/config/lint.py`** and add the
+>    `test_mock_backend_is_now_rejected` test (Step 8 below). This is safe only
+>    here because MockBackend is deleted and conftest stops pinning
+>    `SP_INFERENCE_BACKEND=mock` in the same task.
+> 2. **Fix the import-time `create_app()` health-probe hang.** Task 2 changed the
+>    default backend to `vllm` and bridged the resulting hang by pinning
+>    `SP_INFERENCE_BACKEND=mock` in `tests/conftest.py`. With `mock` gone, that
+>    bridge must be replaced: add an `SP_SKIP_BACKEND_HEALTHCHECK` escape hatch to
+>    `resolve_backend` (Step 4) and have conftest set `SP_INFERENCE_BACKEND=vllm`
+>    + `SP_SKIP_BACKEND_HEALTHCHECK=1` (Step 6) so the module-level
+>    `app = create_app()` in `app/main.py` and every fixture build neither hangs
+>    nor `sys.exit(1)`s, while onprem stays enabled for serving tests.
+>
+> Also clean up the two shims Task 2 left behind (its report, concern #3): the
+> dead `allow_backend_fallback` lookup in `app/config/loader.py` and the
+> `getattr(..., True)` guard in `app/gateway/backends/factory.py`.
+
 **Files:**
-- Modify: `app/gateway/backends/litellm_backend.py` (`health`), `app/gateway/backends/factory.py`, `app/main.py:98,103` (add `app.state.backend`)
-- Modify: `tests/conftest.py:19,47`, `tests/test_gateway.py`, `tests/test_two_lever_cost.py`, `tests/test_display_name.py`, `tests/test_controls.py`, `tests/test_backend_selection.py`, `tests/test_confidence_calibration.py`, `tests/test_backends.py`
+- Modify: `app/gateway/backends/litellm_backend.py` (`health`), `app/gateway/backends/factory.py`, `app/config/lint.py` (`_VALID_BACKENDS`), `app/config/loader.py` (remove dead shim), `app/main.py:98,103` (add `app.state.backend`)
+- Modify: `tests/conftest.py`, `tests/test_gateway.py`, `tests/test_two_lever_cost.py`, `tests/test_display_name.py`, `tests/test_controls.py`, `tests/test_backend_selection.py`, `tests/test_confidence_calibration.py`, `tests/test_backends.py`, `tests/test_litellm_lint.py` (add the moved mock-rejection test)
 - Delete: `app/gateway/backends/mock.py`, `vllm.py`, `dynamo.py`, `openai_compat.py`, `tests/test_vllm_backend.py`, `tests/test_dynamo_backend.py`
 
 **Interfaces:**
 - Consumes: `LiteLLMBackend` (Task 4).
-- Produces: `make_backend(settings) -> LiteLLMBackend`; `resolve_backend` exits non-zero when the onprem endpoint is unreachable (no mock fallback); `app.state.backend` set in `create_app`.
+- Produces: `make_backend(settings) -> LiteLLMBackend`; `resolve_backend` exits non-zero when the onprem endpoint is unreachable (no mock fallback) UNLESS `SP_SKIP_BACKEND_HEALTHCHECK` is set; `app.state.backend` set in `create_app`; lint rejects `mock`.
 
 - [ ] **Step 1: Implement `LiteLLMBackend.health`**
 
@@ -709,6 +728,14 @@ async def resolve_backend(settings: Settings) -> LiteLLMBackend:
     # Probe with a throwaway instance (loop-safety, see README), serve with a
     # fresh one. No mock fallback exists any more: an unreachable onprem backend
     # is a fail-closed boot error (never silently degrade in a customer deploy).
+    #
+    # SP_SKIP_BACKEND_HEALTHCHECK: test escape hatch. app/main.py builds
+    # `app = create_app()` at IMPORT time (before any test fixture/monkeypatch),
+    # so a real vllm/dynamo probe would hang or sys.exit(1) at test collection.
+    # Tests set this to build the backend without a network probe; generation is
+    # driven by a monkeypatched litellm.acompletion. Never set in production.
+    if os.environ.get("SP_SKIP_BACKEND_HEALTHCHECK"):
+        return make_backend(settings)
     probe = make_backend(settings)
     health = await probe.health()
     if not health.ok:
@@ -720,7 +747,9 @@ async def resolve_backend(settings: Settings) -> LiteLLMBackend:
     return make_backend(settings)
 ```
 
-Update the module docstring: remove the `mock`/`none` MockBackend description; document that `none` skips the onprem probe (health ok=True) and that onprem_only rejection is still enforced in `context.py`. (`_aclose` is no longer needed — `LiteLLMBackend` holds no persistent client; remove it and its call.)
+Add `import os` to `factory.py` if not present. Update the module docstring: remove the `mock`/`none` MockBackend description; document that `none` skips the onprem probe (health ok=True), that `SP_SKIP_BACKEND_HEALTHCHECK` is the test-only probe bypass, and that onprem_only rejection is still enforced in `context.py`. (`_aclose` is no longer needed — `LiteLLMBackend` holds no persistent client; remove it and its call.)
+
+**Step 2 test note:** `test_unreachable_onprem_exits` must `monkeypatch.delenv("SP_SKIP_BACKEND_HEALTHCHECK", raising=False)` before asserting `SystemExit`, since conftest sets that flag process-wide (Step 6) and it would otherwise bypass the probe the test is exercising.
 
 - [ ] **Step 5: Wire `app.state.backend` in `main.py`**
 
@@ -731,7 +760,10 @@ After `backend = asyncio.run(resolve_backend(settings))` add `app.state.backend 
 Delete `app/gateway/backends/{mock,vllm,dynamo,openai_compat}.py` and `tests/test_vllm_backend.py`, `tests/test_dynamo_backend.py`.
 
 Re-point constructions of `MockBackend(...)` to a monkeypatched `LiteLLMBackend`:
-- `tests/conftest.py`: replace `from app.gateway.backends.mock import MockBackend` and `backend = MockBackend(settings)` (line 47) with `LiteLLMBackend(settings)`. Because fixtures build a real pipeline that will call `acompletion`, add an autouse fixture in `conftest.py` that monkeypatches `app.gateway.backends.litellm_backend.acompletion` with a recording async fake returning `make_response()` (import from `tests._litellm_fake`). Tests that need specific content/confidence override it locally.
+- `tests/conftest.py`:
+  - Replace the Task-2 bridge `os.environ.setdefault("SP_INFERENCE_BACKEND", "mock")` with **two** lines: `os.environ.setdefault("SP_INFERENCE_BACKEND", "vllm")` and `os.environ.setdefault("SP_SKIP_BACKEND_HEALTHCHECK", "1")`. This keeps onprem enabled (so serving tests still route to onprem candidates) while stopping the import-time `create_app()` from probing the network (see Step 4). `mock` is no longer a valid backend value.
+  - Replace `from app.gateway.backends.mock import MockBackend` and `backend = MockBackend(settings)` (in the `compression_on_pipeline` fixture) with a `_DeterministicLiteLLM(settings)` (the helper in `tests/_litellm_fake.py`, below) so that fixture keeps its deterministic seeded generation without a network call.
+  - Add an autouse fixture that monkeypatches `app.gateway.backends.litellm_backend.acompletion` with a recording async fake returning `make_response()` (from `tests._litellm_fake`), so any test that builds the real pipeline/`client` and actually generates gets a canned completion instead of a network call. Tests that need specific content/confidence override it locally.
 - `tests/test_gateway.py`: `_AlwaysLowBackend(MockBackend)` → subclass `LiteLLMBackend` and override `generate` to return a fixed low-confidence `GenerationResult` (it already overrode behavior; keep that pattern, no `acompletion` needed since `generate` is overridden).
 - `tests/test_two_lever_cost.py`, `tests/test_display_name.py`, `tests/test_controls.py`: `MockBackend(...)` → `LiteLLMBackend(...)` + the recording-acompletion monkeypatch (or a `generate` override returning a deterministic `GenerationResult`, whichever the existing assertions need — these assert on cost/two-lever/display, so a deterministic `generate` override keyed off tier/price is cleanest; provide a small `_DeterministicLiteLLM(LiteLLMBackend)` helper in each that mirrors the old MockBackend seeded logic).
 - `tests/test_backends.py`: rewrite as a thin `LiteLLMBackend.generate` smoke test using the fake (or fold into `test_litellm_backend.py` and delete).
@@ -744,15 +776,40 @@ Re-point constructions of `MockBackend(...)` to a monkeypatched `LiteLLMBackend`
 Run: `uv run pytest -q`
 Expected: PASS except pre-existing unrelated `test_nat_workflow_config.py::test_workflow_validates` (nat CLI not installed — fails identically on `main`). No import errors for removed modules.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 8: Now reject `mock` in the lint (moved from Task 3) + clean the Task-2 shims**
+
+Only now that `MockBackend` is deleted and conftest no longer pins `SP_INFERENCE_BACKEND=mock`:
+- `app/config/lint.py`: `_VALID_BACKENDS = ("vllm", "dynamo", "none")` (drop `"mock"`).
+- `app/config/loader.py`: remove the now-dead `allow_backend_fallback` lookup Task 2 left in place (its report concern #3).
+- Add the moved test to `tests/test_litellm_lint.py`:
+
+```python
+def test_mock_backend_is_now_rejected():
+    from app.config.lint import ConfigLintError
+    import pytest
+    s = load_settings()
+    s = s.model_copy(update={
+        "serving": s.serving.model_copy(update={"inference_backend": "mock"})})
+    with pytest.raises(ConfigLintError):
+        enforce(s)
+```
+
+Run `uv run pytest tests/test_litellm_lint.py -q` then the full suite `uv run pytest -q` again — still green (conftest now uses `vllm`, not `mock`).
+
+- [ ] **Step 9: Commit**
+
+Stage by explicit path (no bare `git add -A` on the repo root):
 
 ```bash
-git add -A app/gateway/backends app/main.py tests/
+git add app/gateway/backends/factory.py app/gateway/backends/litellm_backend.py \
+        app/config/lint.py app/config/loader.py app/main.py \
+        tests/conftest.py tests/_litellm_fake.py tests/test_backend_selection.py \
+        tests/test_gateway.py tests/test_two_lever_cost.py tests/test_display_name.py \
+        tests/test_controls.py tests/test_confidence_calibration.py tests/test_backends.py \
+        tests/test_litellm_lint.py
 git rm app/gateway/backends/mock.py app/gateway/backends/vllm.py app/gateway/backends/dynamo.py app/gateway/backends/openai_compat.py tests/test_vllm_backend.py tests/test_dynamo_backend.py
 git commit -m "refactor(gateway): cut over to LiteLLMBackend, delete hand-rolled adapters"
 ```
-
-> Staging note: use explicit paths, not a bare `git add -A` on the repo root. Stage the `app/gateway/backends/` dir, `app/main.py`, and the touched `tests/` files by name.
 
 ---
 
