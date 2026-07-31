@@ -112,6 +112,29 @@ def test_bare_fake_acompletion_direct_monkeypatch(monkeypatch):
     assert CALLS[0]["model"] == "openai/local-8b"
 
 
+def test_dynamo_api_base_gets_v1_suffix(monkeypatch):
+    """Finding 1 regression: dynamo.endpoint (config/serving.yaml) has no /v1,
+    but LiteLLM's openai/ provider appends /chat/completions directly to
+    api_base, so the egress call needs /v1 appended explicitly — mirroring
+    what health() already does for its /v1/models probe. Without this, a
+    dynamo generation call 404s."""
+    s = load_settings()
+    s = s.model_copy(update={
+        "serving": s.serving.model_copy(update={"inference_backend": "dynamo"})
+    })
+    b = litellm_backend.LiteLLMBackend(s)
+    _, conn = b._map("local-8b")
+    assert conn["api_base"] == "http://dynamo-frontend:8080/v1"
+
+
+def test_vllm_api_base_unchanged(monkeypatch):
+    """Guard against a double-/v1 regression: vllm.base_url already includes
+    /v1 in config/serving.yaml, so _map must not append another one."""
+    b = litellm_backend.LiteLLMBackend(load_settings())  # default inference_backend: vllm
+    _, conn = b._map("local-8b")
+    assert conn["api_base"] == "http://vllm:8000/v1"
+
+
 def test_onprem_disabled_when_backend_none(monkeypatch):
     """Guardrail 3, onprem branch: inference_backend == "none" means no local
     inference at all, so an onprem_only request must be REJECTED rather than

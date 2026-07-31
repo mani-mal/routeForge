@@ -49,7 +49,7 @@ class RecordingBackend:
     """Wraps `_DeterministicLiteLLM`, recording every model it's asked to
     generate for. Matches `InferenceBackend.generate`'s exact signature (see
     app/gateway/backends/base.py's Protocol): `generate(self, model: str,
-    messages, price, tier, hint)`.
+    messages, price, tier, hint, tools=None)`.
     """
     name = "recording"
 
@@ -57,7 +57,7 @@ class RecordingBackend:
         self.inner = inner
         self.models_called: list[str] = []
 
-    async def generate(self, model, messages, price, tier, hint):
+    async def generate(self, model, messages, price, tier, hint, tools: list[dict] | None = None):
         self.models_called.append(model)
         return await self.inner.generate(model, messages, price, tier, hint)
 

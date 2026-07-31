@@ -40,7 +40,7 @@ class LiteLLMBackend:
         if cand.provider == "onprem":
             ib = self._s.serving.inference_backend
             kwargs["api_base"] = (self._s.serving.vllm.base_url if ib == "vllm"
-                                  else self._s.serving.dynamo.endpoint)
+                                  else self._s.serving.dynamo.endpoint.rstrip("/") + "/v1")
         if pcfg.api_base_env:
             kwargs["api_base"] = os.environ.get(pcfg.api_base_env) or kwargs.get("api_base")
         if pcfg.api_key_env:
