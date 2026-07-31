@@ -12,10 +12,20 @@ port into the Pipeline (see app/main.py's _self_port()).
 import httpx
 import pytest
 
+from app.gateway.backends import litellm_backend
+from tests._litellm_fake import make_scripted_tool_then_final_acompletion
+
 pytest.importorskip("nat")
 
 
-def test_multistep_request_returns_multi_hop_trace(live_internal_server):
+def test_multistep_request_returns_multi_hop_trace(live_internal_server, monkeypatch):
+    # The autouse `_fake_acompletion` fixture (conftest.py) returns a single
+    # canned final answer, which would converge NAT in one hop. Drive a real
+    # tool_call -> tool result -> final sequence instead (reproducing the old
+    # mock_agent.decide_agent_step, now deleted) so this exercises >=2 hops.
+    monkeypatch.setattr(litellm_backend, "acompletion",
+                         make_scripted_tool_then_final_acompletion(
+                             arguments='{"expression": "12 * 7"}'))
     r = httpx.post(
         f"http://127.0.0.1:{live_internal_server.port}/v1/chat/completions",
         headers={"authorization": "Bearer acme-key"},

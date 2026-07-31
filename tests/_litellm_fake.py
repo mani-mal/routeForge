@@ -71,6 +71,31 @@ def make_recording_acompletion(response: FakeResponse):
     return _call
 
 
+def make_scripted_tool_then_final_acompletion(
+        *, tool_name: str = "calculator", arguments: str = '{"expression": "2+2"}'):
+    """Reproduces the old (deleted) `mock_agent.decide_agent_step` behaviour
+    as a scripted `litellm.acompletion` fake: the first call (no prior tool
+    result in the message history) emits a `tool_call` against `tool_name`;
+    once a `role == "tool"` message is present, emits a final answer echoing
+    the last tool result. Drives NAT through tool_call -> tool result ->
+    final = >=2 agent hops, unlike the autouse canned `fake_acompletion`
+    (single canned final answer) which converges in one hop.
+
+    Shared by the multi-step e2e tests (test_litellm_multistep.py,
+    test_agent_pipeline_e2e.py) so the script lives in exactly one place.
+    """
+    async def _call(**k):
+        msgs = k.get("messages", [])
+        if any(m.get("role") == "tool" for m in msgs):
+            last = next(m for m in reversed(msgs) if m.get("role") == "tool")
+            return make_response(content=f"The tool reported: {last.get('content', '')}",
+                                  prompt_tokens=15, completion_tokens=8)
+        tc = [{"id": "call-1", "type": "function",
+               "function": {"name": tool_name, "arguments": arguments}}]
+        return make_response(content=None, tool_calls=tc, prompt_tokens=20, completion_tokens=6)
+    return _call
+
+
 class _DeterministicLiteLLM(LiteLLMBackend):
     """Drop-in replacement for the deleted `MockBackend(settings)` in tests.
 

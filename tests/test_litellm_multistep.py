@@ -1,6 +1,10 @@
+import asyncio
+
+import pytest
+
 from app.agent.internal_endpoint import HOPS
 from app.gateway.backends import litellm_backend
-from tests._litellm_fake import make_response
+from tests._litellm_fake import make_response, make_scripted_tool_then_final_acompletion
 
 
 def test_hop_records_real_cost_and_latency(client, monkeypatch):
@@ -56,3 +60,24 @@ def test_tool_call_result_emits_tool_call_sse(client, monkeypatch):
     finally:
         if HOPS.has(run_id):
             HOPS.pop(run_id)
+
+
+def test_multistep_hits_real_backend_and_stays_onprem(live_internal_server, monkeypatch):
+    pytest.importorskip("nat")
+    monkeypatch.setattr(litellm_backend, "acompletion",
+                         make_scripted_tool_then_final_acompletion())
+    from app.agent import runtime as agent_runtime
+    from app.models import ChatRequest, ExecutionPolicyContext, Message
+
+    ctx = ExecutionPolicyContext(
+        request_id="r-ms", tenant_id="hospital", sensitivity="restricted",
+        onprem_only=True, allowed_providers=frozenset({"onprem"}),
+        allowed_models=frozenset(), max_cost_usd=1.0, max_latency_ms=60000,
+        risk_class="high", require_verification=True, detected_entities=(),
+        redaction_map_id=None)
+    req = ChatRequest(messages=[Message(role="user", content="what is 2+2?")])
+    result = asyncio.run(agent_runtime.run(ctx, req, port=live_internal_server.port))
+    assert result.hops, "expected >=1 real hop"
+    assert all(h.actual_cost_usd is not None for h in result.hops)  # real cost recorded
+    # onprem_only stayed on-prem: every chosen model is an onprem-tier slug.
+    assert all(h.chosen in {"local-8b", "local-32b"} for h in result.hops)

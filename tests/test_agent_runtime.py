@@ -43,28 +43,31 @@ def test_cap_exceeded_raises_and_leaves_no_hop_state(live_internal_server, monke
     rule 5) rather than serve it as a successful AgentResult — and must not
     leak the run's HopCollector entry when it does.
 
-    Forces non-convergence by making the mock agent always emit a tool call
-    (never a final answer), against a workflow config whose max_iterations
-    has been forced low via a patched `load_settings` (the real
-    `config/policy.yaml` stays untouched).
+    Forces non-convergence by making the litellm.acompletion fake always emit
+    a tool call (never a final answer), against a workflow config whose
+    max_iterations has been forced low via a patched `load_settings` (the
+    real `config/policy.yaml` stays untouched).
     """
     from app.agent import runtime
     from app.agent.internal_endpoint import HOPS
     from app.agent.runtime import AgentCapExceeded
     from app.config.loader import load_settings as real_load_settings
+    from app.gateway.backends import litellm_backend
+    from tests._litellm_fake import make_response
 
-    # internal_endpoint.py does `from app.agent.mock_agent import
-    # decide_agent_step`, binding the name into its own module namespace —
-    # patching app.agent.mock_agent.decide_agent_step would not affect the
-    # call site, so patch it where it's actually looked up.
-    monkeypatch.setattr(
-        "app.agent.internal_endpoint.decide_agent_step",
-        lambda messages, tools: {
-            "kind": "tool_call",
-            "tool_name": (tools[0]["function"]["name"] if tools else "calculator"),
-            "arguments": {"expression": "1 + 1"},
-        },
-    )
+    # internal_endpoint.py now calls the real backend (litellm.acompletion)
+    # per hop instead of the old scripted `decide_agent_step` — force
+    # non-convergence by making that fake ALWAYS return a tool_call (never a
+    # final answer), so NAT never stops on its own and the max_steps cap
+    # (forced to 2 below) is what raises.
+    async def _always_tool_call(**k):
+        tools = k.get("tools") or []
+        tc = [{"id": "call-1", "type": "function",
+               "function": {"name": (tools[0]["function"]["name"] if tools else "calculator"),
+                             "arguments": '{"expression": "1 + 1"}'}}]
+        return make_response(content=None, tool_calls=tc, prompt_tokens=10, completion_tokens=5)
+
+    monkeypatch.setattr(litellm_backend, "acompletion", _always_tool_call)
 
     settings = real_load_settings()
     settings.policy.agent_budgets = {**settings.policy.agent_budgets, "max_steps": 2}
