@@ -129,8 +129,11 @@ router's braces (guardrail 3).
 After the existing per-hop routing + compression, replace the faked completion:
 
 ```python
+# comp.messages = the COMPRESSED output (NOT raw hop_msgs) — the model must
+# receive, and be billed on, post-compression content, matching the direct path
+# and CLAUDE.md's post-compression pricing rule. (Corrected 2026-07-31 in review.)
 det_result = await backend.generate(
-    decision.chosen.name, hop_msgs, price, decision.chosen.tier, hint, tools=tools)
+    decision.chosen.name, comp.messages, price, decision.chosen.tier, hint, tools=tools)
 HOPS.record(run_id, DecisionRecord(
     step="agent_hop", chosen=decision.chosen.name, ...,
     latency_ms=det_result.latency_ms,            # REAL, not seeded

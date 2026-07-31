@@ -982,10 +982,15 @@ In `app/agent/internal_endpoint.py`:
     settings = request.app.state.settings
     backend = request.app.state.backend
     price = settings.pricing.models[decision.chosen.name]
-    hop_msgs = [Message(role=m.get("role", "user"), content=m["content"])
-                for m in messages if m.get("content")]
+    # CORRECTED (2026-07-31, Task 7 review): send comp.messages (the COMPRESSED
+    # output), NOT the raw hop_msgs. compress() returns a new list and never
+    # mutates hop_msgs, so passing hop_msgs would bill/price the model on the
+    # uncompressed prompt while tokens_priced is the compressed count — a
+    # two-lever divergence that violates CLAUDE.md ("price post-compression
+    # tokens; the model gets compressed content"). The direct path already
+    # sends comp.messages via Gateway.run.
     gen = await backend.generate(
-        decision.chosen.name, hop_msgs, price, decision.chosen.tier, {}, tools=tools)
+        decision.chosen.name, comp.messages, price, decision.chosen.tier, {}, tools=tools)
 
     HOPS.record(run_id, DecisionRecord(
         step="agent_hop", chosen=decision.chosen.name,
