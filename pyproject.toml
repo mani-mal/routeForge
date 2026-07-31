@@ -18,6 +18,10 @@ dependencies = [
   # Custom regex recognizers (per-app privacy rules): per-match timeout=
   # support for a ReDoS-safe matcher, which stdlib `re` lacks.
   "regex>=2024.0.0",
+  # Egress gateway (steps 7-8): single multi-provider path (onprem/Azure/Bedrock).
+  # Used as an SDK behind the policy gate, never as an ingress proxy. Already
+  # present transitively via nvidia-nat[langchain]; pinned here as a direct dep.
+  "litellm>=1.93,<2",
 ]
 
 [dependency-groups]

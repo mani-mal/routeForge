@@ -127,3 +127,7 @@ class GenerationResult(BaseModel):
     latency_ms: float
     cost_usd: float
     confidence: float
+    # Tool calls the model requested this turn (multi-step agent path). None on
+    # the direct path (which never passes tools). Each item is an OpenAI-shape
+    # tool_call dict: {id, type, function:{name, arguments}}.
+    tool_calls: list[dict] | None = None
