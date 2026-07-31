@@ -50,6 +50,15 @@ def lint_settings(s: Settings) -> list[str]:
             errs.append(
                 f"RESIDENCY_UNKNOWN {where}={val} not in {sorted(valid_residency)}")
 
+    # Every ENABLED provider must have a LiteLLM route, or the backend can't
+    # reach it. Disabled providers are skipped (their models are filtered out
+    # of any request's candidate pool upstream). onprem enabled-ness is the
+    # inference_backend axis; azure/bedrock is providers.*.enabled.
+    for pname, pcfg in s.serving.providers.items():
+        enabled = pcfg.enabled and not (pname == "onprem" and s.serving.inference_backend == "none")
+        if enabled and not pcfg.litellm_prefix:
+            errs.append(f"PROVIDER_NO_LITELLM_MAP {pname} has no litellm_prefix")
+
     return errs
 
 
