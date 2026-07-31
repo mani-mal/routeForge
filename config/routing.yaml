@@ -49,8 +49,8 @@ risk_floors:
 model_pool:
   - {name: local-8b,         provider: onprem,  tier: cheap,    display_name: "Qwen2.5-7B-Instruct (local)"}
   - {name: local-32b,        provider: onprem,  tier: mid,      display_name: "Qwen2.5-7B-Instruct (local)"}
-  - {name: azure-gpt-mid,    provider: azure,   tier: mid,      display_name: "GPT-4o mini (Azure)"}
-  - {name: bedrock-frontier, provider: bedrock, tier: frontier, display_name: "Claude Sonnet (Bedrock)"}
+  - {name: azure-gpt-mid,    provider: azure,   tier: mid,      display_name: "GPT-4o mini (Azure)",   litellm_model: "azure/gpt-4o-mini"}
+  - {name: bedrock-frontier, provider: bedrock, tier: frontier, display_name: "Claude Sonnet (Bedrock)", litellm_model: "bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0"}
 
 fallback:
   max_retries_same_provider: 1

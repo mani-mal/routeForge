@@ -1,5 +1,11 @@
 import os
 os.environ.setdefault("SP_PII_DETECTION", "regex")
+# config/serving.yaml's shipped default is now `vllm` (LiteLLM gateway swap,
+# Task 2) so the demo boots against a real backend. Tests must stay offline
+# and fast, so pin the mock backend here — same reasoning/pattern as
+# SP_PII_DETECTION above. Without this, every create_app() (via the `client`
+# fixture) health-checks an unreachable vllm host and hangs.
+os.environ.setdefault("SP_INFERENCE_BACKEND", "mock")
 # Each create_app() gets its own in-memory SQLite (StaticPool → one connection
 # per engine → isolated DB), so the application/token/usage store never leaks
 # state across tests and no DB server is needed.

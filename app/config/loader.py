@@ -65,7 +65,6 @@ def load_settings(config_dir: str = "config") -> Settings:
     serving = ServingCfg(
         inference_backend=os.environ.get(
             "SP_INFERENCE_BACKEND", serving_raw["inference_backend"]),
-        allow_backend_fallback=serving_raw["allow_backend_fallback"],
         providers=serving_raw["providers"],
         pii_detection=os.environ.get(
             "SP_PII_DETECTION", serving_raw["policy"]["pii_detection"]),

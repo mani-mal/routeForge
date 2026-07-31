@@ -9,6 +9,10 @@ class PoolCandidate(BaseModel):
     # `name` stays the stable slug that pricing/tier lookups and the served vLLM
     # model id key on — never render `name` to customers, never route on this.
     display_name: str | None = None
+    # Downstream LiteLLM model id when it differs from the routing slug (cloud
+    # deployment/model names). Defaults to f"{provider_prefix}/{name}" in the
+    # backend. onprem's served-model-name == `name`, so it needs no override.
+    litellm_model: str | None = None
 
 
 class RoutingCfg(BaseModel):
@@ -67,6 +71,16 @@ class PricingCfg(BaseModel):
 
 class ProviderCfg(BaseModel):
     enabled: bool
+    # LiteLLM connection (transport owner: serving.yaml). `litellm_prefix` is the
+    # LiteLLM provider route (openai | azure | bedrock). The *_env fields name the
+    # environment variables holding creds/endpoints (values never in config —
+    # secrets via .env only). onprem derives its api_base from the vllm/dynamo
+    # block per `inference_backend`, so it needs only a key env; bedrock reads
+    # standard AWS_* env, so it needs neither.
+    litellm_prefix: str | None = None
+    api_base_env: str | None = None
+    api_key_env: str | None = None
+    api_version_env: str | None = None
 
 
 class LangfuseCfg(BaseModel):
@@ -127,7 +141,6 @@ class DynamoCfg(BaseModel):
 
 class ServingCfg(BaseModel):
     inference_backend: str
-    allow_backend_fallback: bool
     providers: dict[str, ProviderCfg]
     pii_detection: str
     reject_stream_requests: bool

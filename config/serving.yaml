@@ -8,8 +8,7 @@
 # On-prem serving path. This is the ONLY serving-path axis (see inference-backends
 # skill). The cloud path (managed_cloud) is not selected here — its availability is
 # providers.azure.enabled / providers.bedrock.enabled below.
-inference_backend: mock          # mock | vllm | dynamo | none   (mock is the demo default)
-allow_backend_fallback: true     # false => exit(1) if backend unreachable
+inference_backend: vllm          # vllm | dynamo | none   (mock removed — LiteLLM is the single egress path)
 
 vllm:
   base_url: http://vllm:8000/v1
@@ -64,9 +63,9 @@ observability:
 # Provider *availability* (infra on/off) only. Tier membership is defined by the
 # pool in routing.yaml — the single source of truth for which model is which tier.
 providers:
-  onprem:  {enabled: true}       # on-prem serving path per inference_backend above
-  azure:   {enabled: false}      # managed_cloud path
-  bedrock: {enabled: false}      # managed_cloud path
+  onprem:  {enabled: true,  litellm_prefix: openai,  api_key_env: SP_ONPREM_API_KEY}
+  azure:   {enabled: false, litellm_prefix: azure,   api_base_env: AZURE_API_BASE, api_key_env: AZURE_API_KEY, api_version_env: AZURE_API_VERSION}
+  bedrock: {enabled: false, litellm_prefix: bedrock}
 
 agent:
   runtime: nat                   # NeMo Agent Toolkit

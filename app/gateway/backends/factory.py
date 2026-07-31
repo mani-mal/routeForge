@@ -73,7 +73,13 @@ async def resolve_backend(settings: Settings) -> InferenceBackend:
     health = await probe.health()  # called once; reused for the banner below
     await _aclose(probe)
     if not health.ok:
-        if settings.serving.allow_backend_fallback:
+        # `allow_backend_fallback` was removed from ServingCfg (Task 2 of the
+        # LiteLLM gateway swap; config/serving.yaml no longer sets it). This
+        # getattr keeps existing behaviour (default: fall back to mock) intact
+        # for the transition window and for tests/test_backend_selection.py,
+        # which still exercises the explicit on/off toggle via model_copy.
+        # Task 5 (cutover) removes this shim along with the mock-fallback path.
+        if getattr(settings.serving, "allow_backend_fallback", True):
             log.warning(
                 "backend_unavailable_falling_back backend=%s detail=%s",
                 settings.serving.inference_backend, health.detail)
