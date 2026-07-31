@@ -4,7 +4,7 @@ from app.config.loader import load_settings
 from app.config.schema import PriceCfg
 from app.models import Message
 from app.gateway.backends import litellm_backend
-from tests._litellm_fake import make_response, CALLS
+from tests._litellm_fake import make_response, fake_acompletion, CALLS
 
 
 def _price(name):
@@ -95,3 +95,33 @@ def test_disabled_provider_raises(monkeypatch):
     with pytest.raises(Exception):
         asyncio.run(b.generate("azure-gpt-mid", [Message(role="user", content="hi")],
                                _price("azure-gpt-mid"), "mid", {}))
+
+
+def test_bare_fake_acompletion_direct_monkeypatch(monkeypatch):
+    """Covers the previously-latent bug: monkeypatching acompletion with the
+    BARE fake_acompletion (no functools.partial, no wrapper) must work,
+    because that is the exact form the module docstring advertises and Tasks
+    5-8 rely on."""
+    import asyncio
+    monkeypatch.setattr(litellm_backend, "acompletion", fake_acompletion)
+    b = litellm_backend.LiteLLMBackend(load_settings())
+    r = asyncio.run(b.generate("local-8b", [Message(role="user", content="hi")],
+                               _price("local-8b"), "cheap", {}))
+    assert isinstance(r, litellm_backend.GenerationResult)
+    assert len(CALLS) == 1
+    assert CALLS[0]["model"] == "openai/local-8b"
+
+
+def test_onprem_disabled_when_backend_none(monkeypatch):
+    """Guardrail 3, onprem branch: inference_backend == "none" means no local
+    inference at all, so an onprem_only request must be REJECTED rather than
+    silently falling through — never routed to cloud (see CLAUDE.md hard rule
+    3 and the `none` backend rule)."""
+    _patch(monkeypatch, make_response())
+    s = load_settings()
+    s = s.model_copy(update={
+        "serving": s.serving.model_copy(update={"inference_backend": "none"})
+    })
+    b = litellm_backend.LiteLLMBackend(s)
+    with pytest.raises(Exception):
+        b._map("local-8b")

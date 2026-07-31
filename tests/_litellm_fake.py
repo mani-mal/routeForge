@@ -1,7 +1,17 @@
-"""Offline stand-in for litellm.acompletion. Monkeypatch
-app.gateway.backends.litellm_backend.acompletion with fake_acompletion (or a
-functools.partial of it) in tests. Records every call in CALLS so tests can
-assert the pinned model string / kwargs the backend passed."""
+"""Offline stand-in for litellm.acompletion. Two ways to monkeypatch
+app.gateway.backends.litellm_backend.acompletion in tests:
+
+- `fake_acompletion` — a bare async function. Use directly via
+  `monkeypatch.setattr(litellm_backend, "acompletion", fake_acompletion)`
+  when a default canned `make_response()` is fine.
+- `make_recording_acompletion(response)` — a factory. Use via
+  `monkeypatch.setattr(litellm_backend, "acompletion",
+  make_recording_acompletion(resp))` when the test needs a specific
+  `FakeResponse` (tool_calls / logprobs / token counts).
+
+Both record every call's kwargs in the module-level CALLS list so tests can
+assert the pinned model string / kwargs the backend passed. Clear CALLS in a
+fixture between tests."""
 from __future__ import annotations
 
 CALLS: list[dict] = []
@@ -30,11 +40,19 @@ def make_response(*, content: str | None = "ok", tool_calls: list[dict] | None =
     })
 
 
-def fake_acompletion(*, response: FakeResponse | None = None, **kwargs):
-    async def _call(**call_kwargs):
-        CALLS.append(call_kwargs)
-        return response if response is not None else make_response()
-    # Support both patch styles: partial(response=...) OR direct monkeypatch.
-    if response is not None or not kwargs:
-        return _call(**kwargs) if kwargs else _call
+async def fake_acompletion(**kwargs) -> FakeResponse:
+    """Drop-in default fake: `monkeypatch.setattr(litellm_backend,
+    "acompletion", fake_acompletion)` — no wrapper, no partial. Records the
+    call and returns a default make_response()."""
+    CALLS.append(kwargs)
+    return make_response()
+
+
+def make_recording_acompletion(response: FakeResponse):
+    """Factory for a fake that returns a specific FakeResponse:
+    `monkeypatch.setattr(litellm_backend, "acompletion",
+    make_recording_acompletion(resp))`."""
+    async def _call(**kwargs):
+        CALLS.append(kwargs)
+        return response
     return _call
