@@ -64,6 +64,8 @@ async def record_usage(
     sensitivity: str,
     onprem_only: bool,
     status: str = "ok",
+    quality: float = 0.0,
+    quality_source: str = "?",
 ) -> UsageRecord:
     """Persist one usage row (caller commits)."""
     row = UsageRecord(
@@ -82,6 +84,8 @@ async def record_usage(
         sensitivity=sensitivity,
         onprem_only=onprem_only,
         status=status,
+        quality=quality,
+        quality_source=quality_source,
     )
     session.add(row)
     return row

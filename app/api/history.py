@@ -43,6 +43,10 @@ class RequestSummary(BaseModel):
     hops: int
     detected_entities: list[str]
     created_seq: int
+    total_tokens: int = 0
+    quality_sum: float = 0.0            # Σ per-call quality — TID/CID numerator
+    quality: float | None = None        # chosen model's score (display)
+    quality_source: str | None = None   # provenance of `quality` (display)
 
 
 class HistoryStore:
@@ -70,6 +74,8 @@ class HistoryStore:
 
         cost = resp.get("cost", {})
         policy = resp.get("policy", {})
+        usage = resp.get("usage", {})
+        quality = resp.get("quality", {})
         trace = resp.get("trace") or []
         latency_ms = sum(
             float(rec.get("latency_ms", 0.0)) for rec in trace if rec.get("latency_ms") is not None
@@ -99,6 +105,10 @@ class HistoryStore:
             hops=hops,
             detected_entities=list(policy.get("detected_entities", [])),
             created_seq=self._seq,
+            total_tokens=int(usage.get("total_tokens", 0)),
+            quality_sum=float(quality.get("sum", 0.0)),
+            quality=quality.get("chosen"),
+            quality_source=quality.get("source"),
         )
         self._summaries.append(summary)
         self._full[summary.id] = resp

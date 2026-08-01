@@ -182,6 +182,8 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
                 sensitivity=str(policy.get("sensitivity", "?")),
                 onprem_only=bool(policy.get("onprem_only", False)),
                 status="ok",
+                quality=(resp.get("quality") or {}).get("chosen") or 0.0,
+                quality_source=(resp.get("quality") or {}).get("source") or "?",
             )
             await session.commit()
     except Exception:  # usage metering must never break serving

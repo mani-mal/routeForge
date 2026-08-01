@@ -157,6 +157,8 @@ class UsageRecord(Base):
     prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
     completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
     total_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    quality: Mapped[float] = mapped_column(Float, default=0.0)
+    quality_source: Mapped[str] = mapped_column(String(20), default="?")
 
     cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     baseline_usd: Mapped[float] = mapped_column(Float, default=0.0)
