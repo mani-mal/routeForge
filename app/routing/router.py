@@ -4,9 +4,9 @@ from dataclasses import dataclass, field
 
 from app.config.schema import PoolCandidate, Settings
 from app.models import ExecutionPolicyContext, RejectedCandidate
+from app.routing.quality import QualityResolver
 
 _ORDER = {"cheap": 0, "mid": 1, "frontier": 2}
-_Q = {"cheap": 0.5, "mid": 0.75, "frontier": 1.0}
 _L = {"cheap": 0.2, "mid": 0.5, "frontier": 1.0}
 
 
@@ -16,11 +16,15 @@ class RoutingDecision:
     est_cost_usd: float
     reason: str
     rejected: list[RejectedCandidate] = field(default_factory=list)
+    quality_score: float = 0.0
+    quality_source: str = "tier_default"
 
 
 class Router:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings,
+                 quality_resolver: QualityResolver | None = None) -> None:
         self._s = settings
+        self._quality = quality_resolver or QualityResolver(settings)
 
     def _complexity_tier(self, complexity: float) -> str:
         t = self._s.routing.complexity_thresholds
@@ -93,7 +97,8 @@ class Router:
         def score(item: tuple[PoolCandidate, float]) -> float:
             c, est = item
             norm = est / max_cost if max_cost > 0 else 0.0
-            return (w["quality"] * _Q[c.tier] - w["cost"] * norm
+            q = self._quality.resolve(c.name).score
+            return (w["quality"] * q - w["cost"] * norm
                     - w["latency"] * _L[c.tier] + w["capacity"] * 1.0)
 
         eligible.sort(key=lambda it: (-score(it), it[1]))
@@ -102,6 +107,8 @@ class Router:
             rejected.append(RejectedCandidate(
                 name=c.name, provider=c.provider, tier=c.tier,
                 display_name=c.display_name, reason="lower score"))
+        chosen_q = self._quality.resolve(chosen.name)
         return RoutingDecision(
             chosen=chosen, est_cost_usd=est,
-            reason=f"tier {chosen.tier} (target {target})", rejected=rejected)
+            reason=f"tier {chosen.tier} (target {target})", rejected=rejected,
+            quality_score=chosen_q.score, quality_source=chosen_q.source)

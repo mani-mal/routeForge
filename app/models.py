@@ -90,6 +90,8 @@ class DecisionRecord(BaseModel):
     latency_ms: float = 0.0
     hop_index: int = 0
     tokens_priced: int = 0
+    quality_score: float | None = None
+    quality_source: str | None = None  # customer|calibrated|published|tier_default
 
 
 class VerificationRecord(BaseModel):

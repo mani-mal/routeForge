@@ -55,6 +55,33 @@ def test_min_tier_escalation_raises_target_and_prefers_cheaper():
     assert d.chosen.name == "local-32b"  # cheaper on-prem beats pricier azure within mid
 
 
+def test_higher_quality_wins_within_tier_when_cost_latency_equal():
+    from app.routing.quality import QualityResolver, QualityScore
+
+    # Two mid-tier models: local-32b (onprem) and azure-gpt-mid. Give azure a
+    # much higher override so quality dominates the (cheaper-onprem) tie-break.
+    r = Router(S, quality_resolver=QualityResolver(
+        S, overrides={"azure-gpt-mid": QualityScore(1.0, "customer"),
+                      "local-32b": QualityScore(0.1, "customer")}))
+    # min_tier="mid" forces landing on the mid tier, same as
+    # test_min_tier_escalation_raises_target_and_prefers_cheaper above, where
+    # local-32b normally wins on cost. Here the quality override should flip it.
+    decision = r.select(_ctx({"onprem", "azure", "bedrock"}), tokens_after=200,
+                         complexity=0.1, min_tier="mid")
+    assert decision.chosen.name == "azure-gpt-mid"
+    assert decision.quality_source == "customer"
+    assert decision.quality_score == 1.0
+
+
+def test_default_resolver_reproduces_tier_default_quality():
+    # R is the module-level Router(S) with no resolver injected -> settings-only,
+    # empty overrides.
+    decision = R.select(_ctx({"onprem", "azure", "bedrock"}), tokens_after=20,
+                         complexity=0.1)
+    assert decision.quality_source == "tier_default"
+    assert decision.quality_score == S.routing.tier_quality[decision.chosen.tier]
+
+
 def test_budget_exhaustion_raises():
     ctx = ExecutionPolicyContext(
         request_id="r", tenant_id="t", sensitivity="public", onprem_only=False,
