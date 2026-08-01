@@ -14,7 +14,7 @@ from sqlalchemy.orm import selectinload
 
 from app.apps.models import (
     Application, AppPolicy, AppRecognizer, AppSensitivityRule, AppToken,
-    UsageRecord, utcnow,
+    ModelQuality, UsageRecord, utcnow,
 )
 from app.apps.privacy import AppPrivacyProfile, SensitivityRuleView
 from app.apps.tokens import hash_token, token_prefix
@@ -64,6 +64,8 @@ async def record_usage(
     sensitivity: str,
     onprem_only: bool,
     status: str = "ok",
+    quality: float = 0.0,
+    quality_source: str = "?",
 ) -> UsageRecord:
     """Persist one usage row (caller commits)."""
     row = UsageRecord(
@@ -82,6 +84,8 @@ async def record_usage(
         sensitivity=sensitivity,
         onprem_only=onprem_only,
         status=status,
+        quality=quality,
+        quality_source=quality_source,
     )
     session.add(row)
     return row
@@ -282,3 +286,53 @@ async def replace_privacy_profile(session: AsyncSession, app_id: str,
             sensitivity=r["sensitivity"], risk_class=r["risk_class"],
             residency=r["residency"],
             require_verification=r.get("require_verification", False)))
+
+
+# --- model quality (routing quality ladder; Stage 2 calibration harness) ---
+
+async def upsert_model_quality(
+    session: AsyncSession,
+    *,
+    model_name: str,
+    task_class: str | None = None,
+    score: float,
+    source: str,
+    eval_run_id: str | None = None,
+    notes: str | None = None,
+) -> ModelQuality:
+    """Insert-or-replace the (model_name, task_class, source) score (caller commits)."""
+    stmt = select(ModelQuality).where(
+        ModelQuality.model_name == model_name,
+        ModelQuality.task_class.is_(task_class) if task_class is None
+        else ModelQuality.task_class == task_class,
+        ModelQuality.source == source,
+    )
+    row = (await session.execute(stmt)).scalar_one_or_none()
+    if row is None:
+        row = ModelQuality(id=uuid.uuid4().hex, model_name=model_name,
+                           task_class=task_class, source=source, score=score)
+        session.add(row)
+    row.score = score
+    row.calibrated_at = utcnow()
+    row.eval_run_id = eval_run_id
+    row.notes = notes
+    return row
+
+
+# Provenance precedence for load_quality_overrides: customer wins over calibrated.
+_QUALITY_SOURCE_RANK = {"customer": 2, "calibrated": 1}
+
+
+async def load_quality_overrides(session: AsyncSession) -> dict[str, tuple[float, str]]:
+    """One winning (score, source) per model_name across the scalar (task_class
+    IS NULL) rows, customer beating calibrated. Feeds the router's override
+    snapshot; empty until the Stage 2 harness writes rows."""
+    stmt = select(ModelQuality).where(ModelQuality.task_class.is_(None))
+    rows = (await session.execute(stmt)).scalars().all()
+    best: dict[str, tuple[int, float, str]] = {}
+    for r in rows:
+        rank = _QUALITY_SOURCE_RANK.get(r.source, 0)
+        cur = best.get(r.model_name)
+        if cur is None or rank > cur[0]:
+            best[r.model_name] = (rank, r.score, r.source)
+    return {name: (score, source) for name, (_r, score, source) in best.items()}

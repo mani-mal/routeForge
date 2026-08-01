@@ -129,6 +129,21 @@ class Pipeline:
         trace = [r.model_dump() for r in records] + [vrec.model_dump()]
         trace.append(comp.record.model_dump())
 
+        # Only the SERVED attempt's quality counts here, not every attempt's.
+        # Gateway.run appends one step="router" DecisionRecord PER ATTEMPT, so
+        # under a confidence escalation (config/routing.yaml max_escalations)
+        # `records` holds >1 quality-bearing record for a single response.
+        # usage.total_tokens above reflects only the FINAL served attempt, so
+        # summing quality across attempts would inflate Token Intelligence
+        # Density against a denominator that never grew. Retried low-confidence
+        # attempts delivered nothing to the user; their quality isn't "quality
+        # delivered". (Contrast with the multi-step path below, where each hop
+        # IS a served call and both numerator and token denominator legitimately
+        # sum over all hops — do not apply this change there.)
+        qrecs = [r for r in records if r.quality_score is not None]
+        chosen_q = qrecs[-1] if qrecs else None
+        quality_sum = chosen_q.quality_score if chosen_q else 0.0
+
         return {
             "id": request_id,
             "model": result.model,
@@ -144,6 +159,9 @@ class Pipeline:
             "cost": {"total_usd": total, "baseline_usd": baseline_usd,
                      "routing_saved_usd": routing_saved,
                      "compression_saved_usd": compression_saved},
+            "quality": {"sum": quality_sum,
+                        "chosen": chosen_q.quality_score if chosen_q else None,
+                        "source": chosen_q.quality_source if chosen_q else None},
             "policy": {"sensitivity": ctx.sensitivity, "onprem_only": ctx.onprem_only,
                        "allowed_providers": sorted(ctx.allowed_providers),
                        "detected_entities": list(ctx.detected_entities)},
@@ -205,6 +223,10 @@ class Pipeline:
         trace += [cr.model_dump() for cr in result.compressions]
         trace.append(vrec.model_dump())
 
+        qhops = [h for h in result.hops if h.quality_score is not None]
+        quality_sum = sum(h.quality_score for h in qhops)
+        chosen_q = qhops[-1] if qhops else None
+
         model = result.hops[-1].chosen if result.hops else "auto"
         completion_tokens = count_tokens(result.text)
         # Prompt tokens actually priced across all hops (post-compression) —
@@ -230,6 +252,9 @@ class Pipeline:
             "cost": {"total_usd": total, "baseline_usd": baseline_before,
                      "routing_saved_usd": routing_saved_usd,
                      "compression_saved_usd": compression_saved_usd},
+            "quality": {"sum": quality_sum,
+                        "chosen": chosen_q.quality_score if chosen_q else None,
+                        "source": chosen_q.quality_source if chosen_q else None},
             "policy": {"sensitivity": ctx.sensitivity, "onprem_only": ctx.onprem_only,
                        "allowed_providers": sorted(ctx.allowed_providers),
                        "detected_entities": list(ctx.detected_entities)},

@@ -55,3 +55,21 @@ def test_lint_rejects_unknown_inference_backend():
     s.serving.inference_backend = "vLLM"  # typo (wrong case) — not a valid enum
     with pytest.raises(ConfigLintError, match="inference_backend"):
         enforce(s)
+
+
+def test_tier_quality_missing_tier_flags():
+    s = copy.deepcopy(load_settings())
+    s.routing.tier_quality.pop("frontier")
+    assert any("TIER_QUALITY_MISSING" in e for e in lint_settings(s))
+
+
+def test_tier_quality_out_of_range_flags():
+    s = copy.deepcopy(load_settings())
+    s.routing.tier_quality["mid"] = 1.5
+    assert any("TIER_QUALITY_OUT_OF_RANGE" in e for e in lint_settings(s))
+
+
+def test_pool_quality_out_of_range_flags():
+    s = copy.deepcopy(load_settings())
+    s.routing.model_pool[0].quality = 2.0
+    assert any("POOL_QUALITY_OUT_OF_RANGE" in e for e in lint_settings(s))

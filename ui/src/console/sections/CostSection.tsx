@@ -7,7 +7,16 @@ import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Too
 import type { RequestSummary } from "../../api";
 import { Panel, StatTile, formatPct, formatUsd } from "../../components/common";
 import { useTheme } from "../../theme";
-import { costAgg } from "../aggregate";
+import { costAgg, densityAgg } from "../aggregate";
+
+// 2-3 significant figures — these are intelligence-density ratios (quality
+// per 1k tokens / per $), not currency, so formatUsd/formatPct don't fit.
+function formatDensity(v: number): string {
+  if (!Number.isFinite(v) || v === 0) return "–";
+  if (v >= 100) return v.toFixed(0);
+  if (v >= 10) return v.toFixed(1);
+  return v.toFixed(2);
+}
 
 // Violet, not sky-blue: the old #38bdf8 collided with the mid-tier dot #3b82f6
 // (a tier vs a savings lever — unrelated meanings). Keeps it distinct from the
@@ -28,6 +37,7 @@ export function CostSection({ requests }: { requests: RequestSummary[] }) {
   };
 
   const { total, baseline, routingSaved, compressionSaved, savedPct } = costAgg(requests);
+  const { tokenIntelligenceDensity, costIntelligenceDensity } = densityAgg(requests);
   const compressionRan = compressionSaved > 0;
 
   const savingsData = [{ name: "saved", routing: routingSaved, compression: compressionSaved }];
@@ -112,6 +122,16 @@ export function CostSection({ requests }: { requests: RequestSummary[] }) {
         <StatTile label="All-frontier baseline" value={formatUsd(baseline)} />
         <StatTile label="Routing saved" value={formatUsd(routingSaved)} />
         <StatTile label="Compression saved" value={compressionRan ? formatUsd(compressionSaved) : "off / not run"} />
+        <StatTile
+          label="Token Intelligence Density"
+          value={formatDensity(tokenIntelligenceDensity)}
+          sub="quality delivered per 1k tokens — needs a per-model quality score"
+        />
+        <StatTile
+          label="Cost Intelligence Density"
+          value={formatDensity(costIntelligenceDensity)}
+          sub="quality delivered per $ — needs a per-model quality score"
+        />
       </div>
     </div>
   );

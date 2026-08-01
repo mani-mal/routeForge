@@ -13,12 +13,23 @@ class PoolCandidate(BaseModel):
     # deployment/model names). Defaults to f"{provider_prefix}/{name}" in the
     # backend. onprem's served-model-name == `name`, so it needs no override.
     litellm_model: str | None = None
+    # Published quality snapshot in [0,1] (e.g. normalized Artificial Analysis
+    # Intelligence Index / 100). Optional: unset means the resolver falls to the
+    # tier_default rung. Populating this is an onboarding activity (spec §9/§13);
+    # the shipped demo leaves it unset so routing stays a tier-default regression.
+    quality: float | None = None
 
 
 class RoutingCfg(BaseModel):
     tiers: list[str]
     score_on: str
     weights: dict[str, float]
+    # Tier-default rung of the quality ladder — the fallback quality for any
+    # model with no published/calibrated/customer score. Promoted from the old
+    # hardcoded router `_Q`. One value per canonical tier (config lint enforces
+    # full coverage and the [0,1] range). Owned here (routing input), never in
+    # pricing.yaml.
+    tier_quality: dict[str, float]
     complexity_thresholds: dict[str, float]
     confidence_escalation_threshold: float
     # Softening applied to a real backend's mean-token-logprob before it becomes

@@ -157,6 +157,8 @@ class UsageRecord(Base):
     prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
     completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
     total_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    quality: Mapped[float] = mapped_column(Float, default=0.0)
+    quality_source: Mapped[str] = mapped_column(String(20), default="?")
 
     cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     baseline_usd: Mapped[float] = mapped_column(Float, default=0.0)
@@ -177,3 +179,24 @@ class AdminUser(Base):
     password_hash: Mapped[str] = mapped_column(String(255))
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow)
+
+
+class ModelQuality(Base):
+    """Per-model quality score with provenance, for the routing quality ladder.
+    Written by the Stage 2 calibration harness (source=calibrated) or a
+    customer-declared override (source=customer). A NEW table, so create_all
+    handles it — no migration. This is model metadata, not a promotion/registry
+    system (spec §5/§10). Not a copy of any request content — no PII."""
+
+    __tablename__ = "model_quality"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    model_name: Mapped[str] = mapped_column(String(100), index=True)
+    # Reserved for quality_by_class (Stage 3+); NULL = the scalar quality today.
+    task_class: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    score: Mapped[float] = mapped_column(Float)
+    source: Mapped[str] = mapped_column(String(20))  # customer | calibrated
+    calibrated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow)
+    eval_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    notes: Mapped[str | None] = mapped_column(String(255), nullable=True)

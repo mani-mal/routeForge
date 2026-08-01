@@ -35,6 +35,16 @@ def lint_settings(s: Settings) -> list[str]:
         if p.tier not in tiers:
             errs.append(f"PRICING_TIER_UNKNOWN {name}:{p.tier}")
 
+    for t in tiers:
+        if t not in s.routing.tier_quality:
+            errs.append(f"TIER_QUALITY_MISSING {t}")
+    for t, q in s.routing.tier_quality.items():
+        if not (0.0 <= q <= 1.0):
+            errs.append(f"TIER_QUALITY_OUT_OF_RANGE {t}={q}")
+    for c in s.routing.model_pool:
+        if c.quality is not None and not (0.0 <= c.quality <= 1.0):
+            errs.append(f"POOL_QUALITY_OUT_OF_RANGE {c.name}={c.quality}")
+
     scale = set(s.policy.sensitivity_scale)
     if s.policy.default_sensitivity not in scale:
         errs.append(f"DEFAULT_SENSITIVITY_UNKNOWN {s.policy.default_sensitivity}")

@@ -20,6 +20,8 @@ export interface RequestSummary {
   hops: number;
   detected_entities: string[]; // TYPES only, never raw values
   created_seq: number;
+  total_tokens: number;
+  quality_sum: number; // Σ per-call quality — Token/Cost Intelligence Density numerator
 }
 
 export interface RejectedCandidate {
