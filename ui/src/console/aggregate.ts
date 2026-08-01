@@ -15,6 +15,21 @@ export function costAgg(rs: RequestSummary[]) {
   return { total, baseline, routingSaved, compressionSaved, savedPct };
 }
 
+// Quality-per-resource density, mirroring the backend formulas in
+// app/api/history.py's HistoryStore.stats()/fleet(): quality summed across
+// calls, divided by tokens (x1000, "per 1k tokens") or by USD spend. This
+// section is per-app (tenant-filtered `requests`), so density is derived
+// client-side from those same rows rather than the cross-tenant `/api/stats`
+// endpoint, keeping every Cost-tab figure scoped to the one application.
+export function densityAgg(rs: RequestSummary[]) {
+  const qualitySum = rs.reduce((a, r) => a + r.quality_sum, 0);
+  const tokenSum = rs.reduce((a, r) => a + r.total_tokens, 0);
+  const usdSum = rs.reduce((a, r) => a + r.total_usd, 0);
+  const tokenIntelligenceDensity = tokenSum > 0 ? (qualitySum / tokenSum) * 1000 : 0;
+  const costIntelligenceDensity = usdSum > 0 ? qualitySum / usdSum : 0;
+  return { tokenIntelligenceDensity, costIntelligenceDensity };
+}
+
 export function privacyAgg(rs: RequestSummary[]) {
   const withPii = rs.filter((r) => r.detected_entities.length > 0);
   const onprem = rs.filter((r) => r.onprem_only);
