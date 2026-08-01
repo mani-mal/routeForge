@@ -167,6 +167,18 @@ class UsageRecord(Base):
     status: Mapped[str] = mapped_column(String(16), default="ok")  # ok|rejected|error
 
 
+class AdminUser(Base):
+    """A dashboard admin (Phase 3). Password hashed with argon2."""
+
+    __tablename__ = "admin_users"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow)
+
+
 class ModelQuality(Base):
     """Per-model quality score with provenance, for the routing quality ladder.
     Written by the Stage 2 calibration harness (source=calibrated) or a
@@ -186,15 +198,3 @@ class ModelQuality(Base):
         DateTime(timezone=True), default=utcnow)
     eval_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     notes: Mapped[str | None] = mapped_column(String(255), nullable=True)
-
-
-class AdminUser(Base):
-    """A dashboard admin (Phase 3). Password hashed with argon2."""
-
-    __tablename__ = "admin_users"
-
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
-    password_hash: Mapped[str] = mapped_column(String(255))
-    created_at: Mapped[dt.datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow)
