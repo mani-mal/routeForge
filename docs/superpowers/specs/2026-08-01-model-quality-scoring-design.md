@@ -188,3 +188,10 @@ external before the gate, CCR residency) are unaffected.
 - **AA snapshot automation** — manual for now; revisit if they expose an API.
 - Curating the **representative eval set** per customer domain (harness accepts a set;
   sourcing it is an onboarding activity, not code).
+- **Stage-1 seam (carry into Stage 2):** `store.load_quality_overrides` returns
+  `dict[str, tuple[float, str]]`, but `QualityResolver` consumes
+  `dict[str, QualityScore]`. Wiring the store output straight into the resolver would
+  `AttributeError` on `.score`. Harmless in Stage 1 (nothing wires them — the router
+  always builds `QualityResolver(settings)` with empty overrides); Stage 2's DB→router
+  refresh MUST adapt the `(score, source)` tuples into `QualityScore` objects when
+  building the override snapshot.
