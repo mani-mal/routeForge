@@ -12,6 +12,14 @@ tiers: [cheap, mid, frontier]
 score_on: post_compression       # MUST be post_compression when Headroom is on
 weights: {quality: 1.0, cost: 0.6, latency: 0.3, capacity: 0.2}
 
+# Tier-default quality (the last rung of the quality ladder in app/routing/quality.py).
+# Promoted from the router's old hardcoded _Q so it is single-sourced and lintable.
+# There is NO per-model published `quality` on the model_pool below yet — the demo
+# stays a tier-default regression. To add a published snapshot at onboarding, put e.g.
+#   - {name: azure-gpt-mid, ..., quality: 0.70}   # AA Intelligence Index / 100, dated
+# on a model_pool entry (see spec §9). Values must be in [0,1] (config lint).
+tier_quality: {cheap: 0.5, mid: 0.75, frontier: 1.0}
+
 complexity_thresholds:
   cheap_max: 0.35
   mid_max: 0.70
