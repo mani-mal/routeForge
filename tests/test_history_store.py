@@ -1,3 +1,5 @@
+import pytest
+
 from app.api.history import HistoryStore
 
 
@@ -193,3 +195,34 @@ def test_list_non_positive_limit_returns_empty():
     assert store.list(limit=0) == []
     assert store.list(limit=-1) == []
     assert store.list(app="acme", limit=0) == []
+
+
+def _density_resp(rid, tokens, total_usd, qsum, chosen=0.5):
+    return {
+        "id": rid, "model": "local-8b", "model_display": "Qwen (local)",
+        "usage": {"prompt_tokens": tokens, "completion_tokens": 0, "total_tokens": tokens},
+        "cost": {"total_usd": total_usd, "baseline_usd": total_usd * 10,
+                 "routing_saved_usd": 0.0, "compression_saved_usd": 0.0},
+        "quality": {"sum": qsum, "chosen": chosen, "source": "tier_default"},
+        "trace": [{"step": "router", "latency_ms": 5.0}],
+        "policy": {"sensitivity": "public", "onprem_only": False, "detected_entities": []},
+    }
+
+
+def test_stats_reports_intelligence_densities():
+    from app.api.history import HistoryStore
+    store = HistoryStore()
+    store.record(_density_resp("a", tokens=1000, total_usd=0.002, qsum=0.5), "acme", "cheap", "onprem")
+    store.record(_density_resp("b", tokens=1000, total_usd=0.002, qsum=0.5), "acme", "cheap", "onprem")
+    st = store.stats()
+    # TID = Σqsum / Σtokens * 1000 = 1.0 / 2000 * 1000 = 0.5
+    assert st["token_intelligence_density"] == pytest.approx(0.5)
+    # CID = Σqsum / Σcost = 1.0 / 0.004 = 250.0
+    assert st["cost_intelligence_density"] == pytest.approx(250.0)
+
+
+def test_stats_densities_zero_on_empty():
+    from app.api.history import HistoryStore
+    st = HistoryStore().stats()
+    assert st["token_intelligence_density"] == 0.0
+    assert st["cost_intelligence_density"] == 0.0

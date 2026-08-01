@@ -166,6 +166,12 @@ class HistoryStore:
                     if s.onprem_only and s.provider not in _LOCAL_PROVIDERS),
                 "latency_p50_ms": statistics.median(lat) if lat else 0.0,
                 "tier_distribution": dict(tiers),
+                "token_intelligence_density": (
+                    sum(s.quality_sum for s in items) / sum(s.total_tokens for s in items) * 1000.0
+                    if sum(s.total_tokens for s in items) > 0 else 0.0),
+                "cost_intelligence_density": (
+                    sum(s.quality_sum for s in items) / sum(s.total_usd for s in items)
+                    if sum(s.total_usd for s in items) > 0 else 0.0),
             })
         rows.sort(key=lambda r: r["count"], reverse=True)
         return rows
@@ -184,6 +190,8 @@ class HistoryStore:
                 "tier_distribution": {},
                 "latency_p50_ms": 0.0,
                 "latency_p95_ms": 0.0,
+                "token_intelligence_density": 0.0,
+                "cost_intelligence_density": 0.0,
             }
 
         tier_distribution: dict[str, int] = {}
@@ -198,6 +206,10 @@ class HistoryStore:
             idx = min(len(sorted_vals) - 1, int(round(pct * (len(sorted_vals) - 1))))
             return sorted_vals[idx]
 
+        q_sum = sum(s.quality_sum for s in summaries)
+        tok_sum = sum(s.total_tokens for s in summaries)
+        usd_sum = sum(s.total_usd for s in summaries)
+
         return {
             "count": count,
             "total_usd": sum(s.total_usd for s in summaries),
@@ -208,4 +220,6 @@ class HistoryStore:
             "tier_distribution": tier_distribution,
             "latency_p50_ms": _pctile(latencies, 0.50),
             "latency_p95_ms": _pctile(latencies, 0.95),
+            "token_intelligence_density": (q_sum / tok_sum * 1000.0) if tok_sum > 0 else 0.0,
+            "cost_intelligence_density": (q_sum / usd_sum) if usd_sum > 0 else 0.0,
         }
