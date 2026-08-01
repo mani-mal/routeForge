@@ -167,6 +167,27 @@ class UsageRecord(Base):
     status: Mapped[str] = mapped_column(String(16), default="ok")  # ok|rejected|error
 
 
+class ModelQuality(Base):
+    """Per-model quality score with provenance, for the routing quality ladder.
+    Written by the Stage 2 calibration harness (source=calibrated) or a
+    customer-declared override (source=customer). A NEW table, so create_all
+    handles it — no migration. This is model metadata, not a promotion/registry
+    system (spec §5/§10). Not a copy of any request content — no PII."""
+
+    __tablename__ = "model_quality"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    model_name: Mapped[str] = mapped_column(String(100), index=True)
+    # Reserved for quality_by_class (Stage 3+); NULL = the scalar quality today.
+    task_class: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    score: Mapped[float] = mapped_column(Float)
+    source: Mapped[str] = mapped_column(String(20))  # customer | calibrated
+    calibrated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow)
+    eval_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    notes: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
 class AdminUser(Base):
     """A dashboard admin (Phase 3). Password hashed with argon2."""
 
