@@ -1,9 +1,13 @@
+import asyncio
+
 import pytest
 
 from app.apps.infra import InfraRoster, InfraSnapshot, InfraClusterRow, InfraModelRow
 from app.config.loader import load_settings
-from app.models import ExecutionPolicyContext
+from app.gateway.gateway import Gateway
+from app.models import ExecutionPolicyContext, Message
 from app.routing.router import Router
+from tests._litellm_fake import _DeterministicLiteLLM
 
 S = load_settings()
 
@@ -74,3 +78,29 @@ def test_decision_record_has_serving_engine_field():
     assert rec.serving_engine == "vllm"
     # default is None (cloud / not annotated)
     assert DecisionRecord(step="router", chosen="x", reason="y").serving_engine is None
+
+
+def test_gateway_copies_serving_engine_for_onprem_choice():
+    # Exercises the actual gateway.py line under test: the chosen-model
+    # step="router" DecisionRecord must carry decision.serving_engine, not
+    # just the RoutingDecision/model round-trip covered above.
+    roster = _roster({n: _model(n, enabled=True) for n in _onprem_names()})
+    gw = Gateway(S, _DeterministicLiteLLM(S), Router(S, infra_roster=roster))
+    msgs = [Message(role="user", content="hello")]
+    _result, records = asyncio.run(
+        gw.run(_ctx({"onprem"}, onprem=True), msgs, 20, 0.1, {}))
+    router_hops = [r for r in records if r.step == "router"]
+    assert router_hops, "expected at least one router-step DecisionRecord"
+    assert all(r.serving_engine == "vllm" for r in router_hops)
+
+
+def test_gateway_leaves_serving_engine_none_for_cloud_choice():
+    # Cloud-eligible selection: chosen.provider != "onprem", so the gateway's
+    # copied serving_engine must stay None (never a fabricated engine).
+    gw = Gateway(S, _DeterministicLiteLLM(S), Router(S))
+    msgs = [Message(role="user", content="hello")]
+    _result, records = asyncio.run(
+        gw.run(_ctx({"azure", "bedrock"}), msgs, 20, 0.1, {}))
+    router_hops = [r for r in records if r.step == "router"]
+    assert router_hops, "expected at least one router-step DecisionRecord"
+    assert all(r.serving_engine is None for r in router_hops)
