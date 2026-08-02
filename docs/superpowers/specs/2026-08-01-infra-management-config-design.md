@@ -256,7 +256,71 @@ in that skill stands.
   falls back to the on-prem pool; residency still enforced.
 - **API:** `PUT`s validate `engine ∈ {vllm, trtllm}`; admin-gated; invalidate the cache.
 
-## 12. Deferred / open
+## 12. UI design language — "Switchyard"
+
+The Infrastructure section ships **inside a cohesive design pass** across the existing
+admin + user console. routeForge's own identity (CDW stays a discreet "powered by"
+mark). The console is an **instrument**, not a marketing page; its one job is to make
+every routing decision legible. Approved direction:
+
+**Concept.** A signal-control panel for LLM traffic. The product stands at a junction
+and, per request, throws the switch (cheap-local vs frontier-cloud, on-prem vs external)
+and *shows why the other tracks were not taken*. Dark, control-room, projector-legible
+(consistent with `demo-ui`).
+
+**Palette (named hex; color is semantic, never decoration).**
+- Neutrals: `ink #0B0E14` (bg), `panel #131A26`, `edge #212C3D`, `muted #718097`,
+  `text #E7EDF6`.
+- Signal triad = **tiers**: `cheap #35D6A0`, `mid #4C8DFF`, `frontier #F5A524`.
+- `privacy/onprem #8B7BF7` (residency is its own dimension, not a tier).
+- `alert #F2555A` — **reserved for breaches/health-mismatch only**, so red stays rare
+  and meaningful.
+These extend, not replace, the existing Tailwind tokens (`bg-ink`, `border-edge`, tier
+colors). Reconcile the current `bg-cheap` etc. to the values above.
+
+**Type (self-hosted via `@fontsource`, no external CDN — air-gap/on-prem safe).**
+- **Archivo** — display / nav / verdicts (transit-signage character).
+- **IBM Plex Sans** — body / UI (engineered, control-system pedigree).
+- **IBM Plex Mono** — *every measured value*: cost, latency, tokens, model slugs,
+  request IDs. Mono is truthful here — the content is quantities and identifiers.
+
+**Layout & signature — the rail and the junction.** A thin luminous "track" threads the
+console: a left nav where each section (Overview · Requests · Applications · Policies ·
+**Infrastructure**) is a lit "station," active = lit node. The signature is the routing
+decision rendered as a **switch/junction**: the chosen path glows in its tier color;
+rejected candidates branch off as **dimmed spurs, each tagged inline with its reason**
+(`excluded · residency`, `above target tier`, `disabled by admin`). This directly serves
+the `demo-ui` mandate (show excluded providers + reasons) and the new infra reason
+("disabled by admin"). A **disabled model row in the Infrastructure fleet table uses the
+same dim-node language** as an excluded candidate — the metaphor is learned once.
+
+```
+┌──────┬──────────────────────────────────────────────────────────┐
+│ ▤ RouteForge          ● live    ⛭ Headroom   ☾    powered by CDW  │
+├──────┼──────────────────────────────────────────────────────────┤
+│ ●Over│  request ─gate─◆─● local-8b        cheap    · chosen       │
+│ ○Reqs│                 │  ╲                                        │
+│ ○Apps│                 │   ○ azure-gpt-mid          excluded·residency
+│ ○Pol │                 │   ○ bedrock-frontier       excluded·residency
+│ ●Infra                 │   ○ local-32b              above target tier │
+└──────┴──────────────────────────────────────────────────────────┘
+```
+
+**Motion (spent in one place).** A live decision *travels the rail*: one pulse runs
+request→gate→junction and lights the chosen node. Nothing ambient. `prefers-reduced-
+motion` freezes the pulse and simply lights the chosen node.
+
+**Quality floor (non-negotiable, unannounced):** responsive to mobile, visible keyboard
+focus, reduced-motion respected, WCAG-AA contrast on text. Light theme retained (the
+existing `theme.ts` dark/light system stays; tokens defined for both).
+
+**Scope of the pass:** reskin the existing `ConsoleShell` / admin surfaces
+(`ApplicationsPanel`, `PrivacyRulesEditor`, `FleetOverview`, `RequestDrilldown`,
+`RequestList`) to the token system + shell, and build the new Infrastructure section
+(§7) natively to it. The signature junction is applied to the existing flow/drilldown —
+not a net-new visualizer.
+
+## 13. Deferred / open
 
 - **Manifest rendering / reconciliation** (the "render" and "fully manage" options not
   chosen) — a later spec if the customer wants routeForge to author Dynamo CRDs.
