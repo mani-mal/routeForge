@@ -8,6 +8,7 @@ import type { RequestSummary } from "../../api";
 import { Panel, StatTile, formatPct, formatUsd } from "../../components/common";
 import { useTheme } from "../../theme";
 import { costAgg, densityAgg } from "../aggregate";
+import { LEVER_HEX, TIER_HEX } from "../../tokens";
 
 // 2-3 significant figures — these are intelligence-density ratios (quality
 // per 1k tokens / per $), not currency, so formatUsd/formatPct don't fit.
@@ -18,11 +19,13 @@ function formatDensity(v: number): string {
   return v.toFixed(2);
 }
 
-// Violet, not sky-blue: the old #38bdf8 collided with the mid-tier dot #3b82f6
-// (a tier vs a savings lever — unrelated meanings). Keeps it distinct from the
-// amber compression lever and the green/blue/red tier dots on a projector.
-const ROUTING_COLOR = "#8b5cf6";
-const COMPRESSION_COLOR = "#f59e0b";
+// Token-sourced, not hardcoded: routing is LEVER_HEX.routing (= TIER_HEX.mid
+// blue), compression is LEVER_HEX.compression (= TIER_HEX.frontier amber).
+// The old hardcoded #8b5cf6 sat one hex from the privacy signal #8B7BF7 (a
+// savings lever vs a residency signal — unrelated meanings); routing blue
+// keeps it unambiguously distinct from privacy violet on a projector.
+const ROUTING_COLOR = LEVER_HEX.routing;
+const COMPRESSION_COLOR = LEVER_HEX.compression;
 
 export function CostSection({ requests }: { requests: RequestSummary[] }) {
   const [theme] = useTheme();
@@ -110,7 +113,14 @@ export function CostSection({ requests }: { requests: RequestSummary[] }) {
                   strokeWidth={1.5}
                   name="baseline"
                 />
-                <Line type="monotone" dataKey="total" stroke="#22c55e" dot={false} strokeWidth={2} name="actual" />
+                <Line
+                  type="monotone"
+                  dataKey="total"
+                  stroke={TIER_HEX.cheap}
+                  dot={false}
+                  strokeWidth={2}
+                  name="actual"
+                />
               </LineChart>
             </ResponsiveContainer>
           </div>

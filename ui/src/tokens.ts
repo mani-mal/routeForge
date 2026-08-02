@@ -14,4 +14,15 @@ export const SIGNAL_HEX = {
   alert: "#F2555A", // breaches / health-fail ONLY
 } as const;
 
+// The two cost-savings levers (routing vs. compression) shown side-by-side in
+// CostSection's "savings by lever" chart. Reuses existing tier hexes rather
+// than inventing new ones: `mid` blue for routing keeps it far from the
+// privacy violet (#8B7BF7) it used to collide with as a near-duplicate
+// #8b5cf6; `frontier` amber for compression is the pre-existing amber in
+// this palette. Neither lever is itself a tier — this is a distinct mapping.
+export const LEVER_HEX = {
+  routing: TIER_HEX.mid,
+  compression: TIER_HEX.frontier,
+} as const;
+
 export type Tier = keyof typeof TIER_HEX;
