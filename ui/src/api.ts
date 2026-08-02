@@ -263,6 +263,48 @@ export const adminApi = {
   },
 };
 
+// --- Infrastructure admin (Run:ai + per-model engine; Task A4) -------------
+// Backend: app/api/admin_routes.py — GET/PUT /admin/infra, GET /admin/infra/models,
+// PUT /admin/infra/models/{slug}. Cloud models never appear in `models()` — the
+// API filters to on-prem pool members only.
+
+export type InfraSettings = {
+  inference_backend: string;
+  runai_licensed: boolean;
+  runai_project: string | null;
+  default_engine: string;
+};
+
+export type InfraModel = {
+  model_name: string;
+  display_name: string;
+  tier: string;
+  provider: string;
+  managed: boolean;
+  engine: string | null;
+  enabled: boolean;
+  replicas: number | null;
+  min_replicas: number | null;
+  max_replicas: number | null;
+  tensor_parallel: number | null;
+  gpu_type: string | null;
+  endpoint: string | null;
+  runai_scheduled: boolean;
+  notes: string | null;
+  cross_check: "serving" | "absent" | "unreachable";
+};
+
+export const infraApi = {
+  get: () => fetch("/admin/infra", { credentials: CRED }).then(j<InfraSettings>),
+  put: (body: Partial<Omit<InfraSettings, "inference_backend">>) =>
+    fetch("/admin/infra", opts("PUT", body)).then(j<{ ok: boolean }>),
+  models: () =>
+    fetch("/admin/infra/models", { credentials: CRED }).then(j<InfraModel[]>),
+  putModel: (slug: string, body: Partial<InfraModel>) =>
+    fetch(`/admin/infra/models/${encodeURIComponent(slug)}`, opts("PUT", body))
+      .then(j<{ ok: boolean }>),
+};
+
 // --- Per-app privacy rules (custom recognizers + sensitivity rules) --------
 // Backend: app/api/admin_routes.py — GET/PUT /admin/applications/{id}/privacy.
 

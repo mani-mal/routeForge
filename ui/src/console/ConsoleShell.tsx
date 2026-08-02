@@ -6,14 +6,13 @@
 //
 // Navigation is the Switchyard "rail": a left column of lit "station" nodes
 // threaded by a single vertical track (spec §12). Extend `STATIONS` (and the
-// `View` union) to add sections — B5 wires the "infra" body to a real
-// <InfrastructurePanel/>; until then it renders a placeholder so this shell
-// builds independently of that task.
+// `View` union) to add sections — the "infra" station renders the real
+// <InfrastructurePanel/> (Task B5).
 import { useState } from "react";
 import { FleetOverview } from "./FleetOverview";
 import { AppPage } from "./AppPage";
 import { ApplicationsPanel } from "../admin/ApplicationsPanel";
-import { Panel } from "../components/common";
+import { InfrastructurePanel } from "../admin/InfrastructurePanel";
 
 type View = "fleet" | "manage" | "app" | "infra";
 
@@ -75,12 +74,7 @@ export function ConsoleShell() {
       </nav>
       <div className="flex-1 min-w-0 overflow-auto p-4">
         {view === "manage" && <ApplicationsPanel />}
-        {view === "infra" && (
-          // Placeholder body — B5 replaces this with <InfrastructurePanel/>.
-          <Panel title="Infrastructure">
-            <p className="text-sm text-gray-500">Coming soon.</p>
-          </Panel>
-        )}
+        {view === "infra" && <InfrastructurePanel />}
         {view === "fleet" && <FleetOverview onOpenApp={openApp} />}
       </div>
     </div>
