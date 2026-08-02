@@ -27,15 +27,18 @@ function EngineSelect({
   value,
   onChange,
   className = "",
+  ariaLabel,
 }: {
   value: string;
   onChange: (v: string) => void;
   className?: string;
+  ariaLabel?: string;
 }) {
   return (
     <select
       value={value}
       onChange={(e) => onChange(e.target.value)}
+      aria-label={ariaLabel}
       className={`rounded bg-ink border border-edge px-2 py-1 text-xs font-mono text-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${className}`}
     >
       {ENGINES.map((e) => (
@@ -247,9 +250,14 @@ function ModelRow({ model, onSaved }: { model: InfraModel; onSaved: () => void }
 
   return (
     // The dim-node metaphor (spec §12): a disabled row dims exactly like a
-    // rejected/excluded candidate in the junction inspector — same opacity-60
-    // treatment as RequestDrilldown's rejected spurs.
-    <tr className={`border-b border-edge/60 last:border-0 transition-opacity ${enabled ? "" : "opacity-60"}`}>
+    // rejected/excluded candidate in the junction inspector — same idiom as
+    // RequestDrilldown's rejected spurs (`bg-ink/40 ... opacity-60`), not just
+    // faded text.
+    <tr
+      className={`border-b border-edge/60 last:border-0 transition-colors ${
+        enabled ? "" : "bg-ink/40 opacity-60"
+      }`}
+    >
       <td className="py-2 pr-3 align-top">
         <div className="text-sm text-gray-100">{model.display_name}</div>
         <div className="font-mono text-xs text-gray-500">{model.model_name}</div>
@@ -266,7 +274,7 @@ function ModelRow({ model, onSaved }: { model: InfraModel; onSaved: () => void }
         </span>
       </td>
       <td className="py-2 pr-3 align-top">
-        <EngineSelect value={engine} onChange={setEngine} />
+        <EngineSelect value={engine} onChange={setEngine} ariaLabel={`${model.display_name} engine`} />
       </td>
       <td className="py-2 pr-3 align-top">
         <Toggle on={enabled} onToggle={() => setEnabled((v) => !v)} label={`${model.display_name} enabled`} />
@@ -277,6 +285,7 @@ function ModelRow({ model, onSaved }: { model: InfraModel; onSaved: () => void }
           min={0}
           value={replicas ?? ""}
           onChange={(e) => setReplicas(e.target.value ? Number(e.target.value) : null)}
+          aria-label={`${model.display_name} replicas`}
           className="w-14 rounded bg-ink border border-edge px-1.5 py-1 font-mono text-xs text-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         />
       </td>
@@ -286,6 +295,7 @@ function ModelRow({ model, onSaved }: { model: InfraModel; onSaved: () => void }
           min={1}
           value={tensorParallel ?? ""}
           onChange={(e) => setTensorParallel(e.target.value ? Number(e.target.value) : null)}
+          aria-label={`${model.display_name} tensor parallel`}
           className="w-12 rounded bg-ink border border-edge px-1.5 py-1 font-mono text-xs text-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         />
       </td>
@@ -294,6 +304,7 @@ function ModelRow({ model, onSaved }: { model: InfraModel; onSaved: () => void }
           value={gpuType}
           onChange={(e) => setGpuType(e.target.value)}
           placeholder="(none)"
+          aria-label={`${model.display_name} GPU type`}
           className="w-24 rounded bg-ink border border-edge px-1.5 py-1 font-mono text-xs text-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         />
       </td>
