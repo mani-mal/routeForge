@@ -57,6 +57,8 @@ export function ConsoleShell() {
                   type="button"
                   onClick={() => setView(s.key)}
                   aria-current={active ? "page" : undefined}
+                  aria-label={s.label}
+                  title={s.label}
                   className={`relative z-10 flex w-full items-center gap-3 px-2 py-2.5 text-sm font-display transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset ${
                     active ? "text-accent" : "text-gray-500 hover:text-gray-300"
                   }`}
