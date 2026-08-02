@@ -200,3 +200,45 @@ class ModelQuality(Base):
         DateTime(timezone=True), default=utcnow)
     eval_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     notes: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
+class InfraSettings(Base):
+    """Cluster-level serving-fleet facts (singleton, id='cluster'): whether
+    GPUs are Run:ai-scheduled and the default engine for a model with no
+    explicit engine. Runtime/DB-backed — distinct from serving.yaml's boot-time
+    `inference_backend`. NEW table → create_all handles it, no migration. No
+    request content / PII. See infra-management-config-design.md §5."""
+
+    __tablename__ = "infra_settings"
+
+    id: Mapped[str] = mapped_column(String(16), primary_key=True, default="cluster")
+    runai_licensed: Mapped[bool] = mapped_column(Boolean, default=False)
+    runai_project: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    default_engine: Mapped[str] = mapped_column(String(16), default="vllm")
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class InfraModel(Base):
+    """Per on-prem model serving metadata: engine (vllm|trtllm), the admin
+    availability toggle that gates routing, and descriptive topology (replicas,
+    TP, GPU type, endpoint). Additive to routing.yaml's model_pool keyed by the
+    same slug — NEVER restates tier/provider/quality/cost. On-prem only (cloud
+    models are provider APIs, not fleet infra). NEW table → create_all, no
+    migration. See infra-management-config-design.md §5."""
+
+    __tablename__ = "infra_models"
+
+    model_name: Mapped[str] = mapped_column(String(100), primary_key=True)
+    engine: Mapped[str] = mapped_column(String(16), default="vllm")  # vllm | trtllm
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    replicas: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    min_replicas: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_replicas: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tensor_parallel: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    gpu_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    endpoint: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    runai_scheduled: Mapped[bool] = mapped_column(Boolean, default=False)
+    notes: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow)
