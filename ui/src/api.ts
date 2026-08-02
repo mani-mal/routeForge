@@ -46,6 +46,7 @@ export interface TraceRecord {
   latency_ms?: number;
   hop_index?: number;
   tokens_priced?: number;
+  serving_engine?: string | null; // on-prem engine (vllm|trtllm); set only on step="router" records
   // verify
   required?: boolean;
   performed?: boolean;

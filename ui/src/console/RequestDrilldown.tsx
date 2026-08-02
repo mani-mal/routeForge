@@ -11,6 +11,8 @@
 import type { ReactNode } from "react";
 import { STEPS, stepMeta, TIER_COLOR } from "../api";
 import type { ChatResponse, RequestSummary, TraceRecord } from "../api";
+import { TIER_HEX, SIGNAL_HEX } from "../tokens";
+import type { Tier } from "../tokens";
 import { Panel, StatTile, TierDot, formatUsd, formatUsdPrecise, formatMs, formatPct } from "../components/common";
 
 const PROVIDERS: { key: string; label: string }[] = [
@@ -27,6 +29,33 @@ function stepTitle(key: string): string {
   return stepMeta(key)?.label ?? key;
 }
 
+// The router's `reason` is always "tier <tier> (target <target>)" for a
+// successful pick (app/routing/router.py) — the only place the chosen
+// candidate's own tier reaches the UI, since TraceRecord doesn't carry it
+// directly (unlike RejectedCandidate.tier). Parsed defensively: falls back to
+// undefined (renders as the neutral/dimmed grey) for any other shape, e.g. a
+// gateway escalation record.
+function chosenTier(reason: string | undefined): Tier | undefined {
+  const m = reason?.match(/^tier\s+(cheap|mid|frontier)\b/);
+  return m ? (m[1] as Tier) : undefined;
+}
+
+// Compact right-aligned labels for the rejected-spur reason. Sourced from the
+// exact strings app/routing/router.py emits; unknown reasons pass through
+// unchanged so a future backend reason never disappears from the UI.
+const REASON_LABEL: Record<string, string> = {
+  "excluded by policy (residency)": "excluded · residency",
+  "disabled by admin": "disabled by admin",
+  "below target tier": "below target tier",
+  "above target tier": "above target tier",
+  "over budget": "over budget",
+  "lower score": "lower score",
+};
+
+function compactReason(reason: string): string {
+  return REASON_LABEL[reason] ?? reason;
+}
+
 // One labelled row of detail — lifted from DecisionInspector.
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -37,15 +66,35 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-// Chosen-vs-rejected candidate card — lifted from DecisionInspector, extended
-// with an optional running total so multi-hop requests show cumulative spend
+// The junction: one router/agent-hop decision rendered as a track switch —
+// the chosen candidate is the LIT path (tier-coloured left rail + a glowing
+// switch dot), each rejected candidate is a DIMMED spur labelled with why it
+// lost. This is the demo's "legible on a projector" moment (demo-ui skill) —
+// the reason list is the point, not decoration.
+// Lifted from the old DecisionInspector's chosen/rejected card, extended with
+// an optional running total so multi-hop requests show cumulative spend
 // alongside each hop's own cost.
 function Chosen({ r, cumulative }: { r: TraceRecord; cumulative?: number }) {
+  const tier = chosenTier(r.reason);
+  const litColor = tier ? TIER_HEX[tier] : NEUTRAL;
+  const servingEngine = r.step === "router" ? r.serving_engine : null;
   return (
-    <div className="rounded-md border border-edge bg-ink/40 p-2.5">
+    <div className="relative overflow-hidden rounded-md border border-edge bg-ink/40 p-2.5 pl-3.5">
+      {/* the lit rail — this candidate is the path the switch actually threw to */}
+      <span aria-hidden="true" className="absolute inset-y-0 left-0 w-1" style={{ backgroundColor: litColor }} />
       <div className="flex items-center gap-2">
+        <span
+          aria-hidden="true"
+          className="h-2 w-2 shrink-0 rounded-full animate-rail-pulse"
+          style={{ backgroundColor: litColor, boxShadow: `0 0 6px ${litColor}` }}
+        />
         <span className="text-xs text-gray-500">chosen</span>
-        <span className="font-semibold text-cheap">{displayOf(r)}</span>
+        <span className="font-semibold" style={{ color: litColor }}>{displayOf(r)}</span>
+        {servingEngine && (
+          <span className="rounded border border-edge bg-ink/60 px-1.5 py-0.5 font-mono text-[10px] text-gray-400">
+            served by · {servingEngine}
+          </span>
+        )}
         {r.hop_index !== undefined && r.step === "agent_hop" && (
           <span className="ml-auto text-[10px] text-gray-500">hop #{r.hop_index}</span>
         )}
@@ -53,13 +102,20 @@ function Chosen({ r, cumulative }: { r: TraceRecord; cumulative?: number }) {
       {r.reason && <div className="mt-1 text-xs text-gray-400">{r.reason}</div>}
       {r.rejected && r.rejected.length > 0 && (
         <div className="mt-2">
-          <div className="uppercase tracking-wide text-[10px] text-gray-600 mb-0.5">rejected</div>
-          <ul className="flex flex-col gap-0.5">
+          <div className="uppercase tracking-wide text-[10px] text-gray-600 mb-0.5">rejected spurs</div>
+          <ul className="flex flex-col gap-1">
             {r.rejected.map((c, j) => (
-              <li key={j} className="flex items-center gap-1.5 text-xs">
-                <TierDot tier={c.tier} />
-                <span className="text-gray-300">{c.display_name ?? c.name}</span>
-                <span className="text-gray-500">— {c.reason}</span>
+              <li
+                key={j}
+                className="flex items-center justify-between gap-2 rounded bg-ink/40 px-2 py-1 text-xs opacity-60"
+              >
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <TierDot tier={c.tier} />
+                  <span className="truncate text-gray-300">{c.display_name ?? c.name}</span>
+                </span>
+                <span className="shrink-0 text-right text-gray-500" title={c.reason}>
+                  {compactReason(c.reason)}
+                </span>
               </li>
             ))}
           </ul>
@@ -288,17 +344,23 @@ function ProviderStrip({ allowedProviders, onpremOnly }: { allowedProviders: str
   );
 }
 
-// Verdict colours. Tier colours (cheap/mid/frontier) are reused from TIER_COLOR
-// so the Model card matches the pie and dots everywhere else. Privacy and
-// verification are orthogonal to tiers, so they get their own semantics:
-//   green  = all-clear (cloud-eligible / verified clean)
-//   amber  = specially handled but fine (sensitive data kept on-prem)
-//   red    = needs attention (verification flagged)
-// Amber is a deliberate choice: "kept on-prem" is the privacy WIN, not an
+// Verdict colours — sourced from tokens.ts, the single palette owner (last of
+// the three tier-hex copies to migrate; api.ts/TIER_COLOR and BrandLogo did
+// theirs already). Tier colours (cheap/mid/frontier) are reused from
+// TIER_COLOR so the Model card matches the pie and dots everywhere else.
+// Privacy and verification are orthogonal to tiers, so they get their own
+// semantics:
+//   CLEAR (cheap green)   = all-clear (cloud-eligible / verified clean)
+//   SHIELD (privacy hex)  = specially handled but fine (sensitive data kept on-prem)
+//   ALARM (alert hex)     = needs attention (verification flagged) — RESERVED
+//                           for breach/health-fail states, never decoration
+// SHIELD is a deliberate choice: "kept on-prem" is the privacy WIN, not an
 // error, so it must read as neither the green all-clear nor the red alarm.
-const CLEAR = "#22c55e";
-const SHIELD = "#f59e0b";
-const ALARM = "#ef4444";
+// NEUTRAL is a plain gray, not part of the semantic tier/signal palette, so
+// it stays a literal — it's the "nothing to report" state (e.g. "not checked").
+const CLEAR = TIER_HEX.cheap;
+const SHIELD = SIGNAL_HEX.privacy;
+const ALARM = SIGNAL_HEX.alert;
 const NEUTRAL = "#6b7280";
 
 // Small stroke icons (currentColor), so a card's accent colour flows straight
