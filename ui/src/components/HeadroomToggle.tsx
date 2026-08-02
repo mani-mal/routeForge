@@ -59,7 +59,7 @@ export function HeadroomToggle() {
           ? "Couldn't reach the compression control — click to retry"
           : "Global Headroom (compression) default. Applications set to on/off in their Settings override this; those left at “(global default)” follow it."
       }
-      className="flex items-center gap-2 rounded-md border border-edge px-2.5 py-1.5 text-xs text-gray-400 hover:border-accent hover:text-gray-200 transition-colors disabled:opacity-60 disabled:cursor-wait"
+      className="flex items-center gap-2 rounded-md border border-edge px-2.5 py-1.5 text-xs text-gray-400 hover:border-accent hover:text-gray-200 transition-colors disabled:opacity-60 disabled:cursor-wait focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
     >
       <span className="uppercase tracking-wide text-[10px] text-gray-500">Headroom</span>
       <span

@@ -1,6 +1,5 @@
 // Small shared UI primitives reused across panels — kept boring on purpose.
 import type { ReactNode } from "react";
-import { TIER_COLOR } from "../api";
 
 export function Panel({
   title,
@@ -16,7 +15,7 @@ export function Panel({
   return (
     <section className={`bg-panel border border-edge rounded-lg p-4 flex flex-col gap-3 ${className}`}>
       <div className="flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-400">{title}</h2>
+        <h2 className="text-xs font-display uppercase tracking-[0.12em] text-gray-400">{title}</h2>
         {right}
       </div>
       {children}
@@ -24,16 +23,24 @@ export function Panel({
   );
 }
 
+// Tier dot reads the Tailwind tier classes (bg-cheap/bg-mid/bg-frontier), which
+// resolve to the tokens.ts hexes — one fewer TIER_COLOR consumer, no inline style.
+const TIER_DOT_CLASS: Record<string, string> = {
+  cheap: "bg-cheap",
+  mid: "bg-mid",
+  frontier: "bg-frontier",
+};
+
 export function TierDot({ tier }: { tier: string }) {
-  const color = TIER_COLOR[tier] ?? TIER_COLOR["?"];
-  return <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: color }} />;
+  const cls = TIER_DOT_CLASS[tier] ?? "bg-gray-600";
+  return <span className={`inline-block h-2.5 w-2.5 shrink-0 rounded-full ${cls}`} />;
 }
 
 export function StatTile({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div className="bg-ink/60 border border-edge rounded-md px-3 py-2 flex flex-col gap-0.5 min-w-0">
       <span className="text-[11px] uppercase tracking-wide text-gray-500">{label}</span>
-      <span className="text-xl font-bold text-gray-100 truncate">{value}</span>
+      <span className="text-xl font-bold font-mono text-gray-100 truncate">{value}</span>
       {sub && <span className="text-xs text-gray-500 truncate">{sub}</span>}
     </div>
   );

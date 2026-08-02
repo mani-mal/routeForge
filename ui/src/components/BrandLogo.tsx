@@ -1,10 +1,11 @@
 // Brand + chrome marks for the header.
 //
 // The routeForge mark depicts the product itself: one incoming request routed
-// to three tier endpoints — cheap (green), mid (blue), frontier (red) — reusing
-// the exact tier palette the rest of the UI uses, so the logo *is* the router.
-// The trunk uses currentColor, so it follows the active theme's accent.
+// to three tier endpoints — cheap (green), mid (blue), frontier (amber) — reusing
+// the exact tier palette the rest of the UI uses (tokens.ts), so the logo *is*
+// the router. The trunk uses currentColor, so it follows the active theme's accent.
 import cdwLogo from "../assets/cdw-logo.png";
+import { TIER_HEX } from "../tokens";
 
 export function RouteForgeMark({ className = "h-7 w-7" }: { className?: string }) {
   return (
@@ -16,9 +17,9 @@ export function RouteForgeMark({ className = "h-7 w-7" }: { className?: string }
         <path d="M13 16c5 0 5 8 11 8" />
       </g>
       <circle cx="6" cy="16" r="2.6" fill="currentColor" />
-      <circle cx="25" cy="8" r="3" fill="#22c55e" />
-      <circle cx="25" cy="16" r="3" fill="#3b82f6" />
-      <circle cx="25" cy="24" r="3" fill="#ef4444" />
+      <circle cx="25" cy="8" r="3" fill={TIER_HEX.cheap} />
+      <circle cx="25" cy="16" r="3" fill={TIER_HEX.mid} />
+      <circle cx="25" cy="24" r="3" fill={TIER_HEX.frontier} />
     </svg>
   );
 }
@@ -29,7 +30,7 @@ export function RouteForgeLogo() {
       <span className="text-accent">
         <RouteForgeMark />
       </span>
-      <span className="text-xl font-bold tracking-tight text-gray-100">
+      <span className="text-xl font-display font-bold tracking-tight text-gray-100">
         route<span className="text-accent">Forge</span>
       </span>
     </div>
@@ -48,7 +49,7 @@ export function ThemeToggle({ theme, onToggle }: { theme: string; onToggle: () =
       onClick={onToggle}
       title={isDark ? "Switch to light mode" : "Switch to dark mode"}
       aria-label="Toggle color theme"
-      className="flex h-8 w-8 items-center justify-center rounded-md border border-edge text-gray-400 hover:text-accent hover:border-accent transition-colors"
+      className="flex h-8 w-8 items-center justify-center rounded-md border border-edge text-gray-400 hover:text-accent hover:border-accent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
     >
       {isDark ? (
         <svg viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor" aria-hidden="true">
