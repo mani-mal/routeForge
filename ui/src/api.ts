@@ -2,6 +2,8 @@
 // Matches the Phase-6a backend (app/api/ui_routes.py, app/api/routes.py).
 // The Vite dev server proxies /api and /v1 to the backend (vite.config.ts).
 
+import { TIER_HEX } from "./tokens";
+
 export type Tier = "cheap" | "mid" | "frontier" | "?";
 
 export interface RequestSummary {
@@ -328,9 +330,11 @@ export function stepMeta(key: string): StepMeta | undefined {
   return STEPS.find((s) => s.key === key);
 }
 
+// Cheap/mid/frontier come from the single token source (tokens.ts). "?" is a
+// local fallback for an unresolved tier — not part of the semantic palette,
+// so it isn't in tokens.ts — kept here so existing `TIER_COLOR[t] ?? TIER_COLOR["?"]`
+// call sites keep their grey fallback behaviour unchanged.
 export const TIER_COLOR: Record<string, string> = {
-  cheap: "#22c55e",
-  mid: "#3b82f6",
-  frontier: "#ef4444",
+  ...TIER_HEX,
   "?": "#6b7280",
 };

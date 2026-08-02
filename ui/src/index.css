@@ -10,11 +10,11 @@
 :root,
 :root.dark {
   color-scheme: dark;
-  --c-ink: 11 15 25;
-  --c-panel: 17 24 39;
-  --c-edge: 31 41 55;
-  --c-accent: 56 189 248;   /* sky-400 */
-  --c-gray-100: 243 244 246;
+  --c-ink: 11 14 20;      /* #0B0E14 cool blue-black */
+  --c-panel: 19 26 38;    /* #131A26 */
+  --c-edge: 33 44 61;     /* #212C3D */
+  --c-accent: 79 209 224; /* #4FD1E0 rail cyan (selection/focus, the "track") */
+  --c-gray-100: 231 237 246; /* #E7EDF6 primary text */
   --c-gray-200: 229 231 235;
   --c-gray-300: 209 213 219;
   --c-gray-400: 156 163 175;
@@ -28,7 +28,7 @@
   --c-ink: 244 246 249;     /* soft page background */
   --c-panel: 255 255 255;   /* white card surface */
   --c-edge: 223 228 234;    /* hairline borders */
-  --c-accent: 2 132 199;    /* sky-600 — deeper for contrast on white */
+  --c-accent: 14 155 176;   /* #0E9BB0 — deeper rail cyan for contrast on white */
   --c-gray-100: 17 24 39;   /* prominent text (was brightest) */
   --c-gray-200: 31 41 55;
   --c-gray-300: 55 65 81;
@@ -43,6 +43,14 @@ body {
   margin: 0;
   background: rgb(var(--c-ink));
   color: rgb(var(--c-gray-100));
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
 }
