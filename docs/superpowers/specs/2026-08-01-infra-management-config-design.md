@@ -212,6 +212,18 @@ routeForge **consumes it for display and defaulting only** — it does not sched
 call Run:ai. (Matches `dgx-runai-ops`: Run:ai's admission webhook handles scheduling; we
 never set scheduler fields.) It does **not** change model scoring or the privacy path.
 
+**Save-time validation is declarative.** `PUT /admin/infra` validates only that
+`default_engine ∈ {vllm, trtllm}`. `runai_licensed` and `runai_project` are taken at face
+value as an **admin declaration** — routeForge does not probe the cluster to confirm Run:ai
+is actually installed or licensed. A wrong flag cannot misroute a request or breach
+residency (the flag is display/defaulting-only; routeForge never schedules GPUs or calls
+Run:ai — spec §8, CLAUDE.md rule 4), so the only failure mode is a console asserting a
+scheduling fact that isn't true. A blocking live probe is deliberately **not** built:
+routeForge has no Run:ai / Kubernetes control-plane client or RBAC, and adding one would
+cross the describe→consume boundary. Because the value is unverified, the console must
+label it **honestly as declared**, not asserted — see §12 (e.g. "Run:ai — declared
+licensed"), so nobody mistakes the badge for ground truth.
+
 ## 9. `docs/dynamo.txt` disposition
 
 Promote the ownership content into the **`inference-backends` skill** (the single source
