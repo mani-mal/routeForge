@@ -65,3 +65,12 @@ def test_serving_engine_annotated_for_onprem_choice():
         _ctx({"onprem"}, onprem=True), tokens_after=20, complexity=0.1)
     assert d.chosen.provider == "onprem"
     assert d.serving_engine == "vllm"  # S.serving.inference_backend is "vllm" in tests
+
+
+def test_decision_record_has_serving_engine_field():
+    from app.models import DecisionRecord
+    rec = DecisionRecord(step="router", chosen="local-8b", reason="x",
+                         serving_engine="vllm")
+    assert rec.serving_engine == "vllm"
+    # default is None (cloud / not annotated)
+    assert DecisionRecord(step="router", chosen="x", reason="y").serving_engine is None

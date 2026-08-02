@@ -92,6 +92,7 @@ class DecisionRecord(BaseModel):
     tokens_priced: int = 0
     quality_score: float | None = None
     quality_source: str | None = None  # customer|calibrated|published|tier_default
+    serving_engine: str | None = None  # on-prem engine (vllm|trtllm); None for cloud
 
 
 class VerificationRecord(BaseModel):

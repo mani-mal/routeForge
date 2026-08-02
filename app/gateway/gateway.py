@@ -59,7 +59,8 @@ class Gateway:
                 actual_cost_usd=result.cost_usd, latency_ms=result.latency_ms,
                 hop_index=len(records),
                 quality_score=decision.quality_score,
-                quality_source=decision.quality_source))
+                quality_source=decision.quality_source,
+                serving_engine=decision.serving_engine))
 
             # For onprem_only requests the router clamps an out-of-reach tier back
             # down, so an escalation may re-issue the same tier — bounded by
