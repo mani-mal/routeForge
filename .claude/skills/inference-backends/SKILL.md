@@ -50,6 +50,77 @@ class InferenceBackend(Protocol):
 
 `LiteLLMBackend` is the sole implementer of this Protocol.
 
+## Ownership boundary (routeForge vs Dynamo vs engine vs Run:ai)
+
+NVIDIA Dynamo is a strong choice for the inference-serving and GPU load-balancing
+layer. Dynamo manages the inference request; Run:ai (where available) manages the
+GPU cluster resources Dynamo runs on. Responsibilities split like this:
+
+| Decision | Recommended owner |
+|---|---|
+| Is this coding, RAG, reasoning, tool use or a simple question? | routeForge |
+| Does data contain PII and need to remain on-premises? | routeForge |
+| Which model offers the required quality at the lowest cost? | routeForge |
+| Should a failed request fall back to another model? | routeForge |
+| Which replica has the most useful KV cache? | Dynamo |
+| Which replica has available capacity? | Dynamo |
+| Should prefill and decode run on separate GPU pools? | Dynamo |
+| How many model-worker replicas should run? | Dynamo Planner |
+| How are requests scheduled and continuously batched inside a worker? | vLLM or TensorRT-LLM |
+| How many physical GPU nodes are available? | Kubernetes node autoscaler or fixed on-prem hardware |
+
+**What Dynamo already provides** — you do not need to implement these yourself:
+
+- OpenAI-compatible inference frontend
+- Worker discovery and registration
+- Round-robin, random and KV-cache-aware routing
+- Routing based on cache overlap and active worker load
+- Multiple vLLM, TensorRT-LLM or SGLang workers
+- Aggregated inference, where one worker handles the whole request
+- Disaggregated prefill and decode pools
+- Multi-node and multi-GPU inference
+- Multi-tier KV-cache management
+- Request cancellation and streaming
+- Kubernetes Operator, CRDs, Helm charts and containers
+- Prometheus metrics
+- Planner-driven worker autoscaling
+
+The KV router tracks which workers hold reusable prompt blocks and selects a worker
+using cache overlap and predicted processing cost, falling back to ordinary load
+balancing when KV information is unavailable. The Planner adjusts prefill/decode
+replica counts using throughput, latency, load or SLA-oriented policies.
+
+**You still need to configure:**
+
+- Model-to-GPU assignments
+- Tensor parallelism
+- Minimum and maximum replicas
+- Routing mode
+- TTFT and inter-token latency targets
+- Queue and admission-control limits
+- Model storage and caching
+- Kubernetes GPU placement
+- Monitoring and alerting
+
+**What Dynamo does not replace** — Dynamo does not automatically know that:
+
+- DeepSeek or Qwen is better for a particular coding request
+- A small model is sufficient for a simple question
+- A prompt contains sensitive financial information
+- One model produced better answers in your evaluation dataset
+- A request should use local inference instead of a cloud API
+- A model exceeded the permitted cost per request
+
+Those decisions are the core value of routeForge. Dynamo's Global Router can select
+between pools for the same model, or between pools optimized for characteristics such
+as short vs. long prompts and different latency requirements — it is not a complete
+semantic, quality and governance router across unrelated models.
+
+**Consumed facts, not new axes.** The per-model `engine` attribute and the cluster
+`runai_licensed` fact (surfaced by the infra-management config, spec 2026-08-01) are
+*consumed* facts the router/UI read — they are not new serving-path axes. The single
+`inference_backend` axis (`vllm | dynamo | none`) above still stands.
+
 ## vllm (default)
 
 vLLM exposes an OpenAI-compatible server. `LiteLLMBackend` addresses it through
