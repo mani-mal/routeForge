@@ -14,7 +14,7 @@ function TokenReveal({ token }: { token: string }) {
   return (
     <div className="rounded-md border border-accent/60 bg-accent/10 p-3 text-sm">
       <div className="text-accent font-medium mb-1">New token — copy it now, it won't be shown again</div>
-      <code className="block break-all text-gray-100">{token}</code>
+      <code className="block break-all font-mono text-gray-100">{token}</code>
     </div>
   );
 }
@@ -96,7 +96,9 @@ function PolicyEditor({ app, onSaved }: { app: AdminApp; onSaved: () => void }) 
   }
 
   const chip = (on: boolean) =>
-    `px-2 py-0.5 rounded text-xs border ${on ? "border-accent text-accent bg-accent/10" : "border-edge text-gray-500"}`;
+    `px-2 py-0.5 rounded text-xs border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+      on ? "border-accent text-accent bg-accent/10" : "border-edge text-gray-500"
+    }`;
 
   return (
     <div className="flex flex-col gap-2 text-sm">
@@ -145,13 +147,13 @@ function PolicyEditor({ app, onSaved }: { app: AdminApp; onSaved: () => void }) 
           max rpm
           <input type="number" min={0} value={p.max_rpm ?? ""}
             onChange={(e) => setP({ ...p, max_rpm: e.target.value ? Number(e.target.value) : null })}
-            className="rounded bg-ink border border-edge px-2 py-1 text-xs text-gray-100 w-20" />
+            className="rounded bg-ink border border-edge px-2 py-1 text-xs font-mono text-gray-100 w-20" />
         </label>
         <label className="flex items-center gap-2 text-xs text-gray-500">
           budget $/day
           <input type="number" min={0} step="0.01" value={p.max_spend_usd_per_day ?? ""}
             onChange={(e) => setP({ ...p, max_spend_usd_per_day: e.target.value ? Number(e.target.value) : null })}
-            className="rounded bg-ink border border-edge px-2 py-1 text-xs text-gray-100 w-24" />
+            className="rounded bg-ink border border-edge px-2 py-1 text-xs font-mono text-gray-100 w-24" />
         </label>
         <button onClick={save} disabled={busy}
           className="rounded-md border border-accent bg-accent/20 text-accent px-3 py-1 text-xs disabled:opacity-50">
@@ -206,11 +208,11 @@ export function AppConfig({ appId, onChanged }: { appId: string; onChanged?: () 
   return (
     <div className="flex flex-col gap-4">
       <section>
-        <div className="text-xs uppercase tracking-wide text-gray-500 mb-1">Tokens</div>
+        <div className="text-xs font-display uppercase tracking-wide text-gray-500 mb-1">Tokens</div>
         <ul className="flex flex-col gap-1">
           {app.tokens.map((t) => (
             <li key={t.id} className="flex items-center gap-2 text-sm">
-              <code className="text-gray-300">{t.prefix}</code>
+              <code className="font-mono text-gray-300">{t.prefix}</code>
               <span className="text-gray-600">{t.name}</span>
               <span className={t.status === "active" ? "text-cheap text-xs" : "text-gray-600 text-xs"}>{t.status}</span>
               {t.status === "active" && (
@@ -224,12 +226,12 @@ export function AppConfig({ appId, onChanged }: { appId: string; onChanged?: () 
       </section>
 
       <section>
-        <div className="text-xs uppercase tracking-wide text-gray-500 mb-1">Policy</div>
+        <div className="text-xs font-display uppercase tracking-wide text-gray-500 mb-1">Policy</div>
         <PolicyEditor app={app} onSaved={refresh} />
       </section>
 
       <section>
-        <div className="text-xs uppercase tracking-wide text-gray-500 mb-1">Privacy rules</div>
+        <div className="text-xs font-display uppercase tracking-wide text-gray-500 mb-1">Privacy rules</div>
         <PrivacyRulesEditor appId={appId} />
       </section>
     </div>
@@ -241,7 +243,7 @@ function AppDetail({ app, onChanged }: { app: AdminApp; onChanged: () => void })
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <div>
-          <div className="text-sm font-semibold text-gray-100">{app.name} <span className="text-gray-500">({app.id})</span></div>
+          <div className="text-sm font-semibold text-gray-100">{app.name} <span className="font-mono text-gray-500">({app.id})</span></div>
           <div className="text-xs text-gray-500">
             status {app.status} · default residency {app.default_residency}
             {app.langfuse_project_id ? ` · langfuse: ${app.langfuse_project_id}` : " · langfuse: shared"}
@@ -276,12 +278,14 @@ export function ApplicationsPanel() {
           {apps.map((a) => (
             <li key={a.id}>
               <button onClick={() => setSelected(a.id)}
-                className={`w-full text-left rounded-md border px-3 py-2 ${selected === a.id ? "border-accent bg-accent/5" : "border-edge hover:border-gray-600"}`}>
+                className={`w-full text-left rounded-md border px-3 py-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${selected === a.id ? "border-accent bg-accent/5" : "border-edge hover:border-accent"}`}>
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-gray-100">{a.name}</span>
-                  <span className="text-xs text-gray-500">{a.tokens.filter((t) => t.status === "active").length} tokens</span>
+                  <span className="text-xs font-mono text-gray-500">{a.tokens.filter((t) => t.status === "active").length} tokens</span>
                 </div>
-                <div className="text-xs text-gray-500">{a.id} · {a.default_residency} · {a.status}</div>
+                <div className="text-xs text-gray-500">
+                  <span className="font-mono">{a.id}</span> · {a.default_residency} · {a.status}
+                </div>
               </button>
             </li>
           ))}

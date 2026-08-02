@@ -42,11 +42,11 @@ export function RequestList({
                       </span>
                     )}
                   </div>
-                  <span className="shrink-0 text-xs text-gray-400">{formatUsdPrecise(r.total_usd)}</span>
+                  <span className="shrink-0 text-xs font-mono text-gray-400">{formatUsdPrecise(r.total_usd)}</span>
                 </div>
                 <div className="mt-1 flex items-center justify-between text-xs text-gray-500">
                   <span>{r.sensitivity}</span>
-                  <span>{formatMs(r.latency_ms)}</span>
+                  <span className="font-mono">{formatMs(r.latency_ms)}</span>
                 </div>
               </button>
             );

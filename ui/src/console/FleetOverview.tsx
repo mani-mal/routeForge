@@ -116,7 +116,7 @@ function Th({
   return (
     <button
       onClick={() => onSort(sortKey)}
-      className={`flex items-center gap-1 text-left text-[11px] font-semibold uppercase tracking-wide hover:text-gray-300 ${
+      className={`flex items-center gap-1 text-left text-[11px] font-display font-semibold uppercase tracking-[0.12em] hover:text-gray-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded ${
         active ? "text-gray-200" : "text-gray-500"
       } ${className}`}
     >
@@ -224,7 +224,9 @@ export function FleetOverview({ onOpenApp }: { onOpenApp: (appId: string) => voi
               <Th label="PII" sortKey="pii" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
               <Th label="On-prem" sortKey="onprem" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
               <Th label="p50" sortKey="latency" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Tiers</span>
+              <span className="text-[11px] font-display font-semibold uppercase tracking-[0.12em] text-gray-500">
+                Tiers
+              </span>
               <span />
             </div>
 
@@ -232,25 +234,25 @@ export function FleetOverview({ onOpenApp }: { onOpenApp: (appId: string) => voi
               <button
                 key={row.app.id}
                 onClick={() => onOpenApp(row.app.id)}
-                className={`${GRID} w-full rounded-md border border-edge bg-ink/40 px-3 py-2 text-left transition-colors hover:border-gray-600`}
+                className={`${GRID} w-full rounded-md border border-edge bg-ink/40 px-3 py-2 text-left transition-colors hover:border-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent`}
               >
                 <div className="min-w-0">
                   <div className="truncate text-sm font-medium text-gray-100">{row.app.name}</div>
-                  <div className="truncate text-xs text-gray-500">{row.app.id}</div>
+                  <div className="truncate text-xs font-mono text-gray-500">{row.app.id}</div>
                 </div>
-                <span className="text-sm text-gray-300">{row.count.toLocaleString()}</span>
-                <span className="text-sm text-gray-300">{formatUsd(row.total_usd)}</span>
-                <span className="text-sm text-gray-300">
+                <span className="text-sm font-mono text-gray-300">{row.count.toLocaleString()}</span>
+                <span className="text-sm font-mono text-gray-300">{formatUsd(row.total_usd)}</span>
+                <span className="text-sm font-mono text-gray-300">
                   {formatUsd(row.saved_usd)}
                   <span className="ml-1 text-xs text-gray-500">({row.saved_pct.toFixed(0)}%)</span>
                 </span>
-                <span className="text-sm text-gray-300">{row.pii_count}</span>
-                <span className="text-sm text-gray-300">{row.onprem_count}</span>
-                <span className="text-sm text-gray-300">{formatMs(row.latency_p50_ms)}</span>
+                <span className="text-sm font-mono text-gray-300">{row.pii_count}</span>
+                <span className="text-sm font-mono text-gray-300">{row.onprem_count}</span>
+                <span className="text-sm font-mono text-gray-300">{formatMs(row.latency_p50_ms)}</span>
                 <TierMiniBar dist={row.tier_distribution} />
                 {row.warn ? (
                   <span
-                    className="text-frontier"
+                    className="text-alert"
                     title="Residency breach: a request that must stay on-prem was served off-prem"
                   >
                     ⚠

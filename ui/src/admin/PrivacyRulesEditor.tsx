@@ -32,8 +32,6 @@ const SENSITIVE_LOOKING = new Set([
   "EMAIL_ADDRESS", "PHONE_NUMBER",
 ]);
 
-const AMBER = "#f59e0b";
-
 function emptyRule(): SensitivityRule {
   return { entities: [], sensitivity: "internal", risk_class: "low", residency: "any", require_verification: false };
 }
@@ -202,14 +200,15 @@ export function PrivacyRulesEditor({ appId }: { appId: string }) {
   }
 
   const chip = (on: boolean) =>
-    `px-2 py-0.5 rounded text-xs border ${on ? "border-accent text-accent bg-accent/10" : "border-edge text-gray-500"}`;
+    `px-2 py-0.5 rounded text-xs border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+      on ? "border-accent text-accent bg-accent/10" : "border-edge text-gray-500"
+    }`;
 
   return (
     <div className="flex flex-col gap-4 text-sm">
       {hasDowngrade && (
         <div
-          className="rounded-md border px-3 py-2 text-xs flex items-start gap-2"
-          style={{ borderColor: AMBER, backgroundColor: `${AMBER}1a`, color: AMBER }}
+          className="rounded-md border border-frontier bg-frontier/10 text-frontier px-3 py-2 text-xs flex items-start gap-2"
         >
           <span aria-hidden>⚠</span>
           <span>
@@ -220,7 +219,7 @@ export function PrivacyRulesEditor({ appId }: { appId: string }) {
       )}
 
       <section>
-        <div className="text-xs uppercase tracking-wide text-gray-500 mb-1">Custom recognizers</div>
+        <div className="text-xs font-display uppercase tracking-wide text-gray-500 mb-1">Custom recognizers</div>
         <div className="flex flex-col gap-1.5">
           {recognizers.map((r, i) => (
             <div key={i} className="flex items-center gap-2 flex-wrap">
@@ -232,7 +231,7 @@ export function PrivacyRulesEditor({ appId }: { appId: string }) {
                 className="rounded bg-ink border border-edge px-2 py-1 text-xs text-gray-100 font-mono flex-1 min-w-[10rem]" />
               <input type="number" min={0} max={1} step="0.05" value={r.score} title="score"
                 onChange={(e) => updateRecognizer(i, { score: Number(e.target.value) })}
-                className="rounded bg-ink border border-edge px-2 py-1 text-xs text-gray-100 w-16" />
+                className="rounded bg-ink border border-edge px-2 py-1 text-xs font-mono text-gray-100 w-16" />
               <button onClick={() => deleteRecognizer(i)} className="text-xs text-frontier hover:underline">delete</button>
             </div>
           ))}
@@ -244,15 +243,14 @@ export function PrivacyRulesEditor({ appId }: { appId: string }) {
       </section>
 
       <section>
-        <div className="text-xs uppercase tracking-wide text-gray-500 mb-1">Sensitivity rules</div>
+        <div className="text-xs font-display uppercase tracking-wide text-gray-500 mb-1">Sensitivity rules</div>
         <p className="text-[10px] text-gray-600 mb-2">Evaluated top to bottom — the first matching rule wins.</p>
         <div className="flex flex-col gap-3">
           {rules.map((rule, i) => {
             const downgrade = ruleIsDowngrade(rule);
             return (
               <div key={i}
-                className={`rounded-md border p-2 flex flex-col gap-2 ${downgrade ? "" : "border-edge"}`}
-                style={downgrade ? { borderColor: AMBER } : undefined}>
+                className={`rounded-md border p-2 flex flex-col gap-2 ${downgrade ? "border-frontier" : "border-edge"}`}>
                 <div className="flex items-center justify-between">
                   <span className="text-xs text-gray-500">#{i + 1}</span>
                   <div className="flex items-center gap-1">
@@ -310,7 +308,7 @@ export function PrivacyRulesEditor({ appId }: { appId: string }) {
       </section>
 
       <section>
-        <div className="text-xs uppercase tracking-wide text-gray-500 mb-1">Test against sample text</div>
+        <div className="text-xs font-display uppercase tracking-wide text-gray-500 mb-1">Test against sample text</div>
         <TestBox recognizers={recognizers} />
       </section>
 

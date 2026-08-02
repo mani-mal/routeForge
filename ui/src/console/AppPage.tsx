@@ -88,7 +88,9 @@ export function AppPage({ appId, onBack }: { appId: string; onBack: () => void }
   }, [selectedId]);
 
   const tabBtn = (t: Tab) =>
-    `px-3 py-1.5 rounded-md text-sm ${tab === t ? "bg-accent/15 text-accent" : "text-gray-400 hover:text-gray-200"}`;
+    `px-3 py-1.5 text-sm font-display border-b-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset ${
+      tab === t ? "border-accent text-accent" : "border-transparent text-gray-400 hover:text-gray-200"
+    }`;
 
   return (
     <div className="flex-1 flex flex-col">
@@ -102,7 +104,7 @@ export function AppPage({ appId, onBack }: { appId: string; onBack: () => void }
         <div className="min-w-0">
           <div className="text-sm font-semibold text-gray-100 truncate">{app?.name ?? appId}</div>
           <div className="text-xs text-gray-500 truncate">
-            {appId} · {app?.default_residency ?? "…"}
+            <span className="font-mono">{appId}</span> · <span className="font-mono">{app?.default_residency ?? "…"}</span>
           </div>
         </div>
       </div>
