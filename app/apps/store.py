@@ -363,7 +363,8 @@ async def upsert_infra_settings(session: AsyncSession, **fields) -> InfraSetting
 
 
 async def list_infra_models(session: AsyncSession) -> list[InfraModel]:
-    return list((await session.execute(select(InfraModel))).scalars().all())
+    stmt = select(InfraModel).order_by(InfraModel.model_name)
+    return list((await session.execute(stmt)).scalars().all())
 
 
 async def get_infra_model(session: AsyncSession, model_name: str) -> InfraModel | None:

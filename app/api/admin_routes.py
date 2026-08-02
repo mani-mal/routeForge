@@ -323,3 +323,119 @@ async def put_privacy(app_id: str, body: PrivacyProfileIn, request: Request,
         await session.commit()
     request.app.state.profile_cache.clear(app_id)
     return {"ok": True}
+
+
+# --- infra management (Run:ai declared facts + per-model engine/ops metadata) ----
+# CLAUDE.md rule 4 (no auto-deploy): this surfaces DB-declared facts and a live
+# backend health cross-check only. It never calls Run:ai/Dynamo/K8s and never
+# renders or deploys anything. `runai_licensed`/`runai_project` are declarative
+# (design decision: routeForge does not probe the cluster) — validated only for
+# shape, taken at face value otherwise. Cloud models are never fleet infra:
+# /admin/infra/models lists only routing.yaml's onprem pool members.
+
+_ENGINES = {"vllm", "trtllm"}
+
+
+class InfraSettingsIn(BaseModel):
+    runai_licensed: bool | None = None
+    runai_project: str | None = None
+    default_engine: str | None = None
+
+
+class InfraModelIn(BaseModel):
+    engine: str | None = None
+    enabled: bool | None = None
+    replicas: int | None = None
+    min_replicas: int | None = None
+    max_replicas: int | None = None
+    tensor_parallel: int | None = None
+    gpu_type: str | None = None
+    endpoint: str | None = None
+    runai_scheduled: bool | None = None
+    notes: str | None = None
+
+
+def _infra_model_dict(pool_cand, row, health) -> dict:
+    """One on-prem roster entry: routing.yaml identity + infra_models metadata
+    (or defaults if unmanaged) + a live-health cross-check."""
+    managed = row is not None
+    engine = row.engine if managed else None
+    enabled = row.enabled if managed else True  # unmanaged -> enabled (§6)
+    present = health.ok and pool_cand.name in health.models
+    if not health.ok:
+        cross = "unreachable"
+    elif present:
+        cross = "serving"
+    else:
+        cross = "absent"
+    return {
+        "model_name": pool_cand.name,
+        "display_name": pool_cand.display_name or pool_cand.name,
+        "tier": pool_cand.tier,
+        "provider": pool_cand.provider,
+        "managed": managed,
+        "engine": engine,
+        "enabled": enabled,
+        "replicas": row.replicas if managed else None,
+        "min_replicas": row.min_replicas if managed else None,
+        "max_replicas": row.max_replicas if managed else None,
+        "tensor_parallel": row.tensor_parallel if managed else None,
+        "gpu_type": row.gpu_type if managed else None,
+        "endpoint": row.endpoint if managed else None,
+        "runai_scheduled": row.runai_scheduled if managed else False,
+        "notes": row.notes if managed else None,
+        "cross_check": cross,  # serving | absent | unreachable
+    }
+
+
+@admin_router.get("/infra")
+async def get_infra(request: Request, _: str = Depends(require_admin)) -> dict:
+    s = request.app.state.settings
+    async with request.app.state.db.session() as session:
+        row = await store.get_infra_settings(session)
+    return {
+        "inference_backend": s.serving.inference_backend,  # read-only boot fact
+        "runai_licensed": bool(row.runai_licensed) if row else False,
+        "runai_project": row.runai_project if row else None,
+        "default_engine": row.default_engine if row else "vllm",
+    }
+
+
+@admin_router.put("/infra")
+async def put_infra(body: InfraSettingsIn, request: Request,
+                    _: str = Depends(require_admin)) -> dict:
+    if body.default_engine is not None and body.default_engine not in _ENGINES:
+        raise HTTPException(422, f"bad default_engine {body.default_engine!r}")
+    fields = {k: v for k, v in body.model_dump().items() if v is not None}
+    async with request.app.state.db.session() as session:
+        await store.upsert_infra_settings(session, **fields)
+        await session.commit()
+    await request.app.state.infra_roster.refresh(request.app.state.db)
+    return {"ok": True}
+
+
+@admin_router.get("/infra/models")
+async def get_infra_models(request: Request, _: str = Depends(require_admin)) -> list:
+    s = request.app.state.settings
+    onprem = [c for c in s.routing.model_pool if c.provider == "onprem"]
+    health = await request.app.state.backend.health()
+    async with request.app.state.db.session() as session:
+        rows = {r.model_name: r for r in await store.list_infra_models(session)}
+    return [_infra_model_dict(c, rows.get(c.name), health) for c in onprem]
+
+
+@admin_router.put("/infra/models/{slug}")
+async def put_infra_model(slug: str, body: InfraModelIn, request: Request,
+                          _: str = Depends(require_admin)) -> dict:
+    if body.engine is not None and body.engine not in _ENGINES:
+        raise HTTPException(422, f"bad engine {body.engine!r}")
+    s = request.app.state.settings
+    onprem_names = {c.name for c in s.routing.model_pool if c.provider == "onprem"}
+    if slug not in onprem_names:
+        raise HTTPException(404, "not an on-prem model in the pool")
+    fields = {k: v for k, v in body.model_dump().items() if v is not None}
+    async with request.app.state.db.session() as session:
+        await store.upsert_infra_model(session, slug, **fields)
+        await session.commit()
+    await request.app.state.infra_roster.refresh(request.app.state.db)
+    return {"ok": True}

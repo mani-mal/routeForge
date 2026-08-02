@@ -97,9 +97,15 @@ def create_app() -> FastAPI:
     # fail-closed sys.exit(1) -- mock is gone, there is no fallback.
     backend = asyncio.run(resolve_backend(settings))
     app.state.backend = backend
+    # Runtime on-prem fleet declaration (spec 2026-08-01): a process-global
+    # snapshot of infra_settings/infra_models, lazily loaded on the first
+    # request (routes.py) and refreshed on every admin write. Injected into the
+    # Router so admin-disabled on-prem models are excluded from candidates.
+    from app.apps.infra import InfraRoster
+    app.state.infra_roster = InfraRoster(settings)
     # named model_router (not router) to avoid shadowing the APIRouter imported above;
     # app.include_router(router) below needs the APIRouter, not this Router instance.
-    model_router = Router(settings)
+    model_router = Router(settings, infra_roster=app.state.infra_roster)
     app.state.model_router = model_router
     gateway = Gateway(settings, backend, model_router)
     # Step 5 (Headroom compression): local, TTL-bounded CCR store — never
