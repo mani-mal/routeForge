@@ -7,6 +7,7 @@ audience. The dashboard (Phase 4) is the only intended client.
 from __future__ import annotations
 
 import datetime as dt
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
@@ -14,6 +15,7 @@ from pydantic import BaseModel
 from app.apps import store
 from app.apps.admin_auth import SESSION_COOKIE, require_admin
 from app.apps.langfuse_provision import LangfuseProvisioner, encrypt_secret
+from app.apps.probe import probe_endpoint
 from app.apps.tokens import new_token
 from app.policy.enums import RESIDENCY, RISK_CLASS, SENSITIVITY
 from app.policy.recognizers import PRESIDIO_BUILTINS, validate_recognizer
@@ -40,6 +42,16 @@ def _policy_dict(p) -> dict | None:
             "allowed_models": p.allowed_models, "residency": p.residency,
             "max_spend_usd_per_day": p.max_spend_usd_per_day, "max_rpm": p.max_rpm,
             "compression_enabled": p.compression_enabled}
+
+
+def _onboarded_dict(m) -> dict:
+    return {"slug": m.slug, "display_name": m.display_name, "provider": m.provider,
+            "tier": m.tier, "quality": m.quality, "price_input": m.price_input,
+            "price_output": m.price_output, "endpoint": m.endpoint,
+            "api_key_env": m.api_key_env, "context_window": m.context_window,
+            "enabled": m.enabled, "allowed_app_ids": m.allowed_app_ids,
+            "probe_status": m.probe_status, "probe_error": m.probe_error,
+            "notes": m.notes, "updated_at": _iso(m.updated_at)}
 
 
 def _app_dict(app, *, with_children: bool = True) -> dict:
@@ -87,6 +99,20 @@ class PolicyIn(BaseModel):
 
 class TokenIn(BaseModel):
     name: str = "default"
+
+
+class OnboardIn(BaseModel):
+    slug: str
+    display_name: str
+    tier: str                       # cheap|mid|frontier
+    endpoint: str
+    api_key_env: str | None = None
+    price_input: float
+    price_output: float
+    quality: float | None = None
+    context_window: int | None = None
+    allowed_app_ids: list[str] | None = None
+    notes: str | None = None
 
 
 class RecognizerIn(BaseModel):
@@ -323,3 +349,102 @@ async def put_privacy(app_id: str, body: PrivacyProfileIn, request: Request,
         await session.commit()
     request.app.state.profile_cache.clear(app_id)
     return {"ok": True}
+
+
+# --- on-prem model onboarding (runtime registry; probe-gated activation) ----
+#
+# routeForge deploys nothing — these endpoints register an externally-served
+# OpenAI-compatible endpoint as a routable on-prem model. A model is only
+# ever saved `enabled=True` if `probe_endpoint` can reach it and confirms it
+# serves the given slug; otherwise it's saved disabled. Downstream,
+# ModelRegistry.has_healthy_onprem() keys on `enabled`, so a probe-failed
+# model correctly never satisfies onprem_only routing. `provider` is always
+# forced to "onprem" — never taken from the request body.
+
+def _static_validate_onboard(body: OnboardIn, s) -> None:
+    tiers = set(s.routing.tiers)
+    if body.tier not in tiers:
+        raise HTTPException(422, f"bad tier {body.tier!r}")
+    if not re.match(r"^https?://", body.endpoint):
+        raise HTTPException(422, "endpoint must be an http(s) URL")
+    if body.price_input < 0 or body.price_output < 0:
+        raise HTTPException(422, "price must be >= 0")
+
+
+@admin_router.post("/infra/models")
+async def onboard_model(body: OnboardIn, request: Request,
+                        _: str = Depends(require_admin)) -> dict:
+    s = request.app.state.settings
+    reg = request.app.state.registry
+    yaml_names = {c.name for c in s.routing.model_pool}
+    _static_validate_onboard(body, s)
+    async with request.app.state.db.session() as session:
+        if body.slug in yaml_names or await store.get_onboarded(session, body.slug):
+            raise HTTPException(409, f"slug {body.slug!r} already exists")
+        if body.allowed_app_ids:
+            for aid in body.allowed_app_ids:
+                if await store.get_application(session, aid) is None:
+                    raise HTTPException(422, f"unknown application {aid!r}")
+        ok, detail = await probe_endpoint(body.endpoint, body.slug, body.api_key_env)
+        await store.upsert_onboarded(
+            session, body.slug, display_name=body.display_name, provider="onprem",
+            tier=body.tier, endpoint=body.endpoint, api_key_env=body.api_key_env,
+            price_input=body.price_input, price_output=body.price_output,
+            quality=body.quality, context_window=body.context_window,
+            allowed_app_ids=body.allowed_app_ids, notes=body.notes,
+            enabled=ok, probe_status=("healthy" if ok else "unreachable"),
+            probe_error=(None if ok else detail))
+        await session.commit()
+    await reg.refresh(request.app.state.db)
+    return {"slug": body.slug, "enabled": ok,
+            "probe_status": "healthy" if ok else "unreachable",
+            "probe_error": None if ok else detail}
+
+
+@admin_router.put("/infra/models/{slug}")
+async def edit_onboarded_model(slug: str, body: OnboardIn, request: Request,
+                               _: str = Depends(require_admin)) -> dict:
+    s = request.app.state.settings
+    reg = request.app.state.registry
+    _static_validate_onboard(body, s)
+    async with request.app.state.db.session() as session:
+        if await store.get_onboarded(session, slug) is None:
+            raise HTTPException(404, f"onboarded model {slug!r} not found")
+        if body.allowed_app_ids:
+            for aid in body.allowed_app_ids:
+                if await store.get_application(session, aid) is None:
+                    raise HTTPException(422, f"unknown application {aid!r}")
+        ok, detail = await probe_endpoint(body.endpoint, slug, body.api_key_env)
+        await store.upsert_onboarded(
+            session, slug, display_name=body.display_name, provider="onprem",
+            tier=body.tier, endpoint=body.endpoint, api_key_env=body.api_key_env,
+            price_input=body.price_input, price_output=body.price_output,
+            quality=body.quality, context_window=body.context_window,
+            allowed_app_ids=body.allowed_app_ids, notes=body.notes,
+            enabled=ok, probe_status=("healthy" if ok else "unreachable"),
+            probe_error=(None if ok else detail))
+        await session.commit()
+    await reg.refresh(request.app.state.db)
+    return {"slug": slug, "enabled": ok,
+            "probe_status": "healthy" if ok else "unreachable",
+            "probe_error": None if ok else detail}
+
+
+@admin_router.delete("/infra/models/{slug}")
+async def delete_onboarded_model(slug: str, request: Request,
+                                 _: str = Depends(require_admin)) -> dict:
+    reg = request.app.state.registry
+    async with request.app.state.db.session() as session:
+        deleted = await store.delete_onboarded(session, slug)
+        if not deleted:
+            raise HTTPException(404, f"onboarded model {slug!r} not found")
+        await session.commit()
+    await reg.refresh(request.app.state.db)
+    return {"ok": True, "slug": slug}
+
+
+@admin_router.get("/infra/models")
+async def list_onboarded_models(request: Request,
+                                _: str = Depends(require_admin)) -> list:
+    async with request.app.state.db.session() as session:
+        return [_onboarded_dict(m) for m in await store.list_onboarded(session)]
