@@ -201,8 +201,8 @@ currently `enabled`, `ModelRegistry.has_healthy_onprem()` is `false`, which drop
 `onprem` from `allowed_providers` in `app/policy/context.py`. An `onprem_only`
 request's `allowed_providers` is then empty and the router rejects it downstream.
 Never silently route it to cloud — that inverts the entire privacy claim. See
-`docs/onboarding-models.md` §(e) and CLAUDE.md's `none`-reject note. Test this
-explicitly.
+`docs/onboarding-models.md` §(e) and CLAUDE.md's "No on-prem model onboarded ⇒ derived
+reject, not a backend value" note. Test this explicitly.
 
 ## No boot-time backend health check
 

@@ -55,6 +55,23 @@ servingPlane:
 langfuse: {enabled: true, host: ""}
 ```
 
+**`servingPlane.inferenceBackend` is a dead field — not yet removed.** Both shipped
+charts (`deploy/helm/serving-plane/values.yaml` and `deploy/hpe/routeforge/values.yaml`)
+still declare `inferenceBackend: mock # mock | vllm | dynamo | none`, and their
+templates (`deployment-api.yaml`/`api.yaml`, `configmap.yaml`/`serving-config.yaml`,
+`NOTES.txt`) and `README.md` still branch on `.Values.servingPlane.inferenceBackend` —
+`deploy/hpe/routeforge/templates/NOTES.txt` even still describes
+`inferenceBackend=none` as how you reject `onprem_only`, which is stale: that reject is
+now derived from `ModelRegistry.has_healthy_onprem()` (no onboarded on-prem model
+enabled), not a chart value. This is **cosmetically stale, not a deploy bug** —
+`config/serving.yaml` no longer defines `inference_backend` at all (the loader dropped
+it), so whatever the chart renders for it is simply ignored; on-prem models are
+onboarded at runtime against the deployed router regardless of what
+`inferenceBackend` is set to. Purging `inferenceBackend` from both charts'
+`values.yaml`/templates/`README.md`/`NOTES.txt` is tracked as a **separate,
+already-deferred packaging-cleanup task** — do not set it expecting it to do
+anything, and do not remove it from the charts as a side effect of unrelated work.
+
 Secrets via existing K8s Secret references, never chart values. GreenLake customers
 will have opinions about secret management; don't fight them.
 
