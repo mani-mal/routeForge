@@ -263,46 +263,34 @@ export const adminApi = {
   },
 };
 
-// --- Infrastructure admin (Run:ai + per-model engine; Task A4) -------------
-// Backend: app/api/admin_routes.py — GET/PUT /admin/infra, GET /admin/infra/models,
-// PUT /admin/infra/models/{slug}. Cloud models never appear in `models()` — the
-// API filters to on-prem pool members only.
+// --- Model onboarding (pure router; Task 5/7) -------------------------------
+// routeForge deploys nothing — operators stand up an OpenAI-compatible
+// endpoint themselves and onboard it here at runtime (name, slug, tier,
+// endpoint, price, which apps may use it). Backend: app/api/admin_routes.py —
+// POST/GET /admin/infra/models, PUT/DELETE /admin/infra/models/{slug}.
 
-export type InfraSettings = {
-  inference_backend: string;
-  runai_licensed: boolean;
-  runai_project: string | null;
-  default_engine: string;
+export type OnboardedModel = {
+  slug: string; display_name: string; tier: string; provider: string;
+  endpoint: string; api_key_env: string | null;
+  price_input: number; price_output: number;
+  quality: number | null; context_window: number | null;
+  enabled: boolean; allowed_app_ids: string[] | null;
+  probe_status: string; probe_error: string | null; notes: string | null;
 };
-
-export type InfraModel = {
-  model_name: string;
-  display_name: string;
-  tier: string;
-  provider: string;
-  managed: boolean;
-  engine: string | null;
-  enabled: boolean;
-  replicas: number | null;
-  min_replicas: number | null;
-  max_replicas: number | null;
-  tensor_parallel: number | null;
-  gpu_type: string | null;
-  endpoint: string | null;
-  runai_scheduled: boolean;
-  notes: string | null;
-  cross_check: "serving" | "absent" | "unreachable";
+export type OnboardIn = {
+  slug: string; display_name: string; tier: string; endpoint: string;
+  api_key_env?: string | null; price_input: number; price_output: number;
+  quality?: number | null; context_window?: number | null;
+  allowed_app_ids?: string[] | null; notes?: string | null;
 };
-
-export const infraApi = {
-  get: () => fetch("/admin/infra", { credentials: CRED }).then(j<InfraSettings>),
-  put: (body: Partial<Omit<InfraSettings, "inference_backend">>) =>
-    fetch("/admin/infra", opts("PUT", body)).then(j<{ ok: boolean }>),
-  models: () =>
-    fetch("/admin/infra/models", { credentials: CRED }).then(j<InfraModel[]>),
-  putModel: (slug: string, body: Partial<InfraModel>) =>
-    fetch(`/admin/infra/models/${encodeURIComponent(slug)}`, opts("PUT", body))
-      .then(j<{ ok: boolean }>),
+export const onboardApi = {
+  list: () => fetch("/admin/infra/models", { credentials: CRED }).then(j<OnboardedModel[]>),
+  create: (body: OnboardIn) =>
+    fetch("/admin/infra/models", opts("POST", body)).then(j<OnboardedModel & {enabled: boolean}>),
+  update: (slug: string, body: Partial<OnboardIn>) =>
+    fetch(`/admin/infra/models/${encodeURIComponent(slug)}`, opts("PUT", body)).then(j<OnboardedModel>),
+  remove: (slug: string) =>
+    fetch(`/admin/infra/models/${encodeURIComponent(slug)}`, opts("DELETE")).then(j<{ ok: boolean }>),
 };
 
 // --- Per-app privacy rules (custom recognizers + sensitivity rules) --------
