@@ -15,17 +15,12 @@ Must reach a working demo in under 5 minutes on a laptop, no GPU.
 
 Services: `api` (FastAPI + NAT + Headroom library), `ui` (nginx-served React),
 `langfuse` + `postgres` + `clickhouse` (Langfuse self-hosted needs both), optional
-`vllm` under a `gpu` profile, optional `headroom` proxy sidecar when
-`context_optimization.mode: proxy`.
+`headroom` proxy sidecar when `context_optimization.mode: proxy`. There is no `vllm`
+service in compose any more — routeForge deploys nothing; `docker compose up` boots
+with an empty on-prem pool and no GPU/API keys required. On-prem models are onboarded
+against an externally-reachable endpoint after boot (`docs/onboarding-models.md`).
 
-```yaml
-services:
-  vllm:
-    profiles: ["gpu"]     # excluded unless explicitly requested
-```
-
-Default `inference_backend: mock` so `docker compose up` works with no GPU and no API
-keys. Healthchecks on every service; `depends_on: condition: service_healthy` so the
+Healthchecks on every service; `depends_on: condition: service_healthy` so the
 API doesn't race Langfuse's migrations.
 
 Ship `.env.example`, never `.env`.
@@ -45,12 +40,10 @@ deploy/helm/serving-plane/
 └── templates/   # deployment, service, ingress, configmap, secret, hpa, NOTES.txt
 ```
 
-Everything from `config/serving.yaml` must be settable through `values.yaml` — the
-whole point is switching backends without rebuilding images.
+Everything from `config/serving.yaml` must be settable through `values.yaml`.
 
 ```yaml
 servingPlane:
-  inferenceBackend: mock     # mock | vllm | dynamo | none
   policy: {piiDetection: presidio}
   contextOptimization:
     enabled: false
@@ -102,9 +95,12 @@ trusting this file — the platform changes.
 
 ## Dynamo on K8s
 
-If `inferenceBackend: dynamo`, don't write the deployment by hand. Use NVIDIA's
-verified skills (`dynamo-recipe-runner` for K8s recipes, `dynamo-interconnect-check`
-to validate NIXL/UCX/NCCL before blaming the app). Dynamo requires GPU nodes.
+routeForge's chart deploys the router only — it never deploys Dynamo. If the customer
+is also standing up a Dynamo-fronted on-prem endpoint in the same cluster (to onboard
+into routeForge afterward), don't write that deployment by hand. Use NVIDIA's verified
+skills (`dynamo-recipe-runner` for K8s recipes, `dynamo-interconnect-check` to validate
+NIXL/UCX/NCCL before blaming the app). Dynamo requires GPU nodes. See
+`inference-backends` skill and `docs/onboarding-models.md`.
 
 ## Pre-demo checklist
 

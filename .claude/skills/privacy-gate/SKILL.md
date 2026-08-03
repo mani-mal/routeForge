@@ -129,6 +129,7 @@ visual that sells the privacy story.
 - SSN/email/phone → detected, redacted, `onprem_only: true`
 - Clean request → `sensitivity: public`, full pool available
 - Gate exception → 503, no model call attempted
-- `onprem_only` + `inference_backend: none` → rejected, **never** routed to cloud
+- `onprem_only` + no onboarded on-prem model enabled (`registry.has_healthy_onprem()`
+  false) → rejected, **never** routed to cloud
 - Langfuse payload → assert raw PII absent from the exported trace
 - Redaction map → inside residency boundary, absent from every exported span, TTL enforced

@@ -61,7 +61,7 @@ These encode the demo's promises. If any fail, the demo is dishonest:
 1. A `pii_bearing` request **never** reaches a cloud provider — assert on the
    gateway call log, not just the decision record.
 2. A known SSN appears in **no** exported Langfuse span.
-3. `inference_backend: none` + `onprem_only` → rejection, zero model calls.
+3. No onboarded on-prem model enabled + `onprem_only` → rejection, zero model calls.
 4. Multi-step task produces one DecisionRecord per hop.
 5. Cost accumulates across hops; totals match the sum of parts.
 6. Escalation happens at most once per call.
@@ -78,5 +78,6 @@ These encode the demo's promises. If any fail, the demo is dishonest:
 
 ## Fixtures
 
-Fix time, seed randomness, use the mock backend. Tests must not need GPUs or network.
-CI runs this on a laptop.
+Fix time, seed randomness, fake the LiteLLM SDK call (`tests/_litellm_fake.py`) rather
+than hitting a real endpoint — there is no mock backend. Tests must not need GPUs or
+network. CI runs this on a laptop.
