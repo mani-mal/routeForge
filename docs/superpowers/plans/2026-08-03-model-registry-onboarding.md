@@ -467,11 +467,18 @@ def test_no_healthy_onprem_drops_onprem_for_onprem_only():
 
 ---
 
-### Task 4: Config purge + Qwen removal + lint relaxation
+### Task 4: Config purge + Qwen removal + lint + test-suite rehabilitation
+
+Task 3 xfailed ~58 pipeline tests because the built-in Qwen became unroutable (in the YAML
+pool but no registry endpoint). Removing Qwen from config makes this permanent — there is
+no default on-prem model. Most of those tests reference `local-8b`/`local-32b` by name and
+just need a routable model. **The fix: move the two built-ins out of YAML and into a
+test-only onboarded seed** (same slugs, tiers, prices), so those tests pass unchanged; then
+un-xfail them. A handful that tested the removed backend axis are rewritten/deleted.
 
 **Files:**
-- Modify: `app/config/schema.py`, `app/config/loader.py`, `app/config/lint.py`, `config/serving.yaml`, `config/routing.yaml`, `config/pricing.yaml`
-- Test: `tests/test_config_lint.py` (existing — adjust), `tests/test_context.py` (adjust)
+- Modify: `app/config/schema.py`, `app/config/loader.py`, `app/config/lint.py`, `config/serving.yaml`, `config/routing.yaml`, `config/pricing.yaml`, `app/apps/bootstrap.py`, `tests/conftest.py`, `tests/_litellm_fake.py`
+- Test: `tests/test_config_lint.py`, `tests/test_context.py`, and the ~58 xfailed files from Task 3 (un-xfail); rewrite/delete `tests/test_none_backend.py`, `tests/test_backends.py`, `tests/test_backend_selection.py`
 
 **Changes:**
 1. **`schema.py`** — `ServingCfg`: remove `inference_backend`, `vllm`, `dynamo`. Delete `VllmCfg`/`DynamoCfg` classes. Keep `providers`.
@@ -496,20 +503,46 @@ def test_no_healthy_onprem_drops_onprem_for_onprem_only():
              errs.append(f"POOL_MODEL_NO_PRICE {c.name}")
      ```
    - `PROVIDER_NO_LITELLM_MAP` (67-70): drop the `and not (pname == "onprem" and inference_backend == "none")` clause — just `enabled = pcfg.enabled`.
+7. **Test-only onboarded seed** — `app/apps/bootstrap.py`: add an env-gated `seed_test_models(session)` called from `seed_all`, that recreates the two former built-ins as **onboarded** rows when `SP_SEED_TEST_MODELS` is truthy (never in production):
+   ```python
+   async def seed_test_models(session: AsyncSession) -> None:
+       """TEST-ONLY. Reproduces the former built-in Qwen models as onboarded rows
+       so the existing pipeline test-suite (which routes to local-8b/local-32b by
+       name) works after those built-ins left the YAML pool. Gated on
+       SP_SEED_TEST_MODELS — production never sets it, so the pool boots empty.
+       Idempotent."""
+       import os
+       if os.environ.get("SP_SEED_TEST_MODELS", "").lower() not in ("1", "true", "yes"):
+           return
+       for slug, tier, price in (("local-8b", "cheap", 0.05), ("local-32b", "mid", 0.10)):
+           if await store.get_onboarded(session, slug):
+               continue
+           await store.upsert_onboarded(
+               session, slug, display_name="Qwen2.5-7B-Instruct (local)",
+               provider="onprem", tier=tier, endpoint="http://test-local/v1",
+               api_key_env=None, price_input=price, price_output=price,
+               enabled=True, probe_status="healthy", allowed_app_ids=None,
+               notes="test fixture")
+   ```
+   Call it from `seed_all` (import `store` in bootstrap). Because tests monkeypatch `litellm_backend.acompletion` (`tests/conftest.py::_fake_acompletion`), the dummy endpoint is never hit — the registry just needs an enabled on-prem model so `has_healthy_onprem()` is True and `_map` gets an endpoint.
+8. **`tests/conftest.py`** — at module top (with the other `os.environ.setdefault` calls), add `os.environ.setdefault("SP_SEED_TEST_MODELS", "1")`; **remove** `os.environ.setdefault("SP_INFERENCE_BACKEND", "vllm")` (the var is gone). `SP_SKIP_BACKEND_HEALTHCHECK` is now a harmless no-op — leaving or removing it is fine.
+9. **`tests/_litellm_fake.py`** — its `_DeterministicLiteLLM` subclasses `LiteLLMBackend`; if it references `_map`/`inference_backend`/removed fields, update so it constructs with a `registry` (or overrides `_map` to skip endpoint lookup). Confirm the fake still returns the seeded deterministic result for `local-8b`/`local-32b`.
 
 - [ ] **Step 1: Adjust `tests/test_config_lint.py`** — remove/replace cases asserting the old `inference_backend` enum and `TIER_HAS_NO_MEMBER`; add a case asserting a cloud pool member without a price yields `POOL_MODEL_NO_PRICE`, and that an empty on-prem tier boots clean.
 
 - [ ] **Step 2: Run — expect FAIL** on the new assertions.
 
-- [ ] **Step 3: Apply the schema/loader/yaml/lint changes above.**
+- [ ] **Step 3: Apply the schema/loader/yaml/lint + bootstrap/conftest changes** (config items 1-6 and test-seed items 7-9 above).
 
-- [ ] **Step 4: Run** `uv run pytest tests/test_config_lint.py tests/test_context.py -q`. Fix `test_context.py` cases that referenced `inference_backend == "none"` (now derived): seed/withhold an onboarded model via a `ModelRegistry` to exercise the onprem-drop instead. Also **extend `tests/test_derived_onprem_reject.py`** with a now-passing Router-level case (Qwen is gone): an `onprem_only` ctx + empty registry → `Router(S, registry=reg).select(...)` raises `ValueError("no candidates after residency filter")`; and clear any `xfail` markers added in Task 3.
+- [ ] **Step 4: Boot-smoke** `uv run python -m app.config.lint` → prints `CONFIG_LINT: ok` with the purged config + empty on-prem tiers.
 
-- [ ] **Step 5: Boot-smoke** `uv run python -m app.config.lint` → prints `CONFIG_LINT: ok` with the purged config + empty on-prem tiers.
+- [ ] **Step 5: Un-xfail the routable-model tests.** Remove the `@pytest.mark.xfail(reason="Qwen removed in Task 4")` markers Task 3 added (find them: `grep -rln "Qwen removed in Task 4" tests`). Run each un-xfailed file; with the test seed most pass unchanged. Fix any that assert on now-removed details (e.g. `serving_engine` in a DecisionRecord).
 
-- [ ] **Step 6: Full suite** `uv run pytest -q`. Fix residual references to `local-8b`/`inference_backend` in other tests (`grep -rn "local-8b\|inference_backend\|SP_INFERENCE_BACKEND" tests`), including `tests/conftest.py` (drop `SP_INFERENCE_BACKEND` setdefault) and `tests/_litellm_fake.py` (its `_map`/health may reference removed fields).
+- [ ] **Step 6: Rewrite/delete the backend-axis tests** that tested removed behavior: `tests/test_none_backend.py` (the `inference_backend: none` reject → now covered by `tests/test_derived_onprem_reject.py`; delete or fold), `tests/test_backends.py` / `tests/test_backend_selection.py` (mock/vllm/dynamo switching axis is gone — delete the axis-specific cases, keep any still-valid LiteLLM/registry assertions). Also **extend `tests/test_derived_onprem_reject.py`** with a Router-level case now that Qwen is gone: `onprem_only` ctx + empty registry → `Router(S, registry=reg).select(...)` raises `ValueError("no candidates after residency filter")`. Fix `test_context.py` cases that referenced `inference_backend == "none"` to drive the drop via a `ModelRegistry` with no healthy on-prem instead.
 
-- [ ] **Step 7: Commit** `git add -A && git commit -m "refactor(config): purge inference_backend/vllm/dynamo axis + built-in Qwen; relax lint to YAML-subset"`
+- [ ] **Step 7: Full suite** `uv run pytest -q` → **0 failed, 0 errors, 0 xfailed** (the transitional xfails are all resolved). Confirm `grep -rn "local-8b\|inference_backend\|SP_INFERENCE_BACKEND\|xfail" tests | grep -v "test-local"` shows no stale `inference_backend`/`SP_INFERENCE_BACKEND` refs and no leftover Qwen xfails. If the un-xfail + rewrite work turns out larger than expected, report `DONE_WITH_CONCERNS` with the residual list rather than forcing it.
+
+- [ ] **Step 8: Commit** `git add -A && git commit -m "refactor(config): purge inference_backend/vllm/dynamo + built-in Qwen; test-only onboarded seed; rehabilitate suite"`
 
 ---
 
