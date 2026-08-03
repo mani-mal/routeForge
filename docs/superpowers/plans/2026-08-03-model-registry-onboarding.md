@@ -4,7 +4,7 @@
 
 **Goal:** Make routeForge a pure router over externally-deployed OpenAI-compatible endpoints: on-prem models are onboarded at runtime (DB-backed, hot-reloaded, per-model endpoint, probe-gated) instead of hand-edited into YAML, and the `inference_backend`/vLLM/Dynamo axis plus the built-in Qwen are removed.
 
-**Architecture:** A new `onboarded_models` DB table is the single source for on-prem models. A `ModelRegistry` (replacing `InfraRoster`) merges the static YAML pool (cloud built-ins only) with enabled onboarded rows into one *effective pool*, which the router, gateway, pricing, and per-app policy all read through. Onboarding goes through a probe-gated admin API; a demo-only stub endpoint + first-boot seed keep `docker compose up` working GPU-free.
+**Architecture:** A new `onboarded_models` DB table is the single source for on-prem models. A `ModelRegistry` (replacing `InfraRoster`) merges the static YAML pool (cloud built-ins only) with enabled onboarded rows into one *effective pool*, which the router, gateway, pricing, and per-app policy all read through. Onboarding goes through a probe-gated admin API. routeForge boots with an empty pool; the operator onboards their own externally-deployed model (no bundled demo model — the user drives real traffic from their own application).
 
 **Tech Stack:** Python 3.12, FastAPI, Pydantic v2, SQLAlchemy async (aiosqlite/postgres), LiteLLM, `uv`; React + Vite + TypeScript UI. Tests: `uv run pytest`.
 
@@ -26,14 +26,12 @@
 
 **Create**
 - `app/apps/registry.py` — `ModelRegistry` (replaces `InfraRoster`)
-- `app/stub/server.py` — standalone OpenAI-compatible deterministic stub service
-- `tests/test_onboarded_store.py`, `tests/test_model_registry.py`, `tests/test_onboard_api.py`, `tests/test_derived_onprem_reject.py`, `tests/test_stub_server.py`
+- `tests/test_onboarded_store.py`, `tests/test_model_registry.py`, `tests/test_onboard_api.py`, `tests/test_derived_onprem_reject.py`
 - `docs/onboarding-models.md` — operator onboarding guide
 
 **Modify**
 - `app/apps/models.py` — add `OnboardedModel`; remove `InfraModel`, `InfraSettings`
 - `app/apps/store.py` — onboarded CRUD; remove infra-settings/infra-model fns
-- `app/apps/bootstrap.py` — `seed_onboarded_sample`; call from `seed_all`
 - `app/apps/infra.py` — deleted (logic moves to `registry.py`)
 - `app/routing/router.py` — read effective pool/pricing/endpoint via registry
 - `app/gateway/backends/litellm_backend.py` — per-model endpoint in `_map`; drop vllm/dynamo
@@ -47,7 +45,7 @@
 - `app/api/admin_routes.py` — onboard/edit/delete/list endpoints + probe; remove old infra endpoints
 - `config/serving.yaml`, `config/routing.yaml`, `config/pricing.yaml` — purge axis + Qwen
 - `ui/src/api.ts`, `ui/src/admin/InfrastructurePanel.tsx` — onboard form + router-only fleet
-- `deploy/compose/docker-compose.yml` — add `stub` service; drop `SP_INFERENCE_BACKEND`
+- `deploy/compose/docker-compose.yml` — drop the dead `SP_INFERENCE_BACKEND` env; drop/comment the `vllm` GPU-profile service (onboarding replaces it)
 - `CLAUDE.md`, `.claude/skills/inference-backends/SKILL.md`, `.claude/skills/routing-and-gateway/SKILL.md`
 - Existing tests referencing `InfraRoster`/`local-8b`/`inference_backend`: `tests/test_infra_router.py`, `tests/test_infra_store.py`, `tests/test_admin_infra_api.py`, `tests/test_context.py`, `tests/_litellm_fake.py`, `tests/conftest.py`
 
@@ -58,9 +56,11 @@
 ### Task 1: `onboarded_models` table + store CRUD
 
 **Files:**
-- Modify: `app/apps/models.py` (add `OnboardedModel`; remove `InfraModel` 222-244, `InfraSettings` 205-219)
-- Modify: `app/apps/store.py` (add onboarded CRUD; remove `get/upsert_infra_settings`, `list/get/upsert_infra_model` 343-383)
+- Modify: `app/apps/models.py` (add `OnboardedModel`; **keep** `InfraModel`/`InfraSettings` — they still have live importers removed in the Task 3 cutover)
+- Modify: `app/apps/store.py` (add onboarded CRUD **alongside** the existing infra fns — those are removed in Task 3)
 - Test: `tests/test_onboarded_store.py`
+
+**Sequencing note:** Task 1 is purely additive so the suite stays green. `InfraModel`/`InfraSettings`, the store infra fns (`get/upsert_infra_settings`, `list/get/upsert_infra_model`), `InfraRoster`, and the old `/admin/infra*` endpoints are all removed together in the **Task 3 cutover** (before Task 4's config purge, since `InfraRoster.engine_for` reads `inference_backend`). Do **not** remove them here.
 
 **Interfaces produced:**
 - `OnboardedModel` columns: `slug:str PK`, `display_name:str`, `provider:str="onprem"`, `tier:str`, `quality:float|None`, `price_input:float`, `price_output:float`, `endpoint:str`, `api_key_env:str|None`, `context_window:int|None`, `enabled:bool=False`, `allowed_app_ids:list|None` (JSON; None/[] = all apps), `probe_status:str="unknown"`, `probe_error:str|None`, `notes:str|None`, `updated_at`.
@@ -111,7 +111,7 @@ def test_upsert_get_list_delete_onboarded():
 
 Run: `uv run pytest tests/test_onboarded_store.py -q`
 
-- [ ] **Step 3: Add the model** in `app/apps/models.py` (delete `InfraModel` + `InfraSettings`; add):
+- [ ] **Step 3: Add the model** in `app/apps/models.py` (ADD only — do **not** delete `InfraModel`/`InfraSettings` yet; live importers remain until Task 3):
 
 ```python
 class OnboardedModel(Base):
@@ -143,7 +143,7 @@ class OnboardedModel(Base):
 
 Ensure `Float`, `JSON`, `Integer`, `Boolean`, `String`, `DateTime` are imported (they already are for the removed models).
 
-- [ ] **Step 4: Add store CRUD** in `app/apps/store.py` (remove the infra fns at 343-383; add). Follow the existing whitelist idiom:
+- [ ] **Step 4: Add store CRUD** in `app/apps/store.py` (ADD alongside the existing infra fns — do **not** remove them here). Follow the existing whitelist idiom:
 
 ```python
 _ONBOARDED_FIELDS = {
@@ -180,11 +180,11 @@ async def delete_onboarded(session: AsyncSession, slug: str) -> bool:
     return True
 ```
 
-Update the `OnboardedModel` import at the top of `store.py`; remove `InfraModel`/`InfraSettings` imports.
+Add the `OnboardedModel` import at the top of `store.py`; **keep** the `InfraModel`/`InfraSettings` imports (still used by the infra fns you're leaving in place).
 
-- [ ] **Step 5: Run — expect PASS.** Also run `uv run pytest -q -k "infra_store"` and delete/rewrite `tests/test_infra_store.py` (it tested the removed fns) — replace its cases with onboarded-store equivalents or remove the file.
+- [ ] **Step 5: Run — expect PASS** (`uv run pytest tests/test_onboarded_store.py -q`), then the full suite `uv run pytest -q` to confirm nothing regressed (Task 1 is additive; `tests/test_infra_store.py` still passes and is left untouched until Task 3).
 
-- [ ] **Step 6: Commit** `git add app/apps/models.py app/apps/store.py tests/test_onboarded_store.py && git commit -m "feat(apps): onboarded_models table + store CRUD; drop infra_models/settings"`
+- [ ] **Step 6: Commit** `git add app/apps/models.py app/apps/store.py tests/test_onboarded_store.py && git commit -m "feat(apps): onboarded_models table + store CRUD (additive)"`
 
 ---
 
@@ -362,11 +362,18 @@ class ModelRegistry:
 ### Task 3: Wire router, gateway, context, backend to the registry
 
 **Files:**
-- Modify: `app/routing/router.py`, `app/gateway/gateway.py`, `app/gateway/backends/litellm_backend.py`, `app/gateway/backends/factory.py`, `app/policy/context.py`, `app/main.py`
-- Delete: `app/apps/infra.py`
-- Test: `tests/test_infra_router.py` (rewrite to use `ModelRegistry`), `tests/test_derived_onprem_reject.py`
+- Modify: `app/routing/router.py`, `app/gateway/gateway.py`, `app/gateway/backends/litellm_backend.py`, `app/gateway/backends/factory.py`, `app/policy/context.py`, `app/policy/gate.py`, `app/api/routes.py`, `app/main.py`
+- **Cutover — remove the old infra layer** (all together, since they are mutually coupled and `InfraRoster.engine_for` reads `inference_backend` which Task 4 deletes):
+  - Delete: `app/apps/infra.py` (`InfraRoster`/`InfraSnapshot`/`InfraModelRow`/`InfraClusterRow`)
+  - `app/apps/models.py`: remove `InfraModel` (222-244) + `InfraSettings` (205-219)
+  - `app/apps/store.py`: remove `get/upsert_infra_settings`, `list/get/upsert_infra_model` + their whitelist consts (343-383)
+  - `app/api/admin_routes.py`: remove `GET/PUT /admin/infra` (391-414), `GET /admin/infra/models` (417-424), `PUT /admin/infra/models/{slug}` (427-441), and `InfraSettingsIn`/`InfraModelIn`/`_ENGINES`/`_infra_model_dict` (339-388)
+  - `app/main.py`: remove `InfraRoster` import + `app.state.infra_roster`; add `app.state.registry = ModelRegistry(settings)`
+- Test: `tests/test_infra_router.py` (rewrite to use `ModelRegistry`), `tests/test_derived_onprem_reject.py` (new). **Delete** `tests/test_infra_store.py` and `tests/test_admin_infra_api.py` (they cover the removed old layer).
 
 **Interfaces consumed:** all `ModelRegistry` methods from Task 2.
+
+**Note:** After this cutover there is no admin endpoint to onboard a model until Task 5 adds the new ones — that is fine (no test depends on onboarding until Task 5). The suite must be green at the end of Task 3 with the old layer fully gone.
 
 Key changes (each is behavior-preserving except the derived reject):
 
@@ -420,49 +427,43 @@ Key changes (each is behavior-preserving except the derived reject):
 
 6. **`main.py`** — build `registry = ModelRegistry(settings)`; `app.state.registry = registry`; pass to `Router(settings, registry=registry)`, `make_backend/resolve_backend(settings, registry)`, `Gateway(settings, backend, router, registry)`. Remove `InfraRoster` import/state. Request path: replace `infra_roster.ensure_loaded` (routes.py:100) with `registry.ensure_loaded`.
 
-- [ ] **Step 1: Write failing test** `tests/test_derived_onprem_reject.py`
+- [ ] **Step 1: Write failing test** `tests/test_derived_onprem_reject.py` — target the *mechanism* in `build_context` (independent of whether Qwen is still in the YAML pool): with a registry that has no enabled on-prem model, an `onprem_only` request drops `onprem` from `allowed_providers`.
 
 ```python
 import asyncio
 from app.config.loader import load_settings
 from app.apps.db import Database
 from app.apps.registry import ModelRegistry
-from app.routing.router import Router
-from app.models import ExecutionPolicyContext
+from app.policy.context import build_context
 
 def _run(c): return asyncio.get_event_loop().run_until_complete(c)
 S = load_settings()
 
-def _ctx():
-    return ExecutionPolicyContext(
-        request_id="r", tenant_id="hospital", sensitivity="restricted",
-        onprem_only=True, allowed_providers=frozenset({"onprem"}),
-        allowed_models=frozenset(), max_cost_usd=1.0, max_latency_ms=10000,
-        risk_class="high", require_verification=True, detected_entities=(),
-        redaction_map_id=None)
-
-def test_onprem_only_with_no_onboarded_model_is_rejected():
+def test_no_healthy_onprem_drops_onprem_for_onprem_only():
     db = Database(url="sqlite+aiosqlite://"); _run(db.ensure_ready())
-    reg = ModelRegistry(S); _run(reg.refresh(db))     # empty onboarded
-    r = Router(S, registry=reg)
-    try:
-        r.select(_ctx(), tokens_after=100, complexity=0.9)
-        assert False, "expected rejection"
-    except ValueError as e:
-        assert "no candidates" in str(e)
+    reg = ModelRegistry(S); _run(reg.refresh(db))     # zero onboarded -> no healthy onprem
+    # Construct an onprem_only request. Use whatever path yields onprem_only
+    # under the CURRENT policy.yaml — confirm by reading it. If a tenant with
+    # default_residency: onprem_only exists (e.g. a hospital tenant), pass its id
+    # with entities=[]; else pass entities that a restricted rule maps to
+    # onprem_only. The point of the assertion is the registry-driven drop.
+    ctx = build_context(S, request_id="r", tenant_id="<onprem_only tenant>",
+                        entities=[], redaction_map_id=None, registry=reg)
+    assert ctx.onprem_only is True
+    assert "onprem" not in ctx.allowed_providers    # dropped: no healthy onprem
 ```
 
-- [ ] **Step 2: Run — expect FAIL** (Router still accepts `infra_roster` / reads YAML pool with Qwen present — but Qwen is on-prem so it would be a candidate; this test proves the empty-onboarded on-prem case rejects). Note: this test passes only after Task 4 removes Qwen *and* Task 3 wires the registry. Run it after Step 3+Task 4; expected FAIL now with a different error (constructor kwarg).
+- [ ] **Step 2: Run — expect FAIL** (`build_context` has no `registry` param yet). `uv run pytest tests/test_derived_onprem_reject.py -q`.
 
-- [ ] **Step 3: Apply the six wiring changes above.**
+- [ ] **Step 3: Apply the six wiring changes** (router, gateway, litellm_backend, factory, context, main) from the numbered list above. Thread `registry` from `app/policy/gate.py` into `build_context`, and swap `infra_roster.ensure_loaded` → `registry.ensure_loaded` at `app/api/routes.py:100`.
 
-- [ ] **Step 4: Rewrite `tests/test_infra_router.py`** — replace `InfraRoster`/`InfraSnapshot` imports with `ModelRegistry`; build a registry over an in-memory DB seeded with onboarded rows (helper like `test_model_registry._reg_with`) instead of poking `_snap`. Keep the residency/disable/tier assertions.
+- [ ] **Step 4: Cutover — remove the old infra layer** (see Files above): delete `app/apps/infra.py`; remove `InfraModel`/`InfraSettings` from `models.py`; remove the store infra fns; remove the old `/admin/infra*` endpoints + their Pydantic/helper symbols from `admin_routes.py`; remove `InfraRoster` wiring from `main.py`. Then `grep -rn "InfraRoster\|InfraModel\|InfraSettings\|infra_roster\|/admin/infra" app` returns nothing (only the new `app.state.registry`).
 
-- [ ] **Step 5: Run the full suite** `uv run pytest -q`. Expect failures only in tests that reference removed symbols (`inference_backend`, `local-8b`, `serving_engine`, `InfraRoster`) — those are fixed in Task 4. Fix any registry-wiring regressions here.
+- [ ] **Step 5: Update tests** — rewrite `tests/test_infra_router.py` to build a `ModelRegistry` over an in-memory DB seeded with onboarded rows (helper like `test_model_registry._reg_with`) and construct `Router(S, registry=reg)`; keep the residency/disable/tier assertions. **Delete** `tests/test_infra_store.py` and `tests/test_admin_infra_api.py` (they cover the removed layer).
 
-- [ ] **Step 6: Delete `app/apps/infra.py`**, confirm no importers (`grep -rn "apps.infra" app tests`).
+- [ ] **Step 6: Run the full suite** `uv run pytest -q`. Remaining failures should only be tests referencing `inference_backend`/`local-8b`/`serving_engine` still present in the YAML config (removed in Task 4) — if a test fails purely because Qwen is still a candidate, mark it `@pytest.mark.xfail(reason="Qwen removed in Task 4")` and note it in the report so Task 4 clears it. All *registry-wiring* tests must pass.
 
-- [ ] **Step 7: Commit** `git add -A && git commit -m "feat(routing): route/price/endpoint via ModelRegistry; derived onprem reject"`
+- [ ] **Step 7: Commit** `git add -A && git commit -m "refactor(routing): cutover to ModelRegistry; remove old infra layer (InfraRoster/InfraModel/InfraSettings/admin infra endpoints)"`
 
 ---
 
@@ -502,7 +503,7 @@ def test_onprem_only_with_no_onboarded_model_is_rejected():
 
 - [ ] **Step 3: Apply the schema/loader/yaml/lint changes above.**
 
-- [ ] **Step 4: Run** `uv run pytest tests/test_config_lint.py tests/test_context.py -q`. Fix `test_context.py` cases that referenced `inference_backend == "none"` (now derived): seed/withhold an onboarded model via a `ModelRegistry` to exercise the onprem-drop instead.
+- [ ] **Step 4: Run** `uv run pytest tests/test_config_lint.py tests/test_context.py -q`. Fix `test_context.py` cases that referenced `inference_backend == "none"` (now derived): seed/withhold an onboarded model via a `ModelRegistry` to exercise the onprem-drop instead. Also **extend `tests/test_derived_onprem_reject.py`** with a now-passing Router-level case (Qwen is gone): an `onprem_only` ctx + empty registry → `Router(S, registry=reg).select(...)` raises `ValueError("no candidates after residency filter")`; and clear any `xfail` markers added in Task 3.
 
 - [ ] **Step 5: Boot-smoke** `uv run python -m app.config.lint` → prints `CONFIG_LINT: ok` with the purged config + empty on-prem tiers.
 
@@ -633,90 +634,26 @@ def test_delete_onboarded(client, monkeypatch): ...
 
 ---
 
-### Task 6: Stub inference service + first-boot seed + compose
+### Task 6: Compose cleanup (no stub, no seed)
 
-**Files:**
-- Create: `app/stub/server.py`, `tests/test_stub_server.py`
-- Modify: `app/apps/bootstrap.py` (add `seed_onboarded_sample`, call from `seed_all`), `deploy/compose/docker-compose.yml`
-- Test: `tests/test_stub_server.py`, a seed test in `tests/test_onboarded_store.py` or new
+Per the user: they run their own application and drive real traffic, so there is **no
+demo stub service and no first-boot seed**. routeForge boots with an empty pool; the
+operator onboards their real model (e.g. Nemotron) via the admin API/UI. This task only
+removes now-dead compose config.
 
-**Stub service** — a tiny FastAPI app re-homing the deterministic mock math (from `tests/_litellm_fake.py::_DeterministicLiteLLM` / the deleted `mock.py`):
-```python
-# app/stub/server.py
-import hashlib
-from fastapi import FastAPI
-from pydantic import BaseModel
+**Files:** Modify `deploy/compose/docker-compose.yml`
 
-app = FastAPI(title="routeForge stub inference")
-SERVED = ["sample-local-stub"]   # override via env STUB_SERVED_MODELS (comma-sep)
+- Under `api.environment`: remove `SP_INFERENCE_BACKEND: mock` (the loader no longer
+  reads it after Task 4; leaving it is a dead, misleading knob).
+- The `vllm` GPU-profile service: either delete it, or leave it with a comment
+  reframing it as *an example on-prem endpoint an operator would deploy and then
+  onboard* (routeForge does not manage it). Prefer deletion unless it reads as useful
+  documentation.
+- Confirm the stack still `config`-validates: `docker compose -f deploy/compose/docker-compose.yml config -q` exits 0.
 
-@app.get("/v1/models")
-def models():
-    return {"object": "list", "data": [{"id": m, "object": "model"} for m in SERVED]}
-
-class _Msg(BaseModel):
-    role: str; content: str
-class _Req(BaseModel):
-    model: str; messages: list[_Msg]
-
-@app.post("/v1/chat/completions")
-def chat(req: _Req):
-    prompt = "\n".join(m.content for m in req.messages)
-    seed = int(hashlib.sha256((req.model + prompt).encode()).hexdigest(), 16)
-    tokens_out = 40 + seed % 161
-    tokens_in = max(1, len(prompt) // 4)
-    return {"id": f"stub-{seed % 100000}", "object": "chat.completion",
-            "model": req.model,
-            "choices": [{"index": 0, "finish_reason": "stop",
-                "message": {"role": "assistant", "content": f"[stub:{req.model}] answer"}}],
-            "usage": {"prompt_tokens": tokens_in, "completion_tokens": tokens_out,
-                      "total_tokens": tokens_in + tokens_out}}
-```
-Read `SERVED` from `os.environ.get("STUB_SERVED_MODELS", "sample-local-stub").split(",")`. Run via `uvicorn app.stub.server:app --port 8000`.
-
-**Seed** — `app/apps/bootstrap.py`, gated on demo mode (stub URL present) and idempotent:
-```python
-async def seed_onboarded_sample(session: AsyncSession) -> None:
-    """Demo-only: register a sample model pointing at the stub endpoint so a
-    fresh boot is a working demo. Skipped in real deploys (no STUB_ENDPOINT)
-    and if any onboarded model already exists. Honest label — never a real
-    vendor model name. Meant to be deleted and replaced by the operator."""
-    import os
-    stub = os.environ.get("STUB_ENDPOINT")     # e.g. http://stub:8000/v1
-    if not stub:
-        return
-    if await store.list_onboarded(session):
-        return
-    await store.upsert_onboarded(
-        session, "sample-local-stub", display_name="Sample Local Model (stub)",
-        provider="onprem", tier="cheap", endpoint=stub, api_key_env=None,
-        price_input=0.05, price_output=0.05, enabled=True,
-        probe_status="healthy", allowed_app_ids=None,
-        notes="Demo stub — delete and onboard your real model.")
-```
-Call it from `seed_all` (after `seed_demo_apps`). Import `store` in bootstrap.
-
-**Compose** — add to `deploy/compose/docker-compose.yml`, drop `SP_INFERENCE_BACKEND` from `api`, add `STUB_ENDPOINT`:
-```yaml
-  stub:
-    build: {context: ../.., dockerfile: Dockerfile}
-    command: ["uvicorn", "app.stub.server:app", "--host", "0.0.0.0", "--port", "8000"]
-    environment: {STUB_SERVED_MODELS: "sample-local-stub"}
-    ports: ["8000:8000"]
-```
-Under `api.environment`: remove `SP_INFERENCE_BACKEND: mock`; add `STUB_ENDPOINT: http://stub:8000/v1`. Under `api.depends_on`: add `stub: {condition: service_started}`. Remove the `vllm` GPU-profile service (its model is gone; onboarding replaces it) or leave with a comment that it is an example endpoint to onboard.
-
-- [ ] **Step 1: Write failing test** `tests/test_stub_server.py` (TestClient over `app.stub.server:app`): `/v1/models` returns `sample-local-stub`; `/v1/chat/completions` returns deterministic `usage.completion_tokens` for a fixed prompt; same prompt ⇒ same tokens.
-
-- [ ] **Step 2: Run — expect FAIL.**
-
-- [ ] **Step 3: Implement** stub server + seed + compose edits.
-
-- [ ] **Step 4: Add seed test** — with `STUB_ENDPOINT` set (monkeypatch env) a fresh `Database(seed=seed_all)` produces one `sample-local-stub` onboarded row; without it, none.
-
-- [ ] **Step 5: Run — expect PASS**; full suite.
-
-- [ ] **Step 6: Commit** `git add -A && git commit -m "feat(demo): stub inference service + demo-only sample-local-stub seed; compose"`
+- [ ] **Step 1: Apply the compose edits.**
+- [ ] **Step 2: Verify** `docker compose -f deploy/compose/docker-compose.yml config -q` (exit 0). No test change (compose isn't covered by pytest).
+- [ ] **Step 3: Commit** `git add deploy/compose/docker-compose.yml && git commit -m "chore(compose): drop dead SP_INFERENCE_BACKEND + vllm demo service"`
 
 ---
 
@@ -764,7 +701,7 @@ Remove `ClusterCard`, `EngineSelect`, `ENGINES`, the Engine/Replicas/TP/GPU colu
 - **Fleet table** columns: **Model** (display_name + slug) · **Tier** (`TierDot`) · **Endpoint** · **Apps** (`allowed_app_ids ?? "all"`) · **Enabled** (`Toggle` → `onboardApi.update(slug,{enabled})`) · **Health** (`probe_status` badge; red on `unreachable` reusing the existing `text-alert` idiom) · actions (delete → `onboardApi.remove`). Empty state: "No models onboarded — add one above."
 - Reuse `Panel`, `TierDot`, `Toggle` from the current file. Keep the dim-row idiom for disabled models.
 
-- [ ] Step 1: Rewrite the component. Step 2: `npm run typecheck` + `npm run build`. Step 3: Manual smoke via `scripts/dev-frontend.sh` against `scripts/dev-backend.sh` (onboard the stub, see it enabled; delete it). Step 4: Commit `feat(ui): model onboarding panel — router-only fleet + onboard form`.
+- [ ] Step 1: Rewrite the component. Step 2: `npm run typecheck` + `npm run build`. Step 3: Manual smoke via `scripts/dev-frontend.sh` against `scripts/dev-backend.sh` — onboard a reachable OpenAI-compatible endpoint (probe passes → enabled), see it in the fleet, then delete it. (A wrong endpoint should save disabled with the probe error shown.) Step 4: Commit `feat(ui): model onboarding panel — router-only fleet + onboard form`.
 
 ---
 
@@ -774,8 +711,8 @@ Remove `ClusterCard`, `EngineSelect`, `ENGINES`, the Engine/Replicas/TP/GPU colu
 
 **Files:** Create `docs/onboarding-models.md`; modify `CLAUDE.md`, `.claude/skills/inference-backends/SKILL.md`, `.claude/skills/routing-and-gateway/SKILL.md`
 
-- **`docs/onboarding-models.md`:** (a) deploy your model externally (out of scope — vLLM/Dynamo/NIM/any OpenAI-compatible server) with `--served-model-name <slug>`; (b) onboard via UI (Infrastructure → Onboard) or `POST /admin/infra/models` with the field reference; (c) what the probe checks (`GET {endpoint}/models` contains the slug); (d) app scoping (`allowed_app_ids` empty = all); (e) privacy behavior (onboarded = on-prem; no healthy on-prem ⇒ `onprem_only` rejected); (f) migration note (`CREATE TABLE IF NOT EXISTS onboarded_models` on existing DBs; drop orphaned `infra_models`/`infra_settings`); (g) the demo stub + how to remove it.
-- **`CLAUDE.md`:** remove the `inference_backend: mock|vllm|dynamo|none` config block/rules, the `serving_paths`/backend-rules section, and the "mock=default" lines; reframe the step-8 module row and the `serving.yaml` ownership row (no `inference_backend`); update the demo narrative (step 1 = pre-onboarded sample; onboard real model) and build-order §9 (real backends → "operators onboard endpoints"). Keep all privacy hard rules (state the `none`-reject as derived).
+- **`docs/onboarding-models.md`:** (a) deploy your model externally (out of scope — vLLM/Dynamo/NIM/any OpenAI-compatible server) with `--served-model-name <slug>`; (b) onboard via UI (Infrastructure → Onboard) or `POST /admin/infra/models` with the field reference; (c) what the probe checks (`GET {endpoint}/models` contains the slug); (d) app scoping (`allowed_app_ids` empty = all); (e) privacy behavior (onboarded = on-prem; no healthy on-prem ⇒ `onprem_only` rejected); (f) migration note (`CREATE TABLE IF NOT EXISTS onboarded_models` on existing DBs; drop orphaned `infra_models`/`infra_settings`); (g) the pool boots empty — the operator onboards their own model; there is no bundled demo model.
+- **`CLAUDE.md`:** remove the `inference_backend: mock|vllm|dynamo|none` config block/rules, the `serving_paths`/backend-rules section, and the "mock=default" lines; reframe the step-8 module row and the `serving.yaml` ownership row (no `inference_backend`); update the demo narrative (the operator onboards their own model; no bundled demo model) and build-order §9 (real backends → "operators onboard endpoints"). Keep all privacy hard rules (state the `none`-reject as derived).
 - **`inference-backends` skill:** reframe intro to "routeForge points at OpenAI-compatible endpoints and deploys nothing; on-prem models are onboarded (see docs/onboarding-models.md)." Move vLLM/Dynamo/TensorRT content under "what the operator runs behind the endpoint — outside routeForge." Remove the `SP_INFERENCE_BACKEND` switching instructions.
 - **`routing-and-gateway` skill:** update the serving-paths table/section — pool + endpoints come from the `ModelRegistry`; no `inference_backend` axis.
 
@@ -786,5 +723,5 @@ Remove `ClusterCard`, `EngineSelect`, `ENGINES`, the Engine/Replicas/TP/GPU colu
 ## Self-review notes (spec coverage)
 
 - Spec §Core model → Task 1. Spec and plan agree: `infra_models`/`InfraSettings` are deleted and `onboarded_models` is the single model table (the built-in Qwen it would have overlaid is removed).
-- Spec §Merged view → Task 2. §Router/gateway/backend → Task 3. §Config purge → Task 4. §Admin API + probe → Task 5. §Stub + seed → Task 6. §UI → Tasks 7-8. §Docs/skills → Task 9. §Derived privacy-reject → Task 3 (context) + Task 3 test. §App-scoping → Tasks 2/3/5. §Migration → Task 1 (additive) + Task 9 (documented).
+- Spec §Merged view → Task 2. §Router/gateway/backend → Task 3. §Config purge → Task 4. §Admin API + probe → Task 5. §No bundled demo model → Task 6 (compose cleanup). §UI → Tasks 7-8. §Docs/skills → Task 9. §Derived privacy-reject → Task 3 (context) + Task 3 test. §App-scoping → Tasks 2/3/5. §Migration → Task 1 (additive) + Task 9 (documented).
 - Lint invariant move (spec §Config) → Task 4 (`PROVIDER_UNDECLARED` subset + drop `TIER_HAS_NO_MEMBER` + add `POOL_MODEL_NO_PRICE`).

@@ -48,10 +48,9 @@ Nothing about engine, replicas, TP, GPU, KV, scaling, or Run:ai. Those are remov
    pool + pricing. routeForge ships with no on-prem model; the operator onboards.
 6. **App-scoped onboarding.** Onboarding captures which application(s) may use the model,
    wired into the existing per-app `allowed_models` machinery.
-7. **Seed one sample onboarded model on first boot** (demo mode only), pointing at a
-   compose-provided stub endpoint, so `docker compose up` is a working demo with zero
-   manual steps. No real model or weights ship inside routeForge — the seed is a fixture
-   registering a fake endpoint, honestly labeled as a stub, and trivially deletable.
+7. **No bundled demo model.** routeForge boots with an empty pool; the operator onboards
+   their own externally-deployed model. (Superseded the earlier stub+seed idea: the user
+   runs their own application and drives real traffic, so a demo stub is unnecessary.)
 
 ### Non-negotiables preserved
 
@@ -183,32 +182,13 @@ existing table is altered, so nothing else breaks.
 - `api.ts`: replace `InfraModel`/`InfraSettings` types + `infraApi` calls with the new
   onboard/list/edit/delete shapes; drop `infraApi.get/put`.
 
-#### 8. Stub inference endpoint (new) — GPU-less demo fixture
-The removed in-process mock backend is re-homed as a **standalone OpenAI-compatible stub
-service** (`/v1/models`, `/v1/chat/completions`) with deterministic seeded
-latency/confidence by prompt hash (reuse the old mock logic). Added to `docker-compose`.
-It is not a routeForge backend mode — it is *an endpoint routeForge points at*, exactly
-like a real one.
-
-#### 9. First-boot seed (demo mode only)
-No real model or weights are bundled in routeForge. The seed is a **fixture**: on first
-boot it inserts one enabled `cheap`-tier `onboarded_models` row pointing at the stub
-endpoint, scoped to all apps.
-
-- **Honest identity.** `display_name = "Sample Local Model (stub)"`, `slug =
-  sample-local-stub`. It must **not** impersonate a real vendor model (no "Qwen2.5-7B"
-  label) — a canned echo server presented as a real model is exactly the quiet lie the
-  project avoids (cf. the panel's "declared, not verified" convention).
-- **Demo-only gating.** Inserted only when the stub endpoint is present (demo mode) — a
-  real DGX/GreenLake deploy has no stub and gets no fake model. Idempotent: skip if any
-  onboarded model already exists.
-- **Deletable / meant to be replaced.** The demo opens by deleting the sample and
-  onboarding the operator's real endpoint — the "onboard your real model" story stays
-  front and centre rather than hiding behind a canned model.
+#### 8. No bundled demo model
+There is no stub service and no first-boot seed. routeForge boots with an empty pool.
+The operator onboards their own externally-deployed model and drives real traffic from
+their own application. (The in-process mock backend was already removed; the test suite's
+`tests/_litellm_fake.py` deterministic double stays for pytest and is unaffected.)
 
 ### Data flow — onboarding a Nemotron (the acceptance walkthrough)
-0. Demo opens with the pre-seeded `sample-local-stub` (pointing at the stub endpoint);
-   the admin deletes it to onboard a real model.
 1. Operator deploys Nemotron on their cluster → an OpenAI-compatible URL + key env.
 2. Admin opens Infrastructure → **Onboard model**: name "Nemotron Super 49B", id
    `nemotron-super-49b`, tier `mid`, endpoint, `api_key_env`, prices, apps.
