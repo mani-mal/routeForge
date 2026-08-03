@@ -1,44 +1,30 @@
 ---
 name: inference-backends
-description: Use when implementing or switching the inference backend - vLLM, NVIDIA Dynamo with TensorRT-LLM, or none - all egressing through the single LiteLLM SDK path. Trigger on mentions of Dynamo, vLLM, TensorRT, inference backend, load distribution, GPU serving, or backend fallback.
+description: Use when an operator is standing up the on-prem server behind an onboarded routeForge model - vLLM, NVIDIA Dynamo with TensorRT-LLM, or NIM - or deciding which one to run. Trigger on mentions of Dynamo, vLLM, TensorRT, inference backend, load distribution, GPU serving, or backend fallback.
 ---
 
-# Inference Backends — vllm | dynamo | none
+# Inference Backends — what the operator runs behind an onboarded endpoint
 
-Selected at startup by `inference_backend` in `config/serving.yaml`. **One egress
-implementation** (`LiteLLMBackend`, `app/gateway/backends/litellm_backend.py`) serves
-every value of this axis — LiteLLM (the SDK, not `litellm.Router`) is called directly
-with a per-request model/provider mapping, never a hand-rolled per-backend adapter.
-`inference_backend` only changes which on-prem endpoint that mapping points at (or
-disables on-prem entirely). No code changes to switch.
+routeForge is a pure router: it points at externally-deployed OpenAI-compatible
+endpoints and deploys, scales, or load-balances nothing itself. There is no
+`inference_backend` config axis any more — on-prem models are onboarded at runtime
+(admin UI or `POST /admin/infra/models`), not selected by a startup config value. See
+`docs/onboarding-models.md` for the onboarding flow and field reference.
 
-**`mock` is removed** (superseded by the LiteLLM gateway swap, 2026-07-30). There is
-no more deterministic canned-response path for a live demo run — `vllm` is the
-default, and tests that need determinism fake the LiteLLM SDK call itself
-(`tests/_litellm_fake.py`), not a `MockBackend` class.
+This skill covers the *other* side of that boundary: what an operator stands up on
+their own infrastructure — vLLM, NVIDIA Dynamo + TensorRT-LLM, NIM, or any other
+OpenAI-compatible server — before pointing routeForge at it. None of this is
+routeForge's job to build, deploy, or operate; it's context for advising a customer
+or standing up a demo/dev endpoint to onboard.
 
-## The two serving paths — one axis, not two
-
-There is exactly **one** serving-path axis. Don't reintroduce a parallel
-`serving_paths` block; a second knob makes states like "backend vllm, path disabled"
-representable and meaningless.
-
-- **On-prem path** = `inference_backend`: `vllm | dynamo | none`. `vllm` → vLLM +
-  Semantic Router; `dynamo` → Dynamo + TensorRT-LLM; `none` → on-prem disabled.
-- **Cloud path** (managed_cloud, Azure/Bedrock) is **not** selected by
-  `inference_backend`. Its availability is `providers.azure.enabled` /
-  `providers.bedrock.enabled`, and the per-request router (step 6) picks it only for
-  cloud-permitted requests. That's why `inference_backend` enumerates on-prem options
-  only.
-
-All providers — onprem, azure, bedrock — egress through the **same** `LiteLLMBackend`
-as an SDK call, always **behind the policy gate** (step 2 clears the request first;
-CLAUDE.md hard rule 1). What differs per provider is only the `litellm_prefix` /
-model-slug mapping in `config/serving.yaml` + `config/routing.yaml`'s pool, not the
-code path. "What's real vs simulated?" → `vllm`/`dynamo` are real on-prem;
-managed_cloud is real cloud; nothing here is a demo-safe simulation any more —
-if you need determinism for a test, fake the LiteLLM SDK call, don't reach for a mock
-backend class.
+**One egress implementation, regardless of what's behind the endpoint.**
+`LiteLLMBackend` (`app/gateway/backends/litellm_backend.py`) is the single egress path
+for every provider — onprem, azure, bedrock alike — via the LiteLLM SDK (not
+`litellm.Router`), called directly with a per-request model/provider mapping. It never
+knows or cares whether the on-prem endpoint it's hitting is bare vLLM, Dynamo, or NIM;
+that distinction lives entirely on the operator's side of the wire. Onboarded models'
+endpoint + auth env come from the `ModelRegistry` (onboarded DB rows), never a static
+`base_url` in config — see `app/gateway/backends/litellm_backend.py::_map`.
 
 ```python
 class InferenceBackend(Protocol):
@@ -48,9 +34,18 @@ class InferenceBackend(Protocol):
     def available_models(self) -> list[ModelInfo]: ...
 ```
 
-`LiteLLMBackend` is the sole implementer of this Protocol.
+`LiteLLMBackend` is the sole implementer of this Protocol. Tests that need
+determinism fake the LiteLLM SDK call itself (`tests/_litellm_fake.py`), not a mock
+backend class — there is no `mock` backend.
 
-## Ownership boundary (routeForge vs Dynamo vs engine vs Run:ai)
+## What the operator runs behind the endpoint — outside routeForge
+
+routeForge's value (privacy/governance/cost/semantic routing) lives *above* the
+serving layer, whatever serves the actual tokens. The table below is the ownership
+boundary customers ask about, and the two options they're choosing between when they
+stand up an on-prem endpoint to onboard.
+
+### Ownership boundary (routeForge vs Dynamo vs engine vs Run:ai)
 
 NVIDIA Dynamo is a strong choice for the inference-serving and GPU load-balancing
 layer. Dynamo manages the inference request; Run:ai (where available) manages the
@@ -116,16 +111,18 @@ between pools for the same model, or between pools optimized for characteristics
 as short vs. long prompts and different latency requirements — it is not a complete
 semantic, quality and governance router across unrelated models.
 
-**Consumed facts, not new axes.** The per-model `engine` attribute and the cluster
-`runai_licensed` fact (surfaced by the infra-management config, spec 2026-08-01) are
-*consumed* facts the router/UI read — they are not new serving-path axes. The single
-`inference_backend` axis (`vllm | dynamo | none`) above still stands.
+**Consumed facts, not axes routeForge selects.** The per-model `engine` attribute and
+the cluster `runai_licensed` fact (surfaced by the infra-management config, spec
+2026-08-01) are *consumed* facts the router/UI read from an onboarded model's
+metadata — routeForge doesn't choose or switch between them; the operator's choice of
+server behind the endpoint determines them.
 
-## vllm (default)
+## vllm
 
-vLLM exposes an OpenAI-compatible server. `LiteLLMBackend` addresses it through
-LiteLLM's `openai/` prefix pointed at `vllm.base_url` (see `providers.onprem` in
-`config/serving.yaml`) — there is no separate `AsyncOpenAI`-based adapter anymore.
+vLLM exposes an OpenAI-compatible server. Onboard it by pointing `endpoint` at that
+server and `--served-model-name <slug>` at the `slug` you onboard with — see
+`docs/onboarding-models.md`. `LiteLLMBackend` addresses any onboarded on-prem endpoint
+through LiteLLM's `openai/` prefix; there is no separate `AsyncOpenAI`-based adapter.
 
 ## dynamo
 
@@ -178,51 +175,52 @@ deployment:
 - Multi-node / multi-GPU, disaggregated prefill + decode.
 - A heterogeneous fleet — several models, some best on vLLM, some on TensorRT-LLM,
   behind one endpoint. **This is the only mode where the per-model `engine` field means
-  anything;** under `vllm`/`none` engine is a cluster fact, not a per-model choice.
+  anything;** behind a plain vLLM endpoint (or no onboarded on-prem model at all)
+  `engine` is a cluster fact, not a per-model choice.
 
 **routeForge positioning:** routeForge's value (privacy/governance/cost/semantic
-routing) lives *above* the serving layer and behaves identically on either backend.
-That's why `inference_backend` is a swappable axis — a customer **starts on vLLM** and
-**graduates to Dynamo** when traffic and fleet size justify it, with zero change to
-routeForge's routing behavior. The choice isn't "worse vs. better"; it's "the
-operational complexity that matches my scale."
+routing) lives *above* the serving layer and behaves identically no matter what's
+behind an onboarded endpoint. A customer can **start by onboarding a plain vLLM
+endpoint** and **graduate to a Dynamo-fronted one** when traffic and fleet size
+justify it — they onboard the new endpoint (same or new slug) and routeForge's
+routing behavior doesn't change. The choice isn't "worse vs. better"; it's "the
+operational complexity that matches my scale," and it's entirely the operator's to
+make outside routeForge.
 
 There is **no standalone `tensorrt` backend** — TensorRT-LLM is reached only *through*
-Dynamo. So the real deployment choice is **vLLM (direct) vs. Dynamo (fronting vLLM
-and/or TensorRT-LLM) vs. none**. `inference_backend` is a boot fact set at deploy time
-(the admin UI surfaces it read-only) — switching runtimes is a redeploy, not a live
-toggle. The per-model ENGINE control should therefore be read-only under `vllm`/`none`
-and editable only under `dynamo`.
+Dynamo. So the real deployment choice behind any one endpoint is **vLLM (direct) vs.
+Dynamo (fronting vLLM and/or TensorRT-LLM)**. It's a fact of that endpoint, surfaced to
+routeForge (if at all) as the per-model `engine` attribute — never a routeForge config
+value, and never something routeForge switches at runtime.
 
-## none
+## No on-prem model onboarded
 
-No local inference. `LiteLLMBackend` still constructs (its `health()` reports
-`ok=True` with no network probe — there's no onprem server to check), but on-prem is
-dropped from the enabled provider set structurally in `app/policy/context.py`, so an
-`onprem_only` request's `allowed_providers` is empty and the router rejects it
-downstream. Never silently route it to cloud — that inverts the entire privacy claim.
-Test this explicitly.
+There is no `inference_backend: none` value to set — routeForge has no local-inference
+mode of its own. Instead this is a **derived** state: if no onboarded on-prem model is
+currently `enabled`, `ModelRegistry.has_healthy_onprem()` is `false`, which drops
+`onprem` from `allowed_providers` in `app/policy/context.py`. An `onprem_only`
+request's `allowed_providers` is then empty and the router rejects it downstream.
+Never silently route it to cloud — that inverts the entire privacy claim. See
+`docs/onboarding-models.md` §(e) and CLAUDE.md's `none`-reject note. Test this
+explicitly.
 
-## Startup validation — fail-closed, no fallback
+## No boot-time backend health check
 
-`allow_backend_fallback` **no longer exists.** An unreachable onprem endpoint
-(`vllm`/`dynamo`) at boot is always a hard failure:
-
-```python
-health = await backend.health()
-if not health.ok:
-    log.error("backend_unavailable_no_fallback", backend=cfg.inference_backend)
-    sys.exit(1)
-```
-
-There is no mock to fall back to. Validate before serving traffic. Print the active
-backend and model list in the banner — when a demo misbehaves, the first question is
-always "which backend is it actually on?"
+There is no `inference_backend` to validate at startup and no `allow_backend_fallback`
+— both are gone. `LiteLLMBackend.health()` always reports `ok=True` with no network
+probe (`app/gateway/backends/factory.py::resolve_backend`); per-model reachability is
+probed **at onboard time** instead (`probe_endpoint`, `docs/onboarding-models.md`
+§(c)), and re-probed on every edit. An unreachable onboarded endpoint is saved
+disabled, never a boot failure — the server keeps running with whatever else is
+onboarded and enabled.
 
 ## Tests
 
-- `LiteLLMBackend` satisfies the Protocol for every `inference_backend` value
-- `none` + `onprem_only` → `allowed_providers` empty, rejected, no cloud call
-  (`tests/test_none_backend.py`)
-- Unreachable onprem endpoint at boot → non-zero exit, no fallback of any kind
-- The config lint rejects `mock` as a value of `inference_backend` outright
+- `LiteLLMBackend` satisfies the Protocol regardless of what's behind the endpoint
+  (`tests/test_backends.py`, `tests/test_litellm_backend.py`)
+- No onboarded on-prem model + `onprem_only` → `allowed_providers` empty, rejected,
+  no cloud call (`tests/test_model_registry.py::test_empty_onboarded_has_no_healthy_onprem`)
+- `make_backend`/`resolve_backend` never raise and need no registry at construction
+  time — no boot-time health probe (`tests/test_backend_selection.py`)
+- Onboard/edit probes the endpoint and only ever persists `enabled=True` when the
+  probe passed (`tests/test_onboard_api.py`)

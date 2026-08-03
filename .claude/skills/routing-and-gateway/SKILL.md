@@ -93,11 +93,14 @@ accumulator the demo depends on.
 
 ## Model pool
 
-The pool is defined **once** in `config/routing.yaml` (`model_pool` + `tiers`) — the
-single source of truth. Do not restate it here or in code. There are exactly three
-tiers: `cheap | mid | frontier` (there is no `strong` tier). Read the pool and provider
-names from config — never hard-code provider names, or the `inference_backend: none`
-case breaks. See `config/pricing.yaml` for per-model costs.
+The **effective** pool is the `ModelRegistry`'s merge of the static YAML pool
+(`config/routing.yaml`'s `model_pool` + `tiers` — cloud built-ins) with every currently
+**enabled** onboarded on-prem row (`docs/onboarding-models.md`). `routing.yaml` is
+still the single source of truth for the cloud pool and the canonical tier list — do
+not restate it here or in code. There are exactly three tiers: `cheap | mid | frontier`
+(there is no `strong` tier). Read the pool through the registry and provider names from
+config — never hard-code provider names, or the empty-on-prem-pool case (no model
+onboarded yet, or every onboarded model disabled) breaks. See `config/pricing.yaml` for per-model costs.
 
 ## DecisionRecord
 
@@ -130,18 +133,19 @@ routers exist in this system and conflating them causes confusion:
 | vLLM Semantic Router (8) | model path within a vLLM pool |
 | Dynamo (8) | inference workers, scaling, KV placement |
 
-Paths: **Dynamo + TensorRT-LLM** (multi-GPU, KV-aware worker routing, disaggregated
-prefill/decode), **vLLM + Semantic Router** (heterogeneous vLLM pool), **managed
-cloud** (Azure/Bedrock with regional and private-link controls), and **mock**
-(demo/dev, no GPU). The on-prem path is selected by the single `inference_backend`
-axis (`mock | vllm | dynamo | none`); the managed-cloud path's availability is
-`providers.azure.enabled` / `providers.bedrock.enabled`. There is no separate
-`serving_paths` axis. See `inference-backends` skill.
+There is no `inference_backend` axis and no separate `serving_paths` block. On-prem
+candidates come from the `ModelRegistry` — whatever the operator has onboarded and
+enabled (`docs/onboarding-models.md`); routeForge deploys none of what's behind an
+onboarded endpoint, whether that's a bare vLLM server, a Dynamo-fronted TensorRT-LLM
+pool, or NIM. The managed-cloud path's availability is `providers.azure.enabled` /
+`providers.bedrock.enabled`, independent of on-prem onboarding state. See
+`inference-backends` skill for what operators run behind an endpoint.
 
 ## Gateway (step 7)
 
-Adapter per provider behind one interface: `onprem`, `azure`, `bedrock`, `mock`.
-Prototype-level controls only — virtual keys, per-tenant budget, timeout, retry with
+One provider set behind a single `LiteLLMBackend` interface: `onprem` (onboarded
+endpoints), `azure`, `bedrock` — there is no `mock` provider. Prototype-level controls
+only — virtual keys, per-tenant budget, timeout, retry with
 backoff, circuit breaker (open after N consecutive failures), and fallback to the
 next-best *policy-permitted* candidate.
 

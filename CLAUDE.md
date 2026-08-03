@@ -66,7 +66,7 @@ the demo's value is showing the seams.
 | 5 | Conditional Context Optimization | `app/compression/` | **Headroom.** Compress tool outputs/history. Conditional. |
 | 6 | Adaptive Model & Backend Router | `app/routing/router.py` | Every LLM call. Scores **post-compression** cost |
 | 7 | Model Gateway & Provider Controls | `app/gateway/` | Adapters, quotas, breakers, fallback |
-| 8 | Approved Inference Serving Paths | `app/gateway/backends/` | Dynamo+TensorRT-LLM / vLLM+SR / managed cloud |
+| 8 | Approved Inference Serving Paths | `app/gateway/backends/` | Onboarded on-prem endpoints (via `ModelRegistry`) + managed cloud. routeForge deploys none of it — see `docs/onboarding-models.md` |
 | 9 | Output Controls & Verification | `app/output/verify.py` | Leakage checks, escalation, sampling |
 | 10 | Governed Response / Action | `app/api/routes.py` | Response + full decision trace |
 
@@ -99,32 +99,37 @@ if you do:
 
 | File | Owns |
 |---|---|
-| `config/serving.yaml` | Infrastructure switches only: `inference_backend`, backends, compression infra, observability, provider on/off, server |
+| `config/serving.yaml` | Infrastructure switches only: compression infra, observability, provider on/off, server |
 | `config/policy.yaml` | Budgets (default + `agent_budgets`), the sensitivity enum + default, residency, tenants |
 | `config/routing.yaml` | Scoring weights, thresholds, the canonical `tiers` list, `model_pool`, escalation |
 | `config/pricing.yaml` | Per-model USD/1M and the savings baseline |
 
 ```yaml
 # serving.yaml — infra only
-inference_backend: mock        # mock | vllm | dynamo | none   (mock = demo default)
 context_optimization:
   enabled: false               # Headroom. Default OFF so the demo can show before/after
   ccr: {enabled: true, residency: local_only}
 observability: {langfuse: {enabled: true}}
 policy: {pii_detection: presidio}   # presidio | regex | off
 providers:                     # availability only; tier membership lives in routing.yaml
-  onprem:  {enabled: true}     # on-prem serving path (per inference_backend)
+  onprem:  {enabled: true, litellm_prefix: openai, api_key_env: SP_ONPREM_API_KEY}
   azure:   {enabled: false}    # managed_cloud path
   bedrock: {enabled: false}    # managed_cloud path
 ```
+
+On-prem models are onboarded at runtime, not declared in YAML — see
+`docs/onboarding-models.md`. `providers.onprem.enabled` is an infra kill-switch, not a
+backend selector: on-prem endpoints, prices, and tiers come from the `ModelRegistry`
+(YAML cloud pool ∪ enabled onboarded rows), never a static `base_url` here.
 
 **Canonical values that used to drift — now single-sourced:**
 - Provider name is `onprem` (one word) in every file. Residency flag is `onprem_only`.
 - Tiers are exactly `cheap | mid | frontier`. There is **no `strong` tier**.
 - Sensitivity enum is `public | internal | confidential | restricted`, defined once in
   `policy.yaml`.
-- The on-prem serving path is the single `inference_backend` axis; there is no separate
-  `serving_paths` block. Cloud path availability = `providers.{azure,bedrock}.enabled`.
+- There is no `inference_backend` axis and no separate `serving_paths` block. On-prem
+  candidates are whatever the operator has onboarded (`docs/onboarding-models.md`);
+  cloud path availability = `providers.{azure,bedrock}.enabled`.
 
 ### Config lint at startup — build this first (Phase 1)
 
@@ -132,25 +137,24 @@ A Pydantic settings layer loads all four YAMLs and **cross-validates**, exiting
 non-zero with a named violation on any of:
 - provider names identical across `serving`/`routing`/`pricing` (`onprem` everywhere);
 - every tier named in `risk_floors` and every `model_pool` tier exists in the canonical
-  `tiers` list, and every tier has ≥1 pool member;
+  `tiers` list. An empty YAML tier is legal — on-prem tiers are populated by
+  onboarding, not the static pool, so there is no "every tier needs ≥1 YAML member"
+  check any more;
+- every `model_pool` entry has a price in `pricing.yaml`;
 - no concern owned by two files (no duplicated `max_spend_usd`, thresholds, etc.);
 - one sensitivity enum, used by name wherever sensitivity is matched.
 
 This turns every drift class into a **boot failure instead of a silent demo lie**, and
 keeps working as configs evolve. It is the single highest-leverage thing in Phase 1.
 
-**Backend rules (explicit, per the spec):**
-
-- `mock` — deterministic canned responses, seeded latency/cost. **Default. Demo-safe.**
-- `vllm` — route on-prem tier to a vLLM OpenAI-compatible endpoint.
-- `dynamo` — use ai-dynamo for load distribution across TensorRT-LLM workers.
-- `none` — no local inference; on-prem tier disabled; **`onprem_only` requests must
-  then be REJECTED, never silently sent to cloud.** This is a privacy guarantee, not
-  a fallback.
-
-If `dynamo` or `vllm` is selected but unreachable at startup: log a clear error and
-fall back to `mock` **only if** `allow_backend_fallback: true`; otherwise exit non-zero.
-Never silently degrade in a customer demo.
+**No on-prem model onboarded ⇒ derived reject, not a backend value.** There is no
+`inference_backend: none` to set any more. Instead: if no onboarded model is currently
+`enabled`, `ModelRegistry.has_healthy_onprem()` is false, which drops `onprem` from
+`allowed_providers` in the policy context — an `onprem_only` request then has no
+eligible candidate and is **rejected**, never silently sent to cloud. This is the same
+privacy guarantee the old `none` backend gave; it now falls naturally out of onboarding
+state (empty pool, or every onboarded model unreachable/disabled) instead of a static
+config flag. See `docs/onboarding-models.md` and the `inference-backends` skill.
 
 ## Tech stack — use these, don't substitute
 
@@ -172,7 +176,7 @@ repeated here:
 - `.claude/skills/routing-and-gateway/` — steps 6/7/8 (+ step-4 task mode), scoring, adapters, confidence
 - `.claude/skills/output-controls/` — step 9, leakage checks, `require_verification`, streaming policy
 - `.claude/skills/nemo-agent-toolkit/` — agent runtime, Langfuse wiring, NAT config
-- `.claude/skills/inference-backends/` — mock/vLLM/Dynamo/none switching (owns the full Dynamo skills list)
+- `.claude/skills/inference-backends/` — what an operator runs behind an onboarded on-prem endpoint (vLLM/Dynamo/TensorRT-LLM); owns the full Dynamo skills list
 - `.claude/skills/demo-ui/` — flow visualizer + cost dashboard
 - `.claude/skills/traffic-and-tests/` — personas, traffic generator, test suite
 - `.claude/skills/greenlake-deploy/` — Docker, Helm, HPE GreenLake
@@ -197,12 +201,18 @@ Follow this sequence. Each phase must run before starting the next.
 6. **UI** — flow visualizer, then cost dashboard.
 7. **Traffic + tests** — personas, generator, branch assertions.
 8. **Packaging** — Dockerfile, compose, Helm.
-9. **Real backends** — vLLM/Dynamo adapters last, behind config.
+9. **Real backends** — operators onboard their own on-prem endpoints (vLLM/Dynamo/NIM/
+   any OpenAI-compatible server) at runtime; routeForge deploys none of it.
 
 ## Demo narrative — build toward this
 
 The prototype exists to support this five-minute story. If a feature doesn't serve
 it, cut it.
+
+**Before the demo:** the on-prem pool boots empty — there is no bundled demo model.
+The operator onboards their own on-prem endpoint first (Infrastructure → Onboard, or
+`POST /admin/infra/models`; see `docs/onboarding-models.md`) so step 1 below has a
+cheap tier to land on.
 
 1. Simple question → cheap local model → fractions of a cent.
 2. Question with an SSN → gate detects PII → `onprem_only` → **UI shows cloud
@@ -232,8 +242,8 @@ it, cut it.
 - Don't compute cost only at the end; accumulate per hop or multi-step totals lie.
 - Don't make the UI poll for state; stream decisions over WebSocket/SSE or the flow
   visualizer feels dead.
-- Don't hard-code provider names in the router; read the pool from config or the
-  `none` backend case breaks.
+- Don't hard-code provider names in the router; read the pool from the
+  `ModelRegistry` or the empty-on-prem-pool case breaks.
 - Don't let the router score pre-compression token counts — every cost figure in the
   demo becomes wrong, and it's invisible until someone checks the math.
 - Don't attribute all savings to routing once Headroom is on. Track the two levers
