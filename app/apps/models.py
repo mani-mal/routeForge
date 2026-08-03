@@ -219,6 +219,33 @@ class InfraSettings(Base):
         DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class OnboardedModel(Base):
+    """A registered on-prem model routeForge routes to but never deploys.
+    Self-sufficient: identity + routing + pricing + endpoint. Replaces the
+    infra_models/infra_settings tables. NEW table -> create_all, no migration.
+    See 2026-08-03-model-registry-onboarding-design.md."""
+
+    __tablename__ = "onboarded_models"
+
+    slug: Mapped[str] = mapped_column(String(100), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(200))
+    provider: Mapped[str] = mapped_column(String(32), default="onprem")
+    tier: Mapped[str] = mapped_column(String(16))
+    quality: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_input: Mapped[float] = mapped_column(Float)
+    price_output: Mapped[float] = mapped_column(Float)
+    endpoint: Mapped[str] = mapped_column(String(255))
+    api_key_env: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    context_window: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    allowed_app_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    probe_status: Mapped[str] = mapped_column(String(16), default="unknown")
+    probe_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    notes: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class InfraModel(Base):
     """Per on-prem model serving metadata: engine (vllm|trtllm), the admin
     availability toggle that gates routing, and descriptive topology (replicas,

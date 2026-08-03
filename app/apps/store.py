@@ -14,7 +14,7 @@ from sqlalchemy.orm import selectinload
 
 from app.apps.models import (
     Application, AppPolicy, AppRecognizer, AppSensitivityRule, AppToken,
-    InfraModel, InfraSettings, ModelQuality, UsageRecord, utcnow,
+    InfraModel, InfraSettings, ModelQuality, OnboardedModel, UsageRecord, utcnow,
 )
 from app.apps.privacy import AppPrivacyProfile, SensitivityRuleView
 from app.apps.tokens import hash_token, token_prefix
@@ -381,3 +381,41 @@ async def upsert_infra_model(session: AsyncSession, model_name: str, **fields) -
         if k in _INFRA_MODEL_FIELDS:
             setattr(row, k, v)
     return row
+
+
+# --- onboarded models (runtime model registry; replaces infra_models/infra_settings) ---
+
+_ONBOARDED_FIELDS = {
+    "display_name", "provider", "tier", "quality", "price_input",
+    "price_output", "endpoint", "api_key_env", "context_window", "enabled",
+    "allowed_app_ids", "probe_status", "probe_error", "notes"}
+
+
+async def list_onboarded(session: AsyncSession) -> list[OnboardedModel]:
+    return list((await session.execute(select(OnboardedModel))).scalars().all())
+
+
+async def get_onboarded(session: AsyncSession, slug: str) -> OnboardedModel | None:
+    return await session.get(OnboardedModel, slug)
+
+
+async def upsert_onboarded(session: AsyncSession, slug: str, **fields) -> OnboardedModel:
+    """Create or update one onboarded model's routing/pricing/endpoint metadata
+    (caller commits)."""
+    row = await session.get(OnboardedModel, slug)
+    clean = {k: v for k, v in fields.items() if k in _ONBOARDED_FIELDS}
+    if row is None:
+        row = OnboardedModel(slug=slug, **clean)
+        session.add(row)
+    else:
+        for k, v in clean.items():
+            setattr(row, k, v)
+    return row
+
+
+async def delete_onboarded(session: AsyncSession, slug: str) -> bool:
+    row = await session.get(OnboardedModel, slug)
+    if row is None:
+        return False
+    await session.delete(row)
+    return True
