@@ -14,7 +14,7 @@ from sqlalchemy.orm import selectinload
 
 from app.apps.models import (
     Application, AppPolicy, AppRecognizer, AppSensitivityRule, AppToken,
-    InfraModel, InfraSettings, ModelQuality, OnboardedModel, UsageRecord, utcnow,
+    ModelQuality, OnboardedModel, UsageRecord, utcnow,
 )
 from app.apps.privacy import AppPrivacyProfile, SensitivityRuleView
 from app.apps.tokens import hash_token, token_prefix
@@ -336,51 +336,6 @@ async def load_quality_overrides(session: AsyncSession) -> dict[str, tuple[float
         if cur is None or rank > cur[0]:
             best[r.model_name] = (rank, r.score, r.source)
     return {name: (score, source) for name, (_r, score, source) in best.items()}
-
-
-# --- infra management (Run:ai + per-model engine; runtime/DB-backed fleet facts) ---
-
-_INFRA_SETTINGS_FIELDS = {"runai_licensed", "runai_project", "default_engine"}
-_INFRA_MODEL_FIELDS = {
-    "engine", "enabled", "replicas", "min_replicas", "max_replicas",
-    "tensor_parallel", "gpu_type", "endpoint", "runai_scheduled", "notes"}
-
-
-async def get_infra_settings(session: AsyncSession) -> InfraSettings | None:
-    return await session.get(InfraSettings, "cluster")
-
-
-async def upsert_infra_settings(session: AsyncSession, **fields) -> InfraSettings:
-    """Create or update the cluster singleton (caller commits)."""
-    row = await session.get(InfraSettings, "cluster")
-    if row is None:
-        row = InfraSettings(id="cluster")
-        session.add(row)
-    for k, v in fields.items():
-        if k in _INFRA_SETTINGS_FIELDS:
-            setattr(row, k, v)
-    return row
-
-
-async def list_infra_models(session: AsyncSession) -> list[InfraModel]:
-    stmt = select(InfraModel).order_by(InfraModel.model_name)
-    return list((await session.execute(stmt)).scalars().all())
-
-
-async def get_infra_model(session: AsyncSession, model_name: str) -> InfraModel | None:
-    return await session.get(InfraModel, model_name)
-
-
-async def upsert_infra_model(session: AsyncSession, model_name: str, **fields) -> InfraModel:
-    """Create or update one on-prem model's serving metadata (caller commits)."""
-    row = await session.get(InfraModel, model_name)
-    if row is None:
-        row = InfraModel(model_name=model_name)
-        session.add(row)
-    for k, v in fields.items():
-        if k in _INFRA_MODEL_FIELDS:
-            setattr(row, k, v)
-    return row
 
 
 # --- onboarded models (runtime model registry; replaces infra_models/infra_settings) ---

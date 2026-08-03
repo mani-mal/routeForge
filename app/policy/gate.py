@@ -10,12 +10,15 @@ from app.policy.detectors import Detector
 
 if TYPE_CHECKING:
     from app.apps.policy import AppPolicyView
+    from app.apps.registry import ModelRegistry
 
 
 class Gate:
-    def __init__(self, settings: Settings, detector: Detector) -> None:
+    def __init__(self, settings: Settings, detector: Detector,
+                 registry: "ModelRegistry | None" = None) -> None:
         self._settings = settings
         self._detector = detector
+        self._registry = registry
 
     def evaluate(self, request_id: str, tenant_id: str, request: ChatRequest,
                  app_policy: "AppPolicyView | None" = None,
@@ -32,5 +35,6 @@ class Gate:
         redacted, mapping = det.anonymize(text, entities)
         map_id = f"map-{uuid.uuid4().hex[:8]}" if mapping else None
         ctx = build_context(self._settings, request_id, tenant_id, entities, map_id,
-                            app_policy=app_policy, app_rules=rules)
+                            app_policy=app_policy, app_rules=rules,
+                            registry=self._registry)
         return ctx, redacted, mapping

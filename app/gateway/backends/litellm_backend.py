@@ -21,29 +21,39 @@ DEFAULT_CONFIDENCE = 0.9
 class LiteLLMBackend:
     name = "litellm"
 
-    def __init__(self, settings: Settings, *, logprob_temperature: float = 1.0) -> None:
+    def __init__(self, settings: Settings, *, registry=None,
+                 logprob_temperature: float = 1.0) -> None:
         self._s = settings
+        self._reg = registry
         self._t = logprob_temperature if logprob_temperature > 0 else 1.0
-        self._pool = {c.name: c for c in settings.routing.model_pool}
 
     def _map(self, model: str) -> tuple[str, dict]:
-        cand = self._pool[model]
+        # Read the registry's effective pool so onboarded on-prem models (not in
+        # the static YAML pool) are resolvable; fall back to the YAML pool.
+        pool = (self._reg.effective_pool() if self._reg
+                else self._s.routing.model_pool)
+        cand = {c.name: c for c in pool}[model]
         pcfg = self._s.serving.providers.get(cand.provider)
-        onprem_disabled = cand.provider == "onprem" and self._s.serving.inference_backend == "none"
-        if pcfg is None or not pcfg.enabled or onprem_disabled or not pcfg.litellm_prefix:
+        if pcfg is None or not pcfg.enabled or not pcfg.litellm_prefix:
             raise RuntimeError(
                 f"provider {cand.provider!r} for model {model!r} is not enabled/mapped "
                 "(guardrail 3: cloud must be unreachable by construction)")
         litellm_model = cand.litellm_model or f"{pcfg.litellm_prefix}/{cand.name}"
         kwargs: dict = {}
-        # onprem: base_url from the vllm/dynamo block per inference_backend.
+        # onprem: base_url + optional auth env come from the onboarded model's
+        # registered endpoint (per-model reachability probed at onboard time).
         if cand.provider == "onprem":
-            ib = self._s.serving.inference_backend
-            kwargs["api_base"] = (self._s.serving.vllm.base_url if ib == "vllm"
-                                  else self._s.serving.dynamo.endpoint.rstrip("/") + "/v1")
-        if pcfg.api_base_env:
+            ep = self._reg.endpoint_for(cand.name) if self._reg else None
+            if ep is None:
+                raise RuntimeError(
+                    f"onprem model {model!r} has no registered endpoint")
+            base, key_env = ep
+            kwargs["api_base"] = base
+            if key_env:
+                kwargs["api_key"] = os.environ.get(key_env, "sk-noauth")
+        if pcfg.api_base_env:   # cloud, unchanged
             kwargs["api_base"] = os.environ.get(pcfg.api_base_env) or kwargs.get("api_base")
-        if pcfg.api_key_env:
+        if pcfg.api_key_env and "api_key" not in kwargs:
             kwargs["api_key"] = os.environ.get(pcfg.api_key_env, "sk-noauth")
         if pcfg.api_version_env and os.environ.get(pcfg.api_version_env):
             kwargs["api_version"] = os.environ.get(pcfg.api_version_env)
@@ -91,17 +101,6 @@ class LiteLLMBackend:
             tool_calls=tool_calls)
 
     async def health(self) -> BackendHealth:
-        ib = self._s.serving.inference_backend
-        if ib == "none":
-            return BackendHealth(ok=True, detail="onprem disabled (none)")
-        base = self._s.serving.vllm.base_url if ib == "vllm" else self._s.serving.dynamo.endpoint
-        models_url = base.rstrip("/") + "/models" if ib == "vllm" else base.rstrip("/") + "/v1/models"
-        try:
-            import httpx
-            async with httpx.AsyncClient(timeout=5) as c:
-                resp = await c.get(models_url)
-                resp.raise_for_status()
-                models = [m["id"] for m in resp.json().get("data", [])]
-            return BackendHealth(ok=True, models=models)
-        except Exception as e:
-            return BackendHealth(ok=False, detail=str(e))
+        # Per-model reachability is probed at onboard time (registry), not at
+        # boot: the single LiteLLM egress path is always "up".
+        return BackendHealth(ok=True, detail="litellm")

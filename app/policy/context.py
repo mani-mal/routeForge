@@ -7,6 +7,7 @@ from app.models import Entity, ExecutionPolicyContext
 
 if TYPE_CHECKING:  # avoid importing the apps layer at module load
     from app.apps.policy import AppPolicyView
+    from app.apps.registry import ModelRegistry
 
 _RESIDENCY_RANK = {"any": 0, "private_cloud_ok": 1, "onprem_only": 2}
 
@@ -31,6 +32,7 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
                   entities: list[Entity], redaction_map_id: str | None,
                   app_policy: "AppPolicyView | None" = None,
                   app_rules: list | None = None,
+                  registry: "ModelRegistry | None" = None,
                   ) -> ExecutionPolicyContext:
     etypes = {e.type for e in entities}
     if app_rules is not None:
@@ -52,12 +54,13 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
     onprem_only = residency == "onprem_only"
 
     enabled = {p for p, c in settings.serving.providers.items() if c.enabled}
-    # `inference_backend: none` => no on-prem serving path exists, regardless of
-    # providers.onprem.enabled. Drop it from `enabled` so an onprem_only request
-    # resolves to an empty allowed set and is rejected downstream by the router's
-    # existing "no candidates after residency filter" path -- never silently routed
-    # to cloud (CLAUDE.md backend rule; inference-backends skill).
-    if settings.serving.inference_backend == "none":
+    # On-prem availability is derived from the registry, not a boot flag: with no
+    # healthy onboarded on-prem model, drop "onprem" from `enabled` so an
+    # onprem_only request resolves to an empty allowed set and is rejected
+    # downstream by the router's "no candidates after residency filter" path --
+    # never silently routed to cloud (CLAUDE.md backend rule; replaces the old
+    # inference_backend == "none" drop).
+    if registry is not None and not registry.has_healthy_onprem():
         enabled = enabled - {"onprem"}
     onprem_providers = {c.provider for c in settings.routing.model_pool
                         if c.provider == "onprem"}

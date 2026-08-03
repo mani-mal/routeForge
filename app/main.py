@@ -85,29 +85,27 @@ def create_app() -> FastAPI:
     app.state.profile_cache = ProfileCache()
     # Admin dashboard sessions (in-memory; single-node, admin-only).
     app.state.admin_sessions = SessionStore()
-    gate = Gate(settings, detector)
+    # Merged model source (model-onboarding plan): static YAML pool (cloud
+    # built-ins) + enabled onboarded on-prem rows. Replaces InfraRoster. Sync
+    # reads on the request path; lazily loaded on the first request (routes.py)
+    # and refreshed on every admin write. Injected into gate/router/gateway/
+    # backend so onboarded models are visible and on-prem availability is
+    # derived (not a boot flag).
+    from app.apps.registry import ModelRegistry
+    registry = ModelRegistry(settings)
+    app.state.registry = registry
+    gate = Gate(settings, detector, registry=registry)
     app.state.gate = gate
-    # Phase 9 Task 4: select + health-validate the configured backend.
-    # create_app is sync but resolve_backend is async; this runs before
-    # uvicorn's event loop exists (at import time / test fixture setup, never
-    # from inside an already-running loop -- see app/gateway/backends/factory.py
-    # and app/gateway/backends/README.md), so asyncio.run() is safe here.
-    # `none` never makes a network call, so this is instant on that config;
-    # only vllm/dynamo can fail health, and an unreachable endpoint is a
-    # fail-closed sys.exit(1) -- mock is gone, there is no fallback.
-    backend = asyncio.run(resolve_backend(settings))
+    # Single LiteLLM egress backend, registry-injected so onboarded on-prem
+    # endpoints are resolvable. No boot-time health probe (per-model probe is at
+    # onboard time); resolve_backend now just constructs it.
+    backend = asyncio.run(resolve_backend(settings, registry))
     app.state.backend = backend
-    # Runtime on-prem fleet declaration (spec 2026-08-01): a process-global
-    # snapshot of infra_settings/infra_models, lazily loaded on the first
-    # request (routes.py) and refreshed on every admin write. Injected into the
-    # Router so admin-disabled on-prem models are excluded from candidates.
-    from app.apps.infra import InfraRoster
-    app.state.infra_roster = InfraRoster(settings)
     # named model_router (not router) to avoid shadowing the APIRouter imported above;
     # app.include_router(router) below needs the APIRouter, not this Router instance.
-    model_router = Router(settings, infra_roster=app.state.infra_roster)
+    model_router = Router(settings, registry=registry)
     app.state.model_router = model_router
-    gateway = Gateway(settings, backend, model_router)
+    gateway = Gateway(settings, backend, model_router, registry)
     # Step 5 (Headroom compression): local, TTL-bounded CCR store — never
     # exported to telemetry, contents never leave this process. See
     # app/compression/ccr.py and CLAUDE.md rule 6.

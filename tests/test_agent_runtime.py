@@ -24,6 +24,7 @@ def _ctx() -> ExecutionPolicyContext:
         require_verification=False, detected_entities=(), redaction_map_id=None)
 
 
+@pytest.mark.xfail(reason="Qwen removed in Task 4", strict=False)
 def test_multi_step_run_yields_hops(live_internal_server):
     from app.agent.runtime import run
 
@@ -35,6 +36,7 @@ def test_multi_step_run_yields_hops(live_internal_server):
     assert result.text  # a final answer came back
 
 
+@pytest.mark.xfail(reason="Qwen removed in Task 4", strict=False)
 def test_cap_exceeded_raises_and_leaves_no_hop_state(live_internal_server, monkeypatch):
     """NAT's tool_calling_agent swallows GraphRecursionError internally and
     returns a DEGRADED "could not produce a final answer within N

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
-from app.apps.infra import InfraRoster
 from app.config.schema import PoolCandidate, Settings
 from app.models import ExecutionPolicyContext, RejectedCandidate
 from app.routing.quality import QualityResolver
+
+if TYPE_CHECKING:
+    from app.apps.registry import ModelRegistry
 
 _ORDER = {"cheap": 0, "mid": 1, "frontier": 2}
 _L = {"cheap": 0.2, "mid": 0.5, "frontier": 1.0}
@@ -19,16 +22,15 @@ class RoutingDecision:
     rejected: list[RejectedCandidate] = field(default_factory=list)
     quality_score: float = 0.0
     quality_source: str = "tier_default"
-    serving_engine: str | None = None
 
 
 class Router:
     def __init__(self, settings: Settings,
                  quality_resolver: QualityResolver | None = None,
-                 infra_roster: "InfraRoster | None" = None) -> None:
+                 registry: "ModelRegistry | None" = None) -> None:
         self._s = settings
         self._quality = quality_resolver or QualityResolver(settings)
-        self._infra = infra_roster
+        self._reg = registry
 
     def _complexity_tier(self, complexity: float) -> str:
         t = self._s.routing.complexity_thresholds
@@ -39,16 +41,18 @@ class Router:
         return "frontier"
 
     def _est_cost(self, cand: PoolCandidate, tokens_after: int) -> float:
-        p = self._s.pricing.models[cand.name]
+        p = (self._reg.price_for(cand.name) if self._reg
+             else self._s.pricing.models[cand.name])
         return tokens_after / 1_000_000 * (p.input + p.output)
 
     def select(self, ctx: ExecutionPolicyContext, tokens_after: int,
                complexity: float, min_tier: str | None = None) -> RoutingDecision:
         rejected: list[RejectedCandidate] = []
-        pool = self._s.routing.model_pool
+        pool = self._reg.effective_pool() if self._reg else self._s.routing.model_pool
 
         # 1. residency filter (residency beats everything below), then the
-        #    admin disable-gate for on-prem candidates that pass residency
+        #    per-app scope filter and the admin disable-gate for on-prem
+        #    candidates that pass residency
         allowed = []
         for c in pool:
             if c.provider not in ctx.allowed_providers:
@@ -57,8 +61,15 @@ class Router:
                     display_name=c.display_name,
                     reason="excluded by policy (residency)"))
                 continue
-            if (c.provider == "onprem" and self._infra is not None
-                    and not self._infra.is_enabled(c.name)):
+            if (self._reg is not None
+                    and not self._reg.is_allowed_for_app(c.name, ctx.tenant_id)):
+                rejected.append(RejectedCandidate(
+                    name=c.name, provider=c.provider, tier=c.tier,
+                    display_name=c.display_name,
+                    reason="not permitted for application"))
+                continue
+            if (c.provider == "onprem" and self._reg is not None
+                    and not self._reg.is_enabled(c.name)):
                 rejected.append(RejectedCandidate(
                     name=c.name, provider=c.provider, tier=c.tier,
                     display_name=c.display_name, reason="disabled by admin"))
@@ -119,11 +130,7 @@ class Router:
                 name=c.name, provider=c.provider, tier=c.tier,
                 display_name=c.display_name, reason="lower score"))
         chosen_q = self._quality.resolve(chosen.name)
-        serving_engine = (
-            self._infra.engine_for(chosen.name)
-            if self._infra is not None and chosen.provider == "onprem" else None)
         return RoutingDecision(
             chosen=chosen, est_cost_usd=est,
             reason=f"tier {chosen.tier} (target {target})", rejected=rejected,
-            quality_score=chosen_q.score, quality_source=chosen_q.source,
-            serving_engine=serving_engine)
+            quality_score=chosen_q.score, quality_source=chosen_q.source)

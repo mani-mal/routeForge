@@ -94,10 +94,10 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
             async with request.app.state.db.session() as session:
                 profile = await store.get_privacy_profile(session, tenant)
             cache.put(tenant, profile)
-        # Runtime on-prem fleet snapshot (Task A4): lazily loaded once, then
-        # cheap. Refreshed by the admin infra PUT routes so admin-disabled
-        # on-prem models drop out of the router's candidate pool promptly.
-        await request.app.state.infra_roster.ensure_loaded(request.app.state.db)
+        # Merged model registry: lazily loaded once, then cheap. Refreshed by
+        # the admin model-onboarding routes so onboarded/enabled on-prem models
+        # appear in (or drop out of) the router's candidate pool promptly.
+        await request.app.state.registry.ensure_loaded(request.app.state.db)
         resp = await request.app.state.pipeline.run(
             request_id, tenant, body, app_policy=app_policy, profile=profile)
     except PipelineRejected as e:

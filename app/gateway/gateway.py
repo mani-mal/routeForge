@@ -1,19 +1,25 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from app.config.schema import Settings
 from app.gateway.backends.base import InferenceBackend
 from app.models import DecisionRecord, ExecutionPolicyContext, GenerationResult, Message
 from app.routing.router import Router
+
+if TYPE_CHECKING:
+    from app.apps.registry import ModelRegistry
 
 _NEXT = {"cheap": "mid", "mid": "frontier", "frontier": None}
 
 
 class Gateway:
     def __init__(self, settings: Settings, backend: InferenceBackend,
-                 router: Router) -> None:
+                 router: Router, registry: "ModelRegistry | None" = None) -> None:
         self._s = settings
         self._backend = backend
         self._router = router
+        self._reg = registry
 
     async def run(self, ctx: ExecutionPolicyContext, messages: list[Message],
                   tokens_after: int, complexity: float, hint: dict
@@ -35,7 +41,8 @@ class Gateway:
             if cand.tier in failed_tiers:
                 raise RuntimeError(
                     "backend failed on all reachable tiers for this request")
-            price = self._s.pricing.models[cand.name]
+            price = (self._reg.price_for(cand.name) if self._reg
+                     else self._s.pricing.models[cand.name])
             try:
                 result = await self._backend.generate(
                     cand.name, messages, price, cand.tier, hint)
@@ -59,8 +66,7 @@ class Gateway:
                 actual_cost_usd=result.cost_usd, latency_ms=result.latency_ms,
                 hop_index=len(records),
                 quality_score=decision.quality_score,
-                quality_source=decision.quality_source,
-                serving_engine=decision.serving_engine))
+                quality_source=decision.quality_source))
 
             # For onprem_only requests the router clamps an out-of-reach tier back
             # down, so an escalation may re-issue the same tier — bounded by

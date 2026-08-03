@@ -1,106 +1,101 @@
+"""Router behaviour over the ModelRegistry (replaces the old InfraRoster path).
+
+The registry merges the static YAML pool (cloud built-ins + Qwen on-prem) with
+enabled onboarded on-prem rows. Disabling an on-prem model now means it is not
+onboarded/enabled, so it never enters `effective_pool()` — there is no separate
+admin disable roster any more. App-scoping is enforced in the router alongside
+residency. (The full "all on-prem gone -> onprem_only rejects" behaviour is
+tested at the build_context level in test_derived_onprem_reject.py, since Qwen
+is still a YAML on-prem candidate until Task 4.)"""
 import asyncio
 
-import pytest
-
-from app.apps.infra import InfraRoster, InfraSnapshot, InfraClusterRow, InfraModelRow
 from app.config.loader import load_settings
-from app.gateway.gateway import Gateway
-from app.models import ExecutionPolicyContext, Message
+from app.apps.db import Database
+from app.apps import store
+from app.apps.registry import ModelRegistry
+from app.models import ExecutionPolicyContext
 from app.routing.router import Router
-from tests._litellm_fake import _DeterministicLiteLLM
 
 S = load_settings()
 
 
-def _ctx(providers, risk="low", onprem=False):
+def _run(c):
+    return asyncio.run(c)
+
+
+async def _reg_with(rows):
+    db = Database(url="sqlite+aiosqlite://")
+    await db.ensure_ready()
+    async with db.session() as s:
+        for slug, f in rows.items():
+            await store.upsert_onboarded(s, slug, **f)
+        await s.commit()
+    reg = ModelRegistry(S)
+    await reg.refresh(db)
+    return reg
+
+
+def _ctx(providers, *, tenant_id="t", risk="low", onprem=False):
     return ExecutionPolicyContext(
-        request_id="r", tenant_id="t", sensitivity="public", onprem_only=onprem,
-        allowed_providers=frozenset(providers), allowed_models=frozenset(),
-        max_cost_usd=0.05, max_latency_ms=15000, risk_class=risk,
-        require_verification=False, detected_entities=(), redaction_map_id=None)
+        request_id="r", tenant_id=tenant_id, sensitivity="public",
+        onprem_only=onprem, allowed_providers=frozenset(providers),
+        allowed_models=frozenset(), max_cost_usd=0.05, max_latency_ms=15000,
+        risk_class=risk, require_verification=False, detected_entities=(),
+        redaction_map_id=None)
 
 
-def _roster(models: dict[str, InfraModelRow], *, default_engine="vllm"):
-    r = InfraRoster(S)
-    r._snap = InfraSnapshot(
-        cluster=InfraClusterRow(default_engine=default_engine), models=models)
-    return r
+def _onprem(slug, *, tier="cheap", enabled=True, allowed_app_ids=None):
+    return dict(display_name=slug, provider="onprem", tier=tier,
+                price_input=0.1, price_output=0.1, endpoint=f"http://{slug}/v1",
+                enabled=enabled, allowed_app_ids=allowed_app_ids)
 
 
-def _model(name, *, engine="vllm", enabled=True):
-    return InfraModelRow(model_name=name, engine=engine, enabled=enabled)
+def test_onprem_only_selects_onprem_candidate():
+    # Residency filter: an onprem_only request only ever picks an on-prem model.
+    reg = _run(_reg_with({"nem": _onprem("nem", tier="mid")}))
+    d = Router(S, registry=reg).select(
+        _ctx({"onprem"}, onprem=True), tokens_after=20, complexity=0.9)
+    assert d.chosen.provider == "onprem"
 
 
-def _onprem_names():
-    return [c.name for c in S.routing.model_pool if c.provider == "onprem"]
+def test_disabled_onboarded_model_not_a_candidate():
+    # A disabled onboarded row never enters the effective pool -> never chosen,
+    # and never even appears as a rejected candidate.
+    reg = _run(_reg_with({"off-cheap": _onprem("off-cheap", enabled=False)}))
+    d = Router(S, registry=reg).select(
+        _ctx({"onprem"}, onprem=True), tokens_after=20, complexity=0.1)
+    assert d.chosen.name != "off-cheap"
+    assert all(rc.name != "off-cheap" for rc in d.rejected)
 
 
-def test_disabled_onprem_model_excluded_with_reason():
-    names = _onprem_names()
-    assert len(names) >= 2, "test needs >=2 on-prem pool members"
-    disabled = names[0]
-    roster = _roster({disabled: _model(disabled, enabled=False)})
-    r = Router(S, infra_roster=roster)
-    d = r.select(_ctx({"onprem"}, onprem=True), tokens_after=20, complexity=0.9)
-    assert d.chosen.name != disabled
-    assert any(rc.name == disabled and "disabled by admin" in rc.reason
+def test_app_scoped_model_rejected_for_other_app():
+    # allowed_app_ids scoping: a model bound to "acme" is dropped (with the
+    # app-scope reason) for a different tenant, alongside residency.
+    reg = _run(_reg_with({
+        "acme-only": _onprem("acme-only", allowed_app_ids=["acme"])}))
+    d = Router(S, registry=reg).select(
+        _ctx({"onprem"}, tenant_id="hospital", onprem=True),
+        tokens_after=20, complexity=0.1)
+    assert d.chosen.name != "acme-only"
+    assert any(rc.name == "acme-only" and "not permitted" in rc.reason
                for rc in d.rejected)
 
 
-def test_all_onprem_disabled_onprem_only_rejects_never_cloud():
-    roster = _roster({n: _model(n, enabled=False) for n in _onprem_names()})
-    r = Router(S, infra_roster=roster)
-    with pytest.raises(ValueError):
-        r.select(_ctx({"onprem"}, onprem=True), tokens_after=20, complexity=0.1)
+def test_app_scoped_model_permitted_for_its_own_app():
+    reg = _run(_reg_with({
+        "acme-only": _onprem("acme-only", allowed_app_ids=["acme"])}))
+    d = Router(S, registry=reg).select(
+        _ctx({"onprem"}, tenant_id="acme", onprem=True),
+        tokens_after=20, complexity=0.1)
+    assert not any("not permitted" in rc.reason for rc in d.rejected)
 
 
-def test_all_enabled_roster_is_regression_noop():
-    roster = _roster({n: _model(n, enabled=True) for n in _onprem_names()})
-    with_roster = Router(S, infra_roster=roster).select(
+def test_empty_registry_matches_no_registry():
+    # Regression no-op: with no onboarded rows, routing over the registry must
+    # match routing straight off the YAML pool.
+    reg = _run(_reg_with({}))
+    with_reg = Router(S, registry=reg).select(
         _ctx({"onprem", "azure", "bedrock"}), tokens_after=20, complexity=0.1)
     without = Router(S).select(
         _ctx({"onprem", "azure", "bedrock"}), tokens_after=20, complexity=0.1)
-    assert with_roster.chosen.name == without.chosen.name
-
-
-def test_serving_engine_annotated_for_onprem_choice():
-    roster = _roster({n: _model(n, enabled=True) for n in _onprem_names()})
-    d = Router(S, infra_roster=roster).select(
-        _ctx({"onprem"}, onprem=True), tokens_after=20, complexity=0.1)
-    assert d.chosen.provider == "onprem"
-    assert d.serving_engine == "vllm"  # S.serving.inference_backend is "vllm" in tests
-
-
-def test_decision_record_has_serving_engine_field():
-    from app.models import DecisionRecord
-    rec = DecisionRecord(step="router", chosen="local-8b", reason="x",
-                         serving_engine="vllm")
-    assert rec.serving_engine == "vllm"
-    # default is None (cloud / not annotated)
-    assert DecisionRecord(step="router", chosen="x", reason="y").serving_engine is None
-
-
-def test_gateway_copies_serving_engine_for_onprem_choice():
-    # Exercises the actual gateway.py line under test: the chosen-model
-    # step="router" DecisionRecord must carry decision.serving_engine, not
-    # just the RoutingDecision/model round-trip covered above.
-    roster = _roster({n: _model(n, enabled=True) for n in _onprem_names()})
-    gw = Gateway(S, _DeterministicLiteLLM(S), Router(S, infra_roster=roster))
-    msgs = [Message(role="user", content="hello")]
-    _result, records = asyncio.run(
-        gw.run(_ctx({"onprem"}, onprem=True), msgs, 20, 0.1, {}))
-    router_hops = [r for r in records if r.step == "router"]
-    assert router_hops, "expected at least one router-step DecisionRecord"
-    assert all(r.serving_engine == "vllm" for r in router_hops)
-
-
-def test_gateway_leaves_serving_engine_none_for_cloud_choice():
-    # Cloud-eligible selection: chosen.provider != "onprem", so the gateway's
-    # copied serving_engine must stay None (never a fabricated engine).
-    gw = Gateway(S, _DeterministicLiteLLM(S), Router(S))
-    msgs = [Message(role="user", content="hello")]
-    _result, records = asyncio.run(
-        gw.run(_ctx({"azure", "bedrock"}), msgs, 20, 0.1, {}))
-    router_hops = [r for r in records if r.step == "router"]
-    assert router_hops, "expected at least one router-step DecisionRecord"
-    assert all(r.serving_engine is None for r in router_hops)
+    assert with_reg.chosen.name == without.chosen.name
