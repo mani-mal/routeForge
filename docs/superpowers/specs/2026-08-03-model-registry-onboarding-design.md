@@ -74,7 +74,7 @@ Nothing about engine, replicas, TP, GPU, KV, scaling, or Run:ai. Those are remov
  DB onboarded    │  onboarded_models rows where enabled=true           │    prices via price_for()
    (on-prem) ────┘                                                     │    routes via endpoint_for()
                  └─────────────────────────────────────────────────────┘
-                              produced by ModelRegistry (extends InfraRoster)
+                              produced by ModelRegistry (replaces InfraRoster)
                               reload() re-reads DB on onboard/edit/delete → no restart
 ```
 
