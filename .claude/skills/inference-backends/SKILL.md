@@ -148,6 +148,52 @@ Use `dynamo-router-starter` for router modes, `dynamo-recipe-runner` for K8s dep
 Dynamo needs GPUs and K8s — it will not run on a demo laptop. Expect to exercise this
 path only in GreenLake.
 
+## Choosing vllm-only vs dynamo — the customer decision
+
+Customers ask "Dynamo is open source and does more — why would I run plain vLLM?"
+Open source removes the *license* cost, not the *operational* cost, and operational
+cost is the whole decision. Dynamo isn't a library you flip on; it's a distributed
+system (K8s operator, CRDs, frontend + router + worker pods + Planner, worker
+discovery, and — for disaggregated/multi-node serving — a validated NIXL/UCX/NCCL
+interconnect). Plain vLLM is one container exposing an OpenAI endpoint.
+
+Most of Dynamo's value only materializes **at scale**, so match the complexity to the
+deployment:
+
+**Plain `vllm` is the right call when:**
+- One or few replicas on one node — nothing to load-balance; KV-cache-aware routing
+  across replicas is meaningless with one replica.
+- Modest/bursty traffic — Planner autoscaling and admission control solve problems you
+  don't have.
+- A single model — no heterogeneous fleet, so no per-engine routing to do.
+- Pilot / early on-prem — prove the privacy + cost story before standing up an operator.
+- Small ops team — bare vLLM is `docker run`; Dynamo is real day-2 ownership.
+- You don't want TensorRT-LLM's per-model engine *build* pipeline (compiled per
+  GPU/batch/seqlen); vLLM just loads a HF checkpoint.
+
+**`dynamo` earns its complexity when:**
+- Many replicas, especially with shared prefixes (RAG, long system prompts) — KV-cache-
+  aware routing gives large real wins.
+- High/spiky traffic needing Planner autoscaling of prefill/decode pools.
+- Multi-node / multi-GPU, disaggregated prefill + decode.
+- A heterogeneous fleet — several models, some best on vLLM, some on TensorRT-LLM,
+  behind one endpoint. **This is the only mode where the per-model `engine` field means
+  anything;** under `vllm`/`none` engine is a cluster fact, not a per-model choice.
+
+**routeForge positioning:** routeForge's value (privacy/governance/cost/semantic
+routing) lives *above* the serving layer and behaves identically on either backend.
+That's why `inference_backend` is a swappable axis — a customer **starts on vLLM** and
+**graduates to Dynamo** when traffic and fleet size justify it, with zero change to
+routeForge's routing behavior. The choice isn't "worse vs. better"; it's "the
+operational complexity that matches my scale."
+
+There is **no standalone `tensorrt` backend** — TensorRT-LLM is reached only *through*
+Dynamo. So the real deployment choice is **vLLM (direct) vs. Dynamo (fronting vLLM
+and/or TensorRT-LLM) vs. none**. `inference_backend` is a boot fact set at deploy time
+(the admin UI surfaces it read-only) — switching runtimes is a redeploy, not a live
+toggle. The per-model ENGINE control should therefore be read-only under `vllm`/`none`
+and editable only under `dynamo`.
+
 ## none
 
 No local inference. `LiteLLMBackend` still constructs (its `health()` reports

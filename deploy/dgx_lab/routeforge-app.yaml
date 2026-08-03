@@ -108,7 +108,7 @@ items:
         - name: ghcr-pull
         containers:
         - name: api
-          image: ghcr.io/mani-mal/serving-plane-api:0.7.0
+          image: ghcr.io/mani-mal/serving-plane-api:0.8.0
           ports: [{name: http, containerPort: 8080}]
           env:
           - {name: SP_SERVER_PORT, value: "8080"}
@@ -255,7 +255,7 @@ items:
         - name: ghcr-pull
         containers:
         - name: ui
-          image: ghcr.io/mani-mal/serving-plane-ui:0.7.0
+          image: ghcr.io/mani-mal/serving-plane-ui:0.8.0
           ports: [{name: http, containerPort: 80}]
           resources:
             requests: {cpu: "50m", memory: 64Mi}

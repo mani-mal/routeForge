@@ -169,10 +169,20 @@ function ClusterCard() {
           />
         </label>
 
-        <label className="flex items-center gap-3 text-sm">
-          <span className="w-36 shrink-0 text-xs text-gray-500">default engine</span>
-          <EngineSelect value={defaultEngine} onChange={setDefaultEngine} />
-        </label>
+        <div className="flex flex-col gap-1">
+          <label className="flex items-center gap-3 text-sm">
+            <span className="w-36 shrink-0 text-xs text-gray-500">default engine</span>
+            <EngineSelect value={defaultEngine} onChange={setDefaultEngine} />
+          </label>
+          {/* Engine choice only has effect under Dynamo (the one backend that can
+              front a mixed vLLM + TensorRT-LLM fleet). Under vllm/none the engine
+              is a cluster fact, so say so rather than imply this select does work. */}
+          <p className="ml-36 pl-3 text-[10px] text-gray-600">
+            {settings.inference_backend === "dynamo"
+              ? "Fallback engine for fleet models with no per-model engine set."
+              : `Applies only under Dynamo — ignored while the serving backend is ${settings.inference_backend}.`}
+          </p>
+        </div>
 
         <div className="flex items-center gap-3">
           <button
@@ -210,7 +220,15 @@ function CrossCheckBadge({ status }: { status: InfraModel["cross_check"] }) {
   );
 }
 
-function ModelRow({ model, onSaved }: { model: InfraModel; onSaved: () => void }) {
+function ModelRow({
+  model,
+  backend,
+  onSaved,
+}: {
+  model: InfraModel;
+  backend: string | null;
+  onSaved: () => void;
+}) {
   const [engine, setEngine] = useState(model.engine ?? "vllm");
   const [enabled, setEnabled] = useState(model.enabled);
   const [replicas, setReplicas] = useState<number | null>(model.replicas);
@@ -274,7 +292,25 @@ function ModelRow({ model, onSaved }: { model: InfraModel; onSaved: () => void }
         </span>
       </td>
       <td className="py-2 pr-3 align-top">
-        <EngineSelect value={engine} onChange={setEngine} ariaLabel={`${model.display_name} engine`} />
+        {/* Engine is only a per-model choice under Dynamo — the one backend that
+            can front a mixed vLLM + TensorRT-LLM fleet. Under vllm every model is
+            served by vLLM (engine_for returns "vllm" by construction); under none
+            on-prem serving is off. In those cases the select would be inert, so we
+            render the effective engine read-only instead of a control that lies. */}
+        {backend === "dynamo" ? (
+          <EngineSelect value={engine} onChange={setEngine} ariaLabel={`${model.display_name} engine`} />
+        ) : (
+          <span
+            className="inline-flex items-center font-mono text-xs text-gray-400"
+            title={
+              backend === "none"
+                ? "On-prem serving is disabled (backend: none)"
+                : "Engine is cluster-level under vLLM — per-model engine applies only under Dynamo"
+            }
+          >
+            {backend === "none" ? "—" : "vLLM"}
+          </span>
+        )}
       </td>
       <td className="py-2 pr-3 align-top">
         <Toggle on={enabled} onToggle={() => setEnabled((v) => !v)} label={`${model.display_name} enabled`} />
@@ -331,12 +367,17 @@ function ModelRow({ model, onSaved }: { model: InfraModel; onSaved: () => void }
 
 function FleetTable() {
   const [models, setModels] = useState<InfraModel[] | null>(null);
+  // The cluster serving backend gates whether per-model engine is editable — it
+  // lives in the same /admin/infra settings the Cluster card reads, so fetch it
+  // alongside the roster rather than threading it through a shared parent.
+  const [backend, setBackend] = useState<string | null>(null);
   const [err, setErr] = useState(false);
 
   async function load() {
     try {
-      const rows = await infraApi.models();
+      const [rows, settings] = await Promise.all([infraApi.models(), infraApi.get()]);
       setModels(rows);
+      setBackend(settings.inference_backend);
       setErr(false);
     } catch {
       setErr(true);
@@ -372,7 +413,7 @@ function FleetTable() {
             </thead>
             <tbody>
               {models.map((m) => (
-                <ModelRow key={m.model_name} model={m} onSaved={load} />
+                <ModelRow key={m.model_name} model={m} backend={backend} onSaved={load} />
               ))}
             </tbody>
           </table>
