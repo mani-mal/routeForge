@@ -7,9 +7,11 @@ the UI watches (CLAUDE.md demo narrative step 5: the dashboard fills live).
 Aggregation source: each `/v1/chat/completions` response carries everything
 the summary needs — `cost` (total/baseline/routing_saved/compression_saved)
 and `policy.onprem_only`. Tier is the one field the response omits, so we
-resolve `model -> tier` ONCE from `config/routing.yaml`'s `model_pool` (the
-same file the server itself loads) and map each response's `model`. We
-deliberately do NOT re-fetch `GET /api/requests` to aggregate: `HistoryStore`
+resolve `model -> tier` ONCE from the ModelRegistry's effective pool (static
+`config/routing.yaml` model_pool + enabled onboarded on-prem rows -- pass the
+in-process `registry` when driving the live demo's own server, see
+app/api/ui_routes.py) and map each response's `model`. We deliberately do NOT
+re-fetch `GET /api/requests` to aggregate: `HistoryStore`
 is a fixed 500-entry ring buffer, so a run of >500 requests would evict its
 own early entries before aggregation and silently under-count the demo's
 headline numbers — exactly the >=500-request volume this generator exists
@@ -57,10 +59,16 @@ def _percentile(sorted_vals: list[float], pct: float) -> float:
     return sorted_vals[idx]
 
 
-def _model_tier_map() -> dict[str, str]:
-    """model name -> tier, straight from config/routing.yaml's model_pool
-    (the same config the server loads — no drift risk)."""
-    return {c.name: c.tier for c in load_settings().routing.model_pool}
+def _model_tier_map(registry=None) -> dict[str, str]:
+    """model name -> tier. Reads the registry's merged pool (static YAML +
+    enabled onboarded rows) when given -- onboarded on-prem models (e.g.
+    local-8b) never appear in the static config/routing.yaml model_pool any
+    more, so a registry-blind map would bucket every on-prem response under
+    the "?" tier instead of "cheap"/"mid". Falls back to the static pool
+    (same config the server loads) when no registry is available, e.g. the
+    standalone CLI driving a separately-running server."""
+    pool = registry.effective_pool() if registry else load_settings().routing.model_pool
+    return {c.name: c.tier for c in pool}
 
 
 async def _fire_one(
@@ -105,6 +113,7 @@ async def run_traffic(
     personas: list[Persona] | None = None,
     headroom: bool | None = None,
     client: httpx.AsyncClient | None = None,
+    registry=None,
 ) -> Summary:
     """Fire `n` seeded, weighted-persona requests at `base_url` and return
     an aggregated `Summary`.
@@ -135,7 +144,7 @@ async def run_traffic(
             personas = load_personas()
         rng = random.Random(seed)
         picked = sample(personas, rng, n)
-        tier_map = _model_tier_map()
+        tier_map = _model_tier_map(registry)
 
         latencies: list[float] = []
         results: list[dict] = []

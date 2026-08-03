@@ -6,12 +6,10 @@ def test_loads_real_config():
     assert s.routing.tiers == ["cheap", "mid", "frontier"]
     assert s.policy.default_sensitivity == "public"
     assert s.pricing.baseline_model == "bedrock-frontier"
-    assert {c.provider for c in s.routing.model_pool} == {"onprem", "azure", "bedrock"}
-
-
-def test_env_override(monkeypatch):
-    monkeypatch.setenv("SP_INFERENCE_BACKEND", "none")
-    assert load_settings().serving.inference_backend == "none"
+    # No built-in on-prem pool member any more — on-prem models are onboarded
+    # at runtime (ModelRegistry), never a static YAML entry.
+    assert {c.provider for c in s.routing.model_pool} == {"azure", "bedrock"}
+    assert not hasattr(s.serving, "inference_backend")
 
 
 def test_routing_config_exposes_quality_fields():

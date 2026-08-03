@@ -2,15 +2,11 @@
 # Provider names spelled `onprem` identically to serving.yaml and routing.yaml
 # (config lint enforces). Tiers must match the canonical list in routing.yaml.
 #
-# On-prem tiers are NOT free: a GPU has an amortized cost. These small non-zero
-# rates are the representative amortized cost of serving locally (input/output
-# per 1M tokens) so the cost dashboard shows believable spend + routing savings
-# instead of a flat $0 / 100%. Tune them live to answer "your on-prem isn't
-# really free" in the room. All three cost formulas (router estimate, baseline,
-# actual) read input/output, so one edit here stays consistent everywhere.
+# No built-in on-prem rows here: onboarded on-prem models carry their own
+# price_input/price_output (set at onboarding time, see app/apps/store.py) —
+# a GPU has an amortized cost, so those onboarding-time prices are never $0
+# either, but they are per-model DB rows, not a config file concern.
 models:
-  local-8b:         {input: 0.05, output: 0.05,  tier: cheap,    provider: onprem}
-  local-32b:        {input: 0.10, output: 0.10,  tier: mid,      provider: onprem}
   azure-gpt-mid:    {input: 0.15, output: 0.60,  tier: mid,      provider: azure}
   bedrock-frontier: {input: 3.00, output: 15.00, tier: frontier, provider: bedrock}
 

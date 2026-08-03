@@ -34,8 +34,10 @@ async def _authenticate(request: Request
 @router.get("/health")
 def health(request: Request) -> dict:
     s = request.app.state.settings
-    return {"status": "ok", "backend": s.serving.inference_backend,
-            "models": [c.name for c in s.routing.model_pool]}
+    registry = getattr(request.app.state, "registry", None)
+    pool = registry.effective_pool() if registry else s.routing.model_pool
+    return {"status": "ok", "backend": "litellm",
+            "models": [c.name for c in pool]}
 
 
 @router.post("/v1/chat/completions")
@@ -137,10 +139,16 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
     except Exception:  # export_trace already swallows; this is belt-and-suspenders
         logging.getLogger("serving.obs").exception(
             "export_trace raised before its own guard (swallowed)")
+    # Onboarded on-prem models (e.g. local-8b) live only in the registry's
+    # effective pool, not the static `s.routing.model_pool` -- both lookups
+    # below must consult it too, or every on-prem model's tier/provider
+    # silently reports "?" once it left the static YAML pool.
+    registry = getattr(request.app.state, "registry", None)
+    pool = registry.effective_pool() if registry else s.routing.model_pool
     summary = None
     try:
         tier = next(
-            (c.tier for c in s.routing.model_pool if c.name == resp["model"]), "?")
+            (c.tier for c in pool if c.name == resp["model"]), "?")
         if tier == "?":  # model not in the pool — surfaces as a "?" tier bucket
             logging.getLogger("serving.obs").debug(
                 "history: no tier for model %r (not in model_pool)", resp["model"])
@@ -148,7 +156,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
         # genuine residency breach (an onprem_only request served off-prem), so
         # the warning flags real violations, not merely any detected entity.
         provider = next(
-            (c.provider for c in s.routing.model_pool if c.name == resp["model"]), "?")
+            (c.provider for c in pool if c.name == resp["model"]), "?")
         summary = request.app.state.history.record(resp, tenant, tier, provider)
     except Exception:  # history must never break serving
         logging.getLogger("serving.obs").exception(
@@ -158,7 +166,6 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
         # HistoryStore above is the UI's hot cache; this is the persistent
         # record that survives restarts and feeds per-app dashboards. Guarded:
         # metering must never break serving.
-        pool = s.routing.model_pool
         model = resp.get("model", "?")
         tier = next((c.tier for c in pool if c.name == model), "?")
         provider = next((c.provider for c in pool if c.name == model), "?")

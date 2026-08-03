@@ -69,7 +69,7 @@ def test_pipeline_honors_runtime_cfg_toggle_between_calls():
     """
     from app.compression.ccr import CCRStore
     from app.config.loader import load_settings
-    from tests._litellm_fake import _DeterministicLiteLLM
+    from tests._litellm_fake import _DeterministicLiteLLM, make_test_registry
     from app.gateway.gateway import Gateway
     from app.pipeline import Pipeline
     from app.policy.detectors import make_detector
@@ -85,15 +85,16 @@ def test_pipeline_honors_runtime_cfg_toggle_between_calls():
 
     holder = {"cfg": co_off}
 
+    registry = make_test_registry(settings)
     detector = make_detector(settings.serving.pii_detection)
-    gate = Gate(settings, detector)
+    gate = Gate(settings, detector, registry=registry)
     backend = _DeterministicLiteLLM(settings)
-    model_router = Router(settings)
-    gateway = Gateway(settings, backend, model_router)
+    model_router = Router(settings, registry=registry)
+    gateway = Gateway(settings, backend, model_router, registry)
     ccr = CCRStore(ttl_seconds=co_off.ccr.ttl_hours * 3600)
 
     pipe = Pipeline(settings, gate, detector, gateway, self_port=8080,
-                     co_cfg_provider=lambda: holder["cfg"], ccr=ccr)
+                     co_cfg_provider=lambda: holder["cfg"], ccr=ccr, registry=registry)
 
     long_body = "INFO log line\n" * 800
     req = ChatRequest(messages=[Message(role="user", content=long_body)])

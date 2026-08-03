@@ -5,9 +5,8 @@ from pathlib import Path
 import yaml
 
 from app.config.schema import (
-    BypassCfg, CCRCfg, ContextOptimizationCfg, DynamoCfg, LangfuseCfg,
+    BypassCfg, CCRCfg, ContextOptimizationCfg, LangfuseCfg,
     ObservabilityCfg, PolicyCfg, PricingCfg, RoutingCfg, ServingCfg, Settings,
-    VllmCfg,
 )
 
 _ENV_PAT = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)(?::-([^}]*))?\}")
@@ -36,8 +35,8 @@ def load_settings(config_dir: str = "config") -> Settings:
             host=_expand_env(str(lf_raw["host"])),
             redact_on_export=lf_raw["redact_on_export"],
             # SP_CAPTURE_IO overrides observability.langfuse.capture_io — same
-            # env-override pattern as SP_INFERENCE_BACKEND/SP_PII_DETECTION, so
-            # eval capture can be flipped per-deploy without editing the YAML.
+            # env-override pattern as SP_PII_DETECTION below, so eval capture
+            # can be flipped per-deploy without editing the YAML.
             capture_io=os.environ.get(
                 "SP_CAPTURE_IO",
                 _expand_env(str(lf_raw.get("capture_io", "off")))).strip().lower(),
@@ -54,7 +53,7 @@ def load_settings(config_dir: str = "config") -> Settings:
 
     co_raw = serving_raw["context_optimization"]
     # SP_CONTEXT_OPT=on/off overrides context_optimization.enabled — same
-    # pattern as SP_INFERENCE_BACKEND/SP_PII_DETECTION above. Used by
+    # env-override pattern as SP_PII_DETECTION/SP_CAPTURE_IO above. Used by
     # scripts/smoke-compression.sh to toggle Headroom on/off across two boots
     # without editing config/serving.yaml.
     _co_opt_env = os.environ.get("SP_CONTEXT_OPT")
@@ -63,8 +62,6 @@ def load_settings(config_dir: str = "config") -> Settings:
         else _co_opt_env.strip().lower() in ("on", "true", "1", "yes")
     )
     serving = ServingCfg(
-        inference_backend=os.environ.get(
-            "SP_INFERENCE_BACKEND", serving_raw["inference_backend"]),
         providers=serving_raw["providers"],
         pii_detection=os.environ.get(
             "SP_PII_DETECTION", serving_raw["policy"]["pii_detection"]),
@@ -78,8 +75,6 @@ def load_settings(config_dir: str = "config") -> Settings:
             cache_alignment=co_raw["cache_alignment"],
         ),
         observability=observability,
-        vllm=VllmCfg(**serving_raw["vllm"]),
-        dynamo=DynamoCfg(**serving_raw["dynamo"]),
     )
     routing = RoutingCfg(**routing_raw)
     policy = PolicyCfg(**policy_raw)

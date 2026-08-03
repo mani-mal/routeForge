@@ -62,10 +62,12 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
     # inference_backend == "none" drop).
     if registry is not None and not registry.has_healthy_onprem():
         enabled = enabled - {"onprem"}
-    onprem_providers = {c.provider for c in settings.routing.model_pool
-                        if c.provider == "onprem"}
     if onprem_only:
-        allowed = enabled & onprem_providers
+        # onprem_only means exactly that: the only legal provider is "onprem",
+        # never derived from routing.model_pool membership (on-prem candidates
+        # are onboarded at runtime — the static YAML pool may have none —
+        # see registry-derived `enabled` drop above for actual availability).
+        allowed = enabled & {"onprem"}
     else:
         allowed = enabled  # private_cloud_ok and any both allow enabled cloud here
 
@@ -87,8 +89,12 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
                 return False
         return True
 
-    allowed_models = frozenset(
-        c.name for c in settings.routing.model_pool if _model_ok(c))
+    # Onboarded on-prem models never appear in the static YAML
+    # `settings.routing.model_pool` -- read the registry's merged pool when
+    # available, or every onboarded model would be silently excluded here
+    # regardless of the app's own allowed_tiers/allowed_models policy.
+    pool = registry.effective_pool() if registry is not None else settings.routing.model_pool
+    allowed_models = frozenset(c.name for c in pool if _model_ok(c))
 
     return ExecutionPolicyContext(
         request_id=request_id,

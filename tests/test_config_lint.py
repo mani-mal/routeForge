@@ -14,7 +14,7 @@ def test_provider_drift_is_caught():
     s = copy.deepcopy(s)
     s.routing.model_pool[0].provider = "on_prem"  # drifted spelling
     errs = lint_settings(s)
-    assert any("PROVIDER_NAME_DRIFT" in e for e in errs)
+    assert any("PROVIDER_UNDECLARED" in e for e in errs)
 
 
 def test_enforce_exits_on_violation():
@@ -50,11 +50,21 @@ def test_lint_rejects_ccr_residency_drift():
         enforce(s)
 
 
-def test_lint_rejects_unknown_inference_backend():
+def test_pool_model_without_price_is_caught():
     s = copy.deepcopy(load_settings())
-    s.serving.inference_backend = "vLLM"  # typo (wrong case) — not a valid enum
-    with pytest.raises(ConfigLintError, match="inference_backend"):
-        enforce(s)
+    s.routing.model_pool.append(
+        s.routing.model_pool[0].model_copy(update={"name": "no-such-price-row"}))
+    errs = lint_settings(s)
+    assert any("POOL_MODEL_NO_PRICE" in e and "no-such-price-row" in e for e in errs)
+
+
+def test_empty_onprem_tier_boots_clean():
+    # No built-in on-prem pool member any more (onboarded at runtime) — an
+    # empty on-prem tier must not trip TIER_HAS_NO_MEMBER (that check is gone)
+    # or any other lint violation.
+    s = load_settings()
+    assert not any(c.provider == "onprem" for c in s.routing.model_pool)
+    assert lint_settings(s) == []
 
 
 def test_tier_quality_missing_tier_flags():

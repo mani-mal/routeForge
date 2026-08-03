@@ -15,10 +15,13 @@ def lint_settings(s: Settings) -> list[str]:
     serv_prov = set(s.serving.providers)
     pool_prov = {c.provider for c in s.routing.model_pool}
     price_prov = {p.provider for p in s.pricing.models.values()}
-    if not (serv_prov == pool_prov == price_prov):
-        errs.append(
-            f"PROVIDER_NAME_DRIFT serving={sorted(serv_prov)} "
-            f"routing={sorted(pool_prov)} pricing={sorted(price_prov)}")
+    # Subset, not equality: every provider USED by the pool/pricing must be
+    # DECLARED in serving, but serving may declare a provider with no YAML pool
+    # member (e.g. onprem) — its members come from onboarding at runtime, not
+    # the static config.
+    if not (pool_prov <= serv_prov and price_prov <= serv_prov):
+        errs.append(f"PROVIDER_UNDECLARED pool={sorted(pool_prov)} "
+                    f"pricing={sorted(price_prov)} not subset of serving={sorted(serv_prov)}")
 
     tiers = set(s.routing.tiers)
     pool_tiers = [c.tier for c in s.routing.model_pool]
@@ -28,12 +31,21 @@ def lint_settings(s: Settings) -> list[str]:
     for t in set(pool_tiers):
         if t not in tiers:
             errs.append(f"POOL_TIER_UNKNOWN {t} not in {sorted(tiers)}")
-    for t in tiers:
-        if t not in pool_tiers:
-            errs.append(f"TIER_HAS_NO_MEMBER {t}")
+    # An empty YAML tier is legal now (no TIER_HAS_NO_MEMBER check) — on-prem
+    # tiers are populated by onboarding at runtime, not the static pool.
     for name, p in s.pricing.models.items():
         if p.tier not in tiers:
             errs.append(f"PRICING_TIER_UNKNOWN {name}:{p.tier}")
+
+    # Pool-slug <-> pricing-slug cross-check: every cloud built-in in the pool
+    # must have a matching pricing row, or LiteLLMBackend.generate's
+    # `price.models[cand.name]` lookup KeyErrors at request time instead of at
+    # boot. (Onboarded on-prem rows carry their own price via the registry, so
+    # they are exempt — this only covers static YAML pool members.)
+    price_names = set(s.pricing.models)
+    for c in s.routing.model_pool:
+        if c.name not in price_names:
+            errs.append(f"POOL_MODEL_NO_PRICE {c.name}")
 
     for t in tiers:
         if t not in s.routing.tier_quality:
@@ -62,28 +74,18 @@ def lint_settings(s: Settings) -> list[str]:
 
     # Every ENABLED provider must have a LiteLLM route, or the backend can't
     # reach it. Disabled providers are skipped (their models are filtered out
-    # of any request's candidate pool upstream). onprem enabled-ness is the
-    # inference_backend axis; azure/bedrock is providers.*.enabled.
+    # of any request's candidate pool upstream). onprem availability is now
+    # per-model (onboarded rows, probed at onboard time), not a boot-time
+    # backend axis, so this is just providers.*.enabled.
     for pname, pcfg in s.serving.providers.items():
-        enabled = pcfg.enabled and not (pname == "onprem" and s.serving.inference_backend == "none")
+        enabled = pcfg.enabled
         if enabled and not pcfg.litellm_prefix:
             errs.append(f"PROVIDER_NO_LITELLM_MAP {pname} has no litellm_prefix")
 
     return errs
 
 
-_VALID_BACKENDS = ("vllm", "dynamo", "none")
-
-
 def enforce(s: Settings) -> None:
-    # Fail closed on a typo'd backend with a NAMED violation rather than a raw
-    # traceback from make_backend() at boot (project rule: every drift class is
-    # a named boot failure).
-    if s.serving.inference_backend not in _VALID_BACKENDS:
-        raise ConfigLintError(
-            f"serving.inference_backend must be one of {_VALID_BACKENDS}; "
-            f"got {s.serving.inference_backend!r}")
-
     lf = s.serving.observability.langfuse
     if lf.enabled and not lf.redact_on_export:
         raise ConfigLintError(

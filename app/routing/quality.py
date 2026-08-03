@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from app.config.schema import Settings
+
+if TYPE_CHECKING:
+    from app.apps.registry import ModelRegistry
 
 # Provenance of a resolved quality score, most authoritative first. These four
 # strings are the ONLY valid sources (spec §4) — used verbatim on DecisionRecord
@@ -30,15 +34,22 @@ class QualityResolver:
     declarations), keyed by model name -> QualityScore whose `source` is already
     `customer` or `calibrated`. It is a plain dict snapshot so the router stays
     synchronous and DB-free in unit tests; the caller refreshes it. Empty in
-    Stage 1 (no calibration written yet)."""
+    Stage 1 (no calibration written yet).
+
+    `registry`, when given, resolves tier/published-quality over the merged
+    pool (static YAML + enabled onboarded rows) instead of just the static
+    YAML pool -- otherwise every onboarded on-prem model (which never appears
+    in `settings.routing.model_pool`) would fall through to the flat
+    `_TIER_DEFAULT_FLOOR`, silently ignoring its actual tier's tier_default
+    quality (or any published quality set at onboarding)."""
 
     def __init__(self, settings: Settings,
-                 overrides: dict[str, QualityScore] | None = None) -> None:
+                 overrides: dict[str, QualityScore] | None = None,
+                 registry: "ModelRegistry | None" = None) -> None:
+        pool = registry.effective_pool() if registry else settings.routing.model_pool
         self._tier_quality = dict(settings.routing.tier_quality)
-        self._tier_of = {c.name: c.tier for c in settings.routing.model_pool}
-        self._published = {c.name: c.quality
-                           for c in settings.routing.model_pool
-                           if c.quality is not None}
+        self._tier_of = {c.name: c.tier for c in pool}
+        self._published = {c.name: c.quality for c in pool if c.quality is not None}
         self._overrides = overrides or {}
 
     def resolve(self, model: str, task_class: str | None = None) -> QualityScore:

@@ -29,8 +29,11 @@ class Router:
                  quality_resolver: QualityResolver | None = None,
                  registry: "ModelRegistry | None" = None) -> None:
         self._s = settings
-        self._quality = quality_resolver or QualityResolver(settings)
         self._reg = registry
+        # Registry-aware by default (onboarded on-prem models never appear in
+        # the static YAML pool -- see QualityResolver's docstring) unless the
+        # caller injects its own resolver (e.g. with DB-sourced overrides).
+        self._quality = quality_resolver or QualityResolver(settings, registry=registry)
 
     def _complexity_tier(self, complexity: float) -> str:
         t = self._s.routing.complexity_thresholds

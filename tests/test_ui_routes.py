@@ -1,7 +1,7 @@
-import pytest
 """Console read surface (/api/*). Admin-gated: every /api/* route requires an
 admin session cookie (see app/apps/admin_auth.require_admin). Each test logs in
 first; test_api_requires_admin_login pins the gate itself."""
+import pytest
 
 _ADMIN = {"email": "admin@routeforge.local", "password": "changeme"}
 
@@ -20,7 +20,6 @@ def test_api_requires_admin_login(client):
     assert client.get("/api/requests/anything").status_code == 401
 
 
-@pytest.mark.xfail(reason="Qwen removed in Task 4", strict=False)
 def test_list_detail_stats_for_clean_request(client):
     _login(client)
     r = client.post("/v1/chat/completions", headers={"Authorization": "Bearer demo-key"},
@@ -56,7 +55,6 @@ def test_missing_request_returns_404(client):
     assert r.status_code == 404
 
 
-@pytest.mark.xfail(reason="Qwen removed in Task 4", strict=False)
 def test_pii_request_never_leaks_raw_ssn(client):
     _login(client)
     ssn = "482-73-1946"
@@ -81,7 +79,6 @@ def test_pii_request_never_leaks_raw_ssn(client):
         detail.json()["policy"]["detected_entities"]
 
 
-@pytest.mark.xfail(reason="Qwen removed in Task 4", strict=False)
 def test_fleet_endpoint(client):
     _login(client)
     client.post("/v1/chat/completions", headers={"Authorization": "Bearer acme-key"},
@@ -92,7 +89,6 @@ def test_fleet_endpoint(client):
     assert any(row["app"] == "acme" and row["count"] >= 1 for row in rows)
 
 
-@pytest.mark.xfail(reason="Qwen removed in Task 4", strict=False)
 def test_requests_endpoint_filters_by_app(client):
     _login(client)
     # seeded tokens acme-key / hospital-key drive one request each

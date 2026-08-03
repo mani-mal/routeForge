@@ -23,7 +23,6 @@ def test_unknown_token_is_rejected(client):
     assert r.status_code == 401
 
 
-@pytest.mark.xfail(reason="Qwen removed in Task 4", strict=False)
 def test_known_seeded_token_is_accepted(client):
     r = client.post("/v1/chat/completions",
                     headers={"Authorization": "Bearer demo-key"}, json=_CLEAN)
@@ -31,7 +30,6 @@ def test_known_seeded_token_is_accepted(client):
     assert r.json()["choices"][0]["message"]["content"]
 
 
-@pytest.mark.xfail(reason="Qwen removed in Task 4", strict=False)
 def test_usage_row_persisted_for_served_request(tmp_path):
     # A temp file DB so this test's own event loop can read what the app wrote
     # in its portal loop (in-memory StaticPool is bound to a single loop).

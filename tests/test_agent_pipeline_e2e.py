@@ -18,7 +18,6 @@ from tests._litellm_fake import make_scripted_tool_then_final_acompletion
 pytest.importorskip("nat")
 
 
-@pytest.mark.xfail(reason="Qwen removed in Task 4", strict=False)
 def test_multistep_request_returns_multi_hop_trace(live_internal_server, monkeypatch):
     # The autouse `_fake_acompletion` fixture (conftest.py) returns a single
     # canned final answer, which would converge NAT in one hop. Drive a real

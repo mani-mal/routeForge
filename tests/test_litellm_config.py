@@ -18,8 +18,6 @@ def test_pool_candidates_can_carry_litellm_model():
     by_name = {c.name: c for c in s.routing.model_pool}
     assert by_name["azure-gpt-mid"].litellm_model == "azure/gpt-4o-mini"
     assert by_name["bedrock-frontier"].litellm_model == "bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0"
-    # onprem entries need no override (default <prefix>/<name>)
-    assert by_name["local-8b"].litellm_model is None
 
 
 def test_allow_backend_fallback_field_removed():
@@ -27,11 +25,11 @@ def test_allow_backend_fallback_field_removed():
     assert not hasattr(s.serving, "allow_backend_fallback")
 
 
-def test_default_inference_backend_is_vllm(monkeypatch):
-    # tests/conftest.py pins SP_INFERENCE_BACKEND=vllm (+ the health-probe
-    # skip flag) so the suite stays offline/fast (see its comment) — unset it
-    # here to check the shipped config/serving.yaml default itself, same
-    # pattern as test_compression_config.py::test_sp_context_opt_env_override.
-    monkeypatch.delenv("SP_INFERENCE_BACKEND", raising=False)
+def test_inference_backend_field_removed():
+    # There is no `inference_backend` axis any more — every provider egresses
+    # through the single LiteLLM SDK path; on-prem availability/endpoints come
+    # from the ModelRegistry (onboarded rows), not a boot-time backend switch.
     s = load_settings()
-    assert s.serving.inference_backend == "vllm"
+    assert not hasattr(s.serving, "inference_backend")
+    assert not hasattr(s.serving, "vllm")
+    assert not hasattr(s.serving, "dynamo")

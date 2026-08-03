@@ -48,15 +48,13 @@ risk_floors:
   medium: mid
   low: cheap
 
-# `name` is the stable slug the router/pricing/vLLM served-model-id key on — do
-# not rename it. `display_name` is what the UI shows customers (the real model).
-# NOTE: local-8b and local-32b are BOTH served by one Qwen2.5-7B today (the vLLM
-# aliases both, see deploy/dgx_lab/vllm-local-8b.yaml), so their display names are
-# intentionally the same until a distinct 32B is deployed — representative, not
-# yet distinct. See [[routeforge-router-targets-mid]].
+# `name` is the stable slug the router/pricing key on — do not rename it.
+# `display_name` is what the UI shows customers (the real model). There are no
+# built-in on-prem entries here any more: on-prem models are onboarded at
+# runtime (ModelRegistry merges enabled onboarded rows into the effective pool
+# at request time) — routeForge deploys nothing. An empty on-prem tier boots
+# clean; on-prem candidates only appear once a customer onboards one.
 model_pool:
-  - {name: local-8b,         provider: onprem,  tier: cheap,    display_name: "Qwen2.5-7B-Instruct (local)"}
-  - {name: local-32b,        provider: onprem,  tier: mid,      display_name: "Qwen2.5-7B-Instruct (local)"}
   - {name: azure-gpt-mid,    provider: azure,   tier: mid,      display_name: "GPT-4o mini (Azure)",   litellm_model: "azure/gpt-4o-mini"}
   - {name: bedrock-frontier, provider: bedrock, tier: frontier, display_name: "Claude Sonnet (Bedrock)", litellm_model: "bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0"}
 

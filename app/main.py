@@ -125,7 +125,7 @@ def create_app() -> FastAPI:
     app.state.self_port = self_port
     app.state.pipeline = Pipeline(
         settings, gate, detector, gateway, self_port=self_port,
-        co_cfg_provider=lambda: app.state.co_cfg, ccr=ccr)
+        co_cfg_provider=lambda: app.state.co_cfg, ccr=ccr, registry=registry)
     # In-memory, redaction-safe request history for the Phase-6 UI's
     # list/detail/stats views (app/api/history.py). Process-local; resets
     # on restart — this is a demo prototype, not durable storage.

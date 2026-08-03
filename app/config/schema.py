@@ -85,9 +85,9 @@ class ProviderCfg(BaseModel):
     # LiteLLM connection (transport owner: serving.yaml). `litellm_prefix` is the
     # LiteLLM provider route (openai | azure | bedrock). The *_env fields name the
     # environment variables holding creds/endpoints (values never in config —
-    # secrets via .env only). onprem derives its api_base from the vllm/dynamo
-    # block per `inference_backend`, so it needs only a key env; bedrock reads
-    # standard AWS_* env, so it needs neither.
+    # secrets via .env only). onprem derives its api_base per-model from the
+    # ModelRegistry (onboarded at runtime — routeForge deploys nothing), so it
+    # needs only a key env; bedrock reads standard AWS_* env, so it needs neither.
     litellm_prefix: str | None = None
     api_base_env: str | None = None
     api_key_env: str | None = None
@@ -139,26 +139,13 @@ class ContextOptimizationCfg(BaseModel):
     ccr: CCRCfg
     cache_alignment: bool
 
-class VllmCfg(BaseModel):
-    base_url: str
-    timeout_s: int
-
-
-class DynamoCfg(BaseModel):
-    endpoint: str
-    router_mode: str
-    timeout_s: int
-
 
 class ServingCfg(BaseModel):
-    inference_backend: str
     providers: dict[str, ProviderCfg]
     pii_detection: str
     reject_stream_requests: bool
     context_optimization: ContextOptimizationCfg
     observability: ObservabilityCfg
-    vllm: VllmCfg
-    dynamo: DynamoCfg
 
 
 class Settings(BaseModel):

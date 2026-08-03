@@ -157,7 +157,6 @@ def test_full_authored_raw_is_still_scrubbed_when_flag_off(monkeypatch):
 # --------------------------------------------------------------------------- #
 # End-to-end: a real request through the app exports redacted I/O
 # --------------------------------------------------------------------------- #
-@pytest.mark.xfail(reason="Qwen removed in Task 4", strict=False)
 def test_redacted_capture_end_to_end(monkeypatch):
     from fastapi.testclient import TestClient
 

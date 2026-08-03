@@ -21,6 +21,7 @@ cost/two-lever/display/controls tests (and Task 6's `test_traffic_honesty`)
 use in place of `MockBackend(settings)`."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 
 from app.gateway.backends.base import count_tokens, seeded_latency_ms
@@ -28,6 +29,37 @@ from app.gateway.backends.litellm_backend import LiteLLMBackend
 from app.models import GenerationResult
 
 CALLS: list[dict] = []
+
+
+def make_test_registry(settings):
+    """Build a `ModelRegistry` seeded with the two test-only onboarded models
+    (local-8b/local-32b, reproducing the former built-in Qwen models) for
+    tests that construct Router/Gateway/Gate/LiteLLMBackend directly instead
+    of through `create_app()`/`seed_all` (which wires and seeds a registry
+    automatically via `app.apps.bootstrap.seed_test_models`, gated on
+    SP_SEED_TEST_MODELS — set process-wide by conftest.py).
+
+    Synchronous wrapper (`asyncio.run`) around an in-memory SQLite DB + a
+    registry refresh, matching the `_reg_with(...)` pattern in
+    tests/test_infra_router.py. Callers still need SP_SEED_TEST_MODELS set
+    (true whenever conftest.py has been imported, which pytest always does),
+    since `seed_test_models` itself is gated on it.
+    """
+    from app.apps.bootstrap import seed_test_models
+    from app.apps.db import Database
+    from app.apps.registry import ModelRegistry
+
+    async def _build():
+        db = Database(url="sqlite+aiosqlite://")
+        await db.ensure_ready()
+        async with db.session() as session:
+            await seed_test_models(session)
+            await session.commit()
+        reg = ModelRegistry(settings)
+        await reg.refresh(db)
+        return reg
+
+    return asyncio.run(_build())
 
 
 class FakeResponse:

@@ -26,7 +26,6 @@ def _ctx():
         risk_class="low", require_verification=False, detected_entities=(),
         redaction_map_id=None)
 
-@pytest.mark.xfail(reason="Qwen removed in Task 4", strict=False)
 def test_hop_routes_records_and_streams(client, monkeypatch):
     from app.agent.internal_endpoint import HOPS
     from app.gateway.backends import litellm_backend
@@ -56,7 +55,6 @@ def test_hop_routes_records_and_streams(client, monkeypatch):
     recs = HOPS.pop(run_id)
     assert len(recs) == 1 and recs[0].step == "agent_hop" and recs[0].chosen is not None
 
-@pytest.mark.xfail(reason="Qwen removed in Task 4", strict=False)
 def test_onprem_only_hop_stays_onprem(client):
     from app.agent.internal_endpoint import HOPS
     from app.models import ExecutionPolicyContext
@@ -70,9 +68,12 @@ def test_onprem_only_hop_stays_onprem(client):
             "messages": [{"role": "user", "content": "diagnose please"}], "tools": []}
     client.post(f"/internal/v1/{run_id}/chat/completions", json=body)
     rec = HOPS.pop(run_id)[0]
-    # chosen model must be an on-prem-tier model (provider onprem)
+    # chosen model must be an on-prem-tier model (provider onprem). Onboarded
+    # on-prem models live only in the registry's effective pool, not the
+    # static YAML model_pool.
+    from tests._litellm_fake import make_test_registry
     from app.config.loader import load_settings
-    pool = {c.name: c.provider for c in load_settings().routing.model_pool}
+    pool = {c.name: c.provider for c in make_test_registry(load_settings()).effective_pool()}
     assert pool[rec.chosen] == "onprem"
 
 
@@ -101,7 +102,6 @@ def test_non_loopback_caller_rejected_403(remote_client):
     HOPS.pop(run_id)  # clean up so it doesn't leak into other tests
 
 
-@pytest.mark.xfail(reason="Qwen removed in Task 4", strict=False)
 def test_loopback_caller_still_allowed(client):
     """Regression guard: the default TestClient (host "testclient") — which
     stands in for the agent runtime's real 127.0.0.1 self-calls — must still

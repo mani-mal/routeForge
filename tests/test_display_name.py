@@ -15,16 +15,18 @@ from app.pipeline import Pipeline
 from app.policy.detectors import make_detector
 from app.policy.gate import Gate
 from app.routing.router import Router
-from tests._litellm_fake import _DeterministicLiteLLM
+from tests._litellm_fake import _DeterministicLiteLLM, make_test_registry
 
 
 def _pipeline(settings):
     det = make_detector("regex")
     co = settings.serving.context_optimization
-    return Pipeline(settings, Gate(settings, det), det,
-                    Gateway(settings, _DeterministicLiteLLM(settings), Router(settings)),
+    registry = make_test_registry(settings)
+    return Pipeline(settings, Gate(settings, det, registry=registry), det,
+                    Gateway(settings, _DeterministicLiteLLM(settings),
+                            Router(settings, registry=registry), registry),
                     self_port=8080, co_cfg_provider=lambda: co,
-                    ccr=CCRStore(3600))
+                    ccr=CCRStore(3600), registry=registry)
 
 
 def test_direct_response_carries_display_name():
@@ -60,12 +62,39 @@ def test_rejected_candidates_carry_display_name():
 
 
 def test_display_name_falls_back_to_slug_when_unset():
-    # A pool member with no display_name must fall back to its slug, never blank.
+    # A pool member with no display_name must fall back to its slug, never
+    # blank. On-prem candidates now come from onboarded rows (there is no
+    # built-in on-prem YAML pool member any more), so this seeds its own
+    # onboarded row with an empty display_name rather than using the shared
+    # make_test_registry seed (which always sets one).
+    from app.apps import store
+    from app.apps.db import Database
+    from app.apps.registry import ModelRegistry
+
     s = load_settings()
-    pool = [c.model_copy(update={"display_name": None}) for c in s.routing.model_pool]
-    routing = s.routing.model_copy(update={"model_pool": pool})
-    s = s.model_copy(update={"routing": routing})
-    pipe = _pipeline(s)
+
+    async def _build_registry():
+        db = Database(url="sqlite+aiosqlite://")
+        await db.ensure_ready()
+        async with db.session() as session:
+            await store.upsert_onboarded(
+                session, "local-8b", display_name="", provider="onprem",
+                tier="cheap", endpoint="http://test-local/v1", api_key_env=None,
+                price_input=0.05, price_output=0.05, enabled=True,
+                probe_status="healthy", allowed_app_ids=None)
+            await session.commit()
+        reg = ModelRegistry(s)
+        await reg.refresh(db)
+        return reg
+
+    registry = asyncio.run(_build_registry())
+    det = make_detector("regex")
+    co = s.serving.context_optimization
+    pipe = Pipeline(
+        s, Gate(s, det, registry=registry), det,
+        Gateway(s, _DeterministicLiteLLM(s), Router(s, registry=registry), registry),
+        self_port=8080, co_cfg_provider=lambda: co, ccr=CCRStore(3600), registry=registry)
+
     out = asyncio.run(pipe.run(
         "req-dn3", "acme",
         ChatRequest(messages=[Message(role="user", content="Hi")])))

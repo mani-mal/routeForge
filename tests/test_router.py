@@ -3,9 +3,11 @@ import pytest
 from app.config.loader import load_settings
 from app.models import ExecutionPolicyContext
 from app.routing.router import Router
+from tests._litellm_fake import make_test_registry
 
 S = load_settings()
-R = Router(S)
+REG = make_test_registry(S)
+R = Router(S, registry=REG)
 
 
 def _ctx(providers, risk="low", onprem=False):
@@ -62,7 +64,8 @@ def test_higher_quality_wins_within_tier_when_cost_latency_equal():
     # much higher override so quality dominates the (cheaper-onprem) tie-break.
     r = Router(S, quality_resolver=QualityResolver(
         S, overrides={"azure-gpt-mid": QualityScore(1.0, "customer"),
-                      "local-32b": QualityScore(0.1, "customer")}))
+                      "local-32b": QualityScore(0.1, "customer")}),
+        registry=REG)
     # min_tier="mid" forces landing on the mid tier, same as
     # test_min_tier_escalation_raises_target_and_prefers_cheaper above, where
     # local-32b normally wins on cost. Here the quality override should flip it.

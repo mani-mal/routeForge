@@ -1,17 +1,18 @@
 import os
 os.environ.setdefault("SP_PII_DETECTION", "regex")
-# config/serving.yaml's shipped default is `vllm` (LiteLLM gateway swap,
-# Task 2) so the demo boots against a real backend. Tests must stay offline
-# and fast: keep onprem enabled (SP_INFERENCE_BACKEND=vllm, same as
-# production) so serving tests still route to onprem candidates, but skip
-# the real network health probe that `create_app()` would otherwise run at
-# import time (every `client`/`live_internal_server` fixture) — mock is gone,
-# so there is no fallback, and an unprobed real vllm host would hang or
-# sys.exit(1) at test collection. See app/gateway/backends/factory.py's
-# resolve_backend docstring for the flag's contract. Generation itself is
-# driven by the autouse `_fake_acompletion` fixture below (a monkeypatched
-# litellm.acompletion), never a real network call.
-os.environ.setdefault("SP_INFERENCE_BACKEND", "vllm")
+# There is no `inference_backend` axis any more — every provider egresses
+# through the single LiteLLM SDK path, and on-prem availability/endpoints come
+# from the ModelRegistry (onboarded rows), never a boot-time backend switch or
+# health probe. SP_SEED_TEST_MODELS reproduces the former built-in Qwen models
+# (local-8b/local-32b) as onboarded rows (app/apps/bootstrap.py::
+# seed_test_models) so the existing pipeline test-suite, which routes to them
+# by name, keeps working now that they left the static YAML pool. Production
+# never sets this, so the pool boots empty. SP_SKIP_BACKEND_HEALTHCHECK is now
+# a harmless no-op (resolve_backend no longer probes at boot) — left set for
+# any lingering reference. Generation itself is driven by the autouse
+# `_fake_acompletion` fixture below (a monkeypatched litellm.acompletion),
+# never a real network call.
+os.environ.setdefault("SP_SEED_TEST_MODELS", "1")
 os.environ.setdefault("SP_SKIP_BACKEND_HEALTHCHECK", "1")
 # Each create_app() gets its own in-memory SQLite (StaticPool → one connection
 # per engine → isolated DB), so the application/token/usage store never leaks
@@ -35,7 +36,9 @@ from app.pipeline import Pipeline
 from app.policy.detectors import make_detector
 from app.policy.gate import Gate
 from app.routing.router import Router
-from tests._litellm_fake import _DeterministicLiteLLM, fake_acompletion
+from tests._litellm_fake import (
+    _DeterministicLiteLLM, fake_acompletion, make_test_registry,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -60,7 +63,12 @@ def client() -> TestClient:
 def compression_on_pipeline() -> Pipeline:
     """Same Pipeline app/main.py builds, but with context_optimization forced
     on (enabled=True, min_tokens=1, bypass_on.user_prompt=False) so direct-
-    path requests actually get compressed — see Task 6 (two-lever cost)."""
+    path requests actually get compressed — see Task 6 (two-lever cost).
+
+    Builds its own registry (not through create_app()/seed_all) via
+    `tests._litellm_fake.make_test_registry`, so on-prem routing (local-8b/
+    local-32b) still resolves now that those slugs left the static YAML pool.
+    """
     settings = load_settings()
     bypass_on = settings.serving.context_optimization.bypass_on.model_copy(
         update={"user_prompt": False})
@@ -69,14 +77,15 @@ def compression_on_pipeline() -> Pipeline:
     serving = settings.serving.model_copy(update={"context_optimization": co})
     settings = settings.model_copy(update={"serving": serving})
 
+    registry = make_test_registry(settings)
     detector = make_detector(settings.serving.pii_detection)
-    gate = Gate(settings, detector)
+    gate = Gate(settings, detector, registry=registry)
     backend = _DeterministicLiteLLM(settings)
-    model_router = Router(settings)
-    gateway = Gateway(settings, backend, model_router)
+    model_router = Router(settings, registry=registry)
+    gateway = Gateway(settings, backend, model_router, registry)
     ccr = CCRStore(ttl_seconds=co.ccr.ttl_hours * 3600)
     return Pipeline(settings, gate, detector, gateway, self_port=8080,
-                     co_cfg_provider=lambda: co, ccr=ccr)
+                     co_cfg_provider=lambda: co, ccr=ccr, registry=registry)
 
 
 @pytest.fixture

@@ -1,12 +1,12 @@
 """Router behaviour over the ModelRegistry (replaces the old InfraRoster path).
 
-The registry merges the static YAML pool (cloud built-ins + Qwen on-prem) with
-enabled onboarded on-prem rows. Disabling an on-prem model now means it is not
-onboarded/enabled, so it never enters `effective_pool()` — there is no separate
-admin disable roster any more. App-scoping is enforced in the router alongside
-residency. (The full "all on-prem gone -> onprem_only rejects" behaviour is
-tested at the build_context level in test_derived_onprem_reject.py, since Qwen
-is still a YAML on-prem candidate until Task 4.)"""
+The registry merges the static YAML pool (cloud built-ins only — there is no
+built-in on-prem entry any more) with enabled onboarded on-prem rows.
+Disabling an on-prem model now means it is not onboarded/enabled, so it never
+enters `effective_pool()` — there is no separate admin disable roster any
+more. App-scoping is enforced in the router alongside residency. (The full
+"all on-prem gone -> onprem_only rejects" behaviour is tested at both the
+build_context level and the Router level in test_derived_onprem_reject.py.)"""
 import asyncio
 
 from app.config.loader import load_settings
@@ -60,8 +60,14 @@ def test_onprem_only_selects_onprem_candidate():
 
 def test_disabled_onboarded_model_not_a_candidate():
     # A disabled onboarded row never enters the effective pool -> never chosen,
-    # and never even appears as a rejected candidate.
-    reg = _run(_reg_with({"off-cheap": _onprem("off-cheap", enabled=False)}))
+    # and never even appears as a rejected candidate. No built-in on-prem YAML
+    # pool member any more, so seed a second (enabled) on-prem row too --
+    # otherwise the residency filter would legitimately leave zero candidates
+    # for an onprem_only ctx, which is a different failure mode entirely
+    # (see test_derived_onprem_reject.py's Router-level case for that one).
+    reg = _run(_reg_with({
+        "off-cheap": _onprem("off-cheap", enabled=False),
+        "on-cheap": _onprem("on-cheap")}))
     d = Router(S, registry=reg).select(
         _ctx({"onprem"}, onprem=True), tokens_after=20, complexity=0.1)
     assert d.chosen.name != "off-cheap"
@@ -70,9 +76,12 @@ def test_disabled_onboarded_model_not_a_candidate():
 
 def test_app_scoped_model_rejected_for_other_app():
     # allowed_app_ids scoping: a model bound to "acme" is dropped (with the
-    # app-scope reason) for a different tenant, alongside residency.
+    # app-scope reason) for a different tenant, alongside residency. A second
+    # unscoped on-prem row keeps the residency filter from legitimately
+    # emptying the candidate pool (see comment above).
     reg = _run(_reg_with({
-        "acme-only": _onprem("acme-only", allowed_app_ids=["acme"])}))
+        "acme-only": _onprem("acme-only", allowed_app_ids=["acme"]),
+        "open-cheap": _onprem("open-cheap")}))
     d = Router(S, registry=reg).select(
         _ctx({"onprem"}, tenant_id="hospital", onprem=True),
         tokens_after=20, complexity=0.1)

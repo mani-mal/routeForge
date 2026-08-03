@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Callable
+from typing import Callable, TYPE_CHECKING
 
 from app.config.schema import ContextOptimizationCfg, Settings
 from app.gateway.backends.base import count_tokens
@@ -17,6 +17,9 @@ from app.compression import compress
 from app.compression.ccr import CCRStore
 from app.routing.task_mode import decide as decide_mode
 
+if TYPE_CHECKING:
+    from app.apps.registry import ModelRegistry
+
 
 class PipelineRejected(Exception):
     pass
@@ -26,11 +29,16 @@ class Pipeline:
     def __init__(self, settings: Settings, gate: Gate, detector: Detector,
                  gateway: Gateway, self_port: int,
                  co_cfg_provider: Callable[[], ContextOptimizationCfg],
-                 ccr: CCRStore) -> None:
+                 ccr: CCRStore, registry: "ModelRegistry | None" = None) -> None:
         self._s = settings
         self._gate = gate
         self._detector = detector
         self._gateway = gateway
+        # Onboarded on-prem models (e.g. local-8b) live only in the registry's
+        # effective pool, not the static YAML model_pool -- _display_name must
+        # consult it too, or their human-facing name silently falls back to
+        # the raw slug (see model-registry-onboarding plan Task 4).
+        self._reg = registry
         # Port THIS app is listening on. The agent runtime (multi_step path)
         # drives a real NAT agent whose LLM calls self-call our own internal
         # endpoint at 127.0.0.1:{self._self_port} — see app/agent/runtime.py.
@@ -55,8 +63,12 @@ class Pipeline:
         """Resolve a routing-pool slug (e.g. `local-8b`) to its human-facing
         model name (e.g. `Qwen2.5-7B-Instruct (local)`) for the UI. Falls back
         to the slug when no display name is configured or the slug is unknown
-        (e.g. the multi-step `"auto"` sentinel)."""
-        for c in self._s.routing.model_pool:
+        (e.g. the multi-step `"auto"` sentinel). Reads the registry's merged
+        pool (static YAML + enabled onboarded rows) when available, since
+        onboarded on-prem models never appear in the static
+        `settings.routing.model_pool`."""
+        pool = self._reg.effective_pool() if self._reg else self._s.routing.model_pool
+        for c in pool:
             if c.name == model_slug:
                 return c.display_name or c.name
         return model_slug

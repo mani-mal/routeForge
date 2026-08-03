@@ -12,9 +12,11 @@ from app.config.loader import load_settings
 from app.models import Entity
 from app.policy.context import build_context
 from app.routing.router import Router
+from tests._litellm_fake import make_test_registry
 
 S = load_settings()
-R = Router(S)
+REG = make_test_registry(S)
+R = Router(S, registry=REG)
 
 _LOCATION_ENTITY = [Entity(type="LOCATION", start=13, end=19, value="France")]
 

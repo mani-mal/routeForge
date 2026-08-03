@@ -6,9 +6,10 @@ from app.config.loader import load_settings
 from app.gateway.gateway import Gateway
 from app.models import ExecutionPolicyContext, Message
 from app.routing.router import Router
-from tests._litellm_fake import _DeterministicLiteLLM
+from tests._litellm_fake import _DeterministicLiteLLM, make_test_registry
 
 S = load_settings()
+REG = make_test_registry(S)
 
 
 class _AlwaysLowBackend(_DeterministicLiteLLM):
@@ -26,7 +27,7 @@ def _ctx(providers, risk="low"):
 
 
 def _run(ctx, hint):
-    gw = Gateway(S, _DeterministicLiteLLM(S), Router(S))
+    gw = Gateway(S, _DeterministicLiteLLM(S), Router(S, registry=REG), REG)
     msgs = [Message(role="user", content="hello")]
     return asyncio.run(gw.run(ctx, msgs, 20, 0.1, hint))
 
@@ -45,7 +46,7 @@ def test_low_confidence_escalates_exactly_once():
 
 
 def test_escalation_cap_holds_when_confidence_stays_low():
-    gw = Gateway(S, _AlwaysLowBackend(S), Router(S))
+    gw = Gateway(S, _AlwaysLowBackend(S), Router(S, registry=REG), REG)
     msgs = [Message(role="user", content="hello")]
     _result, records = asyncio.run(
         gw.run(_ctx({"onprem", "azure", "bedrock"}), msgs, 20, 0.1, {}))
@@ -56,7 +57,7 @@ def test_escalation_cap_holds_when_confidence_stays_low():
 def test_onprem_only_backend_failure_fails_closed_not_hang():
     # onprem_only clamps to the best on-prem tier; a persistently failing backend
     # must fail closed (raise), not loop forever.
-    gw = Gateway(S, _DeterministicLiteLLM(S), Router(S))
+    gw = Gateway(S, _DeterministicLiteLLM(S), Router(S, registry=REG), REG)
     msgs = [Message(role="user", content="hello")]
     ctx = _ctx({"onprem"}, risk="high")  # only onprem allowed -> tier clamps to mid
     with pytest.raises(Exception):

@@ -1,13 +1,18 @@
 import asyncio
 
 from tests.traffic.generator import run_traffic
+from tests._litellm_fake import make_test_registry
+from app.config.loader import load_settings
 import pytest
 
 
-@pytest.mark.xfail(reason="Qwen removed in Task 4", strict=False)
 def test_generator_fills_summary(live_internal_server):
     base = f"http://127.0.0.1:{live_internal_server.port}"
-    summary = asyncio.run(run_traffic(base, n=40, rps=50, seed=42))
+    # live_internal_server boots a real create_app() seeded with the same
+    # SP_SEED_TEST_MODELS onboarded rows (its own isolated in-memory DB) --
+    # build an independent registry with the identical seed for the tier map.
+    registry = make_test_registry(load_settings())
+    summary = asyncio.run(run_traffic(base, n=40, rps=50, seed=42, registry=registry))
     assert summary.count == 40
     assert sum(summary.tier_distribution.values()) == 40
     assert summary.onprem_count > 0          # pii/high_risk personas kept on-prem
@@ -40,9 +45,12 @@ def test_aggregation_reads_responses_not_history_ring_buffer():
             })
         raise AssertionError(f"generator must not call {request.url.path}")
 
+    registry = make_test_registry(load_settings())
+
     async def _run():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
-            return await run_traffic("http://x", n=N, rps=0, seed=1, client=c)
+            return await run_traffic("http://x", n=N, rps=0, seed=1, client=c,
+                                     registry=registry)
 
     summary = asyncio.run(_run())
     assert "/api/requests" not in seen_paths  # the bug source — never touched

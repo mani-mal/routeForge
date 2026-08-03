@@ -122,6 +122,14 @@ async def internal_chat_completions(run_id: str, request: Request):
     tools: list[dict] = body.get("tools", [])
 
     ctx = HOPS.context(run_id)
+    # Refresh the registry the same way the public /v1/chat/completions route
+    # does (app/api/routes.py) -- without this, an onboarded on-prem model
+    # (which lives only in the registry, never in the static YAML pool) is
+    # invisible to every hop's routing decision, silently pushing multi-step
+    # traffic onto cloud tiers regardless of onprem_only/residency.
+    registry = getattr(request.app.state, "registry", None)
+    if registry is not None:
+        await registry.ensure_loaded(request.app.state.db)
     model_router = request.app.state.model_router
 
     # Local import: avoids an import cycle at module load (app.compression ->
@@ -147,7 +155,8 @@ async def internal_chat_completions(run_id: str, request: Request):
 
     settings = request.app.state.settings
     backend = request.app.state.backend
-    price = settings.pricing.models[decision.chosen.name]
+    price = (registry.price_for(decision.chosen.name) if registry
+             else settings.pricing.models[decision.chosen.name])
     # The model must receive the COMPRESSED content, not the raw hop_msgs —
     # compress() returns a NEW list and never mutates its input, so passing
     # hop_msgs here would send uncompressed text to the backend while

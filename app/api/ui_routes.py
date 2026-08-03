@@ -144,7 +144,11 @@ async def start_traffic(body: TrafficStart, request: Request) -> dict:
             # itself raises, and the finally must still clear the flag or the
             # UI is wedged at "running" forever with every retry → 409.
             from tests.traffic.generator import run_traffic
-            summary = await run_traffic(base_url, n=n, rps=rps, seed=_TRAFFIC_SEED)
+            registry = getattr(state, "registry", None)
+            if registry is not None:
+                await registry.ensure_loaded(state.db)
+            summary = await run_traffic(
+                base_url, n=n, rps=rps, seed=_TRAFFIC_SEED, registry=registry)
             state.traffic_last_summary = dataclasses.asdict(summary)
         except Exception:
             logging.getLogger("serving.traffic").exception("traffic burst failed")

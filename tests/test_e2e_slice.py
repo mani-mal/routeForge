@@ -2,7 +2,6 @@ import pytest
 _AUTH = {"Authorization": "Bearer demo-key"}
 
 
-@pytest.mark.xfail(reason="Qwen removed in Task 4", strict=False)
 def test_simple_qa_uses_cheap_tier(client):
     r = client.post("/v1/chat/completions", headers=_AUTH, json={
         "messages": [{"role": "user", "content": "capital of France?"}]})
@@ -13,7 +12,6 @@ def test_simple_qa_uses_cheap_tier(client):
     assert body["cost"]["baseline_usd"] >= body["cost"]["total_usd"]
 
 
-@pytest.mark.xfail(reason="Qwen removed in Task 4", strict=False)
 def test_pii_request_excludes_cloud_in_trace(client):
     r = client.post("/v1/chat/completions", headers=_AUTH, json={
         "messages": [{"role": "user", "content": "verify SSN 482-73-1946"}]})
@@ -25,7 +23,6 @@ def test_pii_request_excludes_cloud_in_trace(client):
     assert "482-73-1946" not in r.text
 
 
-@pytest.mark.xfail(reason="Qwen removed in Task 4", strict=False)
 def test_cost_accumulates_and_baseline_present(client):
     r = client.post("/v1/chat/completions", headers=_AUTH, json={
         "messages": [{"role": "user", "content": "hello"}]})
@@ -70,14 +67,16 @@ def test_direct_path_quality_sum_counts_only_served_attempt_not_escalation():
     from app.policy.detectors import make_detector
     from app.policy.gate import Gate
     from app.routing.router import Router
-    from tests._litellm_fake import _DeterministicLiteLLM
+    from tests._litellm_fake import _DeterministicLiteLLM, make_test_registry
 
     s = load_settings()
+    registry = make_test_registry(s)
     det = make_detector("regex")
     co = s.serving.context_optimization
-    pipe = Pipeline(s, Gate(s, det), det,
-                    Gateway(s, _DeterministicLiteLLM(s), Router(s)),
-                    self_port=8080, co_cfg_provider=lambda: co, ccr=CCRStore(3600))
+    pipe = Pipeline(s, Gate(s, det, registry=registry), det,
+                    Gateway(s, _DeterministicLiteLLM(s), Router(s, registry=registry), registry),
+                    self_port=8080, co_cfg_provider=lambda: co, ccr=CCRStore(3600),
+                    registry=registry)
 
     req = ChatRequest(messages=[Message(role="user", content="capital of France?")])
     object.__setattr__(req, "mock_confidence", 0.3)  # forces one cheap->mid escalation

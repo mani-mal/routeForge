@@ -42,7 +42,7 @@ from app.pipeline import Pipeline
 from app.policy.detectors import make_detector
 from app.policy.gate import Gate
 from app.routing.router import Router
-from tests._litellm_fake import _DeterministicLiteLLM
+from tests._litellm_fake import _DeterministicLiteLLM, make_test_registry
 
 
 class RecordingBackend:
@@ -62,16 +62,18 @@ class RecordingBackend:
         return await self.inner.generate(model, messages, price, tier, hint)
 
 
-def _pipeline(rec: RecordingBackend, settings: Settings) -> Pipeline:
+def _pipeline(rec: RecordingBackend, settings: Settings, registry=None) -> Pipeline:
     det = make_detector("regex")
     co = settings.serving.context_optimization
-    gateway = Gateway(settings, rec, Router(settings))
-    return Pipeline(settings, Gate(settings, det), det, gateway,
+    registry = registry or make_test_registry(settings)
+    gateway = Gateway(settings, rec, Router(settings, registry=registry), registry)
+    return Pipeline(settings, Gate(settings, det, registry=registry), det, gateway,
                     self_port=8080, co_cfg_provider=lambda: co, ccr=CCRStore(3600))
 
 
-def _provider_of(model: str, settings: Settings) -> str:
-    return {c.name: c.provider for c in settings.routing.model_pool}.get(model, "?")
+def _provider_of(model: str, settings: Settings, registry=None) -> str:
+    pool = registry.effective_pool() if registry else settings.routing.model_pool
+    return {c.name: c.provider for c in pool}.get(model, "?")
 
 
 def _with_bedrock_enabled(settings: Settings) -> Settings:
@@ -85,8 +87,9 @@ def _with_bedrock_enabled(settings: Settings) -> Settings:
 
 def test_pii_request_never_calls_a_cloud_provider_at_the_backend():
     settings = load_settings()
+    registry = make_test_registry(settings)
     rec = RecordingBackend(_DeterministicLiteLLM(settings))
-    pipe = _pipeline(rec, settings)
+    pipe = _pipeline(rec, settings, registry)
 
     req = ChatRequest(messages=[
         Message(role="user", content="My SSN is 482-73-1946, please summarize this.")])
@@ -94,7 +97,7 @@ def test_pii_request_never_calls_a_cloud_provider_at_the_backend():
 
     assert out["policy"]["onprem_only"] is True
     assert rec.models_called, "expected a model to have actually been called"
-    assert all(_provider_of(m, settings) == "onprem" for m in rec.models_called), (
+    assert all(_provider_of(m, settings, registry) == "onprem" for m in rec.models_called), (
         rec.models_called)
 
 
@@ -104,8 +107,9 @@ def test_high_risk_request_never_calls_a_cloud_provider_at_the_backend():
     guard as the SSN case, for the other onprem_only-triggering entity
     family (bank numbers), not just SSNs."""
     settings = load_settings()
+    registry = make_test_registry(settings)
     rec = RecordingBackend(_DeterministicLiteLLM(settings))
-    pipe = _pipeline(rec, settings)
+    pipe = _pipeline(rec, settings, registry)
 
     req = ChatRequest(messages=[
         Message(role="user", content="Please review account number 12345678901 for fraud.")])
@@ -113,7 +117,7 @@ def test_high_risk_request_never_calls_a_cloud_provider_at_the_backend():
 
     assert out["policy"]["onprem_only"] is True
     assert rec.models_called
-    assert all(_provider_of(m, settings) == "onprem" for m in rec.models_called), (
+    assert all(_provider_of(m, settings, registry) == "onprem" for m in rec.models_called), (
         rec.models_called)
 
 
@@ -137,23 +141,24 @@ def test_bedrock_enabled_pii_stays_onprem_while_clean_request_can_reach_cloud():
       offered to it.
     """
     settings = _with_bedrock_enabled(load_settings())
+    registry = make_test_registry(settings)
 
     # --- PII / onprem_only, cloud available but must not be touched ---
     rec_pii = RecordingBackend(_DeterministicLiteLLM(settings))
-    pipe_pii = _pipeline(rec_pii, settings)
+    pipe_pii = _pipeline(rec_pii, settings, registry)
     pii_req = ChatRequest(messages=[
         Message(role="user", content="My SSN is 482-73-1946, please summarize this.")])
     pii_out = asyncio.run(pipe_pii.run("r3", "hospital", pii_req))
 
     assert pii_out["policy"]["onprem_only"] is True
     assert rec_pii.models_called
-    assert all(_provider_of(m, settings) == "onprem" for m in rec_pii.models_called), (
+    assert all(_provider_of(m, settings, registry) == "onprem" for m in rec_pii.models_called), (
         "PII request reached a non-onprem model even though onprem_only was set: "
         f"{rec_pii.models_called}")
 
     # --- clean acme request, same cloud-enabled settings, CAN escalate ---
     rec_clean = RecordingBackend(_DeterministicLiteLLM(settings))
-    pipe_clean = _pipeline(rec_clean, settings)
+    pipe_clean = _pipeline(rec_clean, settings, registry)
     clean_req = ChatRequest(messages=[
         Message(role="user", content="Email john.doe@example.com re: Q3 planning")])
     object.__setattr__(clean_req, "mock_confidence", 0.1)  # forces escalation
@@ -161,7 +166,7 @@ def test_bedrock_enabled_pii_stays_onprem_while_clean_request_can_reach_cloud():
 
     assert clean_out["policy"]["onprem_only"] is False
     assert clean_out["model"] == "bedrock-frontier"
-    assert any(_provider_of(m, settings) != "onprem" for m in rec_clean.models_called), (
+    assert any(_provider_of(m, settings, registry) != "onprem" for m in rec_clean.models_called), (
         "expected the recorder to observe at least one cloud call for the clean "
         f"request once cloud was enabled and policy permitted it: {rec_clean.models_called}")
 
@@ -170,7 +175,6 @@ def test_bedrock_enabled_pii_stays_onprem_while_clean_request_can_reach_cloud():
     # the onprem guard is discriminating, not vacuous.
 
 
-@pytest.mark.xfail(reason="Qwen removed in Task 4", strict=False)
 def test_residency_filter_is_what_keeps_pii_onprem_not_provider_availability():
     """Mutation check (documented, not run against production code): if the
     residency filter in app/policy/context.py were deleted -- i.e.
@@ -197,7 +201,8 @@ def test_residency_filter_is_what_keeps_pii_onprem_not_provider_availability():
     original_build_context = gate_module.build_context
 
     def _leaky_build_context(settings, request_id, tenant_id, entities,
-                             redaction_map_id, app_policy=None, app_rules=None):
+                             redaction_map_id, app_policy=None, app_rules=None,
+                             registry=None):
         """Reimplements build_context but WITHOUT the onprem residency
         filter, to prove the guard above would catch this exact regression.
         (Signature mirrors build_context, incl. the app_policy/app_rules
@@ -226,8 +231,9 @@ def test_residency_filter_is_what_keeps_pii_onprem_not_provider_availability():
 
     gate_module.build_context = _leaky_build_context
     try:
+        registry = make_test_registry(settings)
         rec = RecordingBackend(_DeterministicLiteLLM(settings))
-        pipe = _pipeline(rec, settings)
+        pipe = _pipeline(rec, settings, registry)
         req = ChatRequest(messages=[
             Message(role="user", content="My SSN is 482-73-1946, please summarize this.")])
         out = asyncio.run(pipe.run("r5", "hospital", req))
@@ -236,7 +242,7 @@ def test_residency_filter_is_what_keeps_pii_onprem_not_provider_availability():
         # -- demonstrating the assertion in the tests above is genuinely
         # falsifiable, not vacuous.
         assert out["policy"]["onprem_only"] is True
-        assert any(_provider_of(m, settings) != "onprem" for m in rec.models_called), (
+        assert any(_provider_of(m, settings, registry) != "onprem" for m in rec.models_called), (
             "expected the deliberately-broken residency filter to leak to a "
             "cloud model, proving the real (unbroken) guard above is meaningful")
     finally:
@@ -244,7 +250,6 @@ def test_residency_filter_is_what_keeps_pii_onprem_not_provider_availability():
 
 
 @pytest.mark.usefixtures("live_internal_server")
-@pytest.mark.xfail(reason="Qwen removed in Task 4", strict=False)
 def test_multistep_pii_request_stays_onprem_at_decision_level(live_internal_server):
     """multi_step + PII: drives mock_multistep with an SSN in the content
     against a live server (the agent runtime's NAT tool_calling_agent makes
@@ -262,6 +267,11 @@ def test_multistep_pii_request_stays_onprem_at_decision_level(live_internal_serv
     """
     pytest.importorskip("nat")
     settings = load_settings()
+    # live_internal_server boots a real create_app(), which seeds the same
+    # SP_SEED_TEST_MODELS onboarded rows (its own isolated in-memory DB) --
+    # build an independent registry with the identical seed here just to
+    # resolve model->provider for the assertion below.
+    registry = make_test_registry(settings)
 
     r = httpx.post(
         f"http://127.0.0.1:{live_internal_server.port}/v1/chat/completions",
@@ -282,5 +292,5 @@ def test_multistep_pii_request_stays_onprem_at_decision_level(live_internal_serv
     assert body["policy"]["onprem_only"] is True
     hops = [t for t in body["trace"] if t.get("step") == "agent_hop"]
     assert hops, "expected at least one agent_hop DecisionRecord"
-    assert all(_provider_of(h["chosen"], settings) == "onprem" for h in hops if h["chosen"]), (
-        hops)
+    assert all(_provider_of(h["chosen"], settings, registry) == "onprem"
+               for h in hops if h["chosen"]), (hops)
