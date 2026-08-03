@@ -246,7 +246,10 @@ function ModelRow({
         allowed_app_ids: model.allowed_app_ids,
         notes: model.notes,
       };
-      await onboardApi.update(model.slug, { ...body, enabled: !model.enabled } as OnboardIn);
+      // onChanged() below re-fetches the full list, so the row reflects the
+      // PUT's actual persisted enabled/probe_status (post intent-AND-probe),
+      // not an optimistic local flip.
+      await onboardApi.update(model.slug, { ...body, enabled: !model.enabled });
       onChanged();
     } catch (e) {
       setErr(e instanceof Error ? e.message : "update failed");

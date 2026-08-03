@@ -132,6 +132,47 @@ def test_put_reprobes_and_updates(client, monkeypatch):
     assert row["enabled"] is False
 
 
+def test_put_can_disable_healthy_model(client, monkeypatch):
+    # Regression: enabled must be admin intent ANDed with probe result, not the
+    # probe result alone — otherwise a healthy model can never be turned off.
+    monkeypatch.setattr("app.api.admin_routes.probe_endpoint", _ok)
+    _login(client)
+    assert client.post("/admin/infra/models", json=_BODY).status_code == 200
+
+    r = client.put("/admin/infra/models/nemotron-mid", json={**_BODY, "enabled": False})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["enabled"] is False
+    assert body["probe_status"] == "healthy"
+
+    lst = client.get("/admin/infra/models").json()
+    row = next(m for m in lst if m["slug"] == "nemotron-mid")
+    assert row["enabled"] is False
+    assert row["probe_status"] == "healthy"
+
+def test_put_cannot_enable_unreachable_model(client, monkeypatch):
+    # Probe-gating preserved: intent=True can never overcome a failing probe.
+    monkeypatch.setattr("app.api.admin_routes.probe_endpoint", _fail)
+    _login(client)
+    assert client.post("/admin/infra/models", json={**_BODY, "slug": "flaky-model"}).status_code == 200
+
+    r = client.put("/admin/infra/models/flaky-model", json={**_BODY, "slug": "flaky-model", "enabled": True})
+    assert r.status_code == 200
+    assert r.json()["enabled"] is False
+
+    lst = client.get("/admin/infra/models").json()
+    row = next(m for m in lst if m["slug"] == "flaky-model")
+    assert row["enabled"] is False
+
+def test_onboard_disabled_intent(client, monkeypatch):
+    monkeypatch.setattr("app.api.admin_routes.probe_endpoint", _ok)
+    _login(client)
+    r = client.post("/admin/infra/models", json={**_BODY, "slug": "intent-off-model", "enabled": False})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["enabled"] is False
+    assert body["probe_status"] == "healthy"
+
 def test_put_missing_slug_404(client, monkeypatch):
     monkeypatch.setattr("app.api.admin_routes.probe_endpoint", _ok)
     _login(client)

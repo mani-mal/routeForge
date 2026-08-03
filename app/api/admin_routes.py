@@ -113,6 +113,7 @@ class OnboardIn(BaseModel):
     context_window: int | None = None
     allowed_app_ids: list[str] | None = None
     notes: str | None = None
+    enabled: bool = True
 
 
 class RecognizerIn(BaseModel):
@@ -386,17 +387,22 @@ async def onboard_model(body: OnboardIn, request: Request,
                 if await store.get_application(session, aid) is None:
                     raise HTTPException(422, f"unknown application {aid!r}")
         ok, detail = await probe_endpoint(body.endpoint, body.slug, body.api_key_env)
+        # `enabled` is explicit admin intent, ANDed with probe result: an
+        # unreachable model can NEVER end up enabled (registry.has_healthy_onprem()
+        # and onprem_only fail-closed depend on that), but a reachable model can
+        # still be turned off on request.
+        final_enabled = body.enabled and ok
         await store.upsert_onboarded(
             session, body.slug, display_name=body.display_name, provider="onprem",
             tier=body.tier, endpoint=body.endpoint, api_key_env=body.api_key_env,
             price_input=body.price_input, price_output=body.price_output,
             quality=body.quality, context_window=body.context_window,
             allowed_app_ids=body.allowed_app_ids, notes=body.notes,
-            enabled=ok, probe_status=("healthy" if ok else "unreachable"),
+            enabled=final_enabled, probe_status=("healthy" if ok else "unreachable"),
             probe_error=(None if ok else detail))
         await session.commit()
     await reg.refresh(request.app.state.db)
-    return {"slug": body.slug, "enabled": ok,
+    return {"slug": body.slug, "enabled": final_enabled,
             "probe_status": "healthy" if ok else "unreachable",
             "probe_error": None if ok else detail}
 
@@ -415,17 +421,19 @@ async def edit_onboarded_model(slug: str, body: OnboardIn, request: Request,
                 if await store.get_application(session, aid) is None:
                     raise HTTPException(422, f"unknown application {aid!r}")
         ok, detail = await probe_endpoint(body.endpoint, slug, body.api_key_env)
+        # Same intent-AND-probe rule as onboard_model — see comment there.
+        final_enabled = body.enabled and ok
         await store.upsert_onboarded(
             session, slug, display_name=body.display_name, provider="onprem",
             tier=body.tier, endpoint=body.endpoint, api_key_env=body.api_key_env,
             price_input=body.price_input, price_output=body.price_output,
             quality=body.quality, context_window=body.context_window,
             allowed_app_ids=body.allowed_app_ids, notes=body.notes,
-            enabled=ok, probe_status=("healthy" if ok else "unreachable"),
+            enabled=final_enabled, probe_status=("healthy" if ok else "unreachable"),
             probe_error=(None if ok else detail))
         await session.commit()
     await reg.refresh(request.app.state.db)
-    return {"slug": slug, "enabled": ok,
+    return {"slug": slug, "enabled": final_enabled,
             "probe_status": "healthy" if ok else "unreachable",
             "probe_error": None if ok else detail}
 

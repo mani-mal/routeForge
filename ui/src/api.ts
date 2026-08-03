@@ -282,6 +282,7 @@ export type OnboardIn = {
   api_key_env?: string | null; price_input: number; price_output: number;
   quality?: number | null; context_window?: number | null;
   allowed_app_ids?: string[] | null; notes?: string | null;
+  enabled?: boolean;
 };
 export const onboardApi = {
   list: () => fetch("/admin/infra/models", { credentials: CRED }).then(j<OnboardedModel[]>),
