@@ -77,7 +77,6 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 function Chosen({ r, cumulative }: { r: TraceRecord; cumulative?: number }) {
   const tier = chosenTier(r.reason);
   const litColor = tier ? TIER_HEX[tier] : NEUTRAL;
-  const servingEngine = r.step === "router" ? r.serving_engine : null;
   return (
     <div className="relative overflow-hidden rounded-md border border-edge bg-ink/40 p-2.5 pl-3.5">
       {/* the lit rail — this candidate is the path the switch actually threw to */}
@@ -90,11 +89,6 @@ function Chosen({ r, cumulative }: { r: TraceRecord; cumulative?: number }) {
         />
         <span className="text-xs text-gray-500">chosen</span>
         <span className="font-semibold" style={{ color: litColor }}>{displayOf(r)}</span>
-        {servingEngine && (
-          <span className="rounded border border-edge bg-ink/60 px-1.5 py-0.5 font-mono text-[10px] text-gray-400">
-            served by · {servingEngine}
-          </span>
-        )}
         {r.hop_index !== undefined && r.step === "agent_hop" && (
           <span className="ml-auto text-[10px] text-gray-500">hop #{r.hop_index}</span>
         )}

@@ -355,12 +355,14 @@ async def put_privacy(app_id: str, body: PrivacyProfileIn, request: Request,
 # --- on-prem model onboarding (runtime registry; probe-gated activation) ----
 #
 # routeForge deploys nothing — these endpoints register an externally-served
-# OpenAI-compatible endpoint as a routable on-prem model. A model is only
-# ever saved `enabled=True` if `probe_endpoint` can reach it and confirms it
-# serves the given slug; otherwise it's saved disabled. Downstream,
-# ModelRegistry.has_healthy_onprem() keys on `enabled`, so a probe-failed
-# model correctly never satisfies onprem_only routing. `provider` is always
-# forced to "onprem" — never taken from the request body.
+# OpenAI-compatible endpoint as a routable on-prem model. A model is saved
+# `enabled=True` only if the admin requested enabled AND `probe_endpoint`
+# reached it and confirmed it serves the given slug (enabled = requested_enabled
+# AND probe_ok); an unreachable model is always saved disabled regardless of
+# admin intent. Downstream, ModelRegistry.has_healthy_onprem() keys on
+# `enabled`, so a probe-failed model correctly never satisfies onprem_only
+# routing. `provider` is always forced to "onprem" — never taken from the
+# request body.
 
 def _static_validate_onboard(body: OnboardIn, s) -> None:
     tiers = set(s.routing.tiers)

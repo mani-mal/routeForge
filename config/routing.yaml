@@ -5,8 +5,10 @@
 # identically to serving.yaml and pricing.yaml (the config lint enforces this).
 
 # Canonical tier list. There are exactly three tiers everywhere: cheap | mid |
-# frontier. There is no "strong" tier. Every tier named below must have >=1 member
-# in model_pool, and every risk_floor must name a tier that exists (config lint).
+# frontier. There is no "strong" tier. Tiers may legally have zero static members
+# here — the on-prem tier's pool boots empty and fills at runtime as operators
+# onboard on-prem models via the ModelRegistry. Every risk_floor must still name
+# a tier that exists in this list (config lint).
 tiers: [cheap, mid, frontier]
 
 score_on: post_compression       # MUST be post_compression when Headroom is on
