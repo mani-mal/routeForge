@@ -108,16 +108,16 @@ items:
         - name: ghcr-pull
         containers:
         - name: api
-          image: ghcr.io/mani-mal/serving-plane-api:0.8.0
+          image: ghcr.io/mani-mal/serving-plane-api:0.9.0
           ports: [{name: http, containerPort: 8080}]
           env:
           - {name: SP_SERVER_PORT, value: "8080"}
-          # The image bakes SP_INFERENCE_BACKEND=none / SP_PII_DETECTION=regex (safe
-          # boot with no external deps), and the loader gives env precedence OVER the
-          # mounted serving.yaml — so these MUST be set here or the ConfigMap's
-          # inference_backend/pii_detection are silently ignored. base_url is not
-          # env-settable and still comes from the mounted file.
-          - {name: SP_INFERENCE_BACKEND, value: "vllm"}
+          # SP_PII_DETECTION is read by the loader with env precedence OVER the
+          # mounted serving.yaml, so it MUST be set here or the ConfigMap's
+          # policy.pii_detection is silently ignored.
+          # (The inference_backend axis is gone as of the pure-router pivot —
+          # on-prem models are onboarded at runtime via /admin/infra/models with a
+          # per-model endpoint, not selected by an SP_INFERENCE_BACKEND env.)
           - {name: SP_PII_DETECTION, value: "presidio"}
           # Attach request/response I/O to the serving.request Langfuse trace so
           # traces are usable as an eval dataset. `redacted` runs the egress
@@ -255,7 +255,7 @@ items:
         - name: ghcr-pull
         containers:
         - name: ui
-          image: ghcr.io/mani-mal/serving-plane-ui:0.8.0
+          image: ghcr.io/mani-mal/serving-plane-ui:0.9.0
           ports: [{name: http, containerPort: 80}]
           resources:
             requests: {cpu: "50m", memory: 64Mi}
