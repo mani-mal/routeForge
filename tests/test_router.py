@@ -5,7 +5,18 @@ from app.models import ExecutionPolicyContext
 from app.routing.router import Router
 from tests._litellm_fake import make_test_registry
 
+# These tests exercise router scoring/tier logic and expect both cloud tiers
+# (mid via azure, frontier via bedrock) to be present as real pool candidates
+# -- that is orthogonal to B10 (disabled providers must not enter the pool),
+# which is covered directly in test_model_registry.py and
+# test_residency_rejection_is_labeled_residency_not_generic below. Enable
+# both cloud providers here so the default-disabled B10 filter doesn't starve
+# these scoring tests of the mid/frontier candidates they were written against.
 S = load_settings()
+_prov = dict(S.serving.providers)
+_prov["azure"] = _prov["azure"].model_copy(update={"enabled": True})
+_prov["bedrock"] = _prov["bedrock"].model_copy(update={"enabled": True})
+S = S.model_copy(update={"serving": S.serving.model_copy(update={"providers": _prov})})
 REG = make_test_registry(S)
 R = Router(S, registry=REG)
 
@@ -83,6 +94,30 @@ def test_default_resolver_reproduces_tier_default_quality():
                          complexity=0.1)
     assert decision.quality_source == "tier_default"
     assert decision.quality_score == S.routing.tier_quality[decision.chosen.tier]
+
+
+def test_residency_rejection_is_labeled_residency_not_generic():
+    from app.config.loader import load_settings
+    from app.policy.context import build_context
+    from app.models import Entity
+    s = load_settings()
+    prov = dict(s.serving.providers)
+    prov["bedrock"] = prov["bedrock"].model_copy(update={"enabled": True})
+    s = s.model_copy(update={"serving": s.serving.model_copy(update={"providers": prov})})
+    # a registry with a healthy onboarded on-prem model, so the onprem_only
+    # request still has an eligible candidate and select() returns normally
+    # instead of raising "no candidates after residency filter" -- we need to
+    # inspect dec.rejected for the mislabeled cloud rejection.
+    reg = make_test_registry(s)
+    # hospital tenant is onprem_only in the default policy.yaml
+    ctx = build_context(s, "req", "hospital",
+                        [Entity(type="US_SSN", start=0, end=11, value="482-73-1946")],
+                        None, registry=reg)
+    assert ctx.onprem_only is True
+    dec = Router(s, registry=reg).select(ctx, tokens_after=50, complexity=0.1)
+    reasons = {r.name: r.reason for r in dec.rejected}
+    # a cloud candidate dropped by residency reads "residency", never the app-policy label
+    assert any(v == "excluded · residency" for v in reasons.values())
 
 
 def test_budget_exhaustion_raises():

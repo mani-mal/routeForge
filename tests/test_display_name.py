@@ -47,10 +47,18 @@ def test_direct_response_carries_display_name():
 
 
 def test_rejected_candidates_carry_display_name():
-    # Default config disables cloud providers, so azure/bedrock are rejected by
-    # the residency filter — each rejected candidate must still carry its
-    # display name so the UI can show a real name greyed out.
+    # B10: a disabled cloud provider now never enters the candidate pool at
+    # all (see app/apps/registry.py effective_pool), so with the default
+    # config (azure/bedrock disabled) they no longer appear even as a
+    # rejected "residency" spur. Enable bedrock here so a real cloud
+    # candidate reaches the router and gets legitimately rejected (by
+    # residency, since this tenant's request is onprem_only-free but the
+    # complexity/risk still lands on the cheap on-prem tier) -- proving
+    # display_name still threads onto the rejected-candidate trace entry.
     s = load_settings()
+    prov = dict(s.serving.providers)
+    prov["bedrock"] = prov["bedrock"].model_copy(update={"enabled": True})
+    s = s.model_copy(update={"serving": s.serving.model_copy(update={"providers": prov})})
     pipe = _pipeline(s)
     out = asyncio.run(pipe.run(
         "req-dn2", "acme",

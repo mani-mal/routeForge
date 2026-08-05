@@ -11,6 +11,17 @@ def _registry(s):
     return make_test_registry(s)
 
 
+def _with_azure_enabled(s):
+    # B10: azure is disabled by default in serving.yaml, so effective_pool()
+    # now omits azure-gpt-mid entirely unless the provider is enabled -- these
+    # tests are about the QualityResolver's published/override rungs, not
+    # about provider gating, so enable azure to keep azure-gpt-mid a real
+    # pool member.
+    prov = dict(s.serving.providers)
+    prov["azure"] = prov["azure"].model_copy(update={"enabled": True})
+    return s.model_copy(update={"serving": s.serving.model_copy(update={"providers": prov})})
+
+
 def test_tier_default_rung_for_model_without_published_quality():
     s = _settings()  # shipped config: no per-model quality set
     r = QualityResolver(s, registry=_registry(s))
@@ -19,7 +30,7 @@ def test_tier_default_rung_for_model_without_published_quality():
 
 
 def test_published_rung_when_pool_entry_has_quality():
-    s = _settings()
+    s = _with_azure_enabled(_settings())
     reg = _registry(s)
     reg.effective_pool()[0].quality = 0.61  # azure-gpt-mid published
     r = QualityResolver(s, registry=reg)
@@ -28,7 +39,7 @@ def test_published_rung_when_pool_entry_has_quality():
 
 
 def test_override_rung_beats_published_and_tier_default():
-    s = _settings()
+    s = _with_azure_enabled(_settings())
     reg = _registry(s)
     reg.effective_pool()[0].quality = 0.61
     r = QualityResolver(s, overrides={"azure-gpt-mid": QualityScore(0.9, "customer")},

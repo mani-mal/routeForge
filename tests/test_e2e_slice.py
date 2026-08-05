@@ -13,13 +13,22 @@ def test_simple_qa_uses_cheap_tier(client):
 
 
 def test_pii_request_excludes_cloud_in_trace(client):
+    # Default config disables azure/bedrock at the provider (kill-switch) level
+    # (B10), so they never enter the candidate pool at all any more -- not even
+    # as a rejected "residency" spur. The privacy guarantee this test actually
+    # cares about is that no cloud candidate/provider ever appears anywhere in
+    # the router trace for an onprem_only request, and the response is served
+    # on-prem. See test_router.py::test_residency_rejection_is_labeled_residency_not_generic
+    # for the case where a cloud provider IS enabled and gets the "excluded ·
+    # residency" reason.
     r = client.post("/v1/chat/completions", headers=_AUTH, json={
         "messages": [{"role": "user", "content": "verify SSN 482-73-1946"}]})
     body = r.json()
     assert body["policy"]["onprem_only"] is True
     router_hop = next(t for t in body["trace"] if t["step"] == "router")
-    assert any(rej["provider"] in {"azure", "bedrock"}
-               and "residency" in rej["reason"] for rej in router_hop["rejected"])
+    assert router_hop["chosen"].startswith("local")  # served on-prem
+    rejected_providers = {rej["provider"] for rej in router_hop["rejected"]}
+    assert "azure" not in rejected_providers and "bedrock" not in rejected_providers
     assert "482-73-1946" not in r.text
 
 
