@@ -466,6 +466,16 @@ model/tier/cost/latency).
   `RequestSummary` (`session_id: str | None`), and expose it on the `/requests` list +
   drilldown payloads. No policy/routing behaviour change; it is a label only. Redaction
   rules still apply (a session id is operator-supplied, not PII, but treat it as opaque).
+- **Langfuse sessions (same id, second surface).** `app/obs/export.py:export_trace`
+  currently sets only `sp.*` + `input/output` on the root span and **never sets a session
+  id**, so Langfuse shows N ungrouped traces and no Session (observed 2026-08-05: six
+  traces, zero sessions, for two sample runs). Stamp the correlation id as Langfuse's OTel
+  **session attribute** on the root span (e.g. `langfuse.session.id` / `session.id` —
+  verify the exact key against the running Langfuse v3 OTel mapping) so the workflow's
+  calls group under one Session automatically. **Granularity: one session = one workflow
+  run, NOT one application** — a session-per-app would merge every request the app ever
+  makes into a single session. One correlation id drives both the RouteForge Requests-tab
+  tree and the Langfuse Session grouping.
 - **UI:** in the Requests list, collapse rows sharing a `session_id` under one expandable
   parent; ungrouped (no id) requests render flat as today. Reuse the drilldown's per-hop
   presentation for the children. Mock:
