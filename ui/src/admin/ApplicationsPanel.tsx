@@ -239,16 +239,98 @@ export function AppConfig({ appId, onChanged }: { appId: string; onChanged?: () 
 }
 
 function AppDetail({ app, onChanged }: { app: AdminApp; onChanged: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(app.name);
+  const [owner, setOwner] = useState(app.owner_email ?? "");
+  const [residency, setResidency] = useState(app.default_residency);
+  const [status, setStatus] = useState(app.status);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // Re-seed fields whenever a different app is selected.
+  useEffect(() => {
+    setEditing(false);
+    setName(app.name);
+    setOwner(app.owner_email ?? "");
+    setResidency(app.default_residency);
+    setStatus(app.status);
+    setErr(null);
+  }, [app.id]);
+
+  async function save() {
+    setBusy(true);
+    setErr(null);
+    try {
+      await adminApi.updateApp(app.id, {
+        name,
+        owner_email: owner,
+        default_residency: residency,
+        status,
+      });
+      setEditing(false);
+      onChanged();
+    } catch {
+      setErr("Could not save changes.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="text-sm font-semibold text-gray-100">{app.name} <span className="font-mono text-gray-500">({app.id})</span></div>
-          <div className="text-xs text-gray-500">
-            status {app.status} · default residency {app.default_residency}
-            {app.langfuse_project_id ? ` · langfuse: ${app.langfuse_project_id}` : " · langfuse: shared"}
+      <div className="flex items-start justify-between gap-2">
+        {editing ? (
+          <div className="flex flex-col gap-2 flex-1">
+            <label className="flex flex-col gap-1 text-xs text-gray-400">
+              name
+              <input value={name} onChange={(e) => setName(e.target.value)}
+                className="rounded bg-ink border border-edge px-2 py-1 text-sm text-gray-100 w-56" />
+            </label>
+            <label className="flex flex-col gap-1 text-xs text-gray-400">
+              owner email
+              <input value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="(none)"
+                className="rounded bg-ink border border-edge px-2 py-1 text-sm text-gray-100 w-56" />
+            </label>
+            <div className="flex items-end gap-2">
+              <label className="flex flex-col gap-1 text-xs text-gray-400">
+                default residency
+                <select value={residency} onChange={(e) => setResidency(e.target.value)}
+                  className="rounded bg-ink border border-edge px-2 py-1 text-sm text-gray-100">
+                  {RESIDENCIES.map((r) => <option key={r} value={r}>{r}</option>)}
+                </select>
+              </label>
+              <label className="flex flex-col gap-1 text-xs text-gray-400">
+                status
+                <select value={status} onChange={(e) => setStatus(e.target.value)}
+                  className="rounded bg-ink border border-edge px-2 py-1 text-sm text-gray-100">
+                  <option value="active">active</option>
+                  <option value="archived">archived</option>
+                </select>
+              </label>
+            </div>
+            <div className="flex items-center gap-2">
+              <button onClick={save} disabled={!name || busy}
+                className="rounded-md border border-accent bg-accent/20 text-accent px-3 py-1 text-xs disabled:opacity-50">
+                {busy ? "saving…" : "Save"}
+              </button>
+              <button onClick={() => setEditing(false)} disabled={busy}
+                className="text-xs text-gray-500 hover:underline">Cancel</button>
+              {err && <span className="text-xs text-frontier">{err}</span>}
+            </div>
           </div>
-        </div>
+        ) : (
+          <>
+            <div>
+              <div className="text-sm font-semibold text-gray-100">{app.name} <span className="font-mono text-gray-500">({app.id})</span></div>
+              <div className="text-xs text-gray-500">
+                status {app.status} · default residency {app.default_residency}
+                {app.langfuse_project_id ? ` · langfuse: ${app.langfuse_project_id}` : " · langfuse: shared"}
+              </div>
+            </div>
+            <button onClick={() => setEditing(true)}
+              className="text-xs text-accent hover:underline shrink-0">Edit</button>
+          </>
+        )}
       </div>
 
       <AppConfig appId={app.id} onChanged={onChanged} />
