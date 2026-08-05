@@ -44,7 +44,7 @@ function chosenTier(reason: string | undefined): Tier | undefined {
 // exact strings app/routing/router.py emits; unknown reasons pass through
 // unchanged so a future backend reason never disappears from the UI.
 const REASON_LABEL: Record<string, string> = {
-  "excluded by policy (residency)": "excluded · residency",
+  "not permitted for application": "excluded · app policy",
   "disabled by admin": "disabled by admin",
   "below target tier": "below target tier",
   "above target tier": "above target tier",
@@ -313,7 +313,7 @@ function StepBody({ stepKey, detail, hops }: { stepKey: string; detail: ChatResp
 // The privacy visual — greyed excluded providers with reason. Lifted from
 // FlowVisualizer.
 function ProviderStrip({ allowedProviders, onpremOnly }: { allowedProviders: string[]; onpremOnly: boolean }) {
-  const excludedReason = onpremOnly ? "excluded — residency" : "excluded by policy";
+  const excludedReason = onpremOnly ? "excluded · residency" : "provider off";
   return (
     <div>
       <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">Serving providers</h3>
@@ -429,12 +429,32 @@ function PlainSummary({ detail, summary }: { detail: ChatResponse; summary: Requ
   const totalLatencyMs =
     summary?.latency_ms ?? detail.trace.reduce((sum, r) => sum + (r.latency_ms ?? 0), 0);
 
-  // Privacy — residency verdict.
-  const privacyAccent = p.onprem_only ? SHIELD : CLEAR;
-  const privacyVerdict = p.onprem_only ? "Kept on-prem" : "Cloud-eligible";
-  const privacyWhy = p.onprem_only
-    ? "Sensitive data detected — this request never left your infrastructure."
-    : "No sensitive data found, so every provider was eligible.";
+  // Privacy — derived from the EFFECTIVE candidate pool, not onprem_only alone.
+  // onprem_only=false only means residency didn't force on-prem; it does NOT mean
+  // cloud is reachable (the kill-switch may have disabled it). Read allowed_providers.
+  const hasCloud = p.allowed_providers.some((x) => x !== "onprem" && x !== "mock");
+  const hasEntities = entities.length > 0;
+  const entityList = entities.join(", ");
+  let privacyAccent: string;
+  let privacyVerdict: string;
+  let privacyWhy: string;
+  if (p.onprem_only) {
+    privacyAccent = SHIELD;
+    privacyVerdict = "Kept on-prem";
+    privacyWhy = hasEntities
+      ? `Detected ${entityList} — residency requires on-prem serving; cloud was ineligible.`
+      : "Residency policy requires on-prem serving; cloud was ineligible.";
+  } else if (!hasCloud) {
+    privacyAccent = NEUTRAL;
+    privacyVerdict = "On-prem only";
+    privacyWhy = "Cloud providers are disabled — this request was served on-prem.";
+  } else {
+    privacyAccent = CLEAR;
+    privacyVerdict = "Cloud-eligible";
+    privacyWhy = hasEntities
+      ? `Detected ${entityList}, but none require on-prem residency — every provider was eligible.`
+      : "No PII detected — every provider was eligible.";
+  }
 
   // Model — states WHY this model won, so "cloud-eligible but ran local" stops
   // looking contradictory. Truthful to the router: target tier = max(task
