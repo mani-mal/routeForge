@@ -42,7 +42,7 @@ class Application(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     name: Mapped[str] = mapped_column(String(200))
     owner_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
-    status: Mapped[str] = mapped_column(String(16), default="active")  # active|disabled
+    status: Mapped[str] = mapped_column(String(16), default="active")  # active|archived
     default_residency: Mapped[str] = mapped_column(String(32), default="any")
 
     # Per-app Langfuse project (Phase 5). secret key is encrypted at rest.
