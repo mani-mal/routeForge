@@ -55,9 +55,12 @@ class Pipeline:
         self._co_cfg_provider = co_cfg_provider
         self._ccr = ccr
 
-    def _baseline(self, tokens_after: int) -> float:
+    def _baseline(self, in_tokens: int, out_tokens: int) -> float:
+        """All-frontier baseline: input and output priced at the baseline
+        (most-expensive frontier) model's respective rates — the SAME token
+        basis `total` uses, so routing_saved compares like with like (B12)."""
         p = self._s.pricing.models[self._s.pricing.baseline_model]
-        return tokens_after / 1_000_000 * (p.input + p.output)
+        return (in_tokens * p.input + out_tokens * p.output) / 1_000_000
 
     def _display_name(self, model_slug: str) -> str:
         """Resolve a routing-pool slug (e.g. `local-8b`) to its human-facing
@@ -147,8 +150,8 @@ class Pipeline:
         # and show fake positive net savings. compression_saved IS clamped,
         # but harmlessly so — tokens_after <= tokens_before always holds, so
         # it is >= 0 anyway.
-        baseline_usd = self._baseline(comp.tokens_before)
-        baseline_after = self._baseline(comp.tokens_after)
+        baseline_usd = self._baseline(comp.tokens_before, result.tokens_out)
+        baseline_after = self._baseline(comp.tokens_after, result.tokens_out)
         compression_saved = max(0.0, baseline_usd - baseline_after)
         routing_saved = baseline_after - total
         trace = [r.model_dump() for r in records] + [vrec.model_dump()]
@@ -224,16 +227,21 @@ class Pipeline:
         #
         # baseline_after prices the SAME (post-compression) token basis as
         # `total` above, via each hop's `tokens_priced` — consistent with the
-        # direct path's self._baseline(comp.tokens_after).
-        baseline_after = sum(self._baseline(h.tokens_priced) for h in result.hops)
+        # direct path's self._baseline(comp.tokens_after, result.tokens_out).
+        baseline_after = sum(self._baseline(h.tokens_priced, h.tokens_out)
+                             for h in result.hops)
         # baseline_before prices each hop's PRE-compression token count — the
         # true all-frontier baseline before either lever runs. Falls back to
         # baseline_after (so compression_saved_usd == 0) only when there are NO
         # compression records at all, i.e. zero hops. (A hop that *bypassed*
         # compression still emits a record with tokens_before == tokens_after,
         # so it contributes equally to both sums and needs no special-casing.)
+        # baseline_before pairs each compression's pre-compression input with its
+        # hop's output (compressions are 1:1 with hops; see comment above).
         if result.compressions:
-            baseline_before = sum(self._baseline(cr.tokens_before) for cr in result.compressions)
+            baseline_before = sum(
+                self._baseline(cr.tokens_before, h.tokens_out)
+                for cr, h in zip(result.compressions, result.hops))
         else:
             baseline_before = baseline_after
         compression_saved_usd = max(0.0, baseline_before - baseline_after)
@@ -273,7 +281,7 @@ class Pipeline:
             "trace": trace,
             # baseline_usd is reported pre-both-levers (baseline_before), so
             # the headline baseline is consistent with the direct path's
-            # baseline_usd (self._baseline(comp.tokens_before)).
+            # baseline_usd (self._baseline(comp.tokens_before, result.tokens_out)).
             "cost": {"total_usd": total, "baseline_usd": baseline_before,
                      "routing_saved_usd": routing_saved_usd,
                      "compression_saved_usd": compression_saved_usd},

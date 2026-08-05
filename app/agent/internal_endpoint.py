@@ -174,7 +174,7 @@ async def internal_chat_completions(run_id: str, request: Request):
         rejected=decision.rejected, est_cost_usd=decision.est_cost_usd,
         actual_cost_usd=gen.cost_usd,        # REAL per-hop cost (was None + seeded latency)
         latency_ms=gen.latency_ms,           # REAL latency (no more seeded_latency_ms)
-        hop_index=hop_index, tokens_priced=tokens_after,
+        hop_index=hop_index, tokens_priced=tokens_after, tokens_out=gen.tokens_out,
         quality_score=decision.quality_score,
         quality_source=decision.quality_source))
     HOPS.record_compression(run_id, comp.record)
