@@ -46,7 +46,7 @@ count kept on-prem, p50/p95 latency. These are the numbers you'll read aloud.
 
 - `test_policy_gate.py` — detection, redaction, fail-closed, context immutability
 - `test_router.py` — scoring, policy exclusion, escalation cap, high-risk override
-- `test_backends.py` — Protocol conformance, `none` + `onprem_only` rejection
+- `test_backends.py` — Protocol conformance; `onprem_only` + no healthy on-prem model → rejection
 - `test_compression.py` — reduction, bypass rules, CCR residency, post-compression pricing
 - `test_output_controls.py` — step 9: leakage check on completions, `require_verification`
   flow, escalation-then-fail-closed, `stream: true` rejected (see `output-controls` skill)

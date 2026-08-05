@@ -44,7 +44,7 @@ outcome and reason, so the UI shows why a response was held or escalated.
 
 ## Sampling
 
-Verifying every token of every response is expensive. For the prototype, verify
+Verifying every token of every response is expensive. By default, verify
 **100%** of requests whose rule set `require_verification: true`, and sample the rest
 at a configurable rate (default e.g. 0.1) so the honesty story holds without paying
 full cost on trivially-public traffic. Record whether a given response was verified
@@ -61,14 +61,14 @@ generate → step 9 leakage check + validation → detokenize (inside the gate) 
 ```
 
 Detokenize **after** verification, **inside the gate's trust boundary**, never before
-and never outside it. In demo mode (default) there is no detokenization at all — the
+and never outside it. In placeholder mode (default) there is no detokenization at all — the
 placeholder is the deliverable.
 
-## Streaming — rejected in the demo
+## Streaming — rejected
 
 Step 9 checks the **complete** response, which is incompatible with token streaming:
 buffering defeats streaming, and incremental scanning leaves a partial-leak window.
-For the demo, reject inbound `stream: true` with a clear error
+Reject inbound `stream: true` with a clear error
 (`server.reject_stream_requests: true`). Note this is a separate channel from the
 decision stream the UI consumes over SSE (that one carries DecisionRecords, not model
 tokens). Production streaming with incremental verification is an explicit open

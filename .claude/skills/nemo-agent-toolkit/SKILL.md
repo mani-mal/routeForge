@@ -7,8 +7,9 @@ description: Use when wiring the NeMo Agent Toolkit (nvidia-nat) into the Servin
 
 NAT v1.8 is an open-source Python library for building, running, evaluating and
 observing agent workflows. It wraps agents from other frameworks rather than
-replacing them, and needs **no GPU** unless models run locally — which is why the
-mock-backed demo runs on a laptop.
+replacing them, and needs **no GPU** unless models run locally — which is why a local
+bring-up runs on a laptop (routeForge deploys no inference and boots with an empty
+on-prem pool).
 
 Here it does two jobs: **agent runtime** (step 4 multi-step path) and **telemetry
 export** to Langfuse. Ignore its evaluation/optimization/fine-tuning features —
@@ -65,7 +66,7 @@ re-enters step 5. If NAT calls a provider directly, the per-call routing story d
 and the cost numbers become fiction.
 
 Constrain the sandbox: `max_steps` (default 6), `max_spend_usd`, per-tool timeouts,
-and scoped credentials. Prototype tools: a calculator, a fake document search, a fake
+and scoped credentials. Demo/sample tools: a calculator, a fake document search, a fake
 CRM lookup — enough to make hops legible, no real integrations.
 
 ## Config-driven
@@ -79,7 +80,7 @@ NAT assembles agents, models, tools and middleware from YAML. Keep the workflow 
 uv add nvidia-nat
 ```
 
-Python 3.11–3.13. Pin the version — this is a customer demo, not a moving target.
+Python 3.11–3.13. Pin the version — reproducible customer deployments, not a moving target.
 
 ## Tests
 

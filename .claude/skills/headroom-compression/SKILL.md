@@ -76,7 +76,7 @@ a question customers ask.
 
 Two supported modes; pick per deployment.
 
-**Library (default for the prototype)** — in-process, simplest, no extra container:
+**Library (default deployment)** — in-process, simplest, no extra container:
 
 ```python
 from headroom import compress

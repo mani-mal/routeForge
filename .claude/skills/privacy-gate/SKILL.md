@@ -5,8 +5,8 @@ description: Use when implementing or modifying steps 2-3 of the Serving Plane -
 
 # Privacy & Policy Gate (Steps 2–3)
 
-This is the step that makes the demo credible. Get it wrong and the whole
-privacy-first claim collapses.
+This is the step that makes the privacy-first claim credible. Get it wrong and the
+whole claim collapses.
 
 ## The ordering rule
 
@@ -20,7 +20,7 @@ sanitized content — otherwise Headroom's CCR cache holds raw PII. See the
 
 ## What the gate does
 
-1. **Authenticate** — API key → tenant. Prototype: static map in config.
+1. **Authenticate** — `rf_live_…` app token → application (tenant). DB-backed, fail-closed.
 2. **Detect** — Presidio scan for PII/PHI/secrets.
 3. **Classify** — assign a sensitivity from the **canonical enum**, defined once in
    `config/policy.yaml` as `public | internal | confidential | restricted` (least →
@@ -71,9 +71,8 @@ this with a test, the same way CCR residency is asserted.
 and its completion will contain `<SSN_1>`. Two supported behaviours, chosen by
 config, never left implicit:
 
-- **Demo mode (default): return placeholders.** The response keeps `<SSN_1>` — it
-  *shows* redaction working, which is the point of the demo. State this out loud so
-  nobody files it as a bug.
+- **Placeholder mode (default): return placeholders.** The response keeps `<SSN_1>` — it
+  *shows* redaction working. State this out loud so nobody files it as a bug.
 - **Detokenize on egress.** Step 10 re-inserts values from the map **inside the
   gate's trust boundary**, after step 9's leakage checks, before the response leaves.
   Detokenization never happens outside the gate.

@@ -71,8 +71,8 @@ surfaced in `GET /api/controls`):
 ## Design
 
 Dark, high-contrast, legible from the back of a room. Large type; assume a projector.
-Colour-code by tier consistently — cheap green, mid blue, strong amber, frontier red —
-and reuse those colours everywhere so the pie chart reads instantly.
+Colour-code by tier consistently — cheap green, mid blue, frontier red — and reuse
+those colours everywhere so the pie chart reads instantly.
 
 Prefer clarity over animation polish. If a choice is between "looks impressive" and
 "a customer understands what just happened", pick the second.

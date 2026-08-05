@@ -25,8 +25,8 @@ on, the customer needs to see which lever did what.
 
 **Canonical tokenizer (avoids the 5↔6 cycle).** Compression must run *before* routing
 so the router can price real counts, but Headroom compresses "for a target model"
-whose tokenizer isn't known until routing picks it — a cycle if taken literally. For
-the prototype, break it: compress **once against a canonical tokenizer** (cl100k / the
+whose tokenizer isn't known until routing picks it — a cycle if taken literally. Break
+it: compress **once against a canonical tokenizer** (cl100k / the
 cheap tier's), treat `est_cost` as an estimate, and record the *actual* count from the
 response into `actual_cost_usd`. Do **not** iterate compression↔routing for marginal
 per-model token accuracy. Per-model recompression is a known, documented approximation.
@@ -53,8 +53,10 @@ def score(candidate, ctx, task) -> float:
             + W_CAPACITY * availability(candidate))
 ```
 
-Weights live in `config/routing.yaml`. Being able to slide cost-weight up in front of
-a customer and watch traffic shift tiers is a strong demo moment — expose it.
+Weights live in `config/routing.yaml`. Note this router is **complexity/risk-tiered, not
+cost-tiered** — the target tier is `max(complexity_tier, risk_floor, min_tier)`, then
+cheapest-within-tier — so a cost-weight slider would not honestly shift tiers and is
+deliberately not shipped (see the `demo-ui` skill's deferred-controls note).
 
 ## Hard rules over scoring
 
@@ -75,8 +77,9 @@ Two overrides that are not negotiable by score:
 
 The escalation signal is **backend-reported**, not a mystery scalar:
 
-- `mock` backend: emits a seeded confidence per response (deterministic by prompt
-  hash) so the `low_confidence` persona reliably triggers exactly one escalation.
+- Tests: the faked LiteLLM SDK (`tests/_litellm_fake.py`) emits a seeded confidence per
+  response (deterministic by prompt hash) so the `low_confidence` persona reliably
+  triggers exactly one escalation.
 - Real backends: mean token logprob when the backend exposes it; otherwise `1.0`
   (never escalate on missing signal — fail toward *not* spending more).
 - If a judge model is ever used instead, that judge call goes **through the gateway**
@@ -85,7 +88,7 @@ The escalation signal is **backend-reported**, not a mystery scalar:
 
 ## Task mode (step 4) is a routed call, not a side channel
 
-Step 4 decides direct vs multi-step. Rules-first is enough for the prototype — keep
+Step 4 decides direct vs multi-step. Rules-first is enough by default — keep
 the LLM classifier **off**. If it is ever turned on, it is an LLM call like any other:
 it goes through steps 5–7, respects `ctx.allowed_providers` (so it can't silently
 break `onprem_only`), and emits a DecisionRecord so its cost is visible to the
@@ -144,13 +147,13 @@ pool, or NIM. The managed-cloud path's availability is `providers.azure.enabled`
 ## Gateway (step 7)
 
 One provider set behind a single `LiteLLMBackend` interface: `onprem` (onboarded
-endpoints), `azure`, `bedrock` — there is no `mock` provider. Prototype-level controls
-only — virtual keys, per-tenant budget, timeout, retry with
+endpoints), `azure`, `bedrock` — there is no `mock` provider. Multi-tenant controls —
+virtual keys, per-tenant budget, timeout, retry with
 backoff, circuit breaker (open after N consecutive failures), and fallback to the
 next-best *policy-permitted* candidate.
 
 Fallback must re-check `ctx.allowed_providers`. A cloud fallback on an `onprem_only`
-request is the single worst bug this demo could have.
+request is the single worst bug the product could have.
 
 ## Cost accounting
 

@@ -85,8 +85,8 @@ applies. The deltas worth handling explicitly:
 - **Ingress** — confirm the controller class; parameterise `ingress.className`.
 - **Registry** — customers usually run a private registry. Parameterise
   `image.repository` and support `imagePullSecrets`.
-- **GPU nodes** — only relevant for `vllm`/`dynamo`. Gate GPU workloads behind
-  `nodeSelector`/`tolerations` in values; the default path must schedule on CPU.
+- **GPU nodes** — routeForge deploys no inference, so its own pods schedule on **CPU**.
+  GPUs are only relevant to the operator's separately-deployed vLLM/Dynamo endpoints.
 - **CCR storage** — if compression is on, CCR needs a PVC **inside the cluster**.
   Never point it at an external object store or cloud bucket; that breaks the
   residency guarantee (hard rule 6). Set TTL via `contextOptimization.ccr.ttlHours`
