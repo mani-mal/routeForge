@@ -103,7 +103,11 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
         resp = await request.app.state.pipeline.run(
             request_id, tenant, body, app_policy=app_policy, profile=profile)
     except PipelineRejected as e:
-        raise HTTPException(422, f"response failed verification: {e}")
+        message = str(e)
+        prefix = ("model request rejected: "
+                  if message.startswith("requested model")
+                  else "response failed verification: ")
+        raise HTTPException(422, f"{prefix}{message}")
     except HTTPException:
         raise
     except Exception:

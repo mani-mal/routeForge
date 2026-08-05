@@ -11,6 +11,7 @@ from app.apps.policy import AppPolicyView, RateLimiter
 from app.config.loader import load_settings
 from app.main import create_app
 from app.policy.context import build_context
+from app.routing.router import Router
 from tests._litellm_fake import make_test_registry
 import pytest
 
@@ -39,6 +40,25 @@ def test_app_policy_restricts_tiers():
                              allowed_tiers=frozenset({"cheap"})))
     # only the cheap-tier model survives
     assert ctx.allowed_models == frozenset({"local-8b"})
+
+
+def test_app_policy_model_scope_is_honored_by_router():
+    settings = load_settings()
+    registry = make_test_registry(settings)
+    ctx = _ctx(AppPolicyView(residency="any",
+                             allowed_models=frozenset({"local-32b"})))
+    ctx = ctx.model_copy(update={"requested_model": "local-32b"})
+    decision = Router(settings, registry=registry).select(ctx, 10, 0.1)
+    assert decision.chosen.name == "local-32b"
+
+
+def test_explicit_model_pin_is_not_ignored():
+    settings = load_settings()
+    registry = make_test_registry(settings)
+    ctx = _ctx(AppPolicyView(residency="any"))
+    ctx = ctx.model_copy(update={"requested_model": "local-32b"})
+    decision = Router(settings, registry=registry).select(ctx, 10, 0.1)
+    assert decision.chosen.name == "local-32b"
 
 
 def test_app_policy_residency_is_stricter():

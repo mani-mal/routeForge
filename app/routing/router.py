@@ -64,6 +64,17 @@ class Router:
                     display_name=c.display_name,
                     reason="excluded by policy (residency)"))
                 continue
+            if ctx.model_scope_active and c.name not in ctx.allowed_models:
+                rejected.append(RejectedCandidate(
+                    name=c.name, provider=c.provider, tier=c.tier,
+                    display_name=c.display_name,
+                    reason="not permitted for application"))
+                continue
+            if ctx.requested_model is not None and c.name != ctx.requested_model:
+                rejected.append(RejectedCandidate(
+                    name=c.name, provider=c.provider, tier=c.tier,
+                    display_name=c.display_name, reason="not requested model"))
+                continue
             if (self._reg is not None
                     and not self._reg.is_allowed_for_app(c.name, ctx.tenant_id)):
                 rejected.append(RejectedCandidate(

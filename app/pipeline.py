@@ -90,6 +90,19 @@ class Pipeline:
         ctx, sanitized, _map = self._gate.evaluate(
             request_id, tenant_id, request, app_policy=app_policy,
             detector=det, rules=rules)
+        if ctx.requested_model is not None:
+            pool = self._reg.effective_pool() if self._reg else self._s.routing.model_pool
+            permitted = {
+                c.name for c in pool
+                if c.provider in ctx.allowed_providers
+                and (not ctx.model_scope_active or c.name in ctx.allowed_models)
+                and (self._reg is None or self._reg.is_allowed_for_app(c.name, tenant_id))
+                and (c.provider != "onprem" or self._reg is None
+                     or self._reg.is_enabled(c.name))
+            }
+            if ctx.requested_model not in permitted:
+                raise PipelineRejected(
+                    f"requested model {ctx.requested_model!r} is not permitted or unavailable")
         # NOTE: task-mode is a rules-only stub today. If a real LLM classifier replaces it,
         # it must receive SANITIZED content (not the raw request) — see CLAUDE.md.
         mode = decide_mode(ctx, request)

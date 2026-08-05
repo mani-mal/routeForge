@@ -95,6 +95,11 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
     # regardless of the app's own allowed_tiers/allowed_models policy.
     pool = registry.effective_pool() if registry is not None else settings.routing.model_pool
     allowed_models = frozenset(c.name for c in pool if _model_ok(c))
+    model_scope_active = bool(
+        app_policy is not None
+        and (app_policy.allowed_tiers is not None
+             or app_policy.allowed_models is not None)
+    )
 
     return ExecutionPolicyContext(
         request_id=request_id,
@@ -103,6 +108,7 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
         onprem_only=onprem_only,
         allowed_providers=frozenset(allowed),
         allowed_models=allowed_models,
+        model_scope_active=model_scope_active,
         max_cost_usd=settings.policy.budgets["default_max_spend_usd"],
         max_latency_ms=int(settings.policy.budgets["default_max_latency_ms"]),
         risk_class=rule.risk_class,

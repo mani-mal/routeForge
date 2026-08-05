@@ -83,12 +83,17 @@ function PolicyEditor({ app, onSaved }: { app: AdminApp; onSaved: () => void }) 
       residency: null, max_spend_usd_per_day: null, max_rpm: null,
       compression_enabled: null,
     });
+  const [modelsText, setModelsText] = useState((p.allowed_models ?? []).join(", "));
   const [busy, setBusy] = useState(false);
 
   async function save() {
     setBusy(true);
     try {
-      await adminApi.setPolicy(app.id, p);
+      const models = modelsText.split(",").map((m) => m.trim()).filter(Boolean);
+      await adminApi.setPolicy(app.id, {
+        ...p,
+        allowed_models: models.length ? models : null,
+      });
       onSaved();
     } finally {
       setBusy(false);
@@ -125,6 +130,16 @@ function PolicyEditor({ app, onSaved }: { app: AdminApp; onSaved: () => void }) 
           {RESIDENCIES.map((r) => <option key={r} value={r}>{r}</option>)}
         </select>
       </div>
+      <label className="flex items-center gap-2 flex-wrap text-xs text-gray-500">
+        <span className="w-20">models</span>
+        <input
+          value={modelsText}
+          onChange={(e) => setModelsText(e.target.value)}
+          placeholder="local-8b, nvidia/… (empty = all)"
+          className="rounded bg-ink border border-edge px-2 py-1 text-xs font-mono text-gray-100 min-w-64 flex-1"
+        />
+        <span className="text-[10px] text-gray-600">comma-separated slugs; empty = all</span>
+      </label>
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-xs text-gray-500 w-20">Headroom</span>
         <select

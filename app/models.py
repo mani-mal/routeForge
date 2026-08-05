@@ -58,6 +58,8 @@ class ExecutionPolicyContext(BaseModel):
     onprem_only: bool
     allowed_providers: frozenset[str]
     allowed_models: frozenset[str]
+    model_scope_active: bool = False
+    requested_model: str | None = None
     max_cost_usd: float
     max_latency_ms: int
     risk_class: str
