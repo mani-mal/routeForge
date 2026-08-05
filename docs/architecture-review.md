@@ -1,5 +1,13 @@
 # Architecture Review — Serving Plane (Steps 1–10)
 
+> **Historical snapshot (2026-07-20 / updated 2026-07-25).** This review predates the
+> multi-tenant product pivot and the 2026-08-03 pure-router pivot. Its "prototype"
+> framing and any `inference_backend` / `mock | vllm | dynamo | none` references describe
+> the repo as it stood then — the `inference_backend` axis and the `mock` backend were
+> later **removed**; on-prem models are now onboarded at runtime. Kept as a point-in-time
+> record; for current state read `CLAUDE.md`, `README.md`, and
+> `docs/architecture/inference-layer-boundary.md`.
+
 **Original review:** 2026-07-20, against the design package (drawio, `CLAUDE.md`,
 skills, `BUILD_PLAN.md`, four configs) — *before any code existed*.
 **Updated:** 2026-07-25, against the built repo (Phases 1–9 complete: skeleton +

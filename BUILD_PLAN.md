@@ -1,5 +1,12 @@
 # Build Plan
 
+> **Historical snapshot.** This is the original demo-era build plan, kept as a record of
+> how RouteForge was first layered. The product is built, and RouteForge is now a
+> self-hostable multi-tenant model router (not a demo prototype). For the current product
+> framing and module map, read `CLAUDE.md` and `README.md`; this file's phase estimates,
+> "demo" framing, and any `inference_backend` / `mock` references reflect the plan as
+> written then, not the shipped product.
+
 Ten phases. Verify each before starting the next. Estimated 2.5–4.5 days with Claude
 Code (compression adds roughly half a day).
 
