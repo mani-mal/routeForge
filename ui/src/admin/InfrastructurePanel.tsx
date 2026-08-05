@@ -154,11 +154,11 @@ function OnboardForm({ apps, onOnboarded }: { apps: AdminApp[]; onOnboarded: () 
           </label>
           <div className="grid grid-cols-2 gap-3">
             <label className="flex flex-col gap-1 text-xs text-gray-500">
-              price / 1M input
+              price / 1M input ($)
               <input required type="number" step="any" min={0} value={priceInput} onChange={(e) => setPriceInput(e.target.value)} className={inputCls} />
             </label>
             <label className="flex flex-col gap-1 text-xs text-gray-500">
-              price / 1M output
+              price / 1M output ($)
               <input required type="number" step="any" min={0} value={priceOutput} onChange={(e) => setPriceOutput(e.target.value)} className={inputCls} />
             </label>
           </div>
