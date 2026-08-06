@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Callable, TYPE_CHECKING
 
 from app.config.schema import ContextOptimizationCfg, Settings
+from app.errors import PolicyGateError
 from app.gateway.backends.base import count_tokens
 from app.gateway.gateway import Gateway
 from app.models import (
@@ -85,14 +86,19 @@ class Pipeline:
         # classification (the gate) and egress verification (verify(), both
         # call sites below) -- a custom entity type the base detector can't
         # see must not silently skip the output leakage check either.
-        if profile is not None:
-            det = EffectiveDetector(self._detector, list(profile.recognizers))
-            rules = effective_rules(profile, self._s)
-        else:
-            det, rules = self._detector, None
-        ctx, sanitized, _map = self._gate.evaluate(
-            request_id, tenant_id, request, app_policy=app_policy,
-            detector=det, rules=rules)
+        try:
+            if profile is not None:
+                det = EffectiveDetector(self._detector, list(profile.recognizers))
+                rules = effective_rules(profile, self._s)
+            else:
+                det, rules = self._detector, None
+            ctx, sanitized, _map = self._gate.evaluate(
+                request_id, tenant_id, request, app_policy=app_policy,
+                detector=det, rules=rules)
+        except PolicyGateError:
+            raise
+        except Exception as e:
+            raise PolicyGateError("policy evaluation failed") from e
         if ctx.requested_model is not None:
             pool = self._reg.effective_pool() if self._reg else self._s.routing.model_pool
             permitted = {
