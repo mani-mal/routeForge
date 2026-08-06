@@ -182,7 +182,8 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
             # above for the pipeline run, Task 7) into egress redaction so a
             # custom entity type (e.g. a hospital's MRN pattern) is masked in
             # telemetry, not just the built-in RegexDetector patterns.
-            recognizers=profile.recognizers)
+            recognizers=profile.recognizers,
+            session_id=session_id)
         # Live deep-link for the UI's "Langfuse trace" button (None when
         # telemetry is off → the UI hides it). Set before history.record so the
         # inspector's full detail carries it.
