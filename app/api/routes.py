@@ -19,9 +19,13 @@ router = APIRouter()
 # B17: opaque, client-supplied workflow-run correlation id. A label only —
 # never a policy control — so it FAILS OPEN: absent / over-long / malformed
 # values yield None (the request is still served, just ungrouped). Bounded at
-# intake because it is displayed in the console and stamped onto telemetry;
-# the narrow charset keeps it safe to render and to place in an OTel attribute,
-# and cannot carry a formatted SSN/phone/email.
+# intake (length + narrow charset) so it is safe to render in the console and
+# to place in an OTel attribute without escaping. It is NOT redacted on either
+# surface — grouping needs the value intact — so RouteForge treats it as an
+# opaque, non-PII label BY CONTRACT: the client must not put PII in the
+# correlation id. The charset alone does not exclude PII (e.g. an SSN like
+# 123-45-6789 is digit-and-hyphen only and would pass), so this is a contract,
+# not a filter.
 _SESSION_ID_RE = re.compile(r"[A-Za-z0-9._:-]+")
 
 
