@@ -89,9 +89,10 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
         # admin PUT (Task 10) calls cache.clear(app_id) on writes so edits
         # take effect on the next request. A profile-load failure must not
         # silently fall back to the base detector/global rules for a request
-        # an app has customized -- so this is inside the same try/except
-        # that already maps any non-PipelineRejected exception to a
-        # fail-closed 503 below.
+        # an app has customized -- so the setup block below is wrapped to
+        # raise PolicyGateError on any failure, which the taxonomy maps to a
+        # fail-closed 503 (B1). Pipeline failures downstream map to their own
+        # honest statuses (422/500/502), not this 503.
         try:
             cache = request.app.state.profile_cache
             profile = cache.get(tenant)

@@ -245,6 +245,15 @@ Verify this holds; if not, import inside the handler.)
 - Truly unexpected → **500 "internal error"** (still rejects; fail-closed
   preserved, but no longer lies about the gate).
 
+**Post-implementation note (scope of 502):** the **502** mapping is
+**direct-path-only**. In the multi-step agent path, a *per-hop* backend failure
+happens inside the internal endpoint (`app/agent/internal_endpoint.py`), which
+does not go through `Gateway.run`'s tier-exhaustion logic and crosses an HTTP
+boundary back to the agent client — so it surfaces at the route as the generic
+**500 "internal error"**, not 502. Still fail-closed (the request is rejected).
+Giving per-hop backend failures their own 502 is a possible follow-up, out of
+scope for B1.
+
 **Tests (`tests/`):** add a route-level test module (e.g. extend an existing
 `tests/test_error_taxonomy.py` or add one) asserting, with the regex detector
 config:
