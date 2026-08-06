@@ -3,9 +3,11 @@ import uuid
 
 from fastapi import APIRouter, HTTPException, Request
 
+from app.agent.runtime import AgentCapExceeded
 from app.apps import store
 from app.apps.langfuse_provision import load_app_langfuse
 from app.apps.policy import AppPolicyView, day_spend_usd, policy_view_from
+from app.errors import BackendUnavailable, NoEligibleCandidate, PolicyGateError
 from app.models import ChatRequest
 from app.obs.export import export_trace
 from app.pipeline import PipelineRejected
@@ -87,19 +89,24 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
         # admin PUT (Task 10) calls cache.clear(app_id) on writes so edits
         # take effect on the next request. A profile-load failure must not
         # silently fall back to the base detector/global rules for a request
-        # an app has customized -- so this is inside the same try/except
-        # that already maps any non-PipelineRejected exception to a
-        # fail-closed 503 below.
-        cache = request.app.state.profile_cache
-        profile = cache.get(tenant)
-        if profile is None:
-            async with request.app.state.db.session() as session:
-                profile = await store.get_privacy_profile(session, tenant)
-            cache.put(tenant, profile)
-        # Merged model registry: lazily loaded once, then cheap. Refreshed by
-        # the admin model-onboarding routes so onboarded/enabled on-prem models
-        # appear in (or drop out of) the router's candidate pool promptly.
-        await request.app.state.registry.ensure_loaded(request.app.state.db)
+        # an app has customized -- so the setup block below is wrapped to
+        # raise PolicyGateError on any failure, which the taxonomy maps to a
+        # fail-closed 503 (B1). Pipeline failures downstream map to their own
+        # honest statuses (422/500/502), not this 503.
+        try:
+            cache = request.app.state.profile_cache
+            profile = cache.get(tenant)
+            if profile is None:
+                async with request.app.state.db.session() as session:
+                    profile = await store.get_privacy_profile(session, tenant)
+                cache.put(tenant, profile)
+            # Merged model registry: lazily loaded once, then cheap. Refreshed
+            # by the admin model-onboarding routes so onboarded/enabled
+            # on-prem models appear in (or drop out of) the router's
+            # candidate pool promptly.
+            await request.app.state.registry.ensure_loaded(request.app.state.db)
+        except Exception as e:
+            raise PolicyGateError("policy setup failed") from e
         resp = await request.app.state.pipeline.run(
             request_id, tenant, body, app_policy=app_policy, profile=profile)
     except PipelineRejected as e:
@@ -108,10 +115,18 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
                   if message.startswith("requested model")
                   else "response failed verification: ")
         raise HTTPException(422, f"{prefix}{message}")
+    except NoEligibleCandidate as e:
+        raise HTTPException(422, f"no model is available for this request's policy: {e}")
+    except AgentCapExceeded:
+        raise HTTPException(500, "agent did not converge within its step limit")
+    except BackendUnavailable:
+        raise HTTPException(502, "no backend could serve this request")
+    except PolicyGateError:
+        raise HTTPException(503, "policy evaluation unavailable")
     except HTTPException:
         raise
     except Exception:
-        raise HTTPException(503, "policy evaluation unavailable")
+        raise HTTPException(500, "internal error")
     try:
         # Eval-capture (docs/eval-logging-backlog.md): when capture_io is
         # redacted|full, attach the request prompt + response completion to the

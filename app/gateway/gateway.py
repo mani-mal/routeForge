@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from app.config.schema import Settings
+from app.errors import BackendUnavailable
 from app.gateway.backends.base import InferenceBackend
 from app.models import DecisionRecord, ExecutionPolicyContext, GenerationResult, Message
 from app.routing.router import Router
@@ -39,14 +40,14 @@ class Gateway:
             # failed (e.g. onprem_only can't advance past the best on-prem tier),
             # stop rather than loop forever.
             if cand.tier in failed_tiers:
-                raise RuntimeError(
+                raise BackendUnavailable(
                     "backend failed on all reachable tiers for this request")
             price = (self._reg.price_for(cand.name) if self._reg
                      else self._s.pricing.models[cand.name])
             try:
                 result = await self._backend.generate(
                     cand.name, messages, price, cand.tier, hint)
-            except Exception:
+            except Exception as exc:
                 records.append(DecisionRecord(
                     step="gateway", chosen=None,
                     reason=f"{cand.name} failed; escalating/fallback",
@@ -55,7 +56,9 @@ class Gateway:
                 failed_tiers.add(cand.tier)
                 nxt = _NEXT[cand.tier]
                 if nxt is None:
-                    raise
+                    raise BackendUnavailable(
+                        "backend failed on all reachable tiers for this request"
+                    ) from exc
                 min_tier = nxt
                 continue
 

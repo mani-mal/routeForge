@@ -63,12 +63,17 @@ In one multi-step output the egress redactor masked `PERSON` but left a raw
 the SSN pattern in model-generated text. Needs a recognizer/tuning pass on the
 **egress** path (the input gate caught it; egress didn't).
 
-## B5 — Multi-step latency reported as 0 ms  (see memory)
+## B5 — Multi-step latency reported as 0 ms  ✅ RESOLVED (2026-08-06, Cluster C)
 
-**Severity:** medium
-Cross-ref: memory `routeforge-multistep-latency-zero-bug`. Agent/multi-step
-requests report 0 ms everywhere — per-hop latency is never summed into the
-request total. Still open.
+**Severity:** medium (resolved)
+Per-hop latency now flows end-to-end: each `agent_hop` DecisionRecord records
+the real measured `latency_ms` (`app/agent/internal_endpoint.py`, from the
+backend's wall-clock timing), and `app/api/history.py` + the DB usage row sum
+it into the request total; the UI drilldown reads the summed value. Closed out
+in Cluster C with hardened `> 0` latency assertions
+(`tests/test_litellm_multistep.py`, `tests/test_agent_hop_compression.py`) and a
+corrected `app/gateway/backends/base.py` comment. Cross-ref memory
+`routeforge-multistep-latency-zero-bug` (now stale/resolved).
 
 ## B6 — Can't rename an application
 

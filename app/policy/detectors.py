@@ -4,6 +4,7 @@ import re
 from typing import Protocol
 
 from app.models import Entity
+from app.policy.merge import dedupe
 
 _PATTERNS = {
     "US_SSN": re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),
@@ -75,7 +76,17 @@ class NullDetector:
 
 
 class PresidioDetector:
-    """Real Presidio path (demo default). Lazy import so tests never need it."""
+    """Real Presidio path (demo default). Lazy import so tests never need it.
+
+    Supplements Presidio with the regex US_SSN pattern (B4): Presidio's
+    UsSsnRecognizer deliberately blocklists textbook sample SSNs (e.g.
+    123-45-6789), which would otherwise slip past BOTH the gate and egress
+    verification under the demo-default config. Only US_SSN is layered --
+    Presidio's own EMAIL/PHONE/CREDIT_CARD recognizers are stronger and are
+    left as-is. dedupe() ensures a valid SSN Presidio already matched is not
+    double-covered."""
+
+    _SSN = _PATTERNS["US_SSN"]
 
     def __init__(self) -> None:
         from presidio_analyzer import AnalyzerEngine
@@ -83,8 +94,11 @@ class PresidioDetector:
 
     def analyze(self, text: str) -> list[Entity]:
         results = self._analyzer.analyze(text=text, language="en")
-        return [Entity(type=r.entity_type, start=r.start, end=r.end,
+        ents = [Entity(type=r.entity_type, start=r.start, end=r.end,
                        value=text[r.start:r.end]) for r in results]
+        ents += [Entity(type="US_SSN", start=m.start(), end=m.end(),
+                        value=m.group()) for m in self._SSN.finditer(text)]
+        return dedupe(ents)
 
     def anonymize(self, text: str, entities: list[Entity]) -> tuple[str, dict[str, str]]:
         # reuse the deterministic placeholder scheme for map symmetry

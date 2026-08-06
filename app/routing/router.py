@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from app.config.schema import PoolCandidate, Settings
+from app.errors import NoEligibleCandidate
 from app.models import ExecutionPolicyContext, RejectedCandidate
 from app.routing.quality import QualityResolver
 
@@ -91,7 +92,7 @@ class Router:
                 continue
             allowed.append(c)
         if not allowed:
-            raise ValueError("no candidates after residency filter")
+            raise NoEligibleCandidate("no candidates after residency filter")
 
         # 2. target tier from complexity + risk floor + escalation, clamped to
         #    the best residency-permitted tier
@@ -125,7 +126,7 @@ class Router:
             else:
                 eligible.append((c, est))
         if not eligible:
-            raise ValueError("no candidates after budget filter")
+            raise NoEligibleCandidate("no candidates after budget filter")
 
         # 5. score within the tier (chooses provider/model — cheaper on-prem wins)
         w = self._s.routing.weights
