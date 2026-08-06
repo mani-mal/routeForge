@@ -48,7 +48,7 @@ def test_escalation_to_baseline_model_yields_zero_routing_saved_identity_holds()
                     Gateway(s, _DeterministicLiteLLM(s), Router(s)),
                     self_port=8080, co_cfg_provider=lambda: co, ccr=CCRStore(3600))
     req = ChatRequest(messages=[Message(role="user", content="Email john.doe@example.com re: Q3")])
-    object.__setattr__(req, "mock_confidence", 0.1)  # force escalation to frontier
+    object.__setattr__(req, "mock_confidence", 0.1)  # routes directly to the frontier (baseline) model — chosen == baseline_model
     out = asyncio.run(pipe.run("rid", "acme", req))
     c = out["cost"]
     assert out["model"] == "bedrock-frontier"          # escalated onto the frontier tier
