@@ -435,6 +435,16 @@ and pipeline progression in `docs/rlhf-readiness.md`. Own SDD task; plan first
 
 ## B17 — FEATURE: group a client-driven workflow's requests under one parent row (correlation id)
 
+**RESOLVED 2026-08-06 (branch `feat/b17-request-grouping`).** A client tags a workflow run
+via the `X-RouteForge-Session` header (opaque, ≤128 chars, `[A-Za-z0-9._:-]`, fail-open);
+RouteForge sanitizes and stores it on each `RequestSummary`, exposes it on `/requests` +
+drilldown, groups tagged rows into an expandable parent→children tree in the console, and
+stamps `langfuse.session.id` on the trace root span so the run's N traces group into one
+Langfuse Session. In-memory only — no DB column; durable/cross-replica grouping stays B3.
+The reference integration (sample sends the header, one id per investigation run) was
+applied to the local **untracked** `test_app` sample and is NOT part of this PR. Spec:
+`docs/superpowers/specs/2026-08-06-b17-request-grouping-design.md`.
+
 **Type:** feature (observability/UX).
 **Severity:** low-now / medium-later (real-integration ergonomics; most customers
 orchestrate client-side).
