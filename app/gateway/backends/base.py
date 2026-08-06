@@ -12,13 +12,14 @@ def count_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
-# Per-tier modeled latency for seeded/deterministic test paths. Single-sourced
-# here so tests/_litellm_fake.py's `_DeterministicLiteLLM.generate` and the
-# agent per-hop path (app/agent/internal_endpoint.py) attribute the SAME
-# latency to a given tier — otherwise multi-step requests report 0 ms because
-# the internal endpoint fakes the completion (it never calls generate) and so
-# has no backend latency to sum. The real LiteLLMBackend.generate measures
-# actual wall-clock latency instead of using this table.
+# Per-tier modeled latency, used ONLY by the deterministic test fake
+# (tests/_litellm_fake.py's _DeterministicLiteLLM.generate) so a given tier
+# gets a stable, non-zero latency in tests. The real LiteLLMBackend.generate
+# measures actual wall-clock latency, and the agent per-hop path
+# (app/agent/internal_endpoint.py) now makes a REAL backend.generate call and
+# records that measured latency -- so multi-step requests report real per-hop
+# latency, not 0 ms (B5, resolved). This table is the single source the fake
+# reads; production never uses it.
 TIER_LATENCY_MS = {"cheap": 200.0, "mid": 500.0, "frontier": 2000.0}
 
 
