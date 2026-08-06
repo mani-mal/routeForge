@@ -59,10 +59,11 @@ class Router:
         allowed = []
         for c in pool:
             if c.provider not in ctx.allowed_providers:
+                reason = ("excluded · residency" if ctx.onprem_only
+                          else "not permitted for application")
                 rejected.append(RejectedCandidate(
                     name=c.name, provider=c.provider, tier=c.tier,
-                    display_name=c.display_name,
-                    reason="excluded by policy (residency)"))
+                    display_name=c.display_name, reason=reason))
                 continue
             if ctx.model_scope_active and c.name not in ctx.allowed_models:
                 rejected.append(RejectedCandidate(
