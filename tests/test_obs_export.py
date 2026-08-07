@@ -79,3 +79,18 @@ def test_export_swallows_exporter_errors(mem_provider, monkeypatch, caplog):
     with caplog.at_level("ERROR", logger="serving.obs"):
         export_mod.export_trace(**_sample())  # logged + swallowed, no raise
     assert any("trace export failed" in r.message for r in caplog.records)
+
+
+def test_export_stamps_langfuse_session_id(mem_provider):
+    export_mod.export_trace(**_sample(), session_id="inv-tck-1001-ab12cd34")
+    otel._provider.force_flush()
+    root = next(s for s in mem_provider.get_finished_spans() if s.name == "serving.request")
+    # present, correct, and NOT redacted (mem_provider wraps RedactingSpanExporter)
+    assert root.attributes["langfuse.session.id"] == "inv-tck-1001-ab12cd34"
+
+
+def test_export_omits_session_id_when_absent(mem_provider):
+    export_mod.export_trace(**_sample())  # no session_id kwarg
+    otel._provider.force_flush()
+    root = next(s for s in mem_provider.get_finished_spans() if s.name == "serving.request")
+    assert "langfuse.session.id" not in root.attributes

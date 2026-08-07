@@ -105,8 +105,11 @@ def _read_session_id(request: Request) -> str | None:
   dropped, not rejected — B17 never fails a request over its own label.
 - `session_id` is **not** added to `app/obs/otel.py` `REDACT_KEYS`. It is operator/client
   supplied and opaque; intake sanitization is what bounds it, and it must survive to the UI
-  and to Langfuse intact (redacting it would defeat the grouping). Treated as non-PII by
-  contract — the sanitized charset cannot carry a formatted SSN/phone/email.
+  and to Langfuse intact (redacting it would defeat the grouping). Treated as an opaque,
+  non-PII label by contract: the client must not place PII in the correlation id. The
+  charset alone does not exclude PII (e.g. an SSN is digit-and-hyphen only and would pass),
+  so this is a contract, not a filter — and the value is deliberately not redacted so
+  grouping works.
 
 Wire it in after a successful `pipeline.run`, before the telemetry/history blocks:
 

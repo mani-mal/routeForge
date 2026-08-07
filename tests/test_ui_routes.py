@@ -100,3 +100,49 @@ def test_requests_endpoint_filters_by_app(client):
     assert r.status_code == 200
     assert all(row["tenant_id"] == "acme" for row in r.json())
     assert len(r.json()) >= 1
+
+
+def test_session_id_captured_and_exposed(client):
+    _login(client)
+    r = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer demo-key",
+                 "X-RouteForge-Session": "inv-tck-1001-ab12cd34"},
+        json={"messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert r.status_code == 200
+    rid = r.json()["id"]
+
+    match = next(s for s in client.get("/api/requests").json() if s["id"] == rid)
+    assert match["session_id"] == "inv-tck-1001-ab12cd34"
+
+    detail = client.get(f"/api/requests/{rid}")
+    assert detail.status_code == 200
+    assert detail.json()["session_id"] == "inv-tck-1001-ab12cd34"
+
+
+def test_missing_session_header_yields_null(client):
+    _login(client)
+    r = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer demo-key"},
+        json={"messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert r.status_code == 200
+    rid = r.json()["id"]
+    match = next(s for s in client.get("/api/requests").json() if s["id"] == rid)
+    assert match["session_id"] is None
+
+
+def test_malformed_session_header_dropped_not_rejected(client):
+    _login(client)
+    r = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer demo-key",
+                 "X-RouteForge-Session": "has spaces & @!"},
+        json={"messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert r.status_code == 200  # fail-open: a bad label never fails the request
+    rid = r.json()["id"]
+    match = next(s for s in client.get("/api/requests").json() if s["id"] == rid)
+    assert match["session_id"] is None

@@ -1,4 +1,5 @@
 import logging
+import re
 import uuid
 
 from fastapi import APIRouter, HTTPException, Request
@@ -13,6 +14,32 @@ from app.obs.export import export_trace
 from app.pipeline import PipelineRejected
 
 router = APIRouter()
+
+
+# B17: opaque, client-supplied workflow-run correlation id. A label only —
+# never a policy control — so it FAILS OPEN: absent / over-long / malformed
+# values yield None (the request is still served, just ungrouped). Bounded at
+# intake (length + narrow charset) so it is safe to render in the console and
+# to place in an OTel attribute without escaping. It is NOT redacted on either
+# surface — grouping needs the value intact — so RouteForge treats it as an
+# opaque, non-PII label BY CONTRACT: the client must not put PII in the
+# correlation id. The charset alone does not exclude PII (e.g. an SSN like
+# 123-45-6789 is digit-and-hyphen only and would pass), so this is a contract,
+# not a filter.
+_SESSION_ID_RE = re.compile(r"[A-Za-z0-9._:-]+")
+
+
+def _sanitize_session_id(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    raw = raw.strip()
+    if not raw or len(raw) > 128 or not _SESSION_ID_RE.fullmatch(raw):
+        return None
+    return raw
+
+
+def _read_session_id(request: Request) -> str | None:
+    return _sanitize_session_id(request.headers.get("x-routeforge-session"))
 
 
 async def _authenticate(request: Request
@@ -127,6 +154,12 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
         raise
     except Exception:
         raise HTTPException(500, "internal error")
+    # B17: capture the client's workflow-run correlation id (opaque label).
+    # Threaded onto the response dict so both history.record and the drilldown
+    # (which read `resp`) carry it with no signature change, and passed to
+    # export_trace below for the Langfuse session stamp.
+    session_id = _read_session_id(request)
+    resp["session_id"] = session_id
     try:
         # Eval-capture (docs/eval-logging-backlog.md): when capture_io is
         # redacted|full, attach the request prompt + response completion to the
@@ -149,7 +182,8 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
             # above for the pipeline run, Task 7) into egress redaction so a
             # custom entity type (e.g. a hospital's MRN pattern) is masked in
             # telemetry, not just the built-in RegexDetector patterns.
-            recognizers=profile.recognizers)
+            recognizers=profile.recognizers,
+            session_id=session_id)
         # Live deep-link for the UI's "Langfuse trace" button (None when
         # telemetry is off → the UI hides it). Set before history.record so the
         # inspector's full detail carries it.
