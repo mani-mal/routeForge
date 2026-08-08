@@ -10,7 +10,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.agent.internal_endpoint import internal_router
 from app.api.admin_routes import admin_router
 from app.api.bus import DecisionBus
-from app.api.history import HistoryStore
 from app.apps.admin_auth import SessionStore
 from app.apps.bootstrap import seed_all
 from app.apps.db import Database
@@ -126,10 +125,6 @@ def create_app() -> FastAPI:
     app.state.pipeline = Pipeline(
         settings, gate, detector, gateway, self_port=self_port,
         co_cfg_provider=lambda: app.state.co_cfg, ccr=ccr, registry=registry)
-    # In-memory, redaction-safe request history for the Phase-6 UI's
-    # list/detail/stats views (app/api/history.py). Process-local; resets
-    # on restart — this is a demo prototype, not durable storage.
-    app.state.history = HistoryStore(capacity=500)
     # Live decision stream (Phase 6a Task 2): in-process asyncio pub/sub
     # feeding GET /api/stream (SSE) for the flow visualizer. Bounded,
     # drop-oldest per-subscriber queues — see app/api/bus.py.

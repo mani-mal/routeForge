@@ -2,8 +2,9 @@
 
 Unlike `/internal/*` (loopback-only agent-hop endpoint), these routes are
 meant to be reachable by the browser dev server and are included in
-OpenAPI. Task 1 added read-only list/detail/stats over the in-memory
-`HistoryStore` on `app.state.history`. Task 2 adds `/api/stream`, a
+OpenAPI. Task 1 added read-only list/detail/stats, now backed by the
+durable DB-backed request history (`app.apps.history_store`, via
+`app.state.db`) so results survive restart. Task 2 adds `/api/stream`, a
 Server-Sent-Events feed of the same redaction-safe events (backed by the
 `DecisionBus` on `app.state.bus`) so the live flow visualizer can animate
 requests as they complete instead of polling.
@@ -20,6 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from app.apps import history_store
 from app.apps.admin_auth import require_admin
 
 # The whole /api/* console surface is admin-gated: it exposes cross-tenant
@@ -61,29 +63,30 @@ _HEARTBEAT_SECONDS = 15
 
 
 @router.get("/requests")
-def list_requests(request: Request, limit: int = 100, app: str | None = None) -> list:
-    history = request.app.state.history
-    return history.list(limit=limit, app=app)
+async def list_requests(request: Request, limit: int = 100, app: str | None = None) -> list:
+    async with request.app.state.db.session() as session:
+        return await history_store.list_history(session, limit=limit, app=app)
 
 
 @router.get("/requests/{request_id}")
-def get_request(request_id: str, request: Request) -> dict:
-    history = request.app.state.history
-    resp = history.get(request_id)
+async def get_request(request_id: str, request: Request) -> dict:
+    async with request.app.state.db.session() as session:
+        resp = await history_store.get_history(session, request_id)
     if resp is None:
         raise HTTPException(404, f"request {request_id!r} not found")
     return resp
 
 
 @router.get("/stats")
-def get_stats(request: Request) -> dict:
-    history = request.app.state.history
-    return history.stats()
+async def get_stats(request: Request) -> dict:
+    async with request.app.state.db.session() as session:
+        return await history_store.stats(session)
 
 
 @router.get("/fleet")
-def fleet(request: Request) -> list:
-    return request.app.state.history.fleet()
+async def fleet(request: Request) -> list:
+    async with request.app.state.db.session() as session:
+        return await history_store.fleet(session)
 
 
 @router.get("/controls")
@@ -178,9 +181,9 @@ async def stream(request: Request) -> StreamingResponse:
     connection only sees events published after it subscribes. The
     `/api/requests` list endpoint covers backfill for anything missed.
 
-    Events carry only what `HistoryStore`/`routes.py` already redacted
-    before publishing — this generator never touches raw request/response
-    bodies itself.
+    Events carry only what `app.apps.history_store`/`routes.py` already
+    redacted before publishing — this generator never touches raw
+    request/response bodies itself.
     """
     bus = request.app.state.bus
     queue = bus.subscribe()

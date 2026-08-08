@@ -1,14 +1,14 @@
 """Durable, DB-backed request history for the console dashboards (B3).
 
-Replaces the process-local in-memory HistoryStore (app/api/history.py) as the
-source for list/stats/fleet/drilldown, so history survives restart and is
-coherent across API replicas. Stores each completed request's already-redacted
-pipeline response (types-only detected_entities, no raw PII, no CCR contents;
-CLAUDE.md 2 & 6) plus denormalized summary columns. Percentiles are computed in
-Python (sqlite has no percentile function) for sqlite/Postgres parity.
+Replaces the process-local in-memory HistoryStore (formerly
+app/api/history.py, deleted) as the source for list/stats/fleet/drilldown, so
+history survives restart and is coherent across API replicas. Stores each
+completed request's already-redacted pipeline response (types-only
+detected_entities, no raw PII, no CCR contents; CLAUDE.md 2 & 6) plus
+denormalized summary columns. Percentiles are computed in Python (sqlite has
+no percentile function) for sqlite/Postgres parity.
 
-`RequestSummary` (the list/stream shape) and `_LOCAL_PROVIDERS` live here now;
-app/api/history.py re-imports them until it is deleted.
+`RequestSummary` (the list/stream shape) and `_LOCAL_PROVIDERS` live here.
 """
 from __future__ import annotations
 

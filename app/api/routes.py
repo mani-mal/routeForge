@@ -200,25 +200,10 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
     pool = registry.effective_pool() if registry else s.routing.model_pool
     summary = None
     try:
-        tier = next(
-            (c.tier for c in pool if c.name == resp["model"]), "?")
-        if tier == "?":  # model not in the pool — surfaces as a "?" tier bucket
-            logging.getLogger("serving.obs").debug(
-                "history: no tier for model %r (not in model_pool)", resp["model"])
-        # Serving provider of the chosen model — lets the fleet aggregate spot a
-        # genuine residency breach (an onprem_only request served off-prem), so
-        # the warning flags real violations, not merely any detected entity.
-        provider = next(
-            (c.provider for c in pool if c.name == resp["model"]), "?")
-        summary = request.app.state.history.record(resp, tenant, tier, provider)
-    except Exception:  # history must never break serving
-        logging.getLogger("serving.obs").exception(
-            "history.record failed (swallowed)")
-    try:
-        # Durable per-application usage row (spec 2026-07-25). The in-memory
-        # HistoryStore above is the UI's hot cache; this is the persistent
-        # record that survives restarts and feeds per-app dashboards. Guarded:
-        # metering must never break serving.
+        # Durable per-application usage row (spec 2026-07-25) plus the durable
+        # request-history row (B3) feeding the console dashboards — both live
+        # in the same DB session so they commit atomically. Guarded: metering
+        # and history must never break serving.
         model = resp.get("model", "?")
         tier = next((c.tier for c in pool if c.name == model), "?")
         provider = next((c.provider for c in pool if c.name == model), "?")
@@ -249,10 +234,14 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
                 quality=(resp.get("quality") or {}).get("chosen") or 0.0,
                 quality_source=(resp.get("quality") or {}).get("source") or "?",
             )
+            from app.apps import history_store
+            summary = await history_store.record_history(
+                session, resp, tenant_id=tenant, tier=tier, provider=provider,
+                retention_rows=s.serving.history.retention_rows)
             await session.commit()
-    except Exception:  # usage metering must never break serving
+    except Exception:  # usage metering and history must never break serving
         logging.getLogger("serving.obs").exception(
-            "usage record failed (swallowed)")
+            "usage/history record failed (swallowed)")
     try:
         # Live decision stream for the UI's flow visualizer (Phase 6a Task
         # 2). Same redaction-safe data history already stored — no raw PII,

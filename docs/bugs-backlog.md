@@ -40,18 +40,26 @@ vs 21/150 at rps=8, all `multi_step`).
 - Raise `vllm.timeout_s` and/or bound agent concurrency — mitigates, doesn't remove.
 - Blocked from scaling the **API** tier by B3.
 
-## B3 — In-memory dashboard state blocks horizontal API scaling
+## B3 — In-memory dashboard state blocks horizontal API scaling  ✅ RESOLVED (2026-08-08, Cluster D)
 
-**Severity:** medium (architectural; blocks B2's API-scaling lever)
+**Severity:** medium (resolved)
 **Found:** 2026-07-31
 
 `app/api/history.py` (ring buffer) and `app/api/bus.py` (SSE decision stream)
-are **process-local**. Running >1 API replica load-balances requests across
-pods, so the flow visualizer and cost dashboard each render only the fraction
-of traffic that hit their pod — the dashboard splits. So the API tier cannot
-be scaled out for throughput without first moving history + the decision bus
-to a **shared store** (DB or Redis pub/sub). Until then, single API replica is
-a hard constraint for a coherent demo.
+were **process-local**. Running >1 API replica load-balances requests across
+pods, so the flow visualizer and cost dashboard each rendered only the
+fraction of traffic that hit their pod — the dashboard split. Fixed: the four
+console dashboards (`/api/requests`, `/api/requests/{id}`, `/api/stats`,
+`/api/fleet`) now read from the durable `request_history` DB table
+(`app/apps/history_store.py`), written in the same DB session/transaction as
+the per-app usage row (`app/api/routes.py`). `app/api/history.py` (the
+in-memory `HistoryStore`) is deleted; `app.state.history` no longer exists.
+The live SSE bus (`app/api/bus.py`) is still process-local by design — it's a
+best-effort animation feed, not the source of truth; `/api/requests` covers
+backfill. **Caveat surfaced by this fix: see B18** — folding the history write
+into the usage DB session exposed a pre-existing concurrent-write data-loss
+bug in `app/apps/db.py`'s session handling, previously invisible because the
+in-memory store never lost a write regardless of DB contention.
 
 ## B4 — Presidio SSN recognizer misses raw SSN on egress
 
@@ -507,3 +515,75 @@ model/tier/cost/latency).
 *execution* moves into RouteForge — the client still orchestrates (pure-router boundary,
 CLAUDE.md rule #4). Cross-ref B3 (a shared session store is needed before this survives
 multi-replica API scale-out, same as history/bus). Own SDD task; plan first.
+
+## B18 — Concurrent async DB writes silently lose/desync rows (usage_records, request_history)
+
+**Severity:** high (undercuts "usage is metered durably" — CLAUDE.md Definition of
+Done — under real concurrent load, silently, with no raised exception)
+**Found:** 2026-08-08, Cluster D (durable-dashboards integration task), while
+diagnosing an unexpected `tests/test_traffic_endpoint.py` failure introduced by
+folding the history write into the usage DB session (see B3).
+
+**Symptom.** After a burst of N concurrent requests (via `/api/traffic`, real HTTP
+self-calls against a live uvicorn instance) where **every** request returns HTTP 200
+(traffic generator's `errors: []`), the DB-backed row counts come up short and
+**disagree with each other**:
+
+```
+requests fired:        15  (all 200 OK, 0 errors)
+/admin/usage  count:    8
+/api/stats    count:   11
+```
+
+`record_usage(...)` and `history_store.record_history(...)` are called
+back-to-back **inside the same `async with db.session()` block**, committed
+together in one `await session.commit()` (`app/api/routes.py`). If that block were
+truly atomic per request, `usage_records` and `request_history` row counts would be
+**identical** — one commit, two inserts, same outcome. They are not (8 vs 11 out of
+15), which rules out "some requests legitimately failed/were rejected" (already
+ruled out separately: 0 errors, all 200s) and instead points at genuine
+cross-request corruption of DB session state under concurrency, not just lost rows.
+
+**Confirmed pre-existing, not introduced by B3's fix.** Reproduced against the
+pre-B3-fix code (`record_usage` alone, no `record_history` in the same block): a
+15-request concurrent burst against the same in-memory-SQLite (`StaticPool`)
+config already showed `/admin/usage count == 11` when 15 requests all succeeded.
+The bug was already there; it was invisible before because `/api/stats` /
+`/api/requests` / `/api/fleet` read from the process-local `HistoryStore`
+(`app/api/history.py`, deleted by B3), which is pure in-memory Python and never
+lost a write regardless of what happened to the DB session underneath it. B3's fix
+(dashboards now read the DB) removed that accidental insulation and made the
+defect observable via `tests/test_traffic_endpoint.py::
+test_traffic_endpoint_starts_runs_and_fills_stats`, which now fails intermittently
+(`stats["count"] >= 10` — undercounts by a variable amount run to run: seen 4, 7,
+8, 9, 11 out of a 10–15 burst). This is a **new, distinct failure**, not one of the
+already-known aiosqlite full-suite teardown flakes.
+
+**Suspected root cause.** `app/apps/db.py::make_engine` puts in-memory SQLite
+(`sqlite+aiosqlite://`, the default for tests — see `tests/conftest.py`) on
+SQLAlchemy's `StaticPool`, which hands out the **same single underlying
+aiosqlite connection** to every concurrently-checked-out `AsyncSession`. Nothing
+in `Database.session()` serializes access to that shared connection across
+concurrent request-handler coroutines (the existing `self._lock` only guards
+one-time `ensure_ready()` schema init, not per-request sessions). Two sessions'
+implicit transaction boundaries (BEGIN/INSERT/COMMIT) on the one shared
+connection can interleave, so one session's commit/rollback can silently
+finalize or discard another session's not-yet-committed work. Needs a
+dedicated repro + fix session — candidates: a serializing lock around
+`Database.session()` scoped to the in-memory/StaticPool case only (must not
+serialize production Postgres/file-SQLite traffic), or moving off `StaticPool`
+for concurrent-safe in-memory testing (e.g. a shared-cache file-backed SQLite
+URI), or an explicit `BEGIN IMMEDIATE`/write-lock discipline. Verify file-based
+SQLite (production single-node default, `DEFAULT_SQLITE_URL`) and Postgres
+aren't exposed to the same failure mode — they use the default pool (separate
+connections per checkout), which this StaticPool-specific hazard may not apply
+to, but that needs to be confirmed, not assumed.
+
+**Not fixed as part of B3/Cluster D** — out of scope for that task (touches
+`app/apps/db.py`, not listed in its brief) and needs its own investigation
+rather than a hasty patch. `tests/test_ui_routes.py` +
+`tests/test_history_persist_restart.py` (the tests B3 was scoped to) pass
+cleanly because they exercise single/low-concurrency request paths, not a
+concurrent burst. Own SDD task; plan first — reproduce with a minimal
+concurrent-session script (not the full traffic generator) before attempting a
+fix.
