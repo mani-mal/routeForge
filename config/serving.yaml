@@ -54,6 +54,12 @@ observability:
     # Quoted: bare `off` is a YAML boolean, but this is a string enum.
     capture_io: "off"   # off | redacted | full
 
+# Bounded dashboard/drilldown store (request_history). UsageRecord is the
+# unbounded metering ledger; this caps only the rich per-request dashboard rows,
+# pruned oldest-first on write. Infra concern -> owned here.
+history:
+  retention_rows: 5000
+
 # Provider *availability* (infra on/off) only. Tier membership is defined by the
 # pool in routing.yaml — the single source of truth for which model is which tier.
 providers:

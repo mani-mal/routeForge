@@ -140,12 +140,20 @@ class ContextOptimizationCfg(BaseModel):
     cache_alignment: bool
 
 
+class HistoryCfg(BaseModel):
+    # Bounded dashboard/drilldown store retention. UsageRecord (metering ledger)
+    # is the UNBOUNDED durable record; this caps only request_history rows.
+    # Owned here (serving.yaml = infra). Pruned on write by app/apps/history_store.
+    retention_rows: int = 5000
+
+
 class ServingCfg(BaseModel):
     providers: dict[str, ProviderCfg]
     pii_detection: str
     reject_stream_requests: bool
     context_optimization: ContextOptimizationCfg
     observability: ObservabilityCfg
+    history: HistoryCfg = HistoryCfg()
 
 
 class Settings(BaseModel):
