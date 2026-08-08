@@ -15,39 +15,7 @@ from __future__ import annotations
 
 from collections import deque
 
-from pydantic import BaseModel
-
-# Providers that keep a request inside the residency boundary. Anything else
-# serving an `onprem_only` request is a genuine Rule-3 breach (see CLAUDE.md #3).
-# `mock` is the demo local stand-in; `?`/`-`/`""` are unknown/placeholder and
-# never counted as a violation (fail toward not crying wolf — pool integrity is
-# the config lint's job, not this honesty counter's). Any concrete cloud
-# provider (azure, bedrock, …) is absent here and so correctly flags.
-_LOCAL_PROVIDERS = frozenset({"onprem", "mock", "?", "-", ""})
-
-
-class RequestSummary(BaseModel):
-    id: str
-    tenant_id: str
-    sensitivity: str
-    onprem_only: bool
-    model: str
-    model_display: str
-    tier: str
-    provider: str = "?"  # serving provider of the chosen model (onprem/azure/…)
-    total_usd: float
-    baseline_usd: float
-    routing_saved_usd: float
-    compression_saved_usd: float
-    latency_ms: float
-    hops: int
-    detected_entities: list[str]
-    created_seq: int
-    total_tokens: int = 0
-    quality_sum: float = 0.0            # Σ per-call quality — TID/CID numerator
-    quality: float | None = None        # chosen model's score (display)
-    quality_source: str | None = None   # provenance of `quality` (display)
-    session_id: str | None = None       # B17: client workflow-run correlation id (opaque)
+from app.apps.history_store import RequestSummary, _LOCAL_PROVIDERS  # noqa: F401
 
 
 class HistoryStore:
