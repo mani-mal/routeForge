@@ -235,10 +235,15 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
                 quality_source=(resp.get("quality") or {}).get("source") or "?",
             )
             from app.apps import history_store
-            summary = await history_store.record_history(
+            # Local var until commit succeeds: if record_history succeeds but
+            # commit() raises, the outer `summary` must stay None so the
+            # bus-publish block below never fires SSE events for a request
+            # that rolled back and isn't actually in the durable table.
+            history_summary = await history_store.record_history(
                 session, resp, tenant_id=tenant, tier=tier, provider=provider,
                 retention_rows=s.serving.history.retention_rows)
             await session.commit()
+            summary = history_summary
     except Exception:  # usage metering and history must never break serving
         logging.getLogger("serving.obs").exception(
             "usage/history record failed (swallowed)")
