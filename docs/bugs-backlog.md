@@ -34,11 +34,30 @@ exception → B1 503. **Lowering rps does not help** — the requests are
 long-lived, so they overlap regardless of arrival rate (19/150 failed at rps=3
 vs 21/150 at rps=8, all `multi_step`).
 
+**RouteForge-owned mitigation — ✅ SHIPPED (2026-08-08, Cluster D).**
+`agent_budgets.max_concurrent_runs` (`config/policy.yaml`, default 8) bounds
+how many multi-step agent runs execute concurrently via an `asyncio.Semaphore`
+(`app/main.py` → `app.state.agent_run_gate` → `app/agent/runtime.py::run`,
+held only around the actual NAT workflow execution). This is admission
+control — it stops a burst from piling unbounded long-lived inferences onto
+the single onboarded backend — not additional inference capacity. Detail and
+the API-tier interaction (was: "blocked by B3") in
+`docs/architecture/dashboards-and-scaling.md`.
+
 **Levers (pick per goal):**
-- Scale vLLM (2–3 replicas behind the `vllm-local-8b` service) — real fix, needs GPU + manifest change.
-- Trim the `multi_step` share in `tests/personas.yaml` for the burst demo — cheap, keeps the "500-req burst" moment clean.
-- Raise `vllm.timeout_s` and/or bound agent concurrency — mitigates, doesn't remove.
-- Blocked from scaling the **API** tier by B3.
+- Scale vLLM (2–3 replicas behind the `vllm-local-8b` service) — real fix,
+  needs GPU + manifest change. **Operator-owned** (CLAUDE.md rule 4 —
+  RouteForge routes, it never scales inference); out of scope to implement
+  here.
+- Trim the `multi_step` share in `tests/personas.yaml` for the burst demo —
+  cheap, keeps the "500-req burst" moment clean; test tooling, not a
+  production fix.
+- Raise `agent_budgets.per_call_timeout_s` — mitigates (buys hops more time),
+  doesn't add capacity. Operator-tunable.
+- B3 (dashboards now durable/replica-coherent) removes the correctness
+  blocker to running >1 API replica, but scaling the API tier only helps if
+  the operator scaled their onboarded backend to match — see
+  `docs/architecture/dashboards-and-scaling.md`.
 
 ## B3 — In-memory dashboard state blocks horizontal API scaling  ✅ RESOLVED (2026-08-08, Cluster D)
 
@@ -58,8 +77,12 @@ The live SSE bus (`app/api/bus.py`) is still process-local by design — it's a
 best-effort animation feed, not the source of truth; `/api/requests` covers
 backfill. **Caveat surfaced by this fix: see B18** — folding the history write
 into the usage DB session exposed a pre-existing concurrent-write data-loss
-bug in `app/apps/db.py`'s session handling, previously invisible because the
-in-memory store never lost a write regardless of DB contention.
+bug in `app/apps/db.py`'s session handling (in-memory SQLite/`StaticPool`
+test-harness only — see B18), previously invisible because the in-memory
+store never lost a write regardless of DB contention. Full writeup —
+replica-coherent dashboards, why the live bus stays per-pod, and the
+API-tier-vs-serving-capacity boundary (B2↔B3) — in
+`docs/architecture/dashboards-and-scaling.md`.
 
 ## B4 — Presidio SSN recognizer misses raw SSN on egress
 
@@ -516,10 +539,17 @@ model/tier/cost/latency).
 CLAUDE.md rule #4). Cross-ref B3 (a shared session store is needed before this survives
 multi-replica API scale-out, same as history/bus). Own SDD task; plan first.
 
-## B18 — Concurrent async DB writes silently lose/desync rows (usage_records, request_history)
+## B18 — In-memory SQLite (StaticPool) sessions interleave under concurrency, losing rows  ✅ RESOLVED (2026-08-08, Cluster D)
 
-**Severity:** high (undercuts "usage is metered durably" — CLAUDE.md Definition of
-Done — under real concurrent load, silently, with no raised exception)
+**Severity:** medium (resolved). **Scope correction:** this is a **test-harness
+artifact** of routeForge's in-memory SQLite (`sqlite+aiosqlite://`,
+`StaticPool`) setup — the config `tests/conftest.py` uses by default — not a
+general or production concurrency bug. Shipped deployments use a real
+database (`DATABASE_URL` pointed at file-SQLite or Postgres, per CLAUDE.md),
+both of which hand out separate pooled connections per session and were
+**confirmed never exposed to this failure mode** (see Fix below). The
+original title/severity here ("high", "undercuts usage is metered durably")
+overstated it as a production data-loss bug; corrected on resolution.
 **Found:** 2026-08-08, Cluster D (durable-dashboards integration task), while
 diagnosing an unexpected `tests/test_traffic_endpoint.py` failure introduced by
 folding the history write into the usage DB session (see B3).
@@ -559,7 +589,7 @@ test_traffic_endpoint_starts_runs_and_fills_stats`, which now fails intermittent
 8, 9, 11 out of a 10–15 burst). This is a **new, distinct failure**, not one of the
 already-known aiosqlite full-suite teardown flakes.
 
-**Suspected root cause.** `app/apps/db.py::make_engine` puts in-memory SQLite
+**Root cause (confirmed by the fix below).** `app/apps/db.py::make_engine` puts in-memory SQLite
 (`sqlite+aiosqlite://`, the default for tests — see `tests/conftest.py`) on
 SQLAlchemy's `StaticPool`, which hands out the **same single underlying
 aiosqlite connection** to every concurrently-checked-out `AsyncSession`. Nothing
@@ -568,22 +598,35 @@ concurrent request-handler coroutines (the existing `self._lock` only guards
 one-time `ensure_ready()` schema init, not per-request sessions). Two sessions'
 implicit transaction boundaries (BEGIN/INSERT/COMMIT) on the one shared
 connection can interleave, so one session's commit/rollback can silently
-finalize or discard another session's not-yet-committed work. Needs a
-dedicated repro + fix session — candidates: a serializing lock around
-`Database.session()` scoped to the in-memory/StaticPool case only (must not
-serialize production Postgres/file-SQLite traffic), or moving off `StaticPool`
-for concurrent-safe in-memory testing (e.g. a shared-cache file-backed SQLite
-URI), or an explicit `BEGIN IMMEDIATE`/write-lock discipline. Verify file-based
-SQLite (production single-node default, `DEFAULT_SQLITE_URL`) and Postgres
-aren't exposed to the same failure mode — they use the default pool (separate
-connections per checkout), which this StaticPool-specific hazard may not apply
-to, but that needs to be confirmed, not assumed.
+finalize or discard another session's not-yet-committed work.
 
-**Not fixed as part of B3/Cluster D** — out of scope for that task (touches
-`app/apps/db.py`, not listed in its brief) and needs its own investigation
-rather than a hasty patch. `tests/test_ui_routes.py` +
-`tests/test_history_persist_restart.py` (the tests B3 was scoped to) pass
-cleanly because they exercise single/low-concurrency request paths, not a
-concurrent burst. Own SDD task; plan first — reproduce with a minimal
-concurrent-session script (not the full traffic generator) before attempting a
-fix.
+**Fix (`app/apps/db.py`, commit `fa5e138`).** `Database` now detects the
+in-memory-SQLite case at construction (`_is_memory_sqlite(url)` →
+`self._serialize_sessions`) and, only in that case, wraps `session()` in a
+per-`Database` `asyncio.Lock` (`self._session_lock`) so the whole session —
+not just the commit — is serialized against every other concurrent session on
+that shared `StaticPool` connection. File-backed SQLite and Postgres URLs
+leave `_serialize_sessions` false and take the old unlocked path unchanged —
+they use the default pool (a real connection per checkout), so there is
+nothing for this lock to guard there and no throughput cost is added to
+production traffic.
+
+**Verification: `tests/test_db_concurrency.py`.**
+- `test_concurrent_writes_do_not_lose_rows_on_memory_sqlite` — fires 25
+  concurrent writes at an in-memory-SQLite `Database` and asserts the row
+  count is exactly 25 (was intermittently short before the fix).
+- `test_serialize_sessions_false_for_file_url` — pins that a file-backed
+  SQLite URL does **not** enable serialization, so the guard stays scoped to
+  the StaticPool case.
+- `test_serialization_prevents_overlapping_sessions_on_memory_sqlite` — a
+  deterministic (non-timing-dependent) mechanism-level guard: two writers
+  race for `db.session()`, and the test asserts only one session is ever open
+  at a time on the in-memory engine. This catches a future regression that
+  deletes `_serialize_sessions` or narrows the lock's scope, independent of
+  whether any particular run happens to trigger a data race.
+
+`tests/test_ui_routes.py` and `tests/test_history_persist_restart.py` (the
+tests B3 was scoped to) were unaffected throughout — they exercise
+single/low-concurrency request paths, not a concurrent burst. Full context
+(B3's write-path fold that exposed this, and the durable-dashboards story
+generally) in `docs/architecture/dashboards-and-scaling.md`.
