@@ -13,6 +13,8 @@ app/api/history.py re-imports them until it is deleted.
 from __future__ import annotations
 
 import json
+import statistics
+from collections import defaultdict
 
 from pydantic import BaseModel
 from sqlalchemy import delete, select
@@ -126,3 +128,105 @@ async def get_history(session: AsyncSession, request_id: str) -> dict | None:
     if row is None:
         return None
     return json.loads(row.redacted_resp)
+
+
+def _pctile(sorted_vals: list[float], pct: float) -> float:
+    if not sorted_vals:
+        return 0.0
+    idx = min(len(sorted_vals) - 1, int(round(pct * (len(sorted_vals) - 1))))
+    return sorted_vals[idx]
+
+
+def _to_summary(row: RequestHistory) -> RequestSummary:
+    return RequestSummary(
+        id=row.request_id, tenant_id=row.tenant_id, sensitivity=row.sensitivity,
+        onprem_only=row.onprem_only, model=row.model, model_display=row.model_display,
+        tier=row.tier, provider=row.provider, total_usd=row.total_usd,
+        baseline_usd=row.baseline_usd, routing_saved_usd=row.routing_saved_usd,
+        compression_saved_usd=row.compression_saved_usd, latency_ms=row.latency_ms,
+        hops=row.hops, detected_entities=json.loads(row.detected_entities or "[]"),
+        created_seq=row.seq, total_tokens=row.total_tokens, quality_sum=row.quality_sum,
+        quality=row.quality, quality_source=row.quality_source, session_id=row.session_id)
+
+
+async def list_history(session: AsyncSession, *, limit: int = 100,
+                       app: str | None = None) -> list[RequestSummary]:
+    """Newest first (seq desc). `app` filters tenant_id; limit<=0 -> []."""
+    if limit <= 0:
+        return []
+    stmt = select(RequestHistory).order_by(RequestHistory.seq.desc()).limit(limit)
+    if app is not None:
+        stmt = stmt.where(RequestHistory.tenant_id == app)
+    return [_to_summary(r) for r in (await session.execute(stmt)).scalars()]
+
+
+async def _all_summaries(session: AsyncSession) -> list[RequestSummary]:
+    # Bounded table (retention_rows) -> a full scan here is bounded by construction.
+    stmt = select(RequestHistory).order_by(RequestHistory.seq.desc())
+    return [_to_summary(r) for r in (await session.execute(stmt)).scalars()]
+
+
+async def stats(session: AsyncSession) -> dict:
+    rows = await _all_summaries(session)
+    count = len(rows)
+    if count == 0:
+        return {"count": 0, "total_usd": 0.0, "baseline_usd": 0.0,
+                "routing_saved_usd": 0.0, "compression_saved_usd": 0.0,
+                "onprem_count": 0, "tier_distribution": {}, "latency_p50_ms": 0.0,
+                "latency_p95_ms": 0.0, "token_intelligence_density": 0.0,
+                "cost_intelligence_density": 0.0}
+    tier_distribution: dict[str, int] = {}
+    for s in rows:
+        tier_distribution[s.tier] = tier_distribution.get(s.tier, 0) + 1
+    latencies = sorted(s.latency_ms for s in rows)
+    q_sum = sum(s.quality_sum for s in rows)
+    tok_sum = sum(s.total_tokens for s in rows)
+    usd_sum = sum(s.total_usd for s in rows)
+    return {
+        "count": count,
+        "total_usd": sum(s.total_usd for s in rows),
+        "baseline_usd": sum(s.baseline_usd for s in rows),
+        "routing_saved_usd": sum(s.routing_saved_usd for s in rows),
+        "compression_saved_usd": sum(s.compression_saved_usd for s in rows),
+        "onprem_count": sum(1 for s in rows if s.onprem_only),
+        "tier_distribution": tier_distribution,
+        "latency_p50_ms": _pctile(latencies, 0.50),
+        "latency_p95_ms": _pctile(latencies, 0.95),
+        "token_intelligence_density": (q_sum / tok_sum * 1000.0) if tok_sum > 0 else 0.0,
+        "cost_intelligence_density": (q_sum / usd_sum) if usd_sum > 0 else 0.0,
+    }
+
+
+async def fleet(session: AsyncSession) -> list[dict]:
+    rows = await _all_summaries(session)
+    groups: dict[str, list[RequestSummary]] = defaultdict(list)
+    for s in rows:
+        groups[s.tenant_id].append(s)
+    out = []
+    for app, items in groups.items():
+        lat = sorted(s.latency_ms for s in items)
+        tiers: dict[str, int] = defaultdict(int)
+        for s in items:
+            tiers[s.tier] += 1
+        tok = sum(s.total_tokens for s in items)
+        usd = sum(s.total_usd for s in items)
+        qsum = sum(s.quality_sum for s in items)
+        out.append({
+            "app": app,
+            "count": len(items),
+            "total_usd": usd,
+            "baseline_usd": sum(s.baseline_usd for s in items),
+            "routing_saved_usd": sum(s.routing_saved_usd for s in items),
+            "compression_saved_usd": sum(s.compression_saved_usd for s in items),
+            "onprem_count": sum(1 for s in items if s.onprem_only),
+            "pii_count": sum(1 for s in items if s.detected_entities),
+            "onprem_violations": sum(
+                1 for s in items
+                if s.onprem_only and s.provider not in _LOCAL_PROVIDERS),
+            "latency_p50_ms": statistics.median(lat) if lat else 0.0,
+            "tier_distribution": dict(tiers),
+            "token_intelligence_density": (qsum / tok * 1000.0) if tok > 0 else 0.0,
+            "cost_intelligence_density": (qsum / usd) if usd > 0 else 0.0,
+        })
+    out.sort(key=lambda r: r["count"], reverse=True)
+    return out
