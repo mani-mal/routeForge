@@ -106,9 +106,16 @@ items:
       spec:
         imagePullSecrets:
         - name: ghcr-pull
+        # routeForge is a pure router — the api serves no inference and needs no
+        # GPU. Tolerate the control-plane taint so it can also schedule on the
+        # ctrl nodes instead of competing for the single GPU worker's 110-pod cap.
+        tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          effect: NoSchedule
+          operator: Exists
         containers:
         - name: api
-          image: ghcr.io/mani-mal/serving-plane-api:0.9.0
+          image: ghcr.io/mani-mal/serving-plane-api:0.10.0
           ports: [{name: http, containerPort: 8080}]
           env:
           - {name: SP_SERVER_PORT, value: "8080"}
@@ -253,9 +260,15 @@ items:
       spec:
         imagePullSecrets:
         - name: ghcr-pull
+        # Non-GPU static nginx — tolerate the control-plane taint so the UI can
+        # schedule on the ctrl nodes too (see the api deployment note above).
+        tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          effect: NoSchedule
+          operator: Exists
         containers:
         - name: ui
-          image: ghcr.io/mani-mal/serving-plane-ui:0.9.0
+          image: ghcr.io/mani-mal/serving-plane-ui:0.10.0
           ports: [{name: http, containerPort: 80}]
           resources:
             requests: {cpu: "50m", memory: 64Mi}
