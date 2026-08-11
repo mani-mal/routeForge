@@ -5,7 +5,13 @@ Sibling backlogs: `ui-open-items.md`, `eval-logging-backlog.md`.
 
 ---
 
-## B1 — Multi-step 503s mislabeled "policy evaluation unavailable"
+## B1 — Multi-step 503s mislabeled "policy evaluation unavailable"  ✅ RESOLVED (Cluster C)
+
+**Resolved:** the catch-all was narrowed to the gate/context stage only
+(`app/api/routes.py`); downstream hop/backend/timeout failures now raise typed
+errors (`NoEligibleCandidate`/`BackendUnavailable`) carrying their own status.
+The remaining 503 "policy evaluation unavailable" is the legitimate fail-closed
+gate error only.
 
 **Severity:** medium (misleading, not data-unsafe)
 **Found:** 2026-07-31, DGX burst on `:0.6.0`
@@ -84,7 +90,11 @@ replica-coherent dashboards, why the live bus stays per-pod, and the
 API-tier-vs-serving-capacity boundary (B2↔B3) — in
 `docs/architecture/dashboards-and-scaling.md`.
 
-## B4 — Presidio SSN recognizer misses raw SSN on egress
+## B4 — Presidio SSN recognizer misses raw SSN on egress  ✅ RESOLVED (Cluster C)
+
+**Resolved:** a regex `US_SSN` recognizer is layered over Presidio on both the
+intake and egress paths (`app/policy/detectors.py`, `app/policy/merge.py`), so a
+raw `123-45-6789` in model-generated text is now masked on egress too.
 
 **Severity:** low (pre-existing, unrelated to the LiteLLM swap)
 **Found:** 2026-07-31 (also present on `:0.5.0`)
@@ -106,7 +116,11 @@ in Cluster C with hardened `> 0` latency assertions
 corrected `app/gateway/backends/base.py` comment. Cross-ref memory
 `routeforge-multistep-latency-zero-bug` (now stale/resolved).
 
-## B6 — Can't rename an application
+## B6 — Can't rename an application  ✅ RESOLVED
+
+**Resolved:** `PATCH /admin/applications/{app_id}` → `update_application`
+(`app/api/admin_routes.py`); the admin UI has an editable name field that
+persists via `adminApi.updateApp(...)` (`ui/src/admin/ApplicationsPanel.tsx`).
 
 **Severity:** medium (admin usability)
 **Found:** 2026-08-04, UI
@@ -116,7 +130,12 @@ not editable). Operators can't correct/rename an app after creation. Needs a
 working edit path (UI field + PATCH/PUT to the app record) in
 `ui/src/admin/ApplicationsPanel.tsx` and the corresponding API route.
 
-## B7 — Can't delete an application
+## B7 — Can't delete an application  ✅ RESOLVED (by design — archive, not hard delete)
+
+**Resolved:** removal is reversible **soft-delete** — an Archive action via
+`updateApp(status:"archived")` plus Restore (`ui/src/admin/ApplicationsPanel.tsx`).
+Owner accepted archive as the intended behavior (2026-08-11); no hard DELETE
+endpoint by choice (avoids cascade decisions on usage_records/history/tokens).
 
 **Severity:** medium (admin usability)
 **Found:** 2026-08-04, UI
@@ -126,7 +145,11 @@ stale/test apps with no cleanup path. Needs a delete action in
 `ui/src/admin/ApplicationsPanel.tsx` + a DELETE API route (and decide cascade
 behavior for the app's policy/rows).
 
-## B8 — Application setup doesn't show the cost currency unit
+## B8 — Application setup doesn't show the cost currency unit  ✅ RESOLVED
+
+**Resolved:** the only cost input on the setup/policy form is the spend budget,
+labeled `budget $/day` with the `$` present, bound to `max_spend_usd_per_day`
+(`ui/src/admin/ApplicationsPanel.tsx`).
 
 **Severity:** low (cosmetic/clarity)
 **Found:** 2026-08-04, UI
@@ -135,7 +158,12 @@ In the application setup screen, cost values render without a `$` unit, so the
 number is ambiguous. Add the `$` prefix (and confirm USD/1M framing matches
 `pricing.yaml`) on the setup UI.
 
-## B9 — Cost density explanation text is truncated
+## B9 — Cost density explanation text is truncated  ✅ RESOLVED
+
+**Resolved:** both density StatTiles moved the explanation off the clipped `sub`
+onto a hover `?` badge via `info=` (`ui/src/console/sections/CostSection.tsx`;
+`StatTile` renders `info` as a hoverable `?` with `title`/`aria-label` in
+`ui/src/components/common.tsx`).
 
 **Severity:** low (cosmetic/clarity)
 **Found:** 2026-08-04, UI
@@ -147,7 +175,15 @@ fully (`ui/src/console/sections/CostSection.tsx:135-144`). Either show the full
 text (let the tile wrap/expand) or move the explanation into a tooltip/info
 balloon (`?` hover) so the label stays compact.
 
-## B10 — Router shows disabled cloud providers as spurs, mislabeled "residency"
+## B10 — Router shows disabled cloud providers as spurs, mislabeled "residency"  ✅ RESOLVED
+
+**Resolved (both parts):** (1) `ModelRegistry.effective_pool()` filters the
+static cloud `model_pool` to providers enabled in `serving.yaml`, so
+disabled azure/bedrock never enter the candidate list (`app/apps/registry.py`).
+(2) The rejection reason is split — `"excluded · residency"` when `onprem_only`
+else `"not permitted for application"` (`app/routing/router.py`); disabled
+providers no longer reach the router to be mislabeled. Covered by
+`tests/test_infra_router.py`.
 
 **Severity:** medium (misleading demo trace + wrong rejection reason)
 **Found:** 2026-08-04, UI (Model Router card, decision drilldown)
@@ -182,7 +218,14 @@ at all; and/or split the `allowed_providers` rejection into distinct reasons
 Decide whether disabled providers should be hidden entirely or shown greyed with
 an honest "provider off" reason. Own SDD task.
 
-## B11 — "What happened" summary card labels request "Cloud-eligible" when cloud was excluded
+## B11 — "What happened" summary card labels request "Cloud-eligible" when cloud was excluded  ✅ RESOLVED
+
+**Resolved:** the eligibility verdict now derives from the effective candidate
+pool — `hasCloud = allowed_providers.some(p !== "onprem" && p !== "mock")` — not
+from `onprem_only` alone, with an explicit "On-prem only" branch when cloud is
+absent (`ui/src/console/RequestDrilldown.tsx`). Entity chips render only when
+entities were actually detected, so a clean request no longer shows a phantom
+`PERSON` chip.
 
 **Severity:** medium (misleading demo headline; contradicts the panel below it)
 **Found:** 2026-08-04, request drilldown (support-ticket demo)
@@ -211,7 +254,15 @@ residency"). Reconcile the "no sensitive data found" wording with the detected
 entity chips so a `PERSON`/`confidential` request doesn't read as clean. Pairs
 naturally with B10. Own SDD task.
 
-## B12 — "All-frontier baseline" omits completion tokens → routing_saved goes negative
+## B12 — "All-frontier baseline" omits completion tokens → routing_saved goes negative  ✅ RESOLVED
+
+**Resolved:** `_baseline(in_tokens, out_tokens)` now prices input and output at
+their respective frontier rates on the actual completion's token counts (same
+basis as `total`), so the baseline includes generated tokens and `routing_saved`
+is positive for a cheaper-tier route; the additive identity
+`compression_saved + routing_saved == baseline_usd − total` holds
+(`app/pipeline.py`). Covered by `tests/test_two_lever_cost.py` (same-tier →
+`routing_saved == 0`, cheaper-tier → `> 0`).
 
 **Severity:** medium (undercuts the flagship cost-savings claim; number goes
 negative on the screen meant to prove savings)
