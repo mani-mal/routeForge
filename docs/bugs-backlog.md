@@ -630,3 +630,32 @@ tests B3 was scoped to) were unaffected throughout — they exercise
 single/low-concurrency request paths, not a concurrent burst. Full context
 (B3's write-path fold that exposed this, and the durable-dashboards story
 generally) in `docs/architecture/dashboards-and-scaling.md`.
+
+## B19 — Onboarded model with a slashed slug (`org/model`) can't be edited or deleted  ✅ RESOLVED (2026-08-11)
+
+**Severity:** medium (resolved). Admin usability + a stuck-row trap; every
+HF/Dynamo-style model id hits it.
+**Found:** 2026-08-11, DGX lab, onboarding a Dynamo-served `Qwen/Qwen2.5-1.5B-Instruct`.
+
+The edit/delete routes were declared `PUT`/`DELETE /admin/infra/models/{slug}`.
+A bare `{slug}` path parameter matches `[^/]+` — it does **not** match a slash —
+so real OpenAI-compatible ids (`Qwen/Qwen2.5-1.5B-Instruct`,
+`meta-llama/Llama-3.1-8B-Instruct`, …) 404'd on the slash. The UI already sends
+`encodeURIComponent(slug)` (`ui/src/api.ts`), but uvicorn percent-decodes `%2F`
+back to `/` **before** Starlette routes, so any onboarded row with a `/` in its
+slug was permanently un-editable and un-deletable through the API and the UI.
+This compounded into a stuck-row trap: a bad-endpoint onboard (`POST`, slug in
+the body — works fine) probes-unhealthy and is saved **disabled**; a re-`POST`
+then hard-409'd, and PUT/DELETE couldn't reach it — so the only way to clear it
+was deleting the row straight from the `onboarded_models` DB table.
+
+**Fix (`app/api/admin_routes.py`).** Both routes now use the path converter —
+`PUT`/`DELETE /admin/infra/models/{slug:path}` — so the slash is captured; the
+UI's `encodeURIComponent` is unchanged and now round-trips. Additionally, `POST`
+of an existing **disabled** slug is now an idempotent re-probe + upsert instead
+of a hard 409, so a bad-endpoint onboarding self-heals via a clean re-POST with
+no DB surgery. An already-**enabled** row still 409s (edit a working model with
+PUT), and a yaml cloud-pool name still 409s. Regression tests
+(`tests/test_onboard_api.py`): `test_slashed_slug_put_and_delete_roundtrip`
+(POST→PUT→DELETE on an `org/model` slug end-to-end) and
+`test_repost_of_disabled_slug_self_heals`.

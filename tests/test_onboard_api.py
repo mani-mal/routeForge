@@ -202,3 +202,60 @@ def test_onboard_requires_admin_auth(client):
     r = client.post("/admin/infra/models", json=_BODY)
     assert r.status_code == 401
     assert client.get("/admin/infra/models").status_code == 401
+
+
+# --- B19: slashed slugs (org/model) are edit/delete-able end-to-end ----------
+
+_SLASH = "Qwen/Qwen2.5-1.5B-Instruct"  # a real OpenAI-compatible id with a '/'
+
+
+def test_slashed_slug_put_and_delete_roundtrip(client, monkeypatch):
+    # {slug:path} routing: an org/model slug must be editable and deletable, not
+    # 404 on the slash. Regression for B19 (bare {slug} matched [^/]+).
+    monkeypatch.setattr("app.api.admin_routes.probe_endpoint", _ok)
+    _login(client)
+    assert client.post("/admin/infra/models",
+                       json={**_BODY, "slug": _SLASH}).status_code == 200
+
+    # PUT reaches the slashed row (was 404).
+    r = client.put(f"/admin/infra/models/{_SLASH}",
+                   json={**_BODY, "slug": _SLASH, "display_name": "Qwen edited"})
+    assert r.status_code == 200
+    row = next(m for m in client.get("/admin/infra/models").json()
+               if m["slug"] == _SLASH)
+    assert row["display_name"] == "Qwen edited"
+
+    # DELETE reaches the slashed row (was 404) and removes it.
+    assert client.delete(f"/admin/infra/models/{_SLASH}").status_code == 200
+    assert not any(m["slug"] == _SLASH
+                   for m in client.get("/admin/infra/models").json())
+
+
+def test_repost_of_disabled_slug_self_heals(client, monkeypatch):
+    # B19 stuck-row trap: a first onboard with a bad endpoint probes-unreachable
+    # and is saved DISABLED. A clean re-POST (fixed endpoint) must re-probe and
+    # upsert rather than hard-409, so the row self-heals without DB surgery.
+    _login(client)
+
+    monkeypatch.setattr("app.api.admin_routes.probe_endpoint", _fail)
+    r = client.post("/admin/infra/models", json={**_BODY, "slug": _SLASH})
+    assert r.status_code == 200 and r.json()["enabled"] is False
+
+    monkeypatch.setattr("app.api.admin_routes.probe_endpoint", _ok)
+    r = client.post("/admin/infra/models", json={**_BODY, "slug": _SLASH})
+    assert r.status_code == 200, "re-POST of a disabled row should upsert, not 409"
+    assert r.json()["enabled"] is True
+
+    # An already-ENABLED row is not re-onboardable via POST — edit it with PUT.
+    assert client.post("/admin/infra/models",
+                       json={**_BODY, "slug": _SLASH}).status_code == 409
+
+
+def test_onboard_yaml_pool_name_always_409(client, monkeypatch):
+    # A static YAML model_pool name (config/routing.yaml) is never re-onboardable,
+    # even before any onboarded row exists — the self-heal path is scoped to
+    # disabled ONBOARDED rows only and must not swallow this branch (B19).
+    monkeypatch.setattr("app.api.admin_routes.probe_endpoint", _ok)
+    _login(client)
+    r = client.post("/admin/infra/models", json={**_BODY, "slug": "azure-gpt-mid"})
+    assert r.status_code == 409
