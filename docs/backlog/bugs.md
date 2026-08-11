@@ -65,6 +65,77 @@ the audit trail in that sweep's task report.
 > found while reviewing the whole `docs/reclassification` branch — recorded
 > below as **B31**. Not fixed here; this review only writes the backlog entry.
 
+---
+
+> **Update 2026-09-14 (DGX Spark onboarding).** Onboarding a keyed vLLM endpoint
+> from the console failed twice for reasons the UI didn't explain. One was
+> **B19** (fixed long ago on a branch that was never merged — now landed; see
+> B19). The other is a UX gap, recorded below as **B32**. Setting up a per-app
+> Langfuse project on the same box then took several saves, recorded as **B33**.
+
+## B33 — Per-app Langfuse credentials form always looks like "add new", never "edit existing", and never checks what it saves
+
+**Severity:** low–medium (UX; no privacy impact — raw capture still only goes to
+the app's own project). Hit by every operator who sets per-app Langfuse credentials.
+**Found:** 2026-09-14, DGX Spark, app `go-to-market-app` (`kit-gtm`).
+
+An app has exactly **one** credential set (host, public key, secret key, project
+id — columns on `applications`), and **Save credentials** replaces all of it
+(`PUT /admin/applications/{id}/langfuse`). Nothing is ever added. But the form in
+step 4 (`LangfuseCredsForm`, `ui/src/admin/AppSettings.tsx`) doesn't show that:
+
+1. **It always shows four empty fields.** After a save it clears them, and the
+   grey placeholders (`http://langfuse-web:3000`, `pk-lf-…`, `cmt5…`) look like
+   pre-filled defaults. The operator saved several times, thinking each save
+   either failed or added another key set.
+2. **The saved values are never shown.** Host, public key and project id aren't
+   secret, but they aren't rendered back, so a mistake stays invisible. In this
+   session the secret key was pasted into the project id field, and later the
+   host was the browser URL — both saved with `200`, both only found via SQL.
+3. **"credentials set ✓" means stored, not working.** It is
+   `has_langfuse_keys` (a public key and a secret are present). Nothing checks the
+   pair authenticates, the project id is that pair's project, or the host is
+   reachable **from the api container**. `http://spark-ae6d:3002` (works in the
+   browser, refused inside the container) passed silently.
+4. **All four fields are required on every save**, including the secret, so
+   fixing one wrong field means retyping the others.
+
+**Fix ideas:** (1) when credentials exist, show a read-only summary (host,
+public key, project id, secret as `••••`) with an **Edit** button and a
+**Remove** action, and show the empty form only when nothing is set; (2) in edit
+mode, prefill the non-secret fields and allow leaving the secret blank to keep
+it (server-side merge); (3) validate on save from the api process —
+`GET {host}/api/public/projects` with the pair must succeed and return the given
+project id — and 422 naming the failing check ("host not reachable from the api
+container", "keys rejected", "keys belong to project X, not Y"); (4) put the
+"server-reachable host, not the browser URL" note beside the field instead of in
+a tooltip.
+
+## B32 — Onboard form's "api key env" silently accepts a raw key; a 401 is reported as "unreachable"
+
+**Severity:** low–medium (UX; no privacy impact). Every operator onboarding an
+authenticated endpoint (vLLM `--api-key`, NIM) is likely to hit it.
+**Found:** 2026-09-14, DGX Spark, onboarding a vLLM server started with `VLLM_API_KEY`.
+
+The field takes the **name** of an environment variable in the api container
+(`app/apps/probe.py:22`, `litellm_backend.py:78-81` resolve it with
+`os.environ.get`). The operator typed the **key itself** (`api key env:
+<the key>`). Nothing rejects that: the lookup finds no such variable, the probe
+sends no `Authorization` header, vLLM answers `401`, and the row is saved
+disabled with a health badge of **unreachable** — which sent debugging toward the
+network (the endpoint was reachable). The `probe_error` column does hold
+`401 Unauthorized`, but the fleet table doesn't surface it.
+
+**Fix ideas:** (1) on onboard/edit, 422 when `api_key_env` is set but that
+variable is absent from the api process environment ("env var X is not set in
+the api container"); (2) distinguish `unauthorized` from `unreachable` in
+`probe_status`, or show `probe_error` in the fleet row; (3) relabel the field
+"API key env var name" with a placeholder like `SP_ONPREM_API_KEY`. Operator
+workaround today: put the key in `SP_ONPREM_API_KEY` (already passed into the
+api container by every compose bundle) and set the field to that name. Related
+trap on the same form, already handled well: the slug must equal the endpoint's
+served model name, and the probe says so explicitly.
+
 ## B31 — CLAUDE.md rule 2's "declared no-protection posture" isn't enforced for non-onprem_only apps
 
 **Severity:** medium (spec/code mismatch — either the rule overstates what is enforced,
@@ -558,6 +629,40 @@ the edited body — the toggle proves the round-trip works.
 `OnboardForm` inputs (prefilled), submitting via the existing `onboardApi.update`.
 `slug` stays the identity key (PUT is keyed by slug); if slug itself must change,
 that's a delete+create, so keep slug read-only in the edit form. Own SDD task.
+
+## B19 — Onboarded model with a slashed slug (`org/model`) can't be edited or deleted  ✅ RESOLVED (2026-09-14; fix written 2026-08-11 but not merged until then)
+
+**Severity:** medium (resolved). Admin usability + a stuck-row trap; every
+HF/Dynamo-style model id hits it.
+**Found:** 2026-08-11, DGX lab, onboarding a Dynamo-served `Qwen/Qwen2.5-1.5B-Instruct`.
+**Re-found:** 2026-09-14, DGX Spark, onboarding `nvidia/Qwen3.8-27B-NVFP4` — the
+console's edit and delete both 404'd. The 2026-08-11 fix (`d48cd63`) had been
+written and tested on `fix/b19-onboard-slug-routes` but that branch was never
+merged, and this entry was lost when the backlogs were consolidated, so main
+still shipped the bug. Cherry-picked onto main.
+
+The edit/delete routes were declared `PUT`/`DELETE /admin/infra/models/{slug}`.
+A bare `{slug}` path parameter matches `[^/]+` — it does **not** match a slash —
+so real OpenAI-compatible ids (`Qwen/Qwen2.5-1.5B-Instruct`,
+`meta-llama/Llama-3.1-8B-Instruct`, …) 404'd on the slash. The UI already sends
+`encodeURIComponent(slug)` (`ui/src/api.ts`), but uvicorn percent-decodes `%2F`
+back to `/` **before** Starlette routes, so any onboarded row with a `/` in its
+slug was permanently un-editable and un-deletable through the API and the UI.
+This compounded into a stuck-row trap: a bad-endpoint onboard (`POST`, slug in
+the body — works fine) probes-unhealthy and is saved **disabled**; a re-`POST`
+then hard-409'd, and PUT/DELETE couldn't reach it — so the only way to clear it
+was deleting the row straight from the `onboarded_models` DB table.
+
+**Fix (`app/api/admin_routes.py`).** Both routes now use the path converter —
+`PUT`/`DELETE /admin/infra/models/{slug:path}` — so the slash is captured; the
+UI's `encodeURIComponent` is unchanged and now round-trips. Additionally, `POST`
+of an existing **disabled** slug is now an idempotent re-probe + upsert instead
+of a hard 409, so a bad-endpoint onboarding self-heals via a clean re-POST with
+no DB surgery. An already-**enabled** row still 409s (edit a working model with
+PUT), and a yaml cloud-pool name still 409s. Regression tests
+(`tests/test_onboard_api.py`): `test_slashed_slug_put_and_delete_roundtrip`
+(POST→PUT→DELETE on an `org/model` slug end-to-end) and
+`test_repost_of_disabled_slug_self_heals`.
 
 ## B1 — Multi-step 503s mislabeled "policy evaluation unavailable"  ✅ RESOLVED (2026-08-16, verified in code)
 
