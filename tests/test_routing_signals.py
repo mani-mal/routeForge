@@ -58,3 +58,12 @@ def test_disabled_cfg_never_raises():
     msgs = [{"role": "user", "content": "plan it"}]
     res = derive_signal_tier(msgs, hop_index=1, cfg=StageSignalsCfg(enabled=False))
     assert res == SignalResult(min_tier=None, reason=None)
+
+
+def test_benign_content_with_error_substring_does_not_raise():
+    msgs = [{"role": "user", "content": "go"},
+            {"role": "assistant", "content": ""},
+            _tool_msg("search", "no error found; error-free result")]
+    res = derive_signal_tier(msgs, hop_index=2, cfg=ON)
+    assert res.min_tier is None
+    assert res.reason is None

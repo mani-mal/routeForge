@@ -8,11 +8,14 @@ rules 3 & 8). Role is a heuristic and the reason string says so ('inferred').
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from app.config.schema import StageSignalsCfg
 
-_ERROR_MARKERS = ("error", "exception", "traceback", "failed", "failure")
+_ERROR_MARKERS = (r"\berror\b", r"\bexception\b", r"\btraceback\b",
+                  r"\bfailed\b", r"\bfailure\b")
+_NEGATED = ("no error", "without error", "no failure", "error-free", "no errors")
 
 
 @dataclass(frozen=True)
@@ -23,7 +26,9 @@ class SignalResult:
 
 def _looks_like_error(content: str) -> bool:
     low = content.lower()
-    return any(m in low for m in _ERROR_MARKERS)
+    if any(neg in low for neg in _NEGATED):
+        return False
+    return any(re.search(m, low) for m in _ERROR_MARKERS)
 
 
 def derive_signal_tier(messages: list[dict], hop_index: int,
