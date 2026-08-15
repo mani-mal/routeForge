@@ -20,6 +20,18 @@ class PoolCandidate(BaseModel):
     quality: float | None = None
 
 
+class StageSignalsCfg(BaseModel):
+    # Feature 2: agent-loop-derived, RAISE-ONLY tier bias. Default OFF so the
+    # baseline/demo numbers are unchanged; an operator toggles it on to show
+    # the lever. The signal only ever joins the max() in Router.select as a
+    # min_tier -- the residency clamp still caps it, so it can never lift an
+    # onprem_only request to cloud (CLAUDE.md rules 3 & 8).
+    enabled: bool = False
+    tool_error_raise: bool = True      # a tool error in the latest result -> raise one tier
+    exploration_repeat: int = 3        # same tool called >= N times -> raise one tier
+    planner_role_raise: bool = True    # inferred "plan" hop (hop 1, no tools yet) -> frontier
+
+
 class RoutingCfg(BaseModel):
     tiers: list[str]
     score_on: str
@@ -44,6 +56,7 @@ class RoutingCfg(BaseModel):
     risk_floors: dict[str, str]
     model_pool: list[PoolCandidate]
     fallback: dict[str, int]
+    stage_signals: StageSignalsCfg = StageSignalsCfg()
 
 
 class SensitivityRule(BaseModel):
