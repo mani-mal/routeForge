@@ -13,8 +13,8 @@ from dataclasses import dataclass
 
 from app.config.schema import StageSignalsCfg
 
-_ERROR_MARKERS = (r"\berror\b", r"\bexception\b", r"\btraceback\b",
-                  r"\bfailed\b", r"\bfailure\b")
+_ERROR_MARKERS = (r"\berrors?\b", r"\bexceptions?\b", r"\btraceback\b",
+                  r"\bfailed\b", r"\bfailures?\b")
 _NEGATED = ("no error", "without error", "no failure", "error-free", "no errors")
 
 

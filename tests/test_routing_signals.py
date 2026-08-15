@@ -67,3 +67,12 @@ def test_benign_content_with_error_substring_does_not_raise():
     res = derive_signal_tier(msgs, hop_index=2, cfg=ON)
     assert res.min_tier is None
     assert res.reason is None
+
+
+def test_plural_error_content_still_raises():
+    msgs = [{"role": "user", "content": "go"},
+            {"role": "assistant", "content": ""},
+            _tool_msg("search", "3 errors occurred; several failures logged")]
+    res = derive_signal_tier(msgs, hop_index=2, cfg=ON)
+    assert res.min_tier == "mid"
+    assert "error" in res.reason.lower()
