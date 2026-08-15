@@ -2,7 +2,7 @@ import logging
 import re
 import uuid
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 
 from app.agent.runtime import AgentCapExceeded
 from app.apps import store
@@ -10,6 +10,7 @@ from app.apps.langfuse_provision import load_app_langfuse
 from app.apps.policy import AppPolicyView, day_spend_usd, policy_view_from
 from app.errors import BackendUnavailable, NoEligibleCandidate, PolicyGateError
 from app.models import ChatRequest
+from app.obs import metrics
 from app.obs.export import export_trace
 from app.pipeline import PipelineRejected
 
@@ -67,6 +68,16 @@ def health(request: Request) -> dict:
     pool = registry.effective_pool() if registry else s.routing.model_pool
     return {"status": "ok", "backend": "litellm",
             "models": [c.name for c in pool]}
+
+
+@router.get("/metrics")
+def prometheus_metrics() -> Response:
+    """Prometheus scrape surface. Open like /health; auth is a production
+    concern (same posture as the decision-stream SSE)."""
+    if not metrics.AVAILABLE:
+        raise HTTPException(503, "metrics unavailable: install the observability extra")
+    body, content_type = metrics.render()
+    return Response(content=body, media_type=content_type)
 
 
 @router.post("/v1/chat/completions")
