@@ -34,12 +34,46 @@ def test_signal_raises_tier_when_enabled():
     assert order[raised.chosen.tier] >= order[base.chosen.tier]
 
 
+def _settings_with_cloud_enabled():
+    """S has azure/bedrock disabled in config/serving.yaml, so
+    ModelRegistry.effective_pool() drops azure-gpt-mid/bedrock-frontier
+    before Router.select ever sees them -- making a residency test against
+    the default S vacuous. Worse: even just enabling a MID-tier cloud
+    candidate (azure-gpt-mid) isn't enough to make a 'frontier' residency
+    test non-vacuous either -- test_signal_never_lifts_onprem_only_to_cloud
+    targets tier 'frontier', the test fixtures' on-prem pool (local-8b
+    cheap, local-32b mid) has no on-prem frontier candidate, and without a
+    cloud frontier candidate in the pool the clamp-to-best-allowed-tier
+    logic (router.py 'best_allowed_order' clamp) would ALSO drag the target
+    down to 'mid' on its own -- at which point on-prem wins the in-tier
+    scoring race against azure-gpt-mid purely on cost, without the residency
+    filter ever being exercised. Enabling bedrock (bedrock-frontier, tier
+    'frontier') is what closes that hole: only then does a genuine
+    frontier-tier cloud candidate exist for the residency filter to have to
+    exclude. Flips the flag on THIS settings snapshot only -- never touches
+    config/*.yaml."""
+    providers = dict(S.serving.providers)
+    providers["bedrock"] = providers["bedrock"].model_copy(update={"enabled": True})
+    serving = S.serving.model_copy(update={"providers": providers})
+    return S.model_copy(update={"serving": serving})
+
+
 def test_signal_never_lifts_onprem_only_to_cloud():
-    reg = make_test_registry(S)
+    s_cloud = _settings_with_cloud_enabled()
+    reg = make_test_registry(s_cloud)
+    # Sanity: a cloud FRONTIER candidate is genuinely in the pool this
+    # Router sees -- otherwise the assertion below would be vacuous (see
+    # _settings_with_cloud_enabled's docstring for why tier matters here,
+    # not just provider).
+    pool = reg.effective_pool()
+    assert any(c.provider == "bedrock" and c.tier == "frontier" for c in pool), \
+        "test setup broken: no bedrock frontier candidate in effective_pool()"
     ctx = _onprem_ctx()
-    d = Router(S, registry=reg).select(ctx, tokens_after=10, complexity=0.01,
-                                       min_tier="frontier")
-    # Residency clamp wins: the chosen candidate stays on-prem.
+    d = Router(s_cloud, registry=reg).select(ctx, tokens_after=10, complexity=0.01,
+                                             min_tier="frontier")
+    # Residency clamp wins: the chosen candidate stays on-prem even though a
+    # cloud frontier candidate (bedrock-frontier) was present in the pool and
+    # exactly matches the 'frontier' min_tier the signal raised to.
     assert d.chosen.provider == "onprem"
 
 
