@@ -6,6 +6,7 @@ from app.config.schema import Settings
 from app.errors import BackendUnavailable
 from app.gateway.backends.base import InferenceBackend
 from app.models import DecisionRecord, ExecutionPolicyContext, GenerationResult, Message
+from app.obs import metrics
 from app.routing.router import Router
 
 if TYPE_CHECKING:
@@ -34,7 +35,8 @@ class Gateway:
         result: GenerationResult | None = None
 
         while True:
-            decision = self._router.select(ctx, tokens_after, complexity, min_tier)
+            with metrics.time_routing():
+                decision = self._router.select(ctx, tokens_after, complexity, min_tier)
             cand = decision.chosen
             # Fail closed: if residency clamping keeps returning a tier that already
             # failed (e.g. onprem_only can't advance past the best on-prem tier),
@@ -70,6 +72,7 @@ class Gateway:
                 hop_index=len(records),
                 quality_score=decision.quality_score,
                 quality_source=decision.quality_source))
+            metrics.observe_routing_decision(cand.tier, escalated=escalations > 0)
 
             # For onprem_only requests the router clamps an out-of-reach tier back
             # down, so an escalation may re-issue the same tier — bounded by

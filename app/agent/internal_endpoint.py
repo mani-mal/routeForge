@@ -24,6 +24,7 @@ from fastapi.responses import StreamingResponse
 
 from app.agent.openai_sse import sse_final, sse_tool_call
 from app.models import CompressionRecord, DecisionRecord, ExecutionPolicyContext, Message
+from app.obs import metrics
 
 # Hosts allowed to call the internal endpoint. Real self-calls come from the
 # agent runtime's own process via 127.0.0.1 (see app/agent/runtime.py). The
@@ -149,7 +150,8 @@ async def internal_chat_completions(run_id: str, request: Request):
     comp = compress(hop_msgs, ctx, co_cfg, ccr=ccr)
     tokens_after = comp.tokens_after
     complexity = min(1.0, tokens_after / 2000)
-    decision = model_router.select(ctx, tokens_after, complexity, None)
+    with metrics.time_routing():
+        decision = model_router.select(ctx, tokens_after, complexity, None)
 
     hop_index = HOPS.next_hop_index(run_id)
 
@@ -178,6 +180,7 @@ async def internal_chat_completions(run_id: str, request: Request):
         quality_score=decision.quality_score,
         quality_source=decision.quality_source))
     HOPS.record_compression(run_id, comp.record)
+    metrics.observe_routing_decision(decision.chosen.tier, escalated=False)
 
     # Per-hop = ONE real call, no escalation/fallback here — escalation stays a
     # direct-path (Gateway.run) feature, unchanged from the previously-faked

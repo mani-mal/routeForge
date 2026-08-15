@@ -148,22 +148,28 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
         resp = await request.app.state.pipeline.run(
             request_id, tenant, body, app_policy=app_policy, profile=profile)
     except PipelineRejected as e:
+        metrics.observe_request("-", "rejected")
         message = str(e)
         prefix = ("model request rejected: "
                   if message.startswith("requested model")
                   else "response failed verification: ")
         raise HTTPException(422, f"{prefix}{message}")
     except NoEligibleCandidate as e:
+        metrics.observe_request("-", "rejected")
         raise HTTPException(422, f"no model is available for this request's policy: {e}")
     except AgentCapExceeded:
+        metrics.observe_request("-", "rejected")
         raise HTTPException(500, "agent did not converge within its step limit")
     except BackendUnavailable:
+        metrics.observe_request("-", "rejected")
         raise HTTPException(502, "no backend could serve this request")
     except PolicyGateError:
+        metrics.observe_request("-", "rejected")
         raise HTTPException(503, "policy evaluation unavailable")
     except HTTPException:
         raise
     except Exception:
+        metrics.observe_request("-", "error")
         raise HTTPException(500, "internal error")
     # B17: capture the client's workflow-run correlation id (opaque label).
     # Threaded onto the response dict so both history.record and the drilldown
@@ -171,6 +177,11 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
     # export_trace below for the Langfuse session stamp.
     session_id = _read_session_id(request)
     resp["session_id"] = session_id
+    metrics.observe_request(resp["model"], "ok")
+    usage = resp.get("usage", {})
+    metrics.observe_tokens(resp["model"],
+                           usage.get("prompt_tokens", 0),
+                           usage.get("completion_tokens", 0))
     try:
         # Eval-capture (docs/eval-logging-backlog.md): when capture_io is
         # redacted|full, attach the request prompt + response completion to the

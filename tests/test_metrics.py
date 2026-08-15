@@ -34,3 +34,22 @@ def test_metrics_carry_no_pii_or_tenant_labels():
     # Label keys must be bounded-cardinality only. Tenant/PII must never appear.
     for forbidden in ('tenant', 'application_id', 'request_id', 'prompt'):
         assert f'{forbidden}=' not in body
+
+
+_AUTH = {"Authorization": "Bearer demo-key"}
+
+
+def test_served_request_increments_counters(client):
+    """A completed request bumps requests_total and routing_decisions_total.
+    Uses the standard `client` fixture (see conftest.py) and the same
+    `_AUTH` bearer-token header the other end-to-end tests use (e.g.
+    tests/test_e2e_slice.py) — there is no `seed_all`/`api_headers` fixture
+    in this repo; `client` already boots a seeded app via create_app()."""
+    r = client.post("/v1/chat/completions", headers=_AUTH,
+                    json={"messages": [{"role": "user", "content": "hi"}]})
+    assert r.status_code == 200
+    after = TestClient(create_app()).get("/metrics").text
+    # Registry is process-global, so counters are visible from a fresh app too.
+    assert "routeforge_requests_total" in after
+    assert 'status="ok"' in after
+    assert "routeforge_routing_decisions_total" in after
