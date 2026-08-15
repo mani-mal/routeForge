@@ -25,6 +25,7 @@ from fastapi.responses import StreamingResponse
 from app.agent.openai_sse import sse_final, sse_tool_call
 from app.models import CompressionRecord, DecisionRecord, ExecutionPolicyContext, Message
 from app.obs import metrics
+from app.routing.signals import derive_signal_tier
 
 # Hosts allowed to call the internal endpoint. Real self-calls come from the
 # agent runtime's own process via 127.0.0.1 (see app/agent/runtime.py). The
@@ -150,12 +151,14 @@ async def internal_chat_completions(run_id: str, request: Request):
     comp = compress(hop_msgs, ctx, co_cfg, ccr=ccr)
     tokens_after = comp.tokens_after
     complexity = min(1.0, tokens_after / 2000)
-    with metrics.time_routing():
-        decision = model_router.select(ctx, tokens_after, complexity, None)
-
     hop_index = HOPS.next_hop_index(run_id)
-
     settings = request.app.state.settings
+    stage_cfg = settings.routing.stage_signals
+    sig = derive_signal_tier(messages, hop_index, stage_cfg) if stage_cfg.enabled else None
+    signal_tier = sig.min_tier if sig else None
+    with metrics.time_routing():
+        decision = model_router.select(ctx, tokens_after, complexity, signal_tier)
+
     backend = request.app.state.backend
     price = (registry.price_for(decision.chosen.name) if registry
              else settings.pricing.models[decision.chosen.name])
@@ -172,7 +175,9 @@ async def internal_chat_completions(run_id: str, request: Request):
 
     HOPS.record(run_id, DecisionRecord(
         step="agent_hop", chosen=decision.chosen.name,
-        chosen_display_name=decision.chosen.display_name, reason=decision.reason,
+        chosen_display_name=decision.chosen.display_name,
+        reason=(f"{decision.reason} · {sig.reason}" if sig and sig.reason
+                else decision.reason),
         rejected=decision.rejected, est_cost_usd=decision.est_cost_usd,
         actual_cost_usd=gen.cost_usd,        # REAL per-hop cost (was None + seeded latency)
         latency_ms=gen.latency_ms,           # REAL latency (no more seeded_latency_ms)
