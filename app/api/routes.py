@@ -90,6 +90,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
     if auth is None:
         # Fail closed: no valid token -> reject. Never fall through to a
         # default tenant (that was the old fail-open behavior).
+        metrics.observe_request("-", "unauthorized")
         raise HTTPException(401, "invalid or missing API token")
     tenant, app_policy, app_langfuse = auth
 
@@ -97,6 +98,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
     # then the daily spend cap (one indexed sum). Both reject with 429; the
     # budget rejection is recorded as a usage row so it shows in the dashboard.
     if not request.app.state.rate_limiter.allow(tenant, app_policy.max_rpm):
+        metrics.observe_request("-", "rate_limited")
         raise HTTPException(429, "rate limit exceeded for this application")
     if app_policy.max_spend_usd_per_day is not None:
         try:
@@ -117,6 +119,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
             except Exception:
                 logging.getLogger("serving.obs").exception(
                     "rejected-usage record failed (swallowed)")
+            metrics.observe_request("-", "budget_exceeded")
             raise HTTPException(429, "daily budget exceeded for this application")
 
     try:

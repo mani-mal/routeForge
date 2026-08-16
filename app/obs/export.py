@@ -24,8 +24,8 @@ def _candidates_json(rec: dict) -> str | None:
         return None
     items = []
     if chosen:
-        items.append({"model": chosen, "tier": rec.get("tier"),
-                      "provider": rec.get("provider"), "eligible": True,
+        items.append({"model": chosen, "tier": rec.get("chosen_tier"),
+                      "provider": rec.get("chosen_provider"), "eligible": True,
                       "reason": rec.get("reason", "")})
     for r in rejected:
         items.append({"model": r.get("name"), "tier": r.get("tier"),

@@ -1,8 +1,7 @@
 """Feature 3 F2: sp.candidates is always-on metadata (independent of
-capture_io). We capture span attributes with an in-memory OTel exporter and
-assert the serialized candidate set. Mirrors the span-capture pattern in
-tests/test_capture_io.py / test_agent_telemetry_redaction.py -- reuse that
-fixture rather than re-inventing it."""
+capture_io). These are unit tests of the `_candidates_json` serializer
+(app/obs/export.py) called directly with representative DecisionRecord-shaped
+dicts -- not span-capture tests."""
 import json
 
 from app.obs.export import _candidates_json
@@ -12,6 +11,8 @@ def test_candidates_json_shape():
     rec = {
         "step": "router",
         "chosen": "local-8b",
+        "chosen_tier": "cheap",
+        "chosen_provider": "onprem",
         "reason": "tier cheap (target cheap)",
         "rejected": [
             {"name": "bedrock-frontier", "provider": "bedrock", "tier": "frontier",
@@ -19,7 +20,10 @@ def test_candidates_json_shape():
         ],
     }
     out = json.loads(_candidates_json(rec))
-    assert {"model": "local-8b", "eligible": True}.items() <= _find(out, "local-8b").items()
+    chosen_entry = _find(out, "local-8b")
+    assert {"model": "local-8b", "eligible": True}.items() <= chosen_entry.items()
+    assert chosen_entry["tier"] == "cheap"
+    assert chosen_entry["provider"] == "onprem"
     rej = _find(out, "bedrock-frontier")
     assert rej["eligible"] is False
     assert rej["reason"] == "excluded · residency"

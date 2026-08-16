@@ -85,6 +85,8 @@ class DecisionRecord(BaseModel):
     step: str
     chosen: str | None
     chosen_display_name: str | None = None  # human-facing name for `chosen`
+    chosen_tier: str | None = None       # tier of the chosen candidate (F3 sp.candidates)
+    chosen_provider: str | None = None   # provider of the chosen candidate (F3 sp.candidates)
     reason: str
     rejected: list[RejectedCandidate] = Field(default_factory=list)
     est_cost_usd: float = 0.0

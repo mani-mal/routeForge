@@ -176,6 +176,7 @@ async def internal_chat_completions(run_id: str, request: Request):
     HOPS.record(run_id, DecisionRecord(
         step="agent_hop", chosen=decision.chosen.name,
         chosen_display_name=decision.chosen.display_name,
+        chosen_tier=decision.chosen.tier, chosen_provider=decision.chosen.provider,
         reason=(f"{decision.reason} · {sig.reason}" if sig and sig.reason
                 else decision.reason),
         rejected=decision.rejected, est_cost_usd=decision.est_cost_usd,

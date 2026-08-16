@@ -60,6 +60,14 @@ def test_disabled_cfg_never_raises():
     assert res == SignalResult(min_tier=None, reason=None)
 
 
+def test_disabled_cfg_suppresses_error_and_exploration_branches():
+    msgs = [{"role": "user", "content": "go"},
+            {"role": "assistant", "content": ""},
+            _tool_msg("search", "Error: connection refused (traceback ...)")]
+    res = derive_signal_tier(msgs, hop_index=3, cfg=StageSignalsCfg(enabled=False))
+    assert res == SignalResult(None, None)
+
+
 def test_benign_content_with_error_substring_does_not_raise():
     msgs = [{"role": "user", "content": "go"},
             {"role": "assistant", "content": ""},
