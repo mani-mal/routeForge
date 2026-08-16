@@ -166,3 +166,9 @@ class Settings(BaseModel):
     routing: RoutingCfg
     policy: PolicyCfg
     pricing: PricingCfg
+    # Feature 3 F3: short content hash of routing.yaml + pricing.yaml (the
+    # scoring weights, thresholds, tiers, pool, and prices that determine a
+    # routing decision). Stamped on every trace as sp.routing_policy_version so
+    # decisions can later be grouped by the exact policy that produced them
+    # (rlhf-readiness F3). Automatic -- no manual semver.
+    routing_policy_version: str = ""

@@ -67,7 +67,8 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                  application_id: str = "", app_langfuse=None,
                  capture_io: str = "off", prompt: str = "",
                  completion: str = "", recognizers=None,
-                 session_id: str | None = None) -> str | None:
+                 session_id: str | None = None,
+                 routing_policy_version: str = "") -> str | None:
     """Export the request's decision trace as spans and return the Langfuse UI
     URL for the resulting trace (or None when telemetry is disabled), so the
     caller can hand the UI a live "Langfuse trace" deep-link.
@@ -97,6 +98,8 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
             root.set_attribute("sp.onprem_only", bool(policy.get("onprem_only", False)))
             root.set_attribute("sp.detected_entities",
                                ",".join(policy.get("detected_entities", [])))  # TYPES only
+            if routing_policy_version:
+                root.set_attribute("sp.routing_policy_version", routing_policy_version)
             if session_id:
                 # Langfuse groups traces sharing this attribute into one Session
                 # (B17). Opaque, client-supplied; deliberately NOT in REDACT_KEYS

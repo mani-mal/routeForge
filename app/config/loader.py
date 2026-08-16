@@ -1,3 +1,5 @@
+import hashlib
+import json
 import os
 import re
 from pathlib import Path
@@ -20,6 +22,15 @@ def _expand_env(value: str) -> str:
 
 def _read(config_dir: str, name: str) -> dict:
     return yaml.safe_load(Path(config_dir, name).read_text()) or {}
+
+
+def _policy_version(routing_raw: dict, pricing_raw: dict) -> str:
+    """First 12 hex of sha256 over the canonicalized routing + pricing config.
+    Sorted-key JSON makes it stable across boots for identical config and
+    change only when a scoring/pool/price value changes."""
+    blob = json.dumps({"routing": routing_raw, "pricing": pricing_raw},
+                      sort_keys=True, default=str)
+    return hashlib.sha256(blob.encode()).hexdigest()[:12]
 
 
 def load_settings(config_dir: str = "config") -> Settings:
@@ -79,4 +90,5 @@ def load_settings(config_dir: str = "config") -> Settings:
     routing = RoutingCfg(**routing_raw)
     policy = PolicyCfg(**policy_raw)
     pricing = PricingCfg(**pricing_raw)
-    return Settings(serving=serving, routing=routing, policy=policy, pricing=pricing)
+    return Settings(serving=serving, routing=routing, policy=policy, pricing=pricing,
+                    routing_policy_version=_policy_version(routing_raw, pricing_raw))

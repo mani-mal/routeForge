@@ -205,7 +205,8 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
             # custom entity type (e.g. a hospital's MRN pattern) is masked in
             # telemetry, not just the built-in RegexDetector patterns.
             recognizers=profile.recognizers,
-            session_id=session_id)
+            session_id=session_id,
+            routing_policy_version=s.routing_policy_version)
         # Live deep-link for the UI's "Langfuse trace" button (None when
         # telemetry is off → the UI hides it). Set before history.record so the
         # inspector's full detail carries it.
