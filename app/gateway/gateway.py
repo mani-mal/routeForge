@@ -3,8 +3,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from app.config.schema import Settings
+from app.errors import BackendUnavailable
 from app.gateway.backends.base import InferenceBackend
 from app.models import DecisionRecord, ExecutionPolicyContext, GenerationResult, Message
+from app.obs import metrics
 from app.routing.router import Router
 
 if TYPE_CHECKING:
@@ -33,20 +35,21 @@ class Gateway:
         result: GenerationResult | None = None
 
         while True:
-            decision = self._router.select(ctx, tokens_after, complexity, min_tier)
+            with metrics.time_routing():
+                decision = self._router.select(ctx, tokens_after, complexity, min_tier)
             cand = decision.chosen
             # Fail closed: if residency clamping keeps returning a tier that already
             # failed (e.g. onprem_only can't advance past the best on-prem tier),
             # stop rather than loop forever.
             if cand.tier in failed_tiers:
-                raise RuntimeError(
+                raise BackendUnavailable(
                     "backend failed on all reachable tiers for this request")
             price = (self._reg.price_for(cand.name) if self._reg
                      else self._s.pricing.models[cand.name])
             try:
                 result = await self._backend.generate(
                     cand.name, messages, price, cand.tier, hint)
-            except Exception:
+            except Exception as exc:
                 records.append(DecisionRecord(
                     step="gateway", chosen=None,
                     reason=f"{cand.name} failed; escalating/fallback",
@@ -55,18 +58,23 @@ class Gateway:
                 failed_tiers.add(cand.tier)
                 nxt = _NEXT[cand.tier]
                 if nxt is None:
-                    raise
+                    raise BackendUnavailable(
+                        "backend failed on all reachable tiers for this request"
+                    ) from exc
                 min_tier = nxt
                 continue
 
             records.append(DecisionRecord(
                 step="router", chosen=cand.name,
-                chosen_display_name=cand.display_name, reason=decision.reason,
+                chosen_display_name=cand.display_name,
+                chosen_tier=cand.tier, chosen_provider=cand.provider,
+                reason=decision.reason,
                 rejected=decision.rejected, est_cost_usd=decision.est_cost_usd,
                 actual_cost_usd=result.cost_usd, latency_ms=result.latency_ms,
                 hop_index=len(records),
                 quality_score=decision.quality_score,
                 quality_source=decision.quality_source))
+            metrics.observe_routing_decision(cand.tier, escalated=escalations > 0)
 
             # For onprem_only requests the router clamps an out-of-reach tier back
             # down, so an escalation may re-issue the same tier — bounded by

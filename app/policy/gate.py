@@ -37,4 +37,7 @@ class Gate:
         ctx = build_context(self._settings, request_id, tenant_id, entities, map_id,
                             app_policy=app_policy, app_rules=rules,
                             registry=self._registry)
+        ctx = ctx.model_copy(update={
+            "requested_model": None if request.model == "auto" else request.model,
+        })
         return ctx, redacted, mapping

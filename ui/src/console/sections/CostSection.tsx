@@ -135,12 +135,12 @@ export function CostSection({ requests }: { requests: RequestSummary[] }) {
         <StatTile
           label="Token Intelligence Density"
           value={formatDensity(tokenIntelligenceDensity)}
-          sub="quality delivered per 1k tokens — needs a per-model quality score"
+          info="quality delivered per 1k tokens — needs a per-model quality score"
         />
         <StatTile
           label="Cost Intelligence Density"
           value={formatDensity(costIntelligenceDensity)}
-          sub="quality delivered per $ — needs a per-model quality score"
+          info="quality delivered per $ — needs a per-model quality score"
         />
       </div>
     </div>

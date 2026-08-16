@@ -29,7 +29,7 @@ def test_hop_records_real_cost_and_latency(client, monkeypatch):
         assert resp.status_code == 200
         rec = HOPS._runs[run_id].records[-1]
         assert rec.actual_cost_usd is not None and rec.actual_cost_usd > 0  # real, not None
-        assert rec.latency_ms >= 0  # from the real call, not seeded_latency_ms
+        assert rec.latency_ms > 0  # measured (real) latency, not zero; never seeded
         assert calls["n"] == 1  # the backend was actually called
     finally:
         if HOPS.has(run_id):

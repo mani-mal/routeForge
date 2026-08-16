@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Callable, TYPE_CHECKING
 
 from app.config.schema import ContextOptimizationCfg, Settings
+from app.errors import PolicyGateError
 from app.gateway.backends.base import count_tokens
 from app.gateway.gateway import Gateway
 from app.models import (
@@ -55,9 +56,12 @@ class Pipeline:
         self._co_cfg_provider = co_cfg_provider
         self._ccr = ccr
 
-    def _baseline(self, tokens_after: int) -> float:
+    def _baseline(self, in_tokens: int, out_tokens: int) -> float:
+        """All-frontier baseline: input and output priced at the baseline
+        (most-expensive frontier) model's respective rates — the SAME token
+        basis `total` uses, so routing_saved compares like with like (B12)."""
         p = self._s.pricing.models[self._s.pricing.baseline_model]
-        return tokens_after / 1_000_000 * (p.input + p.output)
+        return (in_tokens * p.input + out_tokens * p.output) / 1_000_000
 
     def _display_name(self, model_slug: str) -> str:
         """Resolve a routing-pool slug (e.g. `local-8b`) to its human-facing
@@ -82,14 +86,32 @@ class Pipeline:
         # classification (the gate) and egress verification (verify(), both
         # call sites below) -- a custom entity type the base detector can't
         # see must not silently skip the output leakage check either.
-        if profile is not None:
-            det = EffectiveDetector(self._detector, list(profile.recognizers))
-            rules = effective_rules(profile, self._s)
-        else:
-            det, rules = self._detector, None
-        ctx, sanitized, _map = self._gate.evaluate(
-            request_id, tenant_id, request, app_policy=app_policy,
-            detector=det, rules=rules)
+        try:
+            if profile is not None:
+                det = EffectiveDetector(self._detector, list(profile.recognizers))
+                rules = effective_rules(profile, self._s)
+            else:
+                det, rules = self._detector, None
+            ctx, sanitized, _map = self._gate.evaluate(
+                request_id, tenant_id, request, app_policy=app_policy,
+                detector=det, rules=rules)
+        except PolicyGateError:
+            raise
+        except Exception as e:
+            raise PolicyGateError("policy evaluation failed") from e
+        if ctx.requested_model is not None:
+            pool = self._reg.effective_pool() if self._reg else self._s.routing.model_pool
+            permitted = {
+                c.name for c in pool
+                if c.provider in ctx.allowed_providers
+                and (not ctx.model_scope_active or c.name in ctx.allowed_models)
+                and (self._reg is None or self._reg.is_allowed_for_app(c.name, tenant_id))
+                and (c.provider != "onprem" or self._reg is None
+                     or self._reg.is_enabled(c.name))
+            }
+            if ctx.requested_model not in permitted:
+                raise PipelineRejected(
+                    f"requested model {ctx.requested_model!r} is not permitted or unavailable")
         # NOTE: task-mode is a rules-only stub today. If a real LLM classifier replaces it,
         # it must receive SANITIZED content (not the raw request) — see CLAUDE.md.
         mode = decide_mode(ctx, request)
@@ -134,8 +156,8 @@ class Pipeline:
         # and show fake positive net savings. compression_saved IS clamped,
         # but harmlessly so — tokens_after <= tokens_before always holds, so
         # it is >= 0 anyway.
-        baseline_usd = self._baseline(comp.tokens_before)
-        baseline_after = self._baseline(comp.tokens_after)
+        baseline_usd = self._baseline(comp.tokens_before, result.tokens_out)
+        baseline_after = self._baseline(comp.tokens_after, result.tokens_out)
         compression_saved = max(0.0, baseline_usd - baseline_after)
         routing_saved = baseline_after - total
         trace = [r.model_dump() for r in records] + [vrec.model_dump()]
@@ -211,16 +233,21 @@ class Pipeline:
         #
         # baseline_after prices the SAME (post-compression) token basis as
         # `total` above, via each hop's `tokens_priced` — consistent with the
-        # direct path's self._baseline(comp.tokens_after).
-        baseline_after = sum(self._baseline(h.tokens_priced) for h in result.hops)
+        # direct path's self._baseline(comp.tokens_after, result.tokens_out).
+        baseline_after = sum(self._baseline(h.tokens_priced, h.tokens_out)
+                             for h in result.hops)
         # baseline_before prices each hop's PRE-compression token count — the
         # true all-frontier baseline before either lever runs. Falls back to
         # baseline_after (so compression_saved_usd == 0) only when there are NO
         # compression records at all, i.e. zero hops. (A hop that *bypassed*
         # compression still emits a record with tokens_before == tokens_after,
         # so it contributes equally to both sums and needs no special-casing.)
+        # baseline_before pairs each compression's pre-compression input with its
+        # hop's output (compressions are 1:1 with hops; see comment above).
         if result.compressions:
-            baseline_before = sum(self._baseline(cr.tokens_before) for cr in result.compressions)
+            baseline_before = sum(
+                self._baseline(cr.tokens_before, h.tokens_out)
+                for cr, h in zip(result.compressions, result.hops))
         else:
             baseline_before = baseline_after
         compression_saved_usd = max(0.0, baseline_before - baseline_after)
@@ -260,7 +287,7 @@ class Pipeline:
             "trace": trace,
             # baseline_usd is reported pre-both-levers (baseline_before), so
             # the headline baseline is consistent with the direct path's
-            # baseline_usd (self._baseline(comp.tokens_before)).
+            # baseline_usd (self._baseline(comp.tokens_before, result.tokens_out)).
             "cost": {"total_usd": total, "baseline_usd": baseline_before,
                      "routing_saved_usd": routing_saved_usd,
                      "compression_saved_usd": compression_saved_usd},

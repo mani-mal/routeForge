@@ -1,16 +1,46 @@
 import logging
+import re
 import uuid
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 
+from app.agent.runtime import AgentCapExceeded
 from app.apps import store
 from app.apps.langfuse_provision import load_app_langfuse
 from app.apps.policy import AppPolicyView, day_spend_usd, policy_view_from
+from app.errors import BackendUnavailable, NoEligibleCandidate, PolicyGateError
 from app.models import ChatRequest
+from app.obs import metrics
 from app.obs.export import export_trace
 from app.pipeline import PipelineRejected
 
 router = APIRouter()
+
+
+# B17: opaque, client-supplied workflow-run correlation id. A label only —
+# never a policy control — so it FAILS OPEN: absent / over-long / malformed
+# values yield None (the request is still served, just ungrouped). Bounded at
+# intake (length + narrow charset) so it is safe to render in the console and
+# to place in an OTel attribute without escaping. It is NOT redacted on either
+# surface — grouping needs the value intact — so RouteForge treats it as an
+# opaque, non-PII label BY CONTRACT: the client must not put PII in the
+# correlation id. The charset alone does not exclude PII (e.g. an SSN like
+# 123-45-6789 is digit-and-hyphen only and would pass), so this is a contract,
+# not a filter.
+_SESSION_ID_RE = re.compile(r"[A-Za-z0-9._:-]+")
+
+
+def _sanitize_session_id(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    raw = raw.strip()
+    if not raw or len(raw) > 128 or not _SESSION_ID_RE.fullmatch(raw):
+        return None
+    return raw
+
+
+def _read_session_id(request: Request) -> str | None:
+    return _sanitize_session_id(request.headers.get("x-routeforge-session"))
 
 
 async def _authenticate(request: Request
@@ -40,6 +70,16 @@ def health(request: Request) -> dict:
             "models": [c.name for c in pool]}
 
 
+@router.get("/metrics")
+def prometheus_metrics() -> Response:
+    """Prometheus scrape surface. Open like /health; auth is a production
+    concern (same posture as the decision-stream SSE)."""
+    if not metrics.AVAILABLE:
+        raise HTTPException(503, "metrics unavailable: install the observability extra")
+    body, content_type = metrics.render()
+    return Response(content=body, media_type=content_type)
+
+
 @router.post("/v1/chat/completions")
 async def chat_completions(body: ChatRequest, request: Request) -> dict:
     s = request.app.state.settings
@@ -50,6 +90,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
     if auth is None:
         # Fail closed: no valid token -> reject. Never fall through to a
         # default tenant (that was the old fail-open behavior).
+        metrics.observe_request("-", "unauthorized")
         raise HTTPException(401, "invalid or missing API token")
     tenant, app_policy, app_langfuse = auth
 
@@ -57,6 +98,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
     # then the daily spend cap (one indexed sum). Both reject with 429; the
     # budget rejection is recorded as a usage row so it shows in the dashboard.
     if not request.app.state.rate_limiter.allow(tenant, app_policy.max_rpm):
+        metrics.observe_request("-", "rate_limited")
         raise HTTPException(429, "rate limit exceeded for this application")
     if app_policy.max_spend_usd_per_day is not None:
         try:
@@ -77,6 +119,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
             except Exception:
                 logging.getLogger("serving.obs").exception(
                     "rejected-usage record failed (swallowed)")
+            metrics.observe_request("-", "budget_exceeded")
             raise HTTPException(429, "daily budget exceeded for this application")
 
     try:
@@ -87,27 +130,61 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
         # admin PUT (Task 10) calls cache.clear(app_id) on writes so edits
         # take effect on the next request. A profile-load failure must not
         # silently fall back to the base detector/global rules for a request
-        # an app has customized -- so this is inside the same try/except
-        # that already maps any non-PipelineRejected exception to a
-        # fail-closed 503 below.
-        cache = request.app.state.profile_cache
-        profile = cache.get(tenant)
-        if profile is None:
-            async with request.app.state.db.session() as session:
-                profile = await store.get_privacy_profile(session, tenant)
-            cache.put(tenant, profile)
-        # Merged model registry: lazily loaded once, then cheap. Refreshed by
-        # the admin model-onboarding routes so onboarded/enabled on-prem models
-        # appear in (or drop out of) the router's candidate pool promptly.
-        await request.app.state.registry.ensure_loaded(request.app.state.db)
+        # an app has customized -- so the setup block below is wrapped to
+        # raise PolicyGateError on any failure, which the taxonomy maps to a
+        # fail-closed 503 (B1). Pipeline failures downstream map to their own
+        # honest statuses (422/500/502), not this 503.
+        try:
+            cache = request.app.state.profile_cache
+            profile = cache.get(tenant)
+            if profile is None:
+                async with request.app.state.db.session() as session:
+                    profile = await store.get_privacy_profile(session, tenant)
+                cache.put(tenant, profile)
+            # Merged model registry: lazily loaded once, then cheap. Refreshed
+            # by the admin model-onboarding routes so onboarded/enabled
+            # on-prem models appear in (or drop out of) the router's
+            # candidate pool promptly.
+            await request.app.state.registry.ensure_loaded(request.app.state.db)
+        except Exception as e:
+            raise PolicyGateError("policy setup failed") from e
         resp = await request.app.state.pipeline.run(
             request_id, tenant, body, app_policy=app_policy, profile=profile)
     except PipelineRejected as e:
-        raise HTTPException(422, f"response failed verification: {e}")
+        metrics.observe_request("-", "rejected")
+        message = str(e)
+        prefix = ("model request rejected: "
+                  if message.startswith("requested model")
+                  else "response failed verification: ")
+        raise HTTPException(422, f"{prefix}{message}")
+    except NoEligibleCandidate as e:
+        metrics.observe_request("-", "rejected")
+        raise HTTPException(422, f"no model is available for this request's policy: {e}")
+    except AgentCapExceeded:
+        metrics.observe_request("-", "rejected")
+        raise HTTPException(500, "agent did not converge within its step limit")
+    except BackendUnavailable:
+        metrics.observe_request("-", "rejected")
+        raise HTTPException(502, "no backend could serve this request")
+    except PolicyGateError:
+        metrics.observe_request("-", "rejected")
+        raise HTTPException(503, "policy evaluation unavailable")
     except HTTPException:
         raise
     except Exception:
-        raise HTTPException(503, "policy evaluation unavailable")
+        metrics.observe_request("-", "error")
+        raise HTTPException(500, "internal error")
+    # B17: capture the client's workflow-run correlation id (opaque label).
+    # Threaded onto the response dict so both history.record and the drilldown
+    # (which read `resp`) carry it with no signature change, and passed to
+    # export_trace below for the Langfuse session stamp.
+    session_id = _read_session_id(request)
+    resp["session_id"] = session_id
+    metrics.observe_request(resp["model"], "ok")
+    usage = resp.get("usage", {})
+    metrics.observe_tokens(resp["model"],
+                           usage.get("prompt_tokens", 0),
+                           usage.get("completion_tokens", 0))
     try:
         # Eval-capture (docs/eval-logging-backlog.md): when capture_io is
         # redacted|full, attach the request prompt + response completion to the
@@ -130,7 +207,9 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
             # above for the pipeline run, Task 7) into egress redaction so a
             # custom entity type (e.g. a hospital's MRN pattern) is masked in
             # telemetry, not just the built-in RegexDetector patterns.
-            recognizers=profile.recognizers)
+            recognizers=profile.recognizers,
+            session_id=session_id,
+            routing_policy_version=s.routing_policy_version)
         # Live deep-link for the UI's "Langfuse trace" button (None when
         # telemetry is off → the UI hides it). Set before history.record so the
         # inspector's full detail carries it.

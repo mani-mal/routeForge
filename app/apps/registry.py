@@ -58,7 +58,14 @@ class ModelRegistry:
         return self._rows or {}
 
     def effective_pool(self) -> list[PoolCandidate]:
-        pool = list(self._s.routing.model_pool)
+        # A static (YAML) cloud candidate is only routable when its provider is
+        # enabled in serving.yaml. A killed provider must never enter the pool --
+        # otherwise it surfaces as a phantom "residency" spur on the router card
+        # (B10). Onboarded on-prem rows are gated per-model by r.enabled; the
+        # on-prem infra kill-switch is handled in policy/context via
+        # has_healthy_onprem, so it is not re-applied here.
+        enabled = {p for p, c in self._s.serving.providers.items() if c.enabled}
+        pool = [c for c in self._s.routing.model_pool if c.provider in enabled]
         for r in self._onboarded().values():
             if r.enabled:
                 pool.append(PoolCandidate(

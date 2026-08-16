@@ -47,6 +47,7 @@ class RequestSummary(BaseModel):
     quality_sum: float = 0.0            # Σ per-call quality — TID/CID numerator
     quality: float | None = None        # chosen model's score (display)
     quality_source: str | None = None   # provenance of `quality` (display)
+    session_id: str | None = None       # B17: client workflow-run correlation id (opaque)
 
 
 class HistoryStore:
@@ -109,6 +110,7 @@ class HistoryStore:
             quality_sum=float(quality.get("sum", 0.0)),
             quality=quality.get("chosen"),
             quality_source=quality.get("source"),
+            session_id=resp.get("session_id"),
         )
         self._summaries.append(summary)
         self._full[summary.id] = resp

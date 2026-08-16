@@ -101,10 +101,24 @@ def test_app_scoped_model_permitted_for_its_own_app():
 
 def test_empty_registry_matches_no_registry():
     # Regression no-op: with no onboarded rows, routing over the registry must
-    # match routing straight off the YAML pool.
-    reg = _run(_reg_with({}))
-    with_reg = Router(S, registry=reg).select(
+    # match routing straight off the YAML pool -- for the *enabled-provider*
+    # portion of the pool. The no-registry path (`Router(S)`, used only when no
+    # ModelRegistry is injected at all) reads settings.routing.model_pool raw
+    # and is not subject to the B10 provider-enabled filter, which lives in
+    # ModelRegistry.effective_pool(); with the default config (azure/bedrock
+    # disabled) that raw pool still contains them, so this test enables both
+    # here to keep comparing like with like instead of exercising the filter.
+    s = S.model_copy(update={"serving": S.serving.model_copy(update={"providers": {
+        **S.serving.providers,
+        "azure": S.serving.providers["azure"].model_copy(update={"enabled": True}),
+        "bedrock": S.serving.providers["bedrock"].model_copy(update={"enabled": True}),
+    }})})
+    # No onboarded rows either way, so a cold ModelRegistry(s) (no DB refresh
+    # needed) is equivalent to _reg_with({}) here and avoids rebuilding it
+    # against the wrong settings object.
+    reg = ModelRegistry(s)
+    with_reg = Router(s, registry=reg).select(
         _ctx({"onprem", "azure", "bedrock"}), tokens_after=20, complexity=0.1)
-    without = Router(S).select(
+    without = Router(s).select(
         _ctx({"onprem", "azure", "bedrock"}), tokens_after=20, complexity=0.1)
     assert with_reg.chosen.name == without.chosen.name

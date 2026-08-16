@@ -30,6 +30,47 @@ from sqlalchemy.pool import StaticPool
 DEFAULT_SQLITE_URL = "sqlite+aiosqlite:///./routeforge.db"
 
 
+def _patch_aiosqlite_wakeup() -> None:
+    """Work around a runtime-specific aiosqlite wakeup failure.
+
+    In this Python 3.12 runtime the aiosqlite worker completes the connection
+    future but does not wake the event loop waiting on it. Polling the already
+    thread-safe Future at scheduler checkpoints preserves aiosqlite's worker
+    thread and avoids blocking the loop. The patch is intentionally limited to
+    the connection handshake; normal query execution remains aiosqlite's code.
+    """
+    try:
+        import aiosqlite.core
+    except ImportError:
+        return
+    connection_type = aiosqlite.core.Connection
+    if getattr(connection_type, "_routeforge_wakeup_patch", False):
+        return
+
+    async def connect_without_broken_wakeup(self):
+        if self._connection is None:
+            future = asyncio.get_running_loop().create_future()
+            self._tx.put_nowait((future, self._connector))
+            while not future.done():
+                await asyncio.sleep(0)
+            self._connection = future.result()
+        return self
+
+    async def execute_without_broken_wakeup(self, fn, *args, **kwargs):
+        if not self._running or not self._connection:
+            raise ValueError("Connection closed")
+        future = asyncio.get_running_loop().create_future()
+        from functools import partial
+        self._tx.put_nowait((future, partial(fn, *args, **kwargs)))
+        while not future.done():
+            await asyncio.sleep(0)
+        return future.result()
+
+    connection_type._connect = connect_without_broken_wakeup
+    connection_type._execute = execute_without_broken_wakeup
+    connection_type._routeforge_wakeup_patch = True
+
+
 class Base(DeclarativeBase):
     """Declarative base for all routeForge application-layer tables."""
 
@@ -48,6 +89,7 @@ def make_engine(url: str | None = None):
     the one connection — and thus the database — survives across requests."""
     url = _resolve_url(url)
     if url.startswith("sqlite"):
+        _patch_aiosqlite_wakeup()
         connect_args = {"check_same_thread": False}
         if _is_memory_sqlite(url):
             return create_async_engine(
