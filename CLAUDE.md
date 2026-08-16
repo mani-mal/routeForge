@@ -117,6 +117,16 @@ incremental-verification streaming is an open question, out of scope here.
 - **vLLM Semantic Router** (step 8) selects a model path within a vLLM pool
 - **Dynamo** (step 8) selects/scales inference workers and KV placement
 
+**Routing observability & signals** (shipped `0.11.0`; see
+`docs/routing-observability.md`): (1) `GET /metrics` is an in-process Prometheus
+exporter — four `routeforge_*` families, bounded labels only, **no
+tenant/PII**, opt-in `observability` extra (503 without it), no bundled server;
+(2) `routing.stage_signals` (default **OFF**) feeds a **raise-only** `min_tier`
+bias from agent-loop state on the multi-step path — the residency clamp still
+caps it, so it can never lift `onprem_only` to cloud; (3) every trace carries
+`sp.candidates` (chosen + rejected set) and `sp.routing_policy_version`
+(routing+pricing content hash), emitted regardless of `capture_io`.
+
 ## Configuration — everything switchable at startup
 
 Four YAMLs, env-var overridable. **No code changes to switch modes.** **One owner per
