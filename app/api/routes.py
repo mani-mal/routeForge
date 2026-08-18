@@ -191,7 +191,14 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
         # trace. `off` (demo default) passes empty strings and sets nothing.
         # The raw body prompt is redacted inside export_trace for `redacted`
         # mode — routes.py never decides what leaves; the exporter path does.
-        capture_io = s.serving.observability.langfuse.capture_io
+        # Per-app capture_io (B14) overrides the global default; null = inherit.
+        capture_io = app_policy.capture_io or s.serving.observability.langfuse.capture_io
+        # Fail-closed clamp: `full` stores RAW, permitted only for a non-onprem app
+        # with its OWN Langfuse project (so raw lands only in a residency-local
+        # project). Otherwise downgrade to `redacted` — never store raw (rules #2/#6/#8).
+        if capture_io == "full" and (
+                app_policy.residency == "onprem_only" or app_langfuse is None):
+            capture_io = "redacted"
         prompt = body.messages[-1].content if body.messages else ""
         sanitized_prompt = resp.pop("sanitized_prompt", "")
         completion = ""
