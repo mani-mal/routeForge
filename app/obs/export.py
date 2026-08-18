@@ -35,7 +35,7 @@ def _candidates_json(rec: dict) -> str | None:
 
 
 def _set_io(root, capture_io: str, prompt: str, completion: str,
-            recognizers=None) -> None:
+            recognizers=None, sanitized_prompt: str = "") -> None:
     """Attach request/response I/O to the root span per the eval-capture mode
     (docs/eval-logging-backlog.md). `input.value`/`output.value` are the OTel
     attributes Langfuse reads as a trace's Input/Output.
@@ -53,7 +53,10 @@ def _set_io(root, capture_io: str, prompt: str, completion: str,
     if capture_io == "off":
         return
     if capture_io == "redacted":
-        prompt = redact(prompt, recognizers=recognizers)
+        # Prefer the gate's already-sanitized prompt so telemetry can never be
+        # weaker than what the model saw (B13). Fall back to re-redacting raw
+        # for callers that don't supply it (backward-compatible).
+        prompt = sanitized_prompt or redact(prompt, recognizers=recognizers)
         completion = redact(completion, recognizers=recognizers)
     # `full`: leave prompt/completion raw (lint-gated, residency-local only).
     if prompt:
@@ -66,7 +69,7 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                  cost: dict, policy: dict, trace: list[dict],
                  application_id: str = "", app_langfuse=None,
                  capture_io: str = "off", prompt: str = "",
-                 completion: str = "", recognizers=None,
+                 completion: str = "", sanitized_prompt: str = "", recognizers=None,
                  session_id: str | None = None,
                  routing_policy_version: str = "") -> str | None:
     """Export the request's decision trace as spans and return the Langfuse UI
@@ -105,7 +108,8 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                 # (B17). Opaque, client-supplied; deliberately NOT in REDACT_KEYS
                 # so it passes through the RedactingSpanExporter intact.
                 root.set_attribute("langfuse.session.id", session_id)
-            _set_io(root, capture_io, prompt, completion, recognizers=recognizers)
+            _set_io(root, capture_io, prompt, completion,
+                    recognizers=recognizers, sanitized_prompt=sanitized_prompt)
             for i, rec in enumerate(trace):
                 step = str(rec.get("step", f"step-{i}"))
                 with tracer.start_as_current_span(f"serving.{step}") as sp:

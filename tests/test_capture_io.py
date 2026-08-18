@@ -178,3 +178,28 @@ def test_redacted_capture_end_to_end(monkeypatch):
     assert "input.value" in attrs                 # I/O now captured (was blank)
     assert _SSN not in str(attrs)                 # but redacted — rule 2 holds
     assert "<US_SSN>" in attrs["input.value"]
+
+
+def test_redacted_uses_gate_sanitized_prompt(monkeypatch):
+    # When the gate's sanitized prompt is supplied, redacted mode stores THAT
+    # verbatim (never weaker than what the model saw) rather than re-redacting raw.
+    mem, provider = _wire(monkeypatch, redacting=False)
+    _export(capture_io="redacted",
+            prompt=f"my SSN is {_SSN}",                 # raw (ignored in redacted)
+            sanitized_prompt="my SSN is <US_SSN>")       # gate output
+    provider.force_flush()
+    attrs = _root_attrs(mem)
+    assert attrs["input.value"] == "my SSN is <US_SSN>"
+    assert _SSN not in attrs["input.value"]
+
+
+def test_full_ignores_sanitized_prompt_and_keeps_raw(monkeypatch):
+    # full stores RAW for distillation; sanitized_prompt must NOT override it.
+    monkeypatch.setattr(otel, "_capture_io_full", True)
+    mem, provider = _wire(monkeypatch, redacting=True)
+    _export(capture_io="full",
+            prompt=f"my SSN is {_SSN}",
+            sanitized_prompt="my SSN is <US_SSN>")
+    provider.force_flush()
+    attrs = _root_attrs(mem)
+    assert _SSN in attrs["input.value"]                  # raw, on purpose
