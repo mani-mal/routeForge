@@ -72,15 +72,17 @@ DSPy, and the memory module. All are later slices or out of scope.
 **Change the data flow, not the redactor.** Surface the gate's sanitized prompt (and map) from
 the pipeline and feed *that* to the exporter.
 
-- `app/pipeline.py`: stop discarding `_map`. Add to both return dicts (direct `:181`,
-  multi-step `:287`) a `sanitized` block: `{"prompt": sanitized, "redaction_map": _map}`. The
-  completion is already `text`; egress redaction of the completion stays in `_set_io`.
-- `app/api/routes.py:195`: pass `resp["sanitized"]["prompt"]` (not
-  `body.messages[-1].content`) as `prompt=` to `export_trace`. Optionally pass the map for
-  defence-in-depth idempotent re-redaction.
-- `app/obs/export.py:_set_io`: when a pre-sanitized prompt is supplied, do **not** re-run
-  Presidio on the raw body; it may still idempotently re-apply the map. Net: telemetry shows
-  exactly what the model saw.
+- `app/pipeline.py`: add `resp["sanitized_prompt"] = sanitized` to both return dicts (direct
+  `:181` where `sanitized` is in scope; multi-step `:287` via `san_messages[-1].content`).
+  Thread the **text only** (map is belt-and-suspenders; the exporter already re-redacts on
+  egress). The completion is already `text`; its egress redaction stays in `_set_io`.
+- `app/api/routes.py`: keep `prompt=` as the **raw** last message (so `full` still stores raw —
+  the distillation substrate) and add a **separate** `sanitized_prompt=resp.pop("sanitized_
+  prompt","")` to the `export_trace(...)` call. Pop it so the internal field never reaches the
+  client.
+- `app/obs/export.py:_set_io`: `redacted` → use the supplied `sanitized_prompt` (fall back to
+  `redact(prompt)` when absent, for backward-compat); `full` → raw `prompt` unchanged; `off` →
+  nothing. Net: `redacted` telemetry shows exactly what the model saw, `full` still stores raw.
 - **UI copy (superseded by Phase C display, but corrected here as interim):**
   `ui/src/console/RequestDrilldown.tsx:149` — the unconditional "never stored" caption is
   removed / made mode-aware.
