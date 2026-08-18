@@ -267,10 +267,25 @@ async def update_application(app_id: str, body: UpdateAppIn, request: Request,
 async def set_policy(app_id: str, body: PolicyIn, request: Request,
                      _: str = Depends(require_admin)) -> dict:
     async with request.app.state.db.session() as session:
-        if await store.get_application(session, app_id) is None:
+        app = await store.get_application_with_policy(session, app_id)
+        if app is None:
             raise HTTPException(404, "application not found")
+        if body.capture_io == "full":
+            from app.apps.langfuse_provision import load_app_langfuse
+            residency = (body.residency or (app.policy.residency if app.policy else None)) \
+                or app.default_residency
+            if residency == "onprem_only" or load_app_langfuse(app) is None:
+                raise HTTPException(
+                    422, "capture_io='full' stores raw telemetry and is allowed only "
+                    "for a non-onprem application with its own provisioned Langfuse "
+                    "project (residency beats eval; CLAUDE.md rule 6). Use 'redacted'.")
         await store.upsert_policy(session, app_id, **body.model_dump())
         await session.commit()
+        # `app.policy` was eager-loaded (possibly as None) above for the
+        # eligibility check; expire it so upsert_policy's write is actually
+        # re-read below instead of returning the stale cached relationship
+        # (expire_on_commit=False on this sessionmaker).
+        session.expire(app)
         full = await store.get_application_with_policy(session, app_id)
         return _app_dict(full)
 
