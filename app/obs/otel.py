@@ -33,10 +33,12 @@ _capture_io_full: bool = False  # set once at init_tracing from serving.yaml
 _provider = None  # module-level singleton
 _trace_base: str | None = None  # "{host}/project/{project_id}/traces/" for deep-links
 _deeplink_host: str | None = None  # browser-reachable Langfuse host (public_host)
-# Per-application TracerProviders keyed by the app's Langfuse public key, so each
-# application's decision traces export to ITS OWN project (spec 2026-07-25,
-# Phase 5). None means "tried and failed / SDK missing" — don't retry.
-_app_providers: dict[str, object] = {}
+# Per-application TracerProviders keyed by (public_key, capture_io_full), so
+# each application's decision traces export to ITS OWN project (spec
+# 2026-07-25, Phase 5) and a full-eligible app's raw-passthrough exporter is
+# cached separately from any redacted one. None means "tried and failed / SDK
+# missing" — don't retry.
+_app_providers: dict[tuple[str, bool], object] = {}
 
 
 def trace_url(trace_id: int) -> str | None:
@@ -74,28 +76,35 @@ def _build_exporter(lf):
     return _build_exporter_kv(lf.host, lf.public_key, lf.secret_key)
 
 
-def get_app_tracer(host: str, public_key: str, secret_key: str):
+def get_app_tracer(host: str, public_key: str, secret_key: str,
+                   capture_io_full: bool = False):
     """Return a tracer that exports to one application's Langfuse project,
     building (and caching) a dedicated TracerProvider the first time. Returns
     None if the observability SDK isn't installed. Reuses the same redacting
-    exporter as the shared pipeline, so per-app traces are redacted too."""
-    if public_key in _app_providers:
-        p = _app_providers[public_key]
+    exporter as the shared pipeline, so per-app traces are redacted too —
+    UNLESS this app is eligible for `full` capture (capture_io_full=True), in
+    which case its own exporter is built with skip_io=True so raw I/O is kept
+    in ITS project only. Cached per (public_key, capture_io_full) so a single
+    app's redacted and full exporters (if ever both requested) don't collide."""
+    cache_key = (public_key, capture_io_full)
+    if cache_key in _app_providers:
+        p = _app_providers[cache_key]
         return p.get_tracer("serving-plane") if p is not None else None
     try:
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
         base = _build_exporter_kv(host, public_key, secret_key)
-        exporter = RedactingSpanExporter(base) if RedactingSpanExporter else base
+        exporter = RedactingSpanExporter(base, skip_io=capture_io_full) \
+            if RedactingSpanExporter else base
         provider = TracerProvider(
             resource=Resource.create({"service.name": "serving-plane"}))
         provider.add_span_processor(BatchSpanProcessor(exporter))
     except Exception:  # SDK missing or misconfigured — never break serving
         log.warning("per-app tracer build failed for a Langfuse project (non-fatal)")
-        _app_providers[public_key] = None
+        _app_providers[cache_key] = None
         return None
-    _app_providers[public_key] = provider
+    _app_providers[cache_key] = provider
     return provider.get_tracer("serving-plane")
 
 
@@ -180,16 +189,16 @@ def _make_redacting_exporter():
     from opentelemetry.sdk.trace.export import SpanExporter
 
     class RedactingSpanExporter(SpanExporter):
-        def __init__(self, delegate):
+        def __init__(self, delegate, skip_io: bool = False):
             self._delegate = delegate
+            self._skip_io = skip_io
 
         def export(self, spans):
             for span in spans:
                 self._redact(span)
             return self._delegate.export(spans)
 
-        @staticmethod
-        def _redact(span):
+        def _redact(self, span):
             # ReadableSpan._attributes is a BoundedAttributes (private OTel field).
             # Verified against opentelemetry-sdk 1.44.0: once a span is finished it
             # is constructed with immutable=True, so __setitem__ raises TypeError
@@ -202,7 +211,10 @@ def _make_redacting_exporter():
                 return
             # In capture_io='full' the I/O keys are intentionally left raw
             # (lint-gated, residency-local); everything else still redacts.
-            skip = _IO_KEYS if _capture_io_full else frozenset()
+            # Per-app full exporters pass skip_io=True; the shared exporter
+            # falls back to the process-global flag. Either way, non-I/O keys
+            # always redact.
+            skip = _IO_KEYS if (self._skip_io or _capture_io_full) else frozenset()
             keys_to_redact = [k for k in attrs.keys()
                               if k in REDACT_KEYS and k not in skip]
             if not keys_to_redact:

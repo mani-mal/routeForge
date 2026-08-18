@@ -88,7 +88,8 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
         per_app = None
         if app_langfuse is not None:
             per_app = get_app_tracer(app_langfuse.host, app_langfuse.public_key,
-                                     app_langfuse.secret_key)
+                                     app_langfuse.secret_key,
+                                     capture_io_full=(capture_io == "full"))
         tracer = per_app if per_app is not None else get_tracer()
         with tracer.start_as_current_span("serving.request") as root:
             root.set_attribute("sp.request_id", request_id)
