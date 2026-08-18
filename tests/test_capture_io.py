@@ -209,6 +209,45 @@ def test_full_ignores_sanitized_prompt_and_keeps_raw(monkeypatch):
     assert _SSN in attrs["input.value"]                  # raw, on purpose
 
 
+def test_full_downgrades_when_per_app_tracer_build_fails(monkeypatch):
+    # app_langfuse IS configured (the app has its own Langfuse project), but
+    # get_app_tracer fails to build a tracer for it (SDK build failure). Must
+    # NOT fall through to authoring raw I/O on the SHARED tracer -- downgrade
+    # to redacted before any span is authored (B14 final-review).
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(export_mod, "get_app_tracer", lambda *a, **k: None)
+    monkeypatch.setattr(otel, "_capture_io_full", True)  # even if globally armed
+    mem, provider = _wire(monkeypatch, redacting=True)
+    app_lf = SimpleNamespace(host="http://lf", public_key="pk", secret_key="sk",
+                             project_id="proj-1")
+    _export(capture_io="full", app_langfuse=app_lf)
+    provider.force_flush()
+    attrs = _root_attrs(mem)
+    assert _SSN not in attrs["input.value"]
+    assert _SSN not in attrs["output.value"]
+    assert "<US_SSN" in attrs["input.value"]  # redacted, not merely absent
+
+
+def test_full_per_app_tracer_builds_still_stores_raw(monkeypatch):
+    # Sanity check for the normal per-app-full path: when the per-app tracer
+    # DOES build, raw I/O still lands -- only in that app's own project.
+    from types import SimpleNamespace
+
+    app_mem = InMemorySpanExporter()
+    app_provider = TracerProvider()
+    app_provider.add_span_processor(
+        SimpleSpanProcessor(otel.RedactingSpanExporter(app_mem, skip_io=True)))
+    monkeypatch.setattr(export_mod, "get_app_tracer",
+                        lambda *a, **k: app_provider.get_tracer("t"))
+    app_lf = SimpleNamespace(host="http://lf", public_key="pk", secret_key="sk",
+                             project_id="proj-1")
+    _export(capture_io="full", app_langfuse=app_lf)
+    app_provider.force_flush()
+    root = next(s for s in app_mem.get_finished_spans() if s.name == "serving.request")
+    assert _SSN in dict(root.attributes)["input.value"]
+
+
 def test_redacting_exporter_skip_io_keeps_raw_only_when_armed(monkeypatch):
     # Per-app full exporters are built with skip_io=True so an eligible app's
     # OWN project keeps raw I/O even while the process-global flag is off; the

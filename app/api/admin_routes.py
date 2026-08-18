@@ -270,6 +270,8 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
         app = await store.get_application_with_policy(session, app_id)
         if app is None:
             raise HTTPException(404, "application not found")
+        if body.residency is not None and body.residency not in RESIDENCY:
+            raise HTTPException(422, f"bad residency {body.residency!r}")
         if body.capture_io == "full":
             from app.apps.langfuse_provision import load_app_langfuse
             residency = (body.residency or (app.policy.residency if app.policy else None)) \
@@ -278,7 +280,7 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
                 raise HTTPException(
                     422, "capture_io='full' stores raw telemetry and is allowed only "
                     "for a non-onprem application with its own provisioned Langfuse "
-                    "project (residency beats eval; CLAUDE.md rule 6). Use 'redacted'.")
+                    "project (residency beats eval; CLAUDE.md rules 2/8). Use 'redacted'.")
         await store.upsert_policy(session, app_id, **body.model_dump())
         await session.commit()
         # `app.policy` was eager-loaded (possibly as None) above for the

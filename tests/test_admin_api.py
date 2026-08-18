@@ -82,6 +82,17 @@ def test_policy_full_capture_rejected_for_ineligible_app(client):
                       json={"capture_io": "redacted"}).status_code == 200
 
 
+def test_policy_rejects_bad_residency(client):
+    _login(client)
+    client.post("/admin/applications", json={"id": "resapp", "name": "Res"})
+    r = client.put("/admin/applications/resapp/policy", json={"residency": "bogus"})
+    assert r.status_code == 422
+    assert "residency" in r.text.lower()
+    # a valid residency is accepted
+    assert client.put("/admin/applications/resapp/policy",
+                      json={"residency": "private_cloud_ok"}).status_code == 200
+
+
 def test_usage_summary_reflects_served_requests(client):
     _login(client)
     token = client.post("/admin/applications",

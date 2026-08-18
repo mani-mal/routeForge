@@ -195,7 +195,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
         capture_io = app_policy.capture_io or s.serving.observability.langfuse.capture_io
         # Fail-closed clamp: `full` stores RAW, permitted only for a non-onprem app
         # with its OWN Langfuse project (so raw lands only in a residency-local
-        # project). Otherwise downgrade to `redacted` — never store raw (rules #2/#6/#8).
+        # project). Otherwise downgrade to `redacted` — never store raw (CLAUDE.md rules 2/8).
         if capture_io == "full" and (
                 app_policy.residency == "onprem_only" or app_langfuse is None):
             capture_io = "redacted"
