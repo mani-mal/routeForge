@@ -113,6 +113,14 @@ out of scope (would need field-level policy, not entity detection).
 - **UI:** tri-state control in `ui/src/admin/ApplicationsPanel.tsx` app settings, with the
   `full` warning (raw store, access-controlled, TTL) and a disabled+explained state when the
   residency lint forbids `full`.
+- **Follow-ups carried from Phase A final review (2026-08-18):** (1) **`full` currently captures
+  only the last raw message** — `app/api/routes.py:195` sources `prompt=body.messages[-1].content`.
+  Phase A made `redacted` reflect the *full* sanitized prompt, but `full` still stores only the
+  last message, an incomplete distillation substrate for multi-message requests. B14/`full` must
+  capture the whole conversation (raw), symmetric with the gate's full-concatenation view.
+  (2) **Placeholder-format symmetry:** `input.value` uses the gate's numbered placeholders
+  (`<MRN_1>`) while `output.value` uses the exporter's bare `redact()` form (`<MRN>`) — a cosmetic
+  within-trace inconsistency to reconcile when Phase C drives symmetric display.
 
 **Tests:** resolution precedence; lint rejects `full` for an onprem_only app and for an app with
 no own project; runtime clamp; `full` allowed only for own-project + non-onprem app.
