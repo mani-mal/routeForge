@@ -146,7 +146,9 @@ function StepBody({ stepKey, detail, hops }: { stepKey: string; detail: ChatResp
           <Row label="request id">{detail.id}</Row>
           <Row label="served model">{detail.model_display ?? detail.model}</Row>
           <p className="text-xs text-gray-500 pt-2">
-            The raw prompt is never stored or shown — nothing external sees it until the gate clears it.
+            Nothing external sees the request until the policy gate clears it. If telemetry
+            capture is on, only the gate-sanitized prompt (entity values masked) is stored —
+            never more than the model itself received.
           </p>
         </>
       );
