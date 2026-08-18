@@ -25,9 +25,14 @@ because the seams are the product's value. RouteForge delivers three guarantees:
   or load-balances **no** inference itself. Operators stand up their own serving
   (vLLM/Dynamo/NIM/any OpenAI-compatible server) and onboard it. If asked to make
   RouteForge deploy or scale inference, say it is out of scope and stop.
-- **Serving Plane only.** The Improvement Plane (training, evaluation gates, promotion,
-  registry-as-trainer) is external and NOT built here. Do not add it. If asked to "close
-  the loop", say it is out of scope and stop.
+- **Serving Plane, control-plane role — orchestrated, not hosted.** The Improvement Plane
+  (training, evaluation gates, promotion) runs on **external compute**. RouteForge may capture
+  the training substrate, **trigger** an external training/distillation job, and **onboard the
+  result** — but it runs no training loop, hosts no training or inference compute, and has no
+  in-process promotion path. Onboarding stays the only path a model enters. If asked to make
+  RouteForge **host** training or inference compute (not just orchestrate it), say it is out of
+  scope and stop. (See `docs/architecture/self-improving-agent-feature-fit.md` for the full
+  scope decision, 2026-08-17.)
 
 ## Definition of done
 
@@ -59,9 +64,12 @@ guarantees.
 3. **`onprem_only` is absolute.** If policy sets it, a cloud provider must be
    unreachable by construction — filtered out of the candidate pool before the router
    scores anything. Never a post-hoc check.
-4. **RouteForge deploys and promotes nothing.** It routes. There is no promotion path,
-   and it never stands up or scales inference — it points at OpenAI-compatible endpoints
-   that operators onboard. It serves only.
+4. **RouteForge hosts no compute; it orchestrates and consumes.** It routes. It never stands
+   up or scales inference — it points at OpenAI-compatible endpoints that operators onboard.
+   The Improvement Plane is **orchestrated, not hosted**: RouteForge may capture training
+   substrate, trigger an external training/distillation job, and onboard the resulting model,
+   but it runs no training compute and has no in-process promotion path. Onboarding remains the
+   only path a model enters.
 5. **Fail closed.** If the policy gate errors, reject the request. Never fall through
    to "no policy = allow".
 6. **Headroom CCR stays inside the residency boundary.** CCR caches *originals*

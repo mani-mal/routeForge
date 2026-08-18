@@ -3,9 +3,20 @@
 Running list of known defects/observations to pick up later. Newest first.
 Sibling backlogs: `ui-open-items.md`, `eval-logging-backlog.md`.
 
+> **Status sweep 2026-08-16.** Every item below was re-verified against the code.
+> Resolved-but-unmarked items now carry a `✅ RESOLVED` / `PARTIAL` marker in their
+> heading with a one-line evidence note; the original write-ups are kept for history.
+> Still open: **B2**, **B3**, **B13** (bugs) and **B14–B16** (features).
+
 ---
 
-## B1 — Multi-step 503s mislabeled "policy evaluation unavailable"
+## B1 — Multi-step 503s mislabeled "policy evaluation unavailable"  ✅ RESOLVED (2026-08-16, verified in code)
+
+**Resolution:** the fail-closed 503 is now scoped to the policy-setup stage only
+(`app/api/routes.py:149-171` raises `PolicyGateError` just for profile/registry setup);
+downstream `pipeline.run()` failures map to distinct statuses (422/500/502) and a broad
+`except Exception` returns 500 "internal error". The 503 now means what it says. Original
+write-up kept below.
 
 **Severity:** medium (misleading, not data-unsafe)
 **Found:** 2026-07-31, DGX burst on `:0.6.0`
@@ -53,7 +64,12 @@ be scaled out for throughput without first moving history + the decision bus
 to a **shared store** (DB or Redis pub/sub). Until then, single API replica is
 a hard constraint for a coherent demo.
 
-## B4 — Presidio SSN recognizer misses raw SSN on egress
+## B4 — Presidio SSN recognizer misses raw SSN on egress  ✅ RESOLVED (2026-08-16, verified in code)
+
+**Resolution:** a regex `US_SSN` layer covers Presidio's blocklisted sample SSNs
+(`app/policy/detectors.py:81-100`) and the egress redactor reuses the same `RegexDetector`
+(`app/obs/redact.py:14-25`, `app/obs/export.py:55-56`), so raw SSNs are masked on egress.
+Original write-up kept below.
 
 **Severity:** low (pre-existing, unrelated to the LiteLLM swap)
 **Found:** 2026-07-31 (also present on `:0.5.0`)
@@ -75,7 +91,10 @@ in Cluster C with hardened `> 0` latency assertions
 corrected `app/gateway/backends/base.py` comment. Cross-ref memory
 `routeforge-multistep-latency-zero-bug` (now stale/resolved).
 
-## B6 — Can't rename an application
+## B6 — Can't rename an application  ✅ RESOLVED (2026-08-16, verified in code)
+
+**Resolution:** `PATCH /applications/{app_id}` (`app/api/admin_routes.py:252-257`, `UpdateAppIn.name`)
+with an Edit form in `ui/src/admin/ApplicationsPanel.tsx:257-356`. Original write-up kept below.
 
 **Severity:** medium (admin usability)
 **Found:** 2026-08-04, UI
@@ -85,7 +104,12 @@ not editable). Operators can't correct/rename an app after creation. Needs a
 working edit path (UI field + PATCH/PUT to the app record) in
 `ui/src/admin/ApplicationsPanel.tsx` and the corresponding API route.
 
-## B7 — Can't delete an application
+## B7 — Can't delete an application  ✅ RESOLVED as soft-archive (2026-08-16, verified in code)
+
+**Resolution (partial):** implemented as archive/restore via `PATCH status=archived`
+(`ui/src/admin/ApplicationsPanel.tsx:364-368`, `app/api/admin_routes.py:252`) rather than a
+destructive `DELETE` route. If true deletion (with cascade) is required, treat this as still
+open. Original write-up kept below.
 
 **Severity:** medium (admin usability)
 **Found:** 2026-08-04, UI
@@ -95,7 +119,10 @@ stale/test apps with no cleanup path. Needs a delete action in
 `ui/src/admin/ApplicationsPanel.tsx` + a DELETE API route (and decide cascade
 behavior for the app's policy/rows).
 
-## B8 — Application setup doesn't show the cost currency unit
+## B8 — Application setup doesn't show the cost currency unit  ✅ RESOLVED (2026-08-16, verified in code)
+
+**Resolution:** setup inputs are labeled `price / 1M input ($)` and `price / 1M output ($)`
+(`ui/src/admin/InfrastructurePanel.tsx:157,161`). Original write-up kept below.
 
 **Severity:** low (cosmetic/clarity)
 **Found:** 2026-08-04, UI
@@ -104,7 +131,11 @@ In the application setup screen, cost values render without a `$` unit, so the
 number is ambiguous. Add the `$` prefix (and confirm USD/1M framing matches
 `pricing.yaml`) on the setup UI.
 
-## B9 — Cost density explanation text is truncated
+## B9 — Cost density explanation text is truncated  ✅ RESOLVED (2026-08-16, verified in code)
+
+**Resolution:** the explanation moved to a tooltip (`info=` prop → `title=`) in
+`ui/src/console/sections/CostSection.tsx:138,143` (`ui/src/components/common.tsx:39,49`); no
+more clipping. Original write-up kept below.
 
 **Severity:** low (cosmetic/clarity)
 **Found:** 2026-08-04, UI
@@ -116,7 +147,12 @@ fully (`ui/src/console/sections/CostSection.tsx:135-144`). Either show the full
 text (let the tile wrap/expand) or move the explanation into a tooltip/info
 balloon (`?` hover) so the label stays compact.
 
-## B10 — Router shows disabled cloud providers as spurs, mislabeled "residency"
+## B10 — Router shows disabled cloud providers as spurs, mislabeled "residency"  ✅ RESOLVED (2026-08-16, verified in code)
+
+**Resolution:** `ModelRegistry.effective_pool()` now drops candidates whose provider isn't
+enabled in `serving.providers` (`app/apps/registry.py:67-68`), so killed cloud paths never
+enter the pool; the residency rejection reason is now distinct from "not permitted"
+(`app/routing/router.py:63-64`). Original write-up kept below.
 
 **Severity:** medium (misleading demo trace + wrong rejection reason)
 **Found:** 2026-08-04, UI (Model Router card, decision drilldown)
@@ -151,7 +187,11 @@ at all; and/or split the `allowed_providers` rejection into distinct reasons
 Decide whether disabled providers should be hidden entirely or shown greyed with
 an honest "provider off" reason. Own SDD task.
 
-## B11 — "What happened" summary card labels request "Cloud-eligible" when cloud was excluded
+## B11 — "What happened" summary card labels request "Cloud-eligible" when cloud was excluded  ✅ RESOLVED (2026-08-16, verified in code)
+
+**Resolution:** the eligibility line is now derived from `p.allowed_providers` (the effective
+pool), not the `onprem_only` flag (`ui/src/console/RequestDrilldown.tsx:432-435`). Original
+write-up kept below.
 
 **Severity:** medium (misleading demo headline; contradicts the panel below it)
 **Found:** 2026-08-04, request drilldown (support-ticket demo)
@@ -180,7 +220,12 @@ residency"). Reconcile the "no sensitive data found" wording with the detected
 entity chips so a `PERSON`/`confidential` request doesn't read as clean. Pairs
 naturally with B10. Own SDD task.
 
-## B12 — "All-frontier baseline" omits completion tokens → routing_saved goes negative
+## B12 — "All-frontier baseline" omits completion tokens → routing_saved goes negative  ✅ RESOLVED (2026-08-16, verified in code)
+
+**Resolution:** `Pipeline._baseline(in_tokens, out_tokens)` now prices
+`in_tokens×input_rate + out_tokens×output_rate` and is called with the actual input+output
+token counts (`app/pipeline.py:59-64,159-160,237,249`), so routing_saved is positive for a
+cheaper-tier request and zero for a same-tier request. Original write-up kept below.
 
 **Severity:** medium (undercuts the flagship cost-savings claim; number goes
 negative on the screen meant to prove savings)
@@ -223,7 +268,17 @@ baseline_usd - total`. Add a unit test that a same-tier request yields
 `routing_saved == 0` and a cheaper-tier request yields `routing_saved > 0`.
 Re-verify the Overview aggregate against summed per-request values. Own SDD task.
 
-## B13 — `capture_io: redacted` stores raw application input in Langfuse (weaker than the gate); UI claims it never does
+## B13 — `capture_io: redacted` stores raw application input in Langfuse (weaker than the gate); UI claims it never does  ⚠️ STILL OPEN (partly narrowed, 2026-08-16)
+
+**Status 2026-08-16:** structural cause is still present — `app/api/routes.py:195` passes the
+**raw** `body.messages[-1].content` to `export_trace`, which re-runs `redact()` independently
+(`app/obs/export.py:_set_io`) instead of reusing the gate's sanitized prompt + redaction map.
+Business fields that aren't PII entity types (subject/summary/customer_id) still pass through in
+`redacted` mode. The SSN/custom-recognizer gap is narrowed (B4's regex layer + per-app
+recognizers are now threaded into egress redaction, `routes.py:210`). Demo default is
+`capture_io: off`, so this is not a live breach — but it undercuts the claim when `redacted` is
+enabled. **Fix is folded into B14** (drive display/export from the gate's sanitized text).
+Original write-up kept below.
 
 **Severity:** medium (privacy-story integrity; Rule #2. Demo lab uses synthetic
 data so not a live breach, but it undercuts the central claim on-camera)
@@ -395,7 +450,14 @@ rollup project suffices for cross-app router eval; LLM fine-tuning reads the app
 governing storage + symmetric UI display) → B15 (per-app projects + admin rollup).
 Shared files/data model — plan together. Own SDD task; plan first.
 
-## B16 — FEATURE (future): RLHF-readiness — feedback capture, router-decision export, dataset export
+## B16 — FEATURE (future): RLHF-readiness — feedback capture, router-decision export, dataset export  🟡 PARTIAL (2026-08-16)
+
+**Status 2026-08-16:** gaps 1 & 2 shipped in `:0.11.0` — the always-on `sp.candidates`
+snapshot (chosen + rejected set) and the `sp.routing_policy_version` content hash are now
+stamped on every trace regardless of `capture_io` (see `docs/routing-observability.md`).
+**Remaining:** gap 3 — the feedback ingestion path (`POST /v1/feedback` + UI thumbs → a
+Langfuse score linked to the trace, returning the trace/request id on every chat response) —
+plus routing-specific score configs and dataset-export readiness. Original write-up kept below.
 
 **Type:** feature (future; design in `docs/rlhf-readiness.md`).
 **Severity:** low-now / high-later (unlocks feedback-driven router + model
