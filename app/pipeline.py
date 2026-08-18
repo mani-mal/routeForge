@@ -199,6 +199,7 @@ class Pipeline:
             "policy": {"sensitivity": ctx.sensitivity, "onprem_only": ctx.onprem_only,
                        "allowed_providers": sorted(ctx.allowed_providers),
                        "detected_entities": list(ctx.detected_entities)},
+            "sanitized_prompt": sanitized,
         }
 
     async def _run_multi_step(self, request_id: str, ctx: ExecutionPolicyContext,
@@ -297,4 +298,5 @@ class Pipeline:
             "policy": {"sensitivity": ctx.sensitivity, "onprem_only": ctx.onprem_only,
                        "allowed_providers": sorted(ctx.allowed_providers),
                        "detected_entities": list(ctx.detected_entities)},
+            "sanitized_prompt": san_messages[-1].content if san_messages else "",
         }
