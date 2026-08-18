@@ -81,7 +81,7 @@ function PolicyEditor({ app, onSaved }: { app: AdminApp; onSaved: () => void }) 
     app.policy ?? {
       allowed_tiers: null, allowed_providers: null, allowed_models: null,
       residency: null, max_spend_usd_per_day: null, max_rpm: null,
-      compression_enabled: null,
+      compression_enabled: null, capture_io: null,
     });
   const [modelsText, setModelsText] = useState((p.allowed_models ?? []).join(", "));
   const [busy, setBusy] = useState(false);
@@ -157,6 +157,30 @@ function PolicyEditor({ app, onSaved }: { app: AdminApp; onSaved: () => void }) 
           per-app context compression; safety bypasses still apply
         </span>
       </div>
+      {(() => {
+        const fullDisabled =
+          (p.residency ?? app.default_residency) === "onprem_only" ||
+          !app.langfuse_project_id;
+        return (
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs text-gray-500 w-20">eval capture</span>
+            <select
+              value={p.capture_io ?? ""}
+              onChange={(e) => setP({ ...p, capture_io: e.target.value || null })}
+              className="rounded bg-ink border border-edge px-2 py-1 text-xs text-gray-100">
+              <option value="">(global default)</option>
+              <option value="off">off</option>
+              <option value="redacted">redacted</option>
+              <option value="full" disabled={fullDisabled && p.capture_io !== "full"}>
+                full{fullDisabled ? " — needs own Langfuse + non-onprem" : ""}
+              </option>
+            </select>
+            <span className="text-[10px] text-gray-600">
+              raw (full) is stored only in this app's own residency-local project
+            </span>
+          </div>
+        );
+      })()}
       <div className="flex items-center gap-4 flex-wrap">
         <label className="flex items-center gap-2 text-xs text-gray-500">
           max rpm
