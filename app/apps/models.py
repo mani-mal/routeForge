@@ -106,6 +106,12 @@ class AppPolicy(Base):
     # restricted bypass rules (config/serving.yaml) still fire on top, so an app
     # can never force compression onto content the safety rules exclude.
     compression_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # Per-app eval-capture override (F1 Phase B). null = inherit the live global
+    # switch (s.serving.observability.langfuse.capture_io). "off"|"redacted"|"full".
+    # "full" is gated: only an app that is NOT onprem_only AND has its own
+    # provisioned Langfuse project may resolve to it (write-time lint in
+    # admin_routes.set_policy + runtime clamp in api/routes.py).
+    capture_io: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
     application: Mapped[Application] = relationship(back_populates="policy")
 

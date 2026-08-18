@@ -136,6 +136,20 @@ def test_http_provider_restriction_reflected_in_policy(tmp_path):
         restore()
 
 
+def test_capture_io_persists_and_round_trips_via_policy_api(tmp_path):
+    db_url, restore = _with_db(tmp_path)
+    try:
+        from tests.test_admin_api import _login  # admin session helper
+        with TestClient(create_app()) as c:
+            _login(c)
+            c.post("/admin/applications", json={"id": "acme", "name": "Acme"})
+            r = c.put("/admin/applications/acme/policy", json={"capture_io": "redacted"})
+            assert r.status_code == 200
+            assert r.json()["policy"]["capture_io"] == "redacted"
+    finally:
+        restore()
+
+
 def _compression_record(trace):
     # CompressionRecord is the only trace entry carrying tokens_before.
     return next(e for e in trace if "tokens_before" in e)
