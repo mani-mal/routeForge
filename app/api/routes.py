@@ -14,7 +14,7 @@ from app.models import ChatRequest
 from app.obs import metrics
 from app.obs.export import export_trace
 from app.obs.redact import redact
-from app.obs.scores import SCORE_NAMES, post_score
+from app.obs.scores import SCORE_NAMES, ensure_score_config, post_score
 from app.pipeline import PipelineRejected
 
 router = APIRouter()
@@ -354,9 +354,11 @@ async def feedback(body: FeedbackIn, request: Request) -> dict:
     tenant, app_policy, app_langfuse = auth
     if body.score_name not in SCORE_NAMES:
         raise HTTPException(422, f"unknown score_name: {body.score_name!r}")
+    await ensure_score_config(app_langfuse, body.score_name)  # best-effort, never raises
     stored = await post_score(app_langfuse, body.trace_id, body.score_name,
                               body.value, body.comment)
     if body.corrected_output:
+        await ensure_score_config(app_langfuse, "corrected_output")
         await post_score(app_langfuse, body.trace_id, "corrected_output", 1,
                          body.corrected_output)
     return {"stored": stored}

@@ -96,7 +96,7 @@ def test_feedback_corrected_output_posts_second_score(client, monkeypatch):
     calls = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        calls.append(json.loads(request.content))
+        calls.append({"url": str(request.url), "body": json.loads(request.content)})
         return httpx.Response(200, json={"id": "score_x"})
 
     real_ac = httpx.AsyncClient
@@ -113,10 +113,14 @@ def test_feedback_corrected_output_posts_second_score(client, monkeypatch):
                           "value": 0.5, "corrected_output": "the fixed answer"})
     assert r.status_code == 200
     assert r.json()["stored"] is True
-    assert len(calls) == 2
-    names = {c["name"] for c in calls}
+    # Two /api/public/score-configs POSTs (best-effort, ensure_score_config)
+    # also fire here now (one per score name) -- filter down to the actual
+    # /api/public/scores posts, which is what this test asserts on.
+    score_calls = [c["body"] for c in calls if c["url"].endswith("/api/public/scores")]
+    assert len(score_calls) == 2
+    names = {c["name"] for c in score_calls}
     assert names == {"quality", "corrected_output"}
-    corrected = next(c for c in calls if c["name"] == "corrected_output")
+    corrected = next(c for c in score_calls if c["name"] == "corrected_output")
     assert corrected["comment"] == "the fixed answer"
     assert corrected["value"] == 1
     assert corrected["dataType"] == "NUMERIC"

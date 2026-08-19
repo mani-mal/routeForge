@@ -88,6 +88,37 @@ def test_admin_feedback_posts_for_known_request(client, monkeypatch):
     assert base64.b64decode(encoded).decode() == "pk:sk"
 
 
+def test_admin_feedback_corrected_output_posts_second_score(client, monkeypatch):
+    token = _make_app_with_langfuse(client, "fbadmin4")
+
+    served = client.post("/v1/chat/completions",
+                         headers={"Authorization": f"Bearer {token}"}, json=_MSG)
+    assert served.status_code == 200, served.text
+    rid = served.json()["id"]
+
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append({"url": str(request.url), "body": json.loads(request.content)})
+        return httpx.Response(200, json={"id": "score_x"})
+
+    _patch_httpx(monkeypatch, handler)
+
+    r = client.post(f"/api/requests/{rid}/feedback",
+                    json={"score_name": "quality", "value": 0.5,
+                          "corrected_output": "the fixed answer"})
+    assert r.status_code == 200, r.text
+    assert r.json()["stored"] is True
+
+    score_calls = [c["body"] for c in calls if c["url"].endswith("/api/public/scores")]
+    assert len(score_calls) == 2
+    names = {c["name"] for c in score_calls}
+    assert names == {"quality", "corrected_output"}
+    corrected = next(c for c in score_calls if c["name"] == "corrected_output")
+    assert corrected["value"] == 1
+    assert corrected["comment"] == "the fixed answer"
+
+
 def test_admin_feedback_no_trace_id_reports_reason(client, monkeypatch):
     # Same seeding as above, but this app has no Langfuse project, so
     # export_trace never authors a real span context -> resp has no
