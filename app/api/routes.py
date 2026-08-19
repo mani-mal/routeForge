@@ -202,6 +202,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
             capture_io = "redacted"
         prompt = body.messages[-1].content if body.messages else ""
         sanitized_prompt = resp.pop("sanitized_prompt", "")
+        raw_completion = resp.pop("raw_completion", "")   # pre-verify; NEVER client-visible
         completion = ""
         try:
             completion = resp["choices"][0]["message"]["content"] or ""
@@ -226,7 +227,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
             cost=resp["cost"], policy=resp["policy"], trace=resp["trace"],
             application_id=tenant, app_langfuse=app_langfuse,
             capture_io=capture_io, prompt=prompt, completion=completion,
-            sanitized_prompt=sanitized_prompt,
+            sanitized_prompt=sanitized_prompt, raw_completion=raw_completion,
             # Task 8: thread the app's custom recognizers (already resolved
             # above for the pipeline run, Task 7) into egress redaction so a
             # custom entity type (e.g. a hospital's MRN pattern) is masked in

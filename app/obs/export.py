@@ -35,7 +35,8 @@ def _candidates_json(rec: dict) -> str | None:
 
 
 def _set_io(root, capture_io: str, prompt: str, completion: str,
-            recognizers=None, sanitized_prompt: str = "") -> None:
+            recognizers=None, sanitized_prompt: str = "",
+            raw_completion: str = "") -> None:
     """Attach request/response I/O to the root span per the eval-capture mode
     (docs/eval-logging-backlog.md). `input.value`/`output.value` are the OTel
     attributes Langfuse reads as a trace's Input/Output.
@@ -49,7 +50,13 @@ def _set_io(root, capture_io: str, prompt: str, completion: str,
                  MRN pattern) is masked here too, not just built-ins.
     - full     → set raw text. Only reachable when the config lint has cleared
                  it (no onprem_only tenant); the exporter then skips redacting
-                 the I/O keys (app/obs/otel.py _capture_io_full)."""
+                 the I/O keys (app/obs/otel.py _capture_io_full). Prefers the
+                 PRE-VERIFY raw completion (F1 Phase D task 1) over the
+                 already step-9-masked `completion` the caller passed, so a
+                 full-eligible app's own residency-local project captures what
+                 the model actually said, not the client-facing masked text.
+                 Falls back to `completion` when no raw completion was
+                 supplied (backward-compatible)."""
     if capture_io == "off":
         return
     if capture_io == "redacted":
@@ -58,6 +65,8 @@ def _set_io(root, capture_io: str, prompt: str, completion: str,
         # for callers that don't supply it (backward-compatible).
         prompt = sanitized_prompt or redact(prompt, recognizers=recognizers)
         completion = redact(completion, recognizers=recognizers)
+    elif capture_io == "full":
+        completion = raw_completion or completion
     # `full`: leave prompt/completion raw (lint-gated, residency-local only).
     if prompt:
         root.set_attribute("input.value", prompt)
@@ -71,7 +80,8 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                  capture_io: str = "off", prompt: str = "",
                  completion: str = "", sanitized_prompt: str = "", recognizers=None,
                  session_id: str | None = None,
-                 routing_policy_version: str = "") -> str | None:
+                 routing_policy_version: str = "",
+                 raw_completion: str = "") -> str | None:
     """Export the request's decision trace as spans and return the Langfuse UI
     URL for the resulting trace (or None when telemetry is disabled), so the
     caller can hand the UI a live "Langfuse trace" deep-link.
@@ -83,7 +93,12 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
 
     `recognizers` (an app's AppPrivacyProfile.recognizers, Task 7) is threaded
     into the `redacted` capture_io path so a per-app custom entity type is
-    masked in telemetry, not just the built-in RegexDetector patterns."""
+    masked in telemetry, not just the built-in RegexDetector patterns.
+
+    `raw_completion` (F1 Phase D task 1) is the PRE-VERIFY model output --
+    used only on the `capture_io == "full"` path (see `_set_io`), and only
+    ever reaches a full-eligible app's OWN residency-local project (the
+    fail-closed clamp above and in `app/api/routes.py` guarantee that)."""
     try:
         per_app = None
         if app_langfuse is not None:
@@ -124,7 +139,8 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                 # so it passes through the RedactingSpanExporter intact.
                 root.set_attribute("langfuse.session.id", session_id)
             _set_io(root, capture_io, prompt, completion,
-                    recognizers=recognizers, sanitized_prompt=sanitized_prompt)
+                    recognizers=recognizers, sanitized_prompt=sanitized_prompt,
+                    raw_completion=raw_completion)
             for i, rec in enumerate(trace):
                 step = str(rec.get("step", f"step-{i}"))
                 with tracer.start_as_current_span(f"serving.{step}") as sp:
