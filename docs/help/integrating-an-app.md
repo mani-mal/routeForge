@@ -71,3 +71,83 @@ If the admin has enabled per-application Langfuse projects, your application get
 **own Langfuse project**; ask your admin for access and you'll see only your own
 traces — model chosen, cost, latency, and entity *types* detected (never raw PII).
 Otherwise traces land in the shared project.
+
+## 6. Building an agentic app on top of routeForge
+
+routeForge is an OpenAI-compatible model router, so any agent framework that speaks the
+OpenAI API (pydantic-ai, LangChain, etc.) can use it as its model backend. The
+recommended shape is **harness in your app, routing/policy/observability in routeForge**:
+your app owns the tools, state, and the agent loop, and points its model client at
+routeForge's base URL.
+
+```python
+from pydantic_ai import Agent
+from pydantic_ai.models.openai import OpenAIModel
+from pydantic_ai.providers.openai import OpenAIProvider
+
+model = OpenAIModel(
+    "auto",  # let routeForge's router choose per call
+    provider=OpenAIProvider(base_url="http://<host>:<port>/v1", api_key="rf_live_..."),
+)
+agent = Agent(model, tools=[...])  # your harness owns the tools + loop
+```
+
+Four things to get right when the harness lives in your app:
+
+1. **routeForge sees N independent calls, not one trajectory.** Each turn of your agent
+   loop is a *separate* `/v1/chat/completions` request — its own privacy gate, routing
+   decision, cost, and trace. routeForge's own multi-step path (step-4 task-mode router,
+   NAT agent runtime, `agent_budgets`) does **not** engage; that only runs when you hand
+   routeForge a single request and let it drive the loop. To reconstruct the trajectory,
+   use the session header (§7).
+2. **Turn streaming off.** `stream: true` is rejected (output verification needs the
+   complete response). Configure your model client to disable streaming, or every call
+   fails with `400`.
+3. **Tool calls pass through the gateway.** `tools` / `tool_choice` in, `tool_calls`
+   out, unchanged — this is what makes a tool-using agent work. If you rely on
+   tool-calling, validate the round-trip against your onboarded model first.
+4. **Per-app policy applies to *every* call.** Your token carries your policy (allowed
+   models, residency, budget), enforced on each turn. Size the app's budget/residency
+   for the whole agent workload, not a single call — an `onprem_only` app keeps *every*
+   turn on-prem.
+
+## 7. Collecting traces for eval / RLHF (external consumer)
+
+Every request emits one `serving.request` trace with these always-on attributes (they
+are not PII and are present regardless of the app's `capture_io` mode):
+
+| Attribute | Meaning |
+|---|---|
+| `sp.request_id` | correlates to the DecisionRecord / console |
+| `sp.application_id`, `sp.tenant_id` | which app/tenant (falls back to tenant if unset) |
+| `sp.model` | model chosen |
+| `sp.cost_total_usd`, `sp.cost_baseline_usd` | actual cost vs all-frontier baseline |
+| `sp.sensitivity`, `sp.onprem_only` | policy verdict |
+| `sp.detected_entities` | entity **types** only (e.g. `US_SSN`), never values |
+| `sp.routing_policy_version` | routing+pricing content hash at decision time |
+| `langfuse.session.id` | groups turns into one Langfuse **Session** (see below) |
+
+When routeForge runs the **multi-step path**, per-hop **child spans** `serving.step-N`
+carry `sp.chosen`, `sp.reason`, `sp.candidates`, `sp.hop_index`, `sp.actual_cost_usd`,
+and `sp.latency_ms`.
+
+**Reconstructing an app-side multi-agent run.** When your app owns the harness, a run is
+N separate top-level traces, not one trace with hop-spans. Tie them together by sending a
+stable session id on every call:
+
+```
+x-routeforge-session: <run-id>
+```
+
+routeForge stamps it as `langfuse.session.id`, and Langfuse groups all N turns into one
+Session your consumer walks as the trajectory. Header rules (fail-closed — an invalid
+value is silently dropped, not rejected): **max 128 chars**, charset **`[A-Za-z0-9._:-]`**
+(letters, digits, `. _ : -`); leading/trailing whitespace is stripped. A UUID, ULID, or
+`run:<uuid>` all pass.
+
+**Raw text vs. metadata.** All attributes above are **always on** — enough for
+reward/routing eval. Raw prompt/completion (`input.value` / `output.value`) exist **only**
+when the app's `capture_io = full`, which is gated to non-`onprem_only` apps with their
+own Langfuse project (see the F1 capture-substrate design). So SFT/DPO `{prompt, chosen,
+rejected}` pairs come only from `full`-eligible apps; scores and routing signal come from
+everywhere.

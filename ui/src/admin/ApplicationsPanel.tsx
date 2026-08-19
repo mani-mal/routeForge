@@ -203,6 +203,76 @@ function PolicyEditor({ app, onSaved }: { app: AdminApp; onSaved: () => void }) 
   );
 }
 
+// Manual per-app Langfuse creds (B15) — lets an air-gapped operator attach an
+// existing Langfuse project by hand instead of relying on org-scoped
+// auto-provisioning. Once saved, `app.langfuse_project_id` is set, which is
+// what PolicyEditor's `full`-capture gate checks — so `onSaved` must refetch
+// the app for that gate to unlock. Fields reset after a successful save; the
+// secret is write-only and is never rendered back, before or after saving.
+function LangfuseCredsForm({ app, onSaved }: { app: AdminApp; onSaved: () => void }) {
+  const [host, setHost] = useState("");
+  const [publicKey, setPublicKey] = useState("");
+  const [secretKey, setSecretKey] = useState("");
+  const [projectId, setProjectId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function save() {
+    setBusy(true);
+    setErr(null);
+    try {
+      await adminApi.setLangfuseCreds(app.id, {
+        host, public_key: publicKey, secret_key: secretKey, project_id: projectId,
+      });
+      setHost(""); setPublicKey(""); setSecretKey(""); setProjectId("");
+      onSaved();
+    } catch {
+      setErr("Could not save credentials.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const canSave = host && publicKey && secretKey && projectId && !busy;
+
+  return (
+    <div className="flex flex-col gap-2 text-sm">
+      <div className="text-xs text-gray-500">
+        Attach an existing Langfuse project by hand (air-gapped / no org API access).{" "}
+        {app.has_langfuse_keys && <span className="text-cheap">credentials set ✓</span>}
+      </div>
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="flex flex-col gap-1 text-xs text-gray-400">
+          host
+          <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="http://langfuse:3000"
+            className="rounded bg-ink border border-edge px-2 py-1 text-xs font-mono text-gray-100 w-48" />
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-gray-400">
+          public key
+          <input value={publicKey} onChange={(e) => setPublicKey(e.target.value)}
+            className="rounded bg-ink border border-edge px-2 py-1 text-xs font-mono text-gray-100 w-36" />
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-gray-400">
+          secret key
+          <input type="password" value={secretKey} onChange={(e) => setSecretKey(e.target.value)}
+            autoComplete="off" placeholder={app.has_langfuse_keys ? "(unchanged — enter to replace)" : ""}
+            className="rounded bg-ink border border-edge px-2 py-1 text-xs font-mono text-gray-100 w-36" />
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-gray-400">
+          project id
+          <input value={projectId} onChange={(e) => setProjectId(e.target.value)}
+            className="rounded bg-ink border border-edge px-2 py-1 text-xs font-mono text-gray-100 w-32" />
+        </label>
+        <button onClick={save} disabled={!canSave}
+          className="rounded-md border border-accent bg-accent/20 text-accent px-3 py-1 text-xs disabled:opacity-50">
+          {busy ? "saving…" : "Save credentials"}
+        </button>
+        {err && <span className="text-xs text-frontier">{err}</span>}
+      </div>
+    </div>
+  );
+}
+
 // Reusable per-application config UI: policy editor + token management.
 // Fetches its own copy of the app (there is no single-get in adminApi, so it
 // lists and finds by id) and re-fetches after every mutation. `onChanged` is
@@ -262,6 +332,11 @@ export function AppConfig({ appId, onChanged }: { appId: string; onChanged?: () 
         </ul>
         <button onClick={addToken} className="mt-2 text-xs text-accent hover:underline">+ issue token</button>
         {newToken && <div className="mt-2"><TokenReveal token={newToken} /></div>}
+      </section>
+
+      <section>
+        <div className="text-xs font-display uppercase tracking-wide text-gray-500 mb-1">Langfuse credentials</div>
+        <LangfuseCredsForm app={app} onSaved={refresh} />
       </section>
 
       <section>

@@ -68,11 +68,13 @@ class AppLangfuse:
 
 def load_app_langfuse(app) -> AppLangfuse | None:
     """Build an AppLangfuse from a stored Application row, or None if it has no
-    provisioned project. Host comes from LANGFUSE_HOST (the OTLP ingestion host)."""
+    provisioned project. Host prefers the per-app `langfuse_host` (for an
+    air-gapped operator pointing an app at its own Langfuse instance), falling
+    back to the env-global LANGFUSE_HOST (the OTLP ingestion host)."""
     if not (app.langfuse_project_id and app.langfuse_public_key
             and app.langfuse_secret_key_enc):
         return None
-    host = os.environ.get("LANGFUSE_HOST", "")
+    host = getattr(app, "langfuse_host", None) or os.environ.get("LANGFUSE_HOST", "")
     if not host:
         return None
     return AppLangfuse(

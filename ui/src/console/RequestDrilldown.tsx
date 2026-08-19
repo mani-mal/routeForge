@@ -21,6 +21,10 @@ const PROVIDERS: { key: string; label: string }[] = [
   { key: "bedrock", label: "Bedrock" },
 ];
 
+// Shared style for a stored request/response body block (request, response,
+// and the pre-display backward-compat fallback all use this).
+const BODY_CLASS = "pt-2 text-xs text-gray-400 whitespace-pre-wrap break-words max-h-40 overflow-y-auto";
+
 function displayOf(r: TraceRecord): string {
   return r.chosen_display_name ?? r.chosen ?? "—";
 }
@@ -145,11 +149,22 @@ function StepBody({ stepKey, detail, hops }: { stepKey: string; detail: ChatResp
         <>
           <Row label="request id">{detail.id}</Row>
           <Row label="served model">{detail.model_display ?? detail.model}</Row>
-          <p className="text-xs text-gray-500 pt-2">
-            Nothing external sees the request until the policy gate clears it. If telemetry
-            capture is on, only the gate-sanitized prompt (entity values masked) is stored —
-            never more than the model itself received.
-          </p>
+          {detail.display?.mode === "off" && (
+            <p className="text-xs text-gray-500 pt-2">
+              Telemetry capture is off for this application — the request body is not stored.
+              Nothing external sees the request until the policy gate clears it.
+            </p>
+          )}
+          {detail.display?.input != null && (
+            <>
+              <div className={BODY_CLASS}>{detail.display.input}</div>
+              <p className="text-xs text-gray-500 pt-1">
+                {detail.display.mode === "full"
+                  ? "Raw request stored (this app has its own residency-local Langfuse project)."
+                  : "Gate-sanitized request — entity values masked; never more than the model received."}
+              </p>
+            </>
+          )}
         </>
       );
     case "gate":
@@ -302,9 +317,20 @@ function StepBody({ stepKey, detail, hops }: { stepKey: string; detail: ChatResp
           <Row label="all-frontier baseline">{formatUsd(detail.cost.baseline_usd)}</Row>
           <Row label="routing saved">{formatUsd(detail.cost.routing_saved_usd)}</Row>
           <Row label="compression saved">{formatUsd(detail.cost.compression_saved_usd)}</Row>
-          <div className="pt-2 text-xs text-gray-400 whitespace-pre-wrap break-words max-h-40 overflow-y-auto">
-            {detail.choices[0]?.message.content}
-          </div>
+          {detail.display?.mode === "off" && (
+            <p className="text-xs text-gray-500 pt-2">Response body not stored (capture off).</p>
+          )}
+          {detail.display?.output != null && (
+            <>
+              <div className={BODY_CLASS}>{detail.display.output}</div>
+              <p className="text-xs text-gray-500 pt-1">
+                {detail.display.mode === "full"
+                  ? "Served response, as returned to the client (residency-local project). Detected PII is still masked by output verification."
+                  : "Gate-sanitized response — entity values masked."}
+              </p>
+            </>
+          )}
+          {detail.display == null && <div className={BODY_CLASS}>{detail.choices[0]?.message.content}</div>}
         </>
       );
     default:

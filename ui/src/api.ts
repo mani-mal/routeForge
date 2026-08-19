@@ -71,6 +71,7 @@ export interface ChatResponse {
   model: string;
   model_display?: string; // human-facing model name (falls back to `model`)
   langfuse_url?: string | null; // live deep-link to this request's Langfuse trace
+  display?: { mode: "off" | "redacted" | "full"; input: string | null; output: string | null };
   choices: { index: number; message: { role: string; content: string }; finish_reason: string }[];
   usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
   trace: TraceRecord[];
@@ -209,6 +210,8 @@ export interface AdminApp {
   status: string;
   default_residency: string;
   langfuse_project_id: string | null;
+  langfuse_host?: string | null;
+  has_langfuse_keys?: boolean;
   created_at: string | null;
   policy: AdminPolicy | null;
   tokens: AdminToken[];
@@ -228,6 +231,21 @@ export interface UsageSummary {
   application_distribution: Record<string, number>;
   latency_p50_ms: number;
   latency_p95_ms: number;
+}
+
+// Per-application rollup for the cross-app usage report (durable, DB-backed).
+// Backend: GET /admin/usage/by-application?hours= (app/api/admin_routes.py).
+export interface UsageByApp {
+  application_id: string;
+  count: number;
+  rejected_count: number;
+  total_usd: number;
+  baseline_usd: number;
+  total_tokens: number;
+  onprem_count: number;
+  tier_distribution: Record<string, number>;
+  model_distribution: Record<string, number>;
+  sensitivity_distribution: Record<string, number>;
 }
 
 // Admin routes use a session cookie; same-origin (Vite proxies /admin) so the
@@ -252,6 +270,11 @@ export const adminApi = {
     fetch(`/admin/applications/${id}`, opts("PATCH", body)).then(j<AdminApp>),
   setPolicy: (id: string, body: AdminPolicy) =>
     fetch(`/admin/applications/${id}/policy`, opts("PUT", body)).then(j<AdminApp>),
+  // Manual per-app Langfuse creds (B15) — for an air-gapped operator who can't
+  // reach the org-scoped auto-provisioning API. Secret is write-only: never
+  // echoed back in AdminApp; only `has_langfuse_keys` reflects it was set.
+  setLangfuseCreds: (id: string, body: { host: string; public_key: string; secret_key: string; project_id: string }) =>
+    fetch(`/admin/applications/${id}/langfuse`, opts("PUT", body)).then(j<AdminApp>),
   createToken: (id: string, name: string) =>
     fetch(`/admin/applications/${id}/tokens`, opts("POST", { name })).then(j<{ token: string; id: string; prefix: string }>),
   revokeToken: (tokenId: string) =>
@@ -261,6 +284,13 @@ export const adminApi = {
     if (applicationId) q.set("application_id", applicationId);
     if (hours) q.set("hours", String(hours));
     return fetch(`/admin/usage?${q.toString()}`, { credentials: "same-origin" }).then(j<UsageSummary>);
+  },
+  usageByApplication: (hours?: number) => {
+    const q = new URLSearchParams();
+    if (hours) q.set("hours", String(hours));
+    return fetch(`/admin/usage/by-application?${q.toString()}`, { credentials: "same-origin" }).then(
+      j<{ apps: UsageByApp[]; window_hours: number | null }>,
+    );
   },
 };
 

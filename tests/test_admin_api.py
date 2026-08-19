@@ -104,3 +104,90 @@ def test_usage_summary_reflects_served_requests(client):
     body = r.json()
     assert body["count"] >= 1
     assert body["total_tokens"] > 0
+
+
+def test_manual_langfuse_creds_enable_full_capture(client):
+    _login(client)
+    resp = client.post("/admin/applications",
+                       json={"id": "airgap", "name": "Airgap"}).json()
+    app_id = resp["application"]["id"]
+    # Before creds: full is rejected (no own project) — Phase B lint.
+    r = client.put(f"/admin/applications/{app_id}/policy", json={"capture_io": "full"})
+    assert r.status_code == 422
+    # Attach manual creds.
+    r = client.put(f"/admin/applications/{app_id}/langfuse", json={
+        "host": "http://airgap:3000", "public_key": "pk", "secret_key": "sk",
+        "project_id": "proj_air"})
+    assert r.status_code == 200, r.text
+    # Now full is permitted (residency default is not onprem_only).
+    r = client.put(f"/admin/applications/{app_id}/policy", json={"capture_io": "full"})
+    assert r.status_code == 200, r.text
+
+
+def test_manual_langfuse_creds_404_for_unknown_app(client):
+    _login(client)
+    r = client.put("/admin/applications/doesnotexist/langfuse", json={
+        "host": "http://h:3000", "public_key": "pk", "secret_key": "sk",
+        "project_id": "p"})
+    assert r.status_code == 404
+
+
+def test_manual_langfuse_creds_requires_admin_login(client):
+    r = client.put("/admin/applications/anything/langfuse", json={
+        "host": "http://h:3000", "public_key": "pk", "secret_key": "sk",
+        "project_id": "p"})
+    assert r.status_code == 401
+
+
+def test_app_dict_never_returns_secret(client):
+    _login(client)
+    resp = client.post("/admin/applications",
+                       json={"id": "nosecret", "name": "NoSecret"}).json()
+    app_id = resp["application"]["id"]
+    client.put(f"/admin/applications/{app_id}/langfuse", json={
+        "host": "http://h:3000", "public_key": "pk", "secret_key": "TOPSECRET",
+        "project_id": "p"})
+    body = client.get("/admin/applications").json()
+    blob = str(body)
+    assert "TOPSECRET" not in blob
+    app = next(a for a in body if a["id"] == app_id)
+    assert app["has_langfuse_keys"] is True
+    assert app["langfuse_host"] == "http://h:3000"
+
+
+def test_manual_langfuse_creds_rejects_blank_or_bad_input(client):
+    _login(client)
+    resp = client.post("/admin/applications",
+                       json={"id": "badcreds", "name": "BadCreds"}).json()
+    app_id = resp["application"]["id"]
+    # Blank/whitespace-only secret_key must not silently encrypt to a
+    # non-empty Fernet token and unlock capture_io='full'.
+    r = client.put(f"/admin/applications/{app_id}/langfuse", json={
+        "host": "https://h:3000", "public_key": "pk", "secret_key": "   ",
+        "project_id": "p"})
+    assert r.status_code == 422
+    # Non-http(s) host is rejected too.
+    r = client.put(f"/admin/applications/{app_id}/langfuse", json={
+        "host": "not-a-url", "public_key": "pk", "secret_key": "sk",
+        "project_id": "p"})
+    assert r.status_code == 422
+    # Neither rejected call actually stored creds.
+    body = client.get("/admin/applications").json()
+    app = next(a for a in body if a["id"] == app_id)
+    assert app["has_langfuse_keys"] is False
+
+
+def test_onprem_only_cannot_reach_full_even_with_manual_creds(client):
+    _login(client)
+    client.post("/admin/applications", json={"id": "onprem-app", "name": "OnpremApp",
+                                             "default_residency": "onprem_only"})
+    # Valid, well-formed manual creds — proves the block below is the
+    # residency clamp, not the missing-project check (CLAUDE.md rule 8:
+    # residency beats eval; onprem_only must never be lifted to unlock 'full').
+    r = client.put("/admin/applications/onprem-app/langfuse", json={
+        "host": "https://onprem-langfuse:3000", "public_key": "pk",
+        "secret_key": "sk", "project_id": "proj_onprem"})
+    assert r.status_code == 200, r.text
+    r = client.put("/admin/applications/onprem-app/policy", json={"capture_io": "full"})
+    assert r.status_code == 422
+    assert "residency" in r.text.lower() or "onprem" in r.text.lower()

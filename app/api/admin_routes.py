@@ -10,7 +10,7 @@ import datetime as dt
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from app.apps import store
 from app.apps.admin_auth import SESSION_COOKIE, require_admin
@@ -58,6 +58,8 @@ def _app_dict(app, *, with_children: bool = True) -> dict:
     d = {"id": app.id, "name": app.name, "owner_email": app.owner_email,
          "status": app.status, "default_residency": app.default_residency,
          "langfuse_project_id": app.langfuse_project_id,
+         "langfuse_host": app.langfuse_host,
+         "has_langfuse_keys": bool(app.langfuse_public_key and app.langfuse_secret_key_enc),
          "created_at": _iso(app.created_at)}
     if with_children:
         d["policy"] = _policy_dict(app.policy)
@@ -96,6 +98,32 @@ class PolicyIn(BaseModel):
     max_rpm: int | None = None
     compression_enabled: bool | None = None   # None = inherit global Headroom toggle
     capture_io: str | None = None   # None = inherit global; off|redacted|full
+
+
+class LangfuseCredsIn(BaseModel):
+    # Every field is load-bearing for the capture_io='full' eligibility check
+    # (`load_app_langfuse(app) is not None`, `has_langfuse_keys`). A blank or
+    # whitespace-only value would still encrypt to a non-empty Fernet token and
+    # silently unlock 'full' capture with no valid sink — reject fail-closed.
+    host: str = Field(min_length=1)
+    public_key: str = Field(min_length=1)
+    secret_key: str = Field(min_length=1)
+    project_id: str = Field(min_length=1)
+
+    @field_validator("host", "public_key", "secret_key", "project_id")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("must not be blank")
+        return v
+
+    @field_validator("host")
+    @classmethod
+    def _host_is_url(cls, v: str) -> str:
+        # Mirror onboard_model's endpoint check (~admin_routes.py:431).
+        if not re.match(r"^https?://", v):
+            raise ValueError("host must be an http(s) URL")
+        return v
 
 
 class TokenIn(BaseModel):
@@ -263,6 +291,28 @@ async def update_application(app_id: str, body: UpdateAppIn, request: Request,
         return _app_dict(full)
 
 
+@admin_router.put("/applications/{app_id}/langfuse")
+async def set_langfuse_creds(app_id: str, body: LangfuseCredsIn, request: Request,
+                             _: str = Depends(require_admin)) -> dict:
+    """Manual per-app Langfuse creds for an air-gapped operator who can't reach
+    the org-scoped provisioning API (B15). Stored the same way auto-provisioning
+    stores them (secret encrypted at rest via `encrypt_secret`), so once set,
+    `load_app_langfuse(app)` returns non-None and the app becomes
+    capture_io='full'-eligible under the existing Phase-B lint in `set_policy`.
+    """
+    async with request.app.state.db.session() as session:
+        app = await store.update_application(
+            session, app_id,
+            langfuse_host=body.host, langfuse_public_key=body.public_key,
+            langfuse_project_id=body.project_id,
+            langfuse_secret_key_enc=encrypt_secret(body.secret_key))
+        if app is None:
+            raise HTTPException(404, "application not found")
+        await session.commit()
+        full = await store.get_application_with_policy(session, app_id)
+        return _app_dict(full)
+
+
 @admin_router.put("/applications/{app_id}/policy")
 async def set_policy(app_id: str, body: PolicyIn, request: Request,
                      _: str = Depends(require_admin)) -> dict:
@@ -330,6 +380,17 @@ async def usage(request: Request, application_id: str | None = None,
     async with request.app.state.db.session() as session:
         return await store.usage_summary(
             session, application_id=application_id, since=since)
+
+
+@admin_router.get("/usage/by-application")
+async def usage_by_application(request: Request, hours: int | None = None,
+                               _: str = Depends(require_admin)) -> dict:
+    since = None
+    if hours is not None:
+        since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=hours)
+    async with request.app.state.db.session() as session:
+        apps = await store.usage_by_application(session, since=since)
+    return {"apps": apps, "window_hours": hours}
 
 
 # --- per-app privacy profile (recognizers + sensitivity rules) --------------
