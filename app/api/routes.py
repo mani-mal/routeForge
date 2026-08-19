@@ -12,6 +12,7 @@ from app.errors import BackendUnavailable, NoEligibleCandidate, PolicyGateError
 from app.models import ChatRequest
 from app.obs import metrics
 from app.obs.export import export_trace
+from app.obs.redact import redact
 from app.pipeline import PipelineRejected
 
 router = APIRouter()
@@ -206,6 +207,20 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
             completion = resp["choices"][0]["message"]["content"] or ""
         except (KeyError, IndexError, TypeError):
             completion = ""
+        # First-party console view (Phase C Part 1). Mode-appropriate bodies for
+        # the admin drilldown ONLY — this is history/HistoryStore, same residency
+        # boundary as serving, NOT a telemetry egress (export_trace is unchanged).
+        # `choices[]` stays raw for the calling client; this is additive metadata.
+        if capture_io == "full":
+            resp["display"] = {"mode": "full", "input": prompt, "output": completion}
+        elif capture_io == "redacted":
+            resp["display"] = {
+                "mode": "redacted",
+                "input": sanitized_prompt or redact(prompt),
+                "output": redact(completion),
+            }
+        else:  # "off"
+            resp["display"] = {"mode": "off", "input": None, "output": None}
         lf_url = export_trace(
             request_id=resp["id"], tenant_id=tenant, model=resp["model"],
             cost=resp["cost"], policy=resp["policy"], trace=resp["trace"],
