@@ -63,15 +63,17 @@ class HistoryStore:
         self._capacity = capacity
         self._summaries: deque[RequestSummary] = deque(maxlen=capacity)
         self._full: dict[str, dict] = {}
+        self._tenant: dict[str, str] = {}
         self._seq = 0
 
     def record(self, resp: dict, tenant_id: str, tier: str,
                provider: str = "?") -> RequestSummary:
         # Evict the oldest full-response entry in lockstep with the deque's
-        # own eviction, so `_full` never outlives `_summaries`.
+        # own eviction, so `_full` (and `_tenant`) never outlives `_summaries`.
         if len(self._summaries) == self._capacity and self._summaries:
             oldest = self._summaries[0]
             self._full.pop(oldest.id, None)
+            self._tenant.pop(oldest.id, None)
 
         cost = resp.get("cost", {})
         policy = resp.get("policy", {})
@@ -114,6 +116,7 @@ class HistoryStore:
         )
         self._summaries.append(summary)
         self._full[summary.id] = resp
+        self._tenant[summary.id] = tenant_id
         return summary
 
     def list(self, limit: int = 100, app: str | None = None) -> list[RequestSummary]:
@@ -135,6 +138,13 @@ class HistoryStore:
 
     def get(self, request_id: str) -> dict | None:
         return self._full.get(request_id)
+
+    def get_tenant(self, request_id: str) -> str | None:
+        """The tenant (application id) that made this request — kept
+        separately from the client-facing `_full` resp dict (which never
+        carries tenant_id; see `record()`), for the admin feedback route's
+        Langfuse-project lookup (F1 Phase D task 4)."""
+        return self._tenant.get(request_id)
 
     def fleet(self) -> list[dict]:
         """One aggregate row per `tenant_id` (application) seen, sorted by

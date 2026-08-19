@@ -3,6 +3,7 @@ import re
 import uuid
 
 from fastapi import APIRouter, HTTPException, Request, Response
+from pydantic import BaseModel
 
 from app.agent.runtime import AgentCapExceeded
 from app.apps import store
@@ -13,6 +14,7 @@ from app.models import ChatRequest
 from app.obs import metrics
 from app.obs.export import export_trace
 from app.obs.redact import redact
+from app.obs.scores import SCORE_NAMES, ensure_score_config, post_score
 from app.pipeline import PipelineRejected
 
 router = APIRouter()
@@ -186,6 +188,15 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
     metrics.observe_tokens(resp["model"],
                            usage.get("prompt_tokens", 0),
                            usage.get("completion_tokens", 0))
+    # Strip the two never-client-visible keys off `resp` BEFORE the telemetry
+    # try-block runs. `raw_completion` is the pre-verify model output (may carry
+    # PII step-9 masked from the client reply) and `sanitized_prompt` is the
+    # gate's internal redaction — neither may reach the caller. Popping them
+    # here, outside the try, makes their removal structural: even if anything in
+    # the telemetry block below raised, `resp` (returned to the client) can no
+    # longer carry them. They're consumed only inside the try, via these locals.
+    sanitized_prompt = resp.pop("sanitized_prompt", "")
+    raw_completion = resp.pop("raw_completion", "")   # pre-verify; NEVER client-visible
     try:
         # Eval-capture (docs/eval-logging-backlog.md): when capture_io is
         # redacted|full, attach the request prompt + response completion to the
@@ -201,7 +212,6 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
                 app_policy.residency == "onprem_only" or app_langfuse is None):
             capture_io = "redacted"
         prompt = body.messages[-1].content if body.messages else ""
-        sanitized_prompt = resp.pop("sanitized_prompt", "")
         completion = ""
         try:
             completion = resp["choices"][0]["message"]["content"] or ""
@@ -221,12 +231,12 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
             }
         else:  # "off"
             resp["display"] = {"mode": "off", "input": None, "output": None}
-        lf_url = export_trace(
+        te = export_trace(
             request_id=resp["id"], tenant_id=tenant, model=resp["model"],
             cost=resp["cost"], policy=resp["policy"], trace=resp["trace"],
             application_id=tenant, app_langfuse=app_langfuse,
             capture_io=capture_io, prompt=prompt, completion=completion,
-            sanitized_prompt=sanitized_prompt,
+            sanitized_prompt=sanitized_prompt, raw_completion=raw_completion,
             # Task 8: thread the app's custom recognizers (already resolved
             # above for the pipeline run, Task 7) into egress redaction so a
             # custom entity type (e.g. a hospital's MRN pattern) is masked in
@@ -234,11 +244,14 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
             recognizers=profile.recognizers,
             session_id=session_id,
             routing_policy_version=s.routing_policy_version)
-        # Live deep-link for the UI's "Langfuse trace" button (None when
-        # telemetry is off → the UI hides it). Set before history.record so the
-        # inspector's full detail carries it.
-        if lf_url:
-            resp["langfuse_url"] = lf_url
+        # Live deep-link for the UI's "Langfuse trace" button, and the raw hex
+        # trace id for an external eval/RLHF consumer (F1 Phase D task 2).
+        # Both None when telemetry is off → the UI hides the link. Set before
+        # history.record so the inspector's full detail carries them.
+        if te.url:
+            resp["langfuse_url"] = te.url
+        if te.trace_id:
+            resp["trace_id"] = te.trace_id
     except Exception:  # export_trace already swallows; this is belt-and-suspenders
         logging.getLogger("serving.obs").exception(
             "export_trace raised before its own guard (swallowed)")
@@ -320,3 +333,39 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
         logging.getLogger("serving.obs").exception(
             "bus.publish failed (swallowed)")
     return resp
+
+
+class FeedbackIn(BaseModel):
+    """Body for POST /v1/feedback. `value` is numeric for quality-style scores
+    or a string for categorical scores (e.g. failure_type); Langfuse decides
+    dataType by which of those it is (see `app.obs.scores.post_score`)."""
+    trace_id: str
+    score_name: str
+    value: float | str
+    comment: str | None = None
+    corrected_output: str | None = None
+
+
+@router.post("/v1/feedback")
+async def feedback(body: FeedbackIn, request: Request) -> dict:
+    """App-token-authenticated eval/feedback intake (F1 Phase D / B16). Posts
+    straight to the calling app's OWN residency-local Langfuse project via
+    REST — never the shared project, and never anywhere at all when the app
+    has no provisioned project (fail-closed; `post_score` handles that case
+    and returns False, which becomes `{"stored": false}` here, HTTP 200 —
+    a missing project is not the caller's fault and must not surface as an
+    error)."""
+    auth = await _authenticate(request)
+    if auth is None:
+        raise HTTPException(401, "invalid or missing API token")
+    tenant, app_policy, app_langfuse = auth
+    if body.score_name not in SCORE_NAMES:
+        raise HTTPException(422, f"unknown score_name: {body.score_name!r}")
+    await ensure_score_config(app_langfuse, body.score_name)  # best-effort, never raises
+    stored = await post_score(app_langfuse, body.trace_id, body.score_name,
+                              body.value, body.comment)
+    if body.corrected_output:
+        await ensure_score_config(app_langfuse, "corrected_output")
+        await post_score(app_langfuse, body.trace_id, "corrected_output", 1,
+                         body.corrected_output)
+    return {"stored": stored}

@@ -4,11 +4,17 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import namedtuple
 
 from app.obs.otel import app_trace_url, get_app_tracer, get_tracer, trace_url
 from app.obs.redact import redact, redact_value
 
 log = logging.getLogger("serving.obs")
+
+# `url` is the Langfuse UI deep-link (or None when telemetry is off); `trace_id`
+# is the same trace's 32-hex OTel trace id (or None), so an external eval/RLHF
+# consumer can link feedback to a trace without parsing the URL (F1 Phase D).
+TraceExport = namedtuple("TraceExport", ["url", "trace_id"])
 
 
 def _candidates_json(rec: dict) -> str | None:
@@ -35,7 +41,8 @@ def _candidates_json(rec: dict) -> str | None:
 
 
 def _set_io(root, capture_io: str, prompt: str, completion: str,
-            recognizers=None, sanitized_prompt: str = "") -> None:
+            recognizers=None, sanitized_prompt: str = "",
+            raw_completion: str = "") -> None:
     """Attach request/response I/O to the root span per the eval-capture mode
     (docs/eval-logging-backlog.md). `input.value`/`output.value` are the OTel
     attributes Langfuse reads as a trace's Input/Output.
@@ -49,7 +56,13 @@ def _set_io(root, capture_io: str, prompt: str, completion: str,
                  MRN pattern) is masked here too, not just built-ins.
     - full     → set raw text. Only reachable when the config lint has cleared
                  it (no onprem_only tenant); the exporter then skips redacting
-                 the I/O keys (app/obs/otel.py _capture_io_full)."""
+                 the I/O keys (app/obs/otel.py _capture_io_full). Prefers the
+                 PRE-VERIFY raw completion (F1 Phase D task 1) over the
+                 already step-9-masked `completion` the caller passed, so a
+                 full-eligible app's own residency-local project captures what
+                 the model actually said, not the client-facing masked text.
+                 Falls back to `completion` when no raw completion was
+                 supplied (backward-compatible)."""
     if capture_io == "off":
         return
     if capture_io == "redacted":
@@ -58,6 +71,8 @@ def _set_io(root, capture_io: str, prompt: str, completion: str,
         # for callers that don't supply it (backward-compatible).
         prompt = sanitized_prompt or redact(prompt, recognizers=recognizers)
         completion = redact(completion, recognizers=recognizers)
+    elif capture_io == "full":
+        completion = raw_completion or completion
     # `full`: leave prompt/completion raw (lint-gated, residency-local only).
     if prompt:
         root.set_attribute("input.value", prompt)
@@ -71,10 +86,13 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                  capture_io: str = "off", prompt: str = "",
                  completion: str = "", sanitized_prompt: str = "", recognizers=None,
                  session_id: str | None = None,
-                 routing_policy_version: str = "") -> str | None:
-    """Export the request's decision trace as spans and return the Langfuse UI
-    URL for the resulting trace (or None when telemetry is disabled), so the
-    caller can hand the UI a live "Langfuse trace" deep-link.
+                 routing_policy_version: str = "",
+                 raw_completion: str = "") -> TraceExport:
+    """Export the request's decision trace as spans and return a `TraceExport`
+    (url, trace_id) for the resulting trace — `url` the Langfuse UI deep-link,
+    `trace_id` the same trace's 32-hex id — or `TraceExport(None, None)` when
+    telemetry is disabled, so the caller can hand the UI a live "Langfuse
+    trace" deep-link and hand an eval/RLHF consumer the raw trace id.
 
     When `app_langfuse` (the application's own Langfuse project) is provided,
     the trace is exported to THAT project and the deep-link points there — each
@@ -83,8 +101,40 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
 
     `recognizers` (an app's AppPrivacyProfile.recognizers, Task 7) is threaded
     into the `redacted` capture_io path so a per-app custom entity type is
-    masked in telemetry, not just the built-in RegexDetector patterns."""
+    masked in telemetry, not just the built-in RegexDetector patterns.
+
+    `raw_completion` (F1 Phase D task 1) is the PRE-VERIFY model output --
+    used only on the `capture_io == "full"` path (see `_set_io`), and only
+    ever reaches a full-eligible app's OWN residency-local project (the
+    fail-closed clamp above and in `app/api/routes.py` guarantee that)."""
     try:
+        if capture_io == "full" and app_langfuse is None and raw_completion:
+            # `raw_completion` (F1 Phase D task 1) is the PRE-VERIFY model
+            # output and may only ever reach a full-eligible app's OWN
+            # residency-local Langfuse project (rules 2/8). Today the only
+            # production caller (app/api/routes.py) already clamps this
+            # unreachable, but the export boundary must enforce its own
+            # invariant too -- never trust an upstream clamp alone to keep
+            # raw completions off the shared project. Downgrade BEFORE any
+            # span is authored, same as the per-app-tracer-build-failure
+            # guard below.
+            #
+            # Deliberately scoped to `raw_completion` truthy, NOT a blanket
+            # `capture_io == "full" and app_langfuse is None` downgrade: the
+            # latter is legitimate, pre-existing, lint-gated behaviour (the
+            # config lint proves no onprem_only tenant exists, so the
+            # *shared* project is itself residency-local -- see
+            # `app/config/lint.py`, `test_lint_allows_full_when_no_onprem_
+            # tenant`, and `tests/test_capture_io.py`'s direct-caller full-
+            # mode tests, which intentionally pass raw `prompt`/`completion`
+            # with no per-app project and must keep working). Only the NEW
+            # raw_completion path this task adds needs this narrower guard.
+            log.warning(
+                "capture_io='full' with a raw_completion but no per-app "
+                "Langfuse project for tenant %s; downgrading to 'redacted' "
+                "for this export (no raw-completion fallback to shared "
+                "project)", tenant_id)
+            capture_io = "redacted"
         per_app = None
         if app_langfuse is not None:
             per_app = get_app_tracer(app_langfuse.host, app_langfuse.public_key,
@@ -124,7 +174,8 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                 # so it passes through the RedactingSpanExporter intact.
                 root.set_attribute("langfuse.session.id", session_id)
             _set_io(root, capture_io, prompt, completion,
-                    recognizers=recognizers, sanitized_prompt=sanitized_prompt)
+                    recognizers=recognizers, sanitized_prompt=sanitized_prompt,
+                    raw_completion=raw_completion)
             for i, rec in enumerate(trace):
                 step = str(rec.get("step", f"step-{i}"))
                 with tracer.start_as_current_span(f"serving.{step}") as sp:
@@ -148,9 +199,10 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
             get_ctx = getattr(root, "get_span_context", None)
             if get_ctx is not None:
                 trace_id = get_ctx().trace_id
+                hex_id = f"{trace_id:032x}"
                 if app_langfuse is not None:
-                    return app_trace_url(app_langfuse.project_id, trace_id)
-                return trace_url(trace_id)
+                    return TraceExport(app_trace_url(app_langfuse.project_id, trace_id), hex_id)
+                return TraceExport(trace_url(trace_id), hex_id)
     except Exception:  # telemetry must never break serving
         log.exception("trace export failed for %s (swallowed)", request_id)
-    return None
+    return TraceExport(None, None)

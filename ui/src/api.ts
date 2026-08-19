@@ -152,6 +152,14 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ headroom_enabled }),
     }).then(j<Controls>),
+  feedback: (requestId: string, body: { score_name: string; value: number | string;
+             comment?: string; corrected_output?: string }) =>
+    fetch(`/api/requests/${requestId}/feedback`, {
+      method: "POST",
+      credentials: CRED,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(j<{ stored: boolean; reason?: string }>),
   chat: (body: object, apiKey: string) =>
     fetch(`/v1/chat/completions`, {
       method: "POST",

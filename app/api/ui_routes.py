@@ -20,7 +20,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from app.apps import store
 from app.apps.admin_auth import require_admin
+from app.apps.langfuse_provision import load_app_langfuse
+from app.obs.scores import SCORE_NAMES, ensure_score_config, post_score
 
 # The whole /api/* console surface is admin-gated: it exposes cross-tenant
 # metadata (per-app spend, PII/entity-type counts, request traces). The browser
@@ -73,6 +76,54 @@ def get_request(request_id: str, request: Request) -> dict:
     if resp is None:
         raise HTTPException(404, f"request {request_id!r} not found")
     return resp
+
+
+class AdminFeedbackIn(BaseModel):
+    """Body for POST /api/requests/{request_id}/feedback. Unlike the
+    app-token-authed `/v1/feedback` (`app/api/routes.py`), no `trace_id` is
+    accepted here — it comes from the stored request the admin is looking
+    at, never from client-supplied input."""
+    score_name: str
+    value: float | str
+    comment: str | None = None
+    corrected_output: str | None = None
+
+
+@router.post("/requests/{request_id}/feedback")
+async def admin_feedback(request_id: str, body: AdminFeedbackIn, request: Request) -> dict:
+    """Admin-console feedback intake (F1 Phase D task 4): score a request the
+    admin is already looking at in the console, by its stored trace_id —
+    admin-gating is inherited from this router's `Depends(require_admin)`.
+    Resolves the app's own Langfuse project via the request's tenant
+    (`HistoryStore.get_tenant`, added alongside `_full`) and posts through the
+    same `post_score` helper `/v1/feedback` uses, so fail-closed behaviour
+    (unknown tenant / app has no project -> `app_langfuse is None` -> dropped,
+    `{"stored": false}`, HTTP 200) is identical."""
+    history = request.app.state.history
+    resp = history.get(request_id)
+    if resp is None:
+        raise HTTPException(404, f"request {request_id!r} not found")
+    trace_id = resp.get("trace_id")
+    if not trace_id:
+        # Telemetry was off (or export failed) for this request — nothing to
+        # attach a score to. Not an error: the admin just can't score this one.
+        return {"stored": False, "reason": "no trace"}
+    if body.score_name not in SCORE_NAMES:
+        raise HTTPException(422, f"unknown score_name {body.score_name!r}")
+    tenant = history.get_tenant(request_id)
+    app_langfuse = None
+    if tenant is not None:
+        async with request.app.state.db.session() as session:
+            app = await store.get_application(session, tenant)
+        app_langfuse = load_app_langfuse(app) if app is not None else None
+    await ensure_score_config(app_langfuse, body.score_name)  # best-effort, never raises
+    stored = await post_score(app_langfuse, trace_id, body.score_name,
+                              body.value, body.comment)
+    if body.corrected_output:
+        await ensure_score_config(app_langfuse, "corrected_output")
+        await post_score(app_langfuse, trace_id, "corrected_output", 1,
+                         body.corrected_output)
+    return {"stored": stored}
 
 
 @router.get("/stats")
