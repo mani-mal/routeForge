@@ -231,6 +231,21 @@ export interface UsageSummary {
   latency_p95_ms: number;
 }
 
+// Per-application rollup for the cross-app usage report (durable, DB-backed).
+// Backend: GET /admin/usage/by-application?hours= (app/api/admin_routes.py).
+export interface UsageByApp {
+  application_id: string;
+  count: number;
+  rejected_count: number;
+  total_usd: number;
+  baseline_usd: number;
+  total_tokens: number;
+  onprem_count: number;
+  tier_distribution: Record<string, number>;
+  model_distribution: Record<string, number>;
+  sensitivity_distribution: Record<string, number>;
+}
+
 // Admin routes use a session cookie; same-origin (Vite proxies /admin) so the
 // browser sends it automatically. `credentials: "same-origin"` is the default,
 // set explicitly for clarity.
@@ -262,6 +277,13 @@ export const adminApi = {
     if (applicationId) q.set("application_id", applicationId);
     if (hours) q.set("hours", String(hours));
     return fetch(`/admin/usage?${q.toString()}`, { credentials: "same-origin" }).then(j<UsageSummary>);
+  },
+  usageByApplication: (hours?: number) => {
+    const q = new URLSearchParams();
+    if (hours) q.set("hours", String(hours));
+    return fetch(`/admin/usage/by-application?${q.toString()}`, { credentials: "same-origin" }).then(
+      j<{ apps: UsageByApp[]; window_hours: number | null }>,
+    );
   },
 };
 
