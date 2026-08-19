@@ -210,6 +210,8 @@ export interface AdminApp {
   status: string;
   default_residency: string;
   langfuse_project_id: string | null;
+  langfuse_host?: string | null;
+  has_langfuse_keys?: boolean;
   created_at: string | null;
   policy: AdminPolicy | null;
   tokens: AdminToken[];
@@ -268,6 +270,11 @@ export const adminApi = {
     fetch(`/admin/applications/${id}`, opts("PATCH", body)).then(j<AdminApp>),
   setPolicy: (id: string, body: AdminPolicy) =>
     fetch(`/admin/applications/${id}/policy`, opts("PUT", body)).then(j<AdminApp>),
+  // Manual per-app Langfuse creds (B15) — for an air-gapped operator who can't
+  // reach the org-scoped auto-provisioning API. Secret is write-only: never
+  // echoed back in AdminApp; only `has_langfuse_keys` reflects it was set.
+  setLangfuseCreds: (id: string, body: { host: string; public_key: string; secret_key: string; project_id: string }) =>
+    fetch(`/admin/applications/${id}/langfuse`, opts("PUT", body)).then(j<AdminApp>),
   createToken: (id: string, name: string) =>
     fetch(`/admin/applications/${id}/tokens`, opts("POST", { name })).then(j<{ token: string; id: string; prefix: string }>),
   revokeToken: (tokenId: string) =>

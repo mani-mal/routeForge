@@ -58,6 +58,8 @@ def _app_dict(app, *, with_children: bool = True) -> dict:
     d = {"id": app.id, "name": app.name, "owner_email": app.owner_email,
          "status": app.status, "default_residency": app.default_residency,
          "langfuse_project_id": app.langfuse_project_id,
+         "langfuse_host": app.langfuse_host,
+         "has_langfuse_keys": bool(app.langfuse_public_key and app.langfuse_secret_key_enc),
          "created_at": _iso(app.created_at)}
     if with_children:
         d["policy"] = _policy_dict(app.policy)
@@ -96,6 +98,13 @@ class PolicyIn(BaseModel):
     max_rpm: int | None = None
     compression_enabled: bool | None = None   # None = inherit global Headroom toggle
     capture_io: str | None = None   # None = inherit global; off|redacted|full
+
+
+class LangfuseCredsIn(BaseModel):
+    host: str
+    public_key: str
+    secret_key: str
+    project_id: str
 
 
 class TokenIn(BaseModel):
@@ -256,6 +265,28 @@ async def update_application(app_id: str, body: UpdateAppIn, request: Request,
     async with request.app.state.db.session() as session:
         app = await store.update_application(
             session, app_id, **body.model_dump(exclude_none=True))
+        if app is None:
+            raise HTTPException(404, "application not found")
+        await session.commit()
+        full = await store.get_application_with_policy(session, app_id)
+        return _app_dict(full)
+
+
+@admin_router.put("/applications/{app_id}/langfuse")
+async def set_langfuse_creds(app_id: str, body: LangfuseCredsIn, request: Request,
+                             _: str = Depends(require_admin)) -> dict:
+    """Manual per-app Langfuse creds for an air-gapped operator who can't reach
+    the org-scoped provisioning API (B15). Stored the same way auto-provisioning
+    stores them (secret encrypted at rest via `encrypt_secret`), so once set,
+    `load_app_langfuse(app)` returns non-None and the app becomes
+    capture_io='full'-eligible under the existing Phase-B lint in `set_policy`.
+    """
+    async with request.app.state.db.session() as session:
+        app = await store.update_application(
+            session, app_id,
+            langfuse_host=body.host, langfuse_public_key=body.public_key,
+            langfuse_project_id=body.project_id,
+            langfuse_secret_key_enc=encrypt_secret(body.secret_key))
         if app is None:
             raise HTTPException(404, "application not found")
         await session.commit()
