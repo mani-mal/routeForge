@@ -25,17 +25,24 @@ function topTier(dist: Record<string, number>): string {
 }
 
 function joinRows(apps: AdminApp[], usage: UsageByApp[]): JoinedRow[] {
-  const nameById = new Map(apps.map((a) => [a.id, a.name]));
-  return usage.map((u) => ({
-    appId: u.application_id,
-    appName: nameById.get(u.application_id) ?? u.application_id,
-    count: u.count,
-    total_usd: u.total_usd,
-    baseline_usd: u.baseline_usd,
-    saved_usd: u.baseline_usd - u.total_usd,
-    onprem_pct: u.count > 0 ? (u.onprem_count / u.count) * 100 : 0,
-    top_tier: topTier(u.tier_distribution),
-  }));
+  const usageById = new Map(usage.map((u) => [u.application_id, u]));
+  return apps.map((app) => {
+    const u = usageById.get(app.id);
+    const count = u?.count ?? 0;
+    const total_usd = u?.total_usd ?? 0;
+    const baseline_usd = u?.baseline_usd ?? 0;
+    const onprem_count = u?.onprem_count ?? 0;
+    return {
+      appId: app.id,
+      appName: app.name,
+      count,
+      total_usd,
+      baseline_usd,
+      saved_usd: baseline_usd - total_usd,
+      onprem_pct: count > 0 ? (onprem_count / count) * 100 : 0,
+      top_tier: topTier(u?.tier_distribution ?? {}),
+    };
+  });
 }
 
 const GRID = "grid grid-cols-[minmax(140px,2fr)_80px_90px_90px_90px_80px_80px] items-center gap-3";
@@ -70,7 +77,7 @@ export function CrossAppReport() {
     <Panel title="Cross-app usage">
       {loading ? (
         <p className="text-sm text-gray-500">Loading usage…</p>
-      ) : rows.length === 0 ? (
+      ) : apps.length === 0 ? (
         <p className="text-sm text-gray-500">No applications yet.</p>
       ) : (
         <div className="flex flex-col gap-1.5">
