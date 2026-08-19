@@ -325,7 +325,7 @@ function StepBody({ stepKey, detail, hops }: { stepKey: string; detail: ChatResp
               <div className={BODY_CLASS}>{detail.display.output}</div>
               <p className="text-xs text-gray-500 pt-1">
                 {detail.display.mode === "full"
-                  ? "Raw response stored (residency-local project)."
+                  ? "Served response, as returned to the client (residency-local project). Detected PII is still masked by output verification."
                   : "Gate-sanitized response — entity values masked."}
               </p>
             </>
