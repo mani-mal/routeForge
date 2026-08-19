@@ -8,8 +8,9 @@
 // Honesty rules carried over from the panels this replaces: entity fields
 // are TYPES only (never raw values/text), CCR fields are COUNTS only (never
 // cached content), and excluded providers are greyed with their reason.
+import { useState } from "react";
 import type { ReactNode } from "react";
-import { STEPS, stepMeta, TIER_COLOR } from "../api";
+import { STEPS, stepMeta, TIER_COLOR, api } from "../api";
 import type { ChatResponse, RequestSummary, TraceRecord } from "../api";
 import { TIER_HEX, SIGNAL_HEX } from "../tokens";
 import type { Tier } from "../tokens";
@@ -440,6 +441,49 @@ function MetricChip({ icon, accent, label, value, sub }: {
   );
 }
 
+// Reviewer thumbs on the routing verdict — posts `route_correct` (1/0). A
+// same-origin admin call, mirroring api.setControls. `requestId` is undefined
+// only while detail hasn't loaded; the buttons stay disabled until then.
+function ThumbsFeedback({ requestId }: { requestId: string | undefined }) {
+  const [status, setStatus] = useState<"idle" | "sending" | "thanks" | "not_recorded" | "error">("idle");
+
+  const send = (value: 0 | 1) => {
+    if (!requestId) return;
+    setStatus("sending");
+    api
+      .feedback(requestId, { score_name: "route_correct", value })
+      .then((res) => setStatus(res.stored ? "thanks" : "not_recorded"))
+      .catch(() => setStatus("error"));
+  };
+
+  return (
+    <div className="mt-2.5 flex items-center gap-2 text-xs text-gray-500">
+      <span>Was this routing correct?</span>
+      <button
+        type="button"
+        disabled={!requestId || status === "sending"}
+        onClick={() => send(1)}
+        title="Routing was correct"
+        className="rounded px-1 text-sm hover:text-accent disabled:opacity-40"
+      >
+        👍
+      </button>
+      <button
+        type="button"
+        disabled={!requestId || status === "sending"}
+        onClick={() => send(0)}
+        title="Routing was wrong"
+        className="rounded px-1 text-sm hover:text-accent disabled:opacity-40"
+      >
+        👎
+      </button>
+      {status === "thanks" && <span className="text-accent">Thanks — recorded</span>}
+      {status === "not_recorded" && <span className="text-gray-500">Not recorded — this request has no trace</span>}
+      {status === "error" && <span className="text-red-400">Couldn't save — try again</span>}
+    </div>
+  );
+}
+
 // Band 1 — owner-facing summary as labelled outcome cards. No step numbers, no
 // jargon, no run-on sentence: each card answers one question an app owner asks
 // ("was it private? which model, and why? was the output clean? what did it
@@ -540,8 +584,91 @@ function PlainSummary({ detail, summary }: { detail: ChatResponse; summary: Requ
           sub={hops > 1 ? `${hops} hops` : "end to end"} />
       </div>
 
+      <ThumbsFeedback requestId={detail.id} />
+
       <ProviderStrip allowedProviders={p.allowed_providers} onpremOnly={p.onprem_only} />
     </Panel>
+  );
+}
+
+// Collapsible reviewer correction form — `corrected_output` textarea + an
+// optional `preferred_model` text input. Only fields the reviewer actually
+// filled are submitted: a filled preferred_model posts a `preferred_model`
+// score (categorical, plus corrected_output if also filled); a corrected
+// output alone (no preferred model) posts a `corrected_output` score.
+function CorrectionForm({ requestId }: { requestId: string | undefined }) {
+  const [open, setOpen] = useState(false);
+  const [correctedOutput, setCorrectedOutput] = useState("");
+  const [preferredModel, setPreferredModel] = useState("");
+  const [status, setStatus] = useState<"idle" | "sending" | "saved" | "not_recorded" | "error">("idle");
+
+  const text = correctedOutput.trim();
+  const model = preferredModel.trim();
+  const canSubmit = !!requestId && status !== "sending" && (!!text || !!model);
+
+  const submit = () => {
+    if (!requestId || (!text && !model)) return;
+    setStatus("sending");
+    const body = model
+      ? { score_name: "preferred_model", value: model, ...(text ? { corrected_output: text } : {}) }
+      : { score_name: "corrected_output", value: text, corrected_output: text };
+    api
+      .feedback(requestId, body)
+      .then((res) => setStatus(res.stored ? "saved" : "not_recorded"))
+      .catch(() => setStatus("error"));
+  };
+
+  return (
+    <div className="rounded-md border border-edge/70 bg-panel p-3">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="text-xs text-accent hover:underline"
+      >
+        {open ? "Hide correction form" : "Suggest a correction"}
+      </button>
+      {open && (
+        <div className="mt-2 flex flex-col gap-2">
+          <label className="block text-xs text-gray-500">
+            Corrected output
+            <textarea
+              value={correctedOutput}
+              onChange={(e) => setCorrectedOutput(e.target.value)}
+              disabled={!requestId}
+              rows={3}
+              placeholder="What should the model have said?"
+              className="mt-1 w-full rounded-md border border-edge/70 bg-ink/40 p-2 text-xs text-gray-200 placeholder:text-gray-600"
+            />
+          </label>
+          <label className="block text-xs text-gray-500">
+            Preferred model
+            <input
+              type="text"
+              value={preferredModel}
+              onChange={(e) => setPreferredModel(e.target.value)}
+              disabled={!requestId}
+              placeholder="e.g. gpt-4o"
+              className="mt-1 w-full rounded-md border border-edge/70 bg-ink/40 p-2 text-xs text-gray-200 placeholder:text-gray-600"
+            />
+          </label>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={submit}
+              disabled={!canSubmit}
+              className="rounded-md border border-edge/70 px-2 py-1 text-xs text-accent hover:underline disabled:opacity-40"
+            >
+              Submit
+            </button>
+            {status === "saved" && <span className="text-xs text-accent">Saved</span>}
+            {status === "not_recorded" && (
+              <span className="text-xs text-gray-500">Not recorded — this request has no trace</span>
+            )}
+            {status === "error" && <span className="text-xs text-red-400">Couldn't save — try again</span>}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -581,6 +708,7 @@ function TechnicalTrace({ detail }: { detail: ChatResponse }) {
           Multi-step request — {hops} agent hops, each re-entering compression and the router.
         </p>
       )}
+      <CorrectionForm requestId={detail.id} />
       <div className="flex flex-col gap-3 max-h-[560px] overflow-y-auto pr-1">
         {STEPS.map((s) => (
           <div key={s.key} className="rounded-md border border-edge/70 bg-panel p-3">
