@@ -22,7 +22,7 @@ def _trace(**over):
                       "detected_entities": []},
               trace=[{"step": "router", "chosen": "local-8b", "reason": "tier cheap"}])
     kw.update(over)
-    return export_trace(**kw)
+    return export_trace(**kw).url
 
 
 def test_export_trace_returns_deeplink_when_enabled(monkeypatch):

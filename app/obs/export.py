@@ -4,11 +4,17 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import namedtuple
 
 from app.obs.otel import app_trace_url, get_app_tracer, get_tracer, trace_url
 from app.obs.redact import redact, redact_value
 
 log = logging.getLogger("serving.obs")
+
+# `url` is the Langfuse UI deep-link (or None when telemetry is off); `trace_id`
+# is the same trace's 32-hex OTel trace id (or None), so an external eval/RLHF
+# consumer can link feedback to a trace without parsing the URL (F1 Phase D).
+TraceExport = namedtuple("TraceExport", ["url", "trace_id"])
 
 
 def _candidates_json(rec: dict) -> str | None:
@@ -81,10 +87,12 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                  completion: str = "", sanitized_prompt: str = "", recognizers=None,
                  session_id: str | None = None,
                  routing_policy_version: str = "",
-                 raw_completion: str = "") -> str | None:
-    """Export the request's decision trace as spans and return the Langfuse UI
-    URL for the resulting trace (or None when telemetry is disabled), so the
-    caller can hand the UI a live "Langfuse trace" deep-link.
+                 raw_completion: str = "") -> TraceExport:
+    """Export the request's decision trace as spans and return a `TraceExport`
+    (url, trace_id) for the resulting trace — `url` the Langfuse UI deep-link,
+    `trace_id` the same trace's 32-hex id — or `TraceExport(None, None)` when
+    telemetry is disabled, so the caller can hand the UI a live "Langfuse
+    trace" deep-link and hand an eval/RLHF consumer the raw trace id.
 
     When `app_langfuse` (the application's own Langfuse project) is provided,
     the trace is exported to THAT project and the deep-link points there — each
@@ -191,9 +199,10 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
             get_ctx = getattr(root, "get_span_context", None)
             if get_ctx is not None:
                 trace_id = get_ctx().trace_id
+                hex_id = f"{trace_id:032x}"
                 if app_langfuse is not None:
-                    return app_trace_url(app_langfuse.project_id, trace_id)
-                return trace_url(trace_id)
+                    return TraceExport(app_trace_url(app_langfuse.project_id, trace_id), hex_id)
+                return TraceExport(trace_url(trace_id), hex_id)
     except Exception:  # telemetry must never break serving
         log.exception("trace export failed for %s (swallowed)", request_id)
-    return None
+    return TraceExport(None, None)

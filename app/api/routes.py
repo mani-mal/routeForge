@@ -222,7 +222,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
             }
         else:  # "off"
             resp["display"] = {"mode": "off", "input": None, "output": None}
-        lf_url = export_trace(
+        te = export_trace(
             request_id=resp["id"], tenant_id=tenant, model=resp["model"],
             cost=resp["cost"], policy=resp["policy"], trace=resp["trace"],
             application_id=tenant, app_langfuse=app_langfuse,
@@ -235,11 +235,14 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
             recognizers=profile.recognizers,
             session_id=session_id,
             routing_policy_version=s.routing_policy_version)
-        # Live deep-link for the UI's "Langfuse trace" button (None when
-        # telemetry is off → the UI hides it). Set before history.record so the
-        # inspector's full detail carries it.
-        if lf_url:
-            resp["langfuse_url"] = lf_url
+        # Live deep-link for the UI's "Langfuse trace" button, and the raw hex
+        # trace id for an external eval/RLHF consumer (F1 Phase D task 2).
+        # Both None when telemetry is off → the UI hides the link. Set before
+        # history.record so the inspector's full detail carries them.
+        if te.url:
+            resp["langfuse_url"] = te.url
+        if te.trace_id:
+            resp["trace_id"] = te.trace_id
     except Exception:  # export_trace already swallows; this is belt-and-suspenders
         logging.getLogger("serving.obs").exception(
             "export_trace raised before its own guard (swallowed)")
