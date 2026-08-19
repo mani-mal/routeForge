@@ -19,6 +19,43 @@ SCORE_NAMES = frozenset({
     "corrected_output",
 })
 
+# Langfuse score-config dataType per score name, so a lazily-created config
+# renders with the right widget in the Langfuse UI (numeric slider vs
+# categorical picker) instead of defaulting to NUMERIC for everything.
+_SCORE_DATATYPES = {
+    "route_correct": "NUMERIC", "quality": "NUMERIC",
+    "preferred_model": "CATEGORICAL", "failure_type": "CATEGORICAL",
+    "corrected_output": "CATEGORICAL",
+}
+
+
+async def ensure_score_config(app_langfuse, name: str, client=None) -> None:
+    """Best-effort lazy creation of a Langfuse score-config so scores render
+    with the right dataType in the UI. Swallows ALL errors (logs at debug)
+    and never raises — a missing/failed config must never block a score post.
+    `client` is an injectable `httpx.AsyncClient` (tests); when omitted one is
+    built and closed here, mirroring `post_score` above."""
+    if app_langfuse is None:
+        return
+    try:
+        import httpx
+
+        close = client is None
+        if client is None:
+            client = httpx.AsyncClient(timeout=15.0)
+        try:
+            await client.post(
+                f"{app_langfuse.host}/api/public/score-configs",
+                auth=(app_langfuse.public_key, app_langfuse.secret_key),
+                json={"name": name, "dataType": _SCORE_DATATYPES.get(name, "NUMERIC")})
+        finally:
+            if close:
+                await client.aclose()
+    except Exception:
+        log.debug("ensure_score_config failed for %r (swallowed)", name,
+                  exc_info=True)
+    return None
+
 
 async def post_score(app_langfuse, trace_id: str, name: str, value,
                       comment: str | None = None, client=None) -> bool:
