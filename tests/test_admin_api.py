@@ -70,6 +70,29 @@ def test_token_revocation_blocks_serving(client):
     assert client.post("/v1/chat/completions", headers=h, json=_MSG).status_code == 401
 
 
+def test_policy_full_capture_rejected_for_ineligible_app(client):
+    _login(client)
+    client.post("/admin/applications", json={"id": "onp", "name": "Onp",
+                                             "default_residency": "onprem_only"})
+    r = client.put("/admin/applications/onp/policy", json={"capture_io": "full"})
+    assert r.status_code == 422
+    assert "residency" in r.text.lower() or "project" in r.text.lower()
+    # redacted is always allowed
+    assert client.put("/admin/applications/onp/policy",
+                      json={"capture_io": "redacted"}).status_code == 200
+
+
+def test_policy_rejects_bad_residency(client):
+    _login(client)
+    client.post("/admin/applications", json={"id": "resapp", "name": "Res"})
+    r = client.put("/admin/applications/resapp/policy", json={"residency": "bogus"})
+    assert r.status_code == 422
+    assert "residency" in r.text.lower()
+    # a valid residency is accepted
+    assert client.put("/admin/applications/resapp/policy",
+                      json={"residency": "private_cloud_ok"}).status_code == 200
+
+
 def test_usage_summary_reflects_served_requests(client):
     _login(client)
     token = client.post("/admin/applications",

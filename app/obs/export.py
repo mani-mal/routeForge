@@ -88,7 +88,22 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
         per_app = None
         if app_langfuse is not None:
             per_app = get_app_tracer(app_langfuse.host, app_langfuse.public_key,
-                                     app_langfuse.secret_key)
+                                     app_langfuse.secret_key,
+                                     capture_io_full=(capture_io == "full"))
+            if capture_io == "full" and per_app is None:
+                # The app has its own Langfuse project, but building its
+                # tracer failed (e.g. SDK build failure) -- we cannot isolate
+                # raw I/O into that project, and the shared tracer is not a
+                # safe fallback for raw text. Downgrade BEFORE any span is
+                # authored (rules 2/8: redact on egress, residency beats
+                # eval) rather than falling through to raw on the shared
+                # project.
+                log.warning(
+                    "capture_io='full' requested but per-app tracer build "
+                    "failed for tenant %s; downgrading to 'redacted' for "
+                    "this export (no raw fallback to shared project)",
+                    tenant_id)
+                capture_io = "redacted"
         tracer = per_app if per_app is not None else get_tracer()
         with tracer.start_as_current_span("serving.request") as root:
             root.set_attribute("sp.request_id", request_id)

@@ -199,6 +199,7 @@ export interface AdminPolicy {
   max_spend_usd_per_day: number | null;
   max_rpm: number | null;
   compression_enabled: boolean | null;   // null = inherit global Headroom toggle
+  capture_io: string | null;   // null = inherit global capture_io
 }
 
 export interface AdminApp {

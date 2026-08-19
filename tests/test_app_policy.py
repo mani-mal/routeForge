@@ -136,9 +136,50 @@ def test_http_provider_restriction_reflected_in_policy(tmp_path):
         restore()
 
 
+def test_capture_io_persists_and_round_trips_via_policy_api(tmp_path):
+    db_url, restore = _with_db(tmp_path)
+    try:
+        from tests.test_admin_api import _login  # admin session helper
+        with TestClient(create_app()) as c:
+            _login(c)
+            c.post("/admin/applications", json={"id": "acme", "name": "Acme"})
+            r = c.put("/admin/applications/acme/policy", json={"capture_io": "redacted"})
+            assert r.status_code == 200
+            assert r.json()["policy"]["capture_io"] == "redacted"
+    finally:
+        restore()
+
+
 def _compression_record(trace):
     # CompressionRecord is the only trace entry carrying tokens_before.
     return next(e for e in trace if "tokens_before" in e)
+
+
+def test_per_app_capture_io_overrides_global_and_clamps_full(tmp_path, monkeypatch):
+    from tests.test_capture_io import _root_attrs, _wire
+    _SSN = "482-73-1946"
+    db_url, restore = _with_db(tmp_path)
+    try:
+        monkeypatch.setenv("SP_PII_DETECTION", "regex")
+        # global stays off; per-app override drives capture. `hospital` is
+        # onprem_only with no own Langfuse project -> `full` must clamp to redacted.
+        _seed_policy(db_url, "hospital", capture_io="full")
+        with TestClient(create_app()) as c:
+            mem, provider = _wire(monkeypatch, redacting=True)
+            r = c.post("/v1/chat/completions",
+                       headers={"Authorization": "Bearer hospital-key"},
+                       json={"model": "auto",
+                             "messages": [{"role": "user", "content": f"ssn {_SSN}"}]})
+            assert r.status_code == 200
+            provider.force_flush()
+            attrs = _root_attrs(mem)
+            # capture happened (override beat the global 'off') ...
+            assert "input.value" in attrs
+            # ... but clamped to redacted: raw SSN absent despite capture_io='full'
+            assert _SSN not in str(attrs)
+            assert "<US_SSN_1>" in attrs["input.value"]
+    finally:
+        restore()
 
 
 def test_http_per_app_compression_override(tmp_path):
