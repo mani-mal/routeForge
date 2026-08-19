@@ -216,8 +216,8 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
         elif capture_io == "redacted":
             resp["display"] = {
                 "mode": "redacted",
-                "input": sanitized_prompt or redact(prompt),
-                "output": redact(completion),
+                "input": sanitized_prompt or redact(prompt, recognizers=profile.recognizers),
+                "output": redact(completion, recognizers=profile.recognizers),
             }
         else:  # "off"
             resp["display"] = {"mode": "off", "input": None, "output": None}
