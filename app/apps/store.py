@@ -164,7 +164,7 @@ async def update_application(session: AsyncSession, app_id: str, **fields
         return None
     allowed = {"name", "owner_email", "status", "default_residency",
                "langfuse_project_id", "langfuse_public_key",
-               "langfuse_secret_key_enc"}
+               "langfuse_secret_key_enc", "langfuse_host"}
     for k, v in fields.items():
         if k in allowed:
             setattr(app, k, v)

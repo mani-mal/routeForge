@@ -49,6 +49,7 @@ class Application(Base):
     langfuse_project_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     langfuse_public_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
     langfuse_secret_key_enc: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    langfuse_host: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow)

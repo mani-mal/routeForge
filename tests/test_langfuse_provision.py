@@ -81,3 +81,19 @@ def test_load_app_langfuse(monkeypatch):
     bare = SimpleNamespace(langfuse_project_id=None, langfuse_public_key=None,
                            langfuse_secret_key_enc=None)
     assert lp.load_app_langfuse(bare) is None
+
+
+def test_load_app_langfuse_prefers_per_app_host(monkeypatch):
+    from types import SimpleNamespace
+    from app.apps.langfuse_provision import load_app_langfuse, encrypt_secret
+    monkeypatch.setenv("LANGFUSE_HOST", "http://env-host:3000")
+    monkeypatch.delenv("ENCRYPTION_KEY", raising=False)
+    app = SimpleNamespace(
+        langfuse_project_id="proj_x", langfuse_public_key="pk_x",
+        langfuse_secret_key_enc=encrypt_secret("sk_x"),
+        langfuse_host="http://airgap-host:3000",
+    )
+    creds = load_app_langfuse(app)
+    assert creds is not None
+    assert creds.host == "http://airgap-host:3000"   # per-app wins over env
+    assert creds.project_id == "proj_x"
