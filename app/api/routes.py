@@ -3,6 +3,7 @@ import re
 import uuid
 
 from fastapi import APIRouter, HTTPException, Request, Response
+from pydantic import BaseModel
 
 from app.agent.runtime import AgentCapExceeded
 from app.apps import store
@@ -13,6 +14,7 @@ from app.models import ChatRequest
 from app.obs import metrics
 from app.obs.export import export_trace
 from app.obs.redact import redact
+from app.obs.scores import SCORE_NAMES, post_score
 from app.pipeline import PipelineRejected
 
 router = APIRouter()
@@ -324,3 +326,37 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
         logging.getLogger("serving.obs").exception(
             "bus.publish failed (swallowed)")
     return resp
+
+
+class FeedbackIn(BaseModel):
+    """Body for POST /v1/feedback. `value` is numeric for quality-style scores
+    or a string for categorical scores (e.g. failure_type); Langfuse decides
+    dataType by which of those it is (see `app.obs.scores.post_score`)."""
+    trace_id: str
+    score_name: str
+    value: float | str
+    comment: str | None = None
+    corrected_output: str | None = None
+
+
+@router.post("/v1/feedback")
+async def feedback(body: FeedbackIn, request: Request) -> dict:
+    """App-token-authenticated eval/feedback intake (F1 Phase D / B16). Posts
+    straight to the calling app's OWN residency-local Langfuse project via
+    REST — never the shared project, and never anywhere at all when the app
+    has no provisioned project (fail-closed; `post_score` handles that case
+    and returns False, which becomes `{"stored": false}` here, HTTP 200 —
+    a missing project is not the caller's fault and must not surface as an
+    error)."""
+    auth = await _authenticate(request)
+    if auth is None:
+        raise HTTPException(401, "invalid or missing API token")
+    tenant, app_policy, app_langfuse = auth
+    if body.score_name not in SCORE_NAMES:
+        raise HTTPException(422, f"unknown score_name: {body.score_name!r}")
+    stored = await post_score(app_langfuse, body.trace_id, body.score_name,
+                              body.value, body.comment)
+    if body.corrected_output:
+        await post_score(app_langfuse, body.trace_id, "corrected_output", 1,
+                         body.corrected_output)
+    return {"stored": stored}
