@@ -246,6 +246,37 @@ async def usage_summary(session: AsyncSession, *, application_id: str | None = N
     }
 
 
+async def usage_by_application(session: AsyncSession, *,
+                               since: dt.datetime | None = None) -> list[dict]:
+    """App-wise rollup over UsageRecord (durable store; portable Python
+    aggregation across SQLite/Postgres — mirrors `usage_summary`'s style).
+    Sorted by total_usd descending."""
+    stmt = select(UsageRecord)
+    if since is not None:
+        stmt = stmt.where(UsageRecord.ts >= since)
+    rows = (await session.execute(stmt)).scalars().all()
+    agg: dict[str, dict] = {}
+    for r in rows:
+        a = agg.setdefault(r.application_id, {
+            "application_id": r.application_id, "count": 0, "rejected_count": 0,
+            "total_usd": 0.0, "baseline_usd": 0.0, "total_tokens": 0, "onprem_count": 0,
+            "tier_distribution": {}, "model_distribution": {}, "sensitivity_distribution": {},
+        })
+        a["count"] += 1
+        if r.status == "rejected":
+            a["rejected_count"] += 1
+        a["total_usd"] += float(r.cost_usd or 0.0)
+        a["baseline_usd"] += float(r.baseline_usd or 0.0)
+        a["total_tokens"] += int(r.total_tokens or 0)
+        if r.onprem_only:
+            a["onprem_count"] += 1
+        for key, val in (("tier_distribution", r.tier), ("model_distribution", r.model),
+                         ("sensitivity_distribution", r.sensitivity)):
+            if val:
+                a[key][val] = a[key].get(val, 0) + 1
+    return sorted(agg.values(), key=lambda d: d["total_usd"], reverse=True)
+
+
 # --- per-app privacy profile (recognizers + sensitivity rules) ---
 
 async def get_privacy_profile(session: AsyncSession, app_id: str) -> AppPrivacyProfile:

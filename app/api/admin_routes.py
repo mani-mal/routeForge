@@ -332,6 +332,17 @@ async def usage(request: Request, application_id: str | None = None,
             session, application_id=application_id, since=since)
 
 
+@admin_router.get("/usage/by-application")
+async def usage_by_application(request: Request, hours: int | None = None,
+                               _: str = Depends(require_admin)) -> dict:
+    since = None
+    if hours is not None:
+        since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=hours)
+    async with request.app.state.db.session() as session:
+        apps = await store.usage_by_application(session, since=since)
+    return {"apps": apps, "window_hours": hours}
+
+
 # --- per-app privacy profile (recognizers + sensitivity rules) --------------
 
 @admin_router.get("/applications/{app_id}/privacy")
