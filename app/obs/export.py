@@ -100,6 +100,33 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
     ever reaches a full-eligible app's OWN residency-local project (the
     fail-closed clamp above and in `app/api/routes.py` guarantee that)."""
     try:
+        if capture_io == "full" and app_langfuse is None and raw_completion:
+            # `raw_completion` (F1 Phase D task 1) is the PRE-VERIFY model
+            # output and may only ever reach a full-eligible app's OWN
+            # residency-local Langfuse project (rules 2/8). Today the only
+            # production caller (app/api/routes.py) already clamps this
+            # unreachable, but the export boundary must enforce its own
+            # invariant too -- never trust an upstream clamp alone to keep
+            # raw completions off the shared project. Downgrade BEFORE any
+            # span is authored, same as the per-app-tracer-build-failure
+            # guard below.
+            #
+            # Deliberately scoped to `raw_completion` truthy, NOT a blanket
+            # `capture_io == "full" and app_langfuse is None` downgrade: the
+            # latter is legitimate, pre-existing, lint-gated behaviour (the
+            # config lint proves no onprem_only tenant exists, so the
+            # *shared* project is itself residency-local -- see
+            # `app/config/lint.py`, `test_lint_allows_full_when_no_onprem_
+            # tenant`, and `tests/test_capture_io.py`'s direct-caller full-
+            # mode tests, which intentionally pass raw `prompt`/`completion`
+            # with no per-app project and must keep working). Only the NEW
+            # raw_completion path this task adds needs this narrower guard.
+            log.warning(
+                "capture_io='full' with a raw_completion but no per-app "
+                "Langfuse project for tenant %s; downgrading to 'redacted' "
+                "for this export (no raw-completion fallback to shared "
+                "project)", tenant_id)
+            capture_io = "redacted"
         per_app = None
         if app_langfuse is not None:
             per_app = get_app_tracer(app_langfuse.host, app_langfuse.public_key,

@@ -157,3 +157,29 @@ def test_redacted_export_never_gets_raw_completion(client, monkeypatch):
     provider.force_flush()
     out = _output_value_for(mem, resp["id"])
     assert _SSN not in out
+
+
+def test_full_without_app_langfuse_downgrades_to_redacted(monkeypatch):
+    """Defense-in-depth (coordinator review, task 1): export_trace must
+    enforce its OWN full+own-project invariant rather than trusting the
+    upstream clamp in routes.py alone. Today routes.py already guarantees
+    `capture_io == "full"` implies `app_langfuse is not None` for the only
+    production caller -- but the export boundary is where the raw completion
+    actually gets authored onto a span, so it must fail closed independently:
+    a caller that (by a future bug) passes capture_io='full' with no per-app
+    Langfuse project must still get 'redacted' behaviour, never a raw leak
+    onto the shared project."""
+    mem, provider = _wire(monkeypatch, redacting=True)
+    leaked = f"noted: {_SSN}"
+    export_mod.export_trace(
+        request_id="req-guard-1", tenant_id="acme", model="local-32b",
+        cost={"total_usd": 0.0001, "baseline_usd": 0.001},
+        policy={"sensitivity": "internal", "onprem_only": False,
+                "allowed_providers": ["onprem"], "detected_entities": []},
+        trace=[],
+        capture_io="full", app_langfuse=None,
+        prompt="please repeat it back", completion=leaked,
+        raw_completion=leaked)
+    provider.force_flush()
+    out = _output_value_for(mem, "req-guard-1")
+    assert _SSN not in out  # downgraded to redacted -- never raw on the shared project
