@@ -10,7 +10,7 @@ import datetime as dt
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from app.apps import store
 from app.apps.admin_auth import SESSION_COOKIE, require_admin
@@ -101,10 +101,29 @@ class PolicyIn(BaseModel):
 
 
 class LangfuseCredsIn(BaseModel):
-    host: str
-    public_key: str
-    secret_key: str
-    project_id: str
+    # Every field is load-bearing for the capture_io='full' eligibility check
+    # (`load_app_langfuse(app) is not None`, `has_langfuse_keys`). A blank or
+    # whitespace-only value would still encrypt to a non-empty Fernet token and
+    # silently unlock 'full' capture with no valid sink — reject fail-closed.
+    host: str = Field(min_length=1)
+    public_key: str = Field(min_length=1)
+    secret_key: str = Field(min_length=1)
+    project_id: str = Field(min_length=1)
+
+    @field_validator("host", "public_key", "secret_key", "project_id")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("must not be blank")
+        return v
+
+    @field_validator("host")
+    @classmethod
+    def _host_is_url(cls, v: str) -> str:
+        # Mirror onboard_model's endpoint check (~admin_routes.py:431).
+        if not re.match(r"^https?://", v):
+            raise ValueError("host must be an http(s) URL")
+        return v
 
 
 class TokenIn(BaseModel):
