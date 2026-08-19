@@ -162,6 +162,42 @@ admin rollup numbers reconcile with summed per-request values.
 returned on chat responses; fail-closed when the app has no project (score dropped/logged, never
 mis-routed); corrected_output stored.
 
+#### Phase D — build addendum (2026-08-19, owner-decided)
+
+Grounded in the code as it actually is (no Langfuse SDK usage anywhere — telemetry is OTel spans
++ REST; no durable `request_id ↔ trace_id` map; console is admin/session-gated, `/v1/*` is
+app-token). Concrete decisions:
+
+1. **Gated raw-completion capture (owner decision — "gated capture").** Today `capture_io=full`
+   stores raw *prompts* but step-9 `verify()` masks *completions* before anything stores them
+   (`app/output/verify.py`), so `full` completions are masked. Fix: the pipeline surfaces the
+   **pre-verification** raw completion (`result.text`, both direct and multi-step paths) as
+   `resp["raw_completion"]`; `routes.py` **pops it** (like `sanitized_prompt`) so it is never
+   client-visible, never in `resp["display"]`, never in `HistoryStore`. It is threaded into
+   `export_trace` only, and `_set_io` uses it for `output.value` **only on the `full` branch** —
+   which the Phase-B clamp + per-app `skip_io` exporter already restrict to a non-`onprem_only`
+   app with its **own residency-local project**. So the client reply and the shared/redacted
+   telemetry stay masked; raw completions land **only** in the app's own residency-local project,
+   symmetric with raw prompts. Rule #2 is **not** relaxed for shared sinks or the client.
+2. **Scores via Langfuse REST**, not the SDK: `POST {host}/api/public/scores` with the app's
+   `{public_key, secret_key}` Basic auth (mirrors `LangfuseProvisioner`'s httpx pattern). Scores
+   are project-scoped by which creds post them → inherently the app's own project. Fail-closed:
+   `app_langfuse is None` ⇒ drop + log, never post to a shared project.
+3. **Expose `trace_id`** (32-hex) on the chat response (`export_trace` returns it alongside the
+   URL; `routes.py` sets `resp["trace_id"]`). `/v1/feedback` keys on `trace_id` (reliable; no
+   in-memory lookup). The admin UI route keys on `request_id` → reads `trace_id` from the stored
+   history `resp`.
+4. **Two feedback entry points over one helper.** `POST /v1/feedback` (app-token, the substrate
+   API for apps/SDKs) and `POST /api/requests/{request_id}/feedback` (admin session cookie, for
+   the console UI — resolves the request's app + creds server-side). Both call one
+   `post_score(app_langfuse, trace_id, name, value, comment)` helper. Score-name enum validated
+   server-side: `route_correct | preferred_model | failure_type | quality | corrected_output`.
+   `corrected_output` is stored as its own score (text in `comment`) — the DPO "chosen".
+5. **Named score configs:** best-effort lazy creation via `POST /api/public/score-configs` on
+   first use (non-fatal if it fails); documented enum is the contract.
+
+Implementation plan: `docs/superpowers/plans/2026-08-19-f1-phase-d-feedback-and-datasets.md`.
+
 ---
 
 ## 4. Sequencing & risk
