@@ -71,6 +71,7 @@ export interface ChatResponse {
   model: string;
   model_display?: string; // human-facing model name (falls back to `model`)
   langfuse_url?: string | null; // live deep-link to this request's Langfuse trace
+  display?: { mode: "off" | "redacted" | "full"; input: string | null; output: string | null };
   choices: { index: number; message: { role: string; content: string }; finish_reason: string }[];
   usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
   trace: TraceRecord[];
