@@ -262,9 +262,11 @@ async def usage_by_application(session: AsyncSession, *,
             "total_usd": 0.0, "baseline_usd": 0.0, "total_tokens": 0, "onprem_count": 0,
             "tier_distribution": {}, "model_distribution": {}, "sensitivity_distribution": {},
         })
-        a["count"] += 1
         if r.status == "rejected":
             a["rejected_count"] += 1
+        if r.status != "ok":
+            continue
+        a["count"] += 1
         a["total_usd"] += float(r.cost_usd or 0.0)
         a["baseline_usd"] += float(r.baseline_usd or 0.0)
         a["total_tokens"] += int(r.total_tokens or 0)
