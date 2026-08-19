@@ -188,6 +188,15 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
     metrics.observe_tokens(resp["model"],
                            usage.get("prompt_tokens", 0),
                            usage.get("completion_tokens", 0))
+    # Strip the two never-client-visible keys off `resp` BEFORE the telemetry
+    # try-block runs. `raw_completion` is the pre-verify model output (may carry
+    # PII step-9 masked from the client reply) and `sanitized_prompt` is the
+    # gate's internal redaction — neither may reach the caller. Popping them
+    # here, outside the try, makes their removal structural: even if anything in
+    # the telemetry block below raised, `resp` (returned to the client) can no
+    # longer carry them. They're consumed only inside the try, via these locals.
+    sanitized_prompt = resp.pop("sanitized_prompt", "")
+    raw_completion = resp.pop("raw_completion", "")   # pre-verify; NEVER client-visible
     try:
         # Eval-capture (docs/eval-logging-backlog.md): when capture_io is
         # redacted|full, attach the request prompt + response completion to the
@@ -203,8 +212,6 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
                 app_policy.residency == "onprem_only" or app_langfuse is None):
             capture_io = "redacted"
         prompt = body.messages[-1].content if body.messages else ""
-        sanitized_prompt = resp.pop("sanitized_prompt", "")
-        raw_completion = resp.pop("raw_completion", "")   # pre-verify; NEVER client-visible
         completion = ""
         try:
             completion = resp["choices"][0]["message"]["content"] or ""

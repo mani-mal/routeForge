@@ -25,7 +25,13 @@ SCORE_NAMES = frozenset({
 _SCORE_DATATYPES = {
     "route_correct": "NUMERIC", "quality": "NUMERIC",
     "preferred_model": "CATEGORICAL", "failure_type": "CATEGORICAL",
-    "corrected_output": "CATEGORICAL",
+    # corrected_output is always posted as value=1 (a NUMERIC marker) with the
+    # correction TEXT in the score's `comment` — see both feedback handlers'
+    # `post_score(..., "corrected_output", 1, <text>)`. The lazy config must
+    # therefore be NUMERIC to match the score Langfuse actually receives; a
+    # CATEGORICAL config (no categories) would be rejected and mis-render the
+    # widget.
+    "corrected_output": "NUMERIC",
 }
 
 
