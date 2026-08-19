@@ -606,12 +606,18 @@ function CorrectionForm({ requestId }: { requestId: string | undefined }) {
   const model = preferredModel.trim();
   const canSubmit = !!requestId && status !== "sending" && (!!text || !!model);
 
+  // The backend attaches a correction by posting a dedicated `corrected_output`
+  // score (value 1, text in `comment`) whenever the request body's
+  // `corrected_output` field is set — in ADDITION to whatever `score_name` was
+  // requested. So: preferred_model + text sets `corrected_output` and gets both
+  // scores for free; text alone must be posted as the primary score (never as
+  // a second `corrected_output` field) or the backend double-posts it.
   const submit = () => {
     if (!requestId || (!text && !model)) return;
     setStatus("sending");
     const body = model
       ? { score_name: "preferred_model", value: model, ...(text ? { corrected_output: text } : {}) }
-      : { score_name: "corrected_output", value: text, corrected_output: text };
+      : { score_name: "corrected_output", value: 1, comment: text };
     api
       .feedback(requestId, body)
       .then((res) => setStatus(res.stored ? "saved" : "not_recorded"))
