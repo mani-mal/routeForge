@@ -97,7 +97,7 @@ def test_hop_records_nonzero_latency(monkeypatch):
 
     recs = HOPS.pop(run_id)
     assert recs, "expected a recorded agent_hop"
-    assert recs[0].latency_ms >= 0  # real (measured), never the old seeded_latency_ms
+    assert recs[0].latency_ms > 0  # real (measured) latency, never 0.0
     assert calls["n"] == 1  # backend was actually called, exactly once
 
 

@@ -134,7 +134,7 @@ def test_bedrock_enabled_pii_stays_onprem_while_clean_request_can_reach_cloud():
     - a clean acme request (no onprem_only entities) in the SAME
       bedrock-enabled settings, with low mock_confidence forcing an
       escalation to the frontier tier (mirrors
-      test_two_lever_cost.py::test_routing_saved_goes_negative_under_escalation_identity_holds),
+      test_two_lever_cost.py::test_escalation_to_baseline_model_yields_zero_routing_saved_identity_holds),
       DOES reach bedrock-frontier -- proving RecordingBackend actually
       observes cloud calls when policy permits them, so its silence above
       is meaningful, not just because nothing cloud-shaped was ever

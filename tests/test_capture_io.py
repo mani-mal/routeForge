@@ -177,4 +177,61 @@ def test_redacted_capture_end_to_end(monkeypatch):
     attrs = _root_attrs(mem)
     assert "input.value" in attrs                 # I/O now captured (was blank)
     assert _SSN not in str(attrs)                 # but redacted — rule 2 holds
-    assert "<US_SSN>" in attrs["input.value"]
+    # Telemetry now carries the gate's own sanitized prompt verbatim (B13),
+    # whose Detector.anonymize() placeholder scheme numbers entities
+    # (<TYPE_N>), not the exporter's bare-<TYPE> fallback used only when no
+    # gate output is supplied.
+    assert "<US_SSN_1>" in attrs["input.value"]
+
+
+def test_redacted_uses_gate_sanitized_prompt(monkeypatch):
+    # When the gate's sanitized prompt is supplied, redacted mode stores THAT
+    # verbatim (never weaker than what the model saw) rather than re-redacting raw.
+    mem, provider = _wire(monkeypatch, redacting=False)
+    _export(capture_io="redacted",
+            prompt=f"my SSN is {_SSN}",                 # raw (ignored in redacted)
+            sanitized_prompt="my SSN is <US_SSN>")       # gate output
+    provider.force_flush()
+    attrs = _root_attrs(mem)
+    assert attrs["input.value"] == "my SSN is <US_SSN>"
+    assert _SSN not in attrs["input.value"]
+
+
+def test_full_ignores_sanitized_prompt_and_keeps_raw(monkeypatch):
+    # full stores RAW for distillation; sanitized_prompt must NOT override it.
+    monkeypatch.setattr(otel, "_capture_io_full", True)
+    mem, provider = _wire(monkeypatch, redacting=True)
+    _export(capture_io="full",
+            prompt=f"my SSN is {_SSN}",
+            sanitized_prompt="my SSN is <US_SSN>")
+    provider.force_flush()
+    attrs = _root_attrs(mem)
+    assert _SSN in attrs["input.value"]                  # raw, on purpose
+
+
+def test_redacted_capture_reflects_full_model_input(monkeypatch):
+    from fastapi.testclient import TestClient
+    monkeypatch.setenv("SP_PII_DETECTION", "regex")
+    monkeypatch.setenv("SP_CAPTURE_IO", "redacted")
+    from app.main import create_app
+    client = TestClient(create_app())
+
+    mem, provider = _wire(monkeypatch, redacting=True)
+    r = client.post("/v1/chat/completions",
+                    headers={"authorization": "Bearer hospital-key"},
+                    json={"model": "auto", "messages": [
+                        {"role": "user", "content": f"patient SSN is {_SSN}"},
+                        {"role": "user", "content": "please summarize"}]})
+    assert r.status_code == 200
+    # Internal plumbing field must NOT leak to the client:
+    assert "sanitized_prompt" not in r.json()
+    provider.force_flush()
+    attrs = _root_attrs(mem)
+    # Old code redacted only messages[-1] ("please summarize") — the SSN from the
+    # FIRST message was absent from telemetry. Now telemetry carries the whole
+    # sanitized prompt the model actually received. The gate's
+    # Detector.anonymize() numbers placeholders (<TYPE_N>), unlike the
+    # exporter's bare-<TYPE> fallback used only when no gate output is given.
+    assert "<US_SSN_1>" in attrs["input.value"]
+    assert "summarize" in attrs["input.value"]
+    assert _SSN not in str(attrs)

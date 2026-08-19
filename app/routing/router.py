@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from app.config.schema import PoolCandidate, Settings
+from app.errors import NoEligibleCandidate
 from app.models import ExecutionPolicyContext, RejectedCandidate
 from app.routing.quality import QualityResolver
 
@@ -59,10 +60,22 @@ class Router:
         allowed = []
         for c in pool:
             if c.provider not in ctx.allowed_providers:
+                reason = ("excluded · residency" if ctx.onprem_only
+                          else "not permitted for application")
+                rejected.append(RejectedCandidate(
+                    name=c.name, provider=c.provider, tier=c.tier,
+                    display_name=c.display_name, reason=reason))
+                continue
+            if ctx.model_scope_active and c.name not in ctx.allowed_models:
                 rejected.append(RejectedCandidate(
                     name=c.name, provider=c.provider, tier=c.tier,
                     display_name=c.display_name,
-                    reason="excluded by policy (residency)"))
+                    reason="not permitted for application"))
+                continue
+            if ctx.requested_model is not None and c.name != ctx.requested_model:
+                rejected.append(RejectedCandidate(
+                    name=c.name, provider=c.provider, tier=c.tier,
+                    display_name=c.display_name, reason="not requested model"))
                 continue
             if (self._reg is not None
                     and not self._reg.is_allowed_for_app(c.name, ctx.tenant_id)):
@@ -79,7 +92,7 @@ class Router:
                 continue
             allowed.append(c)
         if not allowed:
-            raise ValueError("no candidates after residency filter")
+            raise NoEligibleCandidate("no candidates after residency filter")
 
         # 2. target tier from complexity + risk floor + escalation, clamped to
         #    the best residency-permitted tier
@@ -113,7 +126,7 @@ class Router:
             else:
                 eligible.append((c, est))
         if not eligible:
-            raise ValueError("no candidates after budget filter")
+            raise NoEligibleCandidate("no candidates after budget filter")
 
         # 5. score within the tier (chooses provider/model — cheaper on-prem wins)
         w = self._s.routing.weights

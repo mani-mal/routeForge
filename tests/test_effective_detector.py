@@ -1,7 +1,8 @@
 from app.models import Entity
 from app.policy.detectors import RegexDetector
 from app.policy.recognizers import CustomRecognizer
-from app.policy.effective import EffectiveDetector, _dedupe
+from app.policy.effective import EffectiveDetector
+from app.policy.merge import dedupe
 
 def test_custom_entity_added_on_top_of_builtins():
     base = RegexDetector()
@@ -36,7 +37,7 @@ def test_partial_overlap_is_fully_redacted():
     short = Entity(type="SHORT", start=5, end=13, value=text[5:13], score=None)
     long_ = Entity(type="LONG", start=8, end=25, value=text[8:25], score=0.99)
 
-    merged = _dedupe([short, long_])
+    merged = dedupe([short, long_])
     assert len(merged) == 1
     assert (merged[0].start, merged[0].end) == (5, 25)
     # Highest score (LONG=0.99 beats SHORT's None/0.0) wins the "best" pick.

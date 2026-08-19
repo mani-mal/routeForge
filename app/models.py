@@ -58,6 +58,8 @@ class ExecutionPolicyContext(BaseModel):
     onprem_only: bool
     allowed_providers: frozenset[str]
     allowed_models: frozenset[str]
+    model_scope_active: bool = False
+    requested_model: str | None = None
     max_cost_usd: float
     max_latency_ms: int
     risk_class: str
@@ -83,6 +85,8 @@ class DecisionRecord(BaseModel):
     step: str
     chosen: str | None
     chosen_display_name: str | None = None  # human-facing name for `chosen`
+    chosen_tier: str | None = None       # tier of the chosen candidate (F3 sp.candidates)
+    chosen_provider: str | None = None   # provider of the chosen candidate (F3 sp.candidates)
     reason: str
     rejected: list[RejectedCandidate] = Field(default_factory=list)
     est_cost_usd: float = 0.0
@@ -90,6 +94,7 @@ class DecisionRecord(BaseModel):
     latency_ms: float = 0.0
     hop_index: int = 0
     tokens_priced: int = 0
+    tokens_out: int = 0   # completion tokens for this hop (multi-step baseline pricing, B12)
     quality_score: float | None = None
     quality_source: str | None = None  # customer|calibrated|published|tier_default
 

@@ -36,10 +36,23 @@ export function TierDot({ tier }: { tier: string }) {
   return <span className={`inline-block h-2.5 w-2.5 shrink-0 rounded-full ${cls}`} />;
 }
 
-export function StatTile({ label, value, sub }: { label: string; value: string; sub?: string }) {
+export function StatTile({ label, value, sub, info }: { label: string; value: string; sub?: string; info?: string }) {
   return (
     <div className="bg-ink/60 border border-edge rounded-md px-3 py-2 flex flex-col gap-0.5 min-w-0">
-      <span className="text-[11px] uppercase tracking-wide text-gray-500">{label}</span>
+      <span className="flex items-center gap-1 text-[11px] uppercase tracking-wide text-gray-500">
+        {label}
+        {info && (
+          <span
+            tabIndex={0}
+            role="note"
+            aria-label={info}
+            title={info}
+            className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border border-edge text-[9px] text-gray-500 cursor-help hover:text-gray-300 hover:border-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            ?
+          </span>
+        )}
+      </span>
       <span className="text-xl font-bold font-mono text-gray-100 truncate">{value}</span>
       {sub && <span className="text-xs text-gray-500 truncate">{sub}</span>}
     </div>

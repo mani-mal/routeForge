@@ -92,6 +92,21 @@ def test_revoked_token_and_disabled_app_are_rejected():
     _run(go())
 
 
+def test_archived_app_is_rejected():
+    db = _fresh_db()
+
+    async def go():
+        async with db.session() as s:
+            # archiving an app must disable its tokens even though they stay active
+            await s.execute(update(Application)
+                            .where(Application.id == "hospital")
+                            .values(status="archived"))
+            await s.commit()
+            assert await store.resolve_application(s, "hospital-key") is None
+
+    _run(go())
+
+
 def test_record_and_list_usage():
     db = _fresh_db()
 

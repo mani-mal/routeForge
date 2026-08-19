@@ -53,3 +53,25 @@ def test_app_scope():
 def test_empty_onboarded_has_no_healthy_onprem():
     reg = _run(_reg_with({}))
     assert reg.has_healthy_onprem() is False
+
+
+def test_effective_pool_omits_disabled_provider_candidates():
+    from app.config.loader import load_settings
+    from app.apps.registry import ModelRegistry
+    s = load_settings()  # default: azure + bedrock disabled
+    reg = ModelRegistry(s)
+    # cold cache => YAML-only pool; disabled cloud providers must not appear
+    names = {c.name for c in reg.effective_pool()}
+    assert "azure-gpt-mid" not in names      # azure disabled in serving.yaml
+    assert "bedrock-frontier" not in names   # bedrock disabled in serving.yaml
+
+
+def test_effective_pool_includes_enabled_provider_candidates():
+    from app.config.loader import load_settings
+    from app.apps.registry import ModelRegistry
+    s = load_settings()
+    prov = dict(s.serving.providers)
+    prov["bedrock"] = prov["bedrock"].model_copy(update={"enabled": True})
+    s = s.model_copy(update={"serving": s.serving.model_copy(update={"providers": prov})})
+    reg = ModelRegistry(s)
+    assert "bedrock-frontier" in {c.name for c in reg.effective_pool()}

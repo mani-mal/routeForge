@@ -119,4 +119,5 @@ def test_custom_recognizer_reaches_egress_redaction_end_to_end(monkeypatch, tmp_
     attrs = _root_attrs(mem)
     assert "input.value" in attrs                 # capture_io=redacted is on
     assert "MRN-1234567" not in str(attrs)         # raw custom entity absent
-    assert "<MRN>" in attrs["input.value"]          # masked by the custom rule
+    # gate-sanitized input numbers placeholders (B13: telemetry == what the model saw)
+    assert "<MRN_1>" in attrs["input.value"]        # masked by the custom rule

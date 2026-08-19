@@ -2,6 +2,7 @@
 raises into the request path (telemetry != policy gate)."""
 from __future__ import annotations
 
+import json
 import logging
 
 from app.obs.otel import app_trace_url, get_app_tracer, get_tracer, trace_url
@@ -10,8 +11,31 @@ from app.obs.redact import redact, redact_value
 log = logging.getLogger("serving.obs")
 
 
+def _candidates_json(rec: dict) -> str | None:
+    """Serialize a routing DecisionRecord's chosen + rejected set into an
+    always-on `sp.candidates` attribute. Returns None for records that carry no
+    routing decision (e.g. the verify step). Values are model ids / enums /
+    fixed reason strings -- no PII -- so this is emitted regardless of
+    capture_io (rlhf-readiness F2). Reason strings are run through the same
+    egress redactor defensively at emit time."""
+    chosen = rec.get("chosen")
+    rejected = rec.get("rejected") or []
+    if not chosen and not rejected:
+        return None
+    items = []
+    if chosen:
+        items.append({"model": chosen, "tier": rec.get("chosen_tier"),
+                      "provider": rec.get("chosen_provider"), "eligible": True,
+                      "reason": rec.get("reason", "")})
+    for r in rejected:
+        items.append({"model": r.get("name"), "tier": r.get("tier"),
+                      "provider": r.get("provider"), "eligible": False,
+                      "reason": r.get("reason", "")})
+    return json.dumps(items)
+
+
 def _set_io(root, capture_io: str, prompt: str, completion: str,
-            recognizers=None) -> None:
+            recognizers=None, sanitized_prompt: str = "") -> None:
     """Attach request/response I/O to the root span per the eval-capture mode
     (docs/eval-logging-backlog.md). `input.value`/`output.value` are the OTel
     attributes Langfuse reads as a trace's Input/Output.
@@ -29,7 +53,10 @@ def _set_io(root, capture_io: str, prompt: str, completion: str,
     if capture_io == "off":
         return
     if capture_io == "redacted":
-        prompt = redact(prompt, recognizers=recognizers)
+        # Prefer the gate's already-sanitized prompt so telemetry can never be
+        # weaker than what the model saw (B13). Fall back to re-redacting raw
+        # for callers that don't supply it (backward-compatible).
+        prompt = sanitized_prompt or redact(prompt, recognizers=recognizers)
         completion = redact(completion, recognizers=recognizers)
     # `full`: leave prompt/completion raw (lint-gated, residency-local only).
     if prompt:
@@ -42,7 +69,9 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                  cost: dict, policy: dict, trace: list[dict],
                  application_id: str = "", app_langfuse=None,
                  capture_io: str = "off", prompt: str = "",
-                 completion: str = "", recognizers=None) -> str | None:
+                 completion: str = "", sanitized_prompt: str = "", recognizers=None,
+                 session_id: str | None = None,
+                 routing_policy_version: str = "") -> str | None:
     """Export the request's decision trace as spans and return the Langfuse UI
     URL for the resulting trace (or None when telemetry is disabled), so the
     caller can hand the UI a live "Langfuse trace" deep-link.
@@ -72,7 +101,15 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
             root.set_attribute("sp.onprem_only", bool(policy.get("onprem_only", False)))
             root.set_attribute("sp.detected_entities",
                                ",".join(policy.get("detected_entities", [])))  # TYPES only
-            _set_io(root, capture_io, prompt, completion, recognizers=recognizers)
+            if routing_policy_version:
+                root.set_attribute("sp.routing_policy_version", routing_policy_version)
+            if session_id:
+                # Langfuse groups traces sharing this attribute into one Session
+                # (B17). Opaque, client-supplied; deliberately NOT in REDACT_KEYS
+                # so it passes through the RedactingSpanExporter intact.
+                root.set_attribute("langfuse.session.id", session_id)
+            _set_io(root, capture_io, prompt, completion,
+                    recognizers=recognizers, sanitized_prompt=sanitized_prompt)
             for i, rec in enumerate(trace):
                 step = str(rec.get("step", f"step-{i}"))
                 with tracer.start_as_current_span(f"serving.{step}") as sp:
@@ -84,6 +121,9 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                         sp.set_attribute("sp.chosen", redact_value(str(rec["chosen"])))
                     if "reason" in rec:
                         sp.set_attribute("sp.reason", redact_value(str(rec["reason"])))
+                    cands = _candidates_json(rec)
+                    if cands is not None:
+                        sp.set_attribute("sp.candidates", redact_value(cands))
                     for k in ("hop_index", "actual_cost_usd", "est_cost_usd", "latency_ms"):
                         if rec.get(k) is not None:
                             sp.set_attribute(f"sp.{k}", float(rec[k]))

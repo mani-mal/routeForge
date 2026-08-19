@@ -65,18 +65,31 @@ def test_every_detector_flags_the_demo_ssn(detector):
     )
 
 
-def test_presidio_blocklists_sample_ssns():
-    """Pin the upstream behaviour that caused the bug.
+def test_presidio_raw_still_blocklists_sample_ssn():
+    """Pin the upstream fact we design around: raw Presidio (no supplement)
+    still drops the sample SSN. If a future Presidio release stops blocklisting
+    sample SSNs this fails loudly -- the signal to revisit
+    tests/traffic/personas.fake_ssn's constraints."""
+    pytest.importorskip("presidio_analyzer")
+    from presidio_analyzer import AnalyzerEngine
+    results = AnalyzerEngine().analyze(
+        text=f"my ssn is {PRESIDIO_BLOCKLISTED_SSN} ok", language="en")
+    assert not any(r.entity_type == "US_SSN" for r in results), (
+        "Presidio now flags sample SSNs at the raw layer; fake_ssn's constraints "
+        "can be relaxed"
+    )
 
-    Not a wish — a fact about Presidio we must design around. If a future
-    Presidio release stops blocklisting sample SSNs this fails loudly, which is
-    the signal to revisit the constraints in tests/traffic/personas.fake_ssn.
-    """
+
+def test_presidio_composite_catches_blocklisted_ssn():
+    """B4: the composite PresidioDetector supplements Presidio with the regex
+    US_SSN pattern, so the textbook 123-45-6789 IS flagged -- closing the gap
+    where an SSN slipped past both gates under the demo-default config."""
     pytest.importorskip("presidio_analyzer")
     d = make_detector("presidio")
     ents = d.analyze(f"my ssn is {PRESIDIO_BLOCKLISTED_SSN} ok")
-    assert not any(e.type == "US_SSN" for e in ents), (
-        "Presidio now flags sample SSNs; fake_ssn's constraints can be relaxed"
+    assert any(e.type == "US_SSN" for e in ents), (
+        "composite PresidioDetector must catch the sample SSN via the regex "
+        "US_SSN supplement (B4)"
     )
 
 
