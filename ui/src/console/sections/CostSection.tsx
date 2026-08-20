@@ -45,13 +45,13 @@ export function CostSection({ requests }: { requests: RequestSummary[] }) {
 
   const savingsData = [{ name: "saved", routing: routingSaved, compression: compressionSaved }];
 
-  const sorted = [...requests].sort((a, b) => a.created_seq - b.created_seq);
+  const sorted = [...requests].sort((a, b) => (a.ts ?? "").localeCompare(b.ts ?? ""));
   let cumTotal = 0;
   let cumBaseline = 0;
-  const lineData = sorted.map((r) => {
+  const lineData = sorted.map((r, i) => {
     cumTotal += r.total_usd;
     cumBaseline += r.baseline_usd;
-    return { seq: r.created_seq, total: Number(cumTotal.toFixed(4)), baseline: Number(cumBaseline.toFixed(4)) };
+    return { seq: i, total: Number(cumTotal.toFixed(4)), baseline: Number(cumBaseline.toFixed(4)) };
   });
 
   return (

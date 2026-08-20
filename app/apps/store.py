@@ -6,6 +6,7 @@ Every function takes an `AsyncSession`; the caller owns the transaction
 from __future__ import annotations
 
 import datetime as dt
+import os
 import uuid
 
 from sqlalchemy import delete, select
@@ -14,7 +15,7 @@ from sqlalchemy.orm import selectinload
 
 from app.apps.models import (
     Application, AppPolicy, AppRecognizer, AppSensitivityRule, AppToken,
-    ModelQuality, OnboardedModel, UsageRecord, utcnow,
+    ModelQuality, OnboardedModel, RequestSnapshot, UsageRecord, utcnow,
 )
 from app.apps.privacy import AppPrivacyProfile, SensitivityRuleView
 from app.apps.tokens import hash_token, token_prefix
@@ -98,6 +99,66 @@ async def list_usage(session: AsyncSession, *, application_id: str | None = None
     if application_id is not None:
         stmt = stmt.where(UsageRecord.application_id == application_id)
     return list((await session.execute(stmt)).scalars().all())
+
+
+# --- request snapshots (B3: shared dashboard state across API replicas) ---
+
+# Bounded size of the shared `request_snapshots` cache (console hot set), env-
+# overridable. Defined once here (not in routes.py/ui_routes.py) to avoid a
+# circular import between those two sibling modules — both already import
+# this module as `store` and reference it as `store.SNAPSHOT_CAPACITY`.
+SNAPSHOT_CAPACITY = int(os.environ.get("SP_SNAPSHOT_CAPACITY", "500"))
+
+
+async def record_snapshot(session: AsyncSession, *, request_id: str,
+                          application_id: str, summary_json: dict,
+                          full_json: dict) -> RequestSnapshot:
+    """Upsert-by-write one request snapshot (caller commits). Newer writes for
+    the same request_id replace the row (merge on PK)."""
+    row = RequestSnapshot(
+        request_id=request_id, application_id=application_id,
+        summary_json=summary_json, full_json=full_json)
+    await session.merge(row)
+    return row
+
+
+async def get_snapshot_full(session: AsyncSession, request_id: str) -> dict | None:
+    """Retrieve the full_json for a single snapshot, or None."""
+    row = await session.get(RequestSnapshot, request_id)
+    return row.full_json if row is not None else None
+
+
+async def list_snapshot_summaries(session: AsyncSession, *,
+                                  application_id: str | None = None,
+                                  limit: int = 100) -> list[dict]:
+    """Newest-first (ts desc) summary dicts, optionally scoped to one app."""
+    if limit <= 0:
+        return []
+    stmt = (select(RequestSnapshot.summary_json, RequestSnapshot.ts)
+            .order_by(RequestSnapshot.ts.desc(), RequestSnapshot.request_id.desc())
+            .limit(limit))
+    if application_id is not None:
+        stmt = stmt.where(RequestSnapshot.application_id == application_id)
+    rows = (await session.execute(stmt)).all()
+    return [{**summary_json, "ts": ts.isoformat() if ts is not None else None}
+            for summary_json, ts in rows]
+
+
+async def all_snapshot_summaries(session: AsyncSession, *,
+                                 limit: int = 500) -> list[dict]:
+    """The current bounded snapshot set as summary dicts, for stats/fleet."""
+    return await list_snapshot_summaries(session, limit=limit)
+
+
+async def prune_snapshots(session: AsyncSession, *, capacity: int = 500) -> None:
+    """Keep only the newest `capacity` snapshots (bounded UI cache). Ordering by
+    (ts desc, request_id desc) matches the read path; under identical timestamps
+    the tie-break keeps prune and list consistent."""
+    keep = (select(RequestSnapshot.request_id)
+            .order_by(RequestSnapshot.ts.desc(), RequestSnapshot.request_id.desc())
+            .limit(capacity)).scalar_subquery()
+    await session.execute(
+        delete(RequestSnapshot).where(RequestSnapshot.request_id.not_in(keep)))
 
 
 # --- application / token management (used by seeding now; admin API in Phase 3) ---

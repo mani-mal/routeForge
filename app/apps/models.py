@@ -176,6 +176,25 @@ class UsageRecord(Base):
     status: Mapped[str] = mapped_column(String(16), default="ok")  # ok|rejected|error
 
 
+class RequestSnapshot(Base):
+    """Durable, redaction-safe snapshot of one served request for the operator
+    console (list/detail/stats/fleet + live stream rebuild). Replaces the
+    process-local in-memory HistoryStore so the console is coherent across API
+    replicas (B3). A bounded UI cache — UsageRecord remains the permanent
+    metering record. `full_json` holds ONLY the already-redacted resp dict
+    (raw prompt/completion popped before the record path; see CLAUDE.md rule 2)."""
+
+    __tablename__ = "request_snapshots"
+
+    request_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    application_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("applications.id", ondelete="CASCADE"), index=True)
+    ts: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True)
+    summary_json: Mapped[dict] = mapped_column(JSON)
+    full_json: Mapped[dict] = mapped_column(JSON)
+
+
 class AdminUser(Base):
     """A dashboard admin (Phase 3). Password hashed with argon2."""
 
