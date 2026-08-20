@@ -31,6 +31,8 @@ class AppPolicyView:
     max_rpm: int | None = None
     compression_enabled: bool | None = None   # None = inherit live global toggle
     capture_io: str | None = None             # None = inherit global capture_io
+    pii_detection: str | None = None          # None = inherit global pii_detection
+    stream_mode: str | None = None            # None = inherit (reject inbound stream)
 
 
 def _fs(v) -> frozenset[str] | None:
@@ -53,6 +55,8 @@ def policy_view_from(app: Application) -> AppPolicyView:
         max_rpm=p.max_rpm,
         compression_enabled=p.compression_enabled,
         capture_io=p.capture_io,
+        pii_detection=p.pii_detection,
+        stream_mode=p.stream_mode,
     )
 
 
