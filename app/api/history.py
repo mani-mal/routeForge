@@ -44,6 +44,7 @@ class RequestSummary(BaseModel):
     hops: int
     detected_entities: list[str]
     created_seq: int
+    ts: str | None = None
     total_tokens: int = 0
     quality_sum: float = 0.0            # Σ per-call quality — TID/CID numerator
     quality: float | None = None        # chosen model's score (display)

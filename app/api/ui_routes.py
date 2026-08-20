@@ -246,7 +246,10 @@ async def stream(request: Request) -> StreamingResponse:
     served by another pod still reaches a subscriber connected here.
     """
     bus = request.app.state.bus
-    await request.app.state.bridge.ensure_listening()
+    try:
+        await request.app.state.bridge.ensure_listening()
+    except Exception:
+        logging.getLogger("serving.obs").exception("stream bridge listen failed (local-only)")
     queue = bus.subscribe()
 
     async def event_source():

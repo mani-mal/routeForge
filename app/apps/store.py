@@ -134,12 +134,14 @@ async def list_snapshot_summaries(session: AsyncSession, *,
     """Newest-first (ts desc) summary dicts, optionally scoped to one app."""
     if limit <= 0:
         return []
-    stmt = (select(RequestSnapshot.summary_json)
+    stmt = (select(RequestSnapshot.summary_json, RequestSnapshot.ts)
             .order_by(RequestSnapshot.ts.desc(), RequestSnapshot.request_id.desc())
             .limit(limit))
     if application_id is not None:
         stmt = stmt.where(RequestSnapshot.application_id == application_id)
-    return list((await session.execute(stmt)).scalars().all())
+    rows = (await session.execute(stmt)).all()
+    return [{**summary_json, "ts": ts.isoformat() if ts is not None else None}
+            for summary_json, ts in rows]
 
 
 async def all_snapshot_summaries(session: AsyncSession, *,

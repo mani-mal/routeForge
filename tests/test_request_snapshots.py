@@ -37,6 +37,7 @@ def test_record_get_and_list_newest_first():
         async with db.session() as s:
             rows = await store.list_snapshot_summaries(s, limit=100)
             assert [r["id"] for r in rows] == ["r2", "r1"]              # newest (ts desc) first
+            assert all(isinstance(r["ts"], str) and r["ts"] for r in rows)
             acme = await store.list_snapshot_summaries(s, application_id="acme", limit=100)
             assert [r["id"] for r in acme] == ["r1"]
             full = await store.get_snapshot_full(s, "r2")

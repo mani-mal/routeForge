@@ -22,6 +22,7 @@ export interface RequestSummary {
   hops: number;
   detected_entities: string[]; // TYPES only, never raw values
   created_seq: number;
+  ts?: string | null;
   total_tokens: number;
   quality_sum: number; // Σ per-call quality — Token/Cost Intelligence Density numerator
   session_id?: string | null; // B17: client workflow-run correlation id (opaque); groups rows

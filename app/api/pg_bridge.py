@@ -19,22 +19,27 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from typing import TYPE_CHECKING
 
-from app.apps import store
+if TYPE_CHECKING:
+    import asyncpg
+    from app.api.bus import DecisionBus
+    from app.apps.db import Database
 
 _log = logging.getLogger("serving.obs")
 
 
 class PgDecisionBridge:
-    def __init__(self, db, bus, *, replica_id: str,
+    def __init__(self, db: "Database", bus: "DecisionBus", *, replica_id: str,
                  channel: str = "route_decisions") -> None:
         self._db = db
         self._bus = bus
         self._replica_id = replica_id
         self._channel = channel
-        self._conn = None                       # dedicated asyncpg LISTEN connection
+        self._conn: "asyncpg.Connection | None" = None  # dedicated asyncpg LISTEN connection
         self._started = False
         self._lock = asyncio.Lock()
+        self._tasks: set[asyncio.Task] = set()
 
     @property
     def active(self) -> bool:
@@ -75,7 +80,7 @@ class PgDecisionBridge:
             await self._conn.add_listener(self._channel, self._on_notify)
             self._started = True
 
-    def _on_notify(self, _conn, _pid, _channel, payload: str) -> None:
+    def _on_notify(self, _conn: object, _pid: int, _channel: str, payload: str) -> None:
         # asyncpg calls this synchronously from its reader; schedule async work.
         try:
             data = json.loads(payload)
@@ -85,7 +90,9 @@ class PgDecisionBridge:
             return                              # our own request — already emitted locally
         rid = data.get("rid")
         if rid:
-            asyncio.get_event_loop().create_task(self._deliver(rid))
+            task = asyncio.ensure_future(self._deliver(rid))
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
 
     async def _deliver(self, request_id: str) -> None:
         try:
