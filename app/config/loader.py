@@ -72,10 +72,20 @@ def load_settings(config_dir: str = "config") -> Settings:
         co_raw["enabled"] if _co_opt_env is None
         else _co_opt_env.strip().lower() in ("on", "true", "1", "yes")
     )
+    # SP_ALLOW_APP_PII_DOWNGRADE overrides policy.allow_app_pii_downgrade — same
+    # env-override pattern as SP_PII_DETECTION/SP_CONTEXT_OPT above. Defaults to
+    # true (matches config/serving.yaml) if absent from both env and YAML.
+    _allow_pii_dg_env = os.environ.get("SP_ALLOW_APP_PII_DOWNGRADE")
+    allow_app_pii_downgrade = (
+        bool(serving_raw["policy"].get("allow_app_pii_downgrade", True))
+        if _allow_pii_dg_env is None
+        else _allow_pii_dg_env.strip().lower() in ("on", "true", "1", "yes")
+    )
     serving = ServingCfg(
         providers=serving_raw["providers"],
         pii_detection=os.environ.get(
             "SP_PII_DETECTION", serving_raw["policy"]["pii_detection"]),
+        allow_app_pii_downgrade=allow_app_pii_downgrade,
         reject_stream_requests=serving_raw["server"]["reject_stream_requests"],
         context_optimization=ContextOptimizationCfg(
             enabled=co_enabled,

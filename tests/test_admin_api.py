@@ -1,5 +1,8 @@
 """Admin API: auth gating, app/token lifecycle, policy, usage (Phase 3)."""
 import pytest
+from fastapi.testclient import TestClient
+
+from app.main import create_app
 
 _ADMIN = {"email": "admin@routeforge.local", "password": "changeme"}
 _MSG = {"messages": [{"role": "user", "content": "hi"}]}
@@ -175,6 +178,88 @@ def test_manual_langfuse_creds_rejects_blank_or_bad_input(client):
     body = client.get("/admin/applications").json()
     app = next(a for a in body if a["id"] == app_id)
     assert app["has_langfuse_keys"] is False
+
+
+def test_policy_pii_detection_downgrade_ok_when_any_residency_and_capture_off(client):
+    # (a) valid downgrade on an `any`-residency app with capture explicitly off.
+    _login(client)
+    client.post("/admin/applications", json={"id": "pii-ok", "name": "PiiOk"})
+    r = client.put("/admin/applications/pii-ok/policy",
+                   json={"pii_detection": "regex", "capture_io": "off"})
+    assert r.status_code == 200, r.text
+    assert r.json()["policy"]["pii_detection"] == "regex"
+
+
+def test_policy_pii_detection_downgrade_rejected_for_onprem_only(client):
+    # (b) pii_detection="off" on an onprem_only app -> 422.
+    _login(client)
+    client.post("/admin/applications", json={"id": "pii-onprem", "name": "PiiOnprem",
+                                              "default_residency": "onprem_only"})
+    r = client.put("/admin/applications/pii-onprem/policy", json={"pii_detection": "off"})
+    assert r.status_code == 422
+    assert "onprem_only" in r.text.lower()
+
+
+def test_policy_pii_detection_downgrade_rejected_when_capture_enabled(client):
+    # (c) pii_detection="off" while capture_io="redacted" is in effect -> 422.
+    _login(client)
+    client.post("/admin/applications", json={"id": "pii-captured", "name": "PiiCaptured"})
+    assert client.put("/admin/applications/pii-captured/policy",
+                      json={"capture_io": "redacted"}).status_code == 200
+    r = client.put("/admin/applications/pii-captured/policy", json={"pii_detection": "off"})
+    assert r.status_code == 422
+    assert "capture_io" in r.text.lower()
+
+
+def test_policy_stream_unverified_rejected_for_onprem_only(client):
+    # (d) stream_mode="stream_unverified" on an onprem_only app -> 422.
+    _login(client)
+    client.post("/admin/applications", json={"id": "stream-onprem", "name": "StreamOnprem",
+                                              "default_residency": "onprem_only"})
+    r = client.put("/admin/applications/stream-onprem/policy",
+                   json={"stream_mode": "stream_unverified"})
+    assert r.status_code == 422
+    assert "onprem_only" in r.text.lower()
+
+
+def test_policy_rejects_bad_enum_values(client):
+    # (e) values outside the canonical enums -> 422.
+    _login(client)
+    client.post("/admin/applications", json={"id": "bad-enum", "name": "BadEnum"})
+    r = client.put("/admin/applications/bad-enum/policy",
+                   json={"pii_detection": "bogus"})
+    assert r.status_code == 422
+    r = client.put("/admin/applications/bad-enum/policy",
+                   json={"stream_mode": "bogus"})
+    assert r.status_code == 422
+
+
+def test_policy_deployment_ceiling_blocks_pii_downgrade(monkeypatch):
+    # (f) allow_app_pii_downgrade: false blocks a downgrade even when residency
+    # and capture_io would otherwise permit it.
+    monkeypatch.setenv("SP_ALLOW_APP_PII_DOWNGRADE", "false")
+    with TestClient(create_app()) as c:
+        _login(c)
+        c.post("/admin/applications", json={"id": "pii-locked", "name": "PiiLocked"})
+        r = c.put("/admin/applications/pii-locked/policy",
+                  json={"pii_detection": "regex", "capture_io": "off"})
+        assert r.status_code == 422
+        assert "disabled" in r.text.lower()
+
+
+def test_policy_pii_and_stream_mode_round_trip(client):
+    # (g) GET after PUT reflects the persisted values.
+    _login(client)
+    client.post("/admin/applications", json={"id": "roundtrip", "name": "Roundtrip"})
+    r = client.put("/admin/applications/roundtrip/policy",
+                   json={"pii_detection": "presidio",
+                         "stream_mode": "verified_then_stream"})
+    assert r.status_code == 200, r.text
+    assert r.json()["policy"]["pii_detection"] == "presidio"
+    assert r.json()["policy"]["stream_mode"] == "verified_then_stream"
+    got = client.get("/admin/applications/roundtrip").json()
+    assert got["policy"]["pii_detection"] == "presidio"
+    assert got["policy"]["stream_mode"] == "verified_then_stream"
 
 
 def test_onprem_only_cannot_reach_full_even_with_manual_creds(client):

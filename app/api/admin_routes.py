@@ -17,7 +17,7 @@ from app.apps.admin_auth import SESSION_COOKIE, require_admin
 from app.apps.langfuse_provision import LangfuseProvisioner, encrypt_secret
 from app.apps.probe import probe_endpoint
 from app.apps.tokens import new_token
-from app.policy.enums import RESIDENCY, RISK_CLASS, SENSITIVITY
+from app.policy.enums import PII_MODES, RESIDENCY, RISK_CLASS, SENSITIVITY, STREAM_MODES
 from app.policy.recognizers import PRESIDIO_BUILTINS, validate_recognizer
 
 admin_router = APIRouter(prefix="/admin", tags=["admin"])
@@ -41,7 +41,8 @@ def _policy_dict(p) -> dict | None:
     return {"allowed_tiers": p.allowed_tiers, "allowed_providers": p.allowed_providers,
             "allowed_models": p.allowed_models, "residency": p.residency,
             "max_spend_usd_per_day": p.max_spend_usd_per_day, "max_rpm": p.max_rpm,
-            "compression_enabled": p.compression_enabled, "capture_io": p.capture_io}
+            "compression_enabled": p.compression_enabled, "capture_io": p.capture_io,
+            "pii_detection": p.pii_detection, "stream_mode": p.stream_mode}
 
 
 def _onboarded_dict(m) -> dict:
@@ -98,6 +99,8 @@ class PolicyIn(BaseModel):
     max_rpm: int | None = None
     compression_enabled: bool | None = None   # None = inherit global Headroom toggle
     capture_io: str | None = None   # None = inherit global; off|redacted|full
+    pii_detection: str | None = None   # None = inherit global; off|regex|presidio
+    stream_mode: str | None = None   # None = inherit (reject inbound stream); see STREAM_MODES
 
 
 class LangfuseCredsIn(BaseModel):
@@ -322,6 +325,32 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
             raise HTTPException(404, "application not found")
         if body.residency is not None and body.residency not in RESIDENCY:
             raise HTTPException(422, f"bad residency {body.residency!r}")
+        if body.pii_detection is not None and body.pii_detection not in PII_MODES:
+            raise HTTPException(422, f"bad pii_detection {body.pii_detection!r}")
+        if body.pii_detection in ("off", "regex"):
+            settings = request.app.state.settings
+            residency = (body.residency or (app.policy.residency if app.policy else None)) \
+                or app.default_residency
+            if residency == "onprem_only":
+                raise HTTPException(
+                    422, "pii_detection cannot be downgraded for onprem_only apps")
+            capture_io = body.capture_io if body.capture_io is not None else (
+                (app.policy.capture_io if app.policy else None)
+                or settings.serving.observability.langfuse.capture_io)
+            if capture_io != "off":
+                raise HTTPException(
+                    422, "cannot reduce PII detection while capture_io is enabled")
+            if not settings.serving.allow_app_pii_downgrade:
+                raise HTTPException(
+                    422, "per-app PII downgrade disabled on this deployment")
+        if body.stream_mode is not None and body.stream_mode not in STREAM_MODES:
+            raise HTTPException(422, f"bad stream_mode {body.stream_mode!r}")
+        if body.stream_mode == "stream_unverified":
+            residency = (body.residency or (app.policy.residency if app.policy else None)) \
+                or app.default_residency
+            if residency == "onprem_only":
+                raise HTTPException(
+                    422, "stream_unverified not allowed for onprem_only apps")
         if body.capture_io == "full":
             from app.apps.langfuse_provision import load_app_langfuse
             residency = (body.residency or (app.policy.residency if app.policy else None)) \
