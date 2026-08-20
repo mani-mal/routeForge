@@ -13,7 +13,8 @@ structure.
 
 from __future__ import annotations
 
-from collections import deque
+import statistics
+from collections import defaultdict, deque
 
 from pydantic import BaseModel
 
@@ -50,6 +51,142 @@ class RequestSummary(BaseModel):
     session_id: str | None = None       # B17: client workflow-run correlation id (opaque)
 
 
+def summarize(resp: dict, tenant_id: str, tier: str, provider: str = "?") -> RequestSummary:
+    """Derive a `RequestSummary` from one pipeline response dict.
+
+    Pure function — no ring-buffer/eviction bookkeeping and no `_seq`
+    increment (that stays `HistoryStore`'s job). `created_seq=0` here;
+    ordering is `ts`-driven wherever this is used against a DB-backed store.
+    """
+    cost = resp.get("cost", {})
+    policy = resp.get("policy", {})
+    usage = resp.get("usage", {})
+    quality = resp.get("quality", {})
+    trace = resp.get("trace") or []
+    latency_ms = sum(
+        float(rec.get("latency_ms", 0.0)) for rec in trace if rec.get("latency_ms") is not None
+    )
+    # A "hop" is one model-generating routing decision: exactly 1 for a
+    # direct request (step "router"), N for a multi-step agent run (one
+    # "agent_hop" per LLM call). Counting raw trace records instead would
+    # inflate this (verify + compression records are not hops) and mislead
+    # the flow visualizer's single-call-vs-multi-step story.
+    hops = sum(1 for rec in trace if rec.get("step") in ("router", "agent_hop"))
+
+    return RequestSummary(
+        id=resp["id"],
+        tenant_id=tenant_id,
+        sensitivity=policy.get("sensitivity", "?"),
+        onprem_only=bool(policy.get("onprem_only", False)),
+        model=resp.get("model", "?"),
+        model_display=resp.get("model_display", resp.get("model", "?")),
+        tier=tier,
+        provider=provider,
+        total_usd=float(cost.get("total_usd", 0.0)),
+        baseline_usd=float(cost.get("baseline_usd", 0.0)),
+        routing_saved_usd=float(cost.get("routing_saved_usd", 0.0)),
+        compression_saved_usd=float(cost.get("compression_saved_usd", 0.0)),
+        latency_ms=latency_ms,
+        hops=hops,
+        detected_entities=list(policy.get("detected_entities", [])),
+        created_seq=0,
+        total_tokens=int(usage.get("total_tokens", 0)),
+        quality_sum=float(quality.get("sum", 0.0)),
+        quality=quality.get("chosen"),
+        quality_source=quality.get("source"),
+        session_id=resp.get("session_id"),
+    )
+
+
+def stats_over(summaries: list[RequestSummary]) -> dict:
+    count = len(summaries)
+    if count == 0:
+        return {
+            "count": 0,
+            "total_usd": 0.0,
+            "baseline_usd": 0.0,
+            "routing_saved_usd": 0.0,
+            "compression_saved_usd": 0.0,
+            "onprem_count": 0,
+            "tier_distribution": {},
+            "latency_p50_ms": 0.0,
+            "latency_p95_ms": 0.0,
+            "token_intelligence_density": 0.0,
+            "cost_intelligence_density": 0.0,
+        }
+
+    tier_distribution: dict[str, int] = {}
+    for s in summaries:
+        tier_distribution[s.tier] = tier_distribution.get(s.tier, 0) + 1
+
+    latencies = sorted(s.latency_ms for s in summaries)
+
+    def _pctile(sorted_vals: list[float], pct: float) -> float:
+        if not sorted_vals:
+            return 0.0
+        idx = min(len(sorted_vals) - 1, int(round(pct * (len(sorted_vals) - 1))))
+        return sorted_vals[idx]
+
+    q_sum = sum(s.quality_sum for s in summaries)
+    tok_sum = sum(s.total_tokens for s in summaries)
+    usd_sum = sum(s.total_usd for s in summaries)
+
+    return {
+        "count": count,
+        "total_usd": sum(s.total_usd for s in summaries),
+        "baseline_usd": sum(s.baseline_usd for s in summaries),
+        "routing_saved_usd": sum(s.routing_saved_usd for s in summaries),
+        "compression_saved_usd": sum(s.compression_saved_usd for s in summaries),
+        "onprem_count": sum(1 for s in summaries if s.onprem_only),
+        "tier_distribution": tier_distribution,
+        "latency_p50_ms": _pctile(latencies, 0.50),
+        "latency_p95_ms": _pctile(latencies, 0.95),
+        "token_intelligence_density": (q_sum / tok_sum * 1000.0) if tok_sum > 0 else 0.0,
+        "cost_intelligence_density": (q_sum / usd_sum) if usd_sum > 0 else 0.0,
+    }
+
+
+def fleet_over(summaries: list[RequestSummary]) -> list[dict]:
+    """One aggregate row per `tenant_id` (application) seen, sorted by
+    `count` desc, for the fleet-overview table (Task 2)."""
+    groups: dict[str, list[RequestSummary]] = defaultdict(list)
+    for s in summaries:
+        groups[s.tenant_id].append(s)
+    rows = []
+    for app, items in groups.items():
+        lat = sorted(s.latency_ms for s in items)
+        tiers: dict[str, int] = defaultdict(int)
+        for s in items:
+            tiers[s.tier] += 1
+        rows.append({
+            "app": app,
+            "count": len(items),
+            "total_usd": sum(s.total_usd for s in items),
+            "baseline_usd": sum(s.baseline_usd for s in items),
+            "routing_saved_usd": sum(s.routing_saved_usd for s in items),
+            "compression_saved_usd": sum(s.compression_saved_usd for s in items),
+            "onprem_count": sum(1 for s in items if s.onprem_only),
+            "pii_count": sum(1 for s in items if s.detected_entities),
+            # Genuine residency breach: a request that MUST stay on-prem
+            # (onprem_only — which already subsumes restricted entities)
+            # but was served by an off-prem provider. 0 by construction;
+            # >0 is a real alarm, unlike the old "any PII off-prem" heuristic.
+            "onprem_violations": sum(
+                1 for s in items
+                if s.onprem_only and s.provider not in _LOCAL_PROVIDERS),
+            "latency_p50_ms": statistics.median(lat) if lat else 0.0,
+            "tier_distribution": dict(tiers),
+            "token_intelligence_density": (
+                sum(s.quality_sum for s in items) / sum(s.total_tokens for s in items) * 1000.0
+                if sum(s.total_tokens for s in items) > 0 else 0.0),
+            "cost_intelligence_density": (
+                sum(s.quality_sum for s in items) / sum(s.total_usd for s in items)
+                if sum(s.total_usd for s in items) > 0 else 0.0),
+        })
+    rows.sort(key=lambda r: r["count"], reverse=True)
+    return rows
+
+
 class HistoryStore:
     """Bounded ring buffer of request summaries + full responses.
 
@@ -75,45 +212,9 @@ class HistoryStore:
             self._full.pop(oldest.id, None)
             self._tenant.pop(oldest.id, None)
 
-        cost = resp.get("cost", {})
-        policy = resp.get("policy", {})
-        usage = resp.get("usage", {})
-        quality = resp.get("quality", {})
-        trace = resp.get("trace") or []
-        latency_ms = sum(
-            float(rec.get("latency_ms", 0.0)) for rec in trace if rec.get("latency_ms") is not None
-        )
-        # A "hop" is one model-generating routing decision: exactly 1 for a
-        # direct request (step "router"), N for a multi-step agent run (one
-        # "agent_hop" per LLM call). Counting raw trace records instead would
-        # inflate this (verify + compression records are not hops) and mislead
-        # the flow visualizer's single-call-vs-multi-step story.
-        hops = sum(1 for rec in trace if rec.get("step") in ("router", "agent_hop"))
-
         self._seq += 1
-        summary = RequestSummary(
-            id=resp["id"],
-            tenant_id=tenant_id,
-            sensitivity=policy.get("sensitivity", "?"),
-            onprem_only=bool(policy.get("onprem_only", False)),
-            model=resp.get("model", "?"),
-            model_display=resp.get("model_display", resp.get("model", "?")),
-            tier=tier,
-            provider=provider,
-            total_usd=float(cost.get("total_usd", 0.0)),
-            baseline_usd=float(cost.get("baseline_usd", 0.0)),
-            routing_saved_usd=float(cost.get("routing_saved_usd", 0.0)),
-            compression_saved_usd=float(cost.get("compression_saved_usd", 0.0)),
-            latency_ms=latency_ms,
-            hops=hops,
-            detected_entities=list(policy.get("detected_entities", [])),
-            created_seq=self._seq,
-            total_tokens=int(usage.get("total_tokens", 0)),
-            quality_sum=float(quality.get("sum", 0.0)),
-            quality=quality.get("chosen"),
-            quality_source=quality.get("source"),
-            session_id=resp.get("session_id"),
-        )
+        summary = summarize(resp, tenant_id, tier, provider)
+        summary.created_seq = self._seq        # local ring keeps its own seq
         self._summaries.append(summary)
         self._full[summary.id] = resp
         self._tenant[summary.id] = tenant_id
@@ -149,89 +250,7 @@ class HistoryStore:
     def fleet(self) -> list[dict]:
         """One aggregate row per `tenant_id` (application) seen, sorted by
         `count` desc, for the fleet-overview table (Task 2)."""
-        from collections import defaultdict
-        import statistics
-        groups: dict[str, list[RequestSummary]] = defaultdict(list)
-        for s in self._summaries:
-            groups[s.tenant_id].append(s)
-        rows = []
-        for app, items in groups.items():
-            lat = sorted(s.latency_ms for s in items)
-            tiers: dict[str, int] = defaultdict(int)
-            for s in items:
-                tiers[s.tier] += 1
-            rows.append({
-                "app": app,
-                "count": len(items),
-                "total_usd": sum(s.total_usd for s in items),
-                "baseline_usd": sum(s.baseline_usd for s in items),
-                "routing_saved_usd": sum(s.routing_saved_usd for s in items),
-                "compression_saved_usd": sum(s.compression_saved_usd for s in items),
-                "onprem_count": sum(1 for s in items if s.onprem_only),
-                "pii_count": sum(1 for s in items if s.detected_entities),
-                # Genuine residency breach: a request that MUST stay on-prem
-                # (onprem_only — which already subsumes restricted entities)
-                # but was served by an off-prem provider. 0 by construction;
-                # >0 is a real alarm, unlike the old "any PII off-prem" heuristic.
-                "onprem_violations": sum(
-                    1 for s in items
-                    if s.onprem_only and s.provider not in _LOCAL_PROVIDERS),
-                "latency_p50_ms": statistics.median(lat) if lat else 0.0,
-                "tier_distribution": dict(tiers),
-                "token_intelligence_density": (
-                    sum(s.quality_sum for s in items) / sum(s.total_tokens for s in items) * 1000.0
-                    if sum(s.total_tokens for s in items) > 0 else 0.0),
-                "cost_intelligence_density": (
-                    sum(s.quality_sum for s in items) / sum(s.total_usd for s in items)
-                    if sum(s.total_usd for s in items) > 0 else 0.0),
-            })
-        rows.sort(key=lambda r: r["count"], reverse=True)
-        return rows
+        return fleet_over(list(self._summaries))
 
     def stats(self) -> dict:
-        summaries = list(self._summaries)
-        count = len(summaries)
-        if count == 0:
-            return {
-                "count": 0,
-                "total_usd": 0.0,
-                "baseline_usd": 0.0,
-                "routing_saved_usd": 0.0,
-                "compression_saved_usd": 0.0,
-                "onprem_count": 0,
-                "tier_distribution": {},
-                "latency_p50_ms": 0.0,
-                "latency_p95_ms": 0.0,
-                "token_intelligence_density": 0.0,
-                "cost_intelligence_density": 0.0,
-            }
-
-        tier_distribution: dict[str, int] = {}
-        for s in summaries:
-            tier_distribution[s.tier] = tier_distribution.get(s.tier, 0) + 1
-
-        latencies = sorted(s.latency_ms for s in summaries)
-
-        def _pctile(sorted_vals: list[float], pct: float) -> float:
-            if not sorted_vals:
-                return 0.0
-            idx = min(len(sorted_vals) - 1, int(round(pct * (len(sorted_vals) - 1))))
-            return sorted_vals[idx]
-
-        q_sum = sum(s.quality_sum for s in summaries)
-        tok_sum = sum(s.total_tokens for s in summaries)
-        usd_sum = sum(s.total_usd for s in summaries)
-
-        return {
-            "count": count,
-            "total_usd": sum(s.total_usd for s in summaries),
-            "baseline_usd": sum(s.baseline_usd for s in summaries),
-            "routing_saved_usd": sum(s.routing_saved_usd for s in summaries),
-            "compression_saved_usd": sum(s.compression_saved_usd for s in summaries),
-            "onprem_count": sum(1 for s in summaries if s.onprem_only),
-            "tier_distribution": tier_distribution,
-            "latency_p50_ms": _pctile(latencies, 0.50),
-            "latency_p95_ms": _pctile(latencies, 0.95),
-            "token_intelligence_density": (q_sum / tok_sum * 1000.0) if tok_sum > 0 else 0.0,
-            "cost_intelligence_density": (q_sum / usd_sum) if usd_sum > 0 else 0.0,
-        }
+        return stats_over(list(self._summaries))
