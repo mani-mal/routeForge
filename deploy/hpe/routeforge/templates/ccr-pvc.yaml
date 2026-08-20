@@ -1,0 +1,22 @@
+{{- if and .Values.servingPlane.contextOptimization.enabled .Values.servingPlane.contextOptimization.ccr.enabled }}
+{{/*
+CCR cache PVC — a SECOND copy of sensitive data (originals cached for retrieval).
+CLAUDE.md hard rule 6: it must stay on in-cluster block/file storage inside the
+residency boundary, with an enforced TTL, and must NEVER be an object-store /
+S3-compatible class. Only provisioned when compression AND ccr are both on.
+*/}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: routeforge-ccr
+  labels:
+    {{- include "routeforge.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with .Values.servingPlane.contextOptimization.ccr.storageClassName | default .Values.global.storageClassName }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.servingPlane.contextOptimization.ccr.size }}
+{{- end }}

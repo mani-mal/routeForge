@@ -1,0 +1,33 @@
+{{- if .Values.langfuse.expose }}
+{{/*
+Second endpoint: exposes the bundled Langfuse UI on its own host so the
+console's "open Langfuse trace" deep-link works from a laptop browser. Langfuse
+carries its own auth (NEXTAUTH), so this endpoint is intentionally NOT placed
+behind the oauth2-proxy AuthorizationPolicy — see authorizationpolicy.yaml.
+
+Endpoint defaults to ${RELEASE_NAME}-langfuse-${NAMESPACE}.${DOMAIN_NAME};
+NEXTAUTH_URL / LANGFUSE_PUBLIC_URL are derived from it (see _helpers.tpl).
+*/}}
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: {{ printf "%s-%s-langfuse" .Release.Name .Chart.Name | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "routeforge.labels" . | nindent 4 }}
+spec:
+  gateways:
+    - {{ .Values.langfuse.virtualService.istioGateway | required ".Values.langfuse.virtualService.istioGateway is required" }}
+  hosts:
+    - {{ .Values.langfuse.virtualService.endpoint | required ".Values.langfuse.virtualService.endpoint is required" }}
+  http:
+    - match:
+        - uri:
+            prefix: /
+      rewrite:
+        uri: /
+      route:
+        - destination:
+            host: langfuse-web.{{ .Release.Namespace }}.svc.cluster.local
+            port:
+              number: 3000
+{{- end }}

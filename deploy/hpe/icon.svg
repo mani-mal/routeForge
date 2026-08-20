@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="routeForge">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0f766e"/>
+      <stop offset="1" stop-color="#065f46"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+  <!-- one request in, three routed tiers out (cheap / mid / frontier) -->
+  <g fill="none" stroke="#ffffff" stroke-width="20" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M96 256 H208"/>
+    <path d="M208 256 C 272 256, 272 136, 344 136"/>
+    <path d="M208 256 H344"/>
+    <path d="M208 256 C 272 256, 272 376, 344 376"/>
+  </g>
+  <g fill="#ffffff">
+    <circle cx="96" cy="256" r="30"/>
+  </g>
+  <g fill="#a7f3d0">
+    <circle cx="368" cy="136" r="26"/>
+    <circle cx="368" cy="256" r="26"/>
+    <circle cx="368" cy="376" r="26"/>
+  </g>
+  <!-- policy gate: the bar the request must pass first -->
+  <rect x="176" y="196" width="24" height="120" rx="8" fill="#fbbf24"/>
+</svg>

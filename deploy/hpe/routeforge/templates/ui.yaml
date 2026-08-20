@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: routeforge-ui
+  labels:
+    {{- include "routeforge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ui
+spec:
+  replicas: {{ .Values.replicaCount.ui }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: ui
+  template:
+    metadata:
+      labels:
+        {{- include "routeforge.labels" . | nindent 8 }}
+        app.kubernetes.io/component: ui
+      annotations:
+        checksum/nginx-config: {{ include (print $.Template.BasePath "/ui-nginx-config.yaml") . | sha256sum }}
+        {{- if .Values.ezua.injectCerts }}
+        inject-certs: "enabled"
+        {{- end }}
+    spec:
+      {{- include "routeforge.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: ui
+          image: {{ include "routeforge.uiImage" . }}
+          imagePullPolicy: {{ .Values.image.ui.pullPolicy }}
+          # NOTE: the prebuilt serving-plane-ui image is stock nginx, which binds
+          # :80 as root in its entrypoint. If PCAI's pod-security admission
+          # rejects root containers, rebuild the UI on nginxinc/nginx-unprivileged
+          # (listens :8080) and flip service.ui / the nginx listen port. See README.
+          securityContext:
+            {{- toYaml .Values.securityContext.ui | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+          volumeMounts:
+            - name: nginx-conf
+              mountPath: /etc/nginx/conf.d/serving-plane.conf
+              subPath: serving-plane.conf
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources.ui | nindent 12 }}
+      volumes:
+        - name: nginx-conf
+          configMap:
+            name: routeforge-ui-nginx
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: routeforge-ui
+  labels:
+    {{- include "routeforge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ui
+spec:
+  type: {{ .Values.service.ui.type }}
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: ui
+  ports:
+    - name: http
+      port: {{ .Values.service.ui.port }}
+      targetPort: http

@@ -1,0 +1,70 @@
+{{/*
+Overlays the image's baked /app/config/serving.yaml (infra switches only —
+policy/routing/pricing stay baked in, matching CLAUDE.md's config-ownership
+split). Mounted via subPath on the api Pod. Field names must match
+app/config/loader.py's raw dict access. Env vars on the api container still win
+over these for the keys the loader reads from env (SP_INFERENCE_BACKEND,
+SP_PII_DETECTION, LANGFUSE_HOST) — see api.yaml.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: routeforge-serving-config
+  labels:
+    {{- include "routeforge.labels" . | nindent 4 }}
+data:
+  serving.yaml: |
+    inference_backend: {{ .Values.servingPlane.inferenceBackend | quote }}
+    allow_backend_fallback: {{ .Values.servingPlane.allowBackendFallback }}
+
+    vllm:
+      base_url: {{ .Values.servingPlane.vllm.baseUrl | quote }}
+      timeout_s: {{ .Values.servingPlane.vllm.timeoutS }}
+
+    dynamo:
+      endpoint: {{ .Values.servingPlane.dynamo.endpoint | quote }}
+      router_mode: {{ .Values.servingPlane.dynamo.routerMode | quote }}
+      timeout_s: {{ .Values.servingPlane.dynamo.timeoutS }}
+
+    context_optimization:
+      enabled: {{ .Values.servingPlane.contextOptimization.enabled }}
+      mode: {{ .Values.servingPlane.contextOptimization.mode | quote }}
+      proxy_url: {{ .Values.servingPlane.contextOptimization.proxyUrl | quote }}
+      min_tokens: {{ .Values.servingPlane.contextOptimization.minTokens }}
+      bypass_on:
+        high_risk: {{ .Values.servingPlane.contextOptimization.bypassOn.highRisk }}
+        restricted_sensitivity: {{ .Values.servingPlane.contextOptimization.bypassOn.restrictedSensitivity }}
+        user_prompt: {{ .Values.servingPlane.contextOptimization.bypassOn.userPrompt }}
+      ccr:
+        enabled: {{ .Values.servingPlane.contextOptimization.ccr.enabled }}
+        residency: {{ .Values.servingPlane.contextOptimization.ccr.residency | quote }}
+        ttl_hours: {{ .Values.servingPlane.contextOptimization.ccr.ttlHours }}
+        export_to_telemetry: {{ .Values.servingPlane.contextOptimization.ccr.exportToTelemetry }}
+      cache_alignment: {{ .Values.servingPlane.contextOptimization.cacheAlignment }}
+
+    policy:
+      pii_detection: {{ .Values.servingPlane.policy.piiDetection | quote }}
+      fail_closed: {{ .Values.servingPlane.policy.failClosed }}
+
+    observability:
+      langfuse:
+        enabled: {{ .Values.langfuse.enabled }}
+        host: {{ printf "${LANGFUSE_HOST:-%s}" .Values.langfuse.inClusterHost | quote }}
+        redact_on_export: true   # mandatory — never make this settable
+
+    providers:
+      onprem:
+        enabled: {{ .Values.servingPlane.providers.onprem.enabled }}
+      azure:
+        enabled: {{ .Values.servingPlane.providers.azure.enabled }}
+      bedrock:
+        enabled: {{ .Values.servingPlane.providers.bedrock.enabled }}
+
+    agent:
+      runtime: {{ .Values.servingPlane.agent.runtime | quote }}
+
+    server:
+      host: {{ .Values.servingPlane.server.host | quote }}
+      port: {{ .Values.servingPlane.server.port }}
+      stream_decisions: {{ .Values.servingPlane.server.streamDecisions }}
+      reject_stream_requests: {{ .Values.servingPlane.server.rejectStreamRequests }}

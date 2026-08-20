@@ -1,0 +1,41 @@
+{{/*
+PCAI (HPE AI Essentials) requires imported frameworks to carry the ezua vendor
+labels so the platform can provide resource management and health/status
+monitoring. This Kyverno ClusterPolicy mutates the chart's Pods, Deployments and
+Services in the release namespace to add them — the platform's policy controls
+reject / can't track workloads that lack them. Runs as a pre-install hook so the
+policy exists before the Deployments below create their objects.
+
+Shape per HPE's "Bring Your Own App" guide (PCAI-bring_your_own_app): the guide
+labels Pod, Deployment AND Service with both hpe-ezua/type and hpe-ezua/app.
+*/}}
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: {{ printf "add-vendor-app-labels-%s-%s" .Release.Name .Chart.Name | trunc 63 | trimSuffix "-" }}
+  annotations:
+    "helm.sh/hook": pre-install
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+  labels:
+    {{- include "routeforge.labels" . | nindent 4 }}
+spec:
+  background: false
+  rules:
+    - name: add-vendor-app-labels
+      match:
+        any:
+          - resources:
+              # Only .Release.Namespace — the chart defines no extra namespaces.
+              namespaces:
+                - {{ .Release.Namespace }}
+              kinds:
+                - Pod
+                - Deployment
+                - Service
+      mutate:
+        patchStrategicMerge:
+          metadata:
+            labels:
+              hpe-ezua/type: vendor-service
+              hpe-ezua/app: {{ .Chart.Name }}

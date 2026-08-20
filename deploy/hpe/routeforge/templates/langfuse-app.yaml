@@ -1,0 +1,150 @@
+{{- if .Values.langfuse.enabled }}
+{{- $secret := include "routeforge.secretName" . }}
+{{- $nextauth := ternary (include "routeforge.langfusePublicUrl" .) .Values.langfuse.inClusterHost .Values.langfuse.expose }}
+{{/*
+Langfuse v3 web + worker. NEXTAUTH_URL must match the URL the browser actually
+uses or auth redirects break — so it is the ezua VirtualService host when Langfuse
+is exposed (langfuse.expose), else the in-cluster host. The web container seeds
+the demo org/project/user and the API's public/secret keys via LANGFUSE_INIT_*,
+so the API authenticates with no manual UI setup.
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: langfuse-web
+  labels:
+    {{- include "routeforge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: langfuse-web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: langfuse-web
+  template:
+    metadata:
+      labels:
+        {{- include "routeforge.labels" . | nindent 8 }}
+        app.kubernetes.io/component: langfuse-web
+      {{- if .Values.ezua.injectCerts }}
+      annotations:
+        inject-certs: "enabled"
+      {{- end }}
+    spec:
+      containers:
+        - name: web
+          image: {{ include "routeforge.depImage" (dict "root" . "image" .Values.langfuse.images.web) }}
+          ports: [{name: http, containerPort: 3000}]
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ $secret }}, key: POSTGRES_PASSWORD}}
+            - name: DATABASE_URL
+              value: "postgresql://postgres:$(POSTGRES_PASSWORD)@langfuse-postgres:5432/postgres"
+            - {name: CLICKHOUSE_URL, value: "http://langfuse-clickhouse:8123"}
+            - {name: CLICKHOUSE_MIGRATION_URL, value: "clickhouse://langfuse-clickhouse:9000"}
+            - {name: CLICKHOUSE_CLUSTER_ENABLED, value: "false"}
+            - {name: CLICKHOUSE_USER, value: "default"}
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ $secret }}, key: CLICKHOUSE_PASSWORD}}
+            - {name: REDIS_CONNECTION_STRING, value: "redis://langfuse-redis:6379"}
+            - {name: LANGFUSE_S3_EVENT_UPLOAD_BUCKET, value: "langfuse"}
+            - {name: LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT, value: "http://langfuse-minio:9000"}
+            - {name: LANGFUSE_S3_EVENT_UPLOAD_REGION, value: "us-east-1"}
+            - name: LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID
+              valueFrom: {secretKeyRef: {name: {{ $secret }}, key: MINIO_ROOT_USER}}
+            - name: LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY
+              valueFrom: {secretKeyRef: {name: {{ $secret }}, key: MINIO_ROOT_PASSWORD}}
+            - {name: LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE, value: "true"}
+            - name: NEXTAUTH_URL
+              value: {{ $nextauth | quote }}
+            - name: NEXTAUTH_SECRET
+              valueFrom: {secretKeyRef: {name: {{ $secret }}, key: NEXTAUTH_SECRET}}
+            - name: SALT
+              valueFrom: {secretKeyRef: {name: {{ $secret }}, key: SALT}}
+            - name: ENCRYPTION_KEY
+              valueFrom: {secretKeyRef: {name: {{ $secret }}, key: ENCRYPTION_KEY}}
+            # Seed org/project/user so the API's keys work with no manual setup.
+            - {name: LANGFUSE_INIT_ORG_ID, value: "demo-org"}
+            - {name: LANGFUSE_INIT_PROJECT_ID, value: "demo-project"}
+            - name: LANGFUSE_INIT_PROJECT_PUBLIC_KEY
+              valueFrom: {secretKeyRef: {name: {{ $secret }}, key: LANGFUSE_PUBLIC_KEY}}
+            - name: LANGFUSE_INIT_PROJECT_SECRET_KEY
+              valueFrom: {secretKeyRef: {name: {{ $secret }}, key: LANGFUSE_SECRET_KEY}}
+            - name: LANGFUSE_INIT_USER_EMAIL
+              valueFrom: {secretKeyRef: {name: {{ $secret }}, key: ADMIN_EMAIL}}
+            - name: LANGFUSE_INIT_USER_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ $secret }}, key: ADMIN_PASSWORD}}
+          resources:
+            {{- toYaml .Values.langfuse.web.resources | nindent 12 }}
+          startupProbe:
+            httpGet: {path: /api/public/health, port: 3000}
+            periodSeconds: 10
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: {path: /api/public/health, port: 3000}
+            periodSeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: langfuse-web
+  labels: {{- include "routeforge.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: langfuse-web
+  ports: [{name: http, port: 3000, targetPort: 3000}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: langfuse-worker
+  labels:
+    {{- include "routeforge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: langfuse-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: langfuse-worker
+  template:
+    metadata:
+      labels:
+        {{- include "routeforge.labels" . | nindent 8 }}
+        app.kubernetes.io/component: langfuse-worker
+      {{- if .Values.ezua.injectCerts }}
+      annotations:
+        inject-certs: "enabled"
+      {{- end }}
+    spec:
+      containers:
+        - name: worker
+          image: {{ include "routeforge.depImage" (dict "root" . "image" .Values.langfuse.images.worker) }}
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ $secret }}, key: POSTGRES_PASSWORD}}
+            - name: DATABASE_URL
+              value: "postgresql://postgres:$(POSTGRES_PASSWORD)@langfuse-postgres:5432/postgres"
+            - {name: CLICKHOUSE_URL, value: "http://langfuse-clickhouse:8123"}
+            - {name: CLICKHOUSE_MIGRATION_URL, value: "clickhouse://langfuse-clickhouse:9000"}
+            - {name: CLICKHOUSE_CLUSTER_ENABLED, value: "false"}
+            - {name: CLICKHOUSE_USER, value: "default"}
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ $secret }}, key: CLICKHOUSE_PASSWORD}}
+            - {name: REDIS_CONNECTION_STRING, value: "redis://langfuse-redis:6379"}
+            - {name: LANGFUSE_S3_EVENT_UPLOAD_BUCKET, value: "langfuse"}
+            - {name: LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT, value: "http://langfuse-minio:9000"}
+            - {name: LANGFUSE_S3_EVENT_UPLOAD_REGION, value: "us-east-1"}
+            - name: LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID
+              valueFrom: {secretKeyRef: {name: {{ $secret }}, key: MINIO_ROOT_USER}}
+            - name: LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY
+              valueFrom: {secretKeyRef: {name: {{ $secret }}, key: MINIO_ROOT_PASSWORD}}
+            - {name: LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE, value: "true"}
+            - name: SALT
+              valueFrom: {secretKeyRef: {name: {{ $secret }}, key: SALT}}
+            - name: ENCRYPTION_KEY
+              valueFrom: {secretKeyRef: {name: {{ $secret }}, key: ENCRYPTION_KEY}}
+          resources:
+            {{- toYaml .Values.langfuse.worker.resources | nindent 12 }}
+{{- end }}

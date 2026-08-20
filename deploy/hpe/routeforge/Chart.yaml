@@ -1,0 +1,25 @@
+apiVersion: v2
+name: routeforge
+description: >-
+  Single-bundle packaging of the routeForge Serving Plane for HPE Private Cloud
+  AI (PCAI / AI Essentials). Imports as ONE custom framework via Tools &
+  Frameworks -> Import Framework, and brings up everything the demo needs:
+  the serving-plane API + UI *and* a self-hosted Langfuse v3 observability
+  stack (Postgres, ClickHouse, Redis, MinIO). Carries the PCAI-required Istio
+  VirtualService + Kyverno ClusterPolicy so it passes the platform's service
+  mesh and policy controls. CPU-only by default (inferenceBackend: mock) — no
+  GPU node required.
+type: application
+version: 0.2.7
+appVersion: "0.2.0"
+keywords:
+  - llm
+  - routing
+  - privacy
+  - observability
+  - hpe-pcai
+  - hpe-private-cloud-ai
+  - serving-plane
+home: https://github.com/
+maintainers:
+  - name: routeForge

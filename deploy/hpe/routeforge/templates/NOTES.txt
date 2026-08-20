@@ -1,0 +1,33 @@
+
+routeForge is deploying to HPE Private Cloud AI as a single framework.
+
+  Release:    {{ .Release.Name }}
+  Namespace:  {{ .Release.Namespace }}
+  Backend:    {{ .Values.servingPlane.inferenceBackend }}  (PII: {{ .Values.servingPlane.policy.piiDetection }}, compression: {{ ternary "on" "off" .Values.servingPlane.contextOptimization.enabled }})
+
+Endpoints (via the ezaf-gateway; PCAI resolves ${DOMAIN_NAME} etc.):
+
+  Console (UI + API):  https://{{ .Values.ezua.virtualService.endpoint }}
+{{- if and .Values.langfuse.enabled .Values.langfuse.expose }}
+  Langfuse:            https://{{ .Values.langfuse.virtualService.endpoint }}
+{{- end }}
+
+Wait for rollout:
+
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/routeforge-api
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/langfuse-web
+
+First-boot notes:
+  * langfuse-web runs DB migrations on first start — it can take a few minutes
+    before /api/public/health is green. The API tolerates this and retries.
+{{- if .Values.ezua.authorizationPolicy.enabled }}
+  * The console is behind PCAI SSO (oauth2-proxy). Langfuse keeps its own login.
+{{- end }}
+{{- if not .Values.credentials.existingSecret }}
+  * DEMO credentials are in use (Secret routeforge-creds). Admin login is
+    ADMIN_EMAIL / ADMIN_PASSWORD from values.credentials — CHANGE adminPassword.
+{{- end }}
+{{- if eq .Values.servingPlane.inferenceBackend "none" }}
+  * inferenceBackend=none: the on-prem tier is disabled and onprem_only requests
+    are REJECTED (privacy guarantee, not a fallback — CLAUDE.md).
+{{- end }}

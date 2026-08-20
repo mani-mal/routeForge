@@ -81,7 +81,9 @@ refused.
 
 A first-class memory module, framed as an **extension of step 5 (Conditional Context
 Optimization)** — retrieving only relevant memories instead of replaying full history is a
-**token/cost lever**, same family as Headroom. Router owns retrieval.
+**token/cost lever**, same family as Headroom. Router owns retrieval. (For why Headroom
+itself — and by the same argument this memory module — stays in RouteForge rather than the
+calling app, see [`compression-in-scope.md`](./compression-in-scope.md).)
 
 **Load-bearing constraint (CCR-class, non-negotiable):** the memory store is another persistent
 copy of sensitive user data, so it inherits the CCR rules (#6/#7) verbatim — **inside the

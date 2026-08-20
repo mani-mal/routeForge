@@ -1,0 +1,293 @@
+# =============================================================================
+# routeForge — single-bundle values for HPE Private Cloud AI (PCAI) import.
+#
+# This is the file the Import Framework wizard shows you at the "Framework
+# Values" step. The ONLY thing you normally must set for a first import:
+#
+#   1. imageCredentials.enabled=true + imageCredentials.password=<GHCR PAT>
+#      (image.registry/username are pre-set for private GHCR; the PAT is secret
+#      so it is NOT committed — paste it in the wizard). ezua/langfuse endpoints
+#      keep their ${RELEASE_NAME}/${NAMESPACE}/${DOMAIN_NAME} defaults.
+#
+# PCAI substitutes ${DOMAIN_NAME}, ${RELEASE_NAME}, ${NAMESPACE},
+# ${OIDC_CLIENT_ID/SECRET/DOMAIN} and ${AIRGAP_REGISTRY} in THIS file at import
+# time — leave those tokens as-is unless you know the resolved value.
+#
+# Default posture is demo-safe and CPU-only: inference_backend=mock, no GPU node
+# required, Headroom compression off.
+# =============================================================================
+
+nameOverride: ""
+fullnameOverride: ""
+
+# StorageClass for ALL PVCs (Langfuse Postgres/ClickHouse/MinIO + optional CCR).
+# PCAI does not guarantee a default StorageClass — set this to your platform's
+# class explicitly. "" falls back to the cluster default if one exists.
+global:
+  storageClassName: ""
+
+replicaCount:
+  api: 1
+  ui: 1
+
+# ---------------------------------------------------------------------------
+# routeForge images. Default path pulls straight from private GHCR (the trial
+# cluster has internet egress; Harbor is not exposed). `registry` is the repo
+# PREFIX and MUST be non-empty — if left blank the helper emits a bare repo name
+# that Kubernetes resolves to docker.io/library/... and the pull fails with
+# "repository does not exist". To use PCAI Harbor instead, set this to the Harbor
+# project path (e.g. harbor.ingress.<domain>/routeforge).
+# ---------------------------------------------------------------------------
+image:
+  registry: "ghcr.io/mani-mal"   # repo prefix; NEVER leave blank (see note above)
+  api:
+    repository: serving-plane-api
+    tag: "0.2.0"
+    pullPolicy: IfNotPresent
+  ui:
+    repository: serving-plane-ui
+    tag: "0.2.0"
+    pullPolicy: IfNotPresent
+
+# Pull secret for a PRIVATE registry. GHCR is private, so this must be ON for the
+# default path: flip enabled=true and paste a GitHub classic PAT with
+# `read:packages` as the password. registry/username are pre-filled for GHCR; the
+# PAT is the only thing you supply (never commit it — CLAUDE.md rule: no secrets
+# in code). For a public registry set enabled=false.
+imageCredentials:
+  enabled: false        # <-- set true and add the PAT below for private GHCR
+  registry: "ghcr.io"   # auth host only (no repo path)
+  username: "mani-mal"
+  password: ""          # <-- read:packages classic PAT goes here (wizard, not git)
+
+# Additional existing pull secrets to attach to every Pod.
+imagePullSecrets: []
+# - name: my-existing-registry-cred
+
+# Registry prefix for the THIRD-PARTY images (Langfuse stack). Leave empty to
+# pull the public refs directly (works on an internet-connected trial). On an
+# air-gapped PCAI, mirror those images into Harbor and set this to the mirror
+# prefix — every langfuse.images.* ref below is prepended with it.
+thirdPartyRegistry: ""
+
+# ---------------------------------------------------------------------------
+# PCAI / ezua platform integration. PCAI substitutes the ${...} tokens.
+# ---------------------------------------------------------------------------
+ezua:
+  domainName: "${DOMAIN_NAME}"
+  # PCAI sits behind a TLS-inspecting proxy: raw TCP egress works, but Python
+  # HTTPS calls fail cert verification unless the platform's root CA
+  # (ezaf-root-ca.crt) is trusted. Setting this adds the `inject-certs: enabled`
+  # Pod annotation, which PCAI's platform Kyverno policy keys on to mount the CA
+  # bundle and set REQUESTS_CA_BUNDLE / SSL_CERT_FILE / SSL_CERT_DIR. Harmless if
+  # the policy isn't present (the annotation is simply ignored). Keep ON for PCAI.
+  # (Per HPE "Bring Your Own App" guide — add-certificates-volume policy.)
+  injectCerts: true
+  # Primary console endpoint (the routeForge UI). Reverse-proxies the API.
+  virtualService:
+    endpoint: "${RELEASE_NAME}-${NAMESPACE}.${DOMAIN_NAME}"
+    istioGateway: "istio-system/ezaf-gateway"
+  # Put the UI behind PCAI's platform SSO (oauth2-proxy). This creates an
+  # AuthorizationPolicy in istio-system, so ONLY the Import wizard / a platform
+  # admin can add or remove it — a namespace-scoped notebook SA cannot.
+  #
+  # DEFAULT OFF for this shareable-demo bundle: with SSO on, every viewer needs
+  # a PCAI account, so you can't just hand out a URL + password. routeForge's
+  # own admin login (credentials.adminEmail/adminPassword, seeded into the API)
+  # already gates ALL data — the static UI loads, but /api/* (incl. the SSE
+  # decision stream) returns 401 until you log in. So SSO here is redundant for
+  # a demo; the app login IS the shared credential. Change adminPassword from
+  # `changeme` before sharing. Set enabled:true for a locked-down/multi-tenant
+  # deploy (then viewers authenticate with their PCAI identity first).
+  authorizationPolicy:
+    enabled: false
+    namespace: "istio-system"
+    providerName: "oauth2-proxy"
+    matchLabels:
+      istio: "ingressgateway"
+
+# ---------------------------------------------------------------------------
+# servingPlane: maps onto config/serving.yaml (infra switches only). Backends,
+# PII mode, compression, providers — all switchable here with no image rebuild.
+# ---------------------------------------------------------------------------
+servingPlane:
+  inferenceBackend: mock        # mock | vllm | dynamo | none  (mock = CPU-only default)
+  allowBackendFallback: true    # false => api exits non-zero if backend unreachable
+
+  vllm:
+    baseUrl: http://vllm:8000/v1
+    timeoutS: 60
+  dynamo:
+    endpoint: http://dynamo-frontend:8080
+    routerMode: kv
+    timeoutS: 60
+
+  policy:
+    piiDetection: presidio       # presidio | regex | off (image bakes the Presidio model)
+    failClosed: true             # never relax (CLAUDE.md rule 5)
+
+  contextOptimization:
+    enabled: false               # Headroom. OFF so the demo can show before/after
+    mode: library                # library | proxy
+    proxyUrl: http://headroom:8787
+    minTokens: 2000
+    bypassOn:
+      highRisk: true
+      restrictedSensitivity: true
+      userPrompt: true
+    ccr:
+      enabled: true
+      residency: local_only      # NEVER external object store — hard rule 6
+      ttlHours: 24
+      exportToTelemetry: false    # must stay false
+      storageClassName: ""        # "" => global.storageClassName; must be in-cluster block/file
+      size: 20Gi
+    cacheAlignment: true
+
+  providers:
+    onprem:  {enabled: true}
+    azure:   {enabled: false}
+    bedrock: {enabled: false}
+
+  agent:
+    runtime: nat
+
+  server:
+    host: 0.0.0.0
+    port: 8080
+    streamDecisions: true
+    rejectStreamRequests: true
+
+# ---------------------------------------------------------------------------
+# Langfuse — BUNDLED in this chart (unlike deploy/helm/serving-plane). Brings up
+# the whole v3 stack so the import is one self-contained application.
+# ---------------------------------------------------------------------------
+langfuse:
+  enabled: true
+  # Expose the Langfuse UI on its own ezua endpoint so the console's "open
+  # trace" deep-link works from a browser. This endpoint is NOT behind
+  # oauth2-proxy (Langfuse has its own login).
+  expose: true
+  virtualService:
+    endpoint: "${RELEASE_NAME}-langfuse-${NAMESPACE}.${DOMAIN_NAME}"
+    istioGateway: "istio-system/ezaf-gateway"
+  # In-cluster host the API exports traces to (OTLP/ingest). Not browser-facing.
+  inClusterHost: "http://langfuse-web:3000"
+
+  # Per-PVC storage class override (else global.storageClassName).
+  storageClassName: ""
+
+  # Third-party image refs (prefixed by thirdPartyRegistry when set).
+  images:
+    web: langfuse/langfuse:3
+    worker: langfuse/langfuse-worker:3
+    postgres: postgres:16
+    clickhouse: clickhouse/clickhouse-server:24
+    redis: redis:7
+    minio: minio/minio
+    mc: minio/mc
+
+  postgres:
+    size: 20Gi
+    resources:
+      requests: {cpu: "500m", memory: 1Gi}
+      limits: {cpu: "2", memory: 4Gi}
+  clickhouse:
+    size: 50Gi
+    resources:
+      requests: {cpu: "1", memory: 4Gi}
+      limits: {cpu: "4", memory: 16Gi}
+  redis:
+    resources:
+      requests: {cpu: "100m", memory: 256Mi}
+      limits: {cpu: "1", memory: 2Gi}
+  minio:
+    size: 20Gi
+    resources:
+      requests: {cpu: "250m", memory: 512Mi}
+      limits: {cpu: "2", memory: 4Gi}
+  web:
+    resources:
+      requests: {cpu: "500m", memory: 1Gi}
+      limits: {cpu: "2", memory: 4Gi}
+  worker:
+    resources:
+      requests: {cpu: "500m", memory: 1Gi}
+      limits: {cpu: "2", memory: 4Gi}
+
+# ---------------------------------------------------------------------------
+# Shared credentials. Defaults are DEMO values (match compose/.env.example and
+# the DGX lab). For production: create your own Secret with these keys and set
+# credentials.existingSecret to its name — the chart-created Secret is skipped.
+#   Keys: POSTGRES_PASSWORD CLICKHOUSE_PASSWORD MINIO_ROOT_USER
+#         MINIO_ROOT_PASSWORD NEXTAUTH_SECRET SALT ENCRYPTION_KEY
+#         LANGFUSE_PUBLIC_KEY LANGFUSE_SECRET_KEY ADMIN_EMAIL ADMIN_PASSWORD
+# ---------------------------------------------------------------------------
+credentials:
+  existingSecret: ""
+  postgresPassword: postgres
+  clickhousePassword: clickhouse
+  minioRootUser: minio
+  minioRootPassword: miniosecret
+  nextauthSecret: local-dev-secret
+  salt: local-dev-salt
+  encryptionKey: "990fd1a2bc4b761112c44dc47f5cb88634d3e37c919dbef7c59b4f3ef8d2b464"
+  langfusePublicKey: pk-lf-local
+  langfuseSecretKey: sk-lf-local
+  adminEmail: admin@routeforge.local
+  adminPassword: changeme          # CHANGE THIS
+
+# ---------------------------------------------------------------------------
+# Services / resources / scheduling
+# ---------------------------------------------------------------------------
+service:
+  api:
+    type: ClusterIP
+    port: 8080
+  ui:
+    type: ClusterIP
+    port: 80
+
+resources:
+  api:
+    requests: {cpu: "500m", memory: 2Gi}
+    # Presidio (spaCy en_core_web_lg) + NAT/LangChain are memory-heavy; 2Gi was
+    # too tight once real traffic + the backend client are live (DGX lesson).
+    limits: {cpu: "2", memory: 6Gi}
+  ui:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 500m, memory: 256Mi}
+
+securityContext:
+  # The API image (Dockerfile) runs as a NON-NUMERIC system user (`USER app`).
+  # With runAsNonRoot:true, kubelet can't verify a name is non-root and refuses
+  # the container ("has non-numeric user (app), cannot verify user is non-root"
+  # → CreateContainerConfigError). So we leave runAsNonRoot:false — the image's
+  # own USER app still makes the process non-root; k8s just doesn't re-verify.
+  api:
+    runAsNonRoot: false
+    allowPrivilegeEscalation: false
+    seccompProfile: {type: RuntimeDefault}
+    capabilities: {drop: ["ALL"]}
+  # Stock nginx (ui/Dockerfile.prebuilt) chowns /var/cache/nginx/*_temp at startup;
+  # dropping ALL caps strips CHOWN so even root fails ("chown ... Operation not
+  # permitted" → CrashLoopBackOff). Keep the default cap set (no drop) so nginx
+  # can chown its cache. Baseline PSA allows this (root is fine; no caps ADDED
+  # beyond the default set). For a restricted-PSA cluster, rebuild the UI on
+  # nginxinc/nginx-unprivileged instead (listens :8080) — see templates/ui.yaml.
+  ui:
+    runAsNonRoot: false
+    allowPrivilegeEscalation: false
+    seccompProfile: {type: RuntimeDefault}
+
+podSecurityContext:
+  fsGroup: 1000
+
+# Extra raw env on the api container (e.g. HF_HUB_OFFLINE=1 or
+# HEADROOM_TLS_STRICT=0 for air-gapped / MITM-proxied PCAI — see README).
+extraEnv: []
+# - name: HF_HUB_OFFLINE
+#   value: "1"
+
+nodeSelector: {}
+tolerations: []

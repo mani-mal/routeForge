@@ -9,6 +9,23 @@ authoritative until the `.drawio` is redrawn to match.
 > "why routeForge does not deploy Dynamo" decision, see
 > [`inference-layer-boundary.md`](./inference-layer-boundary.md).
 
+> **NeMo Switchyard vs. our step-6 router** — what to borrow from NVIDIA NeMo
+> Switchyard, what to refuse on scope grounds, and the (deferred, not rejected)
+> "should we replace our custom router with it?" decision, see
+> [`nemo-switchyard-comparison.md`](./nemo-switchyard-comparison.md). The action-oriented
+> per-feature incorporation plan is
+> [`switchyard-features-to-incorporate.md`](./switchyard-features-to-incorporate.md).
+
+> **How a request actually gets a tier (and why "easy question → cheap" is really
+> "short prompt → cheap"), plus the text-only / no-modality boundary** — for the
+> recurring "why did this land on cheap/frontier?" and "can it route text vs image
+> models?" questions, see [`routing-tier-selection.md`](./routing-tier-selection.md).
+
+> **Why context compression (Headroom, step 5) lives in RouteForge and not the
+> calling app** — for the recurring "the app owns its own harness, so shouldn't
+> compression move out like RLHF did?" question, see
+> [`compression-in-scope.md`](./compression-in-scope.md).
+
 ## Canonical step count: 1–10
 
 The Serving Plane is **steps 1–10** (1 Incoming Request → 10 Governed Response). All

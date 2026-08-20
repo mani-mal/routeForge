@@ -1,0 +1,274 @@
+{{- if .Values.langfuse.enabled }}
+{{- $secret := include "routeforge.secretName" . }}
+{{- $sc := .Values.langfuse.storageClassName | default .Values.global.storageClassName }}
+{{/*
+Langfuse v3 backing stores — Postgres, ClickHouse, Redis, MinIO — plus the
+one-shot Job that creates the MinIO bucket (v3 does not auto-create it). Ported
+from deploy/dgx_lab/langfuse.yaml. All CPU-only; none of this touches a GPU.
+
+MinIO here holds Langfuse event uploads ONLY. It must never back the Headroom
+CCR cache (CLAUDE.md hard rule 6 — CCR stays on in-cluster block/file storage).
+*/}}
+# --- Postgres ----------------------------------------------------------------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: langfuse-postgres
+  labels: {{- include "routeforge.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with $sc }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.langfuse.postgres.size }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: langfuse-postgres
+  labels:
+    {{- include "routeforge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: langfuse-postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: langfuse-postgres
+  template:
+    metadata:
+      labels:
+        {{- include "routeforge.labels" . | nindent 8 }}
+        app.kubernetes.io/component: langfuse-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: {{ include "routeforge.depImage" (dict "root" . "image" .Values.langfuse.images.postgres) }}
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ $secret }}, key: POSTGRES_PASSWORD}}
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports: [{containerPort: 5432}]
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+          resources:
+            {{- toYaml .Values.langfuse.postgres.resources | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: langfuse-postgres}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: langfuse-postgres
+  labels: {{- include "routeforge.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: langfuse-postgres
+  ports: [{name: pg, port: 5432, targetPort: 5432}]
+---
+# --- ClickHouse --------------------------------------------------------------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: langfuse-clickhouse
+  labels: {{- include "routeforge.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with $sc }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.langfuse.clickhouse.size }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: langfuse-clickhouse
+  labels:
+    {{- include "routeforge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: langfuse-clickhouse
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: langfuse-clickhouse
+  template:
+    metadata:
+      labels:
+        {{- include "routeforge.labels" . | nindent 8 }}
+        app.kubernetes.io/component: langfuse-clickhouse
+    spec:
+      containers:
+        - name: clickhouse
+          image: {{ include "routeforge.depImage" (dict "root" . "image" .Values.langfuse.images.clickhouse) }}
+          env:
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ $secret }}, key: CLICKHOUSE_PASSWORD}}
+          ports:
+            - {name: http, containerPort: 8123}
+            - {name: native, containerPort: 9000}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/clickhouse}
+          resources:
+            {{- toYaml .Values.langfuse.clickhouse.resources | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: langfuse-clickhouse}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: langfuse-clickhouse
+  labels: {{- include "routeforge.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: langfuse-clickhouse
+  ports:
+    - {name: http, port: 8123, targetPort: 8123}
+    - {name: native, port: 9000, targetPort: 9000}
+---
+# --- Redis -------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: langfuse-redis
+  labels:
+    {{- include "routeforge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: langfuse-redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: langfuse-redis
+  template:
+    metadata:
+      labels:
+        {{- include "routeforge.labels" . | nindent 8 }}
+        app.kubernetes.io/component: langfuse-redis
+    spec:
+      containers:
+        - name: redis
+          image: {{ include "routeforge.depImage" (dict "root" . "image" .Values.langfuse.images.redis) }}
+          ports: [{containerPort: 6379}]
+          resources:
+            {{- toYaml .Values.langfuse.redis.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: langfuse-redis
+  labels: {{- include "routeforge.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: langfuse-redis
+  ports: [{name: redis, port: 6379, targetPort: 6379}]
+---
+# --- MinIO -------------------------------------------------------------------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: langfuse-minio
+  labels: {{- include "routeforge.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with $sc }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.langfuse.minio.size }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: langfuse-minio
+  labels:
+    {{- include "routeforge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: langfuse-minio
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: langfuse-minio
+  template:
+    metadata:
+      labels:
+        {{- include "routeforge.labels" . | nindent 8 }}
+        app.kubernetes.io/component: langfuse-minio
+    spec:
+      containers:
+        - name: minio
+          image: {{ include "routeforge.depImage" (dict "root" . "image" .Values.langfuse.images.minio) }}
+          args: ["server", "/data", "--console-address", ":9001"]
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom: {secretKeyRef: {name: {{ $secret }}, key: MINIO_ROOT_USER}}
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ $secret }}, key: MINIO_ROOT_PASSWORD}}
+          ports:
+            - {name: api, containerPort: 9000}
+            - {name: console, containerPort: 9001}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+          resources:
+            {{- toYaml .Values.langfuse.minio.resources | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: langfuse-minio}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: langfuse-minio
+  labels: {{- include "routeforge.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: langfuse-minio
+  ports:
+    - {name: api, port: 9000, targetPort: 9000}
+    - {name: console, port: 9001, targetPort: 9001}
+---
+# Create the langfuse bucket once MinIO is up (v3 does not create it itself).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: langfuse-minio-init
+  labels: {{- include "routeforge.labels" . | nindent 4 }}
+spec:
+  backoffLimit: 10
+  template:
+    metadata:
+      labels:
+        {{- include "routeforge.labels" . | nindent 8 }}
+        app.kubernetes.io/component: langfuse-minio-init
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: mc
+          image: {{ include "routeforge.depImage" (dict "root" . "image" .Values.langfuse.images.mc) }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              until mc alias set local http://langfuse-minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"; do
+                echo 'waiting for minio'; sleep 3;
+              done
+              mc mb --ignore-existing local/langfuse
+              echo 'bucket ready'
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom: {secretKeyRef: {name: {{ $secret }}, key: MINIO_ROOT_USER}}
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ $secret }}, key: MINIO_ROOT_PASSWORD}}
+{{- end }}

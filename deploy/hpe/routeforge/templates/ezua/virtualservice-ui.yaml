@@ -1,0 +1,32 @@
+{{/*
+Primary app endpoint: routes the PCAI ezaf-gateway to the routeForge UI. The UI's
+nginx (templated ConfigMap, ui-nginx-config.yaml) reverse-proxies /api, /v1,
+/admin and the SSE decision stream to the api Service, so a single host serves
+the whole console.
+
+.Values.ezua.virtualService.endpoint defaults to
+${RELEASE_NAME}-${NAMESPACE}.${DOMAIN_NAME} — PCAI substitutes those variables in
+values.yaml at import time.
+*/}}
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: {{ printf "%s-%s-ui" .Release.Name .Chart.Name | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "routeforge.labels" . | nindent 4 }}
+spec:
+  gateways:
+    - {{ .Values.ezua.virtualService.istioGateway | required ".Values.ezua.virtualService.istioGateway is required" }}
+  hosts:
+    - {{ .Values.ezua.virtualService.endpoint | required ".Values.ezua.virtualService.endpoint is required" }}
+  http:
+    - match:
+        - uri:
+            prefix: /
+      rewrite:
+        uri: /
+      route:
+        - destination:
+            host: routeforge-ui.{{ .Release.Namespace }}.svc.cluster.local
+            port:
+              number: {{ .Values.service.ui.port }}

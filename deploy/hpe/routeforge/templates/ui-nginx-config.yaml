@@ -1,0 +1,74 @@
+{{/*
+Kubernetes-correct nginx config for the UI. The image's baked ui/nginx.conf is
+Compose-specific (it hardcodes `resolver 127.0.0.11` — Docker's embedded DNS —
+and the short upstream name `api`), neither of which works on K8s. This overrides
+it with a config that proxies to the api Service by in-cluster FQDN.
+
+We use a TRUE LITERAL upstream (`proxy_pass http://<host:port>;` with NO URI part
+and NO variable) so nginx resolves the name once at startup via the pod's
+/etc/resolv.conf (CoreDNS). This avoids having to know the cluster DNS ClusterIP,
+which differs per PCAI install. The api Service's ClusterIP exists as soon as Helm
+creates it, so resolution succeeds even before the api Pod is Ready.
+
+CRITICAL: do NOT append `$request_uri` (or any variable) to proxy_pass. A variable
+in proxy_pass flips nginx into per-request runtime resolution, which then REQUIRES
+a `resolver` directive — without one every proxied request 502s with
+"no resolver defined to resolve <host>". With a bare `proxy_pass http://<host:port>;`
+nginx forwards the full original request URI (path + query) automatically, and
+resolves at startup. (This exact bug shipped through 0.2.5; fixed in 0.2.6.)
+
+CRITICAL #2: every proxied location MUST set `proxy_http_version 1.1`. nginx
+defaults upstream connections to HTTP/1.0, but the API Pod's Istio sidecar (Envoy)
+does NOT support HTTP/1.0 and answers HTTP/1.0 requests with "426 Upgrade Required".
+So a bare proxy (no proxy_http_version) reaches the API and 426s. `Connection ""`
+goes with it to enable upstream keepalive under 1.1. (426 bug fixed in 0.2.7.)
+*/}}
+{{- $api := printf "routeforge-api.%s.svc.cluster.local:%v" .Release.Namespace .Values.service.api.port }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: routeforge-ui-nginx
+  labels:
+    {{- include "routeforge.labels" . | nindent 4 }}
+data:
+  serving-plane.conf: |
+    server {
+        listen 80;
+        server_name _;
+        root /usr/share/nginx/html;
+        index index.html;
+
+        location / {
+            try_files $uri $uri/ /index.html;
+        }
+
+        # SSE decision stream — must not buffer, long read timeout.
+        location /api/stream {
+            proxy_pass http://{{ $api }};
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_set_header Host $host;
+            proxy_buffering off;
+            proxy_cache off;
+            proxy_read_timeout 3600s;
+        }
+
+        location /api/ {
+            proxy_pass http://{{ $api }};
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_set_header Host $host;
+        }
+        location /v1/ {
+            proxy_pass http://{{ $api }};
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_set_header Host $host;
+        }
+        location /admin/ {
+            proxy_pass http://{{ $api }};
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_set_header Host $host;
+        }
+    }

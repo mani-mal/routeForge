@@ -1,0 +1,173 @@
+{{- $ccrEnabled := and .Values.servingPlane.contextOptimization.enabled .Values.servingPlane.contextOptimization.ccr.enabled }}
+{{- $secret := include "routeforge.secretName" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: routeforge-api
+  labels:
+    {{- include "routeforge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  replicas: {{ .Values.replicaCount.api }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        {{- include "routeforge.labels" . | nindent 8 }}
+        app.kubernetes.io/component: api
+      annotations:
+        # Roll the Pod when the rendered serving.yaml changes so `--set
+        # servingPlane.*` (or an edit in the wizard's Values step) actually takes
+        # effect without a manual restart.
+        checksum/serving-config: {{ include (print $.Template.BasePath "/serving-config.yaml") . | sha256sum }}
+        {{- if .Values.ezua.injectCerts }}
+        # Trust PCAI's TLS-inspecting proxy CA for any HTTPS the API makes
+        # (Presidio/spaCy asset fetch, NAT, cloud providers). Without this,
+        # startup TLS can hang behind the proxy and the pod never goes Ready.
+        inject-certs: "enabled"
+        {{- end }}
+    spec:
+      {{- include "routeforge.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: api
+          image: {{ include "routeforge.apiImage" . }}
+          imagePullPolicy: {{ .Values.image.api.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext.api | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.servingPlane.server.port }}
+              protocol: TCP
+          env:
+            # These three are read from env by app/config/loader.py, and env WINS
+            # over the mounted serving.yaml — so they must be set here or the
+            # ConfigMap's values are silently ignored (learned on the DGX deploy).
+            - name: SP_INFERENCE_BACKEND
+              value: {{ .Values.servingPlane.inferenceBackend | quote }}
+            - name: SP_PII_DETECTION
+              value: {{ .Values.servingPlane.policy.piiDetection | quote }}
+            - name: SP_SERVER_PORT
+              value: {{ .Values.servingPlane.server.port | quote }}
+            - name: SP_CONTEXT_OPT
+              value: {{ ternary "on" "off" .Values.servingPlane.contextOptimization.enabled | quote }}
+            {{- if .Values.langfuse.enabled }}
+            # In-cluster OTLP/ingest host for trace export.
+            - name: LANGFUSE_HOST
+              value: {{ .Values.langfuse.inClusterHost | quote }}
+            # Browser-reachable Langfuse URL for the UI's "open trace" deep-link
+            # (the ezua VirtualService host). Distinct from LANGFUSE_HOST above.
+            - name: LANGFUSE_PUBLIC_URL
+              value: {{ include "routeforge.langfusePublicUrl" . | quote }}
+            - name: LANGFUSE_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: LANGFUSE_PUBLIC_KEY
+            - name: LANGFUSE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: LANGFUSE_SECRET_KEY
+            {{- end }}
+            # Multi-tenant application/token/usage store — reuse the bundled
+            # Langfuse Postgres (routeForge tables coexist under distinct names).
+            # Needs the image's `postgres` extra (asyncpg).
+            #
+            # ORDER MATTERS: POSTGRES_PASSWORD must be defined BEFORE DATABASE_URL.
+            # Kubernetes only expands a $(VAR) reference to a var declared EARLIER
+            # in this list; if DATABASE_URL comes first, $(POSTGRES_PASSWORD) is
+            # left literal and the API connects with the string "$(POSTGRES_PASSWORD)"
+            # → asyncpg InvalidPasswordError, no create_all, no admin seed, /admin/login
+            # 500s. (langfuse-app.yaml already orders it this way — match it.)
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: POSTGRES_PASSWORD
+            - name: DATABASE_URL
+              value: {{ printf "postgresql+asyncpg://postgres:$(POSTGRES_PASSWORD)@langfuse-postgres.%s.svc.cluster.local:5432/postgres" .Release.Namespace | quote }}
+            # Encrypts stored per-app project secrets at rest (shared with Langfuse).
+            - name: ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: ENCRYPTION_KEY
+            - name: ADMIN_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: ADMIN_EMAIL
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: ADMIN_PASSWORD
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - name: serving-config
+              mountPath: /app/config/serving.yaml
+              subPath: serving.yaml
+              readOnly: true
+            {{- if $ccrEnabled }}
+            - name: ccr-store
+              mountPath: /var/lib/serving-plane/ccr
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.resources.api | nindent 12 }}
+      volumes:
+        - name: serving-config
+          configMap:
+            name: routeforge-serving-config
+        {{- if $ccrEnabled }}
+        - name: ccr-store
+          persistentVolumeClaim:
+            claimName: routeforge-ccr
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: routeforge-api
+  labels:
+    {{- include "routeforge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  type: {{ .Values.service.api.type }}
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: api
+  ports:
+    - name: http
+      port: {{ .Values.service.api.port }}
+      targetPort: http
