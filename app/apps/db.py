@@ -111,6 +111,19 @@ class Database:
         self._lock = asyncio.Lock()
         # Injected to avoid an import cycle (bootstrap imports models -> db).
         self._seed = seed
+        # Serializes `session()` bodies on SQLite only. `StaticPool` hands out
+        # the SAME underlying DBAPI connection to every concurrent AsyncSession
+        # (that's how one in-memory sqlite db survives across requests at all —
+        # see the module docstring), but sqlite3 supports only one transaction
+        # per connection. Two coroutines' sessions interleaving BEGIN/COMMIT on
+        # that shared connection (e.g. two /v1/chat/completions requests in a
+        # traffic burst, each opening 2-3 `db.session()` blocks) silently loses
+        # writes — no exception, a session's commit just lands on the wrong
+        # transaction. This never happens on Postgres (every real deploy, and
+        # what B3 is specifically for): each session gets a real pooled
+        # connection there, so the lock is a no-op skip on that path.
+        self._sqlite_write_lock = (
+            asyncio.Lock() if self.engine.url.drivername.startswith("sqlite") else None)
 
     async def ensure_ready(self) -> None:
         if self._ready:
@@ -129,8 +142,13 @@ class Database:
     @asynccontextmanager
     async def session(self):
         await self.ensure_ready()
-        async with self.sessionmaker() as s:
-            yield s
+        if self._sqlite_write_lock is None:
+            async with self.sessionmaker() as s:
+                yield s
+            return
+        async with self._sqlite_write_lock:
+            async with self.sessionmaker() as s:
+                yield s
 
     async def dispose(self) -> None:
         await self.engine.dispose()

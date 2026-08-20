@@ -6,6 +6,7 @@ Every function takes an `AsyncSession`; the caller owns the transaction
 from __future__ import annotations
 
 import datetime as dt
+import os
 import uuid
 
 from sqlalchemy import delete, select
@@ -101,6 +102,13 @@ async def list_usage(session: AsyncSession, *, application_id: str | None = None
 
 
 # --- request snapshots (B3: shared dashboard state across API replicas) ---
+
+# Bounded size of the shared `request_snapshots` cache (console hot set), env-
+# overridable. Defined once here (not in routes.py/ui_routes.py) to avoid a
+# circular import between those two sibling modules — both already import
+# this module as `store` and reference it as `store.SNAPSHOT_CAPACITY`.
+SNAPSHOT_CAPACITY = int(os.environ.get("SP_SNAPSHOT_CAPACITY", "500"))
+
 
 async def record_snapshot(session: AsyncSession, *, request_id: str,
                           application_id: str, summary_json: dict,

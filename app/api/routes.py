@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from app.agent.runtime import AgentCapExceeded
+from app.api.history import summarize
 from app.apps import store
 from app.apps.langfuse_provision import load_app_langfuse
 from app.apps.policy import AppPolicyView, day_spend_usd, policy_view_from
@@ -218,8 +219,9 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
         except (KeyError, IndexError, TypeError):
             completion = ""
         # First-party console view (Phase C Part 1). Mode-appropriate bodies for
-        # the admin drilldown ONLY — this is history/HistoryStore, same residency
-        # boundary as serving, NOT a telemetry egress (export_trace is unchanged).
+        # the admin drilldown ONLY — this is the request_snapshots cache, same
+        # residency boundary as serving, NOT a telemetry egress (export_trace
+        # is unchanged).
         # `choices[]` stays raw for the calling client; this is additive metadata.
         if capture_io == "full":
             resp["display"] = {"mode": "full", "input": prompt, "output": completion}
@@ -273,15 +275,31 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
         # the warning flags real violations, not merely any detected entity.
         provider = next(
             (c.provider for c in pool if c.name == resp["model"]), "?")
-        summary = request.app.state.history.record(resp, tenant, tier, provider)
-    except Exception:  # history must never break serving
+        summary = summarize(resp, tenant, tier, provider)
+    except Exception:  # snapshot summary must never break serving
         logging.getLogger("serving.obs").exception(
-            "history.record failed (swallowed)")
+            "snapshot summary failed (swallowed)")
     try:
-        # Durable per-application usage row (spec 2026-07-25). The in-memory
-        # HistoryStore above is the UI's hot cache; this is the persistent
-        # record that survives restarts and feeds per-app dashboards. Guarded:
-        # metering must never break serving.
+        # Durable, shared UI cache (B3): every replica writes the redaction-safe
+        # summary + full response to `request_snapshots` so any pod's console
+        # reads see it, not just the one that served the request. Guarded:
+        # the snapshot cache must never break serving.
+        if summary is not None:
+            async with request.app.state.db.session() as session:
+                await store.record_snapshot(
+                    session, request_id=resp["id"], application_id=tenant,
+                    summary_json=summary.model_dump(), full_json=resp)
+                await store.prune_snapshots(session, capacity=store.SNAPSHOT_CAPACITY)
+                await session.commit()
+    except Exception:  # snapshot cache must never break serving
+        logging.getLogger("serving.obs").exception(
+            "snapshot write failed (swallowed)")
+    try:
+        # Durable per-application usage row (spec 2026-07-25). The
+        # `request_snapshots` write above is the UI's hot cache (full
+        # response + summary, keyed by request_id); this is the separate
+        # per-app aggregate that survives restarts and feeds admin
+        # dashboards. Guarded: metering must never break serving.
         model = resp.get("model", "?")
         tier = next((c.tier for c in pool if c.name == model), "?")
         provider = next((c.provider for c in pool if c.name == model), "?")
@@ -329,6 +347,9 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
                     "type": "step", "request_id": resp["id"],
                     "record": record, "index": index,
                 })
+            # Cross-replica fan-out (B3): NOTIFY other pods so their locally
+            # connected SSE subscribers see this request too. Inert on sqlite.
+            await request.app.state.bridge.publish_remote(resp["id"])
     except Exception:  # streaming must never break serving
         logging.getLogger("serving.obs").exception(
             "bus.publish failed (swallowed)")

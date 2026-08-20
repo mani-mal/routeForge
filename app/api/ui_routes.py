@@ -2,11 +2,14 @@
 
 Unlike `/internal/*` (loopback-only agent-hop endpoint), these routes are
 meant to be reachable by the browser dev server and are included in
-OpenAPI. Task 1 added read-only list/detail/stats over the in-memory
-`HistoryStore` on `app.state.history`. Task 2 adds `/api/stream`, a
-Server-Sent-Events feed of the same redaction-safe events (backed by the
-`DecisionBus` on `app.state.bus`) so the live flow visualizer can animate
-requests as they complete instead of polling.
+OpenAPI. Task 1 added read-only list/detail/stats, originally over the
+in-memory `HistoryStore`; B3 moved that backing store to the durable, shared
+`request_snapshots` table (`app.state.db`, see `app/apps/store.py`) so every
+API replica's console reads see every replica's writes. Task 2 adds
+`/api/stream`, a Server-Sent-Events feed of the same redaction-safe events
+(backed by the `DecisionBus` on `app.state.bus`, fanned out cross-replica by
+`app.state.bridge`, see `app/api/pg_bridge.py`) so the live flow visualizer
+can animate requests as they complete instead of polling.
 """
 
 from __future__ import annotations
@@ -20,9 +23,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from app.api.history import RequestSummary, fleet_over, stats_over
 from app.apps import store
 from app.apps.admin_auth import require_admin
 from app.apps.langfuse_provision import load_app_langfuse
+from app.apps.models import RequestSnapshot
 from app.obs.scores import SCORE_NAMES, ensure_score_config, post_score
 
 # The whole /api/* console surface is admin-gated: it exposes cross-tenant
@@ -64,15 +69,15 @@ _HEARTBEAT_SECONDS = 15
 
 
 @router.get("/requests")
-def list_requests(request: Request, limit: int = 100, app: str | None = None) -> list:
-    history = request.app.state.history
-    return history.list(limit=limit, app=app)
+async def list_requests(request: Request, limit: int = 100, app: str | None = None) -> list:
+    async with request.app.state.db.session() as s:
+        return await store.list_snapshot_summaries(s, application_id=app, limit=limit)
 
 
 @router.get("/requests/{request_id}")
-def get_request(request_id: str, request: Request) -> dict:
-    history = request.app.state.history
-    resp = history.get(request_id)
+async def get_request(request_id: str, request: Request) -> dict:
+    async with request.app.state.db.session() as s:
+        resp = await store.get_snapshot_full(s, request_id)
     if resp is None:
         raise HTTPException(404, f"request {request_id!r} not found")
     return resp
@@ -94,15 +99,16 @@ async def admin_feedback(request_id: str, body: AdminFeedbackIn, request: Reques
     """Admin-console feedback intake (F1 Phase D task 4): score a request the
     admin is already looking at in the console, by its stored trace_id —
     admin-gating is inherited from this router's `Depends(require_admin)`.
-    Resolves the app's own Langfuse project via the request's tenant
-    (`HistoryStore.get_tenant`, added alongside `_full`) and posts through the
-    same `post_score` helper `/v1/feedback` uses, so fail-closed behaviour
+    Resolves the app's own Langfuse project via the request's tenant (the
+    snapshot row's `application_id`, B3) and posts through the same
+    `post_score` helper `/v1/feedback` uses, so fail-closed behaviour
     (unknown tenant / app has no project -> `app_langfuse is None` -> dropped,
     `{"stored": false}`, HTTP 200) is identical."""
-    history = request.app.state.history
-    resp = history.get(request_id)
-    if resp is None:
+    async with request.app.state.db.session() as session:
+        snap = await session.get(RequestSnapshot, request_id)
+    if snap is None:
         raise HTTPException(404, f"request {request_id!r} not found")
+    resp = snap.full_json
     trace_id = resp.get("trace_id")
     if not trace_id:
         # Telemetry was off (or export failed) for this request — nothing to
@@ -110,7 +116,7 @@ async def admin_feedback(request_id: str, body: AdminFeedbackIn, request: Reques
         return {"stored": False, "reason": "no trace"}
     if body.score_name not in SCORE_NAMES:
         raise HTTPException(422, f"unknown score_name {body.score_name!r}")
-    tenant = history.get_tenant(request_id)
+    tenant = snap.application_id
     app_langfuse = None
     if tenant is not None:
         async with request.app.state.db.session() as session:
@@ -127,14 +133,17 @@ async def admin_feedback(request_id: str, body: AdminFeedbackIn, request: Reques
 
 
 @router.get("/stats")
-def get_stats(request: Request) -> dict:
-    history = request.app.state.history
-    return history.stats()
+async def get_stats(request: Request) -> dict:
+    async with request.app.state.db.session() as s:
+        rows = await store.all_snapshot_summaries(s, limit=store.SNAPSHOT_CAPACITY)
+    return stats_over([RequestSummary(**r) for r in rows])
 
 
 @router.get("/fleet")
-def fleet(request: Request) -> list:
-    return request.app.state.history.fleet()
+async def fleet(request: Request) -> list:
+    async with request.app.state.db.session() as s:
+        rows = await store.all_snapshot_summaries(s, limit=store.SNAPSHOT_CAPACITY)
+    return fleet_over([RequestSummary(**r) for r in rows])
 
 
 @router.get("/controls")
@@ -229,11 +238,15 @@ async def stream(request: Request) -> StreamingResponse:
     connection only sees events published after it subscribes. The
     `/api/requests` list endpoint covers backfill for anything missed.
 
-    Events carry only what `HistoryStore`/`routes.py` already redacted
-    before publishing — this generator never touches raw request/response
-    bodies itself.
+    Events carry only what `routes.py`/`app/apps/store.py`'s snapshot write
+    already redacted before publishing — this generator never touches raw
+    request/response bodies itself. B3: `bridge.ensure_listening()` makes
+    sure this pod is also LISTENing for other replicas' NOTIFYs (inert on
+    sqlite / a fresh `active` check on the first call per pod) so a request
+    served by another pod still reaches a subscriber connected here.
     """
     bus = request.app.state.bus
+    await request.app.state.bridge.ensure_listening()
     queue = bus.subscribe()
 
     async def event_source():

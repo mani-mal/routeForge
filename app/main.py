@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import uuid
 from pathlib import Path
 
 import yaml
@@ -10,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.agent.internal_endpoint import internal_router
 from app.api.admin_routes import admin_router
 from app.api.bus import DecisionBus
-from app.api.history import HistoryStore
+from app.api.pg_bridge import PgDecisionBridge
 from app.apps.admin_auth import SessionStore
 from app.apps.bootstrap import seed_all
 from app.apps.db import Database
@@ -126,14 +127,24 @@ def create_app() -> FastAPI:
     app.state.pipeline = Pipeline(
         settings, gate, detector, gateway, self_port=self_port,
         co_cfg_provider=lambda: app.state.co_cfg, ccr=ccr, registry=registry)
-    # In-memory, redaction-safe request history for the Phase-6 UI's
-    # list/detail/stats views (app/api/history.py). Process-local; resets
-    # on restart — this is a demo prototype, not durable storage.
-    app.state.history = HistoryStore(capacity=500)
     # Live decision stream (Phase 6a Task 2): in-process asyncio pub/sub
     # feeding GET /api/stream (SSE) for the flow visualizer. Bounded,
     # drop-oldest per-subscriber queues — see app/api/bus.py.
     app.state.bus = DecisionBus()
+    # B3: cross-replica bridge for the live decision stream. Each pod gets a
+    # random replica_id (distinguishes "my own NOTIFY, already emitted
+    # locally" from "another pod's NOTIFY, needs fan-out"); inert unless the
+    # DB is Postgres (see PgDecisionBridge.active). The Phase-6 UI's
+    # list/detail/stats views now read the durable `request_snapshots` table
+    # (app/apps/store.py) directly, not a process-local HistoryStore.
+    app.state.replica_id = uuid.uuid4().hex
+    app.state.bridge = PgDecisionBridge(
+        app.state.db, app.state.bus, replica_id=app.state.replica_id)
+
+    @app.on_event("shutdown")
+    async def _stop_bridge() -> None:
+        await app.state.bridge.stop()
+
     # Phase 7 Task 4: /api/traffic control state (app/api/ui_routes.py).
     app.state.traffic_running = False
     app.state.traffic_last_summary: dict | None = None
