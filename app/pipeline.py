@@ -10,7 +10,7 @@ from app.models import (
     ChatRequest, Choice, ExecutionPolicyContext, Message, Usage,
 )
 from app.output.verify import verify
-from app.policy.detectors import Detector
+from app.policy.detectors import Detector, make_detector
 from app.policy.effective import EffectiveDetector
 from app.policy.gate import Gate
 from app.apps.privacy import AppPrivacyProfile, effective_rules
@@ -55,6 +55,41 @@ class Pipeline:
         # direct path — see app/compression/__init__.py, ccr.py.
         self._co_cfg_provider = co_cfg_provider
         self._ccr = ccr
+        # Per-app pii_detection override (Task 3): an app may select a
+        # cheaper/weaker base detector ("off"/"regex") than the process-wide
+        # global one. Presidio is expensive to construct (loads a spaCy
+        # model), so non-global modes are built lazily on first use and
+        # memoized here for the life of the process -- never rebuilt per
+        # request. The global instance is seeded into the memo up front so
+        # `_detector_for` never constructs a second, redundant instance of
+        # the mode the process already booted with.
+        self._global_pii_mode = settings.serving.pii_detection
+        self._detectors: dict[str, Detector] = {self._global_pii_mode: self._detector}
+
+    def _detector_for(self, mode: str | None) -> Detector:
+        """Resolve the base detector for an app's `pii_detection` override.
+
+        `None` (no override) or a mode matching the global config both return
+        the SAME global `self._detector` instance -- no new object, no
+        redundant warmup. A distinct mode is built via `make_detector`,
+        warmed up once, cached in `self._detectors`, and that same cached
+        instance is returned on every subsequent call for that mode. This
+        residency-independent selection only ever changes WHAT is detected;
+        the onprem_only/allowed_providers floor is computed from
+        `app_policy.residency` in `app/policy/context.py` and never consults
+        `pii_detection` at all -- an app set to "off" cannot leak a cloud
+        provider into `allowed_providers` by weakening detection (see the
+        invariant test in tests/test_pii_detection_pipeline.py).
+        """
+        if mode is None or mode == self._global_pii_mode:
+            return self._detector
+        cached = self._detectors.get(mode)
+        if cached is not None:
+            return cached
+        built = make_detector(mode)
+        built.warmup()
+        self._detectors[mode] = built
+        return built
 
     def _baseline(self, in_tokens: int, out_tokens: int) -> float:
         """All-frontier baseline: input and output priced at the baseline
@@ -86,12 +121,19 @@ class Pipeline:
         # classification (the gate) and egress verification (verify(), both
         # call sites below) -- a custom entity type the base detector can't
         # see must not silently skip the output leakage check either.
+        #
+        # Per-app pii_detection override (Task 3): the BASE detector being
+        # layered is now the app's selected mode (`_detector_for`), not
+        # unconditionally the global `self._detector` -- an app set to
+        # "off"/"regex" actually gets that detection mode instead of always
+        # inheriting the process-wide default.
         try:
+            base = self._detector_for(app_policy.pii_detection if app_policy else None)
             if profile is not None:
-                det = EffectiveDetector(self._detector, list(profile.recognizers))
+                det = EffectiveDetector(base, list(profile.recognizers))
                 rules = effective_rules(profile, self._s)
             else:
-                det, rules = self._detector, None
+                det, rules = base, None
             ctx, sanitized, _map = self._gate.evaluate(
                 request_id, tenant_id, request, app_policy=app_policy,
                 detector=det, rules=rules)
