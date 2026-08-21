@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from typing import AsyncIterator
+
 from app.config.schema import Settings
 from app.errors import BackendUnavailable
-from app.gateway.backends.base import InferenceBackend
+from app.gateway.backends.base import InferenceBackend, StreamChunk
 from app.models import DecisionRecord, ExecutionPolicyContext, GenerationResult, Message
 from app.obs import metrics
 from app.routing.router import Router
@@ -88,3 +90,46 @@ class Gateway:
             break
 
         return result, records
+
+    async def run_stream(self, ctx: ExecutionPolicyContext, messages: list[Message],
+                         tokens_after: int, complexity: float, hint: dict
+                         ) -> tuple[AsyncIterator[StreamChunk], list[DecisionRecord]]:
+        """Real streaming counterpart of `run()` for the direct (single-shot)
+        path. Performs the SAME residency-clamped router selection and emits the
+        SAME step="router" DecisionRecord (chosen + rejected `sp.candidates`,
+        quality) as `run()`, then delegates to `backend.generate_stream` on the
+        chosen candidate. There is NO confidence-escalation loop here (streaming
+        can't retry a partially-emitted response) and NO verify record (step 9 is
+        waived on this path -- the pipeline records that in its metadata).
+
+        Ordering contract: the returned `records` list is COMPLETE only after the
+        returned iterator is fully consumed. The router record's `actual_cost_usd`
+        and `latency_ms` are unknown until the terminal `StreamChunk(final=...)`
+        arrives, so the iterator patches the record in place when it sees `final`.
+        """
+        with metrics.time_routing():
+            decision = self._router.select(ctx, tokens_after, complexity, None)
+        cand = decision.chosen
+        price = (self._reg.price_for(cand.name) if self._reg
+                 else self._s.pricing.models[cand.name])
+        record = DecisionRecord(
+            step="router", chosen=cand.name,
+            chosen_display_name=cand.display_name,
+            chosen_tier=cand.tier, chosen_provider=cand.provider,
+            reason=decision.reason,
+            rejected=decision.rejected, est_cost_usd=decision.est_cost_usd,
+            actual_cost_usd=None, latency_ms=0.0, hop_index=0,
+            quality_score=decision.quality_score,
+            quality_source=decision.quality_source)
+        records: list[DecisionRecord] = [record]
+        metrics.observe_routing_decision(cand.tier, escalated=False)
+
+        async def _agen() -> AsyncIterator[StreamChunk]:
+            async for chunk in self._backend.generate_stream(
+                    cand.name, messages, price, cand.tier, hint):
+                if chunk.final is not None:
+                    record.actual_cost_usd = chunk.final.cost_usd
+                    record.latency_ms = chunk.final.latency_ms
+                yield chunk
+
+        return _agen(), records

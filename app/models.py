@@ -133,7 +133,13 @@ class GenerationResult(BaseModel):
     tokens_out: int
     latency_ms: float
     cost_usd: float
-    confidence: float
+    # None ONLY on the real streaming path (step 8): logprobs are unavailable
+    # while streaming, so no confidence can be derived. The non-streaming
+    # generate() path always sets a float, and the gateway's confidence-based
+    # escalation loop runs only on that non-streaming path -- streaming is a
+    # single-shot direct-path call that never escalates -- so a None here is
+    # never compared against the escalation threshold.
+    confidence: float | None = None
     # Tool calls the model requested this turn (multi-step agent path). None on
     # the direct path (which never passes tools). Each item is an OpenAI-shape
     # tool_call dict: {id, type, function:{name, arguments}}.

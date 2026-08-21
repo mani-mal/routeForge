@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from types import SimpleNamespace
 
 from app.gateway.backends.base import count_tokens, seeded_latency_ms
 from app.gateway.backends.litellm_backend import LiteLLMBackend
@@ -125,6 +126,50 @@ def make_scripted_tool_then_final_acompletion(
         tc = [{"id": "call-1", "type": "function",
                "function": {"name": tool_name, "arguments": arguments}}]
         return make_response(content=None, tool_calls=tc, prompt_tokens=20, completion_tokens=6)
+    return _call
+
+
+class _FakeStreamChunk:
+    """Mimics one litellm streaming chunk. Content deltas live at
+    `choices[0].delta.content`; the terminal usage chunk has empty `choices`
+    and a `usage` object (matching litellm's `stream_options={"include_usage":
+    True}` behaviour). The real `LiteLLMBackend.generate_stream` reads exactly
+    these attributes."""
+
+    def __init__(self, *, content: str | None = None, usage: dict | None = None,
+                 empty_choices: bool = False) -> None:
+        if empty_choices:
+            self.choices = []
+        else:
+            delta = SimpleNamespace(content=content)
+            self.choices = [SimpleNamespace(delta=delta)]
+        self.usage = usage
+
+
+def make_streaming_acompletion(deltas: list[str], *, prompt_tokens: int = 12,
+                               completion_tokens: int = 7):
+    """Factory for a fake `litellm.acompletion` that STREAMS. Install via
+    `monkeypatch.setattr(litellm_backend, "acompletion",
+    make_streaming_acompletion([...]))`.
+
+    `await acompletion(**call)` returns an async iterator yielding one
+    `_FakeStreamChunk` per delta (in order), then a terminal usage chunk
+    (empty choices + usage) -- exactly the shape
+    `LiteLLMBackend.generate_stream` consumes. Records each call's kwargs in
+    the module-level CALLS list so tests can assert `stream=True` etc."""
+    async def _call(**kwargs):
+        CALLS.append(kwargs)
+
+        async def _gen():
+            for d in deltas:
+                yield _FakeStreamChunk(content=d)
+            yield _FakeStreamChunk(
+                empty_choices=True,
+                usage={"prompt_tokens": prompt_tokens,
+                       "completion_tokens": completion_tokens})
+
+        return _gen()
+
     return _call
 
 

@@ -8,14 +8,27 @@ from __future__ import annotations
 import math
 import os
 import time
+from typing import AsyncIterator
 
 from litellm import acompletion
 
 from app.config.schema import PriceCfg, Settings
-from app.gateway.backends.base import BackendHealth
+from app.gateway.backends.base import BackendHealth, StreamChunk
 from app.models import GenerationResult, Message
 
 DEFAULT_CONFIDENCE = 0.9
+
+
+def _usage_dict(u) -> dict:
+    """Normalize a litellm usage object (pydantic-ish), a plain dict, or a
+    SimpleNamespace-style object into a `{prompt_tokens, completion_tokens}`
+    dict -- streaming's terminal usage chunk shape varies by provider."""
+    if isinstance(u, dict):
+        return u
+    if hasattr(u, "model_dump"):
+        return u.model_dump()
+    return {"prompt_tokens": getattr(u, "prompt_tokens", 0),
+            "completion_tokens": getattr(u, "completion_tokens", 0)}
 
 
 class LiteLLMBackend:
@@ -99,6 +112,54 @@ class LiteLLMBackend:
             model=model, text=text, tokens_in=tokens_in, tokens_out=tokens_out,
             latency_ms=latency_ms, cost_usd=cost_usd, confidence=confidence,
             tool_calls=tool_calls)
+
+    async def generate_stream(self, model: str, messages: list[Message], price: PriceCfg,
+                              tier: str, hint: dict,
+                              tools: list[dict] | None = None
+                              ) -> AsyncIterator[StreamChunk]:
+        """Real token streaming (step 8). Mirrors `generate()`'s call
+        construction but with `stream=True`, `stream_options={"include_usage":
+        True}`, and NO `logprobs` (unavailable while streaming -> confidence is
+        None). Yields a `StreamChunk(delta=...)` per non-empty content delta in
+        order, then exactly one terminal `StreamChunk(final=GenerationResult)`
+        whose cost is priced from `pricing.yaml` (the `price` arg), never
+        litellm.completion_cost -- identical cost basis to `generate()`."""
+        litellm_model, conn = self._map(model)
+        call: dict = {
+            "model": litellm_model,
+            "messages": [{"role": m.role, "content": m.content} for m in messages],
+            "stream": True,
+            "stream_options": {"include_usage": True},
+            "num_retries": 0,          # guardrail 2: no LiteLLM-side retry/routing
+            "drop_params": True,       # tolerate providers that reject stream_options
+            **conn,
+        }
+        if tools:
+            call["tools"] = tools
+        start = time.monotonic()
+        parts: list[str] = []
+        usage: dict = {}
+        async for chunk in await acompletion(**call):
+            choices = getattr(chunk, "choices", None)
+            content = None
+            if choices:
+                delta = getattr(choices[0], "delta", None)
+                content = getattr(delta, "content", None) if delta is not None else None
+            u = getattr(chunk, "usage", None)
+            if u is not None:
+                usage = _usage_dict(u)
+            if content:  # skip None/empty deltas (e.g. the terminal usage chunk)
+                parts.append(content)
+                yield StreamChunk(delta=content)
+        latency_ms = (time.monotonic() - start) * 1000
+        text = "".join(parts)
+        tokens_in = usage.get("prompt_tokens", 0)
+        tokens_out = usage.get("completion_tokens", 0)
+        cost_usd = (tokens_in * price.input + tokens_out * price.output) / 1_000_000
+        yield StreamChunk(final=GenerationResult(
+            model=model, text=text, tokens_in=tokens_in, tokens_out=tokens_out,
+            latency_ms=latency_ms, cost_usd=cost_usd, confidence=None,
+            tool_calls=[]))
 
     async def health(self) -> BackendHealth:
         # Per-model reachability is probed at onboard time (registry), not at
