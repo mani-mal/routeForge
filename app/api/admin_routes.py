@@ -330,12 +330,18 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
         if body.stream_mode is not None and body.stream_mode not in STREAM_MODES:
             raise HTTPException(422, f"bad stream_mode {body.stream_mode!r}")
 
-        # Resolve the EFFECTIVE post-write residency/capture_io once. The PUT
-        # is a merge (see below), so "effective value = body value if
-        # provided, else the stored value" is what will actually land — every
-        # clamp below must key on these, not on the stored row or on
-        # `body.*` alone, or a partial PUT can be judged on a value that's
-        # about to be overwritten (the Critical this fixed).
+        # Resolve the EFFECTIVE post-write residency/capture_io/pii_detection
+        # once. The PUT is a merge (see below), so "effective value = body
+        # value if provided, else the stored value, else the global default"
+        # is what will actually land — every clamp below must key on these,
+        # not on the stored row or on `body.*` alone, or a partial PUT can be
+        # judged on a value that's about to be overwritten (the Critical this
+        # fixed) or on a value that's already in effect but never mentioned
+        # in this particular write (fix round 1: the redacted/pii-downgrade
+        # clamp used to key on `body.pii_detection` alone, so a stored
+        # pii=off app could be pushed to capture_io='redacted' — or flipped
+        # to onprem_only — via a PUT that never mentioned pii_detection at
+        # all, silently skipping the whole downgrade branch).
         settings = request.app.state.settings
         stored = app.policy
         eff_residency = (body.residency or (stored.residency if stored else None)) \
@@ -343,10 +349,30 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
         eff_capture = body.capture_io if body.capture_io is not None else (
             (stored.capture_io if stored else None)
             or settings.serving.observability.langfuse.capture_io)
+        # NOTE: unlike eff_residency/eff_capture, this deliberately does NOT
+        # fall through to the global default (`settings.serving.pii_detection`).
+        # Per `docs/per-app-config.md`, unset/None for this field means
+        # "inherit the deployment's live global detector" and is NOT itself a
+        # downgrade — only an actual per-app override (this write's body, or
+        # a previously-stored one) is. Falling back to the global default
+        # here would make this clamp fire for every app whenever the
+        # deployment's own global default happens to be non-presidio (e.g.
+        # this test suite's SP_PII_DETECTION=regex), including apps that
+        # never had a per-app override at all — a false positive that broke
+        # `test_policy_full_capture_rejected_for_ineligible_app`'s "redacted
+        # is always allowed" invariant. A non-presidio *global* default
+        # combined with capture is a deployment-wide config-lint concern
+        # (CLAUDE.md's boot-time cross-file lint), not a per-app write clamp.
+        eff_pii = body.pii_detection if body.pii_detection is not None else (
+            stored.pii_detection if stored else None)
 
-        # --- PII downgrade clamp: only fires when the client is actively
-        # setting off/regex (omitting the field is not a downgrade). ---
-        if body.pii_detection in ("off", "regex"):
+        # --- PII downgrade clamp: fires whenever the EFFECTIVE post-write
+        # pii_detection is off/regex — whether this write is what sets it or
+        # it was already in effect from a prior write. Re-validates the
+        # invariants (non-onprem, operator-flag-on, capture != redacted) on
+        # every write while the app is in a pii-downgraded state, the same
+        # fail-closed shape as the capture_io=='full' clamp below. ---
+        if eff_pii in ("off", "regex"):
             if eff_residency == "onprem_only":
                 raise HTTPException(
                     422, "pii_detection cannot be downgraded for onprem_only apps")

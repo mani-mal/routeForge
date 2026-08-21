@@ -397,6 +397,56 @@ def test_policy_effective_capture_full_bypass_closed_without_own_langfuse(client
     assert r.status_code == 422
 
 
+def test_policy_effective_pii_reevaluates_on_capture_only_put(client):
+    # Fix round 1: the pii-downgrade/redacted-seam clamp must key on the
+    # EFFECTIVE post-write pii_detection (body value, else stored, else
+    # global default), not on body.pii_detection alone. Otherwise a stored
+    # pii=off app can be pushed to capture_io="redacted" via a PUT that
+    # never mentions pii_detection at all, since the whole downgrade branch
+    # would be skipped -> raw PII in "redacted" telemetry with no opt-in.
+    _login(client)
+    client.post("/admin/applications", json={"id": "eff-pii-redact", "name": "EffPiiRedact"})
+    assert client.put("/admin/applications/eff-pii-redact/policy",
+                      json={"pii_detection": "off", "capture_io": "off"}).status_code == 200
+    r = client.put("/admin/applications/eff-pii-redact/policy",
+                   json={"capture_io": "redacted"})
+    assert r.status_code == 422, r.text
+    assert "capture_io" in r.text.lower()
+    # confirm nothing was persisted from the rejected write
+    got = client.get("/admin/applications/eff-pii-redact").json()
+    assert got["policy"]["capture_io"] == "off"
+
+
+def test_policy_effective_pii_reevaluates_on_residency_only_put(client):
+    # Fix round 1, secondary case: a stored pii=off app must not be flippable
+    # to onprem_only via a PUT that never mentions pii_detection.
+    _login(client)
+    client.post("/admin/applications", json={"id": "eff-pii-onprem", "name": "EffPiiOnprem"})
+    assert client.put("/admin/applications/eff-pii-onprem/policy",
+                      json={"pii_detection": "off", "capture_io": "off"}).status_code == 200
+    r = client.put("/admin/applications/eff-pii-onprem/policy",
+                   json={"residency": "onprem_only"})
+    assert r.status_code == 422, r.text
+    assert "onprem_only" in r.text.lower()
+    got = client.get("/admin/applications/eff-pii-onprem").json()
+    assert got["policy"]["residency"] != "onprem_only"
+
+
+def test_policy_effective_pii_can_be_lifted_back_out(client):
+    # Sanity check: the effective-value re-evaluation must not create a hard
+    # trap. An app stored at pii_detection=off can always be lifted back to
+    # presidio explicitly, even while capture_io is (or becomes) redacted.
+    _login(client)
+    client.post("/admin/applications", json={"id": "eff-pii-lift", "name": "EffPiiLift"})
+    assert client.put("/admin/applications/eff-pii-lift/policy",
+                      json={"pii_detection": "off", "capture_io": "off"}).status_code == 200
+    r = client.put("/admin/applications/eff-pii-lift/policy",
+                   json={"pii_detection": "presidio", "capture_io": "redacted"})
+    assert r.status_code == 200, r.text
+    assert r.json()["policy"]["pii_detection"] == "presidio"
+    assert r.json()["policy"]["capture_io"] == "redacted"
+
+
 def test_onprem_only_cannot_reach_full_even_with_manual_creds(client):
     _login(client)
     client.post("/admin/applications", json={"id": "onprem-app", "name": "OnpremApp",

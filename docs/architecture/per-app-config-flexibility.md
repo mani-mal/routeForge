@@ -137,6 +137,28 @@ the second's guardrails trustworthy:
 `app/obs/*`, the streaming code, and `store.upsert_policy` were not modified by this
 follow-up — the exporter's `full`/fail-closed-to-`redacted` behavior was already correct.
 
+**Fix round 1 (2026-08-21, same day):** review found the pii-downgrade/redacted-seam
+clamp still keyed on `body.pii_detection` alone — asymmetric with the `eff_residency`/
+`eff_capture` values used everywhere else, and reachable: `PUT {"pii_detection":"off"}`
+then a later `PUT {"capture_io":"redacted"}` (which never mentions `pii_detection`)
+skipped the whole downgrade branch, silently landing the app at `pii=off` +
+`capture_io=redacted` — the exact sanitized-prompt leak the clamp exists to prevent, with
+no operator opt-in and no runtime backstop. Fixed by resolving `eff_pii` the same way
+and keying the clamp on it: `eff_pii = body.pii_detection if body.pii_detection is not
+None else (stored.pii_detection if stored else None)` — **deliberately with no further
+fallback to the global default**, unlike `eff_residency`/`eff_capture`. Per this doc and
+`docs/per-app-config.md`, unset/`None` means "inherit the deployment's live global
+detector" and is explicitly *not itself a downgrade* — only an actual per-app override
+(this write's body, or a value already stored on this app's row) is what the clamp
+guards. Falling back further to `settings.serving.pii_detection` was tried and reverted:
+it made the clamp misfire for every app whenever the deployment's own global default is
+non-`presidio` (this repo's own test suite runs with `SP_PII_DETECTION=regex` for
+package-free CI, which made *every* app "effectively regex" and broke the pre-existing,
+correct `test_policy_full_capture_rejected_for_ineligible_app` invariant that `redacted`
+is always allowed for an app with no PII override). A non-`presidio` *global* default
+combined with `capture_io=redacted` deployment-wide is a boot-time config-lint concern
+(CLAUDE.md's cross-file lint), not this per-app write clamp's job.
+
 ---
 
 ## Decision 2 — per-app streaming: the capability is desirable; the current flag is not the way ❌ → ✅
