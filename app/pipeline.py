@@ -353,6 +353,18 @@ class Pipeline:
                     "stream is fully consumed")
             return meta
 
+        # Surface the EFFECTIVE detector + ctx the gate just produced so a
+        # streaming verifier (incremental_verify, Task 7) can redact egress
+        # tokens with the SAME per-app detector this request used at intake --
+        # not a global one, which would make intake/egress inconsistent for an
+        # app with a custom `pii_detection` or custom recognizers. Both are
+        # known eagerly HERE (before any delta is consumed), unlike the meta
+        # dict which is only populated once `_deltas()` is drained -- so they
+        # are attached to `get_meta` rather than returned via it. Attribute
+        # access keeps `run_stream`'s `(deltas, get_meta)` contract unchanged
+        # for the `stream_unverified` caller (Task 6).
+        get_meta.detector = det   # type: ignore[attr-defined]
+        get_meta.ctx = ctx        # type: ignore[attr-defined]
         return _deltas(), get_meta
 
     def _assemble_stream_meta(self, request_id: str, ctx: ExecutionPolicyContext,

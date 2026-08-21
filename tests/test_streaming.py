@@ -3,9 +3,12 @@
 
 `verified_then_stream` runs the full verified pipeline (identical to the
 non-stream path -- step 9 verification is NOT skipped) and only chunks the
-finished text out as OpenAI-style SSE. `stream_unverified`/
-`incremental_verify` map to this same safe fallback in this task (Tasks 5-7
-add real backend token streaming with the runtime verification floor).
+finished text out as OpenAI-style SSE. `stream_unverified` (Task 6) and
+`incremental_verify` (Task 7) have since graduated to real backend token
+streaming (see tests/test_stream_unverified.py and
+tests/test_incremental_verify_route.py); both still fall back to
+`verified_then_stream` when the runtime verification floor trips, which this
+file covers for `incremental_verify`.
 """
 from __future__ import annotations
 
@@ -103,26 +106,39 @@ def test_verified_then_stream_matches_nonstream_and_records_usage(client, monkey
     assert usage["count"] == 2
 
 
-def test_incremental_verify_falls_back_to_verified_then_stream(client, monkeypatch):
-    """Interim safe fallback: `incremental_verify` still streams via the
-    chunk-the-verified-answer path until Task 7 adds its hold-back verifier.
-    (`stream_unverified` graduated to real backend token streaming in Task 6 --
-    see tests/test_stream_unverified.py -- so it is no longer covered here.)"""
-    _fixed_backend(monkeypatch, _LONG_TEXT)
-    token = _make_app(client, "stream-fallback-incremental",
-                      stream_mode="incremental_verify")
+def test_incremental_verify_falls_back_when_floored(client):
+    """Runtime backstop (Global Constraint 1): a floored request never streams
+    incrementally. Task 7 graduated `incremental_verify` to real hold-back token
+    streaming (the benign happy path lives in
+    tests/test_incremental_verify_route.py), but an onprem_only/verify-required
+    request must still fall back to `verified_then_stream` -- the COMPLETE
+    response is verified before egress. A US_SSN in the prompt trips the default
+    `restricted` rule -> onprem_only + require_verification -> `run_stream`
+    raises StreamFallback -> the route runs the full verified pipeline and
+    chunks the finished text (served by conftest's autouse non-streaming fake)."""
+    token = _make_app(client, "iv-floored", stream_mode="incremental_verify")
     r = client.post("/v1/chat/completions",
                     headers={"Authorization": f"Bearer {token}"},
                     json={"model": "auto",
-                          "messages": [{"role": "user", "content": "hi"}],
+                          "messages": [{"role": "user",
+                                        "content": "my ssn is 482-73-1946 please help"}],
                           "stream": True})
     assert r.status_code == 200, r.text
     assert r.headers["content-type"].startswith("text/event-stream")
     frames = _parse_sse(r.text)
     assert frames[-1] == "[DONE]"
-    streamed = "".join(
-        f["choices"][0]["delta"]["content"] for f in frames[1:-2])
-    assert streamed == _LONG_TEXT
+    assert "".join(f["choices"][0]["delta"].get("content", "")
+                   for f in frames[1:-2])  # streamed a (verified) answer
+
+    request_id = frames[0]["id"]
+    _login(client)
+    snap = client.get(f"/api/requests/{request_id}").json()
+    # Verification PERFORMED on the complete response -- NOT the weaker
+    # "incremental" marker. The floor was never weakened by the stream mode.
+    recs = [t for t in snap["trace"] if t.get("step") == "verify"]
+    assert len(recs) == 1 and recs[0]["performed"] is True
+    assert recs[0]["reason"] != "incremental"
+    assert snap["policy"]["onprem_only"] is True
 
 
 # --------------------------------------------------------------------------- #

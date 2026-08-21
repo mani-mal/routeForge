@@ -23,6 +23,7 @@ from app.obs import metrics
 from app.obs.export import export_trace
 from app.obs.redact import redact
 from app.obs.scores import SCORE_NAMES, ensure_score_config, post_score
+from app.output.streaming_verify import StreamingVerifier
 from app.pipeline import PipelineRejected, StreamFallback
 from app.policy.enums import STREAM_MODES
 
@@ -188,10 +189,10 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
             await request.app.state.registry.ensure_loaded(request.app.state.db)
         except Exception as e:
             raise PolicyGateError("policy setup failed") from e
-        if stream_mode == "stream_unverified":
-            # Real backend token streaming (Task 6). run_stream EAGERLY runs the
-            # gate, task-mode decision, and the runtime floor before returning,
-            # so a floored request (multi_step / onprem_only /
+        if stream_mode in ("stream_unverified", "incremental_verify"):
+            # Real backend token streaming (Tasks 6-7). run_stream EAGERLY runs
+            # the gate, task-mode decision, and the runtime floor before
+            # returning, so a floored request (multi_step / onprem_only /
             # require_verification) raises StreamFallback here -- before any
             # token is emitted -- and we transparently fall through to the
             # verified_then_stream path below. The floor is enforced ONLY in the
@@ -202,7 +203,18 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
             except StreamFallback:
                 pass  # fall through: run the FULL verified pipeline, then chunk it
             else:
-                return _stream_unverified_response(
+                if stream_mode == "stream_unverified":
+                    return _stream_unverified_response(
+                        request, request_id=request_id, deltas=deltas,
+                        get_meta=get_meta, body=body, tenant=tenant,
+                        app_policy=app_policy, app_langfuse=app_langfuse,
+                        profile=profile, session_id=session_id, s=s)
+                # incremental_verify (Task 7): stream real tokens, but pipe each
+                # delta through a hold-back StreamingVerifier so no un-redacted
+                # text is ever released. Build the verifier on the request's
+                # EFFECTIVE detector + ctx (exposed on get_meta by run_stream),
+                # so egress redaction matches this app's intake.
+                return _incremental_verify_response(
                     request, request_id=request_id, deltas=deltas,
                     get_meta=get_meta, body=body, tenant=tenant,
                     app_policy=app_policy, app_langfuse=app_langfuse,
@@ -241,9 +253,10 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
     # verified_then_stream: the pipeline already ran the FULL request above
     # and step 9 already verified it (same `pipeline.run` call as the
     # non-stream path) -- this only chunks the finished, already-verified
-    # text out as SSE. Reached for `verified_then_stream`, for
-    # `stream_unverified` requests that hit the runtime floor (StreamFallback
-    # above), and for `incremental_verify` (still mapped here until Task 7).
+    # text out as SSE. Reached for `verified_then_stream`, and for
+    # `stream_unverified`/`incremental_verify` requests that hit the runtime
+    # floor (StreamFallback above) -- a floored request is always verified as a
+    # complete response, never streamed unverified/incrementally.
     content = resp["choices"][0]["message"]["content"]
     return sse_response(chunk_text(request_id, resp["model"], content))
 
@@ -481,22 +494,94 @@ def _stream_unverified_response(
     return sse_response(_gen())
 
 
+def _incremental_verify_response(
+        request: Request, *, request_id: str,
+        deltas: AsyncIterator[str], get_meta: Callable[[], dict],
+        body: ChatRequest, tenant: str, app_policy: AppPolicyView,
+        app_langfuse: object | None, profile: AppPrivacyProfile,
+        session_id: str | None, s) -> StreamingResponse:
+    """Live token streaming for `incremental_verify` (Task 7). Real backend
+    deltas are piped through a hold-back `StreamingVerifier` before egress, so
+    an entity split across chunk boundaries never leaks its raw prefix; the
+    verifier's `flush()` releases the held-back tail as a final content frame.
+
+    The verifier is built on the request's EFFECTIVE detector + ctx (the exact
+    per-app detector the gate used, surfaced on `get_meta` by `run_stream`) so
+    egress redaction matches intake. `_finalize` runs in a `finally` for EVERY
+    exit -- normal completion and a mid-stream disconnect alike -- and records
+    step 9 as `performed=True, reason="incremental"` (a deliberately weaker
+    guarantee than the complete-response verdict; see streaming_verify.py).
+    The client-visible (redacted) text is threaded into `_finalize` so the
+    console/usage record shows what actually left, not the raw model output."""
+    created = int(time.time())
+    model = body.model  # stable frame label; resolved model is in the usage row
+    verifier = StreamingVerifier(get_meta.detector, get_meta.ctx)  # type: ignore[attr-defined]
+
+    async def _gen() -> AsyncIterator[str]:
+        meta: dict | None = None
+        released: list[str] = []
+        try:
+            yield sse_frame(openai_chunk(request_id, model, role="assistant",
+                                         created=created))
+            async for delta in deltas:
+                out = verifier.feed(delta)
+                if out:
+                    released.append(out)
+                    yield sse_frame(openai_chunk(request_id, model, delta=out,
+                                                 created=created))
+            tail = verifier.flush()  # release the held-back window
+            if tail:
+                released.append(tail)
+                yield sse_frame(openai_chunk(request_id, model, delta=tail,
+                                             created=created))
+            meta = get_meta()  # valid only now that `deltas` is fully drained
+            yield sse_frame(openai_chunk(request_id, model, finish_reason="stop",
+                                         created=created))
+            yield SSE_DONE
+        finally:
+            # Best-effort finalize on EVERY exit. `client_text` is exactly what
+            # the client received (redacted); on a mid-stream disconnect it is
+            # the partial released prefix, which is honest.
+            await _finalize_stream(
+                request, request_id=request_id, deltas=deltas,
+                get_meta=get_meta, meta=meta, body=body, tenant=tenant,
+                app_policy=app_policy, app_langfuse=app_langfuse,
+                profile=profile, session_id=session_id, s=s,
+                verify_performed=True, verify_reason="incremental",
+                client_text="".join(released))
+
+    return sse_response(_gen())
+
+
 async def _finalize_stream(
         request: Request, *, request_id: str, deltas: AsyncIterator[str],
         get_meta: Callable[[], dict], meta: dict | None,
         body: ChatRequest, tenant: str, app_policy: AppPolicyView,
         app_langfuse: object | None, profile: AppPrivacyProfile,
-        session_id: str | None, s) -> None:
+        session_id: str | None, s,
+        verify_performed: bool = False,
+        verify_reason: str = "waived: stream_unverified",
+        client_text: str | None = None) -> None:
     """Assemble the `resp` dict from the pipeline's final streaming metadata and
     run the shared `_finalize`. Guarded end to end: a failure here must never
-    surface to the (already-streaming) client.
+    surface to the (already-streaming) client. Shared by both real-streaming
+    modes; the caller supplies how step 9 is recorded:
+
+      * `stream_unverified` (Task 6): defaults -- `performed=False`,
+        `reason="waived: stream_unverified"`; the client received the RAW deltas,
+        so `client_text=None` and the recorded completion is `raw_completion`.
+      * `incremental_verify` (Task 7): `performed=True`, `reason="incremental"`;
+        the client received the hold-back-REDACTED text, passed in as
+        `client_text` so the recorded/displayed completion matches what actually
+        left (the raw model output stays in `raw_completion` for eval capture,
+        exactly as on the non-stream path).
 
     On a mid-stream disconnect `meta` is None (the generator never reached
     `get_meta`); we best-effort drain the remaining backend deltas so the final
     accounting (cost, tokens, decision) is recovered rather than silently lost.
-    Verification is recorded as WAIVED (`reason="waived: stream_unverified"`) --
     run_stream only returns normally when the request is NOT onprem_only, NOT
-    require_verification, and NOT multi_step, so waiving step 9 here is sound."""
+    require_verification, and NOT multi_step, so recording step 9 as
+    waived/incremental (rather than a complete-response verdict) is sound."""
     log = logging.getLogger("serving.obs")
     try:
         if meta is None:
@@ -506,28 +591,31 @@ async def _finalize_stream(
                 meta = get_meta()
             except Exception:
                 log.exception(
-                    "stream_unverified: drain-on-disconnect failed (swallowed)")
+                    "streaming: drain-on-disconnect failed (swallowed)")
                 return
         resp = dict(meta)
-        # The completion the client received == the accumulated streamed text
-        # (no verification rewrite on this path); mirror run()'s `choices` shape.
-        text = meta.get("raw_completion") or ""
+        # The completion recorded/displayed == what the client actually
+        # received: the hold-back-redacted text for incremental_verify
+        # (`client_text`), else the raw streamed text (stream_unverified).
+        text = client_text if client_text is not None else (
+            meta.get("raw_completion") or "")
         resp["choices"] = [{"index": 0,
                             "message": {"role": "assistant", "content": text},
                             "finish_reason": "stop"}]
-        # Make the trace's waived VerificationRecord say WHY (Global Constraint
-        # 2). run_stream already stamps a performed=False/passed=True record;
-        # name the reason for this specific mode so the console/Langfuse trace
-        # reads "waived: stream_unverified", distinct from Task 7's "incremental".
+        # Make the trace's VerificationRecord say WHY (Global Constraint 2).
+        # run_stream stamps a performed=False/passed=True "waived" record; name
+        # the reason + performed flag for this specific mode so the console and
+        # Langfuse trace read "waived: stream_unverified" vs "incremental".
         for rec in resp.get("trace", []):
             if isinstance(rec, dict) and rec.get("step") == "verify":
-                rec["reason"] = "waived: stream_unverified"
+                rec["reason"] = verify_reason
+                rec["performed"] = verify_performed
         await _finalize(request, resp, body=body, tenant=tenant,
                         app_policy=app_policy, app_langfuse=app_langfuse,
                         profile=profile, session_id=session_id, s=s,
                         request_id=request_id)
     except Exception:  # finalize must never break the (already sent) stream
-        log.exception("stream_unverified finalize failed (swallowed)")
+        log.exception("streaming finalize failed (swallowed)")
 
 
 class FeedbackIn(BaseModel):
