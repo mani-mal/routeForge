@@ -33,13 +33,30 @@ redacted exactly once, at release).
 """
 from __future__ import annotations
 
+import re
+
 from app.models import Entity, ExecutionPolicyContext
 from app.policy.detectors import Detector
 
 HOLDBACK_CHARS = 48
-"""Characters kept buffered behind the release point. Must exceed the longest
-entity we redact so an entity can never span the whole window and force a
-release mid-entity (the SSN/credit-card/phone patterns are all well under 48)."""
+"""Characters kept buffered behind the release point. The window alone bounds
+only *fixed/short* entities (SSN/credit-card/phone are all well under 48 chars),
+so once such an entity is fully within the buffer `analyze` sees it and the cut
+is pulled back before it. It CANNOT bound a length-unbounded pattern
+(`EMAIL_ADDRESS = \\b[\\w.+-]+@[\\w-]+\\.[\\w.-]+\\b`): while an email's local
+part has streamed but its `@domain` has not, `analyze` returns no entity, so a
+fixed window would release the raw local-part prefix. The trailing-entity-ish-run
+guard in `feed` covers exactly that case -- together they guarantee no raw entity
+text is released across a chunk boundary. (A holistic whole-response verdict
+still cannot be enforced once tokens have streamed -- see the module docstring.)"""
+
+# A maximal run of entity-forming characters anchored to the END of the buffer.
+# Covers every char the built-in patterns build entities from EXCEPT space (the
+# only space-containing pattern, CREDIT_CARD, is length-bounded and handled by
+# the window). A trailing run of these chars might still be *growing* into an
+# entity on the next feed, so it is never released until the run is broken by a
+# non-entity char (proving it is not PII) or completed into a detected entity.
+_TRAILING_ENTITY_RUN = re.compile(r"[\w.@+\-]+$")
 
 
 class StreamingVerifier:
@@ -77,6 +94,23 @@ class StreamingVerifier:
         for e in entities:
             if e.end > safe:
                 cut = min(cut, e.start)
+
+        # General unbounded-entity guard: never release across a run of
+        # entity-forming characters that reaches the END of the buffer -- it may
+        # still be growing into an entity (e.g. an email local part before its
+        # `@domain` arrives) that `analyze` cannot see yet. Holding it is safe
+        # and general: released text and redacted placeholders only ever differ
+        # INSIDE an entity, so a trailing run is released only once it is either
+        # completed+detected (→ redacted above) or broken by a non-entity char
+        # (→ provably not an entity). `min` only ever releases LESS, so this
+        # never regresses the fixed-window cases; and a SHORT trailing run
+        # (the common case) is already inside the window, leaving `cut`
+        # unchanged -- the extra holding kicks in only for a run LONGER than the
+        # window, i.e. exactly the leak class.
+        m = _TRAILING_ENTITY_RUN.search(self._buffer)
+        if m is not None:
+            cut = min(cut, m.start())
+
         if cut <= 0:
             return ""
 

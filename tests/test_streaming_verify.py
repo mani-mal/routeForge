@@ -90,3 +90,64 @@ def test_entity_straddling_the_safe_boundary_stays_buffered() -> None:
 def test_flush_on_empty_buffer_returns_empty() -> None:
     v = StreamingVerifier(RegexDetector(), _ctx())
     assert v.flush() == ""
+
+
+# --------------------------------------------------------------------------- #
+# Unbounded EMAIL_ADDRESS: a length-unbounded pattern defeats a FIXED window
+# unless a trailing entity-ish run is held. Two reviewer live repros.
+# --------------------------------------------------------------------------- #
+def test_long_email_local_part_split_never_leaks_prefix() -> None:
+    """Repro 1: a >48-char local part streamed before the `@domain` arrives.
+    `analyze` sees no entity yet, so a fixed window would release the raw
+    local-part prefix beyond 48 chars. The trailing-run guard must hold it."""
+    v = StreamingVerifier(RegexDetector(), _ctx())
+    outs = [
+        v.feed("john.q.smith.from.the.accounting.department.team.lead"),
+        v.feed("@corp.example.com"),
+        v.flush(),
+    ]
+    released = "".join(outs)
+    assert "john." not in released            # not even the raw prefix
+    assert "john.q.smith" not in released
+    assert "@corp.example.com" not in released
+    assert "<EMAIL_ADDRESS_1>" in released
+
+
+def test_medium_email_local_part_split_never_leaks_prefix() -> None:
+    """Repro 2: a 55-char local part leaked `firstna` under the fixed window."""
+    local = "firstname.lastname.engineering.platform.team.group.co"  # 53 chars
+    assert len(local) > HOLDBACK_CHARS
+    v = StreamingVerifier(RegexDetector(), _ctx())
+    outs = [v.feed(local), v.feed("@example.com"), v.flush()]
+    released = "".join(outs)
+    assert "firstna" not in released
+    assert "first" not in released          # NO raw local-part char released
+    assert "@example.com" not in released
+    assert "<EMAIL_ADDRESS_1>" in released
+
+
+def test_email_at_present_domain_incomplete_stays_held() -> None:
+    """`@` has arrived but the domain isn't complete yet (no dot) -> no entity
+    match; the whole run must stay buffered, never partially released."""
+    v = StreamingVerifier(RegexDetector(), _ctx())
+    # local part alone exceeds the window, so a fixed window would leak it.
+    out = v.feed("verylongusername.with.many.dotted.parts.here.now@corp")
+    assert out == ""  # entire buffer is one entity-ish run -> nothing releases
+    whole = out + v.feed(".example.com ") + v.flush()
+    assert "verylongusername" not in whole
+    assert "verylong" not in whole
+    assert "<EMAIL_ADDRESS_1>" in whole
+
+
+def test_long_benign_word_releases_once_a_space_breaks_the_run() -> None:
+    """A long dotted word that never becomes an entity is not PII: held while
+    the trailing run is unbroken, released (unredacted) once a space ends it."""
+    word = "supercalifragilistic.expialidocious.and.then.some.more.padding.here"
+    assert len(word) > HOLDBACK_CHARS
+    v = StreamingVerifier(RegexDetector(), _ctx())
+    held = v.feed(word)              # one long run, no space -> nothing releases
+    assert held == ""
+    after_space = v.feed(" ")        # run broken -> now releasable
+    tail = v.flush()
+    assert held + after_space + tail == word + " "  # exact, no redaction
+    assert (held + after_space) != ""                # released before flush
