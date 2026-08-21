@@ -103,26 +103,26 @@ def test_verified_then_stream_matches_nonstream_and_records_usage(client, monkey
     assert usage["count"] == 2
 
 
-def test_stream_unverified_and_incremental_verify_fall_back_to_verified_then_stream(
-        client, monkeypatch):
-    """Interim safe fallback (Task 4): both future modes stream via the exact
-    same chunk-the-verified-answer path until Tasks 5-7 add real backend
-    token streaming."""
+def test_incremental_verify_falls_back_to_verified_then_stream(client, monkeypatch):
+    """Interim safe fallback: `incremental_verify` still streams via the
+    chunk-the-verified-answer path until Task 7 adds its hold-back verifier.
+    (`stream_unverified` graduated to real backend token streaming in Task 6 --
+    see tests/test_stream_unverified.py -- so it is no longer covered here.)"""
     _fixed_backend(monkeypatch, _LONG_TEXT)
-    for mode in ("stream_unverified", "incremental_verify"):
-        token = _make_app(client, f"stream-fallback-{mode}", stream_mode=mode)
-        r = client.post("/v1/chat/completions",
-                        headers={"Authorization": f"Bearer {token}"},
-                        json={"model": "auto",
-                              "messages": [{"role": "user", "content": "hi"}],
-                              "stream": True})
-        assert r.status_code == 200, r.text
-        assert r.headers["content-type"].startswith("text/event-stream")
-        frames = _parse_sse(r.text)
-        assert frames[-1] == "[DONE]"
-        streamed = "".join(
-            f["choices"][0]["delta"]["content"] for f in frames[1:-2])
-        assert streamed == _LONG_TEXT
+    token = _make_app(client, "stream-fallback-incremental",
+                      stream_mode="incremental_verify")
+    r = client.post("/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={"model": "auto",
+                          "messages": [{"role": "user", "content": "hi"}],
+                          "stream": True})
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("text/event-stream")
+    frames = _parse_sse(r.text)
+    assert frames[-1] == "[DONE]"
+    streamed = "".join(
+        f["choices"][0]["delta"]["content"] for f in frames[1:-2])
+    assert streamed == _LONG_TEXT
 
 
 # --------------------------------------------------------------------------- #

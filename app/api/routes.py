@@ -1,6 +1,8 @@
 import logging
 import re
+import time
 import uuid
+from collections.abc import AsyncIterator, Callable
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
@@ -8,7 +10,9 @@ from pydantic import BaseModel
 
 from app.agent.runtime import AgentCapExceeded
 from app.api.history import summarize
-from app.api.streaming import chunk_text, sse_response
+from app.api.streaming import (
+    SSE_DONE, chunk_text, openai_chunk, sse_frame, sse_response,
+)
 from app.apps import store
 from app.apps.langfuse_provision import load_app_langfuse
 from app.apps.policy import AppPolicyView, day_spend_usd, policy_view_from
@@ -19,7 +23,7 @@ from app.obs import metrics
 from app.obs.export import export_trace
 from app.obs.redact import redact
 from app.obs.scores import SCORE_NAMES, ensure_score_config, post_score
-from app.pipeline import PipelineRejected
+from app.pipeline import PipelineRejected, StreamFallback
 from app.policy.enums import STREAM_MODES
 
 router = APIRouter()
@@ -153,6 +157,11 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
             metrics.observe_request("-", "budget_exceeded")
             raise HTTPException(429, "daily budget exceeded for this application")
 
+    # Read the opaque workflow-correlation id once, up front: the streaming
+    # branch below returns before the old (post-pipeline) read site, and every
+    # response shape's _finalize needs it.
+    session_id = _read_session_id(request)
+
     try:
         # Per-app privacy profile (custom recognizers + sensitivity rules,
         # Task 7), now cache-aware (Task 9): app.state.profile_cache is
@@ -179,6 +188,25 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
             await request.app.state.registry.ensure_loaded(request.app.state.db)
         except Exception as e:
             raise PolicyGateError("policy setup failed") from e
+        if stream_mode == "stream_unverified":
+            # Real backend token streaming (Task 6). run_stream EAGERLY runs the
+            # gate, task-mode decision, and the runtime floor before returning,
+            # so a floored request (multi_step / onprem_only /
+            # require_verification) raises StreamFallback here -- before any
+            # token is emitted -- and we transparently fall through to the
+            # verified_then_stream path below. The floor is enforced ONLY in the
+            # pipeline (Global Constraint 1); the route never re-implements it.
+            try:
+                deltas, get_meta = await request.app.state.pipeline.run_stream(
+                    request_id, tenant, body, app_policy=app_policy, profile=profile)
+            except StreamFallback:
+                pass  # fall through: run the FULL verified pipeline, then chunk it
+            else:
+                return _stream_unverified_response(
+                    request, request_id=request_id, deltas=deltas,
+                    get_meta=get_meta, body=body, tenant=tenant,
+                    app_policy=app_policy, app_langfuse=app_langfuse,
+                    profile=profile, session_id=session_id, s=s)
         resp = await request.app.state.pipeline.run(
             request_id, tenant, body, app_policy=app_policy, profile=profile)
     except PipelineRejected as e:
@@ -205,7 +233,6 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
     except Exception:
         metrics.observe_request("-", "error")
         raise HTTPException(500, "internal error")
-    session_id = _read_session_id(request)
     await _finalize(request, resp, body=body, tenant=tenant, app_policy=app_policy,
                     app_langfuse=app_langfuse, profile=profile,
                     session_id=session_id, s=s, request_id=request_id)
@@ -214,10 +241,9 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
     # verified_then_stream: the pipeline already ran the FULL request above
     # and step 9 already verified it (same `pipeline.run` call as the
     # non-stream path) -- this only chunks the finished, already-verified
-    # text out as SSE. `stream_unverified`/`incremental_verify` map to this
-    # same safe fallback in this task; Tasks 5-7 add real backend token
-    # streaming (with the runtime verification floor, Global Constraint 1)
-    # and replace the fallback for those two modes.
+    # text out as SSE. Reached for `verified_then_stream`, for
+    # `stream_unverified` requests that hit the runtime floor (StreamFallback
+    # above), and for `incremental_verify` (still mapped here until Task 7).
     content = resp["choices"][0]["message"]["content"]
     return sse_response(chunk_text(request_id, resp["model"], content))
 
@@ -409,6 +435,99 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
     except Exception:  # streaming must never break serving
         logging.getLogger("serving.obs").exception(
             "bus.publish failed (swallowed)")
+
+
+def _stream_unverified_response(
+        request: Request, *, request_id: str,
+        deltas: AsyncIterator[str], get_meta: Callable[[], dict],
+        body: ChatRequest, tenant: str, app_policy: AppPolicyView,
+        app_langfuse: object | None, profile: AppPrivacyProfile,
+        session_id: str | None, s) -> StreamingResponse:
+    """Live token-forwarding SSE for `stream_unverified` (real backend
+    streaming). Emits an OpenAI-style role frame, forwards each `deltas` token
+    as a `content` frame, then (after the stream drains) a `finish_reason`
+    frame + `[DONE]`. `_finalize` runs in a `finally` so the DecisionRecord,
+    usage row, and bus publish are recorded for EVERY streamed request --
+    including a client that disconnects mid-stream (Global Constraint 2).
+
+    `created` is computed once and held constant across every frame (Task 4),
+    and `model` uses the app's requested model string as a stable per-frame
+    label; the resolved serving model lands in the durable usage row via
+    `_finalize` (built from the pipeline's final metadata)."""
+    created = int(time.time())
+    model = body.model  # stable frame label; resolved model is in the usage row
+
+    async def _gen() -> AsyncIterator[str]:
+        meta: dict | None = None
+        try:
+            yield sse_frame(openai_chunk(request_id, model, role="assistant",
+                                         created=created))
+            async for delta in deltas:
+                yield sse_frame(openai_chunk(request_id, model, delta=delta,
+                                             created=created))
+            meta = get_meta()  # valid only now that `deltas` is fully drained
+            yield sse_frame(openai_chunk(request_id, model, finish_reason="stop",
+                                         created=created))
+            yield SSE_DONE
+        finally:
+            # Best-effort finalize on EVERY exit -- normal completion and a
+            # mid-stream client disconnect alike. Accounting must not be lost.
+            await _finalize_stream(
+                request, request_id=request_id, deltas=deltas,
+                get_meta=get_meta, meta=meta, body=body, tenant=tenant,
+                app_policy=app_policy, app_langfuse=app_langfuse,
+                profile=profile, session_id=session_id, s=s)
+
+    return sse_response(_gen())
+
+
+async def _finalize_stream(
+        request: Request, *, request_id: str, deltas: AsyncIterator[str],
+        get_meta: Callable[[], dict], meta: dict | None,
+        body: ChatRequest, tenant: str, app_policy: AppPolicyView,
+        app_langfuse: object | None, profile: AppPrivacyProfile,
+        session_id: str | None, s) -> None:
+    """Assemble the `resp` dict from the pipeline's final streaming metadata and
+    run the shared `_finalize`. Guarded end to end: a failure here must never
+    surface to the (already-streaming) client.
+
+    On a mid-stream disconnect `meta` is None (the generator never reached
+    `get_meta`); we best-effort drain the remaining backend deltas so the final
+    accounting (cost, tokens, decision) is recovered rather than silently lost.
+    Verification is recorded as WAIVED (`reason="waived: stream_unverified"`) --
+    run_stream only returns normally when the request is NOT onprem_only, NOT
+    require_verification, and NOT multi_step, so waiving step 9 here is sound."""
+    log = logging.getLogger("serving.obs")
+    try:
+        if meta is None:
+            try:
+                async for _delta in deltas:
+                    pass
+                meta = get_meta()
+            except Exception:
+                log.exception(
+                    "stream_unverified: drain-on-disconnect failed (swallowed)")
+                return
+        resp = dict(meta)
+        # The completion the client received == the accumulated streamed text
+        # (no verification rewrite on this path); mirror run()'s `choices` shape.
+        text = meta.get("raw_completion") or ""
+        resp["choices"] = [{"index": 0,
+                            "message": {"role": "assistant", "content": text},
+                            "finish_reason": "stop"}]
+        # Make the trace's waived VerificationRecord say WHY (Global Constraint
+        # 2). run_stream already stamps a performed=False/passed=True record;
+        # name the reason for this specific mode so the console/Langfuse trace
+        # reads "waived: stream_unverified", distinct from Task 7's "incremental".
+        for rec in resp.get("trace", []):
+            if isinstance(rec, dict) and rec.get("step") == "verify":
+                rec["reason"] = "waived: stream_unverified"
+        await _finalize(request, resp, body=body, tenant=tenant,
+                        app_policy=app_policy, app_langfuse=app_langfuse,
+                        profile=profile, session_id=session_id, s=s,
+                        request_id=request_id)
+    except Exception:  # finalize must never break the (already sent) stream
+        log.exception("stream_unverified finalize failed (swallowed)")
 
 
 class FeedbackIn(BaseModel):

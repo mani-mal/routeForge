@@ -1,0 +1,220 @@
+"""Task 6: `stream_unverified` route wiring + runtime floor fallback.
+
+`stream_unverified` streams REAL backend token deltas (litellm `stream=True`)
+and WAIVES step-9 verification -- but only when `pipeline.run_stream` returns
+normally, which it does exactly when the request is NOT onprem_only, NOT
+require_verification, and NOT multi_step. A request that trips the runtime
+floor (Global Constraint 1) raises `StreamFallback` inside the pipeline and the
+route transparently falls back to `verified_then_stream` (the COMPLETE response
+is verified, then chunked) -- indistinguishable to the privacy guarantee.
+
+Every streamed request still emits a DecisionRecord + durable usage row via
+`_finalize` (Global Constraint 2), including on a mid-stream client disconnect.
+
+Assertions are made against REAL SSE bytes off a real `TestClient` (and a real
+uvicorn server for the multi-step case), never mocks of the route internals.
+"""
+from __future__ import annotations
+
+import json
+
+import httpx
+import pytest
+
+from app.gateway.backends import litellm_backend
+from tests._litellm_fake import (
+    make_scripted_tool_then_final_acompletion, make_streaming_acompletion,
+)
+from tests.conftest import admin_cookie
+from tests.test_admin_api import _login
+
+_DELTAS = ["Hello", ", ", "streamed", " ", "world", "!"]
+
+
+def _make_app(client, app_id: str, *, stream_mode: str) -> str:
+    _login(client)
+    r = client.post("/admin/applications", json={"id": app_id, "name": app_id})
+    assert r.status_code == 200, r.text
+    token = r.json()["token"]
+    pr = client.put(f"/admin/applications/{app_id}/policy",
+                    json={"stream_mode": stream_mode})
+    assert pr.status_code == 200, pr.text
+    return token
+
+
+def _parse_sse(text: str) -> list[dict | str]:
+    frames: list[dict | str] = []
+    for block in text.strip("\n").split("\n\n"):
+        block = block.strip()
+        if not block:
+            continue
+        assert block.startswith("data: "), block
+        payload = block[len("data: "):]
+        frames.append("[DONE]" if payload == "[DONE]" else json.loads(payload))
+    return frames
+
+
+def _content(frames: list) -> str:
+    return "".join(f["choices"][0]["delta"]["content"]
+                   for f in frames[1:-2])  # drop role, finish, [DONE]
+
+
+def _verify_record(trace: list[dict]) -> dict:
+    recs = [r for r in trace if r.get("step") == "verify"]
+    assert len(recs) == 1, trace
+    return recs[0]
+
+
+# --------------------------------------------------------------------------- #
+# (a) benign prompt -> REAL streamed deltas, verify WAIVED, usage recorded
+# --------------------------------------------------------------------------- #
+def test_stream_unverified_real_deltas_waived_and_usage(client, monkeypatch):
+    from tests import _litellm_fake
+
+    monkeypatch.setattr(litellm_backend, "acompletion",
+                        make_streaming_acompletion(_DELTAS))
+    _litellm_fake.CALLS.clear()
+
+    token = _make_app(client, "su-benign", stream_mode="stream_unverified")
+    r = client.post("/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={"model": "auto",
+                          "messages": [{"role": "user", "content": "hi there"}],
+                          "stream": True})
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("text/event-stream")
+
+    frames = _parse_sse(r.text)
+    assert frames[0]["choices"][0]["delta"] == {"role": "assistant"}
+    assert frames[-1] == "[DONE]"
+    assert frames[-2]["choices"][0]["finish_reason"] == "stop"
+    # REAL streaming forwards the backend deltas one-for-one (NOT post-hoc
+    # word-boundary chunking of a finished string) -- the strongest signal
+    # this took the live path, not the verified_then_stream fallback.
+    content_deltas = [f["choices"][0]["delta"]["content"] for f in frames[1:-2]]
+    assert content_deltas == _DELTAS
+    assert _content(frames) == "".join(_DELTAS)
+
+    # The backend was really asked to stream.
+    assert _litellm_fake.CALLS and _litellm_fake.CALLS[-1]["stream"] is True
+
+    # Decision trace (durable snapshot) shows verification WAIVED for this mode.
+    request_id = frames[0]["id"]
+    _login(client)
+    snap = client.get(f"/api/requests/{request_id}")
+    assert snap.status_code == 200, snap.text
+    vrec = _verify_record(snap.json()["trace"])
+    assert vrec["performed"] is False
+    assert vrec["passed"] is True
+    assert vrec["reason"] == "waived: stream_unverified"
+
+    # A durable usage row was recorded for the streamed request.
+    usage = client.get("/admin/usage?application_id=su-benign").json()
+    assert usage["count"] == 1
+
+
+# --------------------------------------------------------------------------- #
+# (b) require_verification/onprem -> falls back to verified_then_stream:
+#     verification IS performed, output still streamed
+# --------------------------------------------------------------------------- #
+def test_stream_unverified_falls_back_when_floored(client):
+    # A US_SSN trips the default `restricted` rule -> onprem_only +
+    # require_verification -> run_stream raises StreamFallback -> the route
+    # runs the FULL verified pipeline and chunks the finished text. The autouse
+    # non-streaming fake (conftest) serves the fallback's pipeline.run() call.
+    token = _make_app(client, "su-floored", stream_mode="stream_unverified")
+    r = client.post("/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={"model": "auto",
+                          "messages": [{"role": "user",
+                                        "content": "my ssn is 482-73-1946 please help"}],
+                          "stream": True})
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("text/event-stream")
+
+    frames = _parse_sse(r.text)
+    assert frames[-1] == "[DONE]"
+    assert _content(frames)  # streamed a (verified) answer
+
+    request_id = frames[0]["id"]
+    _login(client)
+    snap = client.get(f"/api/requests/{request_id}").json()
+    # Verification was PERFORMED on the complete response -- NOT waived. The
+    # floor was never weakened by the streaming mode.
+    vrec = _verify_record(snap["trace"])
+    assert vrec["performed"] is True
+    assert vrec["reason"] != "waived: stream_unverified"
+    assert snap["policy"]["onprem_only"] is True
+
+
+# --------------------------------------------------------------------------- #
+# (c) multi-step routing -> falls back to verified_then_stream (real server)
+# --------------------------------------------------------------------------- #
+@pytest.mark.usefixtures("live_internal_server")
+def test_stream_unverified_multistep_falls_back(live_internal_server, monkeypatch):
+    pytest.importorskip("nat")
+    monkeypatch.setattr(litellm_backend, "acompletion",
+                        make_scripted_tool_then_final_acompletion(
+                            arguments='{"expression": "12 * 7"}'))
+    base = f"http://127.0.0.1:{live_internal_server.port}"
+    cookie = admin_cookie(live_internal_server.port)
+
+    # Create app + opt into stream_unverified over real HTTP.
+    r = httpx.post(f"{base}/admin/applications",
+                   headers={"Cookie": cookie},
+                   json={"id": "su-multi", "name": "su-multi"}, timeout=10)
+    assert r.status_code == 200, r.text
+    token = r.json()["token"]
+    r = httpx.put(f"{base}/admin/applications/su-multi/policy",
+                  headers={"Cookie": cookie},
+                  json={"stream_mode": "stream_unverified"}, timeout=10)
+    assert r.status_code == 200, r.text
+
+    r = httpx.post(f"{base}/v1/chat/completions",
+                   headers={"authorization": f"Bearer {token}"},
+                   json={"model": "auto", "mock_multistep": True, "stream": True,
+                         "messages": [{"role": "user",
+                                       "content": "Look up account 42 then compute 12 * 7"}]},
+                   timeout=30)
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("text/event-stream")
+
+    frames = _parse_sse(r.text)
+    assert frames[-1] == "[DONE]"
+    assert _content(frames)  # the full agent answer was streamed
+
+    request_id = frames[0]["id"]
+    snap = httpx.get(f"{base}/api/requests/{request_id}",
+                     headers={"Cookie": cookie}, timeout=10).json()
+    # Multi-step ran the FULL agent pipeline (>=1 hop), then chunked -- it did
+    # NOT waive verification as stream_unverified.
+    assert any(t.get("step") == "agent_hop" for t in snap["trace"])
+    vrec = _verify_record(snap["trace"])
+    assert vrec["reason"] != "waived: stream_unverified"
+
+
+# --------------------------------------------------------------------------- #
+# mid-stream disconnect: usage/decision still finalize (best-effort)
+# --------------------------------------------------------------------------- #
+def test_stream_unverified_finalizes_on_disconnect(client, monkeypatch):
+    """Reading only the first SSE frame and closing early simulates a client
+    that disconnects mid-stream. `_finalize` must still run (in the generator's
+    `finally`, draining the remaining backend deltas) so the usage row is not
+    lost -- a Task 5 reviewer note."""
+    monkeypatch.setattr(litellm_backend, "acompletion",
+                        make_streaming_acompletion(_DELTAS))
+    token = _make_app(client, "su-disc", stream_mode="stream_unverified")
+
+    with client.stream("POST", "/v1/chat/completions",
+                       headers={"Authorization": f"Bearer {token}"},
+                       json={"model": "auto",
+                             "messages": [{"role": "user", "content": "hi there"}],
+                             "stream": True}) as r:
+        assert r.status_code == 200
+        for _line in r.iter_lines():
+            break  # read one frame, then abandon the stream
+
+    # Despite the early close, accounting closed out.
+    _login(client)
+    usage = client.get("/admin/usage?application_id=su-disc").json()
+    assert usage["count"] == 1
