@@ -59,8 +59,14 @@ guarantees.
 1. **Nothing external before the policy gate.** No classifier, no cloud model, no
    tool, and no telemetry sink sees the raw request until step 2 completes. Ordering
    is load-bearing, not stylistic.
-2. **Telemetry is redacted on egress.** Redact at the exporter, not only at intake.
-   Tool outputs and model completions leak PII the input gate never saw.
+2. **Telemetry is redacted on egress — except raw capture an operator
+   explicitly opts a non-onprem app into.** Redact at the exporter by default —
+   tool outputs and model completions leak PII the input gate never saw. The one
+   exception: an operator may set `allow_app_pii_downgrade` and configure a
+   specific **non-`onprem_only`** app with `pii_detection=off` + `capture_io=full`,
+   sending raw I/O **only** to that app's **own** provisioned Langfuse project.
+   `onprem_only` never permits it; the shared project never receives raw I/O; the
+   exporter fails closed to `redacted` if the app's project is missing.
 3. **`onprem_only` is absolute.** If policy sets it, a cloud provider must be
    unreachable by construction — filtered out of the candidate pool before the router
    scores anything. Never a post-hoc check.

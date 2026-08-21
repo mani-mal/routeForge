@@ -74,10 +74,26 @@ missing lever: such an app picks `off` (or a scoped `regex`) and keeps its conte
    `null`); per-app selection just *picks* one. Never build a spaCy-loaded Presidio engine
    per application.
 2. **Cross-knob clamp — the real trap.** With detection `off`, egress redaction has nothing
-   to mask, so an app with `capture_io != off` (or an `onprem_only` tenant) would write
-   **raw** prompts to Langfuse believing they are redacted. Reject/clamp `off` (and likely
-   `regex`) whenever the app is `onprem_only` or has capture enabled — same class of lint as
-   the existing `capture_io='full'` clamp.
+   to mask, so an app with `capture_io="redacted"` (or an `onprem_only` tenant) would write
+   **raw** prompts to Langfuse *believing* they are redacted — `_set_io`'s `redacted` branch
+   reuses the gate's `sanitized_prompt`, which is raw when detection is off. Reject/clamp
+   `off` (and `regex`) whenever the app is `onprem_only` or its effective `capture_io` is
+   `"redacted"`. `capture_io="off"` is always safe with detection off.
+
+   **Deliberate, narrower exception — operator-gated raw eval capture (2026-08-21,
+   product-owner approved, relaxes CLAUDE.md rule 2):** `capture_io="full"` is *not*
+   clamped away by the rule above. A **non-`onprem_only`** app may combine
+   `pii_detection=off` with `capture_io="full"`: `app/obs/export.py`'s `full` branch sends
+   RAW (unredacted) I/O, routed via a per-app tracer to the app's **own** provisioned
+   Langfuse project — never the shared/default one — and fails closed to `redacted` if that
+   project is missing or the tracer build fails. This is safe under the same governing rule
+   as everything else here: residency is *still* enforced by an independent mechanism
+   (`onprem_only` apps cannot reach `pii_detection=off` in the first place — the residency
+   clamp above fires first, so the two floors compose instead of one undermining the other),
+   and the raw-capture blast radius is contained to one app's own Langfuse project by the
+   existing `capture_io='full'` eligibility clamp (`load_app_langfuse(app) is not None`).
+   `allow_app_pii_downgrade` gates this combination exactly like any other PII downgrade —
+   an operator who sets that ceiling `false` cannot reach raw capture either.
 3. **Fail closed on validation.** An unknown/invalid mode at admin-write time → 422. Never
    silently fall back to `off`.
 4. **Deployment ceiling.** A global switch — shipped as `policy.allow_app_pii_downgrade`
@@ -93,11 +109,33 @@ the template.
 
 **Shipped as:** `AppPolicy.pii_detection` (`app/apps/models.py`, `String(16)`, one of
 `app/policy/enums.py:PII_MODES`); write-time 422 clamp in `app/api/admin_routes.py:set_policy`
-for `onprem_only` residency or `capture_io != "off"`, plus the `allow_app_pii_downgrade`
+for `onprem_only` residency or `capture_io == "redacted"`, plus the `allow_app_pii_downgrade`
 ceiling; singleton per-mode detector memoized in `Pipeline._detector_for`
 (`app/pipeline.py`) so an app-selected mode never rebuilds Presidio per request; invariant
 test pins that an `onprem_only` app with `pii_detection: off` still gets `onprem_only`
 residency and unredacted-but-on-prem-only routing.
+
+**Task 9 addendum (2026-08-21):** two follow-ups landed together, because the first made
+the second's guardrails trustworthy:
+
+- **Fixed a Critical:** `PUT /admin/applications/{app_id}/policy` used full-replace
+  semantics (`body.model_dump()` with no `exclude_none`), so a *partial* PUT (e.g. just
+  `{"pii_detection": "off"}`) wiped every omitted field — including `capture_io` and
+  `residency` — to `None`, which then inherited global/default values at runtime. The
+  write-time clamps read the *stored* row before the write, so they could pass against a
+  value the write was about to blank. Fixed at the call site
+  (`body.model_dump(exclude_none=True)`, `store.upsert_policy` itself untouched) plus
+  restructuring both the pii-downgrade clamp and the `capture_io=='full'` clamp to key on
+  one resolved *effective* post-write residency/`capture_io` pair, computed once, so a
+  partial PUT is judged on the state it will actually produce.
+- **Shipped the operator-gated raw eval capture described above** (`pii_detection=off` +
+  `capture_io=full` for a non-`onprem_only` app with its own Langfuse project), which
+  depends on that same effective-value fix — the `capture_io=='full'` clamp now
+  re-validates on every write instead of trusting a stored value that a partial PUT might
+  otherwise have left stale.
+
+`app/obs/*`, the streaming code, and `store.upsert_policy` were not modified by this
+follow-up — the exporter's `full`/fail-closed-to-`redacted` behavior was already correct.
 
 ---
 

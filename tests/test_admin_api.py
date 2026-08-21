@@ -262,6 +262,141 @@ def test_policy_pii_and_stream_mode_round_trip(client):
     assert got["policy"]["stream_mode"] == "verified_then_stream"
 
 
+def test_policy_put_merges_not_replaces_capture_io(client):
+    # Task 9 Part A regression: PUT full-replace semantics used to wipe
+    # omitted fields to None. A partial PUT that only sets pii_detection
+    # must NOT blank out the previously-stored capture_io.
+    _login(client)
+    client.post("/admin/applications", json={"id": "merge-capture", "name": "MergeCapture"})
+    assert client.put("/admin/applications/merge-capture/policy",
+                      json={"capture_io": "off"}).status_code == 200
+    r = client.put("/admin/applications/merge-capture/policy",
+                   json={"pii_detection": "off"})
+    assert r.status_code == 200, r.text
+    got = client.get("/admin/applications/merge-capture").json()
+    assert got["policy"]["capture_io"] == "off"
+    assert got["policy"]["pii_detection"] == "off"
+
+
+def test_policy_put_merge_does_not_reset_residency(client):
+    # Task 9 Part A: the "residency-reset footgun" — a partial PUT that
+    # doesn't mention residency must not blank a previously-stored
+    # onprem_only residency back to the app default.
+    _login(client)
+    client.post("/admin/applications", json={"id": "merge-residency", "name": "MergeRes"})
+    assert client.put("/admin/applications/merge-residency/policy",
+                      json={"residency": "onprem_only"}).status_code == 200
+    r = client.put("/admin/applications/merge-residency/policy", json={"max_rpm": 20})
+    assert r.status_code == 200, r.text
+    got = client.get("/admin/applications/merge-residency").json()
+    assert got["policy"]["residency"] == "onprem_only"
+    assert got["policy"]["max_rpm"] == 20
+
+
+def test_policy_raw_capture_allowed_for_non_onprem_app_with_own_langfuse(client):
+    # Task 9 Part B: the new capability — pii_detection=off + capture_io=full
+    # is allowed for a non-onprem app with its own provisioned Langfuse
+    # project (operator flag on by default).
+    _login(client)
+    client.post("/admin/applications", json={"id": "raw-eval", "name": "RawEval"})
+    r = client.put("/admin/applications/raw-eval/langfuse", json={
+        "host": "https://raw-eval-langfuse:3000", "public_key": "pk",
+        "secret_key": "sk", "project_id": "proj_raw_eval"})
+    assert r.status_code == 200, r.text
+    r = client.put("/admin/applications/raw-eval/policy",
+                   json={"pii_detection": "off", "capture_io": "full"})
+    assert r.status_code == 200, r.text
+    assert r.json()["policy"]["pii_detection"] == "off"
+    assert r.json()["policy"]["capture_io"] == "full"
+    got = client.get("/admin/applications/raw-eval").json()
+    assert got["policy"]["pii_detection"] == "off"
+    assert got["policy"]["capture_io"] == "full"
+
+
+def test_policy_raw_capture_still_blocked_cases(client, monkeypatch):
+    # Task 9 Part B: raw capture (pii off + capture full) stays blocked for:
+    # onprem_only, no own Langfuse, capture_io=redacted, and operator flag off.
+    _login(client)
+
+    # onprem_only + full -> 422
+    client.post("/admin/applications", json={"id": "raw-onp", "name": "RawOnp",
+                                              "default_residency": "onprem_only"})
+    client.put("/admin/applications/raw-onp/langfuse", json={
+        "host": "https://raw-onp-langfuse:3000", "public_key": "pk",
+        "secret_key": "sk", "project_id": "proj_raw_onp"})
+    r = client.put("/admin/applications/raw-onp/policy",
+                   json={"pii_detection": "off", "capture_io": "full"})
+    assert r.status_code == 422
+
+    # full + no own Langfuse -> 422
+    client.post("/admin/applications", json={"id": "raw-nolf", "name": "RawNoLf"})
+    r = client.put("/admin/applications/raw-nolf/policy",
+                   json={"pii_detection": "off", "capture_io": "full"})
+    assert r.status_code == 422
+
+    # off + redacted -> 422 (sanitized-prompt seam)
+    client.post("/admin/applications", json={"id": "raw-redacted", "name": "RawRedacted"})
+    r = client.put("/admin/applications/raw-redacted/policy",
+                   json={"pii_detection": "off", "capture_io": "redacted"})
+    assert r.status_code == 422
+    assert "capture_io" in r.text.lower()
+
+    # operator flag off -> 422 even with own Langfuse + non-onprem
+    monkeypatch.setenv("SP_ALLOW_APP_PII_DOWNGRADE", "false")
+    with TestClient(create_app()) as c2:
+        _login(c2)
+        c2.post("/admin/applications", json={"id": "raw-flagoff", "name": "RawFlagOff"})
+        c2.put("/admin/applications/raw-flagoff/langfuse", json={
+            "host": "https://raw-flagoff-langfuse:3000", "public_key": "pk",
+            "secret_key": "sk", "project_id": "proj_raw_flagoff"})
+        r = c2.put("/admin/applications/raw-flagoff/policy",
+                   json={"pii_detection": "off", "capture_io": "full"})
+        assert r.status_code == 422
+        assert "disabled" in r.text.lower()
+
+
+def test_policy_effective_capture_full_bypass_closed(client):
+    # Task 9 Part B "effective-value bypass": once an app is legitimately at
+    # capture_io=full with its own Langfuse project, a LATER partial PUT that
+    # only sets pii_detection (capture_io omitted) must be judged on the
+    # EFFECTIVE (still-full) capture_io, not treated as unset.
+    _login(client)
+    client.post("/admin/applications", json={"id": "eff-full", "name": "EffFull"})
+    client.put("/admin/applications/eff-full/langfuse", json={
+        "host": "https://eff-full-langfuse:3000", "public_key": "pk",
+        "secret_key": "sk", "project_id": "proj_eff_full"})
+    assert client.put("/admin/applications/eff-full/policy",
+                      json={"capture_io": "full"}).status_code == 200
+    r = client.put("/admin/applications/eff-full/policy", json={"pii_detection": "off"})
+    assert r.status_code == 200, r.text
+    assert r.json()["policy"]["capture_io"] == "full"
+    assert r.json()["policy"]["pii_detection"] == "off"
+
+
+def test_policy_effective_capture_full_bypass_closed_without_own_langfuse(client):
+    # Same effective-value clamp, but for an app that reached a STORED
+    # capture_io='full' row without a Langfuse project attached (e.g. direct
+    # DB state, out-of-band of this API's own clamp) — the effective-value
+    # capture_io='full' clamp must re-check has-own-Langfuse on every write,
+    # not trust the previously stored 'full', so a later partial PUT that
+    # only sets pii_detection is still blocked.
+    import asyncio
+    from app.apps import store as _store
+
+    _login(client)
+    client.post("/admin/applications", json={"id": "eff-nolf", "name": "EffNoLf"})
+
+    async def _seed_full_without_langfuse():
+        async with client.app.state.db.session() as s:
+            await _store.upsert_policy(s, "eff-nolf", capture_io="full")
+            await s.commit()
+
+    asyncio.run(_seed_full_without_langfuse())
+
+    r = client.put("/admin/applications/eff-nolf/policy", json={"pii_detection": "off"})
+    assert r.status_code == 422
+
+
 def test_onprem_only_cannot_reach_full_even_with_manual_creds(client):
     _login(client)
     client.post("/admin/applications", json={"id": "onprem-app", "name": "OnpremApp",

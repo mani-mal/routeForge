@@ -10,6 +10,16 @@ per-app overrides: `null` (unset) inherits the deployment-wide default; a set va
 overrides it for that application only, subject to a write-time clamp that keeps the
 override from ever being able to breach a hard guarantee.
 
+**`PUT /admin/applications/{app_id}/policy` merges, it does not replace.** A field the
+request body omits (or sends as `null`) keeps the application's *currently stored*
+value — it is left untouched, not blanked back to "inherit deployment default". Every
+clamp above is evaluated on this same *effective* (post-merge) value, so a partial PUT
+that only touches one field is judged on the real state the write will actually produce,
+not on a value that's about to be silently wiped. One consequence: clearing a field back
+to "inherit default" now needs an explicit value — omission (or an explicit JSON `null`,
+which parses the same way) no longer clears a previously-set field. No test or UI flow
+in this codebase relies on clear-by-omit.
+
 ## `pii_detection`
 
 Set on `PUT /admin/applications/{app_id}/policy` (or the equivalent admin UI field),
@@ -33,21 +43,49 @@ enforced independently by `_stricter(rule.residency, app.residency)` in
 off cannot lift it to cloud.
 
 **The floors (all enforced at admin write-time, `app/api/admin_routes.py:set_policy`,
-HTTP 422 on violation):**
+HTTP 422 on violation, keyed on the app's *effective* post-write residency/`capture_io` —
+request body value if provided, else the app's stored policy, else its default):**
 
-- `pii_detection` in `("off", "regex")` is **rejected** when the app's *effective*
-  residency (request body → existing policy → `app.default_residency`) is
-  `onprem_only`.
-- `pii_detection` in `("off", "regex")` is **rejected** when the app's *effective*
-  `capture_io` (request body → existing policy → global
-  `observability.langfuse.capture_io`) is not `"off"` — turning detection down while
-  telemetry capture is on would write raw prompts/completions to Langfuse believing they
-  were redacted.
+- `pii_detection` in `("off", "regex")` is **rejected** when the app's effective
+  residency is `onprem_only`. `onprem_only` never permits a PII downgrade, full stop —
+  see "Operator-gated raw eval capture" below.
 - **Deployment ceiling:** `policy.allow_app_pii_downgrade` in `config/serving.yaml`
   (default `true`; env override `SP_ALLOW_APP_PII_DOWNGRADE`). Set `false` to forbid
   *every* app on this deployment from downgrading detection at all — a locked-down
   (e.g. hospital) deployment sets this once instead of relying on per-app discipline.
+- `pii_detection` in `("off", "regex")` is **rejected** when the app's effective
+  `capture_io` is `"redacted"` — the `redacted` exporter path reuses the gate's
+  *sanitized* prompt (`app/obs/export.py:_set_io`); with detection off nothing was
+  sanitized, so `redacted` telemetry would silently carry raw PII. `capture_io="off"` is
+  always safe with detection off. `capture_io="full"` is allowed, but only under the
+  guardrails below.
 - An unrecognized value is a 422, never a silent fallback to `off`.
+
+### Operator-gated raw eval capture (`pii_detection=off` + `capture_io=full`)
+
+A **non-`onprem_only`** app may combine `pii_detection=off` with `capture_io=full`: raw,
+unredacted prompts and completions are sent to Langfuse for eval purposes. This is a
+deliberate, narrow exception to "telemetry is redacted on egress" (CLAUDE.md rule 2),
+approved by the product owner — not a bug. Every one of these must hold, and each is
+enforced independently:
+
+- **`onprem_only` never permits it.** The residency clamp fires before the capture
+  clamp — an `onprem_only` app cannot reach `pii_detection=off` at all, so the
+  `capture_io=full` combination can never arise for one (CLAUDE.md rule 8: residency
+  beats eval).
+- **Raw I/O only ever reaches the app's own provisioned Langfuse project**, never the
+  shared/default project. `capture_io=full` is rejected (422) unless
+  `load_app_langfuse(app)` resolves — the app must have its own project, either
+  auto-provisioned at creation or attached manually via
+  `PUT /admin/applications/{app_id}/langfuse` (see `docs/onboarding-models.md`-adjacent
+  Langfuse provisioning notes). `app/obs/export.py` fails closed to `redacted` at export
+  time if the per-app tracer build ever fails, as an independent runtime backstop.
+  `app/obs/*` was not changed by this feature — it already had this behavior.
+- **`allow_app_pii_downgrade` still gates it.** A deployment with the ceiling set
+  `false` cannot reach this combination either, same as any other PII downgrade.
+- **Still blocked:** `onprem_only` + `full`; `full` with no own Langfuse project;
+  `off`/`regex` + `capture_io=redacted`; the downgrade ceiling off. Each is a distinct
+  422 with a message naming which guardrail fired.
 
 ## `stream_mode`
 
