@@ -1,6 +1,9 @@
 # Per-application configuration flexibility
 
-**Status:** decision (2026-08-20)
+**Status:** implemented (2026-08-20) — both decisions below shipped on
+`feat/per-app-flexibility` (see `docs/superpowers/plans/2026-08-20-per-app-flexibility-plan.md`
+for the task-by-task build). See `docs/per-app-config.md` for the operator how-to
+(field values, floors, manual `ALTER` for already-deployed DBs).
 **Related:** per-app privacy rules (PR #3, `app/apps/models.py`); MillWise integration
 assessment; CLAUDE.md §Configuration; `.claude/skills/privacy-gate`, `.claude/skills/output-controls`
 
@@ -77,9 +80,10 @@ missing lever: such an app picks `off` (or a scoped `regex`) and keeps its conte
    the existing `capture_io='full'` clamp.
 3. **Fail closed on validation.** An unknown/invalid mode at admin-write time → 422. Never
    silently fall back to `off`.
-4. **Deployment ceiling.** A global switch (e.g. `allow_app_pii_downgrade`, or a per-tenant
-   floor) so a locked-down deployment (hospital) can forbid apps from weakening detection at
-   all, while a MillWise-owned deployment permits it.
+4. **Deployment ceiling.** A global switch — shipped as `policy.allow_app_pii_downgrade`
+   in `config/serving.yaml` (default `true`, env override `SP_ALLOW_APP_PII_DOWNGRADE`) —
+   so a locked-down deployment (hospital) sets it `false` to forbid apps from weakening
+   detection at all, while a MillWise-owned deployment leaves it `true`.
 5. **Invariant test.** Assert an `onprem_only` app with `pii_detection: off` still receives
    `onprem_only` residency — pin the floor in a test.
 
@@ -87,12 +91,20 @@ missing lever: such an app picks `off` (or a scoped `regex`) and keeps its conte
 selection at request build, invariant test. Follow the `capture_io` override end-to-end as
 the template.
 
+**Shipped as:** `AppPolicy.pii_detection` (`app/apps/models.py`, `String(16)`, one of
+`app/policy/enums.py:PII_MODES`); write-time 422 clamp in `app/api/admin_routes.py:set_policy`
+for `onprem_only` residency or `capture_io != "off"`, plus the `allow_app_pii_downgrade`
+ceiling; singleton per-mode detector memoized in `Pipeline._detector_for`
+(`app/pipeline.py`) so an app-selected mode never rebuilds Presidio per request; invariant
+test pins that an `onprem_only` app with `pii_detection: off` still gets `onprem_only`
+residency and unredacted-but-on-prem-only routing.
+
 ---
 
-## Decision 2 — per-app streaming: the capability is desirable; the current flag is not the way ❌ → 🔜
+## Decision 2 — per-app streaming: the capability is desirable; the current flag is not the way ❌ → ✅
 
-**Decision:** do **not** expose `reject_stream_requests` as a per-application boolean now.
-Instead, when streaming is prioritized, implement a per-app streaming **mode** gated on the
+**Decision:** do **not** expose `reject_stream_requests` as a per-application boolean.
+Instead, implement a per-app streaming **mode** gated on the
 app's verification needs. The reason is mechanical, not a rule appeal.
 
 ### Why streaming fights output verification (first principles)
@@ -125,7 +137,7 @@ verification:
 |---|---|---|---|---|
 | **`verified_then_stream`** | Generate full response server-side, run step 9 on the complete text unchanged, *then* emit SSE chunks to the client | **Fully intact** | None (waits for full generation) | Dense-doc generators (MillWise), any app that wants OpenAI-compatible streaming wire format but not low latency |
 | **`stream_unverified`** | True passthrough streaming from the backend | **Waived** for this app's traffic | Low | Non-sensitive apps (coding helper on internal data, public chatbot, no PII) |
-| **`incremental_verify`** | Verify chunks before release using a hold-back/sliding buffer (catches entities split across chunk boundaries) | Approximate, preserved | Low | Future work — apps that need *both* low TTFT and verification |
+| **`incremental_verify`** | Verify chunks before release using a hold-back/sliding buffer (catches entities split across chunk boundaries) | Approximate, preserved | Low | Apps that need *both* low TTFT and verification |
 
 Notes that make this honest:
 
@@ -137,18 +149,41 @@ Notes that make this honest:
   governing rule): an app cannot combine it with `onprem_only` or `require_verification`.
   Choosing it is choosing to give up the verification differentiator for that app's traffic —
   a declared trade, never a silent side effect.
-- **`incremental_verify`** is the genuinely hard case: partial-text leakage detection is
-  unreliable (an SSN split `123-45-` / `6789` matches on neither chunk), some checks are
-  inherently whole-response, and Presidio-per-chunk is costly. Real component, not a flag.
+- **`incremental_verify`** was the genuinely hard case: partial-text leakage detection is
+  unreliable in general (an SSN split `123-45-` / `6789` matches on neither chunk alone).
+  Shipped as `StreamingVerifier` (`app/output/streaming_verify.py`): a `HOLDBACK_CHARS=48`
+  window plus a trailing-entity-run guard, so raw entity text is never released across a
+  chunk boundary. **Documented limitation:** this bounds *per-entity* leakage only — it
+  cannot enforce a *holistic* whole-response verdict (the `UNVERIFIABLE` marker
+  `app/output/verify.py` fails closed on) once tokens have already streamed to the client.
+  `incremental_verify` is therefore a deliberately **weaker** guarantee than
+  `verified_then_stream`, and the trace records it with `reason="incremental"` so the
+  console/Langfuse show the difference, not just a bare "verified: true".
 
-### Decision
+### Decision — shipped
 
-Keep inbound token streaming rejected globally until a streaming *mode* exists. When
-prioritized, add `AppPolicy.stream_mode` (`off | verified_then_stream | stream_unverified`),
-build `verified_then_stream` first, gate `stream_unverified` behind the clamp above, and
-leave `incremental_verify` as tracked future work. At that point streaming becomes a safe
-per-app knob for the same reason `pii_detection` is — an independent mechanism (the mode +
-clamp) holds the floor.
+All three modes are built. `AppPolicy.stream_mode`
+(`off | verified_then_stream | stream_unverified | incremental_verify`, canonical tuple
+`app/policy/enums.py:STREAM_MODES`). Streaming becomes a safe per-app knob for the same
+reason `pii_detection` is — an independent mechanism (the mode + the floor below) holds
+the guarantee, not the app's own choice:
+
+- **`verified_then_stream`** is post-hoc: the pipeline runs the full request exactly as
+  the non-stream path does (including step 9), then `app/api/streaming.py:chunk_text`
+  emits the already-verified text as OpenAI-compatible SSE. No real backend streaming.
+- **`stream_unverified`** and **`incremental_verify`** are the opposite: REAL backend
+  token streaming (`litellm` `stream=True`, `app/gateway/backends/litellm_backend.py:
+  generate_stream` → `app/gateway/gateway.py:run_stream` → `app/pipeline.py:run_stream`).
+  Neither buffers the whole answer first — `stream_unverified` forwards deltas as they
+  arrive (verification recorded as waived); `incremental_verify` pipes every delta
+  through `StreamingVerifier.feed()` before emitting.
+- **The fail-closed floor lives in one place:** `app/pipeline.py:run_stream` raises
+  `StreamFallback` — caught by `app/api/routes.py` — whenever the request routes
+  `multi_step`, or `ctx.onprem_only`/`ctx.require_verification` is set. A floored request
+  always falls back to `verified_then_stream`; it is never streamed unverified or
+  incrementally. `stream_unverified` additionally gets an admin write-time 422 for
+  `onprem_only` apps (`app/api/admin_routes.py:set_policy`), so the unsafe combination is
+  rejected before it can even be configured, not just caught at runtime.
 
 The separate **decision stream** (SSE of DecisionRecords, `stream_decisions` / `/api/stream`)
 is unaffected by any of this and stays on — it is a different channel and never carries chat
@@ -165,8 +200,8 @@ runs independently of RouteForge's inbound-streaming policy.
 | `allowed_tiers` / `allowed_models` / `allowed_providers` | monotonic-tightening | already per-app |
 | `capture_io` | free-but-floored (clamp for `onprem_only`) | already per-app |
 | `compression_enabled` | free-but-floored | already per-app |
-| `pii_detection` | free-but-floored (clamp for `onprem_only`/capture) | **Decision 1 — add** |
-| streaming | knob-is-the-floor until a *mode* exists | **Decision 2 — via `stream_mode`, not a raw flag** |
+| `pii_detection` | free-but-floored (clamp for `onprem_only`/capture) | ✅ shipped (Decision 1) |
+| `stream_mode` | free-but-floored (`StreamFallback` + write-time clamp hold the floor, not the app's choice) | ✅ shipped (Decision 2) |
 | `fail_closed` | the floor itself | never per-app |
 
 **Rule of thumb for any future knob:** if it is monotonic-tightening or free-but-floored,
@@ -176,11 +211,22 @@ it can be per-app; if it is the floor itself, it stays global. Classify before e
 
 ## Status / next steps
 
-- **Decision 1 (`pii_detection` per-app):** approved; ready to implement following the
-  `capture_io` override as template (column + admin validation + clamp + singleton selection
-  + invariant test).
-- **Decision 2 (streaming):** inbound token streaming stays globally rejected for now; the
-  path to per-app streaming is `stream_mode` with `verified_then_stream` built first, not a
-  per-app `reject_stream_requests` boolean.
+Both decisions are **implemented** (`feat/per-app-flexibility`, 2026-08-20).
+
+- **Decision 1 (`pii_detection` per-app):** ✅ shipped. `AppPolicy.pii_detection` column +
+  admin write-time 422 clamp (`onprem_only` residency, `capture_io != "off"`) + the
+  `allow_app_pii_downgrade` deployment ceiling + singleton per-mode detector selection +
+  the invariant test pinning the residency floor. See `docs/per-app-config.md`.
+- **Decision 2 (streaming):** ✅ shipped, all three `stream_mode` values.
+  `verified_then_stream` chunks a finished, fully-verified answer — no real backend
+  streaming, no TTFT win. `stream_unverified` and `incremental_verify` are REAL backend
+  token streaming; they do NOT buffer-then-chunk. The fail-closed floor
+  (`app/pipeline.py:run_stream` → `StreamFallback`) is enforced independently of the
+  app's chosen mode, at both admin write-time and runtime — see the "Decision — shipped"
+  section above and `docs/per-app-config.md` for the operator-facing summary.
+- **Open follow-up:** none tracked for this workstream. A future holistic
+  streaming-verification scheme (rejecting an in-flight stream on a whole-response
+  verdict, not just per-entity redaction) remains explicitly out of scope — see the
+  `incremental_verify` limitation above.
 </content>
 </invoke>
