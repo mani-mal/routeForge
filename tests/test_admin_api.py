@@ -222,6 +222,24 @@ def test_policy_stream_unverified_rejected_for_onprem_only(client):
     assert "onprem_only" in r.text.lower()
 
 
+def test_policy_effective_stream_mode_reevaluates_on_residency_only_put(client):
+    # Fix round 2: the stream_unverified clamp must key on the EFFECTIVE
+    # post-write stream_mode (body value, else stored), not on
+    # body.stream_mode alone. Otherwise a stored stream_unverified app can be
+    # flipped to onprem_only via a PUT that never mentions stream_mode,
+    # silently skipping the clamp entirely.
+    _login(client)
+    client.post("/admin/applications", json={"id": "eff-stream-onprem", "name": "EffStreamOnprem"})
+    assert client.put("/admin/applications/eff-stream-onprem/policy",
+                      json={"stream_mode": "stream_unverified"}).status_code == 200
+    r = client.put("/admin/applications/eff-stream-onprem/policy",
+                   json={"residency": "onprem_only"})
+    assert r.status_code == 422, r.text
+    assert "stream_unverified" in r.text.lower()
+    got = client.get("/admin/applications/eff-stream-onprem").json()
+    assert got["policy"]["residency"] != "onprem_only"
+
+
 def test_policy_rejects_bad_enum_values(client):
     # (e) values outside the canonical enums -> 422.
     _login(client)

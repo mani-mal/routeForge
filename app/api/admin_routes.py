@@ -392,8 +392,15 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
             #   the EFFECTIVE value.
             # eff_capture == 'off'  -> always safe.
 
-        # --- stream_unverified clamp (unchanged intent; reuses eff_residency) ---
-        if body.stream_mode == "stream_unverified" and eff_residency == "onprem_only":
+        # --- stream_unverified clamp: key on the EFFECTIVE stream_mode, not
+        # body.stream_mode alone, so a stored stream_unverified app can't
+        # reach onprem_only via a PUT that omits stream_mode entirely. No
+        # global fallback needed (unlike eff_pii's doc-defined "inherit
+        # global" semantics) -- stream_mode has no global default; None just
+        # means "no streaming opt-in for this app." ---
+        eff_stream_mode = body.stream_mode if body.stream_mode is not None else (
+            stored.stream_mode if stored else None)
+        if eff_stream_mode == "stream_unverified" and eff_residency == "onprem_only":
             raise HTTPException(
                 422, "stream_unverified not allowed for onprem_only apps")
 
