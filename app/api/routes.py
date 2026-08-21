@@ -3,13 +3,16 @@ import re
 import uuid
 
 from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.agent.runtime import AgentCapExceeded
 from app.api.history import summarize
+from app.api.streaming import chunk_text, sse_response
 from app.apps import store
 from app.apps.langfuse_provision import load_app_langfuse
 from app.apps.policy import AppPolicyView, day_spend_usd, policy_view_from
+from app.apps.privacy import AppPrivacyProfile
 from app.errors import BackendUnavailable, NoEligibleCandidate, PolicyGateError
 from app.models import ChatRequest
 from app.obs import metrics
@@ -84,19 +87,37 @@ def prometheus_metrics() -> Response:
     return Response(content=body, media_type=content_type)
 
 
-@router.post("/v1/chat/completions")
-async def chat_completions(body: ChatRequest, request: Request) -> dict:
+def _resolve_stream_mode(body: ChatRequest, app_policy: AppPolicyView, s) -> str | None:
+    """None for a normal (non-stream) request. For `stream: true`, resolves
+    the app's `stream_mode` override. `None`/`"off"` (no per-app override)
+    keeps today's behavior: reject with 400 when the deployment rejects
+    inbound streaming (`server.reject_stream_requests`) -- backwards
+    compatible for every app that hasn't opted into a stream mode."""
+    if not body.stream:
+        return None
+    mode = app_policy.stream_mode
+    if mode in (None, "off") and s.serving.reject_stream_requests:
+        raise HTTPException(400, "streaming is not supported for this application")
+    return mode
+
+
+@router.post("/v1/chat/completions", response_model=None)
+async def chat_completions(body: ChatRequest, request: Request) -> dict | StreamingResponse:
     s = request.app.state.settings
-    if body.stream and s.serving.reject_stream_requests:
-        raise HTTPException(400, "streaming is not supported in the demo")
     request_id = f"req-{uuid.uuid4().hex[:8]}"
     auth = await _authenticate(request)
     if auth is None:
         # Fail closed: no valid token -> reject. Never fall through to a
-        # default tenant (that was the old fail-open behavior).
+        # default tenant (that was the old fail-open behavior). A stream
+        # request with no resolvable app policy at all keeps the old,
+        # unconditional 400 (the reject guard used to run before auth) --
+        # backwards compatible even for this edge case.
         metrics.observe_request("-", "unauthorized")
+        if body.stream and s.serving.reject_stream_requests:
+            raise HTTPException(400, "streaming is not supported for this application")
         raise HTTPException(401, "invalid or missing API token")
     tenant, app_policy, app_langfuse = auth
+    stream_mode = _resolve_stream_mode(body, app_policy, s)
 
     # Per-application quotas (fail closed). Rate limit first (cheap, in-memory),
     # then the daily spend cap (one indexed sum). Both reject with 429; the
@@ -178,11 +199,40 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
     except Exception:
         metrics.observe_request("-", "error")
         raise HTTPException(500, "internal error")
+    session_id = _read_session_id(request)
+    await _finalize(request, resp, body=body, tenant=tenant, app_policy=app_policy,
+                    app_langfuse=app_langfuse, profile=profile,
+                    session_id=session_id, s=s, request_id=request_id)
+    if stream_mode is None:
+        return resp
+    # verified_then_stream: the pipeline already ran the FULL request above
+    # and step 9 already verified it (same `pipeline.run` call as the
+    # non-stream path) -- this only chunks the finished, already-verified
+    # text out as SSE. `stream_unverified`/`incremental_verify` map to this
+    # same safe fallback in this task; Tasks 5-7 add real backend token
+    # streaming (with the runtime verification floor, Global Constraint 1)
+    # and replace the fallback for those two modes.
+    content = resp["choices"][0]["message"]["content"]
+    return sse_response(chunk_text(request_id, resp["model"], content))
+
+
+async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
+                    tenant: str, app_policy: AppPolicyView,
+                    app_langfuse: object | None, profile: AppPrivacyProfile,
+                    session_id: str | None, s, request_id: str) -> None:
+    """Post-model-call processing shared by every response shape (non-stream
+    and every streaming mode): telemetry export, the first-party console
+    snapshot, the durable per-app usage row, and the live decision-stream
+    publish. Mutates `resp` in place (session id, display block, deep links)
+    and performs the same side effects `chat_completions` used to inline --
+    behavior is unchanged, only the call site moved so streaming responses
+    can reuse it too. `body`/`profile` are the request body and the app's
+    resolved privacy profile the pipeline call itself used, needed here for
+    the display-redaction block and egress recognizers."""
     # B17: capture the client's workflow-run correlation id (opaque label).
     # Threaded onto the response dict so both history.record and the drilldown
     # (which read `resp`) carry it with no signature change, and passed to
     # export_trace below for the Langfuse session stamp.
-    session_id = _read_session_id(request)
     resp["session_id"] = session_id
     metrics.observe_request(resp["model"], "ok")
     usage = resp.get("usage", {})
@@ -353,7 +403,6 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
     except Exception:  # streaming must never break serving
         logging.getLogger("serving.obs").exception(
             "bus.publish failed (swallowed)")
-    return resp
 
 
 class FeedbackIn(BaseModel):
