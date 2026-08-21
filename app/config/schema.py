@@ -156,6 +156,12 @@ class ContextOptimizationCfg(BaseModel):
 class ServingCfg(BaseModel):
     providers: dict[str, ProviderCfg]
     pii_detection: str
+    # Deployment ceiling: whether a per-app policy write may set pii_detection
+    # to a weaker mode ("off"/"regex") than the global default at all. A
+    # locked-down deployment sets this false so no app can weaken PII
+    # detection regardless of its residency/capture_io state (admin_routes.
+    # set_policy write-time clamp). Default true.
+    allow_app_pii_downgrade: bool
     reject_stream_requests: bool
     context_optimization: ContextOptimizationCfg
     observability: ObservabilityCfg

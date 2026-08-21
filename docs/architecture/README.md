@@ -26,6 +26,11 @@ authoritative until the `.drawio` is redrawn to match.
 > compression move out like RLHF did?" question, see
 > [`compression-in-scope.md`](./compression-in-scope.md).
 
+> **Which Serving-Plane settings can safely become per-application overrides** —
+> for "should `pii_detection` / streaming be per-app?" and the rule for classifying
+> any new per-app knob (monotonic-tightening vs free-but-floored vs floor-itself),
+> see [`per-app-config-flexibility.md`](./per-app-config-flexibility.md).
+
 ## Canonical step count: 1–10
 
 The Serving Plane is **steps 1–10** (1 Incoming Request → 10 Governed Response). All

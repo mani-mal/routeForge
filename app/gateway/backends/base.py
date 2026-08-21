@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Protocol
+from dataclasses import dataclass
+from typing import AsyncIterator, Protocol
 
 from pydantic import BaseModel, Field
 
@@ -33,11 +34,35 @@ class BackendHealth(BaseModel):
     models: list[str] = Field(default_factory=list)
 
 
+@dataclass
+class StreamChunk:
+    """One item off a backend token stream (step 8, real streaming path).
+
+    A chunk is EITHER a token delta (``delta`` set, ``final`` None) OR the
+    terminal chunk carrying the completed ``GenerationResult`` (``final`` set,
+    ``delta`` None). The terminal chunk's ``GenerationResult`` has
+    ``confidence=None`` -- logprobs are unavailable while streaming -- and its
+    ``cost_usd`` is priced from ``pricing.yaml`` (never litellm.completion_cost),
+    exactly like the non-streaming ``generate()`` path.
+    """
+    delta: str | None = None
+    final: GenerationResult | None = None
+
+
 class InferenceBackend(Protocol):
     name: str
 
     async def generate(self, model: str, messages: list[Message], price: PriceCfg,
                         tier: str, hint: dict,
                         tools: list[dict] | None = None) -> GenerationResult: ...
+
+    def generate_stream(self, model: str, messages: list[Message], price: PriceCfg,
+                        tier: str, hint: dict,
+                        tools: list[dict] | None = None) -> AsyncIterator[StreamChunk]:
+        """Real token streaming (step 8). Yields token-delta ``StreamChunk``s in
+        order, then exactly one terminal ``StreamChunk`` carrying ``final``.
+        Mirrors ``generate()``'s call construction but with ``stream=True`` and
+        no logprobs (so ``final.confidence`` is None)."""
+        ...
 
     async def health(self) -> BackendHealth: ...

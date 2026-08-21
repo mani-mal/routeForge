@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-from typing import Callable, TYPE_CHECKING
+from typing import AsyncIterator, Callable, TYPE_CHECKING
 
 from app.config.schema import ContextOptimizationCfg, Settings
 from app.errors import PolicyGateError
 from app.gateway.backends.base import count_tokens
 from app.gateway.gateway import Gateway
 from app.models import (
-    ChatRequest, Choice, ExecutionPolicyContext, Message, Usage,
+    ChatRequest, Choice, ExecutionPolicyContext, GenerationResult, Message,
+    Usage, VerificationRecord,
 )
 from app.output.verify import verify
-from app.policy.detectors import Detector
+from app.policy.detectors import Detector, make_detector
 from app.policy.effective import EffectiveDetector
 from app.policy.gate import Gate
 from app.apps.privacy import AppPrivacyProfile, effective_rules
@@ -23,6 +24,23 @@ if TYPE_CHECKING:
 
 
 class PipelineRejected(Exception):
+    pass
+
+
+class StreamFallback(Exception):
+    """Raised by `Pipeline.run_stream` when a request MUST be verified as a
+    complete response and therefore cannot be streamed unverified. The caller
+    (the chat route, Tasks 6-7) catches this and falls back to
+    `verified_then_stream` (buffer the full answer, run step-9 verification,
+    then chunk the finished text).
+
+    Raised in exactly ONE place -- `run_stream` -- for exactly two reasons, both
+    the privacy backstop from Global Constraint 1:
+      * the request routes `multi_step` (streaming is direct-path only), or
+      * `ctx.onprem_only` or `ctx.require_verification` is set (a residency- or
+        risk-floored request is never streamed without a complete-response
+        verification).
+    """
     pass
 
 
@@ -55,6 +73,41 @@ class Pipeline:
         # direct path — see app/compression/__init__.py, ccr.py.
         self._co_cfg_provider = co_cfg_provider
         self._ccr = ccr
+        # Per-app pii_detection override (Task 3): an app may select a
+        # cheaper/weaker base detector ("off"/"regex") than the process-wide
+        # global one. Presidio is expensive to construct (loads a spaCy
+        # model), so non-global modes are built lazily on first use and
+        # memoized here for the life of the process -- never rebuilt per
+        # request. The global instance is seeded into the memo up front so
+        # `_detector_for` never constructs a second, redundant instance of
+        # the mode the process already booted with.
+        self._global_pii_mode = settings.serving.pii_detection
+        self._detectors: dict[str, Detector] = {self._global_pii_mode: self._detector}
+
+    def _detector_for(self, mode: str | None) -> Detector:
+        """Resolve the base detector for an app's `pii_detection` override.
+
+        `None` (no override) or a mode matching the global config both return
+        the SAME global `self._detector` instance -- no new object, no
+        redundant warmup. A distinct mode is built via `make_detector`,
+        warmed up once, cached in `self._detectors`, and that same cached
+        instance is returned on every subsequent call for that mode. This
+        residency-independent selection only ever changes WHAT is detected;
+        the onprem_only/allowed_providers floor is computed from
+        `app_policy.residency` in `app/policy/context.py` and never consults
+        `pii_detection` at all -- an app set to "off" cannot leak a cloud
+        provider into `allowed_providers` by weakening detection (see the
+        invariant test in tests/test_pii_detection_pipeline.py).
+        """
+        if mode is None or mode == self._global_pii_mode:
+            return self._detector
+        cached = self._detectors.get(mode)
+        if cached is not None:
+            return cached
+        built = make_detector(mode)
+        built.warmup()
+        self._detectors[mode] = built
+        return built
 
     def _baseline(self, in_tokens: int, out_tokens: int) -> float:
         """All-frontier baseline: input and output priced at the baseline
@@ -86,12 +139,19 @@ class Pipeline:
         # classification (the gate) and egress verification (verify(), both
         # call sites below) -- a custom entity type the base detector can't
         # see must not silently skip the output leakage check either.
+        #
+        # Per-app pii_detection override (Task 3): the BASE detector being
+        # layered is now the app's selected mode (`_detector_for`), not
+        # unconditionally the global `self._detector` -- an app set to
+        # "off"/"regex" actually gets that detection mode instead of always
+        # inheriting the process-wide default.
         try:
+            base = self._detector_for(app_policy.pii_detection if app_policy else None)
             if profile is not None:
-                det = EffectiveDetector(self._detector, list(profile.recognizers))
+                det = EffectiveDetector(base, list(profile.recognizers))
                 rules = effective_rules(profile, self._s)
             else:
-                det, rules = self._detector, None
+                det, rules = base, None
             ctx, sanitized, _map = self._gate.evaluate(
                 request_id, tenant_id, request, app_policy=app_policy,
                 detector=det, rules=rules)
@@ -201,6 +261,163 @@ class Pipeline:
                        "detected_entities": list(ctx.detected_entities)},
             "sanitized_prompt": sanitized,
             "raw_completion": result.text,
+        }
+
+    async def run_stream(self, request_id: str, tenant_id: str,
+                         request: ChatRequest, app_policy=None,
+                         profile: AppPrivacyProfile | None = None
+                         ) -> tuple[AsyncIterator[str], Callable[[], dict]]:
+        """Real backend token-streaming substrate for the direct (single-shot)
+        path (Tasks 6-7 wire the route to this). Skips step-9 verification --
+        the verification marker in the final metadata is "waived".
+
+        Interface (documented design choice): `run_stream` is a coroutine that
+        eagerly runs the gate, task-mode decision, and the runtime floor, then
+        returns `(deltas, get_meta)`:
+          * `deltas` -- an async generator yielding ordered token-delta `str`s.
+          * `get_meta` -- a zero-arg callable returning the final metadata dict
+            (records/trace, two-lever cost, tokens, model, ctx-derived policy,
+            `sanitized_prompt`, `raw_completion`, and the "waived" verification
+            marker). It is populated only once `deltas` is fully consumed, and
+            raises if called before then.
+
+        Why a coroutine returning a pair (not a bare async generator): the gate
+        and the runtime floor MUST run BEFORE any token is emitted, so that a
+        `StreamFallback` (multi_step, onprem_only, or require_verification) is
+        raised eagerly -- before the caller has committed to a StreamingResponse
+        -- letting the route fall back to `verified_then_stream` cleanly. A bare
+        async generator would defer those checks to first-iteration, after the
+        response has started.
+
+        Nothing external sees the raw request before the gate: the gate (with
+        the per-app `_detector_for` base detector + optional profile recognizers,
+        mirroring `run()`) runs first; compression runs strictly after it.
+        """
+        # Gate first -- identical composition to run() (per-app pii_detection
+        # base detector + optional profile recognizers/rules; fail closed).
+        try:
+            base = self._detector_for(app_policy.pii_detection if app_policy else None)
+            if profile is not None:
+                det = EffectiveDetector(base, list(profile.recognizers))
+                rules = effective_rules(profile, self._s)
+            else:
+                det, rules = base, None
+            ctx, sanitized, _map = self._gate.evaluate(
+                request_id, tenant_id, request, app_policy=app_policy,
+                detector=det, rules=rules)
+        except PolicyGateError:
+            raise
+        except Exception as e:
+            raise PolicyGateError("policy evaluation failed") from e
+
+        # Streaming is the direct/single-shot path only.
+        mode = decide_mode(ctx, request)
+        if mode == "multi_step":
+            raise StreamFallback(
+                "multi_step request cannot stream unverified; verify the "
+                "complete agent response")
+        # Runtime floor (Global Constraint 1) -- the privacy backstop, in ONE
+        # place: an onprem_only or verification-required request must be verified
+        # as a COMPLETE response, never streamed unverified.
+        if ctx.onprem_only or ctx.require_verification:
+            raise StreamFallback(
+                "residency/verification floor: response must be verified as a "
+                "complete response before egress")
+
+        san_messages = [Message(role=request.messages[-1].role, content=sanitized)]
+        comp = compress(san_messages, ctx, self._co_cfg_provider(), ccr=self._ccr)
+        complexity = min(1.0, comp.tokens_after / 2000)
+        hint = {k: getattr(request, k) for k in ("mock_confidence", "mock_fail")
+                if hasattr(request, k)}
+        stream, records = await self._gateway.run_stream(
+            ctx, comp.messages, comp.tokens_after, complexity, hint)
+
+        meta: dict = {}
+
+        async def _deltas() -> AsyncIterator[str]:
+            result: GenerationResult | None = None
+            async for chunk in stream:
+                if chunk.delta is not None:
+                    yield chunk.delta
+                if chunk.final is not None:
+                    result = chunk.final
+            if result is None:
+                raise PipelineRejected("stream ended without a final result")
+            meta.update(self._assemble_stream_meta(
+                request_id, ctx, sanitized, comp, records, result))
+
+        def get_meta() -> dict:
+            if not meta:
+                raise RuntimeError(
+                    "run_stream metadata is available only after the delta "
+                    "stream is fully consumed")
+            return meta
+
+        # Surface the EFFECTIVE detector + ctx the gate just produced so a
+        # streaming verifier (incremental_verify, Task 7) can redact egress
+        # tokens with the SAME per-app detector this request used at intake --
+        # not a global one, which would make intake/egress inconsistent for an
+        # app with a custom `pii_detection` or custom recognizers. Both are
+        # known eagerly HERE (before any delta is consumed), unlike the meta
+        # dict which is only populated once `_deltas()` is drained -- so they
+        # are attached to `get_meta` rather than returned via it. Attribute
+        # access keeps `run_stream`'s `(deltas, get_meta)` contract unchanged
+        # for the `stream_unverified` caller (Task 6).
+        get_meta.detector = det   # type: ignore[attr-defined]
+        get_meta.ctx = ctx        # type: ignore[attr-defined]
+        return _deltas(), get_meta
+
+    def _assemble_stream_meta(self, request_id: str, ctx: ExecutionPolicyContext,
+                              sanitized: str, comp, records, result: GenerationResult
+                              ) -> dict:
+        """Assemble the final streaming metadata dict, mirroring run()'s record,
+        two-lever cost, and quality assembly. Step-9 verification is WAIVED on
+        this path: a VerificationRecord(performed=False, passed=True) is recorded
+        in the trace so the "why" stays visible (Global Constraint 2), and the
+        top-level `verification` marker is "waived" (Tasks 6/7 refine it)."""
+        total = sum(r.actual_cost_usd or 0.0 for r in records)
+        # Same two-lever accounting as run(): baseline prices tokens_before
+        # (pre-both-levers), compression_saved is the tokens_before->tokens_after
+        # drop at baseline price, routing_saved is the remaining drop to actual
+        # total. routing_saved is intentionally NOT clamped (see run()).
+        baseline_usd = self._baseline(comp.tokens_before, result.tokens_out)
+        baseline_after = self._baseline(comp.tokens_after, result.tokens_out)
+        compression_saved = max(0.0, baseline_usd - baseline_after)
+        routing_saved = baseline_after - total
+
+        vrec = VerificationRecord(
+            required=ctx.require_verification, performed=False, passed=True,
+            entities_found=(), reason="waived: streaming (unverified)")
+        trace = [r.model_dump() for r in records] + [vrec.model_dump()]
+        trace.append(comp.record.model_dump())
+
+        qrecs = [r for r in records if r.quality_score is not None]
+        chosen_q = qrecs[-1] if qrecs else None
+        quality_sum = chosen_q.quality_score if chosen_q else 0.0
+
+        return {
+            "id": request_id,
+            "model": result.model,
+            "model_display": self._display_name(result.model),
+            "usage": Usage(prompt_tokens=result.tokens_in,
+                           completion_tokens=result.tokens_out,
+                           total_tokens=result.tokens_in + result.tokens_out
+                           ).model_dump(),
+            "trace": trace,
+            "cost": {"total_usd": total, "baseline_usd": baseline_usd,
+                     "routing_saved_usd": routing_saved,
+                     "compression_saved_usd": compression_saved},
+            "quality": {"sum": quality_sum,
+                        "chosen": chosen_q.quality_score if chosen_q else None,
+                        "source": chosen_q.quality_source if chosen_q else None},
+            "policy": {"sensitivity": ctx.sensitivity, "onprem_only": ctx.onprem_only,
+                       "allowed_providers": sorted(ctx.allowed_providers),
+                       "detected_entities": list(ctx.detected_entities)},
+            "sanitized_prompt": sanitized,
+            "raw_completion": result.text,
+            # Step-9 verification marker: "waived" this task. Tasks 6/7 refine to
+            # "waived" (stream_unverified) / "incremental" (incremental_verify).
+            "verification": "waived",
         }
 
     async def _run_multi_step(self, request_id: str, ctx: ExecutionPolicyContext,

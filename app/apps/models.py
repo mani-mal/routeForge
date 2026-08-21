@@ -113,6 +113,13 @@ class AppPolicy(Base):
     # provisioned Langfuse project may resolve to it (write-time lint in
     # admin_routes.set_policy + runtime clamp in api/routes.py).
     capture_io: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # Per-app PII-detection override. null = inherit live global
+    # (s.serving.pii_detection). One of app.policy.enums.PII_MODES (off|regex|presidio).
+    pii_detection: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # Per-app streaming-mode override. null = inherit (reject inbound
+    # stream:true per server.reject_stream_requests). One of
+    # app.policy.enums.STREAM_MODES.
+    stream_mode: Mapped[str | None] = mapped_column(String(24), nullable=True)
 
     application: Mapped[Application] = relationship(back_populates="policy")
 

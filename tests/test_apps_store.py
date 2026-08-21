@@ -11,6 +11,7 @@ from app.apps.bootstrap import seed_demo_apps
 from app.apps.db import Database
 from app.apps import store
 from app.apps.models import AppToken, Application
+from app.apps.policy import policy_view_from
 from app.apps.tokens import hash_token, new_token, token_prefix
 
 
@@ -129,5 +130,48 @@ def test_record_and_list_usage():
             assert len(all_rows) == 2
             acme_rows = await store.list_usage(s, application_id="acme")
             assert len(acme_rows) == 1 and acme_rows[0].request_id == "req-1"
+
+    _run(go())
+
+
+def test_pii_detection_and_stream_mode_round_trip_through_policy_view():
+    db = _fresh_db()
+
+    async def go():
+        async with db.session() as s:
+            await store.upsert_policy(
+                s, "acme", pii_detection="regex", stream_mode="stream_unverified")
+            await s.commit()
+
+        async with db.session() as s:
+            app = await store.get_application_with_policy(s, "acme")
+            view = policy_view_from(app)
+            assert view.pii_detection == "regex"
+            assert view.stream_mode == "stream_unverified"
+
+    _run(go())
+
+
+def test_pii_detection_and_stream_mode_null_round_trip_as_none():
+    db = _fresh_db()
+
+    async def go():
+        async with db.session() as s:
+            # No policy row at all -> policy_view_from's None-app.policy branch.
+            app = await store.get_application_with_policy(s, "acme")
+            view = policy_view_from(app)
+            assert view.pii_detection is None
+            assert view.stream_mode is None
+
+            # A policy row exists but leaves these two fields unset (NULL).
+            await store.upsert_policy(s, "acme", max_rpm=10)
+            await s.commit()
+
+        async with db.session() as s:
+            app = await store.get_application_with_policy(s, "acme")
+            view = policy_view_from(app)
+            assert view.max_rpm == 10
+            assert view.pii_detection is None
+            assert view.stream_mode is None
 
     _run(go())

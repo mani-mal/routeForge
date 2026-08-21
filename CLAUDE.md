@@ -59,8 +59,14 @@ guarantees.
 1. **Nothing external before the policy gate.** No classifier, no cloud model, no
    tool, and no telemetry sink sees the raw request until step 2 completes. Ordering
    is load-bearing, not stylistic.
-2. **Telemetry is redacted on egress.** Redact at the exporter, not only at intake.
-   Tool outputs and model completions leak PII the input gate never saw.
+2. **Telemetry is redacted on egress — except raw capture an operator
+   explicitly opts a non-onprem app into.** Redact at the exporter by default —
+   tool outputs and model completions leak PII the input gate never saw. The one
+   exception: an operator may set `allow_app_pii_downgrade` and configure a
+   specific **non-`onprem_only`** app with `pii_detection=off` + `capture_io=full`,
+   sending raw I/O **only** to that app's **own** provisioned Langfuse project.
+   `onprem_only` never permits it; the shared project never receives raw I/O; the
+   exporter fails closed to `redacted` if the app's project is missing.
 3. **`onprem_only` is absolute.** If policy sets it, a cloud provider must be
    unreachable by construction — filtered out of the candidate pool before the router
    scores anything. Never a post-hoc check.
@@ -113,11 +119,20 @@ replaced by an LLM classifier, that call goes through steps 5–7 like any other
 sanitized input, respects `allowed_providers` (so it can't break `onprem_only`), and
 emits a DecisionRecord so its cost isn't invisible. Keep it off by default.
 
-**No inbound streaming.** Step 9 verifies the *complete* response, which
-token streaming can't satisfy without a partial-leak window. Reject inbound
-`stream: true` with a clear error (`server.reject_stream_requests`). The UI's decision
-stream (SSE of DecisionRecords) is a separate channel and stays on. Production
-incremental-verification streaming is an open question, out of scope here.
+**Inbound streaming is per-app, floored by step 9.** Step 9 verifies the *complete*
+response, which token streaming can't satisfy without a partial-leak window — so
+`stream: true` is still rejected by default (`server.reject_stream_requests`) and for
+any app with no `stream_mode` set. An app may opt in via `AppPolicy.stream_mode`
+(`off | verified_then_stream | stream_unverified | incremental_verify`):
+`verified_then_stream` runs the full verified pipeline and chunks the finished answer
+(guarantee intact, no latency win); `stream_unverified` streams real backend tokens and
+explicitly waives verification (recorded in the trace); `incremental_verify` streams
+real tokens through a hold-back redactor that never releases raw entity text across a
+chunk boundary, but cannot enforce a whole-response verdict. The floor is absolute and
+independent of the app's choice: `onprem_only` or `require_verification` can never waive
+step-9 verification — those requests fall back to `verified_then_stream` regardless of
+`stream_mode`. The UI's decision stream (SSE of DecisionRecords) is a separate channel
+and stays on. See `docs/per-app-config.md`.
 
 **Routing scopes** — four distinct routers; don't conflate them:
 - **NAT Router Agent** (step 4) selects workflow mode

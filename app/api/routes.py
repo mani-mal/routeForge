@@ -1,22 +1,31 @@
 import logging
 import re
+import time
 import uuid
+from collections.abc import AsyncIterator, Callable
 
 from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.agent.runtime import AgentCapExceeded
 from app.api.history import summarize
+from app.api.streaming import (
+    SSE_DONE, chunk_text, openai_chunk, sse_frame, sse_response,
+)
 from app.apps import store
 from app.apps.langfuse_provision import load_app_langfuse
 from app.apps.policy import AppPolicyView, day_spend_usd, policy_view_from
+from app.apps.privacy import AppPrivacyProfile
 from app.errors import BackendUnavailable, NoEligibleCandidate, PolicyGateError
 from app.models import ChatRequest
 from app.obs import metrics
 from app.obs.export import export_trace
 from app.obs.redact import redact
 from app.obs.scores import SCORE_NAMES, ensure_score_config, post_score
-from app.pipeline import PipelineRejected
+from app.output.streaming_verify import StreamingVerifier
+from app.pipeline import PipelineRejected, StreamFallback
+from app.policy.enums import STREAM_MODES
 
 router = APIRouter()
 
@@ -84,19 +93,42 @@ def prometheus_metrics() -> Response:
     return Response(content=body, media_type=content_type)
 
 
-@router.post("/v1/chat/completions")
-async def chat_completions(body: ChatRequest, request: Request) -> dict:
+def _resolve_stream_mode(body: ChatRequest, app_policy: AppPolicyView, s) -> str | None:
+    """None for a normal (non-stream) request -- including a `stream: true`
+    request from an app whose effective mode is "not streaming". Resolves
+    the app's `stream_mode` override for `stream: true`: `None`/`STREAM_MODES[0]`
+    ("off", no/explicit-off per-app override) keeps today's behavior: reject
+    with 400 when the deployment rejects inbound streaming
+    (`server.reject_stream_requests`) -- backwards compatible for every app
+    that hasn't opted into a stream mode. Normalizes "off" to None here (the
+    single source of truth for "not streaming") so the dispatch in
+    `chat_completions` only ever has to check `is None`, even when
+    `reject_stream_requests` is False and an app explicitly set "off"."""
+    if not body.stream:
+        return None
+    mode = app_policy.stream_mode
+    if mode in (None, STREAM_MODES[0]) and s.serving.reject_stream_requests:
+        raise HTTPException(400, "streaming is not supported for this application")
+    return None if mode in (None, STREAM_MODES[0]) else mode
+
+
+@router.post("/v1/chat/completions", response_model=None)
+async def chat_completions(body: ChatRequest, request: Request) -> dict | StreamingResponse:
     s = request.app.state.settings
-    if body.stream and s.serving.reject_stream_requests:
-        raise HTTPException(400, "streaming is not supported in the demo")
     request_id = f"req-{uuid.uuid4().hex[:8]}"
     auth = await _authenticate(request)
     if auth is None:
         # Fail closed: no valid token -> reject. Never fall through to a
-        # default tenant (that was the old fail-open behavior).
+        # default tenant (that was the old fail-open behavior). A stream
+        # request with no resolvable app policy at all keeps the old,
+        # unconditional 400 (the reject guard used to run before auth) --
+        # backwards compatible even for this edge case.
         metrics.observe_request("-", "unauthorized")
+        if body.stream and s.serving.reject_stream_requests:
+            raise HTTPException(400, "streaming is not supported for this application")
         raise HTTPException(401, "invalid or missing API token")
     tenant, app_policy, app_langfuse = auth
+    stream_mode = _resolve_stream_mode(body, app_policy, s)
 
     # Per-application quotas (fail closed). Rate limit first (cheap, in-memory),
     # then the daily spend cap (one indexed sum). Both reject with 429; the
@@ -126,6 +158,11 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
             metrics.observe_request("-", "budget_exceeded")
             raise HTTPException(429, "daily budget exceeded for this application")
 
+    # Read the opaque workflow-correlation id once, up front: the streaming
+    # branch below returns before the old (post-pipeline) read site, and every
+    # response shape's _finalize needs it.
+    session_id = _read_session_id(request)
+
     try:
         # Per-app privacy profile (custom recognizers + sensitivity rules,
         # Task 7), now cache-aware (Task 9): app.state.profile_cache is
@@ -152,6 +189,36 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
             await request.app.state.registry.ensure_loaded(request.app.state.db)
         except Exception as e:
             raise PolicyGateError("policy setup failed") from e
+        if stream_mode in ("stream_unverified", "incremental_verify"):
+            # Real backend token streaming (Tasks 6-7). run_stream EAGERLY runs
+            # the gate, task-mode decision, and the runtime floor before
+            # returning, so a floored request (multi_step / onprem_only /
+            # require_verification) raises StreamFallback here -- before any
+            # token is emitted -- and we transparently fall through to the
+            # verified_then_stream path below. The floor is enforced ONLY in the
+            # pipeline (Global Constraint 1); the route never re-implements it.
+            try:
+                deltas, get_meta = await request.app.state.pipeline.run_stream(
+                    request_id, tenant, body, app_policy=app_policy, profile=profile)
+            except StreamFallback:
+                pass  # fall through: run the FULL verified pipeline, then chunk it
+            else:
+                if stream_mode == "stream_unverified":
+                    return _stream_unverified_response(
+                        request, request_id=request_id, deltas=deltas,
+                        get_meta=get_meta, body=body, tenant=tenant,
+                        app_policy=app_policy, app_langfuse=app_langfuse,
+                        profile=profile, session_id=session_id, s=s)
+                # incremental_verify (Task 7): stream real tokens, but pipe each
+                # delta through a hold-back StreamingVerifier so no un-redacted
+                # text is ever released. Build the verifier on the request's
+                # EFFECTIVE detector + ctx (exposed on get_meta by run_stream),
+                # so egress redaction matches this app's intake.
+                return _incremental_verify_response(
+                    request, request_id=request_id, deltas=deltas,
+                    get_meta=get_meta, body=body, tenant=tenant,
+                    app_policy=app_policy, app_langfuse=app_langfuse,
+                    profile=profile, session_id=session_id, s=s)
         resp = await request.app.state.pipeline.run(
             request_id, tenant, body, app_policy=app_policy, profile=profile)
     except PipelineRejected as e:
@@ -178,11 +245,39 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
     except Exception:
         metrics.observe_request("-", "error")
         raise HTTPException(500, "internal error")
+    await _finalize(request, resp, body=body, tenant=tenant, app_policy=app_policy,
+                    app_langfuse=app_langfuse, profile=profile,
+                    session_id=session_id, s=s, request_id=request_id)
+    if stream_mode is None:
+        return resp
+    # verified_then_stream: the pipeline already ran the FULL request above
+    # and step 9 already verified it (same `pipeline.run` call as the
+    # non-stream path) -- this only chunks the finished, already-verified
+    # text out as SSE. Reached for `verified_then_stream`, and for
+    # `stream_unverified`/`incremental_verify` requests that hit the runtime
+    # floor (StreamFallback above) -- a floored request is always verified as a
+    # complete response, never streamed unverified/incrementally.
+    content = resp["choices"][0]["message"]["content"]
+    return sse_response(chunk_text(request_id, resp["model"], content))
+
+
+async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
+                    tenant: str, app_policy: AppPolicyView,
+                    app_langfuse: object | None, profile: AppPrivacyProfile,
+                    session_id: str | None, s, request_id: str) -> None:
+    """Post-model-call processing shared by every response shape (non-stream
+    and every streaming mode): telemetry export, the first-party console
+    snapshot, the durable per-app usage row, and the live decision-stream
+    publish. Mutates `resp` in place (session id, display block, deep links)
+    and performs the same side effects `chat_completions` used to inline --
+    behavior is unchanged, only the call site moved so streaming responses
+    can reuse it too. `body`/`profile` are the request body and the app's
+    resolved privacy profile the pipeline call itself used, needed here for
+    the display-redaction block and egress recognizers."""
     # B17: capture the client's workflow-run correlation id (opaque label).
     # Threaded onto the response dict so both history.record and the drilldown
     # (which read `resp`) carry it with no signature change, and passed to
     # export_trace below for the Langfuse session stamp.
-    session_id = _read_session_id(request)
     resp["session_id"] = session_id
     metrics.observe_request(resp["model"], "ok")
     usage = resp.get("usage", {})
@@ -353,7 +448,174 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict:
     except Exception:  # streaming must never break serving
         logging.getLogger("serving.obs").exception(
             "bus.publish failed (swallowed)")
-    return resp
+
+
+def _stream_unverified_response(
+        request: Request, *, request_id: str,
+        deltas: AsyncIterator[str], get_meta: Callable[[], dict],
+        body: ChatRequest, tenant: str, app_policy: AppPolicyView,
+        app_langfuse: object | None, profile: AppPrivacyProfile,
+        session_id: str | None, s) -> StreamingResponse:
+    """Live token-forwarding SSE for `stream_unverified` (real backend
+    streaming). Emits an OpenAI-style role frame, forwards each `deltas` token
+    as a `content` frame, then (after the stream drains) a `finish_reason`
+    frame + `[DONE]`. `_finalize` runs in a `finally` so the DecisionRecord,
+    usage row, and bus publish are recorded for EVERY streamed request --
+    including a client that disconnects mid-stream (Global Constraint 2).
+
+    `created` is computed once and held constant across every frame (Task 4),
+    and `model` uses the app's requested model string as a stable per-frame
+    label; the resolved serving model lands in the durable usage row via
+    `_finalize` (built from the pipeline's final metadata)."""
+    created = int(time.time())
+    model = body.model  # stable frame label; resolved model is in the usage row
+
+    async def _gen() -> AsyncIterator[str]:
+        meta: dict | None = None
+        try:
+            yield sse_frame(openai_chunk(request_id, model, role="assistant",
+                                         created=created))
+            async for delta in deltas:
+                yield sse_frame(openai_chunk(request_id, model, delta=delta,
+                                             created=created))
+            meta = get_meta()  # valid only now that `deltas` is fully drained
+            yield sse_frame(openai_chunk(request_id, model, finish_reason="stop",
+                                         created=created))
+            yield SSE_DONE
+        finally:
+            # Best-effort finalize on EVERY exit -- normal completion and a
+            # mid-stream client disconnect alike. Accounting must not be lost.
+            await _finalize_stream(
+                request, request_id=request_id, deltas=deltas,
+                get_meta=get_meta, meta=meta, body=body, tenant=tenant,
+                app_policy=app_policy, app_langfuse=app_langfuse,
+                profile=profile, session_id=session_id, s=s)
+
+    return sse_response(_gen())
+
+
+def _incremental_verify_response(
+        request: Request, *, request_id: str,
+        deltas: AsyncIterator[str], get_meta: Callable[[], dict],
+        body: ChatRequest, tenant: str, app_policy: AppPolicyView,
+        app_langfuse: object | None, profile: AppPrivacyProfile,
+        session_id: str | None, s) -> StreamingResponse:
+    """Live token streaming for `incremental_verify` (Task 7). Real backend
+    deltas are piped through a hold-back `StreamingVerifier` before egress, so
+    an entity split across chunk boundaries never leaks its raw prefix; the
+    verifier's `flush()` releases the held-back tail as a final content frame.
+
+    The verifier is built on the request's EFFECTIVE detector + ctx (the exact
+    per-app detector the gate used, surfaced on `get_meta` by `run_stream`) so
+    egress redaction matches intake. `_finalize` runs in a `finally` for EVERY
+    exit -- normal completion and a mid-stream disconnect alike -- and records
+    step 9 as `performed=True, reason="incremental"` (a deliberately weaker
+    guarantee than the complete-response verdict; see streaming_verify.py).
+    The client-visible (redacted) text is threaded into `_finalize` so the
+    console/usage record shows what actually left, not the raw model output."""
+    created = int(time.time())
+    model = body.model  # stable frame label; resolved model is in the usage row
+    verifier = StreamingVerifier(get_meta.detector, get_meta.ctx)  # type: ignore[attr-defined]
+
+    async def _gen() -> AsyncIterator[str]:
+        meta: dict | None = None
+        released: list[str] = []
+        try:
+            yield sse_frame(openai_chunk(request_id, model, role="assistant",
+                                         created=created))
+            async for delta in deltas:
+                out = verifier.feed(delta)
+                if out:
+                    released.append(out)
+                    yield sse_frame(openai_chunk(request_id, model, delta=out,
+                                                 created=created))
+            tail = verifier.flush()  # release the held-back window
+            if tail:
+                released.append(tail)
+                yield sse_frame(openai_chunk(request_id, model, delta=tail,
+                                             created=created))
+            meta = get_meta()  # valid only now that `deltas` is fully drained
+            yield sse_frame(openai_chunk(request_id, model, finish_reason="stop",
+                                         created=created))
+            yield SSE_DONE
+        finally:
+            # Best-effort finalize on EVERY exit. `client_text` is exactly what
+            # the client received (redacted); on a mid-stream disconnect it is
+            # the partial released prefix, which is honest.
+            await _finalize_stream(
+                request, request_id=request_id, deltas=deltas,
+                get_meta=get_meta, meta=meta, body=body, tenant=tenant,
+                app_policy=app_policy, app_langfuse=app_langfuse,
+                profile=profile, session_id=session_id, s=s,
+                verify_performed=True, verify_reason="incremental",
+                client_text="".join(released))
+
+    return sse_response(_gen())
+
+
+async def _finalize_stream(
+        request: Request, *, request_id: str, deltas: AsyncIterator[str],
+        get_meta: Callable[[], dict], meta: dict | None,
+        body: ChatRequest, tenant: str, app_policy: AppPolicyView,
+        app_langfuse: object | None, profile: AppPrivacyProfile,
+        session_id: str | None, s,
+        verify_performed: bool = False,
+        verify_reason: str = "waived: stream_unverified",
+        client_text: str | None = None) -> None:
+    """Assemble the `resp` dict from the pipeline's final streaming metadata and
+    run the shared `_finalize`. Guarded end to end: a failure here must never
+    surface to the (already-streaming) client. Shared by both real-streaming
+    modes; the caller supplies how step 9 is recorded:
+
+      * `stream_unverified` (Task 6): defaults -- `performed=False`,
+        `reason="waived: stream_unverified"`; the client received the RAW deltas,
+        so `client_text=None` and the recorded completion is `raw_completion`.
+      * `incremental_verify` (Task 7): `performed=True`, `reason="incremental"`;
+        the client received the hold-back-REDACTED text, passed in as
+        `client_text` so the recorded/displayed completion matches what actually
+        left (the raw model output stays in `raw_completion` for eval capture,
+        exactly as on the non-stream path).
+
+    On a mid-stream disconnect `meta` is None (the generator never reached
+    `get_meta`); we best-effort drain the remaining backend deltas so the final
+    accounting (cost, tokens, decision) is recovered rather than silently lost.
+    run_stream only returns normally when the request is NOT onprem_only, NOT
+    require_verification, and NOT multi_step, so recording step 9 as
+    waived/incremental (rather than a complete-response verdict) is sound."""
+    log = logging.getLogger("serving.obs")
+    try:
+        if meta is None:
+            try:
+                async for _delta in deltas:
+                    pass
+                meta = get_meta()
+            except Exception:
+                log.exception(
+                    "streaming: drain-on-disconnect failed (swallowed)")
+                return
+        resp = dict(meta)
+        # The completion recorded/displayed == what the client actually
+        # received: the hold-back-redacted text for incremental_verify
+        # (`client_text`), else the raw streamed text (stream_unverified).
+        text = client_text if client_text is not None else (
+            meta.get("raw_completion") or "")
+        resp["choices"] = [{"index": 0,
+                            "message": {"role": "assistant", "content": text},
+                            "finish_reason": "stop"}]
+        # Make the trace's VerificationRecord say WHY (Global Constraint 2).
+        # run_stream stamps a performed=False/passed=True "waived" record; name
+        # the reason + performed flag for this specific mode so the console and
+        # Langfuse trace read "waived: stream_unverified" vs "incremental".
+        for rec in resp.get("trace", []):
+            if isinstance(rec, dict) and rec.get("step") == "verify":
+                rec["reason"] = verify_reason
+                rec["performed"] = verify_performed
+        await _finalize(request, resp, body=body, tenant=tenant,
+                        app_policy=app_policy, app_langfuse=app_langfuse,
+                        profile=profile, session_id=session_id, s=s,
+                        request_id=request_id)
+    except Exception:  # finalize must never break the (already sent) stream
+        log.exception("streaming finalize failed (swallowed)")
 
 
 class FeedbackIn(BaseModel):

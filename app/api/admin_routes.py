@@ -17,7 +17,7 @@ from app.apps.admin_auth import SESSION_COOKIE, require_admin
 from app.apps.langfuse_provision import LangfuseProvisioner, encrypt_secret
 from app.apps.probe import probe_endpoint
 from app.apps.tokens import new_token
-from app.policy.enums import RESIDENCY, RISK_CLASS, SENSITIVITY
+from app.policy.enums import PII_MODES, RESIDENCY, RISK_CLASS, SENSITIVITY, STREAM_MODES
 from app.policy.recognizers import PRESIDIO_BUILTINS, validate_recognizer
 
 admin_router = APIRouter(prefix="/admin", tags=["admin"])
@@ -41,7 +41,8 @@ def _policy_dict(p) -> dict | None:
     return {"allowed_tiers": p.allowed_tiers, "allowed_providers": p.allowed_providers,
             "allowed_models": p.allowed_models, "residency": p.residency,
             "max_spend_usd_per_day": p.max_spend_usd_per_day, "max_rpm": p.max_rpm,
-            "compression_enabled": p.compression_enabled, "capture_io": p.capture_io}
+            "compression_enabled": p.compression_enabled, "capture_io": p.capture_io,
+            "pii_detection": p.pii_detection, "stream_mode": p.stream_mode}
 
 
 def _onboarded_dict(m) -> dict:
@@ -98,6 +99,8 @@ class PolicyIn(BaseModel):
     max_rpm: int | None = None
     compression_enabled: bool | None = None   # None = inherit global Headroom toggle
     capture_io: str | None = None   # None = inherit global; off|redacted|full
+    pii_detection: str | None = None   # None = inherit global; off|regex|presidio
+    stream_mode: str | None = None   # None = inherit (reject inbound stream); see STREAM_MODES
 
 
 class LangfuseCredsIn(BaseModel):
@@ -322,16 +325,102 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
             raise HTTPException(404, "application not found")
         if body.residency is not None and body.residency not in RESIDENCY:
             raise HTTPException(422, f"bad residency {body.residency!r}")
-        if body.capture_io == "full":
+        if body.pii_detection is not None and body.pii_detection not in PII_MODES:
+            raise HTTPException(422, f"bad pii_detection {body.pii_detection!r}")
+        if body.stream_mode is not None and body.stream_mode not in STREAM_MODES:
+            raise HTTPException(422, f"bad stream_mode {body.stream_mode!r}")
+
+        # Resolve the EFFECTIVE post-write residency/capture_io/pii_detection
+        # once. The PUT is a merge (see below), so "effective value = body
+        # value if provided, else the stored value, else the global default"
+        # is what will actually land — every clamp below must key on these,
+        # not on the stored row or on `body.*` alone, or a partial PUT can be
+        # judged on a value that's about to be overwritten (the Critical this
+        # fixed) or on a value that's already in effect but never mentioned
+        # in this particular write (fix round 1: the redacted/pii-downgrade
+        # clamp used to key on `body.pii_detection` alone, so a stored
+        # pii=off app could be pushed to capture_io='redacted' — or flipped
+        # to onprem_only — via a PUT that never mentioned pii_detection at
+        # all, silently skipping the whole downgrade branch).
+        settings = request.app.state.settings
+        stored = app.policy
+        eff_residency = (body.residency or (stored.residency if stored else None)) \
+            or app.default_residency
+        eff_capture = body.capture_io if body.capture_io is not None else (
+            (stored.capture_io if stored else None)
+            or settings.serving.observability.langfuse.capture_io)
+        # NOTE: unlike eff_residency/eff_capture, this deliberately does NOT
+        # fall through to the global default (`settings.serving.pii_detection`).
+        # Per `docs/per-app-config.md`, unset/None for this field means
+        # "inherit the deployment's live global detector" and is NOT itself a
+        # downgrade — only an actual per-app override (this write's body, or
+        # a previously-stored one) is. Falling back to the global default
+        # here would make this clamp fire for every app whenever the
+        # deployment's own global default happens to be non-presidio (e.g.
+        # this test suite's SP_PII_DETECTION=regex), including apps that
+        # never had a per-app override at all — a false positive that broke
+        # `test_policy_full_capture_rejected_for_ineligible_app`'s "redacted
+        # is always allowed" invariant. A non-presidio *global* default
+        # combined with capture is a deployment-wide config-lint concern
+        # (CLAUDE.md's boot-time cross-file lint), not a per-app write clamp.
+        eff_pii = body.pii_detection if body.pii_detection is not None else (
+            stored.pii_detection if stored else None)
+
+        # --- PII downgrade clamp: fires whenever the EFFECTIVE post-write
+        # pii_detection is off/regex — whether this write is what sets it or
+        # it was already in effect from a prior write. Re-validates the
+        # invariants (non-onprem, operator-flag-on, capture != redacted) on
+        # every write while the app is in a pii-downgraded state, the same
+        # fail-closed shape as the capture_io=='full' clamp below. ---
+        if eff_pii in ("off", "regex"):
+            if eff_residency == "onprem_only":
+                raise HTTPException(
+                    422, "pii_detection cannot be downgraded for onprem_only apps")
+            if not settings.serving.allow_app_pii_downgrade:
+                raise HTTPException(
+                    422, "per-app PII downgrade disabled on this deployment")
+            if eff_capture == "redacted":
+                raise HTTPException(
+                    422,
+                    "capture_io='redacted' cannot be combined with pii_detection "
+                    "off/regex: redacted telemetry reuses the gate's sanitized "
+                    "prompt, which is raw when PII detection is off. Use "
+                    "capture_io='full' with the app's own Langfuse project, or "
+                    "capture_io='off'.")
+            # eff_capture == 'full' -> permitted here; the capture_io=='full'
+            #   clamp below enforces non-onprem + own provisioned Langfuse on
+            #   the EFFECTIVE value.
+            # eff_capture == 'off'  -> always safe.
+
+        # --- stream_unverified clamp: key on the EFFECTIVE stream_mode, not
+        # body.stream_mode alone, so a stored stream_unverified app can't
+        # reach onprem_only via a PUT that omits stream_mode entirely. No
+        # global fallback needed (unlike eff_pii's doc-defined "inherit
+        # global" semantics) -- stream_mode has no global default; None just
+        # means "no streaming opt-in for this app." ---
+        eff_stream_mode = body.stream_mode if body.stream_mode is not None else (
+            stored.stream_mode if stored else None)
+        if eff_stream_mode == "stream_unverified" and eff_residency == "onprem_only":
+            raise HTTPException(
+                422, "stream_unverified not allowed for onprem_only apps")
+
+        # --- capture_io == 'full' clamp: key on EFFECTIVE capture, not
+        # body.capture_io, so a stale stored 'full' is re-validated on every
+        # write (e.g. a partial PUT that only touches pii_detection). ---
+        if eff_capture == "full":
             from app.apps.langfuse_provision import load_app_langfuse
-            residency = (body.residency or (app.policy.residency if app.policy else None)) \
-                or app.default_residency
-            if residency == "onprem_only" or load_app_langfuse(app) is None:
+            if eff_residency == "onprem_only" or load_app_langfuse(app) is None:
                 raise HTTPException(
                     422, "capture_io='full' stores raw telemetry and is allowed only "
                     "for a non-onprem application with its own provisioned Langfuse "
                     "project (residency beats eval; CLAUDE.md rules 2/8). Use 'redacted'.")
-        await store.upsert_policy(session, app_id, **body.model_dump())
+
+        # exclude_none=True makes this a MERGE, not a full replace: an
+        # omitted field keeps its stored value instead of being wiped to
+        # None (the Critical this fixed — see Part A in the task-9 brief).
+        # Trade-off: clearing a field back to "inherit default" now requires
+        # sending an explicit value, not omission.
+        await store.upsert_policy(session, app_id, **body.model_dump(exclude_none=True))
         await session.commit()
         # `app.policy` was eager-loaded (possibly as None) above for the
         # eligibility check; expire it so upsert_policy's write is actually
