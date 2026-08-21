@@ -27,12 +27,17 @@ SSE_DONE = "data: [DONE]\n\n"
 
 def openai_chunk(request_id: str, model: str, *, delta: str | None = None,
                   role: str | None = None,
-                  finish_reason: str | None = None) -> dict:
+                  finish_reason: str | None = None,
+                  created: int | None = None) -> dict:
     """Build one OpenAI-compatible `chat.completion.chunk` frame.
 
     `role` (e.g. "assistant") opens the stream, `delta` carries a content
     fragment, and `finish_reason` closes it — callers pass exactly one of
-    `role`/`delta`, or neither for the terminal finish-reason-only frame."""
+    `role`/`delta`, or neither for the terminal finish-reason-only frame.
+    `created` defaults to "now" when omitted, but a multi-frame stream
+    (`chunk_text` below) computes it once and threads the same value through
+    every frame -- a real OpenAI stream holds `created` constant for the
+    whole response, it doesn't drift frame to frame."""
     d: dict[str, str] = {}
     if role is not None:
         d["role"] = role
@@ -41,7 +46,7 @@ def openai_chunk(request_id: str, model: str, *, delta: str | None = None,
     return {
         "id": request_id,
         "object": "chat.completion.chunk",
-        "created": int(time.time()),
+        "created": created if created is not None else int(time.time()),
         "model": model,
         "choices": [{"index": 0, "delta": d, "finish_reason": finish_reason}],
     }
@@ -72,15 +77,20 @@ def _split_on_word_boundaries(text: str, chunk_size: int) -> list[str]:
 
 
 async def chunk_text(request_id: str, model: str, text: str, *,
-                      chunk_size: int = 48) -> AsyncIterator[str]:
+                      chunk_size: int = 48,
+                      created: int | None = None) -> AsyncIterator[str]:
     """Yield a full OpenAI-style SSE stream for an already-finished,
     already-verified `text`: a role-opening frame, then content frames
     splitting `text` on ~word boundaries, a `finish_reason="stop"` frame, and
-    the terminal `[DONE]` frame."""
-    yield sse_frame(openai_chunk(request_id, model, role="assistant"))
+    the terminal `[DONE]` frame. `created` is computed once (or taken from
+    the caller, e.g. the response's own `created` if it has one) and held
+    constant across every frame in this stream, not recomputed per frame."""
+    if created is None:
+        created = int(time.time())
+    yield sse_frame(openai_chunk(request_id, model, role="assistant", created=created))
     for piece in _split_on_word_boundaries(text, chunk_size):
-        yield sse_frame(openai_chunk(request_id, model, delta=piece))
-    yield sse_frame(openai_chunk(request_id, model, finish_reason="stop"))
+        yield sse_frame(openai_chunk(request_id, model, delta=piece, created=created))
+    yield sse_frame(openai_chunk(request_id, model, finish_reason="stop", created=created))
     yield SSE_DONE
 
 

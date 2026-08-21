@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 
+import app.api.streaming as streaming
 from app.api.streaming import SSE_DONE, chunk_text, openai_chunk, sse_frame
 
 
@@ -16,6 +17,11 @@ def test_openai_chunk_role_frame():
     assert c["choices"] == [{"index": 0, "delta": {"role": "assistant"},
                              "finish_reason": None}]
     assert isinstance(c["created"], int)
+
+
+def test_openai_chunk_uses_explicit_created_verbatim():
+    c = openai_chunk("req-1", "local-8b", role="assistant", created=12345)
+    assert c["created"] == 12345
 
 
 def test_openai_chunk_content_frame():
@@ -65,6 +71,23 @@ def test_chunk_text_empty_text_still_frames_role_finish_done():
     assert parsed[0]["choices"][0]["delta"] == {"role": "assistant"}
     assert parsed[1]["choices"][0]["finish_reason"] == "stop"
     assert frames[-1] == SSE_DONE
+
+
+def test_chunk_text_holds_created_constant_across_every_frame(monkeypatch):
+    # Regression: `created` must be computed ONCE per stream and threaded
+    # through every frame, not recomputed per-frame (which would let a real
+    # OpenAI-style stream's chunks disagree on `created` if the wall clock
+    # ticks mid-stream). Force the clock to advance on every call so a
+    # per-frame `int(time.time())` implementation would visibly disagree.
+    ticking = iter(range(1000, 1000 + 20))
+    monkeypatch.setattr(streaming.time, "time", lambda: next(ticking))
+
+    text = "alpha beta gamma delta epsilon zeta eta theta"
+    frames = _drain(chunk_text("req-5", "local-8b", text, chunk_size=8))
+    parsed = [json.loads(f[len("data: "):-2]) for f in frames[:-1]]
+    assert len(parsed) > 2  # role + multiple content frames + finish
+    created_values = {p["created"] for p in parsed}
+    assert len(created_values) == 1, f"created drifted across frames: {created_values}"
 
 
 def test_chunk_text_never_splits_a_word_when_a_boundary_is_available():

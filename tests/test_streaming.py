@@ -160,6 +160,42 @@ def test_non_stream_request_with_invalid_token_still_401s(client):
     assert r.status_code == 401
 
 
+def test_explicit_stream_mode_off_never_enters_sse_even_when_reject_is_disabled(
+        monkeypatch):
+    # Regression: `stream_mode="off"` is an explicit, persisted STREAM_MODES
+    # value (not normalized to None by the admin store), distinct from an
+    # unset override -- but both must mean "not streaming" downstream. With
+    # the deployment's reject guard OFF, a naive `if mode in (None, "off")
+    # and reject: ...` check falls through and returns the literal "off"
+    # (since reject is False), which is not None, so a dispatch that only
+    # checks `stream_mode is None` would wrongly enter the SSE branch. Build
+    # a fresh app instance with `reject_stream_requests=False` (the `client`
+    # fixture's app always has it True per config/serving.yaml) so this path
+    # -- reject disabled AND an explicit "off" override -- is actually
+    # exercised, not just the always-reject default.
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+
+    app = create_app()
+    app.state.settings = app.state.settings.model_copy(update={
+        "serving": app.state.settings.serving.model_copy(
+            update={"reject_stream_requests": False})})
+    no_reject_client = TestClient(app)
+
+    _fixed_backend(monkeypatch, "a plain answer")
+    token = _make_app(no_reject_client, "stream-explicit-off", stream_mode="off")
+
+    r = no_reject_client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"model": "auto", "messages": [{"role": "user", "content": "hi"}],
+              "stream": True})
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("application/json")  # NOT text/event-stream
+    assert r.json()["choices"][0]["message"]["content"] == "a plain answer"
+
+
 # --------------------------------------------------------------------------- #
 # (c) non-stream requests: unchanged (regression)
 # --------------------------------------------------------------------------- #

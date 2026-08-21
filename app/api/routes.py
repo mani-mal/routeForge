@@ -20,6 +20,7 @@ from app.obs.export import export_trace
 from app.obs.redact import redact
 from app.obs.scores import SCORE_NAMES, ensure_score_config, post_score
 from app.pipeline import PipelineRejected
+from app.policy.enums import STREAM_MODES
 
 router = APIRouter()
 
@@ -88,17 +89,22 @@ def prometheus_metrics() -> Response:
 
 
 def _resolve_stream_mode(body: ChatRequest, app_policy: AppPolicyView, s) -> str | None:
-    """None for a normal (non-stream) request. For `stream: true`, resolves
-    the app's `stream_mode` override. `None`/`"off"` (no per-app override)
-    keeps today's behavior: reject with 400 when the deployment rejects
-    inbound streaming (`server.reject_stream_requests`) -- backwards
-    compatible for every app that hasn't opted into a stream mode."""
+    """None for a normal (non-stream) request -- including a `stream: true`
+    request from an app whose effective mode is "not streaming". Resolves
+    the app's `stream_mode` override for `stream: true`: `None`/`STREAM_MODES[0]`
+    ("off", no/explicit-off per-app override) keeps today's behavior: reject
+    with 400 when the deployment rejects inbound streaming
+    (`server.reject_stream_requests`) -- backwards compatible for every app
+    that hasn't opted into a stream mode. Normalizes "off" to None here (the
+    single source of truth for "not streaming") so the dispatch in
+    `chat_completions` only ever has to check `is None`, even when
+    `reject_stream_requests` is False and an app explicitly set "off"."""
     if not body.stream:
         return None
     mode = app_policy.stream_mode
-    if mode in (None, "off") and s.serving.reject_stream_requests:
+    if mode in (None, STREAM_MODES[0]) and s.serving.reject_stream_requests:
         raise HTTPException(400, "streaming is not supported for this application")
-    return mode
+    return None if mode in (None, STREAM_MODES[0]) else mode
 
 
 @router.post("/v1/chat/completions", response_model=None)
