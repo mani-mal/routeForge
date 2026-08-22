@@ -143,7 +143,8 @@ class Pipeline:
 
     async def run(self, request_id: str, tenant_id: str,
                   request: ChatRequest, app_policy=None,
-                  profile: AppPrivacyProfile | None = None) -> dict:
+                  profile: AppPrivacyProfile | None = None,
+                  session_id: str | None = None) -> dict:
         # Per-app effective detector + rules (Task 7): when the caller supplies
         # the app's privacy profile, layer its custom recognizers on top of the
         # base detector and use its resolved sensitivity rules for BOTH
@@ -198,14 +199,16 @@ class Pipeline:
         # Partition key note: `run()` is never handed a distinct
         # application_id -- "the application id equals the tenant slug"
         # (CLAUDE.md/routes.py._authenticate), so `tenant_id` doubles as
-        # `application_id` here. A per-session partition (`x-routeforge-session`,
-        # app/api/routes.py::_read_session_id) is also never threaded into
-        # `run()`/`run_stream()` today, so `session_id=""` -- every recall for
-        # this tenant+app shares one partition regardless of session header.
+        # `application_id` here. `session_id` is the per-session partition key
+        # (`x-routeforge-session`, app/api/routes.py::_read_session_id),
+        # threaded in by the caller; a request with no session header (or an
+        # unsanitizable one) falls back to `session_id or ""`, the shared
+        # partition -- so distinct end-user sessions of one app no longer
+        # collide, and no session header keeps the old (pre-session) behavior.
         mem_cfg = self._s.serving.memory
         recall = recall_memory(self._memory, mem_cfg, ctx, san_messages,
                                tenant_id=tenant_id, application_id=tenant_id,
-                               session_id="")
+                               session_id=session_id or "")
         if recall.messages:
             san_messages = recall.messages + san_messages
 
@@ -238,7 +241,8 @@ class Pipeline:
         # ONLY -- never `result.text` (pre-verify raw), `raw_completion`, or
         # the raw request. See write_memory()'s docstring for the contract.
         write_memory(self._memory, mem_cfg, ctx, sanitized, text,
-                    tenant_id=tenant_id, application_id=tenant_id, session_id="")
+                    tenant_id=tenant_id, application_id=tenant_id,
+                    session_id=session_id or "")
 
         total = sum(r.actual_cost_usd or 0.0 for r in records)
         # Two-lever accounting (CLAUDE.md: "don't attribute all savings to
@@ -308,7 +312,8 @@ class Pipeline:
 
     async def run_stream(self, request_id: str, tenant_id: str,
                          request: ChatRequest, app_policy=None,
-                         profile: AppPrivacyProfile | None = None
+                         profile: AppPrivacyProfile | None = None,
+                         session_id: str | None = None
                          ) -> tuple[AsyncIterator[str], Callable[[], dict]]:
         """Real backend token-streaming substrate for the direct (single-shot)
         path (Tasks 6-7 wire the route to this). Skips step-9 verification --
@@ -377,7 +382,7 @@ class Pipeline:
         mem_cfg = self._s.serving.memory
         recall = recall_memory(self._memory, mem_cfg, ctx, san_messages,
                                tenant_id=tenant_id, application_id=tenant_id,
-                               session_id="")
+                               session_id=session_id or "")
         if recall.messages:
             san_messages = recall.messages + san_messages
         comp = compress(san_messages, ctx, self._co_cfg_provider(), ccr=self._ccr)

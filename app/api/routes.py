@@ -199,7 +199,8 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
             # pipeline (Global Constraint 1); the route never re-implements it.
             try:
                 deltas, get_meta = await request.app.state.pipeline.run_stream(
-                    request_id, tenant, body, app_policy=app_policy, profile=profile)
+                    request_id, tenant, body, app_policy=app_policy, profile=profile,
+                    session_id=session_id)
             except StreamFallback:
                 pass  # fall through: run the FULL verified pipeline, then chunk it
             else:
@@ -220,7 +221,8 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
                     app_policy=app_policy, app_langfuse=app_langfuse,
                     profile=profile, session_id=session_id, s=s)
         resp = await request.app.state.pipeline.run(
-            request_id, tenant, body, app_policy=app_policy, profile=profile)
+            request_id, tenant, body, app_policy=app_policy, profile=profile,
+            session_id=session_id)
     except PipelineRejected as e:
         metrics.observe_request("-", "rejected")
         message = str(e)

@@ -71,9 +71,11 @@ def _pipeline(settings, memory=None, backend=None) -> Pipeline:
 
 
 def _run(pipeline: Pipeline, content: str, *, tenant: str = "acme",
-        app_policy=None, request_id: str = "req-1") -> dict:
+        app_policy=None, request_id: str = "req-1",
+        session_id: str | None = None) -> dict:
     req = ChatRequest(messages=[Message(role="user", content=content)])
-    return asyncio.run(pipeline.run(request_id, tenant, req, app_policy=app_policy))
+    return asyncio.run(pipeline.run(request_id, tenant, req, app_policy=app_policy,
+                                    session_id=session_id))
 
 
 def _mem_trace(out: dict) -> dict | None:
@@ -237,3 +239,43 @@ def test_below_min_tokens_bypasses_memory():
 
     assert _mem_trace(out) is None
     assert store.size == 0
+
+
+# --- 8. cross-session isolation WITHIN one tenant (fix round 1) -------------
+#
+# Regression coverage for the Important review finding: session_id was
+# hard-coded to "" in both recall_memory(...) and write_memory(...) calls, so
+# distinct end-user SESSIONS of the SAME application/tenant shared a single
+# memory partition -- user X's sanitized exchange could be recalled into user
+# Y's request within the same app. session_id is now threaded from
+# Pipeline.run(..., session_id=...) into both partition keys.
+
+
+def test_cross_session_isolation_same_tenant_distinct_sessions():
+    s = _mem_settings()
+    store = DeterministicMemoryStore(ttl_seconds=3600, clock=lambda: 0.0)
+    spy = _SpyBackend(s)
+    pipe = _pipeline(s, memory=store, backend=spy)
+
+    # Session S1 writes a summary.
+    _run(pipe, "My favorite color is blue.", tenant="acme", session_id="S1")
+    assert store.size == 1
+
+    # A DIFFERENT session (S2) of the SAME tenant recalls NOTHING -- S1's
+    # content must not cross into S2's partition.
+    out_s2 = _run(pipe, "What did I just tell you?", tenant="acme",
+                 session_id="S2")
+    mem_trace_s2 = _mem_trace(out_s2)
+    assert mem_trace_s2 is not None
+    assert mem_trace_s2["recalled_count"] == 0
+    joined_s2 = "\n".join(m.content for m in spy.calls[-1])
+    assert "blue" not in joined_s2
+
+    # Back on S1: the earlier write IS recalled.
+    out_s1 = _run(pipe, "What did I just tell you?", tenant="acme",
+                 session_id="S1")
+    mem_trace_s1 = _mem_trace(out_s1)
+    assert mem_trace_s1 is not None
+    assert mem_trace_s1["recalled_count"] >= 1
+    joined_s1 = "\n".join(m.content for m in spy.calls[-1])
+    assert "blue" in joined_s1
