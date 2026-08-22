@@ -126,6 +126,20 @@ class CompressionRecord(BaseModel):
     latency_ms: float = 0.0
 
 
+class MemoryRecord(BaseModel):
+    """Persistent memory (Feature 5, step-5 extension) trace record —
+    counts-only, mirroring CompressionRecord's residency posture. Memory
+    contents NEVER leave the process (CLAUDE.md rule 6); this is the only
+    thing that reaches a trace (Task 2 appends it). If a content field is
+    ever added it MUST go in app/obs/otel.py::REDACT_KEYS."""
+    step: str = "memory"
+    recalled_count: int = 0
+    tokens_recalled: int = 0
+    recall_stayed_local: bool = True
+    retrievals_to_cloud: int = 0  # must be 0 for onprem_only — honesty counter
+    latency_ms: float = 0.0
+
+
 class GenerationResult(BaseModel):
     model: str
     text: str

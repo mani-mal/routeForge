@@ -153,6 +153,26 @@ class ContextOptimizationCfg(BaseModel):
     cache_alignment: bool
 
 
+class MemoryCfg(BaseModel):
+    """Feature 5 (Task 1) — persistent memory substrate config. CCR-class
+    residency posture (CLAUDE.md rule 6): local-only, enforced TTL, never
+    exported. Default OFF; Task 1 adds NO pipeline wiring, so flipping this
+    to true still has no effect on a request until Task 2 wires read/write
+    in. See docs/architecture/persistent-memory-residency-spec.md."""
+    enabled: bool = False
+    residency: str = "local_only"
+    ttl_hours: int = 24
+    export_to_telemetry: bool = False
+    max_recall: int = 3          # most-recent-first cap per tenant partition
+    min_tokens: int = 0          # small-request bypass knob (like compression's min_tokens)
+    # Reuses the compression BypassCfg shape for parity — `user_prompt` has no
+    # meaning for memory recall (no "live prompt" to protect) and is unused
+    # until Task 2 wires bypass logic in; kept for one coherent bypass shape
+    # across the two step-5 levers rather than inventing a second one.
+    bypass_on: BypassCfg = BypassCfg(
+        high_risk=True, restricted_sensitivity=True, user_prompt=False)
+
+
 class ServingCfg(BaseModel):
     providers: dict[str, ProviderCfg]
     pii_detection: str
@@ -164,6 +184,7 @@ class ServingCfg(BaseModel):
     allow_app_pii_downgrade: bool
     reject_stream_requests: bool
     context_optimization: ContextOptimizationCfg
+    memory: MemoryCfg = MemoryCfg()
     observability: ObservabilityCfg
 
 

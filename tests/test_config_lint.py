@@ -83,3 +83,38 @@ def test_pool_quality_out_of_range_flags():
     s = copy.deepcopy(load_settings())
     s.routing.model_pool[0].quality = 2.0
     assert any("POOL_QUALITY_OUT_OF_RANGE" in e for e in lint_settings(s))
+
+
+def test_lint_rejects_memory_telemetry_export():
+    s = copy.deepcopy(load_settings())
+    s.serving.memory.enabled = True
+    s.serving.memory.export_to_telemetry = True
+    with pytest.raises(ConfigLintError, match="export_to_telemetry"):
+        enforce(s)
+
+
+def test_lint_rejects_memory_residency_drift():
+    s = copy.deepcopy(load_settings())
+    s.serving.memory.enabled = True
+    s.serving.memory.residency = "cloud_ok"
+    with pytest.raises(ConfigLintError, match="residency"):
+        enforce(s)
+
+
+def test_lint_rejects_memory_nonpositive_ttl():
+    s = copy.deepcopy(load_settings())
+    s.serving.memory.enabled = True
+    s.serving.memory.ttl_hours = 0
+    with pytest.raises(ConfigLintError, match="ttl_hours"):
+        enforce(s)
+
+
+def test_memory_disabled_skips_guards():
+    # memory.enabled False -- a would-be-violating residency/export/ttl must
+    # NOT trip the lint (mirrors CCR's disabled-skips-guards posture).
+    s = copy.deepcopy(load_settings())
+    assert s.serving.memory.enabled is False
+    s.serving.memory.residency = "cloud_ok"
+    s.serving.memory.export_to_telemetry = True
+    s.serving.memory.ttl_hours = 0
+    enforce(s)  # must not raise
