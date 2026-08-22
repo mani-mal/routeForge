@@ -584,6 +584,15 @@ wheels = [
 ]
 
 [[package]]
+name = "cloudpickle"
+version = "3.1.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/27/fb/576f067976d320f5f0114a8d9fa1215425441bb35627b1993e5afd8111e5/cloudpickle-3.1.2.tar.gz", hash = "sha256:7fda9eb655c9c230dab534f1983763de5835249750e85fbcef43aaa30a9a2414", size = 22330, upload-time = "2025-11-03T09:25:26.604Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/88/39/799be3f2f0f38cc727ee3b4f1445fe6d5e4133064ec2e4115069418a5bb6/cloudpickle-3.1.2-py3-none-any.whl", hash = "sha256:9acb47f6afd73f60dc1df93bb801b472f05ff42fa6c84167d25cb206be1fbf4a", size = 22228, upload-time = "2025-11-03T09:25:25.534Z" },
+]
+
+[[package]]
 name = "colorama"
 version = "0.4.6"
 source = { registry = "https://pypi.org/simple" }
@@ -769,12 +778,58 @@ wheels = [
 ]
 
 [[package]]
+name = "diskcache"
+version = "5.6.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/3f/21/1c1ffc1a039ddcc459db43cc108658f32c57d271d7289a2794e401d0fdb6/diskcache-5.6.3.tar.gz", hash = "sha256:2c3a3fa2743d8535d832ec61c2054a1641f41775aa7c556758a109941e33e4fc", size = 67916, upload-time = "2023-08-31T06:12:00.316Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3f/27/4570e78fc0bf5ea0ca45eb1de3818a23787af9b390c0b0a0033a1b8236f9/diskcache-5.6.3-py3-none-any.whl", hash = "sha256:5e31b2d5fbad117cc363ebaf6b689474db18a1f6438bc82358b024abd4c2ca19", size = 45550, upload-time = "2023-08-31T06:11:58.822Z" },
+]
+
+[[package]]
 name = "distro"
 version = "1.9.0"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/fc/f8/98eea607f65de6527f8a2e8885fc8015d3e6f5775df186e443e0964a11c3/distro-1.9.0.tar.gz", hash = "sha256:2fa77c6fd8940f116ee1d6b94a2f90b13b5ea8d019b98bc8bafdcabcdd9bdbed", size = 60722, upload-time = "2023-12-24T09:54:32.31Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/12/b3/231ffd4ab1fc9d679809f356cebee130ac7daa00d6d6f3206dd4fd137e9e/distro-1.9.0-py3-none-any.whl", hash = "sha256:7bffd925d65168f85027d8da9af6bddab658135b840670a223589bc0c8ef02b2", size = 20277, upload-time = "2023-12-24T09:54:30.421Z" },
+]
+
+[[package]]
+name = "dspy"
+version = "3.3.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "cachetools" },
+    { name = "cloudpickle" },
+    { name = "diskcache" },
+    { name = "gepa" },
+    { name = "json-repair" },
+    { name = "litellm" },
+    { name = "openai" },
+    { name = "orjson" },
+    { name = "pydantic" },
+    { name = "regex" },
+    { name = "requests" },
+    { name = "tenacity" },
+    { name = "tqdm" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/47/36/cafd7ee235481f299426243d9c3608b9fa2e64227940cce50f94feea9570/dspy-3.3.1.tar.gz", hash = "sha256:ca53a428ac6a30984a894cf3847cf623b7dd7e8aadf8a63620b1f1f6155e4eaf", size = 361491, upload-time = "2026-08-21T23:06:13.993Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d7/cc/d769426ff2cfb816bdedbcedf364c1812b6831887d34be8d188ca2727dc8/dspy-3.3.1-py3-none-any.whl", hash = "sha256:250049f565f52c014609ce2d3ca0de17a6c9449ac961492d61a009aa30dceabf", size = 421179, upload-time = "2026-08-21T23:06:12.591Z" },
+]
+
+[[package]]
+name = "dspy-ai"
+version = "3.3.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "dspy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/35/80/a1b573c8c2f6a649e7e65802927bfdf289d16338b2fbf9efe8fc5b869168/dspy_ai-3.3.1.tar.gz", hash = "sha256:09ffb30df2e0692f387bbcdde4e542b965c8e15e90e2ac5de48a61c36ea9af5c", size = 1254, upload-time = "2026-08-21T23:06:21.746Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/66/8c/09d4ace01fc63f534748ee2025d6b1fcb8b12d803768ecd7587e723ca945/dspy_ai-3.3.1-py3-none-any.whl", hash = "sha256:84760146779baa173d10b6164438c3ddc2eb58f164ed33d318c943304ab8b2ad", size = 1170, upload-time = "2026-08-21T23:06:20.945Z" },
 ]
 
 [[package]]
@@ -966,6 +1021,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/10/a1/ae4e3e5003468d6391d2c77b6fa1cd73bd5d13511d81c642d7b28ac90ed4/fsspec-2026.6.0.tar.gz", hash = "sha256:f5bac145310fe30e16e1471bd6840b2d990d609e872251d7e674241822abf01a", size = 313646, upload-time = "2026-06-16T01:57:28.105Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e5/22/4222d7ddf3da30f363edaa98e329c2bce6c65497c9cb2810931c8b2c0fbc/fsspec-2026.6.0-py3-none-any.whl", hash = "sha256:02e0b71817df9b2169dc30a16832045764def1191b43dcff5bb85bdee212d2a1", size = 203949, upload-time = "2026-06-16T01:57:26.358Z" },
+]
+
+[[package]]
+name = "gepa"
+version = "0.1.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/95/56/925779e5690971f1b022f7d107caf015c33ec09560261273ec137e23a8f2/gepa-0.1.4.tar.gz", hash = "sha256:6dd153a676ae5481764860d19286a9c0e8ddb5ef70d7f13044faf24978bdb6b8", size = 351343, upload-time = "2026-07-15T14:53:59.929Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fd/77/5b3a281cfd9caaa9e68349b434cf27f1ca448003ee0067a1ae2184dc52d1/gepa-0.1.4-py3-none-any.whl", hash = "sha256:12b971039599625c156d2231f6d72a29c31a22e9c237689459b5f1a3c353f532", size = 290167, upload-time = "2026-07-15T14:53:58.422Z" },
 ]
 
 [[package]]
@@ -1367,6 +1431,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c7/e0/27a6a081ae25420eda6768ceae05d7022a7f2447f420588843f2a44e4298/joserfc-1.7.4.tar.gz", hash = "sha256:b3bc561672ae541b17a9237053b48a03dacddd92d68047b3ecdfb4b5714a88ed", size = 234027, upload-time = "2026-07-19T15:43:02.739Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f9/bf/249dcd99b3376375910b7fa922383b57792975c8758f50d44612e749226c/joserfc-1.7.4-py3-none-any.whl", hash = "sha256:32d46c2cd5e3203c13e87a6c61333cab310b1ba80cd54b4c4f386a848a122463", size = 71000, upload-time = "2026-07-19T15:43:01.299Z" },
+]
+
+[[package]]
+name = "json-repair"
+version = "0.63.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/b5/fe/708f83b5d42f0dc687fc720b0eba1217d9632539a5ccac432c4cfc4794ee/json_repair-0.63.3.tar.gz", hash = "sha256:87747d2d136124961a56392687c84558f5609244301df5ce641b84dac52f3b92", size = 52739, upload-time = "2026-08-19T17:51:27.829Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e4/63/7d171e5fb75ec70e714ec119df1052af5a7224fc19c5668f0e99faf50e6a/json_repair-0.63.3-py3-none-any.whl", hash = "sha256:3681cc25e44f17749d6d440ae69d7c4275609a75092bcde03c6bacc3f3c8475e", size = 51170, upload-time = "2026-08-19T17:51:26.362Z" },
 ]
 
 [[package]]
@@ -3376,6 +3449,9 @@ agent = [
 compression = [
     { name = "headroom-ai" },
 ]
+dspy = [
+    { name = "dspy-ai" },
+]
 observability = [
     { name = "langfuse" },
     { name = "opentelemetry-exporter-otlp-proto-http" },
@@ -3400,6 +3476,7 @@ requires-dist = [
     { name = "aiosqlite", specifier = ">=0.20" },
     { name = "argon2-cffi", specifier = ">=23.1" },
     { name = "asyncpg", marker = "extra == 'postgres'", specifier = ">=0.30" },
+    { name = "dspy-ai", marker = "extra == 'dspy'", specifier = ">=2.5" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "headroom-ai", marker = "extra == 'compression'", specifier = ">=0.1" },
     { name = "httpx", specifier = ">=0.27" },
@@ -3418,7 +3495,7 @@ requires-dist = [
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
 ]
-provides-extras = ["presidio", "observability", "agent", "compression", "postgres"]
+provides-extras = ["presidio", "observability", "agent", "compression", "postgres", "dspy"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8.3" }]

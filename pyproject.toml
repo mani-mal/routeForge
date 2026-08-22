@@ -54,6 +54,10 @@ compression = ["headroom-ai>=0.1"]
 # core dep); deployment installs this: `uv sync --extra postgres`.
 postgres = ["asyncpg>=0.30"]
 
+# DSPy prompt-optimizer (Feature 3 Task 3). OFFLINE only -- never imported on
+# the request-serving path (see tools/prompt_opt/). Opt-in: `uv sync --extra dspy`.
+dspy = ["dspy-ai>=2.5"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
