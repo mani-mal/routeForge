@@ -18,6 +18,7 @@ responses) -- no real network. All job-log paths are tmp_path.
 """
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -26,6 +27,7 @@ from unittest.mock import patch
 
 import pytest
 
+from tools.orchestrate import jobs as jobs_module
 from tools.orchestrate.client import (
     OrchestratorError, TrainingJobSpec, TrainingJobStatus, TrainingOrchestratorClient,
     resolve_credentials,
@@ -300,6 +302,41 @@ def test_job_log_round_trips_and_transitions_state(tmp_path):
     assert loaded_again[0].state == "succeeded"
     assert loaded_again[0].result_endpoint == "https://onprem.example/v1"
     assert loaded_again[0].result_slug == "slug-1"
+
+
+def test_job_log_write_is_atomic_and_survives_a_mid_write_crash(tmp_path, monkeypatch):
+    """upsert_job must never truncate-then-write: simulate a crash between
+    the temp-file write and the `os.replace` swap (the exact window
+    `Path.write_text` doesn't have, because it truncates the real target
+    first) and assert the existing valid job-log is left completely intact
+    -- never a truncated/invalid partial write."""
+    jobs_file = tmp_path / "jobs.json"
+    config_dir = tmp_path / "config"
+
+    first = TrainingJobRecord(
+        job_id="ext-1", external_ref="ext-1", state="submitted",
+        base_model_ref="ref", method="distill", dataset_ref="ds-ref")
+    upsert_job(jobs_file, first, config_dir=config_dir)
+    good_contents = jobs_file.read_text()
+    assert json.loads(good_contents)  # sanity: valid JSON before the crash
+
+    def boom(*args, **kwargs):
+        raise OSError("simulated crash mid-write")
+
+    monkeypatch.setattr(jobs_module.os, "replace", boom)
+
+    second = TrainingJobRecord(
+        job_id="ext-2", external_ref="ext-2", state="submitted",
+        base_model_ref="ref", method="distill", dataset_ref="ds-ref")
+    with pytest.raises(OSError):
+        upsert_job(jobs_file, second, config_dir=config_dir)
+
+    # The target must still hold the last GOOD write, byte-for-byte -- not
+    # truncated, not partially overwritten -- and no leftover temp files.
+    assert jobs_file.read_text() == good_contents
+    assert json.loads(jobs_file.read_text()) == json.loads(good_contents)
+    leftover_tmp = list(tmp_path.glob("*.tmp"))
+    assert leftover_tmp == [], f"orphaned temp file(s) left behind: {leftover_tmp}"
 
 
 def test_job_log_path_guard_rejects_traversal():

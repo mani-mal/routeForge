@@ -11,6 +11,8 @@ in `TrainingJobRecord` are ever written, never the orchestrator token (see
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -75,6 +77,26 @@ def upsert_job(path: str | Path, record: TrainingJobRecord, *,
     by_id = {r.job_id: r for r in load_jobs(resolved, config_dir=config_dir)}
     by_id[record.job_id] = record
     resolved.parent.mkdir(parents=True, exist_ok=True)
-    resolved.write_text(
+    _atomic_write_text(
+        resolved,
         json.dumps([r.model_dump(mode="json") for r in by_id.values()], indent=2))
     return resolved
+
+
+def _atomic_write_text(target: Path, text: str) -> None:
+    """Write `text` to `target` atomically: write to a temp file in the same
+    directory, then `os.replace` it into place. A crash mid-write leaves the
+    temp file orphaned and `target` untouched — never a truncated/invalid
+    partial write, unlike `Path.write_text` (which truncates then writes)."""
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(target.parent), prefix=f".{target.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        os.replace(tmp_name, target)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except FileNotFoundError:
+            pass
+        raise

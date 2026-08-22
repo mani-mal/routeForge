@@ -274,6 +274,34 @@ def test_high_tier_error_rate_fires_and_stays_silent():
     assert high_tier_error_rate(quiet, routing) is None
 
 
+def test_high_tier_error_rate_ignores_the_synthetic_reject_bucket_tier():
+    """The `tier="-"` bucket (budget rejects — app/api/routes.py) is not a
+    real configured tier. Even with a high error/reject rate concentrated
+    there, the rule must not point at a non-existent tier "-"; it must still
+    fire for a genuine high-error real tier alongside it."""
+    routing = _routing_cfg()
+    agg = aggregate(
+        # Reject-bucket rows: high "error" rate, but tier "-" is not in
+        # routing.tiers and must never be recommended for review.
+        [_row(tier="-", status="rejected") for _ in range(9)]
+        + [_row(tier="-", status="ok") for _ in range(1)]
+        # A genuine real tier ("mid") with its own elevated error rate.
+        + [_row(tier="mid", status="ok") for _ in range(8)]
+        + [_row(tier="mid", status="error") for _ in range(2)])
+    rec = high_tier_error_rate(agg, routing)
+    assert rec is not None
+    assert rec.field_path == "fallback (tier=mid)"
+    assert "tier=-" not in rec.evidence
+    assert "tier=- " not in rec.field_path
+
+    # With ONLY the reject-bucket rows present (no real tier breaching the
+    # threshold), the rule must stay completely silent.
+    only_reject_bucket = aggregate(
+        [_row(tier="-", status="rejected") for _ in range(9)]
+        + [_row(tier="-", status="ok") for _ in range(1)])
+    assert high_tier_error_rate(only_reject_bucket, routing) is None
+
+
 def test_onprem_capacity_pressure_fires_and_stays_silent():
     routing = _routing_cfg()
     triggering = aggregate(

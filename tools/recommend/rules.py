@@ -141,9 +141,16 @@ def high_tier_error_rate(agg: Aggregates, routing: RoutingCfg) -> Recommendation
     """A tier's error/reject rate is elevated — flag it for review. This is a
     NON-value recommendation: current_value == recommended_value (nothing
     concrete to change), just a pointer at `fallback`/`max_escalations` and
-    the evidence that triggered it."""
+    the evidence that triggered it.
+
+    Only considers real, configured tiers (`routing.tiers`) — `agg.tiers` can
+    also carry synthetic non-tier bucket keys such as `"-"` (the reject
+    bucket `UsageRecord.tier` is written as for budget rejects) or `"?"`;
+    those aren't routing tiers and must never be recommended for review."""
     worst: Any = None
     for tier in sorted(agg.tiers):
+        if tier not in routing.tiers:
+            continue
         stats = agg.tiers[tier]
         if stats.total_count < MIN_TIER_TOTAL_FOR_ERROR_RULE:
             continue
