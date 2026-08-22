@@ -53,6 +53,11 @@ class RoutingCfg(BaseModel):
     # backend (its confidence is seeded/persona-driven, not logprob-derived).
     confidence_logprob_temperature: float = 1.0
     max_escalations: int
+    # Failure-driven lateral model switch: on a retryable backend failure the
+    # gateway excludes the failed model and re-selects -- a same-tier peer first,
+    # escalating only when the tier empties. This bounds those retries. 0 makes a
+    # single failure terminal (no lateral retry). Owned here (routing input).
+    max_failover_attempts: int = 2
     risk_floors: dict[str, str]
     model_pool: list[PoolCandidate]
     fallback: dict[str, int]

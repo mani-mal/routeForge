@@ -50,7 +50,8 @@ class Router:
         return tokens_after / 1_000_000 * (p.input + p.output)
 
     def select(self, ctx: ExecutionPolicyContext, tokens_after: int,
-               complexity: float, min_tier: str | None = None) -> RoutingDecision:
+               complexity: float, min_tier: str | None = None,
+               exclude: frozenset[str] = frozenset()) -> RoutingDecision:
         rejected: list[RejectedCandidate] = []
         pool = self._reg.effective_pool() if self._reg else self._s.routing.model_pool
 
@@ -65,6 +66,16 @@ class Router:
                 rejected.append(RejectedCandidate(
                     name=c.name, provider=c.provider, tier=c.tier,
                     display_name=c.display_name, reason=reason))
+                continue
+            # Failure-driven lateral switch: drop a model the gateway already
+            # saw fail on this request. Placed AFTER the residency check so an
+            # excluded cloud model under onprem_only still reads "residency",
+            # never "prior failure" -- excluding a name only ever removes a
+            # candidate, so it can never weaken residency.
+            if c.name in exclude:
+                rejected.append(RejectedCandidate(
+                    name=c.name, provider=c.provider, tier=c.tier,
+                    display_name=c.display_name, reason="excluded · prior failure"))
                 continue
             if ctx.model_scope_active and c.name not in ctx.allowed_models:
                 rejected.append(RejectedCandidate(
