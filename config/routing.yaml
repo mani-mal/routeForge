@@ -74,3 +74,9 @@ stage_signals:
   tool_error_raise: true
   exploration_repeat: 3
   planner_role_raise: true
+  # Role (plan/verify/execute/format, inferred from message state) -> min_tier
+  # raise. Absent roles never raise -- execute/format leave the router free
+  # to pick the cheap tier. "plan" also requires planner_role_raise: true.
+  role_tiers:
+    plan: frontier
+    verify: mid
