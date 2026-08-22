@@ -195,6 +195,93 @@ def test_emit_candidate_never_sets_verified_true(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Fix round 1 -- `--out-label` guards (clobber / traversal / overwrite)
+# ---------------------------------------------------------------------------
+
+def test_emit_candidate_rejects_out_label_equal_to_base_label(tmp_path):
+    """`--out-label v1` (== --base-label) must never be allowed to overwrite
+    the shipped, hand-authored, verified base artifact."""
+    with pytest.raises(OptimizerError, match="same as --base-label"):
+        emit_candidate(
+            str(tmp_path), "some text", base_label="v1", dataset_path="d.jsonl",
+            model_slug="m", example_count=1, out_label="v1")
+    # Nothing written at all.
+    assert not (tmp_path / "task_mode_classifier").exists()
+
+
+@pytest.mark.parametrize("bad_label", [
+    "../v1", "../../etc/passwd", "sub/dir", "sub\\dir", "..", "...", ".hidden",
+])
+def test_emit_candidate_rejects_unsafe_out_label(tmp_path, bad_label):
+    """Path separators, `..`, and leading dots must be rejected -- a
+    traversal label like `../../x` must never write outside artifacts_dir."""
+    with pytest.raises(OptimizerError):
+        emit_candidate(
+            str(tmp_path), "some text", base_label="v1", dataset_path="d.jsonl",
+            model_slug="m", example_count=1, out_label=bad_label)
+    # No file was written anywhere under or outside tmp_path.
+    written = list(tmp_path.rglob("*.yaml"))
+    assert written == []
+
+
+def test_emit_candidate_refuses_to_overwrite_existing_artifact(tmp_path):
+    """A second emit at the same label (explicit or content-derived) must
+    error instead of silently clobbering the first candidate."""
+    out_path = emit_candidate(
+        str(tmp_path), "some text", base_label="v1", dataset_path="d.jsonl",
+        model_slug="m", example_count=1, out_label="dup-run")
+    original_contents = out_path.read_text()
+
+    with pytest.raises(OptimizerError, match="already exists"):
+        emit_candidate(
+            str(tmp_path), "different text", base_label="v1", dataset_path="d.jsonl",
+            model_slug="m", example_count=1, out_label="dup-run")
+
+    # The original candidate is untouched.
+    assert out_path.read_text() == original_contents
+
+
+def test_emit_candidate_never_modifies_shipped_v1_artifact(tmp_path):
+    """Prove the refuse-overwrite guard protects the real shipped base
+    artifact: pre-seed a tmp artifacts_dir with a copy of the shipped
+    config/prompts/task_mode_classifier/v1.yaml and assert emit_candidate
+    cannot touch it via either the base-label-clobber guard or the
+    refuse-overwrite guard, and the real repo file is untouched throughout."""
+    real_v1 = REPO_ROOT / "config" / "prompts" / "task_mode_classifier" / "v1.yaml"
+    real_v1_contents_before = real_v1.read_text()
+
+    artifacts_dir = tmp_path / "prompts"
+    _write_base_artifact(artifacts_dir, label="v1", text=real_v1_contents_before)
+
+    # (1) --out-label v1 is rejected outright (clobber guard).
+    with pytest.raises(OptimizerError, match="same as --base-label"):
+        emit_candidate(
+            str(artifacts_dir), "candidate text", base_label="v1",
+            dataset_path="d.jsonl", model_slug="m", example_count=1,
+            out_label="v1")
+
+    # (2) Even a distinct label that happens to already exist on disk is
+    # refused (refuse-overwrite guard) -- simulate a prior candidate file
+    # sitting at the target path.
+    existing = artifacts_dir / "task_mode_classifier" / "already-there.yaml"
+    existing.write_text("sentinel: true\n")
+    with pytest.raises(OptimizerError, match="already exists"):
+        emit_candidate(
+            str(artifacts_dir), "candidate text", base_label="v1",
+            dataset_path="d.jsonl", model_slug="m", example_count=1,
+            out_label="already-there")
+    assert existing.read_text() == "sentinel: true\n"
+
+    # The v1.yaml artifact in the tmp dir (standing in for the shipped file)
+    # was never modified by either attempt.
+    v1_path = artifacts_dir / "task_mode_classifier" / "v1.yaml"
+    assert yaml.safe_load(v1_path.read_text())["verified"] is True
+
+    # And the actual repo-shipped file was never touched by this test.
+    assert real_v1.read_text() == real_v1_contents_before
+
+
+# ---------------------------------------------------------------------------
 # Invariant 4 -- human-gate holds (reuses Task 1's enforce guard)
 # ---------------------------------------------------------------------------
 
@@ -322,3 +409,23 @@ def test_load_dataset_skips_blank_lines(tmp_path):
 def test_load_dataset_missing_file_raises(tmp_path):
     with pytest.raises(ValueError, match="not found"):
         load_dataset(str(tmp_path / "nope.jsonl"))
+
+
+# ---------------------------------------------------------------------------
+# Fix round 1 (Minor) -- main() surfaces startup errors as the friendly line,
+# not a raw traceback, for exception types beyond OptimizerError/ValueError.
+# ---------------------------------------------------------------------------
+
+def test_main_reports_friendly_error_for_bad_config_dir(tmp_path, capsys):
+    from tools.prompt_opt.optimize import main
+
+    rc = main([
+        "--dataset", str(tmp_path / "eval.jsonl"),
+        "--model", "m",
+        "--config-dir", str(tmp_path / "does-not-exist"),
+    ])
+
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert "prompt-opt: error:" in captured.err
+    assert "Traceback" not in captured.err

@@ -35,6 +35,7 @@ import argparse
 import asyncio
 import hashlib
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any, Callable
@@ -174,6 +175,32 @@ def _content_label(optimized_text: str) -> str:
     return f"dspy-{hashlib.sha256(optimized_text.encode()).hexdigest()[:8]}"
 
 
+_SAFE_LABEL_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _validate_out_label(out_label: str, base_label: str) -> None:
+    """Guards against `--out-label` clobbering the shipped/base artifact or
+    escaping `artifacts_dir` (path traversal). Raises `OptimizerError` --
+    never lets an unsafe label reach a filesystem write."""
+    if out_label == base_label:
+        raise OptimizerError(
+            f"--out-label {out_label!r} is the same as --base-label "
+            f"{base_label!r} -- refusing to overwrite the base artifact. "
+            "Pick a different --out-label.")
+    if "/" in out_label or "\\" in out_label:
+        raise OptimizerError(
+            f"--out-label {out_label!r} must not contain a path separator.")
+    if ".." in out_label:
+        raise OptimizerError(f"--out-label {out_label!r} must not contain '..'.")
+    if out_label.startswith("."):
+        raise OptimizerError(
+            f"--out-label {out_label!r} must not start with '.'.")
+    if not _SAFE_LABEL_RE.match(out_label):
+        raise OptimizerError(
+            f"--out-label {out_label!r} contains unsafe characters -- only "
+            "letters, digits, '.', '_', '-' are allowed.")
+
+
 def emit_candidate(
     artifacts_dir: str,
     optimized_text: str,
@@ -189,10 +216,31 @@ def emit_candidate(
     `PromptArtifact`: `verified: false` (always, never `true`), `source:
     "dspy"`. Never touches `config/routing.yaml` or `prompt_opt.active` --
     those live entirely outside `artifacts_dir` and this function writes
-    nothing else."""
+    nothing else.
+
+    Guards (checked BEFORE any filesystem write, so a bad `out_label` or an
+    existing candidate can never be clobbered):
+    - `out_label` may not equal `base_label` (would overwrite the base
+      artifact -- e.g. the shipped, hand-authored, `verified: true` v1.yaml).
+    - `out_label` must be a safe single filename stem: no path separator, no
+      `..`, no leading dot, and only `[A-Za-z0-9._-]` characters (blocks path
+      traversal outside `artifacts_dir`).
+    - the resolved `out_path` must not already exist (refuses to overwrite
+      any prior candidate, including a content-hash re-run landing on the
+      same default label)."""
     from app.prompts.store import PromptArtifact  # local: keep this module dspy-import-free at top level
 
+    if out_label is not None:
+        _validate_out_label(out_label, base_label)
     label = out_label or _content_label(optimized_text)
+
+    out_path = Path(artifacts_dir, prompt_id, f"{label}.yaml")
+    if out_path.exists():
+        raise OptimizerError(
+            f"candidate artifact already exists at {out_path} -- refusing to "
+            "overwrite. Pick a different --out-label, or remove the old "
+            "file if you intend to replace it.")
+
     notes = (
         f"DSPy candidate optimized from base label {base_label!r} using "
         f"dataset {dataset_path!r} ({example_count} examples) against "
@@ -204,9 +252,7 @@ def emit_candidate(
         id=prompt_id, label=label, text=optimized_text,
         verified=False, source="dspy", notes=notes)
 
-    out_dir = Path(artifacts_dir, prompt_id)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{label}.yaml"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(yaml.safe_dump(artifact.model_dump(), sort_keys=False))
     return out_path
 
@@ -295,7 +341,15 @@ def main(argv: list[str] | None = None) -> int:
             base_label=args.base_label,
             out_label=args.out_label,
         )
-    except (OptimizerError, ValueError) as e:
+    except Exception as e:
+        # Broad on purpose: any startup/runtime failure (a bad --config-dir
+        # raising FileNotFoundError, a malformed YAML, an OptimizerError /
+        # ValueError from the pipeline, ...) becomes this one friendly line
+        # instead of a raw traceback. `SystemExit` (raised by the config lint
+        # in `load_settings`/`enforce` on a real boot-config violation, and
+        # already printing its own named CONFIG_LINT line) is a BaseException,
+        # not an Exception, so it is never caught here -- it propagates and
+        # keeps its own exit code.
         print(f"prompt-opt: error: {e}", file=sys.stderr)
         return 1
 
