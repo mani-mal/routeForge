@@ -22,7 +22,25 @@ def test_partition_key_includes_tenant_id():
     s = DeterministicMemoryStore(ttl_seconds=3600, clock=lambda: 0.0)
     s.write("x", tenant_id="tenant-a", application_id="app1", session_id="sess1")
     assert s.size == 1
-    assert all(key.startswith("tenant-a\x1f") for key in s._data)  # noqa: SLF001
+    assert all(key[0] == "tenant-a" for key in s._data)  # noqa: SLF001
+
+
+def test_partition_key_is_injective_tuple_no_delimiter_collision():
+    """R2: the partition key is the native (tenant_id, application_id,
+    session_id) tuple, not a joined string -- two DIFFERENT tuples can never
+    collide onto the same key, even when a component contains the old
+    separator character. Regression for a review finding: a joined string
+    key let (tenant_id="a\\x1fx", application_id="b", session_id="c") and
+    (tenant_id="a", application_id="x", session_id="b\\x1fc") collide onto
+    the same string key, leaking tenant "a"'s memory into a recall scoped to
+    tenant "a\\x1fx"."""
+    s = DeterministicMemoryStore(ttl_seconds=3600, clock=lambda: 0.0)
+    s.write("secret for a\x1fx/b/c", tenant_id="a\x1fx", application_id="b",
+             session_id="c")
+    assert s.recall(tenant_id="a", application_id="x",
+                     session_id="b\x1fc", max_items=5) == []
+    assert s.recall(tenant_id="a\x1fx", application_id="b", session_id="c",
+                     max_items=5) == ["secret for a\x1fx/b/c"]
 
 
 def test_tenant_id_required():

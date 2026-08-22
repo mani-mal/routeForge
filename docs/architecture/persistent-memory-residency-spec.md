@@ -33,15 +33,24 @@ site.
 ## R2 — tenant isolation
 
 A recall for one tenant can **never** return another tenant's memory. This is structural, not a
-filter applied after a broader scan: `DeterministicMemoryStore` partitions its internal dict by a
-key derived from `(tenant_id, application_id, session_id)`, with `tenant_id` **mandatory** and
+filter applied after a broader scan: `DeterministicMemoryStore` partitions its internal dict by
+the **native tuple** `(tenant_id, application_id, session_id)`, with `tenant_id` **mandatory** and
 always the leading component. `recall()` reads only the requesting partition's list — there is no
 code path that scans across partitions.
 
-**Enforcement point:** `app/memory/store.py::_partition_key` (raises if `tenant_id` is falsy) +
-`DeterministicMemoryStore.recall`'s exclusive per-key lookup. Tested by
-`tests/test_memory_store.py::test_tenant_isolation_structural` and
-`::test_partition_key_includes_tenant_id`.
+The key is a Python tuple, not a delimiter-joined string. Tuple equality compares
+component-by-component with no separator character in play, so two different
+`(tenant_id, application_id, session_id)` triples can never collide onto the same key regardless
+of what characters an id contains — the partition key is collision-free (injective) by
+construction. (An earlier revision joined the components into a single `\x1f`-separated string;
+that was not injective — e.g. `("a\x1fx", "b", "c")` and `("a", "x", "b\x1fc")` joined to the same
+string. The tuple key closes that gap.)
+
+**Enforcement point:** `app/memory/store.py::_partition_key` (raises if `tenant_id` is falsy, and
+returns the tuple key) + `DeterministicMemoryStore.recall`'s exclusive per-key lookup. Tested by
+`tests/test_memory_store.py::test_tenant_isolation_structural`,
+`::test_partition_key_includes_tenant_id`, and
+`::test_partition_key_is_injective_tuple_no_delimiter_collision`.
 
 ## R3 — residency boundary
 
@@ -144,7 +153,7 @@ code that constructs a store and reads/writes it per request.
 | Guarantee | Enforcement | Test |
 |---|---|---|
 | R1 sanitized-only | caller contract (Task 2 call site) | reviewed at Task 2, not testable in Task 1 |
-| R2 tenant isolation | structural partition key (`tenant_id` mandatory, leading) | `test_tenant_isolation_structural`, `test_partition_key_includes_tenant_id` |
+| R2 tenant isolation | structural, injective tuple partition key (`tenant_id` mandatory, leading) | `test_tenant_isolation_structural`, `test_partition_key_includes_tenant_id`, `test_partition_key_is_injective_tuple_no_delimiter_collision` |
 | R3 residency boundary | `to_cloud` param + honesty counter, caller discipline | `test_retrievals_to_cloud_pinned_zero_on_normal_recall` |
 | R4 never exported | counts-only `MemoryRecord` + boot lint | `test_lint_rejects_memory_telemetry_export`, `test_memory_record_is_counts_only` |
 | R5 enforced TTL | sweep-on-write + evict-on-read + boot lint | `test_ttl_swept_on_write`, `test_ttl_evicted_on_read`, `test_lint_rejects_memory_nonpositive_ttl` |

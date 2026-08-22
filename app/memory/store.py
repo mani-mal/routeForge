@@ -57,15 +57,22 @@ class MemoryStore(Protocol):
     def retrievals_to_cloud(self) -> int: ...
 
 
-def _partition_key(tenant_id: str, application_id: str, session_id: str) -> str:
+PartitionKey = tuple[str, str, str]
+
+
+def _partition_key(tenant_id: str, application_id: str, session_id: str) -> PartitionKey:
     # tenant_id is MANDATORY and always the leading component of the key --
     # a recall for tenant B can structurally never observe tenant A's
     # entries (R2), because they never share a dict key, not because of a
-    # post-hoc filter. \x1f (unit separator) avoids collisions with ids that
-    # happen to contain plain delimiters like ":" or "/".
+    # post-hoc filter. The key is the native (tenant_id, application_id,
+    # session_id) tuple -- NOT a joined/delimited string. Python tuple
+    # equality compares component-by-component with no separator character,
+    # so distinct tuples can never collide onto the same key regardless of
+    # what characters an id contains: unlike a joined string, this is
+    # collision-free (injective) by construction.
     if not tenant_id:
         raise ValueError("tenant_id is required for a memory partition key")
-    return f"{tenant_id}\x1f{application_id}\x1f{session_id}"
+    return (tenant_id, application_id, session_id)
 
 
 class DeterministicMemoryStore:
@@ -79,7 +86,7 @@ class DeterministicMemoryStore:
                  clock: Callable[[], float] = time.monotonic) -> None:
         self._ttl = ttl_seconds
         self._clock = clock
-        self._data: dict[str, list[MemoryEntry]] = {}
+        self._data: dict[PartitionKey, list[MemoryEntry]] = {}
         self._retrievals = 0
         self._retrievals_to_cloud = 0
 
