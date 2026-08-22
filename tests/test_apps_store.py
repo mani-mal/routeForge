@@ -152,6 +152,141 @@ def test_pii_detection_and_stream_mode_round_trip_through_policy_view():
     _run(go())
 
 
+def test_usage_summary_quality_aggregate_matches_history_formula():
+    """usage_summary must emit token_intelligence_density/cost_intelligence_density
+    computed exactly like app/api/history.py:145-146 (quality_sum/tok_sum*1000 and
+    quality_sum/usd_sum), plus a quality_source_distribution counting provenance —
+    additive to the existing fields (Task 2, quality axis)."""
+    db = _fresh_db()
+
+    async def go():
+        async with db.session() as s:
+            await store.record_usage(
+                s, application_id="acme", request_id="q-1", model="local-8b",
+                provider="onprem", tier="cheap", prompt_tokens=700,
+                completion_tokens=300, total_tokens=1000, cost_usd=0.01,
+                baseline_usd=0.05, latency_ms=10.0, sensitivity="public",
+                onprem_only=False, quality=0.5, quality_source="tier_default")
+            await store.record_usage(
+                s, application_id="acme", request_id="q-2", model="local-70b",
+                provider="onprem", tier="frontier", prompt_tokens=1500,
+                completion_tokens=500, total_tokens=2000, cost_usd=0.02,
+                baseline_usd=0.02, latency_ms=20.0, sensitivity="public",
+                onprem_only=False, quality=1.0, quality_source="calibrated")
+            await s.commit()
+
+            summary = await store.usage_summary(s, application_id="acme")
+
+            # Same numerator/denominators as the two records above.
+            quality_sum = 0.5 + 1.0
+            total_tokens = 1000 + 2000
+            total_usd = 0.01 + 0.02
+            expected_tid = quality_sum / total_tokens * 1000.0
+            expected_cid = quality_sum / total_usd
+            assert summary["token_intelligence_density"] == expected_tid
+            assert summary["cost_intelligence_density"] == expected_cid
+            assert summary["quality_source_distribution"] == {
+                "tier_default": 1, "calibrated": 1}
+
+            # Additive: pre-existing fields are untouched by the new ones.
+            assert summary["count"] == 2
+            assert summary["total_tokens"] == total_tokens
+            assert abs(summary["total_usd"] - total_usd) < 1e-9
+
+    _run(go())
+
+
+def test_usage_summary_quality_zero_guards():
+    """Zero total_tokens and zero total_usd must both floor the density
+    fields to 0.0 rather than raising/NaN-ing (mirrors history.py's guards)."""
+    db = _fresh_db()
+
+    async def go():
+        async with db.session() as s:
+            await store.record_usage(
+                s, application_id="acme", request_id="q-zero", model="local-8b",
+                provider="onprem", tier="cheap", prompt_tokens=0,
+                completion_tokens=0, total_tokens=0, cost_usd=0.0,
+                baseline_usd=0.0, latency_ms=1.0, sensitivity="public",
+                onprem_only=False, quality=0.5, quality_source="tier_default")
+            await s.commit()
+
+            summary = await store.usage_summary(s, application_id="acme")
+            assert summary["token_intelligence_density"] == 0.0
+            assert summary["cost_intelligence_density"] == 0.0
+            assert summary["quality_source_distribution"] == {"tier_default": 1}
+
+    _run(go())
+
+
+def test_usage_by_application_quality_aggregate_matches_per_app():
+    """usage_by_application's per-app rollup must carry the same quality
+    aggregate (TID/CID/quality_source_distribution) as usage_summary scoped
+    to that one application — the two views must reconcile."""
+    db = _fresh_db()
+
+    async def go():
+        async with db.session() as s:
+            await store.record_usage(
+                s, application_id="acme", request_id="qa-1", model="local-8b",
+                provider="onprem", tier="cheap", prompt_tokens=700,
+                completion_tokens=300, total_tokens=1000, cost_usd=0.01,
+                baseline_usd=0.05, latency_ms=10.0, sensitivity="public",
+                onprem_only=False, quality=0.5, quality_source="tier_default")
+            await store.record_usage(
+                s, application_id="hospital", request_id="qa-2", model="local-70b",
+                provider="onprem", tier="frontier", prompt_tokens=1500,
+                completion_tokens=500, total_tokens=2000, cost_usd=0.02,
+                baseline_usd=0.02, latency_ms=20.0, sensitivity="restricted",
+                onprem_only=True, quality=1.0, quality_source="calibrated")
+            await s.commit()
+
+            rollup = {r["application_id"]: r
+                     for r in await store.usage_by_application(s)}
+            acme_summary = await store.usage_summary(s, application_id="acme")
+            hospital_summary = await store.usage_summary(s, application_id="hospital")
+
+            assert rollup["acme"]["token_intelligence_density"] == \
+                acme_summary["token_intelligence_density"]
+            assert rollup["acme"]["cost_intelligence_density"] == \
+                acme_summary["cost_intelligence_density"]
+            assert rollup["acme"]["quality_source_distribution"] == \
+                {"tier_default": 1} == acme_summary["quality_source_distribution"]
+
+            assert rollup["hospital"]["token_intelligence_density"] == \
+                hospital_summary["token_intelligence_density"]
+            assert rollup["hospital"]["quality_source_distribution"] == \
+                {"calibrated": 1}
+
+            # No internal-only accumulator key (e.g. a raw "_quality_sum")
+            # leaks into the returned aggregate — counts/sums/ratios only.
+            for row in rollup.values():
+                assert all(not k.startswith("_") for k in row)
+
+    _run(go())
+
+
+def test_usage_by_application_quality_zero_guards():
+    db = _fresh_db()
+
+    async def go():
+        async with db.session() as s:
+            await store.record_usage(
+                s, application_id="acme", request_id="qz-1", model="local-8b",
+                provider="onprem", tier="cheap", prompt_tokens=0,
+                completion_tokens=0, total_tokens=0, cost_usd=0.0,
+                baseline_usd=0.0, latency_ms=1.0, sensitivity="public",
+                onprem_only=False, quality=0.5, quality_source="tier_default")
+            await s.commit()
+
+            rollup = {r["application_id"]: r
+                     for r in await store.usage_by_application(s)}
+            assert rollup["acme"]["token_intelligence_density"] == 0.0
+            assert rollup["acme"]["cost_intelligence_density"] == 0.0
+
+    _run(go())
+
+
 def test_pii_detection_and_stream_mode_null_round_trip_as_none():
     db = _fresh_db()
 

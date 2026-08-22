@@ -25,6 +25,11 @@ export interface RequestSummary {
   ts?: string | null;
   total_tokens: number;
   quality_sum: number; // Σ per-call quality — Token/Cost Intelligence Density numerator
+  // Chosen model's quality score + its provenance (tier_default | calibrated |
+  // published | customer — see app/routing/quality.py). A tier-quality PROXY
+  // in the demo, NOT measured accuracy; always show provenance alongside it.
+  quality?: number | null;
+  quality_source?: string | null;
   session_id?: string | null; // B17: client workflow-run correlation id (opaque); groups rows
 }
 
@@ -100,6 +105,10 @@ export interface Stats {
   tier_distribution: Record<string, number>;
   latency_p50_ms: number;
   latency_p95_ms: number;
+  // Quality-per-resource, same formula as app/api/history.py's stats_over —
+  // a tier-quality PROXY, not measured accuracy.
+  token_intelligence_density: number;
+  cost_intelligence_density: number;
 }
 
 export interface FleetRow {
@@ -114,6 +123,8 @@ export interface FleetRow {
   onprem_violations: number; // onprem_only requests served off-prem — a real Rule-3 breach
   latency_p50_ms: number;
   tier_distribution: Record<string, number>;
+  token_intelligence_density: number;
+  cost_intelligence_density: number;
 }
 
 export interface Controls {
@@ -240,6 +251,13 @@ export interface UsageSummary {
   application_distribution: Record<string, number>;
   latency_p50_ms: number;
   latency_p95_ms: number;
+  // Quality-per-resource + its provenance breakdown (app/apps/store.py
+  // usage_summary), mirroring history.py's stats_over formula exactly. A
+  // tier-quality PROXY (or calibrated/customer when set) — not measured
+  // accuracy; quality_source_distribution shows how much of it is which.
+  token_intelligence_density: number;
+  cost_intelligence_density: number;
+  quality_source_distribution: Record<string, number>;
 }
 
 // Per-application rollup for the cross-app usage report (durable, DB-backed).
@@ -255,6 +273,9 @@ export interface UsageByApp {
   tier_distribution: Record<string, number>;
   model_distribution: Record<string, number>;
   sensitivity_distribution: Record<string, number>;
+  token_intelligence_density: number;
+  cost_intelligence_density: number;
+  quality_source_distribution: Record<string, number>;
 }
 
 // Admin routes use a session cookie; same-origin (Vite proxies /admin) so the
