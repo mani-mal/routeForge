@@ -153,6 +153,31 @@ class ContextOptimizationCfg(BaseModel):
     cache_alignment: bool
 
 
+class SemanticCacheCfg(BaseModel):
+    """Feature #6 -- infra switch only, mirrors context_optimization's
+    placement/shape. Default OFF (C7): with enabled=false nothing in the
+    pipeline constructs a DeterministicSemanticCache (Task 1 wires no
+    pipeline code at all). See
+    docs/architecture/semantic-cache-residency-spec.md."""
+    enabled: bool = False
+    residency: str = "local_only"     # lint-enforced when enabled -- CLAUDE.md rule 6
+    ttl_hours: int = 24                # lint-enforced > 0 when enabled
+    export_to_telemetry: bool = False  # lint-enforced when enabled
+    max_entries: int = 0               # 0 = unbounded beyond TTL (a size cap is optional)
+    # Reuses BypassCfg's shape for config-shape parity with
+    # context_optimization.bypass_on. `user_prompt` is IGNORED here -- it only
+    # means something for per-message compression treatment ("don't compress
+    # the live question"); a cache check/store is a whole-request decision,
+    # not a per-message one. Kept in the shape so operators don't have to
+    # learn a second bypass schema.
+    bypass_on: BypassCfg
+    # Deferred embedding seam (C8): a future SemanticCacheBackend behind this
+    # value. "off" is the only meaningful value today -- inert placeholder,
+    # nothing reads it to construct anything. No embedding library is
+    # imported anywhere in this codebase.
+    embedding: str = "off"
+
+
 class ServingCfg(BaseModel):
     providers: dict[str, ProviderCfg]
     pii_detection: str
@@ -164,6 +189,7 @@ class ServingCfg(BaseModel):
     allow_app_pii_downgrade: bool
     reject_stream_requests: bool
     context_optimization: ContextOptimizationCfg
+    semantic_cache: SemanticCacheCfg
     observability: ObservabilityCfg
 
 
