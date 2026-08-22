@@ -25,6 +25,22 @@ class Gateway:
         self._router = router
         self._reg = registry
 
+    @property
+    def router(self) -> Router:
+        """Exposes the SAME `Router` instance `run`/`run_stream` use, so
+        Task 2's optional step-4 LLM classifier (`app/routing/task_mode_llm.
+        py::classify_task_mode`) routes through the identical
+        residency-filtered entry point instead of the pipeline constructing
+        (or the classifier being handed) a second one."""
+        return self._router
+
+    @property
+    def backend(self) -> InferenceBackend:
+        """Exposes the SAME `InferenceBackend` instance `run`/`run_stream`
+        call, for the same reason as `router` above -- the classifier makes
+        its (post-selection) call on this instance, never a new one."""
+        return self._backend
+
     async def run(self, ctx: ExecutionPolicyContext, messages: list[Message],
                   tokens_after: int, complexity: float, hint: dict
                   ) -> tuple[GenerationResult, list[DecisionRecord]]:
