@@ -7,8 +7,8 @@ from app.errors import PolicyGateError
 from app.gateway.backends.base import count_tokens
 from app.gateway.gateway import Gateway
 from app.models import (
-    ChatRequest, Choice, ExecutionPolicyContext, GenerationResult, Message,
-    Usage, VerificationRecord,
+    ChatRequest, Choice, ExecutionPolicyContext, GenerationResult, MemoryRecord,
+    Message, Usage, VerificationRecord,
 )
 from app.output.verify import verify
 from app.policy.detectors import Detector, make_detector
@@ -17,6 +17,8 @@ from app.policy.gate import Gate
 from app.apps.privacy import AppPrivacyProfile, effective_rules
 from app.compression import compress
 from app.compression.ccr import CCRStore
+from app.memory import recall_memory, write_memory
+from app.memory.store import MemoryStore
 from app.routing.task_mode import decide as decide_mode
 
 if TYPE_CHECKING:
@@ -48,7 +50,8 @@ class Pipeline:
     def __init__(self, settings: Settings, gate: Gate, detector: Detector,
                  gateway: Gateway, self_port: int,
                  co_cfg_provider: Callable[[], ContextOptimizationCfg],
-                 ccr: CCRStore, registry: "ModelRegistry | None" = None) -> None:
+                 ccr: CCRStore, registry: "ModelRegistry | None" = None,
+                 memory: MemoryStore | None = None) -> None:
         self._s = settings
         self._gate = gate
         self._detector = detector
@@ -73,6 +76,14 @@ class Pipeline:
         # direct path — see app/compression/__init__.py, ccr.py.
         self._co_cfg_provider = co_cfg_provider
         self._ccr = ccr
+        # Persistent memory (Feature 5, Task 2): parallels self._ccr above --
+        # a single shared, always-constructed store (app/main.py builds one
+        # `DeterministicMemoryStore` regardless of the flag, like CCRStore),
+        # but only READ/WRITTEN when `settings.serving.memory.enabled`. No
+        # runtime toggle endpoint exists for memory (unlike co_cfg_provider,
+        # which tracks POST /api/controls), so the config is read directly
+        # off `self._s` rather than through a mutable provider callback.
+        self._memory = memory
         # Per-app pii_detection override (Task 3): an app may select a
         # cheaper/weaker base detector ("off"/"regex") than the process-wide
         # global one. Presidio is expensive to construct (loads a spaCy
@@ -178,6 +189,26 @@ class Pipeline:
 
         san_messages = [Message(role=request.messages[-1].role, content=sanitized)]
 
+        # Memory READ (Feature 5, Task 2): after san_messages (post-gate,
+        # sanitized) and before compress() -- recalled context is prepended
+        # so it gets compressed + priced like any other request tokens, no
+        # separate untracked token path. Runs for BOTH the direct and
+        # multi_step branches below, since both consume `san_messages`.
+        #
+        # Partition key note: `run()` is never handed a distinct
+        # application_id -- "the application id equals the tenant slug"
+        # (CLAUDE.md/routes.py._authenticate), so `tenant_id` doubles as
+        # `application_id` here. A per-session partition (`x-routeforge-session`,
+        # app/api/routes.py::_read_session_id) is also never threaded into
+        # `run()`/`run_stream()` today, so `session_id=""` -- every recall for
+        # this tenant+app shares one partition regardless of session header.
+        mem_cfg = self._s.serving.memory
+        recall = recall_memory(self._memory, mem_cfg, ctx, san_messages,
+                               tenant_id=tenant_id, application_id=tenant_id,
+                               session_id="")
+        if recall.messages:
+            san_messages = recall.messages + san_messages
+
         if mode == "multi_step":
             # No outer compress() here: the agent runtime re-enters
             # compression per hop (app/agent/internal_endpoint.py, Task 7 /
@@ -185,7 +216,8 @@ class Pipeline:
             # work and its tokens_after would not reflect the real per-hop
             # pricing basis. san_messages (sanitized, not yet compressed)
             # still goes to the agent — each hop compresses its own view.
-            return await self._run_multi_step(request_id, ctx, request, san_messages, det)
+            return await self._run_multi_step(request_id, ctx, request, san_messages, det,
+                                              recall.record)
 
         comp = compress(san_messages, ctx, self._co_cfg_provider(), ccr=self._ccr)
         complexity = min(1.0, comp.tokens_after / 2000)
@@ -198,6 +230,15 @@ class Pipeline:
         text, vrec = verify(det, ctx, result.text)
         if not vrec.passed:
             raise PipelineRejected(vrec.reason)
+
+        # Memory WRITE (Feature 5, Task 2): success path ONLY (a rejected/
+        # failed request writes nothing -- unreachable above since a failed
+        # verify already raised). R1 sanitized-only: built from `sanitized`
+        # (the gate's redacted input) and `text` (the post-verify output)
+        # ONLY -- never `result.text` (pre-verify raw), `raw_completion`, or
+        # the raw request. See write_memory()'s docstring for the contract.
+        write_memory(self._memory, mem_cfg, ctx, sanitized, text,
+                    tenant_id=tenant_id, application_id=tenant_id, session_id="")
 
         total = sum(r.actual_cost_usd or 0.0 for r in records)
         # Two-lever accounting (CLAUDE.md: "don't attribute all savings to
@@ -222,6 +263,8 @@ class Pipeline:
         routing_saved = baseline_after - total
         trace = [r.model_dump() for r in records] + [vrec.model_dump()]
         trace.append(comp.record.model_dump())
+        if recall.record is not None:
+            trace.append(recall.record.model_dump())
 
         # Only the SERVED attempt's quality counts here, not every attempt's.
         # Gateway.run appends one step="router" DecisionRecord PER ATTEMPT, so
@@ -325,6 +368,18 @@ class Pipeline:
                 "complete response before egress")
 
         san_messages = [Message(role=request.messages[-1].role, content=sanitized)]
+        # Memory READ only (Feature 5, Task 2) -- mirrors run()'s hook. NEVER
+        # a WRITE on this path: step-9 verify() never runs while streaming
+        # (waived, by design -- see this method's docstring), so there is no
+        # verified output to build a sanitized-only summary from. Writing
+        # `result.text` here would be writing un-verified content, which R1 /
+        # this task's "never on any path" rule forbids.
+        mem_cfg = self._s.serving.memory
+        recall = recall_memory(self._memory, mem_cfg, ctx, san_messages,
+                               tenant_id=tenant_id, application_id=tenant_id,
+                               session_id="")
+        if recall.messages:
+            san_messages = recall.messages + san_messages
         comp = compress(san_messages, ctx, self._co_cfg_provider(), ccr=self._ccr)
         complexity = min(1.0, comp.tokens_after / 2000)
         hint = {k: getattr(request, k) for k in ("mock_confidence", "mock_fail")
@@ -344,7 +399,7 @@ class Pipeline:
             if result is None:
                 raise PipelineRejected("stream ended without a final result")
             meta.update(self._assemble_stream_meta(
-                request_id, ctx, sanitized, comp, records, result))
+                request_id, ctx, sanitized, comp, records, result, recall.record))
 
         def get_meta() -> dict:
             if not meta:
@@ -368,8 +423,8 @@ class Pipeline:
         return _deltas(), get_meta
 
     def _assemble_stream_meta(self, request_id: str, ctx: ExecutionPolicyContext,
-                              sanitized: str, comp, records, result: GenerationResult
-                              ) -> dict:
+                              sanitized: str, comp, records, result: GenerationResult,
+                              mem_record: MemoryRecord | None = None) -> dict:
         """Assemble the final streaming metadata dict, mirroring run()'s record,
         two-lever cost, and quality assembly. Step-9 verification is WAIVED on
         this path: a VerificationRecord(performed=False, passed=True) is recorded
@@ -390,6 +445,8 @@ class Pipeline:
             entities_found=(), reason="waived: streaming (unverified)")
         trace = [r.model_dump() for r in records] + [vrec.model_dump()]
         trace.append(comp.record.model_dump())
+        if mem_record is not None:
+            trace.append(mem_record.model_dump())
 
         qrecs = [r for r in records if r.quality_score is not None]
         chosen_q = qrecs[-1] if qrecs else None
@@ -422,7 +479,8 @@ class Pipeline:
 
     async def _run_multi_step(self, request_id: str, ctx: ExecutionPolicyContext,
                               request: ChatRequest, san_messages: list[Message],
-                              det: Detector) -> dict:
+                              det: Detector,
+                              mem_record: MemoryRecord | None = None) -> dict:
         # Lazy import: nat is an optional extra; importing app.pipeline must not
         # require it to be installed (mirrors app/agent/runtime.py's own lazy
         # import of the nat package itself).
@@ -442,6 +500,14 @@ class Pipeline:
         if not vrec.passed:
             raise PipelineRejected(vrec.reason)
 
+        # Memory WRITE is intentionally NOT wired for multi-step (Task 2 scope
+        # decision -- see task-2-report.md): unlike the direct path, there is
+        # no single (sanitized, verified) exchange here to summarize -- the
+        # agent may run several hops, each with its own tool I/O, and
+        # `sanitized`/`text` are not threaded into this method. READ still
+        # runs (san_messages, above, was already prepended with recalled
+        # context in run() before this method was called) -- only WRITE is
+        # deferred. Never writes raw/un-verified content on this path.
         total = sum(
             h.actual_cost_usd if h.actual_cost_usd is not None else (h.est_cost_usd or 0.0)
             for h in result.hops)
@@ -480,6 +546,8 @@ class Pipeline:
         trace = [h.model_dump() for h in result.hops]
         trace += [cr.model_dump() for cr in result.compressions]
         trace.append(vrec.model_dump())
+        if mem_record is not None:
+            trace.append(mem_record.model_dump())
 
         qhops = [h for h in result.hops if h.quality_score is not None]
         quality_sum = sum(h.quality_score for h in qhops)
