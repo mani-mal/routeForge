@@ -140,7 +140,7 @@ class CacheRecord(BaseModel):
     tokens_saved: int = 0
     cache_saved_usd: float = 0.0
     entries_size: int = 0
-    served_from_cloud_entry: int = 0  # must stay 0 for onprem_only -- honesty counter
+    blocked_cloud_entries: int = 0  # must stay 0 for onprem_only -- honesty counter
     latency_ms: float = 0.0
 
 

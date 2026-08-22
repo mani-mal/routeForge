@@ -67,7 +67,7 @@ a generic cache:
    `lookup` still refuses to serve it. The check lives inside the method that
    returns data to the caller — it is not a wrapper the caller could bypass.
 
-The honesty counter `served_from_cloud_entry` mirrors CCR's `retrievals_to_cloud`: it
+The honesty counter `blocked_cloud_entries` mirrors CCR's `retrievals_to_cloud`: it
 exists for parity and observability, and the rule above makes it structurally
 unreachable via the public API, so it stays 0 for `onprem_only` traffic. If it is ever
 nonzero, that is itself evidence of a Rule-3 breach worth alarming on.
@@ -119,7 +119,7 @@ a `ConfigLintError`) and by `residency: local_only`.
 Cache contents (`response_text`, `model`, `provider`) live only in-process, for the
 process lifetime bounded by TTL. Only a **counts-only** `CacheRecord`
 (`app/models.py`) reaches any trace or telemetry sink — `hit`, `tokens_saved`,
-`cache_saved_usd`, `entries_size`, `served_from_cloud_entry`, `latency_ms`, and
+`cache_saved_usd`, `entries_size`, `blocked_cloud_entries`, `latency_ms`, and
 `bypass_reason`. It has no query or response field, matching the
 `CompressionRecord` precedent (which carries token counts, never CCR contents).
 `semantic_cache.export_to_telemetry` must be `false`; the boot lint rejects `true`
@@ -152,7 +152,7 @@ object anywhere in the running process.
 ## C8 — embedding seam (deferred)
 
 `SemanticCacheBackend` (a `Protocol`: `lookup`, `store`, `size`, `hits`,
-`served_from_cloud_entry`) is the seam a future fuzzy/embedding backend implements.
+`blocked_cloud_entries`) is the seam a future fuzzy/embedding backend implements.
 `DeterministicSemanticCache` is the only implementation shipped now. The
 `SemanticCacheCfg.embedding` field is a placeholder (`"off"` today, inert — nothing
 reads it to construct anything) for a future value naming an embedder.

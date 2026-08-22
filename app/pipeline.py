@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import logging
+import time
 from typing import AsyncIterator, Callable, TYPE_CHECKING
 
+from app.cache.store import CacheEntry, DeterministicSemanticCache
 from app.config.schema import ContextOptimizationCfg, Settings
 from app.errors import PolicyGateError
 from app.gateway.backends.base import count_tokens
 from app.gateway.gateway import Gateway
 from app.models import (
-    ChatRequest, Choice, ExecutionPolicyContext, GenerationResult, Message,
-    Usage, VerificationRecord,
+    CacheRecord, ChatRequest, Choice, ExecutionPolicyContext, GenerationResult,
+    Message, Usage, VerificationRecord,
 )
 from app.output.verify import verify
 from app.policy.detectors import Detector, make_detector
@@ -21,6 +24,8 @@ from app.routing.task_mode import decide as decide_mode
 
 if TYPE_CHECKING:
     from app.apps.registry import ModelRegistry
+
+log = logging.getLogger("serving.cache")
 
 
 class PipelineRejected(Exception):
@@ -48,7 +53,8 @@ class Pipeline:
     def __init__(self, settings: Settings, gate: Gate, detector: Detector,
                  gateway: Gateway, self_port: int,
                  co_cfg_provider: Callable[[], ContextOptimizationCfg],
-                 ccr: CCRStore, registry: "ModelRegistry | None" = None) -> None:
+                 ccr: CCRStore, registry: "ModelRegistry | None" = None,
+                 cache: "DeterministicSemanticCache | None" = None) -> None:
         self._s = settings
         self._gate = gate
         self._detector = detector
@@ -83,6 +89,14 @@ class Pipeline:
         # the mode the process already booted with.
         self._global_pii_mode = settings.serving.pii_detection
         self._detectors: dict[str, Detector] = {self._global_pii_mode: self._detector}
+        # Feature #6 semantic cache (Task 2). Always constructed by main.py
+        # (mirrors self._ccr), only USED when settings.serving.semantic_cache
+        # .enabled is true (read live off self._s on every call, same pattern
+        # as self._co_cfg_provider() -- there is no separate cfg param to
+        # thread since Settings already carries it). Direct path only (see
+        # run()); never touched by run_stream/_run_multi_step -- see the
+        # comments at each of those call sites for why.
+        self._cache = cache
 
     def _detector_for(self, mode: str | None) -> Detector:
         """Resolve the base detector for an app's `pii_detection` override.
@@ -124,11 +138,87 @@ class Pipeline:
         pool (static YAML + enabled onboarded rows) when available, since
         onboarded on-prem models never appear in the static
         `settings.routing.model_pool`."""
-        pool = self._reg.effective_pool() if self._reg else self._s.routing.model_pool
+        pool = self._pool()
         for c in pool:
             if c.name == model_slug:
                 return c.display_name or c.name
         return model_slug
+
+    def _pool(self):
+        """The merged model source (static YAML pool + enabled onboarded
+        rows) -- see `_display_name`'s docstring. Shared with the cache
+        STORE hook's provider resolution below (`run()`), which needs the
+        same merged pool to resolve `result.model` -> its producing
+        provider."""
+        return self._reg.effective_pool() if self._reg else self._s.routing.model_pool
+
+    def _cache_bypass_reason(self, cfg, ctx: ExecutionPolicyContext) -> str | None:
+        """Semantic-cache bypass posture (design brief §5). `bypass_on
+        .user_prompt` is deliberately IGNORED -- it only means something for
+        per-message compression treatment; a cache check/store is a
+        whole-request decision, not a per-message one (mirrors
+        SemanticCacheCfg's docstring)."""
+        if cfg.bypass_on.high_risk and ctx.risk_class == "high":
+            return "high_risk"
+        if cfg.bypass_on.restricted_sensitivity and ctx.sensitivity == "restricted":
+            return "restricted_sensitivity"
+        if ctx.requested_model is not None:
+            # The client pinned a specific model -- a cached response from a
+            # DIFFERENT model would silently violate that pin.
+            return "requested_model"
+        return None
+
+    def _serve_from_cache(self, request_id: str, ctx: ExecutionPolicyContext,
+                          sanitized: str, entry: CacheEntry, det: Detector,
+                          check_latency_ms: float) -> dict | None:
+        """C4 keystone: re-verify the cached text against the CURRENT
+        request's per-app detector + ctx before ever serving it -- this is
+        the step-9 verification for the served response; compress/gateway/
+        verify are NOT re-run. Returns None (never a response) when the
+        re-verify fails, so the caller treats this as an ordinary MISS and
+        falls through to the normal flow -- the cached text is never served
+        un-re-verified (see docs/architecture/semantic-cache-residency-spec.md
+        C4)."""
+        text, vrec = verify(det, ctx, entry.response_text)
+        if not vrec.passed:
+            return None
+        tokens_in = count_tokens(sanitized)
+        tokens_out = count_tokens(text)
+        # Honest third savings lever (CLAUDE.md: "don't attribute all savings
+        # to routing"): a hit skips the model entirely, so the avoided cost is
+        # the FULL all-frontier baseline of this request -- never folded into
+        # routing_saved_usd/compression_saved_usd, which both stay 0 here.
+        baseline = self._baseline(tokens_in, tokens_out)
+        cache_rec = CacheRecord(
+            enabled=True, hit=True, tokens_saved=tokens_in + tokens_out,
+            cache_saved_usd=baseline, entries_size=self._cache.size,
+            blocked_cloud_entries=self._cache.blocked_cloud_entries,
+            latency_ms=check_latency_ms)
+        trace = [vrec.model_dump(), cache_rec.model_dump()]
+        return {
+            "id": request_id,
+            "model": entry.model,
+            "model_display": self._display_name(entry.model),
+            "choices": [Choice(index=0,
+                               message=Message(role="assistant", content=text)
+                               ).model_dump()],
+            "usage": Usage(prompt_tokens=tokens_in, completion_tokens=tokens_out,
+                           total_tokens=tokens_in + tokens_out).model_dump(),
+            "trace": trace,
+            "cost": {"total_usd": 0.0, "baseline_usd": baseline,
+                     "routing_saved_usd": 0.0, "compression_saved_usd": 0.0,
+                     "cache_saved_usd": baseline},
+            "quality": {"sum": 0.0, "chosen": None, "source": None},
+            "policy": {"sensitivity": ctx.sensitivity, "onprem_only": ctx.onprem_only,
+                       "allowed_providers": sorted(ctx.allowed_providers),
+                       "detected_entities": list(ctx.detected_entities)},
+            "sanitized_prompt": sanitized,
+            # No raw/pre-verify text exists for a cache hit (no model call ran
+            # this request) -- `text` (the just-re-verified, redacted answer)
+            # is the least-revealing honest value to pop here (see routes.py
+            # `_finalize`, which never forwards this key to the client).
+            "raw_completion": text,
+        }
 
     async def run(self, request_id: str, tenant_id: str,
                   request: ChatRequest, app_policy=None,
@@ -187,6 +277,52 @@ class Pipeline:
             # still goes to the agent — each hop compresses its own view.
             return await self._run_multi_step(request_id, ctx, request, san_messages, det)
 
+        # Feature #6 — semantic cache CHECK (direct path only; see the
+        # constructor comment and _run_multi_step/run_stream for why they
+        # never touch this). Runs after san_messages, before compress: a hit
+        # skips compress/gateway/verify entirely and short-circuits below.
+        # `cache_active` mirrors C7 — with the feature off (or main.py never
+        # constructing a cache) nothing here runs and nothing is added to the
+        # trace/cost dict, so serving stays byte-for-byte unchanged.
+        sc_cfg = self._s.serving.semantic_cache
+        cache_active = self._cache is not None and sc_cfg.enabled
+        cache_bypass_reason = (
+            self._cache_bypass_reason(sc_cfg, ctx) if cache_active else None)
+        cache_record: CacheRecord | None = None
+        if cache_active:
+            if cache_bypass_reason is not None:
+                cache_record = CacheRecord(
+                    enabled=True, hit=False, bypass_reason=cache_bypass_reason,
+                    entries_size=self._cache.size,
+                    blocked_cloud_entries=self._cache.blocked_cloud_entries)
+            else:
+                t0 = time.monotonic()
+                entry = None
+                try:
+                    entry = self._cache.lookup(
+                        tenant_id=tenant_id, onprem_only=ctx.onprem_only,
+                        allowed_providers=ctx.allowed_providers, query=sanitized)
+                except Exception:
+                    # Fail-safe (CLAUDE.md rule 5 spirit): a cache error must
+                    # never crash a served request -- skip the cache and serve
+                    # normally, exactly as if this were a miss.
+                    log.exception("semantic cache lookup failed (swallowed); "
+                                  "serving normally")
+                check_latency_ms = (time.monotonic() - t0) * 1000
+                if entry is not None:
+                    # C4 KEYSTONE: re-verify with the CURRENT request's
+                    # detector/ctx before ever serving cached text. A failed
+                    # re-verify is treated as an ordinary miss below (falls
+                    # through to compress/gateway/verify), never served.
+                    hit_resp = self._serve_from_cache(
+                        request_id, ctx, sanitized, entry, det, check_latency_ms)
+                    if hit_resp is not None:
+                        return hit_resp
+                cache_record = CacheRecord(
+                    enabled=True, hit=False, entries_size=self._cache.size,
+                    blocked_cloud_entries=self._cache.blocked_cloud_entries,
+                    latency_ms=check_latency_ms)
+
         comp = compress(san_messages, ctx, self._co_cfg_provider(), ccr=self._ccr)
         complexity = min(1.0, comp.tokens_after / 2000)
 
@@ -198,6 +334,25 @@ class Pipeline:
         text, vrec = verify(det, ctx, result.text)
         if not vrec.passed:
             raise PipelineRejected(vrec.reason)
+
+        # Feature #6 — semantic cache STORE. Reached only on a genuine MISS
+        # (a hit already returned above), enabled, and not bypassed. C1:
+        # cache the SANITIZED query (never raw) and the post-verify `text`
+        # (never `result.text`/raw_completion). C3 residency: the store
+        # itself refuses to persist a cloud-produced entry into an
+        # onprem_only partition -- passing the REAL ctx values here is what
+        # makes that refusal apply to real traffic.
+        if cache_active and cache_bypass_reason is None:
+            try:
+                provider = next(
+                    (c.provider for c in self._pool() if c.name == result.model), "?")
+                self._cache.store(
+                    tenant_id=tenant_id, onprem_only=ctx.onprem_only,
+                    allowed_providers=ctx.allowed_providers, query=sanitized,
+                    response_text=text, model=result.model, provider=provider)
+            except Exception:
+                # Fail-safe: a cache write must never crash a served request.
+                log.exception("semantic cache store failed (swallowed)")
 
         total = sum(r.actual_cost_usd or 0.0 for r in records)
         # Two-lever accounting (CLAUDE.md: "don't attribute all savings to
@@ -222,6 +377,8 @@ class Pipeline:
         routing_saved = baseline_after - total
         trace = [r.model_dump() for r in records] + [vrec.model_dump()]
         trace.append(comp.record.model_dump())
+        if cache_record is not None:
+            trace.append(cache_record.model_dump())
 
         # Only the SERVED attempt's quality counts here, not every attempt's.
         # Gateway.run appends one step="router" DecisionRecord PER ATTEMPT, so
@@ -238,6 +395,17 @@ class Pipeline:
         chosen_q = qrecs[-1] if qrecs else None
         quality_sum = chosen_q.quality_score if chosen_q else 0.0
 
+        cost = {"total_usd": total, "baseline_usd": baseline_usd,
+               "routing_saved_usd": routing_saved,
+               "compression_saved_usd": compression_saved}
+        if cache_active:
+            # Honest third lever, present whenever the feature is on (even a
+            # bypassed/miss request reports 0.0 rather than omitting the key)
+            # — never folded into routing_saved_usd/compression_saved_usd.
+            # Omitted entirely when the feature is off (C7: byte-for-byte
+            # unchanged serving behavior).
+            cost["cache_saved_usd"] = 0.0
+
         return {
             "id": request_id,
             "model": result.model,
@@ -250,9 +418,7 @@ class Pipeline:
                            total_tokens=result.tokens_in + result.tokens_out
                            ).model_dump(),
             "trace": trace,
-            "cost": {"total_usd": total, "baseline_usd": baseline_usd,
-                     "routing_saved_usd": routing_saved,
-                     "compression_saved_usd": compression_saved},
+            "cost": cost,
             "quality": {"sum": quality_sum,
                         "chosen": chosen_q.quality_score if chosen_q else None,
                         "source": chosen_q.quality_source if chosen_q else None},
@@ -270,6 +436,12 @@ class Pipeline:
         """Real backend token-streaming substrate for the direct (single-shot)
         path (Tasks 6-7 wire the route to this). Skips step-9 verification --
         the verification marker in the final metadata is "waived".
+
+        NOT wired to the semantic cache (feature #6, Task 2), deliberately:
+        verification is waived here, so storing this response would persist
+        unverified content into the cache (violates C1/C4), and a cache HIT
+        can't be expressed as a token stream anyway. See `run()` for the only
+        path the cache checks/stores against.
 
         Interface (documented design choice): `run_stream` is a coroutine that
         eagerly runs the gate, task-mode decision, and the runtime floor, then
@@ -423,6 +595,12 @@ class Pipeline:
     async def _run_multi_step(self, request_id: str, ctx: ExecutionPolicyContext,
                               request: ChatRequest, san_messages: list[Message],
                               det: Detector) -> dict:
+        # NOT wired to the semantic cache (feature #6, Task 2), deliberately:
+        # a multi-step run is non-deterministic and tool-driven (its final
+        # text is not a pure function of the initial query), so neither a
+        # cache check nor a cache store make sense here. See `run()` for the
+        # only path the cache checks/stores against.
+        #
         # Lazy import: nat is an optional extra; importing app.pipeline must not
         # require it to be installed (mirrors app/agent/runtime.py's own lazy
         # import of the nat package itself).

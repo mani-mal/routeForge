@@ -87,7 +87,7 @@ class SemanticCacheBackend(Protocol):
     def hits(self) -> int: ...
 
     @property
-    def served_from_cloud_entry(self) -> int: ...
+    def blocked_cloud_entries(self) -> int: ...
 
 
 class DeterministicSemanticCache:
@@ -100,7 +100,7 @@ class DeterministicSemanticCache:
         self._clock = clock
         self._data: dict[CachePartition, dict[str, CacheEntry]] = {}
         self._hits = 0
-        self._served_from_cloud_entry = 0
+        self._blocked_cloud_entries = 0
 
     def store(self, *, tenant_id: str, onprem_only: bool,
               allowed_providers: frozenset[str], query: str,
@@ -155,7 +155,7 @@ class DeterministicSemanticCache:
         # (defense in depth), and the honesty counter records it if it ever
         # fires, exactly like CCR's retrievals_to_cloud.
         if not _is_residency_consistent(onprem_only, entry.provider):
-            self._served_from_cloud_entry += 1
+            self._blocked_cloud_entries += 1
             return None
         self._hits += 1
         return entry
@@ -169,5 +169,5 @@ class DeterministicSemanticCache:
         return self._hits
 
     @property
-    def served_from_cloud_entry(self) -> int:
-        return self._served_from_cloud_entry
+    def blocked_cloud_entries(self) -> int:
+        return self._blocked_cloud_entries

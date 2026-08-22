@@ -71,7 +71,7 @@ def test_cloud_produced_entry_never_served_to_onprem_only_lookup():
                       allowed_providers=frozenset({"onprem", "azure"}),
                       query="What is the capital of France?")
     assert entry is None
-    assert c.served_from_cloud_entry == 0
+    assert c.blocked_cloud_entries == 0
     assert c.hits == 0
 
 
@@ -106,7 +106,7 @@ def test_lookup_itself_refuses_rogue_cloud_entry_in_onprem_partition():
                       allowed_providers=frozenset({"onprem"}),
                       query="rogue query")
     assert entry is None
-    assert c.served_from_cloud_entry == 1  # honesty counter fires on the rogue path
+    assert c.blocked_cloud_entries == 1  # honesty counter fires on the rogue path
     assert c.hits == 0
 
 
@@ -120,7 +120,7 @@ def test_onprem_produced_entry_is_served_to_onprem_only_lookup():
     assert entry is not None
     assert entry.provider == "onprem"
     assert c.hits == 1
-    assert c.served_from_cloud_entry == 0
+    assert c.blocked_cloud_entries == 0
 
 
 def test_allowed_providers_is_part_of_the_partition():
