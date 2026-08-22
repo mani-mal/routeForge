@@ -1,5 +1,7 @@
 from pydantic import BaseModel
 
+from app.prompts.store import PromptArtifact
+
 
 class PoolCandidate(BaseModel):
     name: str
@@ -32,6 +34,18 @@ class StageSignalsCfg(BaseModel):
     planner_role_raise: bool = True    # inferred "plan" hop (hop 1, no tools yet) -> frontier
 
 
+class PromptOptCfg(BaseModel):
+    """Feature 3 (DSPy prompt-optimization) Task 1: managed-prompt substrate.
+    Home for the step-4 router's classifier pin today, and for any future
+    routed-prompt pin (verify/judge, etc.) -- one block, owned here (routing
+    input), never restated in another YAML. `enabled` is OFF here on purpose:
+    Task 2 wires the LLM classifier that reads it; this task activates
+    nothing."""
+    enabled: bool = False           # master switch (Task 2 LLM classifier reads this)
+    artifacts_dir: str = "config/prompts"
+    active: dict[str, str] = {}     # prompt_id -> pinned label (the human-gate pin)
+
+
 class RoutingCfg(BaseModel):
     tiers: list[str]
     score_on: str
@@ -57,6 +71,7 @@ class RoutingCfg(BaseModel):
     model_pool: list[PoolCandidate]
     fallback: dict[str, int]
     stage_signals: StageSignalsCfg = StageSignalsCfg()
+    prompt_opt: PromptOptCfg = PromptOptCfg()
 
 
 class SensitivityRule(BaseModel):
@@ -178,3 +193,11 @@ class Settings(BaseModel):
     # decisions can later be grouped by the exact policy that produced them
     # (rlhf-readiness F3). Automatic -- no manual semver.
     routing_policy_version: str = ""
+    # Feature 3 (DSPy prompt-optimization) Task 1: sha256[:12] over the active
+    # managed-prompt texts (routing.prompt_opt.active), mirroring
+    # routing_policy_version's shape/empty-default exactly. Stamped on every
+    # trace as sp.prompt_version when non-empty. `active_prompts` is the
+    # already-resolved artifact set so downstream readers (Task 2's
+    # classifier) don't need to re-read from disk.
+    prompt_version: str = ""
+    active_prompts: dict[str, PromptArtifact] = {}

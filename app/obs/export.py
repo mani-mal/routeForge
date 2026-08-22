@@ -87,6 +87,7 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                  completion: str = "", sanitized_prompt: str = "", recognizers=None,
                  session_id: str | None = None,
                  routing_policy_version: str = "",
+                 prompt_version: str = "",
                  raw_completion: str = "") -> TraceExport:
     """Export the request's decision trace as spans and return a `TraceExport`
     (url, trace_id) for the resulting trace — `url` the Langfuse UI deep-link,
@@ -106,7 +107,11 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
     `raw_completion` (F1 Phase D task 1) is the PRE-VERIFY model output --
     used only on the `capture_io == "full"` path (see `_set_io`), and only
     ever reaches a full-eligible app's OWN residency-local project (the
-    fail-closed clamp above and in `app/api/routes.py` guarantee that)."""
+    fail-closed clamp above and in `app/api/routes.py` guarantee that).
+
+    `prompt_version` (Feature 3 / DSPy prompt-optimization Task 1) is
+    `Settings.prompt_version` -- stamped as `sp.prompt_version` when
+    non-empty, mirroring `routing_policy_version` exactly."""
     try:
         if capture_io == "full" and app_langfuse is None and raw_completion:
             # `raw_completion` (F1 Phase D task 1) is the PRE-VERIFY model
@@ -168,6 +173,12 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                                ",".join(policy.get("detected_entities", [])))  # TYPES only
             if routing_policy_version:
                 root.set_attribute("sp.routing_policy_version", routing_policy_version)
+            if prompt_version:
+                # Feature 3 (DSPy prompt-optimization) Task 1: sha256[:12]
+                # over the active managed-prompt texts (Settings.prompt_version).
+                # Empty (nothing stamped) whenever no managed prompt is
+                # pinned active -- true for every deploy this task ships.
+                root.set_attribute("sp.prompt_version", prompt_version)
             if session_id:
                 # Langfuse groups traces sharing this attribute into one Session
                 # (B17). Opaque, client-supplied; deliberately NOT in REDACT_KEYS

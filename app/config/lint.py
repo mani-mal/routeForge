@@ -3,6 +3,7 @@ import sys
 from app.config.loader import load_settings
 from app.config.schema import Settings
 from app.policy.enums import RESIDENCY as valid_residency
+from app.prompts.store import load_artifact
 
 
 class ConfigLintError(Exception):
@@ -82,6 +83,21 @@ def lint_settings(s: Settings) -> list[str]:
         if enabled and not pcfg.litellm_prefix:
             errs.append(f"PROVIDER_NO_LITELLM_MAP {pname} has no litellm_prefix")
 
+    # Feature 3 (DSPy prompt-optimization) Task 1: every routing.prompt_opt
+    # pin must resolve to a real, well-formed artifact on disk. Re-resolves
+    # independently from disk (not from `s.active_prompts`) so this check is
+    # authoritative even when the loader deferred (see
+    # app/config/loader.py::load_settings) because SOME other pin failed --
+    # fail closed, never a silent skip (CLAUDE.md rule 5).
+    for prompt_id, label in s.routing.prompt_opt.active.items():
+        try:
+            artifact = load_artifact(s.routing.prompt_opt.artifacts_dir, prompt_id, label)
+        except ValueError as e:
+            errs.append(f"PROMPT_ARTIFACT_INVALID {prompt_id}:{label} {e}")
+            continue
+        if artifact is None:
+            errs.append(f"PROMPT_ACTIVE_MISSING {prompt_id}:{label}")
+
     return errs
 
 
@@ -131,6 +147,31 @@ def enforce(s: Settings) -> None:
         raise ConfigLintError(
             "context_optimization.ccr.export_to_telemetry must be false "
             "(CCR contents are originals and must never reach telemetry)")
+
+    # Feature 3 (DSPy prompt-optimization) Task 1: fail-closed human-gate
+    # guard. A managed prompt may only go live once an operator has marked it
+    # `verified: true` AND pinned it active (CLAUDE.md rule 4 -- human-gated
+    # promotion; rule 5 -- fail closed). Reuse `s.active_prompts` when the
+    # loader already resolved it (the all-success case); otherwise load the
+    # pin fresh -- a resolution failure here is skipped, not raised, because
+    # `lint_settings` above/below already reports it by name
+    # (PROMPT_ACTIVE_MISSING/PROMPT_ARTIFACT_INVALID) and this guard's job is
+    # only to judge `verified`, not existence/validity.
+    for prompt_id, label in s.routing.prompt_opt.active.items():
+        artifact = s.active_prompts.get(prompt_id)
+        if artifact is None:
+            try:
+                artifact = load_artifact(s.routing.prompt_opt.artifacts_dir, prompt_id, label)
+            except ValueError:
+                continue  # reported as PROMPT_ARTIFACT_INVALID by lint_settings
+            if artifact is None:
+                continue  # reported as PROMPT_ACTIVE_MISSING by lint_settings
+        if not artifact.verified:
+            raise ConfigLintError(
+                f"routing.prompt_opt pins an UNVERIFIED prompt {prompt_id}:{label}; "
+                "a managed prompt must be human-verified (verified: true) before "
+                "activation (CLAUDE.md rule 5 — fail closed; rule 4 — human-gated "
+                "promotion)")
 
     errs = lint_settings(s)
     if errs:
