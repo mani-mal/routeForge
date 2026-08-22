@@ -86,3 +86,32 @@ export function formatPct(v: number | null | undefined): string {
   if (v === null || v === undefined || Number.isNaN(v)) return "–";
   return `${v.toFixed(1)}%`;
 }
+
+// 2-3 significant figures — these are intelligence-density ratios (quality
+// per 1k tokens / per $), not currency, so formatUsd/formatPct don't fit.
+export function formatDensity(v: number | null | undefined): string {
+  if (v === null || v === undefined || !Number.isFinite(v) || v === 0) return "–";
+  if (v >= 100) return v.toFixed(0);
+  if (v >= 10) return v.toFixed(1);
+  return v.toFixed(2);
+}
+
+// The one honesty caveat every quality-axis figure in the console must carry
+// (Task 2 — quality/accuracy-tradeoff axis): "quality" here is a tier-quality
+// proxy (cheap 0.5 / mid 0.75 / frontier 1.0) or a calibrated/customer/published
+// score when set (app/routing/quality.py's provenance ladder) — NEVER
+// ground-truth accuracy. Reused verbatim so the caveat can't drift per call site.
+export const QUALITY_CAVEAT =
+  "quality is a tier proxy / calibrated — not measured accuracy; needs a per-model quality score";
+
+// A compact "provenance: N% tier_default" note from a quality_source_distribution
+// (app/apps/store.py, app/api/history.py). Picks the most common source so the
+// note stays short; returns null when there's nothing to show yet.
+export function provenanceNote(dist: Record<string, number> | undefined | null): string | null {
+  if (!dist) return null;
+  const entries = Object.entries(dist);
+  const total = entries.reduce((a, [, n]) => a + n, 0);
+  if (total === 0) return null;
+  const [source, count] = entries.reduce((best, cur) => (cur[1] > best[1] ? cur : best));
+  return `provenance: ${((count / total) * 100).toFixed(0)}% ${source}`;
+}

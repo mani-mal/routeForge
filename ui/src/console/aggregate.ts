@@ -30,6 +30,18 @@ export function densityAgg(rs: RequestSummary[]) {
   return { tokenIntelligenceDensity, costIntelligenceDensity };
 }
 
+// Provenance distribution for the quality axis — a Counter over quality_source
+// (tier_default | calibrated | published | customer; app/routing/quality.py),
+// mirroring the backend's quality_source_distribution so the honesty caveat
+// can cite it client-side for the (per-app, tenant-filtered) `requests` rows.
+export function qualitySourceAgg(rs: RequestSummary[]): Record<string, number> {
+  const dist: Record<string, number> = {};
+  for (const r of rs) {
+    if (r.quality_source) dist[r.quality_source] = (dist[r.quality_source] ?? 0) + 1;
+  }
+  return dist;
+}
+
 export function privacyAgg(rs: RequestSummary[]) {
   const withPii = rs.filter((r) => r.detected_entities.length > 0);
   const onprem = rs.filter((r) => r.onprem_only);
