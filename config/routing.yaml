@@ -47,6 +47,10 @@ confidence_escalation_threshold: 0.60
 # backend ignores this (its confidence is seeded per persona).
 confidence_logprob_temperature: 4.0
 max_escalations: 1
+# On a retryable backend failure, try another healthy model in the SAME tier
+# first (lateral switch), escalating only when the tier empties -- bounded here.
+# 0 disables lateral retry (a single failure is terminal). Owned by this file.
+max_failover_attempts: 2
 
 # Risk floor = the minimum tier a request may use, applied AFTER the residency
 # filter. Precedence: residency beats risk floor. An onprem_only high-risk request
