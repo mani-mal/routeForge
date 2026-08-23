@@ -114,7 +114,7 @@ provisioner no-ops and apps share the default project.
 > # 403 "...required..." -> project-scoped (wrong; get keys from the ORG settings page)
 > ```
 
-## Enabling it on the DGX deployment
+## Enabling auto-provision on the DGX deployment (requires Langfuse EE)
 
 The Langfuse provisioner is already baked into the running image; enabling it is an
 env-only change (no image rebuild, no DB migration — the `applications.langfuse_*`
@@ -158,3 +158,44 @@ columns already exist).
 
 The manifest comments in `deploy/dgx_lab/routeforge-app.yaml` carry the same wiring for
 `kubectl apply`-based deploys.
+
+## Manual per-app setup (OSS, no Enterprise license)
+
+This is the path when Langfuse is OSS (no `LANGFUSE_EE_LICENSE_KEY`), so auto-provision
+isn't available. You create the project by hand and assign its **project**-scoped keys
+to one app. Per-app trace isolation is identical; it's just manual per app. No org keys,
+no `LANGFUSE_ORG_*` env, no rollout.
+
+Per application:
+
+1. In the Langfuse UI, create a project (or reuse one) and copy its **project** API keys
+   (Project → Settings → API Keys): `pk-lf-…` / `sk-lf-…`. Note the **project id** — the
+   `id` from `GET {host}/api/public/projects` (org- or project-key auth both list it),
+   e.g. `cmt5…`.
+
+2. Assign them to the app via `PUT /admin/applications/{app_id}/langfuse` (admin-authed).
+   `host` is the **server-reachable OTLP ingestion** host (in-cluster
+   `http://langfuse-web:3000` on the DGX) — *not* the browser URL; the console deep-link
+   uses the shared public URL with this app's project id automatically.
+
+   ```bash
+   curl -sX PUT "$API/admin/applications/<app_id>/langfuse" -b "$ADMIN_COOKIE" \
+     -H 'content-type: application/json' -d '{
+       "project_id":"cmt5...","public_key":"pk-lf-...",
+       "secret_key":"sk-lf-...","host":"http://langfuse-web:3000"}'
+   ```
+
+   The secret is encrypted at rest (`ENCRYPTION_KEY`). From then on that app's traces
+   export to its own project; a request with no per-app creds still uses the shared one.
+
+3. Verify: send one request as that app and confirm a trace lands in the project.
+
+   ```bash
+   kubectl -n runai-routeforge exec deploy/langfuse-postgres -- psql -U postgres -d postgres \
+     -tc "SELECT id, langfuse_project_id, langfuse_host FROM applications WHERE id='<app_id>';"
+   # then, using that project's own keys, confirm the trace arrived:
+   curl -s -u "$PK:$SK" "$LANGFUSE_HOST/api/public/traces?limit=1"
+   ```
+
+To move an app back to the shared project, `PUT` the same endpoint with the fields
+cleared (or delete/recreate the app).
