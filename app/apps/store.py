@@ -286,17 +286,29 @@ async def usage_summary(session: AsyncSession, *, application_id: str | None = N
     tier_dist: dict[str, int] = {}
     model_dist: dict[str, int] = {}
     app_dist: dict[str, int] = {}
+    # Provenance of the `quality` numerator below — a tier proxy by default
+    # (see app/routing/quality.py's customer > calibrated > published >
+    # tier_default ladder), never presented as measured accuracy.
+    quality_source_dist: dict[str, int] = {}
     for r in ok:
         tier_dist[r.tier] = tier_dist.get(r.tier, 0) + 1
         model_dist[r.model] = model_dist.get(r.model, 0) + 1
         app_dist[r.application_id] = app_dist.get(r.application_id, 0) + 1
+        if r.quality_source:
+            quality_source_dist[r.quality_source] = (
+                quality_source_dist.get(r.quality_source, 0) + 1)
     latencies = sorted(r.latency_ms for r in ok)
+    total_tokens = sum(r.total_tokens for r in ok)
+    total_usd = sum(r.cost_usd for r in ok)
+    # Same numerator/formula as app/api/history.py:145-146 (stats_over):
+    # quality summed across calls, over tokens (x1000) or over USD spend.
+    quality_sum = sum(r.quality for r in ok)
     return {
         "count": len(ok),
         "rejected_count": sum(1 for r in rows if r.status == "rejected"),
-        "total_usd": sum(r.cost_usd for r in ok),
+        "total_usd": total_usd,
         "baseline_usd": sum(r.baseline_usd for r in ok),
-        "total_tokens": sum(r.total_tokens for r in ok),
+        "total_tokens": total_tokens,
         "prompt_tokens": sum(r.prompt_tokens for r in ok),
         "completion_tokens": sum(r.completion_tokens for r in ok),
         "onprem_count": sum(1 for r in ok if r.onprem_only),
@@ -305,6 +317,11 @@ async def usage_summary(session: AsyncSession, *, application_id: str | None = N
         "application_distribution": app_dist,
         "latency_p50_ms": _pctile(latencies, 0.50),
         "latency_p95_ms": _pctile(latencies, 0.95),
+        "token_intelligence_density": (
+            quality_sum / total_tokens * 1000.0) if total_tokens > 0 else 0.0,
+        "cost_intelligence_density": (
+            quality_sum / total_usd) if total_usd > 0 else 0.0,
+        "quality_source_distribution": quality_source_dist,
     }
 
 
@@ -323,6 +340,7 @@ async def usage_by_application(session: AsyncSession, *,
             "application_id": r.application_id, "count": 0, "rejected_count": 0,
             "total_usd": 0.0, "baseline_usd": 0.0, "total_tokens": 0, "onprem_count": 0,
             "tier_distribution": {}, "model_distribution": {}, "sensitivity_distribution": {},
+            "quality_source_distribution": {},
         })
         if r.status == "rejected":
             a["rejected_count"] += 1
@@ -332,12 +350,29 @@ async def usage_by_application(session: AsyncSession, *,
         a["total_usd"] += float(r.cost_usd or 0.0)
         a["baseline_usd"] += float(r.baseline_usd or 0.0)
         a["total_tokens"] += int(r.total_tokens or 0)
+        # Internal-only running sum, same numerator history.py uses; popped
+        # below before the rollup is returned (aggregate-only, no leakage).
+        a["_quality_sum"] = a.get("_quality_sum", 0.0) + float(r.quality or 0.0)
         if r.onprem_only:
             a["onprem_count"] += 1
         for key, val in (("tier_distribution", r.tier), ("model_distribution", r.model),
-                         ("sensitivity_distribution", r.sensitivity)):
+                         ("sensitivity_distribution", r.sensitivity),
+                         ("quality_source_distribution", r.quality_source)):
             if val:
                 a[key][val] = a[key].get(val, 0) + 1
+
+    # Same formula as usage_summary/app/api/history.py:145-146, computed once
+    # the per-app sums are final. `quality` here is a tier-quality proxy (or
+    # calibrated/customer when set) — not measured accuracy.
+    for a in agg.values():
+        quality_sum = a.pop("_quality_sum", 0.0)
+        tok_sum = a["total_tokens"]
+        usd_sum = a["total_usd"]
+        a["token_intelligence_density"] = (
+            quality_sum / tok_sum * 1000.0) if tok_sum > 0 else 0.0
+        a["cost_intelligence_density"] = (
+            quality_sum / usd_sum) if usd_sum > 0 else 0.0
+
     return sorted(agg.values(), key=lambda d: d["total_usd"], reverse=True)
 
 

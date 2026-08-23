@@ -7,12 +7,12 @@ from app.config.schema import PoolCandidate, Settings
 from app.errors import NoEligibleCandidate
 from app.models import ExecutionPolicyContext, RejectedCandidate
 from app.routing.quality import QualityResolver
+from app.routing.strategy import RoutingStrategy, build_strategy
 
 if TYPE_CHECKING:
     from app.apps.registry import ModelRegistry
 
 _ORDER = {"cheap": 0, "mid": 1, "frontier": 2}
-_L = {"cheap": 0.2, "mid": 0.5, "frontier": 1.0}
 
 
 @dataclass
@@ -28,13 +28,17 @@ class RoutingDecision:
 class Router:
     def __init__(self, settings: Settings,
                  quality_resolver: QualityResolver | None = None,
-                 registry: "ModelRegistry | None" = None) -> None:
+                 registry: "ModelRegistry | None" = None,
+                 strategy: RoutingStrategy | None = None) -> None:
         self._s = settings
         self._reg = registry
         # Registry-aware by default (onboarded on-prem models never appear in
         # the static YAML pool -- see QualityResolver's docstring) unless the
         # caller injects its own resolver (e.g. with DB-sourced overrides).
         self._quality = quality_resolver or QualityResolver(settings, registry=registry)
+        # Step-5 scoring seam (app/routing/strategy.py). Injectable like
+        # quality_resolver; config-selected otherwise (routing.strategy).
+        self._strategy = strategy or build_strategy(settings.routing.strategy)
 
     def _complexity_tier(self, complexity: float) -> str:
         t = self._s.routing.complexity_thresholds
@@ -50,7 +54,8 @@ class Router:
         return tokens_after / 1_000_000 * (p.input + p.output)
 
     def select(self, ctx: ExecutionPolicyContext, tokens_after: int,
-               complexity: float, min_tier: str | None = None) -> RoutingDecision:
+               complexity: float, min_tier: str | None = None,
+               exclude: frozenset[str] = frozenset()) -> RoutingDecision:
         rejected: list[RejectedCandidate] = []
         pool = self._reg.effective_pool() if self._reg else self._s.routing.model_pool
 
@@ -65,6 +70,16 @@ class Router:
                 rejected.append(RejectedCandidate(
                     name=c.name, provider=c.provider, tier=c.tier,
                     display_name=c.display_name, reason=reason))
+                continue
+            # Failure-driven lateral switch: drop a model the gateway already
+            # saw fail on this request. Placed AFTER the residency check so an
+            # excluded cloud model under onprem_only still reads "residency",
+            # never "prior failure" -- excluding a name only ever removes a
+            # candidate, so it can never weaken residency.
+            if c.name in exclude:
+                rejected.append(RejectedCandidate(
+                    name=c.name, provider=c.provider, tier=c.tier,
+                    display_name=c.display_name, reason="excluded · prior failure"))
                 continue
             if ctx.model_scope_active and c.name not in ctx.allowed_models:
                 rejected.append(RejectedCandidate(
@@ -128,20 +143,15 @@ class Router:
         if not eligible:
             raise NoEligibleCandidate("no candidates after budget filter")
 
-        # 5. score within the tier (chooses provider/model — cheaper on-prem wins)
-        w = self._s.routing.weights
-        max_cost = max((e for _, e in eligible), default=0.0)
-
-        def score(item: tuple[PoolCandidate, float]) -> float:
-            c, est = item
-            norm = est / max_cost if max_cost > 0 else 0.0
-            q = self._quality.resolve(c.name).score
-            return (w["quality"] * q - w["cost"] * norm
-                    - w["latency"] * _L[c.tier] + w["capacity"] * 1.0)
-
-        eligible.sort(key=lambda it: (-score(it), it[1]))
-        chosen, est = eligible[0]
-        for c, _e in eligible[1:]:
+        # 5. score within the tier (chooses provider/model — cheaper on-prem
+        #    wins). Delegated to the pluggable strategy (app/routing/strategy.py)
+        #    -- it only ranks this already-filtered eligible set, it can never
+        #    add a candidate back in.
+        ordered = self._strategy.rank(
+            eligible, ctx=ctx, tokens_after=tokens_after,
+            weights=self._s.routing.weights, quality_resolver=self._quality)
+        chosen, est = ordered[0]
+        for c, _e in ordered[1:]:
             rejected.append(RejectedCandidate(
                 name=c.name, provider=c.provider, tier=c.tier,
                 display_name=c.display_name, reason="lower score"))

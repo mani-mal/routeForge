@@ -3,6 +3,7 @@ import sys
 from app.config.loader import load_settings
 from app.config.schema import Settings
 from app.policy.enums import RESIDENCY as valid_residency
+from app.routing.strategy import _STRATEGIES as _KNOWN_STRATEGIES
 
 
 class ConfigLintError(Exception):
@@ -36,6 +37,9 @@ def lint_settings(s: Settings) -> list[str]:
     for name, p in s.pricing.models.items():
         if p.tier not in tiers:
             errs.append(f"PRICING_TIER_UNKNOWN {name}:{p.tier}")
+    for role, t in s.routing.stage_signals.role_tiers.items():
+        if t not in tiers:
+            errs.append(f"ROLE_TIER_UNKNOWN {role}:{t} not in {sorted(tiers)}")
 
     # Pool-slug <-> pricing-slug cross-check: every cloud built-in in the pool
     # must have a matching pricing row, or LiteLLMBackend.generate's
@@ -86,6 +90,14 @@ def lint_settings(s: Settings) -> list[str]:
 
 
 def enforce(s: Settings) -> None:
+    # routing.strategy names a real RoutingStrategy (app/routing/strategy.py's
+    # registry) or boot fails loud -- an unknown name must never silently fall
+    # back to "default" (CLAUDE.md rule 5, fail closed).
+    if s.routing.strategy not in _KNOWN_STRATEGIES:
+        raise ConfigLintError(
+            f"routing.strategy={s.routing.strategy!r} is not a known strategy; "
+            f"known strategies: {sorted(_KNOWN_STRATEGIES)}")
+
     lf = s.serving.observability.langfuse
     if lf.enabled and not lf.redact_on_export:
         raise ConfigLintError(
