@@ -9,6 +9,27 @@ I/O only ever goes to that app's *own* project).
 This is **opt-in via environment variables** — the code is always present, but it stays
 dormant until configured.
 
+> ## ⚠️ Requires Langfuse Enterprise Edition (self-hosted)
+>
+> Auto-provision creates projects through Langfuse's admin API, which on **self-hosted
+> Langfuse is an Enterprise-Edition feature**. Both routes to it —
+> **organization-scoped API keys** (basic-auth `pk-lf`/`sk-lf` on `POST
+> /api/public/projects`, which is what this provisioner uses) and the **`ADMIN_API_KEY`
+> Org/Instance Management API** — are gated behind an EE license. On OSS Langfuse there
+> is **no** way to create a project programmatically, and the org settings page shows
+> only *General / Members / Projects* — **no "API Keys" tab** (that tab is what the EE
+> license adds).
+>
+> - **To use auto-provision:** set `LANGFUSE_EE_LICENSE_KEY` on **both** Langfuse
+>   containers (web + worker), then create an org-scoped key pair under **Organization →
+>   Settings → API Keys** and configure it below. See
+>   <https://langfuse.com/self-hosting/license-key>.
+> - **Without an EE license (OSS):** use the **manual per-app path** instead — create a
+>   project by hand in the Langfuse UI (OSS supports this), then assign its project keys
+>   to the app via `PUT /admin/applications/{app_id}/langfuse`. Same per-app trace
+>   isolation; just not automatic on onboard. See *Manual fallback* below.
+> - **Or** leave it off: every app shares the default project (fully functional).
+
 ## How many orgs / projects do I create? (the mental model)
 
 **One organization, configured once. RouteForge creates the per-app projects for you.**
