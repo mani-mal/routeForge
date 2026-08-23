@@ -40,6 +40,9 @@ agent_budgets:
   max_steps: 5
   max_spend_usd: 0.05
   per_call_timeout_s: 10
+  max_concurrent_runs: 8   # B2: cap concurrent multi-step runs so a burst can't
+                           # saturate the single onboarded backend (admission control,
+                           # not inference scaling — that's the operator's job, rule 4)
 
 tenants:
   acme:     {display_name: "Acme Corp",      default_residency: private_cloud_ok}

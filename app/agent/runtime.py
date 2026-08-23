@@ -42,6 +42,8 @@ package to be installed.
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import uuid
 
 from pydantic import BaseModel
@@ -52,6 +54,16 @@ from app.models import ChatRequest, CompressionRecord, DecisionRecord, Execution
 
 NAT_WORKFLOW_CONFIG = "config/nat_workflow.yaml"
 DEFAULT_MAX_STEPS = 5
+
+
+def _gate(run_gate: "asyncio.Semaphore | None"):
+    """The concurrency gate as an async context; a no-op when unbounded (None).
+
+    B2: bounds how many multi-step agent runs execute concurrently, so a
+    traffic burst can't pile unbounded long-lived inferences onto the single
+    onboarded backend (admission control, not inference scaling — CLAUDE.md
+    rule 4)."""
+    return run_gate if run_gate is not None else contextlib.nullcontext()
 
 
 def _configure_nat_telemetry(config) -> None:
@@ -127,7 +139,8 @@ def _is_cap_exceeded(text: str) -> bool:
     return _CAP_EXCEEDED_MARKER in (text or "").lower()
 
 
-async def run(ctx: ExecutionPolicyContext, request: ChatRequest, *, port: int) -> AgentResult:
+async def run(ctx: ExecutionPolicyContext, request: ChatRequest, *, port: int,
+              run_gate: "asyncio.Semaphore | None" = None) -> AgentResult:
     """Run the NAT `tool_calling_agent` workflow for one chat request.
 
     Every LLM call the agent makes is a real HTTP POST to our own internal
@@ -165,14 +178,19 @@ async def run(ctx: ExecutionPolicyContext, request: ChatRequest, *, port: int) -
         # our own redacted per-hop trace covers this. See _configure_nat_telemetry.
         _configure_nat_telemetry(config)
 
-        async with WorkflowBuilder.from_config(config=config) as builder:
-            session_manager = await SessionManager.create(config=config, shared_builder=builder)
-            try:
-                async with session_manager.session() as session:
-                    async with session.run(user_text) as runner:
-                        text = await runner.result(to_type=str)
-            finally:
-                await session_manager.shutdown()
+        # B2: hold the concurrency gate only around the actual NAT execution
+        # (the expensive, long-lived inference work) — released before the
+        # HOPS.pop_all drain below, which must run unconditionally regardless
+        # of gate state.
+        async with _gate(run_gate):
+            async with WorkflowBuilder.from_config(config=config) as builder:
+                session_manager = await SessionManager.create(config=config, shared_builder=builder)
+                try:
+                    async with session_manager.session() as session:
+                        async with session.run(user_text) as runner:
+                            text = await runner.result(to_type=str)
+                finally:
+                    await session_manager.shutdown()
     finally:
         # Always drain the per-run hop collector, even when we are about to
         # raise AgentCapExceeded below — fail closed without leaking state.

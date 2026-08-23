@@ -5,7 +5,7 @@ from pathlib import Path
 import yaml
 
 from app.config.schema import (
-    BypassCfg, CCRCfg, ContextOptimizationCfg, LangfuseCfg,
+    BypassCfg, CCRCfg, ContextOptimizationCfg, HistoryCfg, LangfuseCfg,
     ObservabilityCfg, PolicyCfg, PricingCfg, RoutingCfg, ServingCfg, Settings,
 )
 
@@ -75,6 +75,7 @@ def load_settings(config_dir: str = "config") -> Settings:
             cache_alignment=co_raw["cache_alignment"],
         ),
         observability=observability,
+        history=HistoryCfg(**serving_raw.get("history", {})),
     )
     routing = RoutingCfg(**routing_raw)
     policy = PolicyCfg(**policy_raw)

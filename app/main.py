@@ -10,7 +10,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.agent.internal_endpoint import internal_router
 from app.api.admin_routes import admin_router
 from app.api.bus import DecisionBus
-from app.api.history import HistoryStore
 from app.apps.admin_auth import SessionStore
 from app.apps.bootstrap import seed_all
 from app.apps.db import Database
@@ -123,13 +122,17 @@ def create_app() -> FastAPI:
     # Task 4, app/api/ui_routes.py) — same own-port, single source.
     self_port = _self_port()
     app.state.self_port = self_port
+    # B2: cap concurrent multi-step agent runs so a traffic burst can't pile
+    # unbounded long-lived inferences onto the single onboarded backend. This is
+    # request-admission control, NOT inference scaling (rule 4 — operators scale
+    # their own serving). On 3.12 asyncio.Semaphore binds to the loop on first
+    # acquire, so constructing it here (outside the serving loop) is safe.
+    _max_runs = int(settings.policy.agent_budgets.get("max_concurrent_runs", 8))
+    app.state.agent_run_gate = asyncio.Semaphore(_max_runs)
     app.state.pipeline = Pipeline(
         settings, gate, detector, gateway, self_port=self_port,
-        co_cfg_provider=lambda: app.state.co_cfg, ccr=ccr, registry=registry)
-    # In-memory, redaction-safe request history for the Phase-6 UI's
-    # list/detail/stats views (app/api/history.py). Process-local; resets
-    # on restart — this is a demo prototype, not durable storage.
-    app.state.history = HistoryStore(capacity=500)
+        co_cfg_provider=lambda: app.state.co_cfg, ccr=ccr, registry=registry,
+        run_gate=app.state.agent_run_gate)
     # Live decision stream (Phase 6a Task 2): in-process asyncio pub/sub
     # feeding GET /api/stream (SSE) for the flow visualizer. Bounded,
     # drop-oldest per-subscriber queues — see app/api/bus.py.

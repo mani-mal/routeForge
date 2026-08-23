@@ -169,6 +169,48 @@ class UsageRecord(Base):
     status: Mapped[str] = mapped_column(String(16), default="ok")  # ok|rejected|error
 
 
+class RequestHistory(Base):
+    """Durable, bounded per-request record backing the console dashboards
+    (list/stats/fleet) and the drilldown. A NEW table -> create_all, no
+    migration (see routeforge-schema-no-migrations). Distinct from
+    UsageRecord: that is the lean, unbounded metering/budget ledger; this is
+    the rich, pruned dashboard store. `redacted_resp` is the SAME
+    already-redacted pipeline response the old in-memory HistoryStore held —
+    types-only detected_entities, no raw PII, no CCR contents (CLAUDE.md 2 & 6).
+    `seq` is a monotonic autoincrement used for ordering AND as the prune key."""
+
+    __tablename__ = "request_history"
+
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    request_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    application_id: Mapped[str] = mapped_column(String(64), index=True)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow)
+
+    # Denormalized summary columns (cheap list/stats/fleet; mirror RequestSummary).
+    tenant_id: Mapped[str] = mapped_column(String(64))
+    sensitivity: Mapped[str] = mapped_column(String(20), default="?")
+    onprem_only: Mapped[bool] = mapped_column(Boolean, default=False)
+    model: Mapped[str] = mapped_column(String(100), default="?")
+    model_display: Mapped[str] = mapped_column(String(200), default="?")
+    tier: Mapped[str] = mapped_column(String(20), default="?")
+    provider: Mapped[str] = mapped_column(String(50), default="?")
+    total_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    baseline_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    routing_saved_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    compression_saved_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    latency_ms: Mapped[float] = mapped_column(Float, default=0.0)
+    hops: Mapped[int] = mapped_column(Integer, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    quality_sum: Mapped[float] = mapped_column(Float, default=0.0)
+    quality: Mapped[float | None] = mapped_column(Float, nullable=True)
+    quality_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    session_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
+
+    detected_entities: Mapped[str] = mapped_column(Text, default="[]")  # JSON array of TYPE strings
+    redacted_resp: Mapped[str] = mapped_column(Text)                     # JSON blob (drilldown)
+
+
 class AdminUser(Base):
     """A dashboard admin (Phase 3). Password hashed with argon2."""
 

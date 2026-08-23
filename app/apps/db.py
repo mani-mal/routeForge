@@ -111,6 +111,14 @@ class Database:
         self._lock = asyncio.Lock()
         # Injected to avoid an import cycle (bootstrap imports models -> db).
         self._seed = seed
+        # B18: the in-memory sqlite engine uses StaticPool — ONE shared aiosqlite
+        # connection for every concurrently checked-out AsyncSession. Concurrent
+        # transactions interleave on that single connection and lose committed
+        # writes. Serialize whole sessions in that case only. Real pools
+        # (file-sqlite, Postgres) give each session its own connection and are
+        # left untouched. Safe (non-reentrant): db.session() is never nested.
+        self._serialize_sessions = _is_memory_sqlite(_resolve_url(url))
+        self._session_lock = asyncio.Lock()
 
     async def ensure_ready(self) -> None:
         if self._ready:
@@ -129,8 +137,13 @@ class Database:
     @asynccontextmanager
     async def session(self):
         await self.ensure_ready()
-        async with self.sessionmaker() as s:
-            yield s
+        if self._serialize_sessions:
+            async with self._session_lock:
+                async with self.sessionmaker() as s:
+                    yield s
+        else:
+            async with self.sessionmaker() as s:
+                yield s
 
     async def dispose(self) -> None:
         await self.engine.dispose()

@@ -9,9 +9,9 @@ demo prioritizes showing recent activity over completeness for a laggy
 viewer.
 
 Events published here carry the same redaction-safe `RequestSummary` /
-types-only trace records already produced by `HistoryStore`
-(app/api/history.py) — this module never sees or stores raw PII or CCR
-contents; it's a plain fan-out mailbox.
+types-only trace records already produced by the durable request-history
+write path (app/apps/history_store.py) — this module never sees or stores
+raw PII or CCR contents; it's a plain fan-out mailbox.
 """
 
 from __future__ import annotations

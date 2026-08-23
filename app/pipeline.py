@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Callable, TYPE_CHECKING
 
 from app.config.schema import ContextOptimizationCfg, Settings
@@ -30,7 +31,8 @@ class Pipeline:
     def __init__(self, settings: Settings, gate: Gate, detector: Detector,
                  gateway: Gateway, self_port: int,
                  co_cfg_provider: Callable[[], ContextOptimizationCfg],
-                 ccr: CCRStore, registry: "ModelRegistry | None" = None) -> None:
+                 ccr: CCRStore, registry: "ModelRegistry | None" = None,
+                 run_gate: "asyncio.Semaphore | None" = None) -> None:
         self._s = settings
         self._gate = gate
         self._detector = detector
@@ -55,6 +57,10 @@ class Pipeline:
         # direct path — see app/compression/__init__.py, ccr.py.
         self._co_cfg_provider = co_cfg_provider
         self._ccr = ccr
+        # B2: concurrency gate for multi-step agent runs (admission control,
+        # not inference scaling — see app/main.py, app/agent/runtime.py).
+        # None means unbounded (direct construction / tests unaffected).
+        self._run_gate = run_gate
 
     def _baseline(self, in_tokens: int, out_tokens: int) -> float:
         """All-frontier baseline: input and output priced at the baseline
@@ -217,7 +223,8 @@ class Pipeline:
         # AgentCapExceeded (fail closed on cap-exceed) is intentionally not
         # caught here: it propagates to the route, which maps any
         # non-PipelineRejected exception to a handled error response.
-        result = await agent_run(ctx, sanitized_request, port=self._self_port)
+        result = await agent_run(ctx, sanitized_request, port=self._self_port,
+                                 run_gate=self._run_gate)
 
         text, vrec = verify(det, ctx, result.text)
         if not vrec.passed:
