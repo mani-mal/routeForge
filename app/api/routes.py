@@ -342,7 +342,8 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
             # telemetry, not just the built-in RegexDetector patterns.
             recognizers=profile.recognizers,
             session_id=session_id,
-            routing_policy_version=s.routing_policy_version)
+            routing_policy_version=s.routing_policy_version,
+            prompt_version=s.prompt_version)
         # Live deep-link for the UI's "Langfuse trace" button, and the raw hex
         # trace id for an external eval/RLHF consumer (F1 Phase D task 2).
         # Both None when telemetry is off → the UI hides the link. Set before

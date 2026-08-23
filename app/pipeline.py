@@ -10,7 +10,7 @@ from app.errors import PolicyGateError
 from app.gateway.backends.base import count_tokens
 from app.gateway.gateway import Gateway
 from app.models import (
-    CacheRecord, ChatRequest, Choice, ExecutionPolicyContext, GenerationResult, MemoryRecord,
+    CacheRecord, ChatRequest, Choice, DecisionRecord, ExecutionPolicyContext, GenerationResult, MemoryRecord,
     Message, Usage, VerificationRecord,
 )
 from app.output.verify import verify
@@ -23,6 +23,7 @@ from app.compression.ccr import CCRStore
 from app.memory import recall_memory, write_memory
 from app.memory.store import MemoryStore
 from app.routing.task_mode import decide as decide_mode
+from app.routing.task_mode_llm import classify_task_mode
 
 if TYPE_CHECKING:
     from app.apps.registry import ModelRegistry
@@ -133,6 +134,35 @@ class Pipeline:
         built.warmup()
         self._detectors[mode] = built
         return built
+
+    def _classifier_enabled(self) -> bool:
+        """The step-4 LLM classifier is OFF unless BOTH the master switch
+        (`routing.prompt_opt.enabled`) is on AND the operator has pinned +
+        verified the `task_mode_classifier` artifact (`active_prompts` is
+        populated by the config loader only for pins that resolved -- see
+        `app/config/loader.py`). The shipped `config/routing.yaml` leaves
+        `prompt_opt.enabled: false`, so this is False by default and the
+        rules `decide()` path below is unchanged."""
+        return (self._s.routing.prompt_opt.enabled
+                and "task_mode_classifier" in self._s.active_prompts)
+
+    async def _decide_task_mode(self, ctx: ExecutionPolicyContext, sanitized: str,
+                                request: ChatRequest) -> tuple[str, DecisionRecord | None]:
+        """Resolve step-4 task mode: the optional LLM classifier when enabled
+        + pinned (routed ONLY via `Router.select` through the gateway's own
+        router/backend -- see `classify_task_mode`'s docstring for the
+        residency argument), else the unchanged rules `decide()` path.
+        Returns `(mode, classifier_record_or_None)` so both call sites can
+        fold the classifier's DecisionRecord (when one was produced) into the
+        SAME trace the pipeline already returns -- its cost must not be
+        invisible (CLAUDE.md pitfall: "don't compute cost only at the end")."""
+        if not self._classifier_enabled():
+            return decide_mode(ctx, request), None
+        artifact = self._s.active_prompts["task_mode_classifier"]
+        mode, crec = await classify_task_mode(
+            ctx, sanitized, artifact, request,
+            self._gateway.router, self._gateway.backend, self._s, self._reg)
+        return mode, crec
 
     def _baseline(self, in_tokens: int, out_tokens: int) -> float:
         """All-frontier baseline: input and output priced at the baseline
@@ -274,9 +304,11 @@ class Pipeline:
             if ctx.requested_model not in permitted:
                 raise PipelineRejected(
                     f"requested model {ctx.requested_model!r} is not permitted or unavailable")
-        # NOTE: task-mode is a rules-only stub today. If a real LLM classifier replaces it,
-        # it must receive SANITIZED content (not the raw request) — see CLAUDE.md.
-        mode = decide_mode(ctx, request)
+        # Task-mode: the optional LLM classifier (Task 2) when enabled +
+        # pinned, else the unchanged rules `decide()` path. Either way this
+        # receives SANITIZED content only, never the raw request — see
+        # CLAUDE.md rule 1 and `classify_task_mode`'s docstring.
+        mode, crec = await self._decide_task_mode(ctx, sanitized, request)
 
         san_messages = [Message(role=request.messages[-1].role, content=sanitized)]
 
@@ -309,8 +341,9 @@ class Pipeline:
             # work and its tokens_after would not reflect the real per-hop
             # pricing basis. san_messages (sanitized, not yet compressed)
             # still goes to the agent — each hop compresses its own view.
-            return await self._run_multi_step(request_id, ctx, request, san_messages, det,
-                                              recall.record)
+            return await self._run_multi_step(
+                request_id, ctx, request, san_messages, det,
+                recall.record, classifier_record=crec)
 
         # Feature #6 — semantic cache CHECK (direct path only; see the
         # constructor comment and _run_multi_step/run_stream for why they
@@ -365,6 +398,12 @@ class Pipeline:
                 if hasattr(request, k)}
         result, records = await self._gateway.run(
             ctx, comp.messages, comp.tokens_after, complexity, hint)
+        if crec is not None:
+            # Fold the classifier's own DecisionRecord into the SAME trace/
+            # cost accumulation as the router's -- its cost must not be
+            # invisible (CLAUDE.md pitfall). `quality_score` is unset on
+            # `crec`, so it never displaces the served hop's quality below.
+            records = [crec, *records]
 
         text, vrec = verify(det, ctx, result.text)
         if not vrec.passed:
@@ -529,8 +568,9 @@ class Pipeline:
         except Exception as e:
             raise PolicyGateError("policy evaluation failed") from e
 
-        # Streaming is the direct/single-shot path only.
-        mode = decide_mode(ctx, request)
+        # Streaming is the direct/single-shot path only. Same optional-LLM-
+        # classifier-else-rules resolution as run() (Task 2).
+        mode, crec = await self._decide_task_mode(ctx, sanitized, request)
         if mode == "multi_step":
             raise StreamFallback(
                 "multi_step request cannot stream unverified; verify the "
@@ -562,6 +602,10 @@ class Pipeline:
                 if hasattr(request, k)}
         stream, records = await self._gateway.run_stream(
             ctx, comp.messages, comp.tokens_after, complexity, hint)
+        if crec is not None:
+            # Same fold as run() -- the classifier's cost/reason reach the
+            # SAME trace `_assemble_stream_meta` builds below.
+            records = [crec, *records]
 
         meta: dict = {}
 
@@ -656,7 +700,8 @@ class Pipeline:
     async def _run_multi_step(self, request_id: str, ctx: ExecutionPolicyContext,
                               request: ChatRequest, san_messages: list[Message],
                               det: Detector,
-                              mem_record: MemoryRecord | None = None) -> dict:
+                              mem_record: MemoryRecord | None = None,
+                              classifier_record: DecisionRecord | None = None) -> dict:
         # NOT wired to the semantic cache (feature #6, Task 2), deliberately:
         # a multi-step run is non-deterministic and tool-driven (its final
         # text is not a pure function of the initial query), so neither a
@@ -693,6 +738,14 @@ class Pipeline:
         total = sum(
             h.actual_cost_usd if h.actual_cost_usd is not None else (h.est_cost_usd or 0.0)
             for h in result.hops)
+        if classifier_record is not None:
+            # Additive, not zipped with result.compressions -- deliberately
+            # kept OUT of result.hops so the hops<->compressions 1:1 zip
+            # below stays aligned (Task 2; classifier_record has no
+            # matching per-hop CompressionRecord of its own).
+            total += (classifier_record.actual_cost_usd
+                     if classifier_record.actual_cost_usd is not None
+                     else (classifier_record.est_cost_usd or 0.0))
         # Two-lever accounting for multi-step (M3 / Task 7): each hop now
         # re-enters compression itself (app/agent/internal_endpoint.py), so
         # `result.compressions` is 1:1 with `result.hops` instead of a single
@@ -725,7 +778,8 @@ class Pipeline:
         # baseline_usd - total_usd.
         routing_saved_usd = baseline_after - total
 
-        trace = [h.model_dump() for h in result.hops]
+        trace = ([classifier_record.model_dump()] if classifier_record is not None else [])
+        trace += [h.model_dump() for h in result.hops]
         trace += [cr.model_dump() for cr in result.compressions]
         trace.append(vrec.model_dump())
         if mem_record is not None:

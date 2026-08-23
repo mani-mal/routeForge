@@ -11,6 +11,7 @@ from app.config.schema import (
     ObservabilityCfg, PolicyCfg, PricingCfg, RoutingCfg, SemanticCacheCfg,
     ServingCfg, Settings,
 )
+from app.prompts.store import prompt_version, resolve_active
 
 _ENV_PAT = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)(?::-([^}]*))?\}")
 
@@ -143,5 +144,24 @@ def load_settings(config_dir: str = "config") -> Settings:
     routing = RoutingCfg(**routing_raw)
     policy = PolicyCfg(**policy_raw)
     pricing = PricingCfg(**pricing_raw)
+
+    # Feature 3 (DSPy prompt-optimization) Task 1: resolve the managed-prompt
+    # pins. A missing/invalid pin must fail the boot (CLAUDE.md rule 5 --
+    # fail closed), never a silent skip -- but `load_settings()` itself must
+    # never raise for it, or `enforce()` (which reports the NAMED
+    # PROMPT_ACTIVE_MISSING/PROMPT_ARTIFACT_INVALID error) would never get a
+    # chance to run. So: on ANY resolution failure, defer entirely -- leave
+    # `active_prompts` empty and `prompt_version` "" -- and let
+    # `app/config/lint.py::lint_settings`/`enforce` re-resolve each pin
+    # independently from `routing.prompt_opt` and report the named violation.
+    # This is deliberately all-or-nothing (not partial): a bad pin must never
+    # let its sibling pins quietly activate either.
+    try:
+        active_prompts = resolve_active(routing.prompt_opt)
+    except (FileNotFoundError, ValueError):
+        active_prompts = {}
+    pv = prompt_version(active_prompts)
+
     return Settings(serving=serving, routing=routing, policy=policy, pricing=pricing,
-                    routing_policy_version=_policy_version(routing_raw, pricing_raw))
+                    routing_policy_version=_policy_version(routing_raw, pricing_raw),
+                    prompt_version=pv, active_prompts=active_prompts)

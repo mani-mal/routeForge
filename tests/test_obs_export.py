@@ -94,3 +94,19 @@ def test_export_omits_session_id_when_absent(mem_provider):
     otel._provider.force_flush()
     root = next(s for s in mem_provider.get_finished_spans() if s.name == "serving.request")
     assert "langfuse.session.id" not in root.attributes
+
+
+def test_export_stamps_prompt_version_when_present(mem_provider):
+    """Feature 3 (DSPy prompt-optimization) Task 1: sp.prompt_version mirrors
+    sp.routing_policy_version's stamp-when-non-empty pattern exactly."""
+    export_mod.export_trace(**_sample(), prompt_version="abc123def456")
+    otel._provider.force_flush()
+    root = next(s for s in mem_provider.get_finished_spans() if s.name == "serving.request")
+    assert root.attributes["sp.prompt_version"] == "abc123def456"
+
+
+def test_export_omits_prompt_version_when_absent(mem_provider):
+    export_mod.export_trace(**_sample())  # no prompt_version kwarg -> default ""
+    otel._provider.force_flush()
+    root = next(s for s in mem_provider.get_finished_spans() if s.name == "serving.request")
+    assert "sp.prompt_version" not in root.attributes
