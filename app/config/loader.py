@@ -7,7 +7,7 @@ from pathlib import Path
 import yaml
 
 from app.config.schema import (
-    BypassCfg, CCRCfg, ContextOptimizationCfg, LangfuseCfg,
+    BypassCfg, CCRCfg, ContextOptimizationCfg, LangfuseCfg, MemoryCfg,
     ObservabilityCfg, PolicyCfg, PricingCfg, RoutingCfg, SemanticCacheCfg,
     ServingCfg, Settings,
 )
@@ -82,6 +82,28 @@ def load_settings(config_dir: str = "config") -> Settings:
         if _allow_pii_dg_env is None
         else _allow_pii_dg_env.strip().lower() in ("on", "true", "1", "yes")
     )
+    # Feature 5 (Task 1) — memory.enabled. SP_MEMORY overrides serving.yaml's
+    # memory.enabled — same env-override pattern as SP_CONTEXT_OPT above.
+    # Substrate only: this cfg is surfaced but nothing constructs/uses a
+    # store yet (Task 2 wires it in), so flipping it has no runtime effect.
+    mem_raw = serving_raw.get("memory", {})
+    _mem_opt_env = os.environ.get("SP_MEMORY")
+    mem_enabled = (
+        bool(mem_raw.get("enabled", False)) if _mem_opt_env is None
+        else _mem_opt_env.strip().lower() in ("on", "true", "1", "yes")
+    )
+    memory = MemoryCfg(
+        enabled=mem_enabled,
+        residency=mem_raw.get("residency", "local_only"),
+        ttl_hours=mem_raw.get("ttl_hours", 24),
+        export_to_telemetry=mem_raw.get("export_to_telemetry", False),
+        max_recall=mem_raw.get("max_recall", 3),
+        min_tokens=mem_raw.get("min_tokens", 0),
+        bypass_on=BypassCfg(**mem_raw.get(
+            "bypass_on",
+            {"high_risk": True, "restricted_sensitivity": True, "user_prompt": False})),
+    )
+
 
     sc_raw = serving_raw["semantic_cache"]
     # SP_SEMANTIC_CACHE=on/off overrides semantic_cache.enabled — same
@@ -106,6 +128,7 @@ def load_settings(config_dir: str = "config") -> Settings:
             ccr=CCRCfg(**co_raw["ccr"]),
             cache_alignment=co_raw["cache_alignment"],
         ),
+        memory=memory,
         semantic_cache=SemanticCacheCfg(
             enabled=sc_enabled,
             residency=sc_raw["residency"],

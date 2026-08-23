@@ -32,6 +32,22 @@ context_optimization:
     export_to_telemetry: false   # must stay false
   cache_alignment: true          # CacheAligner: stabilize prefixes for KV cache hits
 
+# Feature 5 (Task 1) — Persistent memory (mem0-style, step-5 extension).
+# CCR-class residency posture (rule 6): local-only, TTL-bounded,
+# tenant-partitioned, sanitized-only, NEVER exported. Substrate only here —
+# default OFF, no pipeline wiring yet (Task 2 wires read/write in). See
+# docs/architecture/persistent-memory-residency-spec.md. Env override: SP_MEMORY.
+memory:
+  enabled: false                 # default OFF — substrate exists, nothing constructs a store yet
+  residency: local_only          # NEVER external store — see hard rule 6
+  ttl_hours: 24                  # enforced; ttl_hours <= 0 is a boot-fail
+  export_to_telemetry: false     # must stay false — only a counts-only MemoryRecord reaches a trace
+  max_recall: 3                  # most-recent-first cap per tenant partition
+  min_tokens: 0                  # small-request bypass knob (like compression's min_tokens)
+  bypass_on:
+    high_risk: true
+    restricted_sensitivity: true
+    user_prompt: false           # N/A for recall (no live prompt to protect); shape parity with compression
 # Feature #6 — semantic cache (design-gate substrate, Task 1). CCR-class: local,
 # TTL-enforced, never exported, tenant+residency-partitioned so an onprem_only
 # request can never be served a cloud-produced cached response (see

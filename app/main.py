@@ -24,6 +24,7 @@ from app.config.lint import enforce
 from app.config.loader import load_settings
 from app.gateway.backends.factory import resolve_backend
 from app.gateway.gateway import Gateway
+from app.memory.store import DeterministicMemoryStore
 from app.pipeline import Pipeline
 from app.policy.detectors import make_detector
 from app.policy.gate import Gate
@@ -120,6 +121,16 @@ def create_app() -> FastAPI:
     # second one, so CCR TTL/retrieval accounting is process-wide-consistent.
     app.state.co_cfg = settings.serving.context_optimization
     app.state.ccr = ccr
+    # Feature 5 (Task 2): single shared, local, TTL-bounded memory store --
+    # parallels `ccr` above exactly. Constructed ALWAYS (like CCRStore),
+    # regardless of `memory.enabled`; Pipeline only reads/writes it when the
+    # flag is on (see app/memory/__init__.py's bypass idiom), so a disabled
+    # store just sits empty and unused. No runtime toggle endpoint exists for
+    # memory today, so there is no `app.state.memory_cfg` to mirror
+    # `app.state.co_cfg` -- Pipeline reads `settings.serving.memory` directly.
+    memory = DeterministicMemoryStore(
+        ttl_seconds=settings.serving.memory.ttl_hours * 3600)
+    app.state.memory = memory
     # Feature #6 — semantic cache (Task 2). ALWAYS constructed (mirrors ccr
     # above), only USED by the pipeline when settings.serving.semantic_cache
     # .enabled is true (C7: with it false, nothing in the request path ever
@@ -137,6 +148,7 @@ def create_app() -> FastAPI:
     app.state.pipeline = Pipeline(
         settings, gate, detector, gateway, self_port=self_port,
         co_cfg_provider=lambda: app.state.co_cfg, ccr=ccr, registry=registry,
+        memory=memory,
         cache=cache)
     # Live decision stream (Phase 6a Task 2): in-process asyncio pub/sub
     # feeding GET /api/stream (SSE) for the flow visualizer. Bounded,

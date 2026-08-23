@@ -144,6 +144,24 @@ def enforce(s: Settings) -> None:
             "context_optimization.ccr.export_to_telemetry must be false "
             "(CCR contents are originals and must never reach telemetry)")
 
+    # Persistent memory (Feature 5) — same CCR-class posture, plus an
+    # enforced-TTL guard the CCR block doesn't need (CCR always sets a
+    # ttl_hours > 0 by convention; memory adds an explicit boot-fail so an
+    # unbounded memory cache can never ship). CLAUDE.md rule 6.
+    mem = s.serving.memory
+    if mem.enabled and mem.residency != "local_only":
+        raise ConfigLintError(
+            "memory.residency must be 'local_only' (memory is a local cache "
+            f"of sanitized summaries; got {mem.residency!r}; CLAUDE.md rule 6)")
+    if mem.enabled and mem.export_to_telemetry is not False:
+        raise ConfigLintError(
+            "memory.export_to_telemetry must be false (memory contents must "
+            "never reach telemetry — only a counts-only MemoryRecord may; "
+            "CLAUDE.md rule 6)")
+    if mem.enabled and mem.ttl_hours <= 0:
+        raise ConfigLintError(
+            "memory.ttl_hours must be > 0 (enforced TTL; an unbounded memory "
+            "cache defeats the residency claim; CLAUDE.md rule 6)")
     # Feature #6 semantic cache — same CCR-class guards (CLAUDE.md rule 6), plus
     # an enforced-TTL check CCR doesn't need to repeat (CCR's TTL has no
     # equivalent boot guard; this store's design gate calls it out explicitly —
