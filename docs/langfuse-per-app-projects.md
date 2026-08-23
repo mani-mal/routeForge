@@ -9,6 +9,31 @@ I/O only ever goes to that app's *own* project).
 This is **opt-in via environment variables** — the code is always present, but it stays
 dormant until configured.
 
+## How many orgs / projects do I create? (the mental model)
+
+**One organization, configured once. RouteForge creates the per-app projects for you.**
+
+- You create **one** Langfuse **organization** and generate **one** organization-scoped
+  API key pair from it. You set that pair on RouteForge **once** (the env vars below).
+- From then on, **every** application you onboard gets its **own new project created
+  automatically** under that same org — named after the app, tagged
+  `routeforge_app=<app_id>`. RouteForge calls the Langfuse admin API to make it.
+
+So, concretely:
+
+- **Do NOT** create a new organization per application. One org for the whole
+  RouteForge deployment is enough.
+- **Do NOT** manually pre-create a project per application (for the auto path). The
+  provisioner makes a fresh project per app itself; a project you hand-create is simply
+  ignored by auto-provision.
+- A new application therefore needs **nothing** created by hand — onboard it and its
+  project appears. The only setup is the one-time org + org keys.
+
+> If you *want* an app to use a specific project you created by hand (e.g. an
+> air-gapped site that provisions projects out of band), that's the **manual** path
+> instead — `PUT /admin/applications/{app_id}/langfuse` with that project's own keys.
+> The manual and auto paths are mutually exclusive per app.
+
 ## What happens on onboard
 
 `POST /admin/applications` (create/onboard an app) calls
@@ -45,10 +70,28 @@ All three of `LANGFUSE_HOST` + `LANGFUSE_ORG_PUBLIC_KEY` + `LANGFUSE_ORG_SECRET_
 must be present together (`LangfuseProvisioner.is_configured()`); any missing → the
 provisioner no-ops and apps share the default project.
 
-> **Org keys vs project keys.** `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` are
-> *project*-scoped and drive the shared exporter. The `_ORG_` pair is
-> *organization*-scoped and is the only kind that can create new projects. They are
-> different keys from a different Langfuse settings page.
+> **Org keys vs project keys — the #1 gotcha.** `LANGFUSE_PUBLIC_KEY` /
+> `LANGFUSE_SECRET_KEY` are *project*-scoped and drive the shared exporter. The `_ORG_`
+> pair is *organization*-scoped and is the **only** kind that can create new projects.
+> They look alike (both `pk-lf-…` / `sk-lf-…`) but come from **different settings
+> pages**:
+>
+> - **Project** keys: Project → Settings → API Keys. Scoped to that one project. Can
+>   read/write traces; **cannot create projects**.
+> - **Organization** keys: **Organization → Settings → API Keys** (the org-level page,
+>   not inside any project). These are what `LANGFUSE_ORG_*` must be.
+>
+> If you configure *project* keys by mistake, the provisioner's create call returns
+> **HTTP 403 `Invalid API key. Organization-scoped API key required for this
+> operation.`** — and every onboarded app silently falls back to the shared project. To
+> check a pair before wiring it:
+>
+> ```bash
+> curl -s -u "$PK:$SK" -X POST "$LANGFUSE_HOST/api/public/projects" \
+>   -H 'content-type: application/json' -d '{"name":"scope-check"}' -w '\nHTTP=%{http_code}\n'
+> # 200 + a project id  -> org-scoped (good; delete the scope-check project after)
+> # 403 "...required..." -> project-scoped (wrong; get keys from the ORG settings page)
+> ```
 
 ## Enabling it on the DGX deployment
 
