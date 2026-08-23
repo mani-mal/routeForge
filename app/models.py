@@ -126,6 +126,24 @@ class CompressionRecord(BaseModel):
     latency_ms: float = 0.0
 
 
+class CacheRecord(BaseModel):
+    """Semantic-cache trace record (feature #6). COUNTS ONLY -- mirrors
+    CompressionRecord. Never a query or response/content field: cache
+    contents live only in-process and must never leave it (CLAUDE.md rule 6;
+    see docs/architecture/semantic-cache-residency-spec.md C6). If a content
+    field is ever added here it MUST also be added to
+    app/obs/otel.py::REDACT_KEYS."""
+    step: str = "cache"
+    enabled: bool
+    hit: bool
+    bypass_reason: str = ""
+    tokens_saved: int = 0
+    cache_saved_usd: float = 0.0
+    entries_size: int = 0
+    blocked_cloud_entries: int = 0  # must stay 0 for onprem_only -- honesty counter
+    latency_ms: float = 0.0
+
+
 class GenerationResult(BaseModel):
     model: str
     text: str

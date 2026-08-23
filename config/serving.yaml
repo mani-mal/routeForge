@@ -32,6 +32,25 @@ context_optimization:
     export_to_telemetry: false   # must stay false
   cache_alignment: true          # CacheAligner: stabilize prefixes for KV cache hits
 
+# Feature #6 — semantic cache (design-gate substrate, Task 1). CCR-class: local,
+# TTL-enforced, never exported, tenant+residency-partitioned so an onprem_only
+# request can never be served a cloud-produced cached response (see
+# docs/architecture/semantic-cache-residency-spec.md). Default OFF: with
+# enabled: false nothing in the pipeline constructs or touches a cache instance
+# at all — Task 2 wires the check/store calls into the pipeline behind this flag.
+# Env override: SP_SEMANTIC_CACHE (see loader), mirrors SP_CONTEXT_OPT above.
+semantic_cache:
+  enabled: false                 # default OFF: no pipeline wiring exists yet (Task 1)
+  residency: local_only          # NEVER external — see hard rule 6; lint-enforced
+  ttl_hours: 24                  # enforced; unbounded cache = retention liability
+  export_to_telemetry: false     # must stay false; only a counts-only CacheRecord traces
+  max_entries: 0                 # 0 = unbounded beyond TTL
+  bypass_on:
+    high_risk: true              # risk_class == high (see policy.yaml)
+    restricted_sensitivity: true # sensitivity == restricted (see policy.yaml enum)
+    user_prompt: true            # ignored by the cache (whole-request decision); kept for shape parity
+  embedding: "off"                # deferred seam (C8) — no embedder wired, no embedding lib imported
+
 policy:
   pii_detection: presidio        # presidio | regex | off
   fail_closed: true              # never relax this

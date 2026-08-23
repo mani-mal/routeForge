@@ -144,6 +144,27 @@ def enforce(s: Settings) -> None:
             "context_optimization.ccr.export_to_telemetry must be false "
             "(CCR contents are originals and must never reach telemetry)")
 
+    # Feature #6 semantic cache — same CCR-class guards (CLAUDE.md rule 6), plus
+    # an enforced-TTL check CCR doesn't need to repeat (CCR's TTL has no
+    # equivalent boot guard; this store's design gate calls it out explicitly —
+    # see docs/architecture/semantic-cache-residency-spec.md C5). Only
+    # load-bearing when the cache is enabled — a drifted value on a disabled
+    # cache does not fail the boot, mirroring the ccr guards above.
+    sc = s.serving.semantic_cache
+    if sc.enabled and sc.residency != "local_only":
+        raise ConfigLintError(
+            "semantic_cache.residency must be 'local_only' (a cache hit skips "
+            f"the model entirely, so this is a local-only store; got {sc.residency!r})")
+    if sc.enabled and sc.export_to_telemetry is not False:
+        raise ConfigLintError(
+            "semantic_cache.export_to_telemetry must be false (cache contents "
+            "are cached responses and must never reach telemetry — only a "
+            "counts-only CacheRecord may)")
+    if sc.enabled and sc.ttl_hours <= 0:
+        raise ConfigLintError(
+            "semantic_cache.ttl_hours must be > 0 when enabled (enforced TTL, "
+            f"not an unbounded retention liability; got {sc.ttl_hours})")
+
     errs = lint_settings(s)
     if errs:
         for e in errs:

@@ -18,6 +18,7 @@ from app.apps.db import Database
 from app.apps.policy import RateLimiter
 from app.api.routes import router
 from app.api.ui_routes import router as ui_router
+from app.cache.store import DeterministicSemanticCache
 from app.compression.ccr import CCRStore
 from app.config.lint import enforce
 from app.config.loader import load_settings
@@ -119,6 +120,15 @@ def create_app() -> FastAPI:
     # second one, so CCR TTL/retrieval accounting is process-wide-consistent.
     app.state.co_cfg = settings.serving.context_optimization
     app.state.ccr = ccr
+    # Feature #6 — semantic cache (Task 2). ALWAYS constructed (mirrors ccr
+    # above), only USED by the pipeline when settings.serving.semantic_cache
+    # .enabled is true (C7: with it false, nothing in the request path ever
+    # calls into this instance). Local, TTL-bounded, tenant+residency-
+    # partitioned — see app/cache/store.py and
+    # docs/architecture/semantic-cache-residency-spec.md.
+    cache = DeterministicSemanticCache(
+        ttl_seconds=settings.serving.semantic_cache.ttl_hours * 3600)
+    app.state.cache = cache
     # Computed once and reused for both the agent runtime's self-call
     # (Pipeline below) and the /api/traffic control's self-call (Phase 7
     # Task 4, app/api/ui_routes.py) — same own-port, single source.
@@ -126,7 +136,8 @@ def create_app() -> FastAPI:
     app.state.self_port = self_port
     app.state.pipeline = Pipeline(
         settings, gate, detector, gateway, self_port=self_port,
-        co_cfg_provider=lambda: app.state.co_cfg, ccr=ccr, registry=registry)
+        co_cfg_provider=lambda: app.state.co_cfg, ccr=ccr, registry=registry,
+        cache=cache)
     # Live decision stream (Phase 6a Task 2): in-process asyncio pub/sub
     # feeding GET /api/stream (SSE) for the flow visualizer. Bounded,
     # drop-oldest per-subscriber queues — see app/api/bus.py.

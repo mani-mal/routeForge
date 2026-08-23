@@ -8,7 +8,8 @@ import yaml
 
 from app.config.schema import (
     BypassCfg, CCRCfg, ContextOptimizationCfg, LangfuseCfg,
-    ObservabilityCfg, PolicyCfg, PricingCfg, RoutingCfg, ServingCfg, Settings,
+    ObservabilityCfg, PolicyCfg, PricingCfg, RoutingCfg, SemanticCacheCfg,
+    ServingCfg, Settings,
 )
 
 _ENV_PAT = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)(?::-([^}]*))?\}")
@@ -81,6 +82,16 @@ def load_settings(config_dir: str = "config") -> Settings:
         if _allow_pii_dg_env is None
         else _allow_pii_dg_env.strip().lower() in ("on", "true", "1", "yes")
     )
+
+    sc_raw = serving_raw["semantic_cache"]
+    # SP_SEMANTIC_CACHE=on/off overrides semantic_cache.enabled — same
+    # env-override pattern as SP_CONTEXT_OPT above (feature #6, Task 1). No
+    # pipeline code reads this cfg yet; Task 2 wires the check/store calls.
+    _sc_opt_env = os.environ.get("SP_SEMANTIC_CACHE")
+    sc_enabled = (
+        sc_raw["enabled"] if _sc_opt_env is None
+        else _sc_opt_env.strip().lower() in ("on", "true", "1", "yes")
+    )
     serving = ServingCfg(
         providers=serving_raw["providers"],
         pii_detection=os.environ.get(
@@ -94,6 +105,15 @@ def load_settings(config_dir: str = "config") -> Settings:
             bypass_on=BypassCfg(**co_raw["bypass_on"]),
             ccr=CCRCfg(**co_raw["ccr"]),
             cache_alignment=co_raw["cache_alignment"],
+        ),
+        semantic_cache=SemanticCacheCfg(
+            enabled=sc_enabled,
+            residency=sc_raw["residency"],
+            ttl_hours=sc_raw["ttl_hours"],
+            export_to_telemetry=sc_raw["export_to_telemetry"],
+            max_entries=sc_raw["max_entries"],
+            bypass_on=BypassCfg(**sc_raw["bypass_on"]),
+            embedding=sc_raw["embedding"],
         ),
         observability=observability,
     )
