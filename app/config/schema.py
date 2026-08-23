@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class PoolCandidate(BaseModel):
@@ -29,7 +29,14 @@ class StageSignalsCfg(BaseModel):
     enabled: bool = False
     tool_error_raise: bool = True      # a tool error in the latest result -> raise one tier
     exploration_repeat: int = 3        # same tool called >= N times -> raise one tier
-    planner_role_raise: bool = True    # inferred "plan" hop (hop 1, no tools yet) -> frontier
+    planner_role_raise: bool = True    # gates the "plan" role specifically (see role_tiers)
+    # Role -> min_tier raise map (Task 1: full role tagging -- plan/verify/
+    # execute/format). Config-driven so operators can tune it; a role absent
+    # from this map never raises. "plan" only raises when planner_role_raise
+    # is also True. "execute"/"format" are intentionally absent by default --
+    # they leave the cost/quality router free to pick the cheap tier.
+    role_tiers: dict[str, str] = Field(
+        default_factory=lambda: {"plan": "frontier", "verify": "mid"})
 
 
 class RoutingCfg(BaseModel):
