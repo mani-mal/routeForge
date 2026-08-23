@@ -26,25 +26,31 @@ Sibling backlogs: `ui-open-items.md`, `eval-logging-backlog.md`.
 
 ---
 
-## B20 — Flaky test: `test_generated_ssns_are_detected_by_presidio` (Presidio nondeterminism)
+## B20 — SSN downgraded out of `onprem_only` when spaCy tags it DATE_TIME/PHONE (dedupe defeated the SSN backstop)  ✅ RESOLVED (2026-08-23)
 
-**Severity:** low (test tooling only — NOT product code; the product PII path has the
-deterministic `US_SSN` regex layer, see B4).
-**Found:** 2026-08-23, full-suite run while integrating PRs #18–#23 (present on the
-pre-merge baseline `c5a98bd` too — unrelated to those features; no feature touches
-detectors/Presidio/personas).
+**Severity:** MEDIUM (real privacy-routing gap, not just a flaky test — surfaced *as* a
+flaky test). **Found:** 2026-08-23 while integrating PRs #18–#23 (pre-existing; present
+on baseline `c5a98bd`; no feature touched it).
 
-`tests/test_traffic_personas.py::test_generated_ssns_are_detected_by_presidio` seeds
-`random.Random(99)` and asserts Presidio's `US_SSN` recognizer flags 50 generated SSNs.
-Despite the fixed seed (deterministic inputs), it passes/fails nondeterministically
-across runs (~40–60% fail rate in isolation; e.g. "presidio missed 818-30-4221") — the
-nondeterminism is inside Presidio/spaCy scoring on borderline SSNs, not the generator.
+**What it really was.** `test_traffic_personas.py::test_generated_ssns_are_detected_by_presidio`
+flaked ~40–60% *across process starts* (seeded inputs, so not the generator). Root cause:
+`PresidioDetector.analyze` appends a regex `US_SSN` backstop (B4), but spaCy
+nondeterministically tags an SSN-format string (e.g. `818-30-4221`, `818` = a real LA
+area code) as `DATE_TIME`/`PHONE_NUMBER` on the *same span*. `dedupe` (`app/policy/merge.py`)
+resolves same-span overlap by highest `score`; the backstop had `score=None`→0.0 and the
+Presidio entity tied/won, so the merged entity was typed `DATE_TIME` and the `US_SSN` was
+dropped. Impact beyond the test: `US_SSN`→`restricted`+`onprem_only` (policy.yaml:14–16)
+but `DATE_TIME`/`PHONE_NUMBER`→the lower tier (residency not onprem_only), so a
+misclassified SSN could **route to a cloud provider** (rule 3/8). Redaction still masked
+the span (no raw leak), but the residency/sensitivity downgraded.
 
-**Fix ideas (testing-phase candidate):** either lower the acceptance bar to "≥N of 50
-detected", add the deterministic `US_SSN` regex layer to `make_detector("presidio")` so
-Presidio-misses are backstopped (matching the real egress path, B4), or mark it
-`@pytest.mark.flaky`/xfail with a tracking note. Own task; pick up in the test-hardening
-pass.
+**Fix (`app/policy/detectors.py`).** The regex `US_SSN` backstop now carries `score=1.0` —
+an exact SSN-format match is a high-confidence privacy signal that MUST win `dedupe`, so an
+SSN is always typed `US_SSN` regardless of spaCy's per-process mood (fail-safe: SSN-format
+→ most-sensitive interpretation). Verified 0 misses across 8 process starts + 6/6 test runs.
+Regression locked at the dedupe level in `tests/test_policy_merge.py::
+test_scored_ssn_wins_type_over_coincidental_datetime_overlap` (deterministic, no Presidio
+dep). This restores B4's intent (an SSN never slips the gate) through the merge step.
 
 ## B1 — Multi-step 503s mislabeled "policy evaluation unavailable"  ✅ RESOLVED (2026-08-16, verified in code)
 

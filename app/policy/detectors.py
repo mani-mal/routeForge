@@ -96,8 +96,18 @@ class PresidioDetector:
         results = self._analyzer.analyze(text=text, language="en")
         ents = [Entity(type=r.entity_type, start=r.start, end=r.end,
                        value=text[r.start:r.end]) for r in results]
+        # score=1.0 is LOAD-BEARING, not cosmetic. An exact SSN-format match is a
+        # high-confidence privacy signal that MUST win dedupe's same-span overlap
+        # resolution. spaCy nondeterministically tags an SSN like 818-30-4221 as
+        # DATE_TIME/PHONE_NUMBER (818 is a real area code); without a decisive
+        # score dedupe keeps that overlapping Presidio entity and drops US_SSN,
+        # which would DOWNGRADE the request out of restricted/onprem_only
+        # (policy.yaml) and let an SSN route to cloud (rule 3/8). The regex
+        # backstop (B4) exists precisely so an SSN never slips the gate; the
+        # score makes that guarantee survive dedupe. Fail-safe: an SSN-format
+        # string is always treated as the most sensitive interpretation.
         ents += [Entity(type="US_SSN", start=m.start(), end=m.end(),
-                        value=m.group()) for m in self._SSN.finditer(text)]
+                        value=m.group(), score=1.0) for m in self._SSN.finditer(text)]
         return dedupe(ents)
 
     def anonymize(self, text: str, entities: list[Entity]) -> tuple[str, dict[str, str]]:
