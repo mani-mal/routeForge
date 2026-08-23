@@ -1,9 +1,30 @@
 import copy
+import pathlib
 
 import pytest
+import yaml
 
 from app.config.lint import ConfigLintError, enforce, lint_settings
 from app.config.loader import load_settings
+
+
+def test_boot_survives_serving_yaml_without_semantic_cache_block(tmp_path):
+    # Upgrade safety: a mounted serving.yaml that predates feature #6 (the DGX
+    # ConfigMap, Helm/HPE serving-config — none ship a semantic_cache: block)
+    # must still boot. semantic_cache is optional/defaulted like memory and
+    # context_optimization; a required key would KeyError every existing
+    # deployment on upgrade.
+    raw = yaml.safe_load(pathlib.Path("config/serving.yaml").read_text())
+    for k in ("semantic_cache", "memory", "stage_signals"):
+        raw.pop(k, None)
+    (tmp_path / "serving.yaml").write_text(yaml.safe_dump(raw))
+    for f in ("policy.yaml", "routing.yaml", "pricing.yaml"):
+        (tmp_path / f).write_text(pathlib.Path("config", f).read_text())
+    s = load_settings(config_dir=str(tmp_path))  # must not raise
+    assert s.serving.semantic_cache.enabled is False
+    assert s.serving.semantic_cache.residency == "local_only"
+    assert s.serving.memory.enabled is False
+    enforce(s)  # boot lint must still pass on the defaulted config
 
 
 def test_semantic_cache_cfg_surfaced_default_off():

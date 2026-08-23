@@ -218,8 +218,11 @@ class SemanticCacheCfg(BaseModel):
     # means something for per-message compression treatment ("don't compress
     # the live question"); a cache check/store is a whole-request decision,
     # not a per-message one. Kept in the shape so operators don't have to
-    # learn a second bypass schema.
-    bypass_on: BypassCfg
+    # learn a second bypass schema. Defaulted so the whole block is optional
+    # (see ServingCfg.semantic_cache) — an upgrade whose mounted serving.yaml
+    # predates this feature must still boot.
+    bypass_on: BypassCfg = BypassCfg(
+        high_risk=True, restricted_sensitivity=True, user_prompt=True)
     # Deferred embedding seam (C8): a future SemanticCacheBackend behind this
     # value. "off" is the only meaningful value today -- inert placeholder,
     # nothing reads it to construct anything. No embedding library is
@@ -239,7 +242,10 @@ class ServingCfg(BaseModel):
     reject_stream_requests: bool
     context_optimization: ContextOptimizationCfg
     memory: MemoryCfg = MemoryCfg()
-    semantic_cache: SemanticCacheCfg
+    # Optional/defaulted like `memory` and `context_optimization`: a mounted
+    # serving.yaml that predates feature #6 has no semantic_cache: block, and a
+    # required field here would KeyError every existing deployment on upgrade.
+    semantic_cache: SemanticCacheCfg = SemanticCacheCfg()
     observability: ObservabilityCfg
 
 

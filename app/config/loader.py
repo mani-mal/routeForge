@@ -106,13 +106,17 @@ def load_settings(config_dir: str = "config") -> Settings:
     )
 
 
-    sc_raw = serving_raw["semantic_cache"]
+    # Defensive .get() like `memory`/`context_optimization` above: a brand-new
+    # default-OFF infra block must be OPTIONAL, or upgrading an existing
+    # deployment whose mounted serving.yaml predates this feature (DGX
+    # ConfigMap, Helm/HPE serving-config — none ship a semantic_cache: block)
+    # would KeyError at boot. Absent block => disabled with schema defaults.
+    sc_raw = serving_raw.get("semantic_cache", {})
     # SP_SEMANTIC_CACHE=on/off overrides semantic_cache.enabled — same
-    # env-override pattern as SP_CONTEXT_OPT above (feature #6, Task 1). No
-    # pipeline code reads this cfg yet; Task 2 wires the check/store calls.
+    # env-override pattern as SP_CONTEXT_OPT above (feature #6, Task 1).
     _sc_opt_env = os.environ.get("SP_SEMANTIC_CACHE")
     sc_enabled = (
-        sc_raw["enabled"] if _sc_opt_env is None
+        bool(sc_raw.get("enabled", False)) if _sc_opt_env is None
         else _sc_opt_env.strip().lower() in ("on", "true", "1", "yes")
     )
     serving = ServingCfg(
@@ -132,12 +136,14 @@ def load_settings(config_dir: str = "config") -> Settings:
         memory=memory,
         semantic_cache=SemanticCacheCfg(
             enabled=sc_enabled,
-            residency=sc_raw["residency"],
-            ttl_hours=sc_raw["ttl_hours"],
-            export_to_telemetry=sc_raw["export_to_telemetry"],
-            max_entries=sc_raw["max_entries"],
-            bypass_on=BypassCfg(**sc_raw["bypass_on"]),
-            embedding=sc_raw["embedding"],
+            residency=sc_raw.get("residency", "local_only"),
+            ttl_hours=sc_raw.get("ttl_hours", 24),
+            export_to_telemetry=sc_raw.get("export_to_telemetry", False),
+            max_entries=sc_raw.get("max_entries", 0),
+            bypass_on=BypassCfg(**sc_raw.get(
+                "bypass_on",
+                {"high_risk": True, "restricted_sensitivity": True, "user_prompt": True})),
+            embedding=sc_raw.get("embedding", "off"),
         ),
         observability=observability,
     )
