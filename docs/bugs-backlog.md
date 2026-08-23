@@ -3,12 +3,48 @@
 Running list of known defects/observations to pick up later. Newest first.
 Sibling backlogs: `ui-open-items.md`, `eval-logging-backlog.md`.
 
-> **Status sweep 2026-08-16.** Every item below was re-verified against the code.
-> Resolved-but-unmarked items now carry a `✅ RESOLVED` / `PARTIAL` marker in their
-> heading with a one-line evidence note; the original write-ups are kept for history.
-> Still open: **B2**, **B3**, **B13** (bugs) and **B14–B16** (features).
+> **Status sweep 2026-08-22.** Re-verified against the code at `main` (merge `ed64312`,
+> deployed DGX `:0.14.0`). Resolved-but-unmarked items carry a `✅ RESOLVED` / `PARTIAL`
+> marker in their heading with a one-line evidence note; original write-ups kept for history.
+> **No open code-correctness bug remains.** B3 (PR #16), B13 (folded into B14/F1), B14
+> (F1 Phase B + PR #17) are now resolved. Remaining: **B2** is an infra/capacity note (scale
+> vLLM), not a code fix; **B15** is PARTIAL (admin cross-app rollup + manual per-app creds
+> shipped, but automatic project-per-app provisioning still needs `LANGFUSE_ORG_*` config —
+> this is why every app currently lands in the shared `demo-project`); **B16** is PARTIAL
+> (all 3 substrate gaps shipped; only routing score-configs + dataset-export readiness remain).
+> Forward *feature* work is tracked in the audit, not here.
+>
+> _Prior sweep 2026-08-16: listed B2/B3/B13 + B14–B16 as open._
+>
+> **Update 2026-08-23 (DGX `:0.17.0`).** The six-feature program (PRs #18–#23) is
+> now MERGED to `main` and deployed: role-aware raise-only tier bias, failure-driven
+> lateral model switch, semantic cache (CCR-class), persistent memory (CCR-class),
+> trace-mining recommend-loop + external-training orchestration hook, and DSPy
+> prompt-optimization — all default-OFF. Plus a config-hardening fix (semantic_cache
+> block made optional so a pre-feature-6 mounted serving.yaml boots unchanged). One
+> new **test-quality** item found: B20 below.
 
 ---
+
+## B20 — Flaky test: `test_generated_ssns_are_detected_by_presidio` (Presidio nondeterminism)
+
+**Severity:** low (test tooling only — NOT product code; the product PII path has the
+deterministic `US_SSN` regex layer, see B4).
+**Found:** 2026-08-23, full-suite run while integrating PRs #18–#23 (present on the
+pre-merge baseline `c5a98bd` too — unrelated to those features; no feature touches
+detectors/Presidio/personas).
+
+`tests/test_traffic_personas.py::test_generated_ssns_are_detected_by_presidio` seeds
+`random.Random(99)` and asserts Presidio's `US_SSN` recognizer flags 50 generated SSNs.
+Despite the fixed seed (deterministic inputs), it passes/fails nondeterministically
+across runs (~40–60% fail rate in isolation; e.g. "presidio missed 818-30-4221") — the
+nondeterminism is inside Presidio/spaCy scoring on borderline SSNs, not the generator.
+
+**Fix ideas (testing-phase candidate):** either lower the acceptance bar to "≥N of 50
+detected", add the deterministic `US_SSN` regex layer to `make_detector("presidio")` so
+Presidio-misses are backstopped (matching the real egress path, B4), or mark it
+`@pytest.mark.flaky`/xfail with a tracking note. Own task; pick up in the test-hardening
+pass.
 
 ## B1 — Multi-step 503s mislabeled "policy evaluation unavailable"  ✅ RESOLVED (2026-08-16, verified in code)
 
@@ -51,7 +87,13 @@ vs 21/150 at rps=8, all `multi_step`).
 - Raise `vllm.timeout_s` and/or bound agent concurrency — mitigates, doesn't remove.
 - Blocked from scaling the **API** tier by B3.
 
-## B3 — In-memory dashboard state blocks horizontal API scaling
+## B3 — In-memory dashboard state blocks horizontal API scaling  ✅ RESOLVED (2026-08-22, PR #16 / :0.13.0)
+
+**Resolution:** shared-state landed in PR #16 — the durable `request_snapshots` table replaces
+the process-local `HistoryStore` for console list/detail/stats, and `PgDecisionBridge`
+(Postgres LISTEN/NOTIFY, inert on sqlite) carries the SSE decision stream across replicas.
+The API tier can now be scaled horizontally with a coherent dashboard (see
+`docs/architecture/api-load-balancing.md`). Original write-up kept below.
 
 **Severity:** medium (architectural; blocks B2's API-scaling lever)
 **Found:** 2026-07-31
@@ -268,17 +310,19 @@ baseline_usd - total`. Add a unit test that a same-tier request yields
 `routing_saved == 0` and a cheaper-tier request yields `routing_saved > 0`.
 Re-verify the Overview aggregate against summed per-request values. Own SDD task.
 
-## B13 — `capture_io: redacted` stores raw application input in Langfuse (weaker than the gate); UI claims it never does  ⚠️ STILL OPEN (partly narrowed, 2026-08-16)
+## B13 — `capture_io: redacted` stores raw application input in Langfuse (weaker than the gate); UI claims it never does  ✅ RESOLVED (2026-08-22, folded into B14/F1)
 
-**Status 2026-08-16:** structural cause is still present — `app/api/routes.py:195` passes the
-**raw** `body.messages[-1].content` to `export_trace`, which re-runs `redact()` independently
-(`app/obs/export.py:_set_io`) instead of reusing the gate's sanitized prompt + redaction map.
-Business fields that aren't PII entity types (subject/summary/customer_id) still pass through in
-`redacted` mode. The SSN/custom-recognizer gap is narrowed (B4's regex layer + per-app
-recognizers are now threaded into egress redaction, `routes.py:210`). Demo default is
-`capture_io: off`, so this is not a live breach — but it undercuts the claim when `redacted` is
-enabled. **Fix is folded into B14** (drive display/export from the gate's sanitized text).
-Original write-up kept below.
+**Status 2026-08-22:** structural cause fixed. `routes.py` now threads the gate's
+`sanitized_prompt` into `export_trace`, and `_set_io` (`app/obs/export.py:72`) prefers that
+sanitized text over independently re-redacting the raw body — so `redacted` telemetry can no
+longer be weaker than what the model saw. The false "raw prompt is never stored" caption is
+gone; the drilldown renders bodies by the per-app display mode
+(`ui/src/console/RequestDrilldown.tsx`). The only residual is inherent, not a defect: business
+fields (subject/customer_id) aren't PII *entity types*, so redaction can't mask them — an app
+carrying such fields uses `capture_io=off` or its own `full` project. Original write-up kept below.
+
+**Prior status 2026-08-16 (historical):** structural cause was still present — raw
+`body.messages[-1].content` passed to `export_trace`, re-redacted independently.
 
 **Severity:** medium (privacy-story integrity; Rule #2. Demo lab uses synthetic
 data so not a live breach, but it undercuts the central claim on-camera)
@@ -321,7 +365,14 @@ card, drive the actual request+response *display* from the per-app setting
 demo mitigation: set `SP_CAPTURE_IO=off` on the DGX deploy to restore blank Input.
 Cross-ref `docs/eval-logging-backlog.md` and B14. Own SDD task.
 
-## B14 — FEATURE: per-application capture_io (off | redacted | full) in app settings
+## B14 — FEATURE: per-application capture_io (off | redacted | full) in app settings  ✅ SHIPPED (F1 Phase B :0.12.0; + pii_detection/stream_mode in PR #17 :0.14.0)
+
+**Resolution:** per-app `capture_io` (`AppPolicy.capture_io`, `app/apps/models.py`) is threaded
+per request into `export_trace` with a fail-closed clamp (`app/api/routes.py`), symmetric UI
+display by mode (`RequestDrilldown.tsx`), and the per-app residency lint (onprem_only cannot
+reach `full`). PR #17 (:0.14.0) extended the same per-app pattern to `pii_detection` and
+`stream_mode`, plus operator-gated raw eval capture (`allow_app_pii_downgrade`). Router-diagnostic
+`sp.*` metadata is always-on regardless of `capture_io` (:0.11.0). Original write-up kept below.
 
 **Type:** feature (with a design-bug component: the current global-only switch is
 too coarse for a multi-tenant product).
@@ -390,7 +441,19 @@ top = Improvement Plane = out of scope (CLAUDE.md).
 recreate) on deployed DBs — `create_all` never migrates (see memory
 `routeforge-schema-no-migrations`). Own SDD task; plan first.
 
-## B15 — FEATURE: per-application Langfuse project (isolation) + admin cross-app reporting
+## B15 — FEATURE: per-application Langfuse project (isolation) + admin cross-app reporting  🟡 PARTIAL (2026-08-22)
+
+**Status 2026-08-22:** two of three halves shipped. **(a) Admin cross-app reporting ✅** —
+the "Cross-app usage" console tab (`ui/src/admin/CrossAppReport.tsx` ← `GET
+/admin/usage/by-application`) is the DB-backed source-of-truth rollup, so cross-app reporting
+does NOT depend on Langfuse. **(b) Manual per-app creds ✅** — `PUT
+/admin/applications/{id}/langfuse` (F1 Phase C) + `load_app_langfuse` route each app's traces to
+its own project when configured. **(c) Automatic project-per-app provisioning ⏳ STILL OPEN** —
+`LangfuseProvisioner` needs `LANGFUSE_HOST` + `LANGFUSE_ORG_PUBLIC_KEY` + `LANGFUSE_ORG_SECRET_KEY`
+(org-scoped key pair); those are **not set on DGX**, so provisioning is a no-op and every app
+falls back to the shared `demo-project` keyed by the deployment `LANGFUSE_PUBLIC_KEY`. Making
+project-per-app the *default* (auto-create on app onboarding) + the optional redacted rollup
+project remain. Original write-up kept below.
 
 **Type:** feature (tenancy/observability).
 **Severity:** medium (multi-tenant data separation + precondition for B14 raw
@@ -452,12 +515,16 @@ Shared files/data model — plan together. Own SDD task; plan first.
 
 ## B16 — FEATURE (future): RLHF-readiness — feedback capture, router-decision export, dataset export  🟡 PARTIAL (2026-08-16)
 
-**Status 2026-08-16:** gaps 1 & 2 shipped in `:0.11.0` — the always-on `sp.candidates`
-snapshot (chosen + rejected set) and the `sp.routing_policy_version` content hash are now
-stamped on every trace regardless of `capture_io` (see `docs/routing-observability.md`).
-**Remaining:** gap 3 — the feedback ingestion path (`POST /v1/feedback` + UI thumbs → a
-Langfuse score linked to the trace, returning the trace/request id on every chat response) —
-plus routing-specific score configs and dataset-export readiness. Original write-up kept below.
+**Status 2026-08-22:** all three substrate gaps now shipped. Gaps 1 & 2 (`:0.11.0`) — the
+always-on `sp.candidates` snapshot + `sp.routing_policy_version` content hash on every trace.
+Gap 3 (F1 Phase D) — `POST /v1/feedback` (`app/api/routes.py`) writes a Langfuse score to the
+trace's own project (fail-closed when the app has no project), and every chat response returns
+`trace_id`. **Remaining (feature-shaped, not a gap):** routing-specific score configs
+(`route_correct`, `preferred_model`, `failure_type`) and dataset-export readiness (traces +
+corrected outputs → Langfuse datasets → external TRL transform). Training stays out of scope.
+Original write-up kept below.
+
+**Prior status 2026-08-16 (historical):** gaps 1 & 2 shipped; gap 3 still open.
 
 **Type:** feature (future; design in `docs/rlhf-readiness.md`).
 **Severity:** low-now / high-later (unlocks feedback-driven router + model
