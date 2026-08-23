@@ -167,6 +167,8 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
             root.set_attribute("sp.model", model)
             root.set_attribute("sp.cost_total_usd", float(cost.get("total_usd", 0.0)))
             root.set_attribute("sp.cost_baseline_usd", float(cost.get("baseline_usd", 0.0)))
+            if "cache_saved_usd" in cost:  # only present when semantic_cache is enabled
+                root.set_attribute("sp.cost_cache_saved_usd", float(cost["cache_saved_usd"]))
             root.set_attribute("sp.sensitivity", str(policy.get("sensitivity", "")))
             root.set_attribute("sp.onprem_only", bool(policy.get("onprem_only", False)))
             root.set_attribute("sp.detected_entities",

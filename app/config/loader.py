@@ -7,8 +7,9 @@ from pathlib import Path
 import yaml
 
 from app.config.schema import (
-    BypassCfg, CCRCfg, ContextOptimizationCfg, LangfuseCfg,
-    ObservabilityCfg, PolicyCfg, PricingCfg, RoutingCfg, ServingCfg, Settings,
+    BypassCfg, CCRCfg, ContextOptimizationCfg, LangfuseCfg, MemoryCfg,
+    ObservabilityCfg, PolicyCfg, PricingCfg, RoutingCfg, SemanticCacheCfg,
+    ServingCfg, Settings,
 )
 from app.prompts.store import prompt_version, resolve_active
 
@@ -82,6 +83,38 @@ def load_settings(config_dir: str = "config") -> Settings:
         if _allow_pii_dg_env is None
         else _allow_pii_dg_env.strip().lower() in ("on", "true", "1", "yes")
     )
+    # Feature 5 (Task 1) — memory.enabled. SP_MEMORY overrides serving.yaml's
+    # memory.enabled — same env-override pattern as SP_CONTEXT_OPT above.
+    # Substrate only: this cfg is surfaced but nothing constructs/uses a
+    # store yet (Task 2 wires it in), so flipping it has no runtime effect.
+    mem_raw = serving_raw.get("memory", {})
+    _mem_opt_env = os.environ.get("SP_MEMORY")
+    mem_enabled = (
+        bool(mem_raw.get("enabled", False)) if _mem_opt_env is None
+        else _mem_opt_env.strip().lower() in ("on", "true", "1", "yes")
+    )
+    memory = MemoryCfg(
+        enabled=mem_enabled,
+        residency=mem_raw.get("residency", "local_only"),
+        ttl_hours=mem_raw.get("ttl_hours", 24),
+        export_to_telemetry=mem_raw.get("export_to_telemetry", False),
+        max_recall=mem_raw.get("max_recall", 3),
+        min_tokens=mem_raw.get("min_tokens", 0),
+        bypass_on=BypassCfg(**mem_raw.get(
+            "bypass_on",
+            {"high_risk": True, "restricted_sensitivity": True, "user_prompt": False})),
+    )
+
+
+    sc_raw = serving_raw["semantic_cache"]
+    # SP_SEMANTIC_CACHE=on/off overrides semantic_cache.enabled — same
+    # env-override pattern as SP_CONTEXT_OPT above (feature #6, Task 1). No
+    # pipeline code reads this cfg yet; Task 2 wires the check/store calls.
+    _sc_opt_env = os.environ.get("SP_SEMANTIC_CACHE")
+    sc_enabled = (
+        sc_raw["enabled"] if _sc_opt_env is None
+        else _sc_opt_env.strip().lower() in ("on", "true", "1", "yes")
+    )
     serving = ServingCfg(
         providers=serving_raw["providers"],
         pii_detection=os.environ.get(
@@ -95,6 +128,16 @@ def load_settings(config_dir: str = "config") -> Settings:
             bypass_on=BypassCfg(**co_raw["bypass_on"]),
             ccr=CCRCfg(**co_raw["ccr"]),
             cache_alignment=co_raw["cache_alignment"],
+        ),
+        memory=memory,
+        semantic_cache=SemanticCacheCfg(
+            enabled=sc_enabled,
+            residency=sc_raw["residency"],
+            ttl_hours=sc_raw["ttl_hours"],
+            export_to_telemetry=sc_raw["export_to_telemetry"],
+            max_entries=sc_raw["max_entries"],
+            bypass_on=BypassCfg(**sc_raw["bypass_on"]),
+            embedding=sc_raw["embedding"],
         ),
         observability=observability,
     )

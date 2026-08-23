@@ -1,8 +1,13 @@
-"""Top-level `tools/` package: OFFLINE-only utilities that must never be
-imported by the serving graph (`app/main.py`, `app/pipeline.py`,
-`app/api/routes.py`, `app/routing/task_mode*.py`, ...). See
-`tools/prompt_opt/` (Feature 3 / DSPy prompt-optimization, Task 3) for the
-first tenant -- CLAUDE.md rule 4: RouteForge hosts no compute; this package
-is where standalone jobs that orchestrate external compute live, structurally
-separated so the request path can never accidentally pull one in.
+"""Offline operator tooling, OUTSIDE the serving graph.
+
+OFFLINE-only utilities that must never be imported by the serving graph
+(`app/main.py`, `app/pipeline.py`, `app/api/routes.py`,
+`app/routing/task_mode*.py`, ...). Tenants: `tools/prompt_opt/` (DSPy
+prompt-optimization) and `tools/recommend/` + `tools/orchestrate/`
+(trace-mining recommend-loop + external-training orchestration). Per
+CLAUDE.md rule 4 (RouteForge hosts no compute), these standalone jobs
+orchestrate external compute and are human-gated; the request path can
+never accidentally pull one in. `tools.*` importing `app.*` is fine and
+expected (one-way): the jobs read the same config/DB the server uses,
+they just never run inside it.
 """

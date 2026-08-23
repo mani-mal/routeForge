@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.prompts.store import PromptArtifact
 
@@ -31,7 +31,14 @@ class StageSignalsCfg(BaseModel):
     enabled: bool = False
     tool_error_raise: bool = True      # a tool error in the latest result -> raise one tier
     exploration_repeat: int = 3        # same tool called >= N times -> raise one tier
-    planner_role_raise: bool = True    # inferred "plan" hop (hop 1, no tools yet) -> frontier
+    planner_role_raise: bool = True    # gates the "plan" role specifically (see role_tiers)
+    # Role -> min_tier raise map (Task 1: full role tagging -- plan/verify/
+    # execute/format). Config-driven so operators can tune it; a role absent
+    # from this map never raises. "plan" only raises when planner_role_raise
+    # is also True. "execute"/"format" are intentionally absent by default --
+    # they leave the cost/quality router free to pick the cheap tier.
+    role_tiers: dict[str, str] = Field(
+        default_factory=lambda: {"plan": "frontier", "verify": "mid"})
 
 
 class PromptOptCfg(BaseModel):
@@ -67,11 +74,20 @@ class RoutingCfg(BaseModel):
     # backend (its confidence is seeded/persona-driven, not logprob-derived).
     confidence_logprob_temperature: float = 1.0
     max_escalations: int
+    # Failure-driven lateral model switch: on a retryable backend failure the
+    # gateway excludes the failed model and re-selects -- a same-tier peer first,
+    # escalating only when the tier empties. This bounds those retries. 0 makes a
+    # single failure terminal (no lateral retry). Owned here (routing input).
+    max_failover_attempts: int = 2
     risk_floors: dict[str, str]
     model_pool: list[PoolCandidate]
     fallback: dict[str, int]
     stage_signals: StageSignalsCfg = StageSignalsCfg()
     prompt_opt: PromptOptCfg = PromptOptCfg()
+    # Step-6 scoring strategy name (app/routing/strategy.py's `_STRATEGIES`
+    # registry). Owned here only -- the config lint rejects an unknown name at
+    # boot (never a silent fallback to "default").
+    strategy: str = "default"
 
 
 class SensitivityRule(BaseModel):
@@ -168,6 +184,49 @@ class ContextOptimizationCfg(BaseModel):
     cache_alignment: bool
 
 
+class MemoryCfg(BaseModel):
+    """Feature 5 (Task 1) — persistent memory substrate config. CCR-class
+    residency posture (CLAUDE.md rule 6): local-only, enforced TTL, never
+    exported. Default OFF; Task 1 adds NO pipeline wiring, so flipping this
+    to true still has no effect on a request until Task 2 wires read/write
+    in. See docs/architecture/persistent-memory-residency-spec.md."""
+    enabled: bool = False
+    residency: str = "local_only"
+    ttl_hours: int = 24
+    export_to_telemetry: bool = False
+    max_recall: int = 3          # most-recent-first cap per tenant partition
+    min_tokens: int = 0          # small-request bypass knob (like compression's min_tokens)
+    # Reuses the compression BypassCfg shape for parity — `user_prompt` has no
+    # meaning for memory recall (no "live prompt" to protect) and is unused
+    # until Task 2 wires bypass logic in; kept for one coherent bypass shape
+    # across the two step-5 levers rather than inventing a second one.
+    bypass_on: BypassCfg = BypassCfg(
+        high_risk=True, restricted_sensitivity=True, user_prompt=False)
+class SemanticCacheCfg(BaseModel):
+    """Feature #6 -- infra switch only, mirrors context_optimization's
+    placement/shape. Default OFF (C7): with enabled=false nothing in the
+    pipeline constructs a DeterministicSemanticCache (Task 1 wires no
+    pipeline code at all). See
+    docs/architecture/semantic-cache-residency-spec.md."""
+    enabled: bool = False
+    residency: str = "local_only"     # lint-enforced when enabled -- CLAUDE.md rule 6
+    ttl_hours: int = 24                # lint-enforced > 0 when enabled
+    export_to_telemetry: bool = False  # lint-enforced when enabled
+    max_entries: int = 0               # 0 = unbounded beyond TTL (a size cap is optional)
+    # Reuses BypassCfg's shape for config-shape parity with
+    # context_optimization.bypass_on. `user_prompt` is IGNORED here -- it only
+    # means something for per-message compression treatment ("don't compress
+    # the live question"); a cache check/store is a whole-request decision,
+    # not a per-message one. Kept in the shape so operators don't have to
+    # learn a second bypass schema.
+    bypass_on: BypassCfg
+    # Deferred embedding seam (C8): a future SemanticCacheBackend behind this
+    # value. "off" is the only meaningful value today -- inert placeholder,
+    # nothing reads it to construct anything. No embedding library is
+    # imported anywhere in this codebase.
+    embedding: str = "off"
+
+
 class ServingCfg(BaseModel):
     providers: dict[str, ProviderCfg]
     pii_detection: str
@@ -179,6 +238,8 @@ class ServingCfg(BaseModel):
     allow_app_pii_downgrade: bool
     reject_stream_requests: bool
     context_optimization: ContextOptimizationCfg
+    memory: MemoryCfg = MemoryCfg()
+    semantic_cache: SemanticCacheCfg
     observability: ObservabilityCfg
 
 

@@ -4,6 +4,7 @@ from app.config.loader import load_settings
 from app.config.schema import Settings
 from app.policy.enums import RESIDENCY as valid_residency
 from app.prompts.store import load_artifact
+from app.routing.strategy import _STRATEGIES as _KNOWN_STRATEGIES
 
 
 class ConfigLintError(Exception):
@@ -37,6 +38,9 @@ def lint_settings(s: Settings) -> list[str]:
     for name, p in s.pricing.models.items():
         if p.tier not in tiers:
             errs.append(f"PRICING_TIER_UNKNOWN {name}:{p.tier}")
+    for role, t in s.routing.stage_signals.role_tiers.items():
+        if t not in tiers:
+            errs.append(f"ROLE_TIER_UNKNOWN {role}:{t} not in {sorted(tiers)}")
 
     # Pool-slug <-> pricing-slug cross-check: every cloud built-in in the pool
     # must have a matching pricing row, or LiteLLMBackend.generate's
@@ -102,6 +106,14 @@ def lint_settings(s: Settings) -> list[str]:
 
 
 def enforce(s: Settings) -> None:
+    # routing.strategy names a real RoutingStrategy (app/routing/strategy.py's
+    # registry) or boot fails loud -- an unknown name must never silently fall
+    # back to "default" (CLAUDE.md rule 5, fail closed).
+    if s.routing.strategy not in _KNOWN_STRATEGIES:
+        raise ConfigLintError(
+            f"routing.strategy={s.routing.strategy!r} is not a known strategy; "
+            f"known strategies: {sorted(_KNOWN_STRATEGIES)}")
+
     lf = s.serving.observability.langfuse
     if lf.enabled and not lf.redact_on_export:
         raise ConfigLintError(
@@ -172,6 +184,44 @@ def enforce(s: Settings) -> None:
                 "a managed prompt must be human-verified (verified: true) before "
                 "activation (CLAUDE.md rule 5 — fail closed; rule 4 — human-gated "
                 "promotion)")
+    # Persistent memory (Feature 5) — same CCR-class posture, plus an
+    # enforced-TTL guard the CCR block doesn't need (CCR always sets a
+    # ttl_hours > 0 by convention; memory adds an explicit boot-fail so an
+    # unbounded memory cache can never ship). CLAUDE.md rule 6.
+    mem = s.serving.memory
+    if mem.enabled and mem.residency != "local_only":
+        raise ConfigLintError(
+            "memory.residency must be 'local_only' (memory is a local cache "
+            f"of sanitized summaries; got {mem.residency!r}; CLAUDE.md rule 6)")
+    if mem.enabled and mem.export_to_telemetry is not False:
+        raise ConfigLintError(
+            "memory.export_to_telemetry must be false (memory contents must "
+            "never reach telemetry — only a counts-only MemoryRecord may; "
+            "CLAUDE.md rule 6)")
+    if mem.enabled and mem.ttl_hours <= 0:
+        raise ConfigLintError(
+            "memory.ttl_hours must be > 0 (enforced TTL; an unbounded memory "
+            "cache defeats the residency claim; CLAUDE.md rule 6)")
+    # Feature #6 semantic cache — same CCR-class guards (CLAUDE.md rule 6), plus
+    # an enforced-TTL check CCR doesn't need to repeat (CCR's TTL has no
+    # equivalent boot guard; this store's design gate calls it out explicitly —
+    # see docs/architecture/semantic-cache-residency-spec.md C5). Only
+    # load-bearing when the cache is enabled — a drifted value on a disabled
+    # cache does not fail the boot, mirroring the ccr guards above.
+    sc = s.serving.semantic_cache
+    if sc.enabled and sc.residency != "local_only":
+        raise ConfigLintError(
+            "semantic_cache.residency must be 'local_only' (a cache hit skips "
+            f"the model entirely, so this is a local-only store; got {sc.residency!r})")
+    if sc.enabled and sc.export_to_telemetry is not False:
+        raise ConfigLintError(
+            "semantic_cache.export_to_telemetry must be false (cache contents "
+            "are cached responses and must never reach telemetry — only a "
+            "counts-only CacheRecord may)")
+    if sc.enabled and sc.ttl_hours <= 0:
+        raise ConfigLintError(
+            "semantic_cache.ttl_hours must be > 0 when enabled (enforced TTL, "
+            f"not an unbounded retention liability; got {sc.ttl_hours})")
 
     errs = lint_settings(s)
     if errs:
