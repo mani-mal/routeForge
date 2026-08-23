@@ -5,7 +5,7 @@
 import { useEffect, useState } from "react";
 import { adminApi } from "../api";
 import type { AdminApp, UsageByApp } from "../api";
-import { Panel, formatUsd, formatPct } from "../components/common";
+import { Panel, formatUsd, formatPct, formatDensity, provenanceNote, QUALITY_CAVEAT } from "../components/common";
 
 interface JoinedRow {
   appId: string;
@@ -16,6 +16,10 @@ interface JoinedRow {
   saved_usd: number;
   onprem_pct: number;
   top_tier: string;
+  // Quality-per-dollar (cost_intelligence_density) + its provenance — a
+  // tier-quality PROXY, never measured accuracy (see QUALITY_CAVEAT).
+  cost_intelligence_density: number;
+  quality_provenance: string | null;
 }
 
 function topTier(dist: Record<string, number>): string {
@@ -41,11 +45,13 @@ function joinRows(apps: AdminApp[], usage: UsageByApp[]): JoinedRow[] {
       saved_usd: baseline_usd - total_usd,
       onprem_pct: count > 0 ? (onprem_count / count) * 100 : 0,
       top_tier: topTier(u?.tier_distribution ?? {}),
+      cost_intelligence_density: u?.cost_intelligence_density ?? 0,
+      quality_provenance: provenanceNote(u?.quality_source_distribution),
     };
   });
 }
 
-const GRID = "grid grid-cols-[minmax(140px,2fr)_80px_90px_90px_90px_80px_80px] items-center gap-3";
+const GRID = "grid grid-cols-[minmax(140px,2fr)_80px_90px_90px_90px_80px_80px_100px] items-center gap-3";
 
 export function CrossAppReport() {
   const [apps, setApps] = useState<AdminApp[]>([]);
@@ -103,6 +109,12 @@ export function CrossAppReport() {
             <span className="text-[11px] font-display font-semibold uppercase tracking-[0.12em] text-gray-500">
               Top tier
             </span>
+            <span
+              className="text-[11px] font-display font-semibold uppercase tracking-[0.12em] text-gray-500 cursor-help"
+              title={QUALITY_CAVEAT}
+            >
+              Quality/$ *
+            </span>
           </div>
 
           {rows.map((row) => (
@@ -120,8 +132,15 @@ export function CrossAppReport() {
               <span className="text-sm font-mono text-gray-300">{formatUsd(row.saved_usd)}</span>
               <span className="text-sm font-mono text-gray-300">{formatPct(row.onprem_pct)}</span>
               <span className="text-sm font-mono text-gray-300">{row.top_tier}</span>
+              <span
+                className="text-sm font-mono text-gray-300 truncate"
+                title={row.quality_provenance ? `${QUALITY_CAVEAT} (${row.quality_provenance})` : QUALITY_CAVEAT}
+              >
+                {formatDensity(row.cost_intelligence_density)}
+              </span>
             </div>
           ))}
+          <p className="px-3 text-[11px] text-gray-500">* {QUALITY_CAVEAT}</p>
         </div>
       )}
     </Panel>

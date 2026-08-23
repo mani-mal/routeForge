@@ -12,6 +12,12 @@ export const TIER_HEX = {
 export const SIGNAL_HEX = {
   privacy: "#8B7BF7", // residency dimension (not a tier)
   alert: "#F2555A", // breaches / health-fail ONLY
+  // Quality-proxy axis (Token/Cost Intelligence Density, cost-vs-quality
+  // chart). Deliberately its own hue — distinct from privacy's violet and
+  // every cost/tier color — because it's a different signal: quality is a
+  // tier-quality PROXY (or calibrated/customer when set), never measured
+  // accuracy. See app/routing/quality.py's provenance ladder.
+  quality: "#EC4899",
 } as const;
 
 // The two cost-savings levers (routing vs. compression) shown side-by-side in

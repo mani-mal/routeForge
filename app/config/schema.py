@@ -64,6 +64,10 @@ class RoutingCfg(BaseModel):
     model_pool: list[PoolCandidate]
     fallback: dict[str, int]
     stage_signals: StageSignalsCfg = StageSignalsCfg()
+    # Step-6 scoring strategy name (app/routing/strategy.py's `_STRATEGIES`
+    # registry). Owned here only -- the config lint rejects an unknown name at
+    # boot (never a silent fallback to "default").
+    strategy: str = "default"
 
 
 class SensitivityRule(BaseModel):
