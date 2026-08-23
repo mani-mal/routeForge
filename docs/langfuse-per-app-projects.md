@@ -1,4 +1,4 @@
-# Per-app Langfuse projects (auto-provision on onboard)
+# Per-app Langfuse projects (shared, manual, or auto-provision)
 
 By default every application's traces land in one shared Langfuse project. RouteForge
 can instead give **each onboarded application its own Langfuse project**, created
@@ -8,6 +8,32 @@ I/O only ever goes to that app's *own* project).
 
 This is **opt-in via environment variables** — the code is always present, but it stays
 dormant until configured.
+
+## Which path should I use? (pick one)
+
+Three ways to route this deployment's traces, in increasing setup cost. Most
+deployments want **shared** or **manual**; **auto** is a convenience that costs an
+Enterprise license.
+
+| Path | What you get | Setup | Needs EE? |
+|---|---|---|---|
+| **Shared project** (default) | Every app's traces in one project, still redacted on egress; all privacy rules hold. | Nothing. | No |
+| **Manual per-app** | Each app's traces in **its own** project — full tenant isolation, and the only way to enable the raw-capture path (rule 2). | Per app, once: create a project in Langfuse, then paste its **project** keys into the app (Console → Applications → *Langfuse credentials*, or `PUT /admin/applications/{id}/langfuse`). | No |
+| **Auto-provision** | Same per-app isolation as manual, but the project is created **automatically** on onboard — no per-app step. | One-time: set an org-scoped key pair (`LANGFUSE_ORG_*`) once. | **Yes** — org keys / project creation are EE-only on self-hosted. |
+
+**How to choose:**
+
+- Don't need to separate one tenant's traces from another? → **Shared.** Zero setup, fully
+  functional, telemetry still redacted.
+- Need per-tenant trace isolation, or want an app to opt into raw I/O capture (rule 2)?
+  → **Manual per-app.** Isolation is byte-for-byte identical to auto; you just wire each
+  app by hand once. **This is the recommended path on OSS Langfuse.**
+- Onboarding apps often enough that the manual step is real friction, and you already run
+  (or will license) Langfuse Enterprise? → **Auto-provision.**
+
+The manual and auto paths are **mutually exclusive per app** — an app either has keys you
+set by hand or keys the provisioner minted, never both. Switching a deployment from OSS to
+EE later doesn't disturb apps already wired manually.
 
 > ## ⚠️ Requires Langfuse Enterprise Edition (self-hosted)
 >
