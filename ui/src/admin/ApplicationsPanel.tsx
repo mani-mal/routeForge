@@ -203,9 +203,10 @@ function PolicyEditor({ app, onSaved }: { app: AdminApp; onSaved: () => void }) 
   );
 }
 
-// Manual per-app Langfuse creds (B15) — lets an air-gapped operator attach an
-// existing Langfuse project by hand instead of relying on org-scoped
-// auto-provisioning. Once saved, `app.langfuse_project_id` is set, which is
+// Manual per-app Langfuse creds (B15) — attach an existing Langfuse project by
+// hand. This is the primary path on OSS Langfuse (org-scoped auto-provisioning
+// needs an Enterprise license); it is also how air-gapped operators wire a
+// project provisioned out of band. Once saved, `app.langfuse_project_id` is set, which is
 // what PolicyEditor's `full`-capture gate checks — so `onSaved` must refetch
 // the app for that gate to unlock. Fields reset after a successful save; the
 // secret is write-only and is never rendered back, before or after saving.
@@ -237,30 +238,39 @@ function LangfuseCredsForm({ app, onSaved }: { app: AdminApp; onSaved: () => voi
 
   return (
     <div className="flex flex-col gap-2 text-sm">
-      <div className="text-xs text-gray-500">
-        Attach an existing Langfuse project by hand (air-gapped / no org API access).{" "}
-        {app.has_langfuse_keys && <span className="text-cheap">credentials set ✓</span>}
+      <div className="flex flex-col gap-1 text-xs text-gray-500">
+        <span>
+          Send this app's traces to its own Langfuse project. Create the project in
+          Langfuse first, then paste its <strong>project</strong>-scoped keys below.{" "}
+          {app.has_langfuse_keys && <span className="text-cheap">credentials set ✓</span>}
+        </span>
+        <span className="text-gray-600">
+          Use the keys from <em>Project → Settings → API Keys</em> (not organization
+          keys). Leave blank to keep sharing the default project.
+        </span>
       </div>
       <div className="flex flex-wrap items-end gap-2">
         <label className="flex flex-col gap-1 text-xs text-gray-400">
           host
-          <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="http://langfuse:3000"
+          <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="http://langfuse-web:3000"
+            title="Server-reachable Langfuse (in-cluster, e.g. http://langfuse-web:3000) — not the browser URL"
             className="rounded bg-ink border border-edge px-2 py-1 text-xs font-mono text-gray-100 w-48" />
         </label>
         <label className="flex flex-col gap-1 text-xs text-gray-400">
           public key
-          <input value={publicKey} onChange={(e) => setPublicKey(e.target.value)}
+          <input value={publicKey} onChange={(e) => setPublicKey(e.target.value)} placeholder="pk-lf-…"
             className="rounded bg-ink border border-edge px-2 py-1 text-xs font-mono text-gray-100 w-36" />
         </label>
         <label className="flex flex-col gap-1 text-xs text-gray-400">
           secret key
           <input type="password" value={secretKey} onChange={(e) => setSecretKey(e.target.value)}
-            autoComplete="off" placeholder={app.has_langfuse_keys ? "(unchanged — enter to replace)" : ""}
+            autoComplete="off" placeholder={app.has_langfuse_keys ? "(unchanged — enter to replace)" : "sk-lf-…"}
             className="rounded bg-ink border border-edge px-2 py-1 text-xs font-mono text-gray-100 w-36" />
         </label>
         <label className="flex flex-col gap-1 text-xs text-gray-400">
           project id
-          <input value={projectId} onChange={(e) => setProjectId(e.target.value)}
+          <input value={projectId} onChange={(e) => setProjectId(e.target.value)} placeholder="cmt5…"
+            title="The project's id (e.g. cmt5…) — the project settings URL, or GET {host}/api/public/projects"
             className="rounded bg-ink border border-edge px-2 py-1 text-xs font-mono text-gray-100 w-32" />
         </label>
         <button onClick={save} disabled={!canSave}
