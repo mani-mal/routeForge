@@ -83,3 +83,9 @@ def test_pool_quality_out_of_range_flags():
     s = copy.deepcopy(load_settings())
     s.routing.model_pool[0].quality = 2.0
     assert any("POOL_QUALITY_OUT_OF_RANGE" in e for e in lint_settings(s))
+
+
+def test_role_tier_unknown_is_caught():
+    s = copy.deepcopy(load_settings())
+    s.routing.stage_signals.role_tiers["plan"] = "strong"  # nonexistent tier
+    assert any("ROLE_TIER_UNKNOWN" in e for e in lint_settings(s))

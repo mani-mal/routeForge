@@ -14,6 +14,13 @@ tiers: [cheap, mid, frontier]
 score_on: post_compression       # MUST be post_compression when Headroom is on
 weights: {quality: 1.0, cost: 0.6, latency: 0.3, capacity: 0.2}
 
+# Step-6 scoring strategy (app/routing/strategy.py). "default" reproduces the
+# scoring above exactly. An unknown name fails the config lint at boot -- it
+# never silently falls back. Swap this to try an alternate ranking (e.g. a
+# future NeMo Switchyard strategy) without touching the residency/budget
+# filtering in Router.select.
+strategy: default
+
 # Tier-default quality (the last rung of the quality ladder in app/routing/quality.py).
 # Promoted from the router's old hardcoded _Q so it is single-sourced and lintable.
 # There is NO per-model published `quality` on the model_pool below yet — the demo
@@ -78,3 +85,9 @@ stage_signals:
   tool_error_raise: true
   exploration_repeat: 3
   planner_role_raise: true
+  # Role (plan/verify/execute/format, inferred from message state) -> min_tier
+  # raise. Absent roles never raise -- execute/format leave the router free
+  # to pick the cheap tier. "plan" also requires planner_role_raise: true.
+  role_tiers:
+    plan: frontier
+    verify: mid
