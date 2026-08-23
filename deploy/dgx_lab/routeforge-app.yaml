@@ -143,11 +143,16 @@ items:
           # Admin dashboard login. CHANGE THESE — demo defaults only.
           - {name: ADMIN_EMAIL, value: "admin@routeforge.local"}
           - {name: ADMIN_PASSWORD, value: "changeme"}
-          # Optional: to auto-provision a Langfuse PROJECT per application, set an
-          # organization-scoped API key pair here (Langfuse org settings -> API
-          # keys). Absent -> apps share the default project (still works).
-          # - {name: LANGFUSE_ORG_PUBLIC_KEY, value: "pk-lf-org-..."}
-          # - {name: LANGFUSE_ORG_SECRET_KEY, value: "sk-lf-org-..."}
+          # Optional: to auto-provision a Langfuse PROJECT per application on
+          # onboard (POST /admin/applications), set the in-cluster Langfuse host
+          # plus an organization-scoped API key pair (Langfuse org settings ->
+          # API keys). All three are required together; absent -> apps share the
+          # default project (still works). See docs/langfuse-per-app-projects.md.
+          # - {name: LANGFUSE_HOST, value: "http://langfuse-web:3000"}
+          # - name: LANGFUSE_ORG_PUBLIC_KEY
+          #   valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: LANGFUSE_ORG_PUBLIC_KEY}}
+          # - name: LANGFUSE_ORG_SECRET_KEY
+          #   valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: LANGFUSE_ORG_SECRET_KEY}}
           # ENCRYPTION_KEY (reused from the langfuse secret) encrypts stored
           # per-app project secrets at rest.
           - name: ENCRYPTION_KEY

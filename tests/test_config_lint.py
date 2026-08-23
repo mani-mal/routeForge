@@ -118,3 +118,7 @@ def test_memory_disabled_skips_guards():
     s.serving.memory.export_to_telemetry = True
     s.serving.memory.ttl_hours = 0
     enforce(s)  # must not raise
+def test_role_tier_unknown_is_caught():
+    s = copy.deepcopy(load_settings())
+    s.routing.stage_signals.role_tiers["plan"] = "strong"  # nonexistent tier
+    assert any("ROLE_TIER_UNKNOWN" in e for e in lint_settings(s))

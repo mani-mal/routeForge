@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from typing import AsyncIterator
 
 from app.config.schema import Settings
-from app.errors import BackendUnavailable
+from app.errors import BackendUnavailable, NoEligibleCandidate
 from app.gateway.backends.base import InferenceBackend, StreamChunk
 from app.models import DecisionRecord, ExecutionPolicyContext, GenerationResult, Message
 from app.obs import metrics
@@ -31,21 +31,33 @@ class Gateway:
         records: list[DecisionRecord] = []
         threshold = self._s.routing.confidence_escalation_threshold
         max_esc = self._s.routing.max_escalations
+        max_failover = self._s.routing.max_failover_attempts
         min_tier: str | None = None
         escalations = 0
-        failed_tiers: set[str] = set()
+        # Failure-driven lateral switch: exclude every model that has already
+        # failed on this request and re-select. Because excluded models leave the
+        # candidate set, the router picks a same-tier peer first and escalates on
+        # its own once the tier empties -- one mechanism for both. Bounded by
+        # max_failover_attempts; residency is preserved because exclude only ever
+        # removes candidates (see Router.select).
+        failed_models: set[str] = set()
+        failover_attempts = 0
         result: GenerationResult | None = None
 
         while True:
-            with metrics.time_routing():
-                decision = self._router.select(ctx, tokens_after, complexity, min_tier)
+            try:
+                with metrics.time_routing():
+                    decision = self._router.select(
+                        ctx, tokens_after, complexity, min_tier,
+                        exclude=frozenset(failed_models))
+            except NoEligibleCandidate:
+                # Every reachable candidate has now been excluded by prior
+                # failures -> exhausted, not a genuine no-candidate reject.
+                if failed_models:
+                    raise BackendUnavailable(
+                        "backend failed on all reachable candidates for this request")
+                raise
             cand = decision.chosen
-            # Fail closed: if residency clamping keeps returning a tier that already
-            # failed (e.g. onprem_only can't advance past the best on-prem tier),
-            # stop rather than loop forever.
-            if cand.tier in failed_tiers:
-                raise BackendUnavailable(
-                    "backend failed on all reachable tiers for this request")
             price = (self._reg.price_for(cand.name) if self._reg
                      else self._s.pricing.models[cand.name])
             try:
@@ -54,16 +66,15 @@ class Gateway:
             except Exception as exc:
                 records.append(DecisionRecord(
                     step="gateway", chosen=None,
-                    reason=f"{cand.name} failed; escalating/fallback",
+                    reason=f"{cand.name} failed; retrying peer/escalating",
                     rejected=decision.rejected, est_cost_usd=decision.est_cost_usd,
                     latency_ms=0.0, hop_index=len(records)))
-                failed_tiers.add(cand.tier)
-                nxt = _NEXT[cand.tier]
-                if nxt is None:
+                failed_models.add(cand.name)
+                failover_attempts += 1
+                if failover_attempts > max_failover:
                     raise BackendUnavailable(
-                        "backend failed on all reachable tiers for this request"
+                        "backend failed on all reachable candidates for this request"
                     ) from exc
-                min_tier = nxt
                 continue
 
             records.append(DecisionRecord(

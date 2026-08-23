@@ -5,19 +5,10 @@
 // time. Chart idioms lifted from components/CostDashboard.tsx.
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { RequestSummary } from "../../api";
-import { Panel, StatTile, formatPct, formatUsd } from "../../components/common";
+import { Panel, StatTile, formatDensity, formatPct, formatUsd, provenanceNote, QUALITY_CAVEAT } from "../../components/common";
 import { useTheme } from "../../theme";
-import { costAgg, densityAgg } from "../aggregate";
-import { LEVER_HEX, TIER_HEX } from "../../tokens";
-
-// 2-3 significant figures — these are intelligence-density ratios (quality
-// per 1k tokens / per $), not currency, so formatUsd/formatPct don't fit.
-function formatDensity(v: number): string {
-  if (!Number.isFinite(v) || v === 0) return "–";
-  if (v >= 100) return v.toFixed(0);
-  if (v >= 10) return v.toFixed(1);
-  return v.toFixed(2);
-}
+import { costAgg, densityAgg, qualitySourceAgg } from "../aggregate";
+import { LEVER_HEX, SIGNAL_HEX, TIER_HEX } from "../../tokens";
 
 // Token-sourced, not hardcoded: routing is LEVER_HEX.routing (= TIER_HEX.mid
 // blue), compression is LEVER_HEX.compression (= TIER_HEX.frontier amber).
@@ -26,6 +17,7 @@ function formatDensity(v: number): string {
 // keeps it unambiguously distinct from privacy violet on a projector.
 const ROUTING_COLOR = LEVER_HEX.routing;
 const COMPRESSION_COLOR = LEVER_HEX.compression;
+const QUALITY_COLOR = SIGNAL_HEX.quality;
 
 export function CostSection({ requests }: { requests: RequestSummary[] }) {
   const [theme] = useTheme();
@@ -41,6 +33,7 @@ export function CostSection({ requests }: { requests: RequestSummary[] }) {
 
   const { total, baseline, routingSaved, compressionSaved, savedPct } = costAgg(requests);
   const { tokenIntelligenceDensity, costIntelligenceDensity } = densityAgg(requests);
+  const qualityProvenance = provenanceNote(qualitySourceAgg(requests));
   const compressionRan = compressionSaved > 0;
 
   const savingsData = [{ name: "saved", routing: routingSaved, compression: compressionSaved }];
@@ -48,10 +41,24 @@ export function CostSection({ requests }: { requests: RequestSummary[] }) {
   const sorted = [...requests].sort((a, b) => (a.ts ?? "").localeCompare(b.ts ?? ""));
   let cumTotal = 0;
   let cumBaseline = 0;
+  // Rolling average quality (tier-quality proxy) up to each point, plotted
+  // on a second axis alongside cost — the cost-vs-quality tradeoff. Null
+  // when a row has no `quality` yet, so the line skips gaps (connectNulls).
+  let qualitySum = 0;
+  let qualityCount = 0;
   const lineData = sorted.map((r, i) => {
     cumTotal += r.total_usd;
     cumBaseline += r.baseline_usd;
-    return { seq: i, total: Number(cumTotal.toFixed(4)), baseline: Number(cumBaseline.toFixed(4)) };
+    if (typeof r.quality === "number") {
+      qualitySum += r.quality;
+      qualityCount += 1;
+    }
+    return {
+      seq: i,
+      total: Number(cumTotal.toFixed(4)),
+      baseline: Number(cumBaseline.toFixed(4)),
+      avgQuality: qualityCount > 0 ? Number((qualitySum / qualityCount).toFixed(3)) : null,
+    };
   });
 
   return (
@@ -97,15 +104,27 @@ export function CostSection({ requests }: { requests: RequestSummary[] }) {
         </div>
 
         <div>
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1">Cost over time</h3>
+          <div className="flex items-center justify-between gap-2 mb-1">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+              Cost over time <span style={{ color: QUALITY_COLOR }}>vs. quality</span>
+            </h3>
+          </div>
           <div className="h-40 w-full">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={lineData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
                 <CartesianGrid stroke={gridStroke} strokeDasharray="3 3" />
                 <XAxis dataKey="seq" hide />
-                <YAxis hide />
-                <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => formatUsd(v)} />
+                <YAxis yAxisId="cost" hide />
+                {/* Right axis: rolling avg quality (0-1 tier proxy) — see QUALITY_CAVEAT below. */}
+                <YAxis yAxisId="quality" orientation="right" domain={[0, 1]} hide />
+                <Tooltip
+                  contentStyle={tooltipStyle}
+                  formatter={(v: number, name: string) =>
+                    name === "avg quality (tier proxy)" ? formatDensity(v) : formatUsd(v)
+                  }
+                />
                 <Line
+                  yAxisId="cost"
                   type="monotone"
                   dataKey="baseline"
                   stroke={baselineStroke}
@@ -114,6 +133,7 @@ export function CostSection({ requests }: { requests: RequestSummary[] }) {
                   name="baseline"
                 />
                 <Line
+                  yAxisId="cost"
                   type="monotone"
                   dataKey="total"
                   stroke={TIER_HEX.cheap}
@@ -121,8 +141,23 @@ export function CostSection({ requests }: { requests: RequestSummary[] }) {
                   strokeWidth={2}
                   name="actual"
                 />
+                <Line
+                  yAxisId="quality"
+                  type="monotone"
+                  dataKey="avgQuality"
+                  stroke={QUALITY_COLOR}
+                  dot={false}
+                  strokeWidth={2}
+                  strokeDasharray="4 2"
+                  connectNulls
+                  name="avg quality (tier proxy)"
+                />
               </LineChart>
             </ResponsiveContainer>
+          </div>
+          <div className="text-[11px] text-gray-500 mt-1" title={QUALITY_CAVEAT}>
+            quality (dashed) is a tier proxy — not measured accuracy
+            {qualityProvenance ? ` · ${qualityProvenance}` : ""}
           </div>
         </div>
       </Panel>

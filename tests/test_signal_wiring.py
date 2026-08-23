@@ -87,6 +87,25 @@ def test_signal_is_raise_only_never_lowers():
     assert order[d.chosen.tier] >= 1  # still >= mid from complexity
 
 
+def test_signal_plan_role_never_lifts_onprem_only_to_cloud():
+    """Task 1 (role-aware routing) extension of the residency invariant: the
+    'plan' role raise (frontier, default role_tiers) must never lift an
+    onprem_only request to cloud either -- same clamp, driven by the actual
+    derive_signal_tier() output instead of a hand-picked 'frontier' literal."""
+    s_cloud = _settings_with_cloud_enabled()
+    reg = make_test_registry(s_cloud)
+    pool = reg.effective_pool()
+    assert any(c.provider == "bedrock" and c.tier == "frontier" for c in pool), \
+        "test setup broken: no bedrock frontier candidate in effective_pool()"
+    ctx = _onprem_ctx()
+    msgs = [{"role": "user", "content": "plan the multi-step task"}]
+    sig = derive_signal_tier(msgs, hop_index=1, cfg=StageSignalsCfg(enabled=True))
+    assert sig.min_tier == "frontier"  # sanity: the role signal actually fired
+    d = Router(s_cloud, registry=reg).select(ctx, tokens_after=10, complexity=0.01,
+                                             min_tier=sig.min_tier)
+    assert d.chosen.provider == "onprem"
+
+
 def test_flag_off_yields_no_signal():
     from app.routing.signals import SignalResult
     res = derive_signal_tier([{"role": "user", "content": "plan"}],
