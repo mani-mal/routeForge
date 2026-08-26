@@ -1,0 +1,58 @@
+{
+  "title": "RouteForge — Request / Response Flow (numbered)",
+  "bands": [
+    {"title": "Client", "nodes": [
+      {"id": "app", "label": "Tenant app\nOpenAI SDK + API token", "color": "gray"}
+    ]},
+    {"title": "Step 1 / 10 · API", "nodes": [
+      {"id": "api", "label": "API  :8080\nFastAPI (OpenAI-compatible)", "color": "orange", "bold": true}
+    ]},
+    {"title": "Step 2 / 3 · Privacy & Policy Gate  (runs first, fails closed)", "nodes": [
+      {"id": "gate", "label": "Policy gate\nPresidio PII scan + rules", "color": "red"},
+      {"id": "ctx", "label": "Policy context\nresidency · providers · budget", "color": "purple"}
+    ]},
+    {"title": "Step 4 · Task-Mode Router + Agent Runtime", "nodes": [
+      {"id": "taskmode", "label": "Task-mode router\ndirect vs multi-step", "color": "blue"},
+      {"id": "agent", "label": "Agent runtime (NAT)\nmulti-step — each hop\nre-enters steps 5-8", "color": "blue"}
+    ]},
+    {"title": "Step 5 · Context Optimization  (per call)", "nodes": [
+      {"id": "opt", "label": "Semantic cache ·\nHeadroom compression", "color": "purple"}
+    ]},
+    {"title": "Step 6 / 7 / 8 · Router + Gateway", "nodes": [
+      {"id": "router", "label": "Adaptive router\nscore post-compression\n(residency clamp)", "color": "orange"},
+      {"id": "gw", "label": "Model gateway\nLiteLLM · quotas · breakers", "color": "orange"}
+    ]},
+    {"title": "Step 8 · Backends  (external)", "nodes": [
+      {"id": "onprem", "label": "On-prem endpoint\nvLLM / Dynamo / NIM", "color": "green"},
+      {"id": "cloud", "label": "Managed cloud\nAzure / Bedrock\n(blocked if onprem_only)", "color": "yellow", "dashed": true}
+    ]},
+    {"title": "Step 9 / 10 · Verification & Governed Response", "nodes": [
+      {"id": "verify", "label": "Output verify\nleakage checks · escalate", "color": "red"},
+      {"id": "resp", "label": "Governed response\n+ DecisionRecord", "color": "green", "emphasis": true}
+    ]},
+    {"title": "Observability  (every step emits a DecisionRecord)", "nodes": [
+      {"id": "otel", "label": "OTel exporter\nredact on egress", "color": "gray"},
+      {"id": "langfuse", "label": "Langfuse\ntrace · cost · latency", "color": "purple", "emphasis": true}
+    ]}
+  ],
+  "edges": [
+    {"from": "app", "to": "api", "label": "1 · POST /v1/chat"},
+    {"from": "api", "to": "gate", "label": "2 · authN + PII scan", "color": "#B85450"},
+    {"from": "gate", "to": "ctx", "label": "3 · build context", "color": "#B85450"},
+    {"from": "ctx", "to": "taskmode", "label": "4 · classify mode", "color": "#9673A6"},
+    {"from": "taskmode", "to": "agent", "label": "5 · multi-step", "color": "#6C8EBF", "dashed": true},
+    {"from": "taskmode", "to": "opt", "label": "6 · direct", "color": "#6C8EBF"},
+    {"from": "agent", "to": "opt", "label": "6 · per hop", "color": "#6C8EBF", "dashed": true},
+    {"from": "opt", "to": "router", "label": "7 · optimized ctx", "color": "#9673A6"},
+    {"from": "router", "to": "gw", "label": "8 · select model", "color": "#D79B00"},
+    {"from": "gw", "to": "onprem", "label": "9 · dispatch", "color": "#D79B00"},
+    {"from": "gw", "to": "cloud", "label": "9 · if allowed", "color": "#D79B00", "dashed": true},
+    {"from": "onprem", "to": "verify", "label": "10 · completion", "color": "#82B366"},
+    {"from": "cloud", "to": "verify", "label": "10", "color": "#D6B656", "dashed": true},
+    {"from": "verify", "to": "resp", "label": "11 · verify + record", "color": "#B85450"},
+    {"from": "resp", "to": "api", "label": "12 · response", "color": "#82B366"},
+    {"from": "api", "to": "app", "label": "13 · 200 / 422", "color": "#666666"},
+    {"from": "resp", "to": "otel", "label": "14 · emit trace", "color": "#999999", "dashed": true},
+    {"from": "otel", "to": "langfuse", "label": "15 · store (redacted)", "color": "#9673A6"}
+  ]
+}

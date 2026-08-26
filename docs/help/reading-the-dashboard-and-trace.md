@@ -56,6 +56,11 @@ is an SSN.
 > `restricted` case) removes cloud from the candidate pool. Good line to pre-empt in a
 > demo.
 
+> **Cost tab, not walked through here:** its "Cost over time" chart now also overlays a
+> dashed **quality line** on a second axis (a tier-quality proxy, not measured accuracy),
+> and the tiles include **Quality/$** density (Cost Intelligence Density) alongside the
+> spend/saved figures — see `ui-guide.md` §4 and `ui/src/console/sections/CostSection.tsx`.
+
 ---
 
 ## 2. Privacy tab

@@ -108,6 +108,7 @@ Other application endpoints:
 | PATCH | `/admin/applications/{id}` | Update `name`, `owner_email`, `status` (`active\|disabled`), `default_residency` |
 | PUT | `/admin/applications/{id}/policy` | Upsert routing/quota policy (§4) |
 | PUT | `/admin/applications/{id}/privacy` | Replace the privacy profile (§5) |
+| PUT | `/admin/applications/{id}/langfuse` | Set per-app Langfuse credentials manually (§6) |
 
 Disabling an app (`status: disabled`) makes every request with its tokens fail
 closed with `401`.
@@ -165,6 +166,9 @@ curl -b cookies.txt -X PUT \
 | `max_spend_usd_per_day` | float \| null | Daily USD cap. Over it → request rejected `429` and a `rejected` usage row recorded. |
 | `max_rpm` | int \| null | Requests/minute (sliding window). Over it → `429`. |
 | `compression_enabled` | bool \| null | Gate Headroom compression for this app. `null` = inherit the global toggle. Safety bypass rules still apply regardless. |
+| `capture_io` | str \| null | `off \| redacted \| full` telemetry I/O capture. `null` = inherit global. `full` needs the app's own Langfuse project; clamped to `redacted` for `onprem_only` apps. See [`../per-app-config.md`](../per-app-config.md). |
+| `pii_detection` | str \| null | `off \| regex \| presidio` per-app override of the detector. `null` = inherit global. Downgrade off/regex is refused for `onprem_only` apps and unless the deployment sets `allow_app_pii_downgrade`. |
+| `stream_mode` | str \| null | `off \| verified_then_stream \| stream_unverified \| incremental_verify`. `null`/`off` = reject inbound `stream:true`. `onprem_only`/`require_verification` always fall back to the verified path. See [`../per-app-config.md`](../per-app-config.md). |
 
 > **Residency beats everything.** `onprem_only` removes cloud providers from the
 > candidate pool *by construction* before routing scores anything. When no on-prem model
@@ -224,6 +228,13 @@ traces land in the shared project.
 Give the developer read access to their project in Langfuse, or point them at the
 `trace` array returned in every response (see the API reference).
 
+**Manual credentials** — `PUT /admin/applications/{id}/langfuse` sets an app's
+Langfuse host + key pair by hand (secret encrypted at rest with `ENCRYPTION_KEY`).
+Use it in an air-gapped deploy that can't reach the org-scoped provisioning API.
+Once set, the app has its own residency-local project, which is what makes it
+eligible for `capture_io: full` (raw I/O goes only to that project, never the
+shared one).
+
 ---
 
 ## 7. Watching traffic as an admin
@@ -233,6 +244,7 @@ The console API (admin-cookie-gated) surfaces what's flowing:
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/admin/usage` | Usage records (per-app, billing/audit) |
+| GET | `/admin/usage/by-application` | Per-application usage rollup (backs the cross-app usage report) |
 | GET | `/api/requests?limit=&app=` | Recent request summaries |
 | GET | `/api/requests/{request_id}` | Full stored trace for one request |
 | GET | `/api/stats` | Aggregate cost/latency/tier stats |

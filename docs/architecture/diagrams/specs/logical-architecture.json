@@ -1,0 +1,61 @@
+{
+  "title": "RouteForge — Logical Architecture (open-source & libraries)",
+  "bands": [
+    {"title": "Clients", "nodes": [
+      {"id": "app", "label": "Tenant apps\nOpenAI-compatible SDK", "color": "gray"},
+      {"id": "console", "label": "Admin console\nReact · Recharts · Vite · Tailwind", "color": "blue"}
+    ]},
+    {"title": "1 / 10 · API  (ingress + governed response)", "nodes": [
+      {"id": "api", "label": "FastAPI + Uvicorn\nPydantic v2 · Starlette · httpx", "color": "orange", "bold": true}
+    ]},
+    {"title": "2 / 3 · Identity, Privacy & Policy Gate  (runs first)", "nodes": [
+      {"id": "presidio", "label": "Presidio\nspaCy NER", "color": "red"},
+      {"id": "recognizers", "label": "Regex recognizers\n(ReDoS-safe, regex)", "color": "red"},
+      {"id": "authz", "label": "Auth + tokens\nargon2-cffi", "color": "purple"},
+      {"id": "appstore", "label": "App / usage store\nSQLAlchemy (async)", "color": "purple"}
+    ]},
+    {"title": "4 · Task-Mode Router + Agent Runtime", "nodes": [
+      {"id": "taskmode", "label": "Task-mode router\nrules-first", "color": "blue"},
+      {"id": "nat", "label": "Agent runtime\nNeMo Agent Toolkit\n(nvidia-nat + LangChain)", "color": "blue"}
+    ]},
+    {"title": "5 · Conditional Context Optimization  (per call)", "nodes": [
+      {"id": "headroom", "label": "Compression\nHeadroom (headroom-ai)", "color": "purple"},
+      {"id": "semcache", "label": "Semantic cache\nCCR-class", "color": "purple"}
+    ]},
+    {"title": "6 / 7 / 8 · Adaptive Router + Model Gateway", "nodes": [
+      {"id": "router", "label": "Adaptive router\nRoutingStrategy (scoring)", "color": "orange"},
+      {"id": "gateway", "label": "Model gateway\nLiteLLM (quotas · breakers)", "color": "orange"}
+    ]},
+    {"title": "8 · Approved Inference Backends  (external — operator-run)", "nodes": [
+      {"id": "onprem", "label": "On-prem endpoints\nvLLM · Dynamo · NIM", "color": "green", "dashed": true},
+      {"id": "cloud", "label": "Managed cloud\nAzure · Bedrock", "color": "yellow", "dashed": true}
+    ]},
+    {"title": "9 · Output Controls & Verification", "nodes": [
+      {"id": "verify", "label": "Leakage checks\nrequire_verification", "color": "red"}
+    ]},
+    {"title": "Observability & Config  (cross-cutting)", "nodes": [
+      {"id": "otel", "label": "OpenTelemetry SDK\n+ OTLP exporter", "color": "gray"},
+      {"id": "langfuse", "label": "Langfuse\ntraces · cost (redacted)", "color": "purple", "emphasis": true},
+      {"id": "prom", "label": "Prometheus\nprometheus-client · /metrics", "color": "yellow"},
+      {"id": "config", "label": "Config + cross-file lint\nPyYAML · Pydantic", "color": "purple"}
+    ]}
+  ],
+  "edges": [
+    {"from": "app", "to": "api", "label": "/v1/chat"},
+    {"from": "console", "to": "api", "label": "admin API"},
+    {"from": "api", "to": "presidio", "label": "gate first", "color": "#B85450"},
+    {"from": "presidio", "to": "taskmode", "label": "sanitized"},
+    {"from": "taskmode", "to": "headroom", "label": "direct"},
+    {"from": "nat", "to": "headroom", "label": "per hop", "dashed": true},
+    {"from": "taskmode", "to": "nat", "label": "multi-step", "dashed": true},
+    {"from": "headroom", "to": "router", "label": "post-compress", "color": "#9673A6"},
+    {"from": "router", "to": "gateway", "label": "select"},
+    {"from": "gateway", "to": "onprem", "label": "dispatch", "color": "#D79B00"},
+    {"from": "gateway", "to": "cloud", "label": "if allowed", "color": "#D79B00", "dashed": true},
+    {"from": "onprem", "to": "verify", "label": "completion", "color": "#82B366"},
+    {"from": "verify", "to": "api", "label": "governed resp", "color": "#B85450"},
+    {"from": "api", "to": "otel", "label": "spans", "dashed": true, "color": "#999999"},
+    {"from": "otel", "to": "langfuse", "label": "export", "color": "#9673A6"},
+    {"from": "config", "to": "router", "label": "weights", "dashed": true, "color": "#9673A6"}
+  ]
+}

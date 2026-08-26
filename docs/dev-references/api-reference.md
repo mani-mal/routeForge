@@ -23,21 +23,25 @@ Body:
 | Field | Type | Required | Default | Notes |
 |---|---|---|---|---|
 | `messages` | array of `{role, content}` | **yes** | — | Standard chat messages. `role` is `system`/`user`/`assistant`; `content` is a string. |
-| `model` | string | no | `"auto"` | **Currently inert for routing** — see below. Send `"auto"`. |
-| `stream` | bool | no | `false` | `true` is **rejected** (`400`). See [Streaming](#streaming-is-rejected). |
+| `model` | string | no | `"auto"` | `"auto"` lets the router choose. **A non-`"auto"` value is a hard model pin** — see below. |
+| `stream` | bool | no | `false` | Per-app capability via `stream_mode`; default (unset) still **rejected** (`400`). See [Streaming](#streaming). |
 
 Unknown fields are **accepted, not rejected** (the model allows extras). Two
 demo-only hint fields are read if present: `mock_multistep` (force the agent
 path) and `mock_confidence` / `mock_fail` (mock-backend generation hints). See
 [`agentic-app-guide.md`](./agentic-app-guide.md).
 
-> **The `model` field does not select a model.** Routing is entirely
-> policy-and-router driven: routeForge picks the tier from request complexity and
-> the risk floor, clamps to your app's `allowed_tiers` / `allowed_providers` /
-> `allowed_models`, then scores within the tier. The `model` string you send is
-> accepted but ignored for selection. To constrain which models you can reach,
-> your **admin** narrows your policy — you can't pin a model from the request
-> body. (An older help doc implied otherwise; the code does not honor it.)
+> **`model: "auto"` lets the router choose; any other value pins routing to that
+> exact slug.** With `"auto"`, routeForge picks the tier from request complexity
+> and the risk floor, clamps to your app's `allowed_tiers` / `allowed_providers` /
+> `allowed_models`, then scores within the tier. If you send a concrete slug
+> instead (e.g. `"local-8b"`), the router drops every candidate whose name
+> doesn't match — routing is pinned to that one model, and the semantic cache
+> honors the pin too. If the pinned slug isn't in your app's permitted/available
+> pool the request is **rejected `422`** with
+> `model request rejected: requested model '<slug>' is not permitted or unavailable`.
+> The pin can only narrow within your policy; it can't reach a model your admin
+> hasn't allowed.
 >
 > There is also **no tenant field** in the body — your tenant is derived from the
 > token.
@@ -60,9 +64,10 @@ A standard `ChatCompletion` **plus routeForge-specific fields**:
   "usage": { "prompt_tokens": 123, "completion_tokens": 45, "total_tokens": 168 },
 
   // ---- routeForge extensions ----
-  "trace":  [ /* DecisionRecord, VerificationRecord, CompressionRecord */ ],
+  "trace":  [ /* DecisionRecord, VerificationRecord, CompressionRecord, MemoryRecord, CacheRecord */ ],
   "cost":   { "total_usd": 0.00012, "baseline_usd": 0.0009,
               "routing_saved_usd": 0.00078, "compression_saved_usd": 0.0 },
+              // "cache_saved_usd" is also present when the semantic cache is enabled
   "quality":{ "sum": 0.5, "chosen": 0.5, "source": "tier_default" },
   "policy": { "sensitivity": "low", "onprem_only": false,
               "allowed_providers": ["azure","bedrock","onprem"],
@@ -106,20 +111,39 @@ entities_found, escalated, escalations_used, reason, latency_ms`.
 tokens_before, tokens_after, reduction_pct, compressor, ccr_stored,
 ccr_retrievals, ccr_retrievals_to_cloud, latency_ms`.
 
+**`MemoryRecord`** (`step:"memory"`) — persistent-memory recall, counts only:
+`recalled_count, tokens_recalled, recall_stayed_local, retrievals_to_cloud`.
+Present only when persistent memory is enabled. No memory contents ever reach the
+trace.
+
+**`CacheRecord`** (`step:"cache"`) — semantic-cache decision, counts only:
+`enabled, hit, bypass_reason, tokens_saved, cache_saved_usd, entries_size,
+blocked_cloud_entries, latency_ms`. Present only when the semantic cache is
+enabled. No query or response text ever reaches the trace.
+
 ---
 
-## Streaming is rejected
+## Streaming
 
-Sending `"stream": true` returns:
+Inbound streaming is a **per-app capability**, not a flat rejection. Your admin
+sets your `AppPolicy.stream_mode` — one of `off | verified_then_stream |
+stream_unverified | incremental_verify` (see
+[`../per-app-config.md`](../per-app-config.md) for what each mode guarantees).
+
+If your app has no `stream_mode` set (or it's `off`) and the deployment rejects
+inbound streaming (`server.reject_stream_requests`), sending `"stream": true`
+still returns:
 
 ```
-400  {"detail": "streaming is not supported in the demo"}
+400  {"detail": "streaming is not supported for this application"}
 ```
 
 Output verification (step 9) needs the **complete** response, which token
-streaming can't provide without a partial-leak window. Request the full
-completion instead. (The dashboard's live decision stream is a *separate*,
-admin-only channel — see [Decision stream](#the-decision-stream-admin-only).)
+streaming can't provide without a partial-leak window — which is why streaming is
+gated and why `onprem_only` / `require_verification` requests always fall back to
+the fully-verified path regardless of `stream_mode`. (The dashboard's live
+decision stream is a *separate*, admin-only channel — see
+[Decision stream](#the-decision-stream-admin-only).)
 
 ---
 
@@ -129,24 +153,53 @@ Every error the inference endpoint can return:
 
 | Status | `detail` message | Cause |
 |---|---|---|
-| `400` | `streaming is not supported in the demo` | You sent `stream: true`. |
+| `400` | `streaming is not supported for this application` | You sent `stream: true` and your app has no stream mode (see [Streaming](#streaming)). |
 | `401` | `invalid or missing API token` | Missing/unknown/revoked token, or the application is disabled. **Fail closed.** |
 | `422` | *(FastAPI validation error)* | Malformed body — e.g. missing `messages`. Extra unknown fields do **not** cause this. |
+| `422` | `model request rejected: requested model '<slug>' is not permitted or unavailable` | You pinned a `model` slug that isn't in your app's permitted/available pool. |
+| `422` | `no model is available for this request's policy: <detail>` | No eligible candidate — e.g. `onprem_only` with no healthy on-prem model. That rejection is the privacy guarantee working as designed. |
 | `422` | `response failed verification: <detail>` | Output leakage / verification failed. |
 | `429` | `rate limit exceeded for this application` | Over your `max_rpm`. |
 | `429` | `daily budget exceeded for this application` | Over your `max_spend_usd_per_day`. |
-| `503` | `policy evaluation unavailable` | **Catch-all, fail-closed:** the privacy gate errored, routing found no candidates (e.g. `onprem_only` with no local backend), the backend failed on all reachable tiers, or an agent step-cap was exceeded. Retry-safe only if you know the cause is transient. |
+| `500` | `agent did not converge within its step limit` | A multi-step workflow exceeded `agent_budgets.max_steps`. |
+| `500` | `internal error` | Unexpected server-side failure. |
+| `502` | `no backend could serve this request` | Every reachable backend/tier failed. |
+| `503` | `policy evaluation unavailable` | **Fail-closed:** the privacy gate itself errored. |
 
 Things that surprise people:
 
 - A **bad token is `401`, never `403`.** There is no `403` on this endpoint.
-- There is **no `502` / `504`.** Provider/backend failures are retried and fall
-  back inside the gateway; exhausting all allowed tiers surfaces as `503`.
-- `onprem_only` + no on-prem backend → **`503`**, never a silent cloud call. That
-  rejection is the privacy guarantee working as designed.
+- `onprem_only` + no healthy on-prem model → **`422 no model is available…`**,
+  never a silent cloud call.
+- The `503` is now narrow: **only** a privacy-gate error. "No candidates" is
+  `422`, backend exhaustion is `502`, and an agent step-cap is `500` — each maps
+  to its own honest status rather than a catch-all `503`.
 
-Handle `429` with backoff; treat `503` as "routeForge declined to serve this
-safely," not "server crashed."
+Handle `429` with backoff; treat a `422`/`503` rejection as "routeForge declined
+to serve this safely," not "server crashed."
+
+---
+
+## `POST /v1/feedback`
+
+App-token authenticated (same `Authorization: Bearer rf_live_…` as inference).
+Posts an evaluation/RLHF score for a prior request straight to your app's **own**
+residency-local Langfuse project — never the shared project.
+
+Body — `{ trace_id, score_name, value, comment?, corrected_output? }`. `value` is
+a number or string; `score_name` must be one of the recognized score names
+(otherwise `422 unknown score_name: …`). Returns `{"stored": <bool>}` (HTTP
+`200`); `stored: false` when your app has no provisioned Langfuse project — a
+missing project is not an error.
+
+---
+
+## `GET /metrics`
+
+No auth. A Prometheus scrape surface (in-process exporter; `503 metrics
+unavailable: install the observability extra` when the `observability` extra
+isn't installed). Bounded labels only — no tenant or PII. See
+[`../routing-observability.md`](../routing-observability.md).
 
 ---
 
@@ -191,7 +244,7 @@ from openai import OpenAI
 client = OpenAI(base_url="http://<host>:<port>/v1", api_key="rf_live_...")
 
 resp = client.chat.completions.create(
-    model="auto",                 # router chooses; body model is not honored
+    model="auto",                 # router chooses; a concrete slug pins to that model
     messages=[{"role": "user", "content": "Summarize this ticket: ..."}],
 )
 print(resp.choices[0].message.content)

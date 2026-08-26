@@ -38,7 +38,7 @@ context_optimization:
 # default OFF, no pipeline wiring yet (Task 2 wires read/write in). See
 # docs/architecture/persistent-memory-residency-spec.md. Env override: SP_MEMORY.
 memory:
-  enabled: false                 # default OFF — substrate exists, nothing constructs a store yet
+  enabled: false                 # default OFF (store wired into pipeline; opt-in)
   residency: local_only          # NEVER external store — see hard rule 6
   ttl_hours: 24                  # enforced; ttl_hours <= 0 is a boot-fail
   export_to_telemetry: false     # must stay false — only a counts-only MemoryRecord reaches a trace
@@ -56,7 +56,7 @@ memory:
 # at all — Task 2 wires the check/store calls into the pipeline behind this flag.
 # Env override: SP_SEMANTIC_CACHE (see loader), mirrors SP_CONTEXT_OPT above.
 semantic_cache:
-  enabled: false                 # default OFF: no pipeline wiring exists yet (Task 1)
+  enabled: false                 # default OFF (pipeline wiring shipped; opt-in)
   residency: local_only          # NEVER external — see hard rule 6; lint-enforced
   ttl_hours: 24                  # enforced; unbounded cache = retention liability
   export_to_telemetry: false     # must stay false; only a counts-only CacheRecord traces

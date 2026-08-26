@@ -32,7 +32,7 @@ The path, step by step:
 | 6 · Tier from complexity | `app/routing/router.py:39` | `0.003 ≤ cheap_max (0.35)` → **cheap** |
 | 6 · Risk floor | `config/routing.yaml:48` | `low → cheap`. Target = `max(cheap, cheap)` = **cheap** |
 | 6 · Residency clamp | `router.py:104` | `any` — nothing dropped, target stays cheap |
-| 6 · Within-tier score | `router.py:135` | Among cheap candidates: `quality·1.0 − cost·0.6 − latency·0.3 + capacity·0.2` → cheapest/best cheap model wins (an onboarded on-prem model usually wins on cost) |
+| 6 · Within-tier score | `router.py:150` | Among cheap candidates: `quality·1.0 − cost·0.6 − latency·0.3 + capacity·0.2` → cheapest/best cheap model wins (an onboarded on-prem model usually wins on cost). Ranking is now delegated to the pluggable strategy (`ordered = self._strategy.rank(...)`, `app/routing/strategy.py`); the default strategy reproduces this native formula |
 
 ### The load-bearing line
 
@@ -168,8 +168,10 @@ which predates and is unrelated to NVIDIA's project — see
 [`nemo-switchyard-comparison.md`](./nemo-switchyard-comparison.md) for the name-collision
 note.) The one mechanism that *rhymes* with Switchyard is the confidence escalation in
 Part 1 — but it is native and **reactive** (fires on low confidence / step-9 failure),
-not Switchyard's turn-by-turn *progress-driven* escalation. Switchyard's genuinely
-distinct ideas (Stage Router, progress-driven escalation, pluggable strategy family,
-accuracy-tradeoff axis; Prefill Router is *rejected* as Improvement-Plane) are all
-**deferred backlog**, tracked in that doc and in
+not Switchyard's turn-by-turn *progress-driven* escalation. Of Switchyard's genuinely
+distinct ideas, several have since **shipped**: the pluggable strategy family
+(`app/routing/strategy.py`), the accuracy-tradeoff axis (the cost dashboard's quality
+axis), and Stage Router signals (`app/routing/signals.py`, default OFF). Progress-driven
+escalation remains backlog and the Prefill Router stays *rejected* as Improvement-Plane —
+all tracked in that doc and in
 [`switchyard-features-to-incorporate.md`](./switchyard-features-to-incorporate.md).

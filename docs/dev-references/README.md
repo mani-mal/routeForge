@@ -33,7 +33,7 @@ most common onboarding mistake.
 
 | Credential | Who holds it | What it opens |
 |---|---|---|
-| **App token** `rf_live_…` in `Authorization: Bearer` | Your application | `POST /v1/chat/completions`, `GET /health` |
+| **App token** `rf_live_…` in `Authorization: Bearer` | Your application | `POST /v1/chat/completions`, `POST /v1/feedback`, `GET /health` |
 | **Admin session cookie** `rf_admin_session` | A human admin (dashboard) | `/admin/*` management, `/api/*` console (history, stats, the live decision SSE stream) |
 
 An app token **cannot** call `/admin/*` or `/api/*`. An admin cookie is **not**

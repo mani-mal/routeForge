@@ -4,8 +4,13 @@ Feature #6 (semantic cache), Task 1 design gate. This is the binding contract fo
 CCR-class semantic-cache substrate built in `app/cache/store.py`. Task 2 wires the
 check/store calls into the pipeline; this doc is what that wiring must honor.
 
-**Status:** substrate built, default OFF (`semantic_cache.enabled: false`). No pipeline
-wiring in this task — serving behavior is byte-for-byte unchanged.
+**Status:** Task-2 pipeline wiring **shipped** (commit `a7f19da`); the feature **remains
+default OFF** (`semantic_cache.enabled: false`, `config/serving.yaml:59`). `app/main.py`
+constructs the `DeterministicSemanticCache` and hands it to the pipeline, which does a
+cache CHECK/STORE on the direct path (`app/pipeline.py`: `_serve_from_cache`,
+`self._cache.lookup`, `self._cache.store`). With the flag off, serving behavior is
+byte-for-byte unchanged; the caller contracts below (C1, C4) are now implemented at those
+call sites.
 
 ## Why this needs a spec before code
 
@@ -140,10 +145,11 @@ same way it catches every other duplicated concern). Default `enabled: false`. A
 `SP_CONTEXT_OPT`'s pattern for the same reason: operators can flip it per-deploy without
 editing YAML, e.g. to A/B a demo the way Headroom's before/after toggle works.
 
-With `enabled: false` (the shipped default), nothing in the pipeline constructs or
-touches a `DeterministicSemanticCache` instance — this task adds no pipeline wiring at
-all, so the claim is stronger than "the cache does nothing": it doesn't exist as an
-object anywhere in the running process.
+With `enabled: false` (the shipped default), the pipeline never calls into the cache — no
+`lookup`/`store` happens on any request path, so the cache stays empty and serving is
+byte-for-byte unchanged. The instance itself is constructed unconditionally in
+`app/main.py` (mirroring `_ccr`), so the flag gates *use*, not *existence* — the same
+always-construct/conditionally-use idiom CCR uses.
 
 **Enforcement point:** `config/serving.yaml` (shipped default) + `app/config/loader.py`
 (`SP_SEMANTIC_CACHE` override) + Task 2 (the actual construction/use, gated on
@@ -175,10 +181,10 @@ is typed, no lint guard exists yet (nothing to guard).
 
 | Guarantee | What | Enforced where | Status |
 |---|---|---|---|
-| C1 | sanitized-only | Task 2 caller contract | spec'd, not enforceable in-store |
+| C1 | sanitized-only | Task 2 caller contract (`pipeline.py` `store()` call site) | shipped (caller contract wired); not enforceable in-store |
 | C2 | tenant isolation | partition tuple | built + tested |
 | C3 | residency partition | `store` (write refuse) + `lookup` (structural, load-bearing) | built + tested |
-| C4 | verification carryover | Task 2 caller contract | spec'd, deferred to Task 2 |
+| C4 | verification carryover | Task 2 caller contract (`pipeline.py` re-verify on hit) | shipped (verify carryover wired at the hit call site) |
 | C5 | enforced TTL | sweep-on-write + evict-on-read + lint | built + tested |
 | C6 | never exported | `CacheRecord` counts-only + lint | built + tested |
 | C7 | default OFF / one owner | `serving.yaml` + loader | built + tested |

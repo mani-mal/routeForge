@@ -121,7 +121,7 @@ Point at the two live apps and contrast them — **this contrast is the best par
 ### 5a. "What happened" — the plain-language band (say this verbatim, it's already English)
 
 > **"Checked for sensitive data (found LOCATION) → eligible for cloud → answered by
-> Qwen2.5-7B-Instruct (local) → verified clean, in 500 ms for $0.0000."**
+> Qwen2.5-7B-Instruct (local) → verified clean, in 500 ms for 0.003¢."**
 
 > "That's the entire lifecycle in one sentence, no jargon. It found a location entity,
 > policy said this one *could* have gone to cloud, but the router chose the **local**
@@ -160,16 +160,24 @@ Scroll the trace. You don't have to read every card; hit these beats:
 
 > "The console is the customer's decision story. **Langfuse** is the operator's permanent
 > system of record — every trace, every per-hop span, cost, latency — and it's **PII-
-> redacted on export**. Prompts and answers come across as null; only the decision
-> attributes are exported. So your audit trail is complete *and* safe to keep."
+> redacted on export by default**. In that default mode prompts and answers come across as
+> null; only the decision attributes are exported. So your audit trail is complete *and*
+> safe to keep."
+
+*(Per-app `capture_io` shipped: the default `off` is what's described above — I/O null.
+An operator can opt a specific non-`onprem_only` app into `redacted` (masked I/O) or `full`
+(raw I/O to that app's **own** provisioned project) — in those modes prompts/answers are
+**not** null. `onprem_only` never permits it and the shared project never receives raw I/O.)*
 
 ### 6a. The forward-looking value — custom agent-harness training *(roadmap, say it as roadmap)*
 
 > "Here's where this gets strategic. Every request RouteForge handles is a labelled
-> example: *this input, this policy decision, this model, this cost, this outcome.* Today
-> we redact that for safety. The next step on our roadmap is to let you capture the
-> **complete** input and output — inside your residency boundary — and turn your own
-> production traffic into an **evaluation and training dataset**."
+> example: *this input, this policy decision, this model, this cost, this outcome.* By
+> default we redact that for safety — but you can already **capture the complete input and
+> output**, per application, inside your residency boundary (the per-app `capture_io`
+> setting, plus a `POST /v1/feedback` endpoint that attaches graded scores to any trace).
+> The next step on our roadmap is to turn that captured traffic into an **evaluation and
+> training dataset** that improves your own models."
 
 What that unlocks, in plain terms — say one or two, don't list all four:
 
@@ -183,10 +191,12 @@ What that unlocks, in plain terms — say one or two, don't list all four:
 > same privacy guarantee that governs the serving path governs the training data. You get
 > a self-improving system that never compromises the residency promise."
 
-*(Positioning note for internal use: this is deliberately framed as future work. The
-prototype serves and observes; it does not train or auto-promote anything. Capturing the
-data is cheap and on the roadmap; building eval/training pipelines on top is the larger
-"Improvement Plane" that comes next. Don't over-promise a ship date on camera.)*
+*(Positioning note for internal use: the **capture** half has shipped — per-app
+`capture_io` (`off | redacted | full`) plus `POST /v1/feedback` — so speak of capture in
+the present tense. The **training** half is still deliberately future work: RouteForge
+serves, observes, and captures; it does not train or auto-promote anything. Building
+eval/training pipelines on the captured data is the larger "Improvement Plane" that comes
+next. Don't over-promise a ship date on camera.)*
 
 ---
 
@@ -287,11 +297,11 @@ any backend.
 | They ask… | You say… |
 |---|---|
 | "Are those cloud models real?" | "The pool has four models; on this deploy the served ones are local. The cloud entries stay in the pool **on purpose** — so you can see them appear in the rejected list with a reason. That rejected-with-a-reason list *is* the routing proof." |
-| "Why is the local cost $0.0000 / so low?" | "On-prem tiers are priced at a small representative amortized rate, not literally zero — so the savings read as honest cost *reduction*, not a fake 'free.' It rounds to four decimals on a per-request row." |
+| "Why is the local cost so low?" | "On-prem tiers are priced at a small representative amortized rate, not literally zero — so the savings read as honest cost *reduction*, not a fake 'free.' A single local request is a fraction of a cent, so the per-request row shows it **in cents** (e.g. `0.003¢`, or `<0.001¢` when it's tinier still) rather than a dollar figure that would round to `$0.0000`." |
 | "Is this just PII pattern-matching?" | "Detection is one input. Residency is decided by the entity's **risk class** *and* the **tenant's own policy** — low-risk data on a cloud-eligible tenant is redacted and allowed out; high-risk data, or any request on an `onprem_only` tenant, is forced local." |
-| "What about streaming responses?" | "The demo verifies the *complete* response before returning it — that's what makes the leakage check trustworthy — so inbound token-streaming is intentionally off here. The console's own live updates are a separate channel and stay on." |
+| "What about streaming responses?" | "By default we verify the *complete* response before returning it — that's what makes the leakage check trustworthy — so inbound token-streaming is off in this demo config. It's not all-or-nothing, though: a per-app `stream_mode` shipped (e.g. verified-then-stream, or incremental hold-back redaction), and the floor is absolute — an `onprem_only` or verification-required request always falls back to the fully-verified path regardless. The console's own live updates are a separate channel and stay on." |
 | "Does it fail open if the gate breaks?" | "No — it **fails closed**. If the policy gate errors, the request is rejected. There is no 'no policy = allow' path." |
-| "Why does a multi-step request show 0 ms?" | *(Only if it comes up.)* "Known display bug — per-hop latency isn't summed into the request total yet. Single-shot latency is correct; it's tracked for a fix." |
+| "Why does a multi-step request show 0 ms?" | *(No longer expected — resolved 2026-08-06.)* "That was an old display bug where per-hop latency wasn't summed into the request total; it now sums correctly, so a multi-step request shows its real end-to-end time. If you ever see 0 ms, you're on a pre-fix build." |
 
 ---
 

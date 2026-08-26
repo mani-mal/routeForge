@@ -7,7 +7,9 @@ Sibling backlogs: `ui-open-items.md`, `eval-logging-backlog.md`.
 > deployed DGX `:0.14.0`). Resolved-but-unmarked items carry a `✅ RESOLVED` / `PARTIAL`
 > marker in their heading with a one-line evidence note; original write-ups kept for history.
 > **No open code-correctness bug remains.** B3 (PR #16), B13 (folded into B14/F1), B14
-> (F1 Phase B + PR #17) are now resolved. Remaining: **B2** is an infra/capacity note (scale
+> (F1 Phase B + PR #17) are now resolved. *(One more — B20, a real privacy-routing bug —
+> was found and fixed on 2026-08-23, after this sweep; see the 2026-08-23 update below.
+> It is resolved, so the statement still holds.)* Remaining: **B2** is an infra/capacity note (scale
 > vLLM), not a code fix; **B15** is PARTIAL (admin cross-app rollup + manual per-app creds
 > shipped, but automatic project-per-app provisioning still needs `LANGFUSE_ORG_*` config —
 > this is why every app currently lands in the shared `demo-project`); **B16** is PARTIAL
@@ -16,13 +18,18 @@ Sibling backlogs: `ui-open-items.md`, `eval-logging-backlog.md`.
 >
 > _Prior sweep 2026-08-16: listed B2/B3/B13 + B14–B16 as open._
 >
-> **Update 2026-08-23 (DGX `:0.17.0`).** The six-feature program (PRs #18–#23) is
-> now MERGED to `main` and deployed: role-aware raise-only tier bias, failure-driven
-> lateral model switch, semantic cache (CCR-class), persistent memory (CCR-class),
-> trace-mining recommend-loop + external-training orchestration hook, and DSPy
-> prompt-optimization — all default-OFF. Plus a config-hardening fix (semantic_cache
-> block made optional so a pre-feature-6 mounted serving.yaml boots unchanged). One
-> new **test-quality** item found: B20 below.
+> **Update 2026-08-23 (DGX `:0.18.0`).** The **seven-feature** program is now MERGED to
+> `main` and deployed. Six landed as PRs #18–#23 (commits numbered #1/7…#6/7): role-aware
+> raise-only tier bias, failure-driven lateral model switch, semantic cache (CCR-class),
+> persistent memory (CCR-class), trace-mining recommend-loop + external-training
+> orchestration hook, and DSPy prompt-optimization — all default-OFF. The **seventh** is
+> PR #24: a quality/accuracy axis on the cost dashboard + a pluggable routing-strategy
+> interface. Plus a config-hardening fix (semantic_cache block made optional so a
+> pre-feature-6 mounted serving.yaml boots unchanged). The `:0.18.0` bump came from the
+> B20 SSN-dedupe fix (commit `e87e8df`), landed *after* this sweep. One item surfaced
+> while integrating the program — B20 below — initially read as a flaky test but was a
+> **real MEDIUM privacy-routing bug** (an SSN could downgrade off `onprem_only` and route
+> to cloud); now **RESOLVED**.
 
 ---
 

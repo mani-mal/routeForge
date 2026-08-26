@@ -1,8 +1,10 @@
 # Persistent memory — residency spec (Feature 5, Task 1)
 
 **Status:** design-gate doc, 2026-08-22. Authored as part of Task 1 (substrate + config + lint
-guards, no pipeline wiring, default OFF). Task 2 wires read/write into the serving pipeline and
-must satisfy every guarantee below; the reviewer checks Task 2 against this doc. Sibling reads:
+guards, default OFF). **Task 2 has since shipped** (commit `e778c97`): read/write is now wired
+into the serving pipeline (`app/main.py` constructs `DeterministicMemoryStore`; `app/pipeline.py`
+recalls and writes on the direct and multi-step paths), satisfying every guarantee below. The
+feature **remains default OFF** (`config/serving.yaml:41`). Sibling reads:
 `docs/architecture/self-improving-agent-feature-fit.md` (§ persistent memory is one of the four
 cost-reduction levers), `.claude/skills/headroom-compression/` (CCR is the precedent this spec
 mirrors).
@@ -137,11 +139,13 @@ config rule. Shipped default is `enabled: false`. The env override is `SP_MEMORY
 `SP_CONTEXT_OPT`): unset follows the YAML value; a truthy spelling (`on`/`true`/`1`/`yes`, any
 case) forces it on; anything else forces it off.
 
-**Task 1 adds no pipeline wiring at all** — no code path constructs or calls a
-`DeterministicMemoryStore` yet, regardless of `memory.enabled`. Flipping the flag on today has zero
-runtime effect; it only surfaces the config value and satisfies the lint guards. Serving behavior
-with the shipped config is byte-for-byte unchanged from before this feature. Task 2 is the first
-code that constructs a store and reads/writes it per request.
+**Task 2 has shipped the pipeline wiring.** `app/main.py` constructs one shared
+`DeterministicMemoryStore` unconditionally (mirroring `CCRStore`) and passes it to the pipeline;
+`app/pipeline.py` imports `recall_memory`/`write_memory` and calls them on the direct path (recall
+before routing, write on the success path) and recalls on the multi-step path. The store is
+constructed regardless of `memory.enabled`, but the pipeline only reads/writes it when the flag is
+on — so with the shipped default (`enabled: false`) the flag gates *use*, not *existence*, and
+serving behavior is byte-for-byte unchanged from before this feature.
 
 **Enforcement point:** `config/serving.yaml` (single `memory:` block), `app/config/loader.py`
 (`SP_MEMORY` override, mirrors `SP_CONTEXT_OPT`). Tested by
@@ -152,7 +156,7 @@ code that constructs a store and reads/writes it per request.
 
 | Guarantee | Enforcement | Test |
 |---|---|---|
-| R1 sanitized-only | caller contract (Task 2 call site) | reviewed at Task 2, not testable in Task 1 |
+| R1 sanitized-only | caller contract (Task 2 call site, now wired in `pipeline.py`) | reviewed at Task 2 (shipped); caller contract, not store-enforceable |
 | R2 tenant isolation | structural, injective tuple partition key (`tenant_id` mandatory, leading) | `test_tenant_isolation_structural`, `test_partition_key_includes_tenant_id`, `test_partition_key_is_injective_tuple_no_delimiter_collision` |
 | R3 residency boundary | `to_cloud` param + honesty counter, caller discipline | `test_retrievals_to_cloud_pinned_zero_on_normal_recall` |
 | R4 never exported | counts-only `MemoryRecord` + boot lint | `test_lint_rejects_memory_telemetry_export`, `test_memory_record_is_counts_only` |

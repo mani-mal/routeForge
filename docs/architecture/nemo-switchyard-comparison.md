@@ -47,8 +47,8 @@ internal report `NVIDIA_Nemotron_and_Switchyard_Report.docx`.
 | **Escalation Router** | Start cheap, watch progress turn-by-turn, escalate on *sustained difficulty* | Escalation is **reactive** — triggered by step-9 verification failure, not in-flight progress | **Incorporate** (highest value) |
 | **Stage Router** | Route on *tool-activity signals*: errors/exploration → capable model; steady edits → efficient | Step-6 scores cost/risk/task-mode per hop; does **not** read agent-loop state as a feature | **Incorporate** |
 | **Session affinity** | Cache the classification; don't re-decide unchanged work | Router re-enters every hop by design (needed for per-hop cost accounting) | **Partial** — cache the *decision*, still price each hop |
-| **Strategy family** (Classifier / Stage / Escalation / Random / Passthrough) | Routing is a **pluggable interface**, picked per priority | Step-6 is a single cost/risk scorer; step-4 classifier off by default | **Incorporate the shape** — make the scorer one strategy among several |
-| **Accuracy-tradeoff reporting** | "7% to frontier, 74% cheaper, **6% accuracy cost**" | Dashboard splits routing vs compression savings; no explicit *quality-cost* axis | **Incorporate** — strengthens the cost story |
+| **Strategy family** (Classifier / Stage / Escalation / Random / Passthrough) | Routing is a **pluggable interface**, picked per priority | Step-6 delegates within-tier ranking to a pluggable `RoutingStrategy` (`app/routing/strategy.py`); the default reproduces the native formula | ✅ **SHIPPED** — scorer is now one strategy among several (`build_strategy`, `routing.yaml` `strategy:`) |
+| **Accuracy-tradeoff reporting** | "7% to frontier, 74% cheaper, **6% accuracy cost**" | Cost dashboard now carries a per-call quality axis (`app/api/history.py` `quality_sum`, `ui/.../CostSection.tsx`) | ✅ **SHIPPED** (`148fc73`) — strengthens the cost story |
 | **Semantic model naming** decoupled from endpoints | Map names → provider/model IDs | Already done: `ModelRegistry` + tiers + LiteLLM prefixes | **Already have** ✓ |
 | **Router as library, hands call back to host** | Routing logic separate from HTTP ownership | Step-6 is already an internal module | **Already have** ✓ |
 | **Multi-format inbound** (OpenAI + Anthropic Messages + Responses) | Protocol bridge | OpenAI `/v1/chat/completions` only | **Consider, with guardrails** (must keep no-inbound-stream + gate-first) |
@@ -73,12 +73,14 @@ internal report `NVIDIA_Nemotron_and_Switchyard_Report.docx`.
    LLM classifier because it's rules-first, matching the "classifier off by default"
    stance.
 
-3. **An accuracy-tradeoff axis on the cost dashboard.** The dashboard already splits
-   routing vs compression savings. Switchyard always pairs the cost win with the
-   *quality cost*. Step 9 already produces a quality signal (verification pass/fail,
-   `require_verification`); surfacing "cost saved vs. estimated quality delta against the
-   all-frontier baseline" turns the two-lever story into a harder-to-dispute
-   three-number story.
+3. **An accuracy-tradeoff axis on the cost dashboard.** ✅ **SHIPPED** (`148fc73`):
+   `app/api/history.py` accumulates per-call quality (`quality_sum`) and
+   `ui/src/console/sections/CostSection.tsx` surfaces the quality axis alongside the
+   savings split. The dashboard already splits routing vs compression savings; Switchyard
+   always pairs the cost win with the *quality cost*. Step 9 already produces a quality
+   signal (verification pass/fail, `require_verification`); surfacing "cost saved vs.
+   estimated quality delta against the all-frontier baseline" turns the two-lever story
+   into a harder-to-dispute three-number story.
 
 ## What to explicitly refuse
 
@@ -115,7 +117,10 @@ re-evaluation when (a) Switchyard exits pre-alpha with a production posture, (b)
 gains — or exposes an extension point for — hard policy constraints like absolute
 residency filtering, and (c) a Python-consumable path exists (stable server API or
 bindings) that fits an air-gapped install. Until then, the pluggable-strategy interface
-(above) is the low-regret move: it captures Switchyard's best ideas now *and* makes a
-future swap to `switchyard-libsy` a per-strategy adapter rather than a router rewrite.
+(above) is the low-regret move — and it has since **shipped** (`app/routing/strategy.py`:
+`RoutingStrategy` Protocol + `build_strategy`; the router delegates within-tier ranking at
+`app/routing/router.py:150`, the default strategy reproducing the native formula): it
+captures Switchyard's best ideas now *and* makes a future swap to `switchyard-libsy` a
+per-strategy adapter rather than a router rewrite.
 If we later pursue that interface, it is also the natural moment to rename our step-6
 module to end the name collision.

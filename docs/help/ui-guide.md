@@ -24,17 +24,23 @@ Three levels, top to bottom:
 
 ```
 Sign-in ──▶ Console Shell ──▶ Fleet Overview ──▶ Application Page (tabbed)
-                 │                                     ├─ Overview
-                 └─ Manage applications                ├─ Cost
-                    (create + config + tokens)         ├─ Privacy
-                                                        ├─ Traffic
-                                                        ├─ Requests (list + drill-down)
-                                                        └─ Settings
+                 │  (left rail)                       ├─ Overview
+                 ├─ Overview (Fleet)                  ├─ Cost
+                 ├─ Applications                       ├─ Privacy
+                 │   (create + config + tokens)        ├─ Traffic
+                 ├─ Infrastructure                     ├─ Requests (list + drill-down)
+                 │   (onboard on-prem models)          └─ Settings
+                 └─ Cross-app usage
+                     (DB-backed per-app rollup)
 ```
 
-- **Console Shell** (`ConsoleShell.tsx`) — the only top-level surface after login.
-  Nav on the left (**Fleet**), and **＋ New application** on the right which opens the
-  **Manage applications** panel (create app, per-app config, tokens).
+- **Console Shell** (`ConsoleShell.tsx`) — the only top-level surface after login. A
+  left rail (`STATIONS` in `ConsoleShell.tsx:22-27`) with four sections — **Overview**
+  (the Fleet landing screen), **Applications** (create app, per-app config, tokens —
+  the admin `ApplicationsPanel`), **Infrastructure** (`InfrastructurePanel`, onboard/
+  manage on-prem models via `/admin/infra/models*`), and **Cross-app usage**
+  (`CrossAppReport`, the DB-backed per-app rollup). Selecting a fleet row opens the
+  per-app **Application Page**.
 - **Fleet Overview** (`FleetOverview.tsx`) — the landing screen: an all-apps summary
   strip + a sortable per-application table. Click a row to open that app.
 - **Application Page** (`AppPage.tsx`) — the per-app "answer desk": six tabs, scoped to
@@ -162,15 +168,22 @@ They satisfy the identity `routing_saved + compression_saved == baseline − act
 Keeping them separate is deliberate: the customer must be able to tell which lever is
 working.
 
-### 4c. Cost over time
+### 4c. Cost over time vs. quality
 
-Cumulative line chart as requests accrue (ordered by `created_seq`): **actual**
-(green) vs. **baseline** (grey). The widening gap is the running saving.
+Cumulative line chart as requests accrue (ordered by timestamp): **actual** (green) vs.
+**baseline** (grey) on the cost (left) axis — the widening gap is the running saving. A
+third **dashed quality line** rides a **second, right-hand Y-axis** (`domain [0,1]`): the
+**rolling-average quality** (a tier-quality **proxy**, not measured accuracy) up to each
+point, skipping requests that carry no `quality` (`connectNulls`). A caption under the
+chart states the caveat (`QUALITY_CAVEAT`) plus the quality-signal provenance.
 
 ### 4d. Tiles (bottom)
 
-Repeat the four figures as stat tiles: **Total spend**, **All-frontier baseline**,
-**Routing saved**, **Compression saved** (again "off / not run" when zero).
+Repeat the cost figures as stat tiles — **Total spend**, **All-frontier baseline**,
+**Routing saved**, **Compression saved** (again "off / not run" when zero) — followed by
+two quality-density tiles: **Token Intelligence Density** (quality delivered per 1k
+tokens) and **Cost Intelligence Density** (quality delivered per $, i.e. Quality/$). Both
+densities are a tier-quality proxy and need a per-model quality score.
 
 ### 4e. How baseline & "% saved" are computed
 
@@ -404,6 +417,9 @@ cookie (`same-origin`); the packaged deploy's nginx reverse-proxies `/api`, `/ad
 | Drill-down full trace | `GET /api/requests/{id}` | `ui_routes.get_request` |
 | Live updates (all tabs) | `GET /api/stream` (SSE) | `ui_routes.stream` |
 | Settings (policy/tokens) | `/admin/applications/*`, `/admin/tokens/*` | `admin_routes` |
+| Cross-app usage report | `GET /admin/usage/by-application` | `admin_routes` |
+| Infrastructure (onboard models) | `/admin/infra/models*` | `admin_routes` |
+| Headroom toggle (header) | `GET`/`POST /api/controls` | `ui_routes` |
 | Serving a request | `POST /v1/chat/completions` | `routes.py` |
 
 Every panel is driven by the `RequestSummary` / `TraceRecord` contract in `ui/src/api.ts`
@@ -451,36 +467,37 @@ The two cloud models exist **in the pool so the routing story is visible** — t
 in the **rejected / greyed-out** list with a reason. A model that was *chosen and served*
 is always one of the local pair today.
 
-### "How do I turn Headroom (compression) on? There's no button."
+### "How do I turn Headroom (compression) on?"
 
-**Correct — there is no console control for it today.** The old demo UI had a
-"Headroom on/off" toggle; it was dropped when the per-application console replaced the
-3-column layout, and no equivalent was added back. The backend still supports a **live**
-toggle — it's just not wired to any button.
+There **is** a console control now: a **Headroom toggle in the top-right chrome**
+(`ui/src/components/HeadroomToggle.tsx`, mounted in `App.tsx:64`, shown only while
+signed in — `{auth === "in" && <HeadroomToggle />}`). It sits between the live/
+disconnected dot and the theme toggle, showing **on / off** with an animated switch.
+Clicking it flips the global compression default live (optimistic UI, then reconciled
+with the server), reading `GET /api/controls` and writing `POST /api/controls`.
 
 | Layer | Toggle present? |
 |---|---|
-| Backend `POST /api/controls` | ✅ Mutates `app.state.co_cfg` in place — next request picks it up, **no restart** (`app/api/ui_routes.py:99`). Admin-gated. |
-| API client `api.setControls()` | ✅ Present (`ui/src/api.ts:141`). |
-| Console UI | ❌ Nothing renders/calls it on any tab. |
+| Backend `POST /api/controls` | ✅ Mutates `app.state.co_cfg` in place — next request on either the direct or per-hop agent path picks it up, **no restart**. Admin-gated. |
+| API client `api.controls()` / `api.setControls()` | ✅ Present (`ui/src/api.ts`). |
+| Console UI | ✅ **HeadroomToggle** in the header chrome (`App.tsx:64`). |
 
-Two ways to enable it until a control is added:
+**Scope:** this switch is the **global default** (`app.state.co_cfg`, server-wide). A
+per-application override in an app's **Settings** tab (`AppPolicy.compression_enabled`)
+**wins** over it; apps left at "(global default)" follow this switch. Safety bypasses
+(high-risk / restricted / below-min-tokens) still apply on top regardless — see
+`app/compression`.
+
+You can also set the startup default in `config/serving.yaml` →
+`context_optimization.enabled` (defaults OFF so the demo can show before/after; a restart
+applies it, but the header toggle changes it live without one), or drive it via curl:
 
 ```bash
-# 1. Live, via the admin-gated API (needs the admin session cookie):
+# Live, via the admin-gated API (needs the admin session cookie):
 curl -X POST http://<api-host>:30808/api/controls \
   -H 'Content-Type: application/json' -b 'rf_admin_session=<cookie>' \
   -d '{"headroom_enabled": true}'
-
-# 2. At startup: config/serving.yaml → context_optimization.enabled: true
-#    (defaults OFF so the demo can show before/after). Requires a restart.
 ```
-
-**Caveat:** this switch is **global** (`app.state.co_cfg`, server-wide), **not
-per-application** — one lever for the whole server, not per-tenant. Because the demo
-narrative depends on toggling Headroom live (story step 4 in `CLAUDE.md`), the missing
-button is a known gap; the natural fix is a Headroom toggle in the app **Settings** tab
-or a global control in the console header.
 
 ### "Why does multi-step latency read 0 ms?"
 
@@ -512,8 +529,9 @@ renders raw input**. The **answer** is shown at the Response step; the prompts l
 ---
 
 **Known gaps & deferred UI work:** see `docs/ui-open-items.md` — includes the planned
-redesign of the "What happened" band (§7b), the missing Headroom toggle, the 0 ms
-multi-step latency bug, per-request `$0.0000` precision, and the two-blues recolour.
+redesign of the "What happened" band (§7b), the 0 ms multi-step latency bug, per-request
+`$0.0000` precision, and the two-blues recolour. (The Headroom toggle — formerly a gap —
+now ships in the header chrome; see the FAQ.)
 
 ---
 

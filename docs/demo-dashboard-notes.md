@@ -54,7 +54,7 @@ tenant) is forced local. It is *not* a blunt "all PII on-prem".
 
 ## The yellow ⚠️ ("Sensitive traffic not all kept on-prem") is over-eager
 
-It fires from a deliberately simple rule (`ui/src/console/FleetOverview.tsx:47`):
+It fires from a deliberately simple rule (`ui/src/console/FleetOverview.tsx:51`):
 
 ```js
 warn: pii_count > 0 && onprem_count < pii_count

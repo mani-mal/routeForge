@@ -31,6 +31,23 @@ authoritative until the `.drawio` is redrawn to match.
 > any new per-app knob (monotonic-tightening vs free-but-floored vs floor-itself),
 > see [`per-app-config-flexibility.md`](./per-app-config-flexibility.md).
 
+> **How the `api` deployment scales horizontally** — the L4/L7 balancing layers, why
+> per-pod in-memory state was a bug, and how to scale replicas, see
+> [`api-load-balancing.md`](./api-load-balancing.md).
+
+> **Where the self-improving-agent research lands vs. RouteForge's scope** — the
+> 2026-08-17 control-plane-vs-compute boundary decision (compression, prompt-opt,
+> memory, distillation-and-onboard all orchestrated, not hosted), see
+> [`self-improving-agent-feature-fit.md`](./self-improving-agent-feature-fit.md).
+
+> **Residency + correctness contract for the semantic cache (feature #6)** — why a
+> cached answer is a second copy that must stay CCR-class and residency-partitioned,
+> see [`semantic-cache-residency-spec.md`](./semantic-cache-residency-spec.md).
+
+> **Residency contract for persistent memory (mem0-style, step-5 extension)** — the
+> CCR-class guarantees a cross-request memory store must honor, see
+> [`persistent-memory-residency-spec.md`](./persistent-memory-residency-spec.md).
+
 ## Canonical step count: 1–10
 
 The Serving Plane is **steps 1–10** (1 Incoming Request → 10 Governed Response). All

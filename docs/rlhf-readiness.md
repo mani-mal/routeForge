@@ -7,6 +7,19 @@ research note) on 2026-08-05.
 > gaps in §4) has since shipped, across **0.11.0** and **F1 Phase D**. See the status
 > update after §1 for what changed and where. Training itself is still external and
 > out of scope — nothing below changes the boundary.
+>
+> **Update 2026-08-23 (features #4 & #5 of the seven-feature program):** the two
+> *improvement* halves this doc anticipated now ship as offline, operator-gated tools.
+> **Feature #5 — trace-mining recommend-loop + external-training orchestration** realizes
+> §2 **Target A** and §8 steps 7–8: `tools/recommend/` mines the local metering/trace
+> substrate into a `RecommendationReport` (`report.py`) for an operator to **hand-apply**
+> — it recommends, it does not retrain or auto-apply; `tools/orchestrate/` **triggers** an
+> external distill/fine-tune job, tracks its status, and surfaces the result for
+> onboarding, but **NEVER auto-onboards** (probe-gated, operator-initiated — CLAUDE.md
+> rule 4). **Feature #4 — DSPy prompt-optimization** (`tools/prompt_opt/`) is the
+> offline prompt-improvement counterpart. All three are default-OFF and honor the scope
+> boundary below — RouteForge still only *captures and orchestrates*, never trains or
+> promotes in-process.
 
 **Scope boundary (read first — CLAUDE.md rule):** the **Improvement Plane** —
 reward-model training, DPO/PPO/GRPO, LLM fine-tuning, policy retraining, evaluation
