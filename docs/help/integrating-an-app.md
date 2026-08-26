@@ -60,10 +60,16 @@ A runnable example is in [`examples/client/chat.py`](../../examples/client/chat.
 
 - **`model` field:** send `"auto"` to let the router choose, or a specific model your
   application is permitted to use. A model you're not allowed to use is rejected.
-- **No inbound streaming:** `stream: true` is rejected — the output-verification step
-  needs the complete response. (The dashboard's live decision stream is separate.)
+- **Inbound streaming is per-app opt-in:** by default `stream: true` is **rejected**
+  (the output-verification step needs the complete response), and it stays rejected for
+  any app with no `stream_mode` set. An admin can opt your app into streaming via
+  `AppPolicy.stream_mode` (`verified_then_stream | stream_unverified |
+  incremental_verify`); the `onprem_only` / `require_verification` floor still forces the
+  fully-verified path regardless. See [`../per-app-config.md`](../per-app-config.md). (The
+  dashboard's live decision stream is a separate channel and always on.)
 - **Errors:** `401` invalid/missing/revoked token; `429` rate/budget exceeded; `400`
-  streaming requested; `422` response failed output verification.
+  streaming requested by an app not opted into a `stream_mode`; `422` response failed
+  output verification.
 
 ## 5. Seeing your traffic (observability)
 
@@ -100,9 +106,11 @@ Four things to get right when the harness lives in your app:
    NAT agent runtime, `agent_budgets`) does **not** engage; that only runs when you hand
    routeForge a single request and let it drive the loop. To reconstruct the trajectory,
    use the session header (§7).
-2. **Turn streaming off.** `stream: true` is rejected (output verification needs the
-   complete response). Configure your model client to disable streaming, or every call
-   fails with `400`.
+2. **Streaming is off unless your app opts in.** By default `stream: true` is rejected
+   (output verification needs the complete response), so configure your model client to
+   disable streaming or every call fails with `400`. If your workload needs streaming,
+   ask your admin to set a `stream_mode` on the app — subject to the verification floor
+   (see §4 and [`../per-app-config.md`](../per-app-config.md)).
 3. **Tool calls pass through the gateway.** `tools` / `tool_choice` in, `tool_calls`
    out, unchanged — this is what makes a tool-using agent work. If you rely on
    tool-calling, validate the round-trip against your onboarded model first.

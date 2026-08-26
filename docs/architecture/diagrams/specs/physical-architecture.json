@@ -1,0 +1,53 @@
+{
+  "title": "RouteForge — Physical Architecture (Kubernetes pods & services)",
+  "bands": [
+    {"title": "Ingress", "nodes": [
+      {"id": "ingress", "label": "Istio / ezua gateway\nVirtualService (ui, langfuse)", "color": "orange", "bold": true}
+    ]},
+    {"title": "RouteForge workloads", "nodes": [
+      {"id": "ui", "label": "ui  (Deployment)\nnginx: React build + reverse-proxy", "color": "blue"},
+      {"id": "apipod", "label": "api  (Deployment + HPA)\nFastAPI / Uvicorn  :8080", "color": "orange", "bold": true},
+      {"id": "vllmstub", "label": "vllm-stub (Deployment)\noptional · disabled by default", "color": "gray", "dashed": true}
+    ]},
+    {"title": "Langfuse application pods", "nodes": [
+      {"id": "lfweb", "label": "langfuse-web\n:3000  (UI + OTLP ingest)", "color": "purple"},
+      {"id": "lfworker", "label": "langfuse-worker\n(async trace processing)", "color": "purple"}
+    ]},
+    {"title": "Shared datastores", "nodes": [
+      {"id": "pg", "label": "langfuse-postgres  :5432\n(+ RouteForge app/usage store)", "color": "red", "emphasis": true},
+      {"id": "ch", "label": "langfuse-clickhouse\n:8123 / :9000  (traces)", "color": "red"},
+      {"id": "redis", "label": "langfuse-redis  :6379\n(queue / cache)", "color": "red"},
+      {"id": "minio", "label": "langfuse-minio (S3)  :9000\ninit Job seeds bucket", "color": "red"}
+    ]},
+    {"title": "Persistent volumes (PVC)", "nodes": [
+      {"id": "ccrpvc", "label": "ccr-cache PVC\n(residency-local originals, TTL)", "color": "gray"},
+      {"id": "pgpvc", "label": "postgres PVC", "color": "gray"},
+      {"id": "chpvc", "label": "clickhouse PVC", "color": "gray"},
+      {"id": "miniopvc", "label": "minio PVC", "color": "gray"}
+    ]},
+    {"title": "Approved inference  (external — operator-run, not RouteForge pods)", "nodes": [
+      {"id": "onprem", "label": "On-prem OpenAI endpoints\nvLLM / Dynamo / NIM", "color": "green", "dashed": true},
+      {"id": "cloud", "label": "Managed cloud\nAzure / Bedrock", "color": "yellow", "dashed": true}
+    ]}
+  ],
+  "edges": [
+    {"from": "ingress", "to": "ui", "label": "HTTPS /"},
+    {"from": "ingress", "to": "lfweb", "label": "/langfuse"},
+    {"from": "ui", "to": "apipod", "label": "proxy /api /v1", "color": "#6C8EBF"},
+    {"from": "apipod", "to": "lfweb", "label": "OTLP export", "color": "#D79B00", "dashed": true},
+    {"from": "apipod", "to": "pg", "label": "app/usage", "color": "#D79B00"},
+    {"from": "apipod", "to": "onprem", "label": "inference", "color": "#82B366"},
+    {"from": "apipod", "to": "cloud", "label": "if allowed", "color": "#D79B00", "dashed": true},
+    {"from": "apipod", "to": "ccrpvc", "label": "mount", "color": "#999999", "dashed": true},
+    {"from": "lfworker", "to": "pg", "label": "read/write", "color": "#9673A6"},
+    {"from": "lfweb", "to": "pg", "color": "#9673A6"},
+    {"from": "lfweb", "to": "ch", "label": "traces", "color": "#9673A6"},
+    {"from": "lfworker", "to": "ch", "color": "#9673A6"},
+    {"from": "lfworker", "to": "redis", "color": "#9673A6"},
+    {"from": "lfweb", "to": "redis", "color": "#9673A6"},
+    {"from": "lfworker", "to": "minio", "label": "blobs", "color": "#9673A6"},
+    {"from": "pg", "to": "pgpvc", "color": "#999999", "dashed": true},
+    {"from": "ch", "to": "chpvc", "color": "#999999", "dashed": true},
+    {"from": "minio", "to": "miniopvc", "color": "#999999", "dashed": true}
+  ]
+}

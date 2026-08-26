@@ -91,7 +91,9 @@ residency boundary, enforced TTL, redacted at rest, never exported to telemetry,
 with post-gate sanitized content.** If residency can't be guaranteed for a tenant, memory is
 disabled for them, exactly like CCR. Memory retrieval re-enters gate → compression → router like
 any other call. Design its residency model in its own spec before build (it is the newest, least
-specified surface).
+specified surface). ✅ **SHIPPED** — that spec now exists
+([`persistent-memory-residency-spec.md`](./persistent-memory-residency-spec.md)) and the feature
+landed (`app/memory/`).
 
 ### D. Prompt optimization — stanfordnlp/dspy
 
@@ -149,14 +151,18 @@ requires RouteForge to host training or inference compute.
 3. **B15 remainder** — admin cross-app reporting from RouteForge's own store + a manual per-app
    Langfuse-creds path (air-gapped operators with no org key). Project isolation core is done.
 4. **B16 feedback + dataset substrate** — `POST /v1/feedback` → trace-linked score, correction-
-   output form, named score configs, dataset-export readiness.
+   output form, named score configs, dataset-export readiness. ✅ **SHIPPED** (`POST /v1/feedback`
+   in `app/api/routes.py`, `app/obs/scores.py`, `tools/prompt_opt/dataset.py`).
 5. **DSPy prompt-optimization** of RouteForge's own prompts (managed, human-gated, versioned).
+   ✅ **SHIPPED** (`tools/prompt_opt/`, `app/prompts/store.py`).
 6. **Orchestration hook** — trigger an external distill/fine-tune job from exported datasets +
-   onboard the result. Closes the loop; hosts no training.
+   onboard the result. Closes the loop; hosts no training. ✅ **SHIPPED** (`tools/orchestrate/`).
 7. **Harness recursive-learning loop** — mine traces → recommend routing-rule/threshold/prompt
    changes → version + A/B (on `routing_policy_version`) → operator applies via config, lint gates.
    Offline + human-gated; no runtime self-editing. Extends the trace-mining substrate.
+   ✅ **SHIPPED** (`tools/recommend/`).
 8. **Persistent memory module** (own spec first) — step-5 extension, CCR-class residency guardrails.
+   ✅ **SHIPPED** (`app/memory/`; spec: `persistent-memory-residency-spec.md`).
 
 Sequencing rationale: 1→4 are the capture substrate every later feature reads from (do first, in
 order — shared data model). 5–7 are independent tracks that consume the substrate; 7 needs its own

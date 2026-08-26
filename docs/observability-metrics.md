@@ -2,8 +2,8 @@
 
 Reference catalog of the metrics RouteForge should surface, the open-source tools that
 produce them, and corrected definitions. Captured from a collected research note.
-Related: `docs/dashboard-metrics` framing lives here now; ties to
-`docs/eval-logging-backlog.md` and `docs/rlhf-readiness.md` (feedback/score metrics).
+Related: ties to `docs/eval-logging-backlog.md` and `docs/rlhf-readiness.md`
+(feedback/score metrics).
 
 **Tool layers at a glance:**
 - **OpenTelemetry / OpenInference** — common trace format.
@@ -65,6 +65,9 @@ Related: `docs/dashboard-metrics` framing lives here now; ties to
 | Core | Headroom compression rate | (Tokens before − after) ÷ before | Context savings | Headroom |
 | Production | Compression quality delta | Quality with Headroom − without | Detects information loss | NAT Eval |
 | Production | CCR retrieval rate | Requests where compressed source was retrieved | Compression too aggressive? | Headroom |
+| Production | Semantic-cache hit rate | Cache `hits` ÷ lookups (`app/cache/store.py`; `blocked_cloud_entries` is the residency honesty counter) | Repeat-query savings, no model call | RouteForge semantic cache |
+| Production | Cache cost savings | `sp.cost_cache_saved_usd` — model cost avoided by a cache hit (`app/obs/export.py`) | Third savings lever, tracked separately | RouteForge |
+| Production | Memory recall rate | Memory `retrievals` (and `retrievals_to_cloud`, CCR-class honesty counter) ÷ requests (`app/memory/store.py`) | Persistent-memory reuse; residency honesty | RouteForge persistent memory |
 | Core | Token Intelligence Density | Σ quality score ÷ Σ workflow tokens × 1,000 | Quality per 1,000 tokens | Custom NAT evaluator |
 | Production | Reasoning-to-answer ratio | Reasoning tokens ÷ user-visible answer tokens | Detects overthinking | Custom evaluator |
 

@@ -7,6 +7,17 @@
 > later **removed**; on-prem models are now onboarded at runtime. Kept as a point-in-time
 > record; for current state read `CLAUDE.md`, `README.md`, and
 > `docs/architecture/inference-layer-boundary.md`.
+>
+> **Further out of date (deployed `api:0.18.0`).** The whole seven-feature program shipped
+> *after* this snapshot: stage/role-aware routing signals, the failure-driven gateway
+> lateral model switch, the trace-mining recommend/external-training orchestrate tools,
+> DSPy prompt-optimization (with the optional step-4 LLM classifier), the CCR-class
+> semantic cache, and persistent memory — plus a pluggable `RoutingStrategy` seam and a
+> quality/accuracy axis on the cost dashboard. So §4 "What still needs building" and the
+> "Current verdict" below both predate `api:0.18.0`; read them as of mid-2026, not now.
+> For current state see `docs/routing-observability.md`,
+> `docs/architecture/semantic-cache-residency-spec.md`, and
+> `docs/architecture/persistent-memory-residency-spec.md`.
 
 **Original review:** 2026-07-20, against the design package (drawio, `CLAUDE.md`,
 skills, `BUILD_PLAN.md`, four configs) — *before any code existed*.
@@ -106,11 +117,13 @@ Defined as **backend-reported**: the mock backend emits a seeded confidence
 is owned by `routing.yaml`, with `max_escalations: 1`. Documented in
 `routing-and-gateway`.
 
-### 2.5 Step-4 classifier as an unrouted LLM call — ✅ resolved (kept off)
-`app/routing/task_mode.py` is **rules-only; the classifier is OFF this pass**, as the
-design intends. `CLAUDE.md` documents that if it is ever turned on, that call goes
-through steps 5–7 (sanitized input, respects `allowed_providers`, emits a
-DecisionRecord).
+### 2.5 Step-4 classifier as an unrouted LLM call — ✅ resolved (built, default-off)
+`app/routing/task_mode.py` is **rules-only** and the default step-4 path. The optional
+LLM classifier is now **built** as `app/routing/task_mode_llm.py` — but it is
+**default-off** (gated by `PromptOptCfg.enabled`, shipped with the DSPy feature) and, when
+enabled, is **routed through `Router.select`** (`task_mode_llm.py:114`) exactly like any
+other call: sanitized input, respects `allowed_providers` (so it cannot break
+`onprem_only`), and emits a DecisionRecord. `CLAUDE.md` documents the same rule.
 
 ### 2.6 Streaming unresolved between step 1 and step 9 — ✅ resolved
 `config/serving.yaml` sets `reject_stream_requests: true`; `app/api/routes.py` rejects
@@ -183,9 +196,12 @@ backstop. Covered by the router regression test (the "4.1 test") and the seeding
 that assert the demo apps get the expected profiles idempotently on first boot.
 
 ### 4.2 ✅ Real-backend validation on GPUs — done (vLLM, verified live 2026-07-25)
-The `vllm` and `dynamo` adapters (`app/gateway/backends/`, `make_backend` factory,
-Protocol `health()` checks, startup validation/fallback) are now **exercised end to end
-on the DGX H200 (Run:ai, namespace `runai-routeforge`)**. A 80-request burst against the
+The backend adapters (`app/gateway/backends/`, factory + Protocol `health()` checks,
+startup validation/fallback) are now **exercised end to end on the DGX H200 (Run:ai,
+namespace `runai-routeforge`)**. *(Later note: the separate `vllm`/`dynamo` adapters and
+the `make_backend` factory named here were subsequently removed — `app/gateway/backends/`
+is now `base.py` / `factory.py` / `litellm_backend.py`, a single LiteLLM adapter that
+reaches every onboarded OpenAI-compatible endpoint.)* A 80-request burst against the
 live API confirmed `backend: vllm`, genuine Qwen2.5-7B completions, real non-zero cost
 ($0.078 actual vs $6.92 all-frontier baseline ≈ 98.9% saved), real GPU latency
 (p50 ≈ 6.8 s / p95 ≈ 12.8 s, replacing the mock's fixed timings), Presidio redaction on

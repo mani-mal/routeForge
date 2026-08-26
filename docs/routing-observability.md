@@ -1,7 +1,10 @@
-# Routing observability & signals (`0.11.0`)
+# Routing observability & signals (`0.11.0`, extended through `0.18.0`)
 
-Three shipped, operator-facing capabilities added in `0.11.0`. All three are
-pure Serving-Plane changes — none deploys inference, none touches the
+Three shipped, operator-facing capabilities, first landed in `0.11.0` and since
+extended (through the seven-feature program deployed at `0.18.0` — the stage
+signals grew full role tagging, and a third always-on trace attribute
+`sp.prompt_version` joined the metadata set; both noted inline below). All three
+are pure Serving-Plane changes — none deploys inference, none touches the
 Improvement Plane, none weakens a privacy invariant.
 
 1. **Prometheus `/metrics`** — a scrape surface for routing behaviour.
@@ -90,16 +93,28 @@ stage_signals:
   enabled: false            # master switch — flip to true to demonstrate the lever
   tool_error_raise: true    # latest tool result looks like an error → raise to mid
   exploration_repeat: 3     # same tool called ≥ N times in the run → raise to mid
-  planner_role_raise: true  # inferred first-hop "plan" turn → bias to frontier
+  planner_role_raise: true  # gates the "plan" role specifically (see role_tiers)
+  role_tiers:               # inferred role → min_tier raise; absent roles never raise
+    plan: frontier          # (only raises when planner_role_raise is also true)
+    verify: mid
 ```
 
 ### What each signal does
 
 Source of truth: `app/routing/signals.py::derive_signal_tier`. Evaluated per hop,
-returns the highest requested raise or nothing:
+all signals are combined by **strongest raise** (not first-match):
 
-- **Inferred plan role** (`hop_index ≤ 1` with no tool results yet) → suggests
-  `frontier`. Heuristic — the trace reason literally says `inferred role: plan`.
+- **Inferred role** (`_infer_role`) — full role tagging from observable message
+  state only, no LLM classifier: `plan` (`hop_index ≤ 1` with no tool results
+  yet), `verify` (latest non-tool message matches verify/validate/check markers),
+  `format` (matches format/summarize/final-answer markers), `execute` (tool
+  results present, no other role matched). The role → `min_tier` raise is
+  **config-driven** via `stage_signals.role_tiers`: by default `plan → frontier`
+  and `verify → mid`, while `execute`/`format` are deliberately **absent** from
+  the map (they never raise, leaving the cost/quality router free to pick the
+  cheap tier). A role absent from `role_tiers` never raises; `plan` raises only
+  when `planner_role_raise` is also true. Heuristic — the trace reason literally
+  says `inferred role: <role> -> <tier>`.
 - **Tool error** (latest tool message matches an error marker — word-boundary
   regex `error/exception/traceback/failed/failure`, with a negation denylist so
   "no errors" doesn't trip it) → suggests `mid`.
@@ -132,10 +147,10 @@ is a heuristic and the trace says so.
 
 ## 3. Always-on candidate snapshot + routing-policy-version
 
-Every trace now carries two extra attributes, emitted **regardless of
+Every trace now carries three extra attributes, emitted **regardless of
 `capture_io`** — they are decision metadata (enums, model ids, fixed reason
-strings), not request I/O, and are still run through `redact_value` defensively.
-Source of truth: `app/obs/export.py`.
+strings, content hashes), not request I/O, and are still run through
+`redact_value` defensively. Source of truth: `app/obs/export.py`.
 
 ### `sp.candidates` — per decision step
 
@@ -167,6 +182,14 @@ on every trace's root span.
   that govern routing/pricing do.
 - Lets a later eval pipeline group decisions by the exact policy that produced
   them.
+
+### `sp.prompt_version` — on the root span
+
+A content hash over the active managed-prompt texts (`Settings.prompt_version`),
+added by feature 4 (DSPy prompt-optimization). Stamped on every trace's root
+span **when non-empty**, mirroring `sp.routing_policy_version` exactly — so a
+later eval pipeline can also group decisions by the exact managed-prompt set in
+effect. Source: `app/obs/export.py` (docstring ~line 112, set ~line 183).
 
 ---
 

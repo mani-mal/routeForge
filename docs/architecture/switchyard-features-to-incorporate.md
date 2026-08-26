@@ -20,17 +20,17 @@ assuming we keep our own router, which Switchyard *features* do we borrow, and h
 | # | Feature (from report) | routeForge fit | Action | Priority |
 |---|---|---|---|---|
 | 1 | **Escalation Router** — optimistic cheap-first run, downstream judge catches loops/drift/stall, re-runs on frontier | We verify-then-escalate at step 9; missing the *loop/drift/stall* signals and per-turn posture | **Incorporate** — add progress/loop signals to step-9 escalation | High |
-| 2 | **Stage Router signals** — tool-state changes & failure flags drive tier, no judge model | Step-6 doesn't read agent-loop state as a feature | **Incorporate** — rules-first, matches "classifier off by default" | High |
-| 3 | **Prometheus `/metrics` endpoint** — `requests_total`, `routing_decisions_total`, `routing_overhead_seconds`, `tokens_total` | We have Langfuse + DecisionRecord but no scrape endpoint or explicit router-overhead metric | **Incorporate** — clean ops win, in-scope | High |
-| 4 | **Semantic caching** — instantly return answers for semantically duplicate subtasks | New lever; but a response cache is a second copy of sensitive data | **Incorporate *carefully*** — treat as CCR-class data (residency, TTL, per-app isolation) | Medium |
-| 5 | **Library-mode split** (`libsy` returns a model *name*, never holds creds/traffic) | Our step-6 is already a pure module; validates the seam | **Already have** — formalize the interface | Medium |
+| 2 | **Stage Router signals** — tool-state changes & failure flags drive tier, no judge model | Step-6 doesn't read agent-loop state as a feature | ✅ **SHIPPED (partial)** — `app/routing/signals.py`; rules-first raise-only bias, `routing.yaml` `stage_signals` (default OFF) | High |
+| 3 | **Prometheus `/metrics` endpoint** — `requests_total`, `routing_decisions_total`, `routing_overhead_seconds`, `tokens_total` | We have Langfuse + DecisionRecord but no scrape endpoint or explicit router-overhead metric | ✅ **SHIPPED** — `GET /metrics` (`app/api/routes.py`), `app/obs/metrics.py` (`routeforge_*` families) | High |
+| 4 | **Semantic caching** — instantly return answers for semantically duplicate subtasks | New lever; but a response cache is a second copy of sensitive data | ✅ **SHIPPED** — `app/cache/store.py`, CCR-class (residency, TTL, per-app isolation); default OFF | Medium |
+| 5 | **Library-mode split** (`libsy` returns a model *name*, never holds creds/traffic) | Our step-6 is already a pure module; validates the seam | ✅ **SHIPPED** — pluggable `RoutingStrategy` Protocol + `build_strategy` (`app/routing/strategy.py`), `routing.yaml` `strategy: default` | Medium |
 | 6 | **Configurable low-confidence fallback** (`strong_target`) | We escalate on verify failure, not on low routing *confidence* | **Incorporate** — fallback-to-`frontier` on low confidence, within `allowed_providers` | Medium |
 | 7 | **Kong separation-of-concerns** — Switchyard picks model; Kong does PII/rate-limit/creds | This is *literally routeForge's architecture* (gate + LiteLLM = "Kong"; step-6 = "Switchyard") | **Validation, not a change** — cite as external confirmation of our seams | — |
 | 8 | **Omnivorous API translation** (OpenAI Chat + Anthropic Messages + Responses inbound) | We accept OpenAI `/v1/chat/completions` only | **Consider, guarded** — must keep no-inbound-stream + gate-first | Low |
 | 9 | **`routing_overhead_seconds` watch** — mid-stream judge latency can erase the cheap-model win | Directly relevant if we adopt #1/#6 | **Adopt as a guardrail** — budget the judge/verify latency | (rides with #1) |
 | 10 | **Lineage:** Switchyard is the formal successor to the deprecated `llm-router` blueprint (v1/v2) | We had `LLMRouter` deferred with triggers | **Note** — the thing we deferred is now superseded; re-point the trigger | — |
-| 11 | **Failure-driven model *switch* in long-running agents** — on repeated failure, pick a *different* model (not only a higher tier) | Our escalation only steps the *tier* up; no notion of switching to a different/lateral model on failure | **Incorporate** — extend #1 with per-hop model diversity, still within `allowed_providers` | High |
-| 12 | **Task-decomposition-aware routing** — plan/roadmapping sub-tasks → frontier; execution/verification/formatting sub-tasks → cheap | Step-4 already splits direct vs multi-step; we don't route by the *role* of a sub-task within a decomposed plan | **Incorporate** — role-aware per-hop routing feature for step-6 | High |
+| 11 | **Failure-driven model *switch* in long-running agents** — on repeated failure, pick a *different* model (not only a higher tier) | Our escalation only steps the *tier* up; no notion of switching to a different/lateral model on failure | ✅ **SHIPPED** — `app/gateway/gateway.py` lateral switch, re-selects excluding already-failed models, still within `allowed_providers` | High |
+| 12 | **Task-decomposition-aware routing** — plan/roadmapping sub-tasks → frontier; execution/verification/formatting sub-tasks → cheap | Step-4 already splits direct vs multi-step; we don't route by the *role* of a sub-task within a decomposed plan | ✅ **SHIPPED** — `app/routing/signals.py` `_infer_role`/`role_tiers` raise-only bias; `routing.yaml` `stage_signals`/`role_tiers` | High |
 | 13 | **LLM-as-judge** — a judge model gates the escalation decision | Step-9 verification is our judge seam; but an *LLM* judge is a routed call with cost/PII exposure | **Incorporate, as a routed call** — sanitized input, respects `allowed_providers`, emits its own DecisionRecord | Medium |
 
 ## The high-value borrows, in detail
@@ -49,6 +49,8 @@ floor (hard rule 8). Needs real per-hop signal aggregation, which the open multi
 latency=0 bug currently lacks — that fix is a prerequisite.
 
 ### 11. Failure-driven model *switch* (not just a higher tier)
+✅ **SHIPPED** (`app/gateway/gateway.py`): on backend failure the gateway re-selects, excluding every model already failed this request, staying within `allowed_providers`.
+
 The report's long-running-agent behaviour isn't only "escalate cheap→frontier on
 failure" — on repeated failure it can pick a **different model**, not merely a more
 expensive one. That's a distinct axis from our current escalation, which only steps the
@@ -64,6 +66,8 @@ to cloud. Avoid switch-thrash: cap switches per request and don't re-pick a mode
 abandoned this request.
 
 ### 12. Task-decomposition-aware routing (route by the sub-task's *role*)
+✅ **SHIPPED** (`app/routing/signals.py` `_infer_role`/`role_tiers`, `routing.yaml` `stage_signals`/`role_tiers`, default OFF): rules-first per-hop role inference feeds a **raise-only** tier bias — the residency clamp still caps it, so it never lifts `onprem_only` to cloud.
+
 The report's "Strategic Division of Labor": high-level planning / roadmapping / abstract
 structuring → frontier; heavy structural processing, verification routines, syntax
 evaluation, and formatting → the cheap model. This is **role-aware routing** — the
@@ -91,6 +95,8 @@ rules-based judge where the signals (loops, stalls, repeated errors) are determi
 reserve the LLM judge for genuinely semantic calls.
 
 ### 2. Stage Router → tool-activity as a step-6 routing feature
+✅ **SHIPPED (partial)** (`app/routing/signals.py`, `routing.yaml` `stage_signals`, default OFF): agent-loop state now drives a rules-first, raise-only `min_tier` bias on the multi-step path.
+
 Route on the agent's own state: tool errors / exploration → capable model; steady
 writes/edits → efficient model. No judge model needed — purely rule-based history and
 execution state. This is the most defensible borrow because it's **rules-first**, in
@@ -98,6 +104,8 @@ keeping with our "step-4 classifier off by default" stance. Feed the NAT runtime
 tool-call history into the step-6 scorer as an additional feature.
 
 ### 3. Prometheus `/metrics` endpoint
+✅ **SHIPPED** (`GET /metrics` in `app/api/routes.py`, `app/obs/metrics.py`): an in-process exporter with the `routeforge_*` families below, bounded labels only, no bundled server.
+
 The report gives exact counters worth mirroring (renamed to our prefix):
 - `routeforge_requests_total{model,route_id,status}` — tier traffic comparison
 - `routeforge_routing_decisions_total` — increments on escalation/route change
@@ -110,6 +118,8 @@ additive and gives ops teams a standard surface without touching the trace pipel
 prompt/PII or tenant-identifying free-text in a label (egress-redaction rule 2).
 
 ### 4. Semantic caching — incorporate, but govern it like CCR
+✅ **SHIPPED** (`app/cache/store.py`, default OFF): built CCR-class exactly as this section prescribes — residency-partitioned, TTL-enforced, never exported, tenant-isolated; an `onprem_only` request can never be served a cloud-produced entry. See [`semantic-cache-residency-spec.md`](./semantic-cache-residency-spec.md).
+
 Returning a cached answer for a semantically duplicate subtask eliminates redundant
 inference — attractive for agent loops that re-ask similar things. **But a response
 cache is a second copy of sensitive data**, exactly the risk profile of the Headroom CCR
@@ -168,7 +178,9 @@ a major vendor independently drew them. Worth citing to skeptics.
    plumbing exists.
 5. **#4 semantic cache** — last, behind a flag, only after CCR-class guarantees are wired.
 
-None of these require the pluggable-strategy interface up front, but building the routing
-features (#1/#2/#6/#11/#12) as named strategies behind a common interface (the comparison
-doc's low-regret move) keeps a future swap to `switchyard-libsy` a per-strategy adapter
-rather than a router rewrite.
+None of these *required* the pluggable-strategy interface up front — but that interface
+has since **shipped** (`app/routing/strategy.py`: `RoutingStrategy` Protocol +
+`build_strategy`, selected by `routing.yaml` `strategy: default`, with the default strategy
+reproducing the native scoring formula). Building the routing features (#1/#2/#6/#11/#12) as
+named strategies behind that common interface (the comparison doc's low-regret move) keeps a
+future swap to `switchyard-libsy` a per-strategy adapter rather than a router rewrite.

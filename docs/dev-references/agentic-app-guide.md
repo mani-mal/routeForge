@@ -53,9 +53,10 @@ What you get and owe with Pattern A:
   separate requests you make.)
 - **Privacy holds automatically.** If a step's content contains PII, that step
   goes `onprem_only` on its own — you don't manage residency per step.
-- **No streaming.** Each call returns a complete verified response (`stream:true`
-  is rejected). Agent loops don't need token streaming; they need the finished
-  step.
+- **Streaming is a per-app capability, off by default.** Unless your admin sets
+  your app's `stream_mode`, `stream:true` is rejected and each call returns a
+  complete verified response. Agent loops don't need token streaming anyway; they
+  need the finished step. (See `stream_mode` in `../per-app-config.md`.)
 
 ### Tool outputs contain data the input gate never saw
 
@@ -103,7 +104,8 @@ curl http://<host>:<port>/v1/chat/completions \
   you read per-hop cost/latency/model out of one response.
 
 **Limits.** The workflow is capped by the server's `agent_budgets.max_steps`
-(default 5). Exceeding it fails closed → `503 policy evaluation unavailable`. The
+(default 5). Exceeding it fails closed → `500 agent did not converge within its
+step limit`. The
 tool set and behavior of the built-in workflow are fixed by routeForge, not
 supplied by you — which is why Pattern B is mostly a demo/showcase of per-call
 routing, not a place to put *your* tools.
@@ -152,14 +154,22 @@ the privacy gate; `policy.onprem_only` tells you it was pinned on-prem.
 
 ## Gotchas
 
-- **Don't rely on the `model` field to pick a model.** It's ignored for routing.
-  Your reachable models are set by your admin's policy, not your request.
-- **`503` is fail-closed, not a crash.** No candidates (e.g. `onprem_only` with no
-  local backend), gate error, all tiers failed, or the agent step-cap tripped all
-  surface as `503 policy evaluation unavailable`. Distinguish it from a real
-  outage before blindly retrying.
+- **The `model` field is a hard pin, not a hint.** `"auto"` lets the router
+  choose; any concrete slug pins routing to that exact model, and a slug outside
+  your app's permitted/available pool is rejected `422 model request rejected:
+  requested model '<slug>' is not permitted or unavailable`. A pin can only narrow
+  within your admin's policy — it can't reach a model you're not allowed. For
+  agent loops, `"auto"` is usually what you want so each step lands on the
+  cheapest allowed tier.
+- **Rejections are fail-closed, not crashes — and each has its own status.** No
+  candidates (e.g. `onprem_only` with no on-prem model) → `422 no model is
+  available…`; all backends failed → `502 no backend could serve this request`;
+  the agent step-cap tripped → `500 agent did not converge within its step
+  limit`; a privacy-gate error → `503 policy evaluation unavailable`. Distinguish
+  them from a real outage before blindly retrying.
 - **Bad token is `401`, not `403`.** Handle token rotation on `401`.
-- **No inbound streaming.** Build your loop around complete responses.
+- **Inbound streaming is off by default** (per-app `stream_mode`). Build your loop
+  around complete responses.
 - **The SSE decision stream (`/api/stream`) is admin-only.** Your app can't
   subscribe with its token — use the response `trace` or a Langfuse project for
   programmatic observability.
