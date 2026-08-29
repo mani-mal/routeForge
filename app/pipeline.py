@@ -10,7 +10,8 @@ from app.errors import PolicyGateError
 from app.gateway.backends.base import count_tokens
 from app.gateway.gateway import Gateway
 from app.models import (
-    CacheRecord, ChatRequest, Choice, DecisionRecord, ExecutionPolicyContext, GenerationResult, MemoryRecord,
+    CacheRecord, ChatRequest, Choice, CompressionRecord, DecisionRecord,
+    ExecutionPolicyContext, GenerationResult, MemoryRecord,
     Message, Usage, VerificationRecord,
 )
 from app.output.verify import verify
@@ -18,9 +19,9 @@ from app.policy.detectors import Detector, make_detector
 from app.policy.effective import EffectiveDetector
 from app.policy.gate import Gate
 from app.apps.privacy import AppPrivacyProfile, effective_rules
-from app.compression import compress
+from app.compression import CompressionResult, compress
 from app.compression.ccr import CCRStore
-from app.memory import recall_memory, write_memory
+from app.memory import RecallResult, recall_memory, write_memory
 from app.memory.store import MemoryStore
 from app.routing.task_mode import decide as decide_mode
 from app.routing.task_mode_llm import classify_task_mode
@@ -134,6 +135,19 @@ class Pipeline:
         built.warmup()
         self._detectors[mode] = built
         return built
+
+    def _sanitize_msg(self, det: Detector, m: Message) -> Message:
+        """Redact one message's text with the request's effective detector,
+        preserving role + tool-calling structure. Used on the tool-calling
+        path so the full structured conversation reaches the model with every
+        message's PII masked (CLAUDE.md rule 1) -- the per-message analogue of
+        the flattened path's single sanitized blob. A None content (an
+        assistant turn that only carries tool_calls) passes through untouched."""
+        content = m.content
+        if content:
+            content, _ = det.anonymize(content, det.analyze(content))
+        return Message(role=m.role, content=content, tool_calls=m.tool_calls,
+                       tool_call_id=m.tool_call_id, name=m.name)
 
     def _classifier_enabled(self) -> bool:
         """The step-4 LLM classifier is OFF unless BOTH the master switch
@@ -304,35 +318,57 @@ class Pipeline:
             if ctx.requested_model not in permitted:
                 raise PipelineRejected(
                     f"requested model {ctx.requested_model!r} is not permitted or unavailable")
-        # Task-mode: the optional LLM classifier (Task 2) when enabled +
-        # pinned, else the unchanged rules `decide()` path. Either way this
-        # receives SANITIZED content only, never the raw request — see
-        # CLAUDE.md rule 1 and `classify_task_mode`'s docstring.
-        mode, crec = await self._decide_task_mode(ctx, sanitized, request)
-
-        san_messages = [Message(role=request.messages[-1].role, content=sanitized)]
-
-        # Memory READ (Feature 5, Task 2): after san_messages (post-gate,
-        # sanitized) and before compress() -- recalled context is prepended
-        # so it gets compressed + priced like any other request tokens, no
-        # separate untracked token path. Runs for BOTH the direct and
-        # multi_step branches below, since both consume `san_messages`.
-        #
-        # Partition key note: `run()` is never handed a distinct
-        # application_id -- "the application id equals the tenant slug"
-        # (CLAUDE.md/routes.py._authenticate), so `tenant_id` doubles as
-        # `application_id` here. `session_id` is the per-session partition key
-        # (`x-routeforge-session`, app/api/routes.py::_read_session_id),
-        # threaded in by the caller; a request with no session header (or an
-        # unsanitizable one) falls back to `session_id or ""`, the shared
-        # partition -- so distinct end-user sessions of one app no longer
-        # collide, and no session header keeps the old (pre-session) behavior.
         mem_cfg = self._s.serving.memory
-        recall = recall_memory(self._memory, mem_cfg, ctx, san_messages,
-                               tenant_id=tenant_id, application_id=tenant_id,
-                               session_id=session_id or "")
-        if recall.messages:
-            san_messages = recall.messages + san_messages
+        # A client that supplies `tools` (or replays assistant/tool turns) is
+        # driving its OWN agent loop: RouteForge serves a SINGLE completion that
+        # may return tool_calls, forwarding the full structured, PER-MESSAGE-
+        # redacted conversation to the model. This path is deliberately distinct
+        # from the ordinary single-prompt path (which flattens the whole request
+        # into one sanitized blob) and from the internal NAT agent (`multi_step`)
+        # -- a client's tool loop must never be hijacked by our own agent. It
+        # forces `direct` and skips task-mode, the semantic cache, and memory,
+        # all of which assume that single flattened prompt.
+        tools = request.tools
+        tool_choice = request.tool_choice
+        tool_mode = bool(tools) or any(
+            m.tool_calls or m.tool_call_id for m in request.messages)
+
+        if tool_mode:
+            mode, crec = "direct", None
+            # Preserve roles + tool structure, but redact EACH message's text so
+            # no raw PII reaches the model (CLAUDE.md rule 1) -- the same
+            # guarantee the flattened path gives, applied message-by-message.
+            san_messages = [self._sanitize_msg(det, m) for m in request.messages]
+            recall = RecallResult([], None)
+        else:
+            # Task-mode: the optional LLM classifier (Task 2) when enabled +
+            # pinned, else the unchanged rules `decide()` path. Either way this
+            # receives SANITIZED content only, never the raw request — see
+            # CLAUDE.md rule 1 and `classify_task_mode`'s docstring.
+            mode, crec = await self._decide_task_mode(ctx, sanitized, request)
+
+            san_messages = [Message(role=request.messages[-1].role, content=sanitized)]
+
+            # Memory READ (Feature 5, Task 2): after san_messages (post-gate,
+            # sanitized) and before compress() -- recalled context is prepended
+            # so it gets compressed + priced like any other request tokens, no
+            # separate untracked token path. Runs for BOTH the direct and
+            # multi_step branches below, since both consume `san_messages`.
+            #
+            # Partition key note: `run()` is never handed a distinct
+            # application_id -- "the application id equals the tenant slug"
+            # (CLAUDE.md/routes.py._authenticate), so `tenant_id` doubles as
+            # `application_id` here. `session_id` is the per-session partition key
+            # (`x-routeforge-session`, app/api/routes.py::_read_session_id),
+            # threaded in by the caller; a request with no session header (or an
+            # unsanitizable one) falls back to `session_id or ""`, the shared
+            # partition -- so distinct end-user sessions of one app no longer
+            # collide, and no session header keeps the old (pre-session) behavior.
+            recall = recall_memory(self._memory, mem_cfg, ctx, san_messages,
+                                   tenant_id=tenant_id, application_id=tenant_id,
+                                   session_id=session_id or "")
+            if recall.messages:
+                san_messages = recall.messages + san_messages
 
         if mode == "multi_step":
             # No outer compress() here: the agent runtime re-enters
@@ -353,7 +389,9 @@ class Pipeline:
         # constructing a cache) nothing here runs and nothing is added to the
         # trace/cost dict, so serving stays byte-for-byte unchanged.
         sc_cfg = self._s.serving.semantic_cache
-        cache_active = self._cache is not None and sc_cfg.enabled
+        # `not tool_mode`: a tool-calling conversation is never cached (the cache
+        # keys on a single flattened query and would drop the tool structure).
+        cache_active = self._cache is not None and sc_cfg.enabled and not tool_mode
         cache_bypass_reason = (
             self._cache_bypass_reason(sc_cfg, ctx) if cache_active else None)
         cache_record: CacheRecord | None = None
@@ -391,13 +429,25 @@ class Pipeline:
                     blocked_cloud_entries=self._cache.blocked_cloud_entries,
                     latency_ms=check_latency_ms)
 
-        comp = compress(san_messages, ctx, self._co_cfg_provider(), ccr=self._ccr)
+        if tool_mode:
+            # No compression on a tool conversation: Headroom rewrites text and
+            # would corrupt tool_call/tool_result structure. Build a bypassed
+            # CompressionResult so the cost/trace accounting below is identical.
+            tb = sum(count_tokens(m.content) for m in san_messages)
+            comp = CompressionResult(
+                san_messages, tb, tb,
+                CompressionRecord(
+                    enabled=self._co_cfg_provider().enabled, applied=False,
+                    bypass_reason="tool_calling", tokens_before=tb, tokens_after=tb))
+        else:
+            comp = compress(san_messages, ctx, self._co_cfg_provider(), ccr=self._ccr)
         complexity = min(1.0, comp.tokens_after / 2000)
 
         hint = {k: getattr(request, k) for k in ("mock_confidence", "mock_fail")
                 if hasattr(request, k)}
         result, records = await self._gateway.run(
-            ctx, comp.messages, comp.tokens_after, complexity, hint)
+            ctx, comp.messages, comp.tokens_after, complexity, hint,
+            tools=tools, tool_choice=tool_choice)
         if crec is not None:
             # Fold the classifier's own DecisionRecord into the SAME trace/
             # cost accumulation as the router's -- its cost must not be
@@ -415,9 +465,10 @@ class Pipeline:
         # (the gate's redacted input) and `text` (the post-verify output)
         # ONLY -- never `result.text` (pre-verify raw), `raw_completion`, or
         # the raw request. See write_memory()'s docstring for the contract.
-        write_memory(self._memory, mem_cfg, ctx, sanitized, text,
-                    tenant_id=tenant_id, application_id=tenant_id,
-                    session_id=session_id or "")
+        if not tool_mode:  # tool conversations are not summarized into memory
+            write_memory(self._memory, mem_cfg, ctx, sanitized, text,
+                        tenant_id=tenant_id, application_id=tenant_id,
+                        session_id=session_id or "")
         # Feature #6 — semantic cache STORE. Reached only on a genuine MISS
         # (a hit already returned above), enabled, and not bypassed. C1:
         # cache the SANITIZED query (never raw) and the post-verify `text`
@@ -491,13 +542,22 @@ class Pipeline:
             # unchanged serving behavior).
             cost["cache_saved_usd"] = 0.0
 
+        # Tool-calling turn: the model asked to call tools, so the assistant
+        # message carries `tool_calls` with `content: null` and the choice's
+        # finish_reason is "tool_calls" (OpenAI clients switch on this to run
+        # their tools and call back). Ordinary answers keep content + "stop".
+        tool_calls = result.tool_calls or None
+        assistant = Message(
+            role="assistant",
+            content=(text or None) if tool_calls else text,
+            tool_calls=tool_calls)
+        finish_reason = "tool_calls" if tool_calls else "stop"
         return {
             "id": request_id,
             "model": result.model,
             "model_display": self._display_name(result.model),
-            "choices": [Choice(index=0,
-                               message=Message(role="assistant", content=text)
-                               ).model_dump()],
+            "choices": [Choice(index=0, message=assistant,
+                               finish_reason=finish_reason).model_dump()],
             "usage": Usage(prompt_tokens=result.tokens_in,
                            completion_tokens=result.tokens_out,
                            total_tokens=result.tokens_in + result.tokens_out

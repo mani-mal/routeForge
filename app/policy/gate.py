@@ -29,8 +29,11 @@ class Gate:
         # effective_rules (per-app custom recognizers/classification) instead
         # of the process-wide default -- see app/pipeline.py.
         det = detector or self._detector
-        # scan the latest user message (the live prompt) + prior content
-        text = "\n".join(m.content for m in request.messages)
+        # scan the latest user message (the live prompt) + prior content.
+        # `content or ""`: a tool-calling round-trip includes an assistant
+        # message whose content is null (it only carries tool_calls) — joining
+        # None would crash the gate before any request is served.
+        text = "\n".join(m.content or "" for m in request.messages)
         entities = det.analyze(text)
         redacted, mapping = det.anonymize(text, entities)
         map_id = f"map-{uuid.uuid4().hex[:8]}" if mapping else None

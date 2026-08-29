@@ -8,7 +8,19 @@ RESIDENCIES = ("any", "private_cloud_ok", "onprem_only")
 
 class Message(BaseModel):
     role: str
-    content: str
+    # Optional so an OpenAI tool-calling round-trip parses: an assistant turn
+    # that ONLY requested tools carries `content: null` + `tool_calls`, and a
+    # `role:"tool"` result carries `content` + `tool_call_id`. Kept a plain
+    # str for every ordinary user/assistant turn. Consumers that read raw text
+    # (the gate, compression, token counting) MUST coerce `content or ""`.
+    content: str | None = None
+    # OpenAI tool-calling fields. Accepted on request messages (so a client can
+    # replay an assistant/tool turn back to us) and emitted on the response
+    # assistant message. `tool_calls` items are OpenAI-shape dicts:
+    # {id, type, function:{name, arguments}}.
+    tool_calls: list[dict] | None = None
+    tool_call_id: str | None = None   # on a role:"tool" result message
+    name: str | None = None           # optional function/tool name on a tool message
 
 
 class ChatRequest(BaseModel):
@@ -16,6 +28,13 @@ class ChatRequest(BaseModel):
     model: str = "auto"
     messages: list[Message]
     stream: bool = False
+    # OpenAI tool-calling inputs. Declared (rather than left to extra="allow")
+    # so the pipeline can read them reliably and thread them to the backend;
+    # a client that supplies `tools` drives its OWN agent loop, so RouteForge
+    # serves a single completion that may return `tool_calls` (it never hands
+    # a tools request to its internal NAT agent — see Pipeline.run).
+    tools: list[dict] | None = None
+    tool_choice: str | dict | None = None
 
 
 class Usage(BaseModel):
@@ -27,12 +46,18 @@ class Usage(BaseModel):
 class Choice(BaseModel):
     index: int
     message: Message
+    # "stop" for a normal answer; "tool_calls" when the assistant message
+    # carries tool_calls (OpenAI clients switch on this to run their tools).
     finish_reason: str = "stop"
 
 
 class ChatResponse(BaseModel):
     id: str
     object: str = "chat.completion"
+    # Unix-epoch seconds. REQUIRED by OpenAI-compatible clients (the openai
+    # SDK's ChatCompletion model rejects a response without it) — omitting it
+    # was why every turn failed before reaching a tool. Set in routes._finalize.
+    created: int = 0
     model: str
     choices: list[Choice]
     usage: Usage

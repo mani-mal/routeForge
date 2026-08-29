@@ -83,6 +83,9 @@ def compress(messages: list[Message], ctx: ExecutionPolicyContext,
             if protect_last and is_last:
                 out.append(m)
                 continue
+            if m.content is None:  # e.g. an assistant tool_calls turn — nothing to compress
+                out.append(m)
+                continue
             compressed = compressor.compress_text(m.content)
             if ccr is not None and cfg.ccr.enabled and compressed != m.content:
                 ccr.store(m.content)  # local original, TTL-bounded, never telemetry

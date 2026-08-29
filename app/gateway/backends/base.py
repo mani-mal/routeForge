@@ -9,8 +9,11 @@ from app.config.schema import PriceCfg
 from app.models import GenerationResult, Message
 
 
-def count_tokens(text: str) -> int:
-    return max(1, len(text) // 4)
+def count_tokens(text: str | None) -> int:
+    # `text or ""`: a tool-calling round-trip carries messages whose content is
+    # None (an assistant turn that only requested tools), and every token-count
+    # call site funnels through here — coercing None once keeps them all safe.
+    return max(1, len(text or "") // 4)
 
 
 # Per-tier modeled latency, used ONLY by the deterministic test fake
@@ -54,11 +57,13 @@ class InferenceBackend(Protocol):
 
     async def generate(self, model: str, messages: list[Message], price: PriceCfg,
                         tier: str, hint: dict,
-                        tools: list[dict] | None = None) -> GenerationResult: ...
+                        tools: list[dict] | None = None,
+                        tool_choice: str | dict | None = None) -> GenerationResult: ...
 
     def generate_stream(self, model: str, messages: list[Message], price: PriceCfg,
                         tier: str, hint: dict,
-                        tools: list[dict] | None = None) -> AsyncIterator[StreamChunk]:
+                        tools: list[dict] | None = None,
+                        tool_choice: str | dict | None = None) -> AsyncIterator[StreamChunk]:
         """Real token streaming (step 8). Yields token-delta ``StreamChunk``s in
         order, then exactly one terminal ``StreamChunk`` carrying ``final``.
         Mirrors ``generate()``'s call construction but with ``stream=True`` and

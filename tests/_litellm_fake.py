@@ -186,10 +186,11 @@ class _DeterministicLiteLLM(LiteLLMBackend):
 
     name = "mock"  # cosmetic; nothing in the pipeline branches on backend.name
 
-    async def generate(self, model, messages, price, tier, hint, tools=None):
+    async def generate(self, model, messages, price, tier, hint, tools=None,
+                       tool_choice=None):
         if hint.get("mock_fail"):
             raise RuntimeError("mock backend forced failure")
-        prompt = "\n".join(m.content for m in messages)
+        prompt = "\n".join(m.content or "" for m in messages)
         seed = int(hashlib.sha256((model + prompt).encode()).hexdigest(), 16)
         tokens_in = sum(count_tokens(m.content) for m in messages)
         tokens_out = 40 + seed % 161

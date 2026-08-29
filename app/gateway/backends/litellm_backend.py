@@ -31,6 +31,21 @@ def _usage_dict(u) -> dict:
             "completion_tokens": getattr(u, "completion_tokens", 0)}
 
 
+def _to_wire(m) -> dict:
+    """Serialize a `Message` to the OpenAI wire shape, preserving tool-calling
+    structure so a client's agent loop round-trips: an assistant turn keeps its
+    `tool_calls`, and a `role:"tool"` result keeps its `tool_call_id`/`name`.
+    Ordinary turns serialize to just `{role, content}` exactly as before."""
+    d: dict = {"role": m.role, "content": m.content}
+    if m.tool_calls:
+        d["tool_calls"] = m.tool_calls
+    if m.tool_call_id:
+        d["tool_call_id"] = m.tool_call_id
+    if m.name:
+        d["name"] = m.name
+    return d
+
+
 class LiteLLMBackend:
     name = "litellm"
 
@@ -74,11 +89,12 @@ class LiteLLMBackend:
 
     async def generate(self, model: str, messages: list[Message], price: PriceCfg,
                         tier: str, hint: dict,
-                        tools: list[dict] | None = None) -> GenerationResult:
+                        tools: list[dict] | None = None,
+                        tool_choice: str | dict | None = None) -> GenerationResult:
         litellm_model, conn = self._map(model)
         call: dict = {
             "model": litellm_model,
-            "messages": [{"role": m.role, "content": m.content} for m in messages],
+            "messages": [_to_wire(m) for m in messages],
             "logprobs": True,
             "num_retries": 0,          # guardrail 2: no LiteLLM-side retry/routing
             "drop_params": True,       # tolerate providers that reject logprobs/tools
@@ -86,6 +102,8 @@ class LiteLLMBackend:
         }
         if tools:
             call["tools"] = tools
+        if tool_choice is not None:
+            call["tool_choice"] = tool_choice
         start = time.monotonic()
         resp = await acompletion(**call)
         latency_ms = (time.monotonic() - start) * 1000
@@ -115,7 +133,8 @@ class LiteLLMBackend:
 
     async def generate_stream(self, model: str, messages: list[Message], price: PriceCfg,
                               tier: str, hint: dict,
-                              tools: list[dict] | None = None
+                              tools: list[dict] | None = None,
+                              tool_choice: str | dict | None = None
                               ) -> AsyncIterator[StreamChunk]:
         """Real token streaming (step 8). Mirrors `generate()`'s call
         construction but with `stream=True`, `stream_options={"include_usage":
@@ -127,7 +146,7 @@ class LiteLLMBackend:
         litellm_model, conn = self._map(model)
         call: dict = {
             "model": litellm_model,
-            "messages": [{"role": m.role, "content": m.content} for m in messages],
+            "messages": [_to_wire(m) for m in messages],
             "stream": True,
             "stream_options": {"include_usage": True},
             "num_retries": 0,          # guardrail 2: no LiteLLM-side retry/routing
@@ -136,6 +155,8 @@ class LiteLLMBackend:
         }
         if tools:
             call["tools"] = tools
+        if tool_choice is not None:
+            call["tool_choice"] = tool_choice
         start = time.monotonic()
         parts: list[str] = []
         usage: dict = {}

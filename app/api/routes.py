@@ -259,7 +259,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
     # `stream_unverified`/`incremental_verify` requests that hit the runtime
     # floor (StreamFallback above) -- a floored request is always verified as a
     # complete response, never streamed unverified/incrementally.
-    content = resp["choices"][0]["message"]["content"]
+    content = resp["choices"][0]["message"]["content"] or ""
     return sse_response(chunk_text(request_id, resp["model"], content))
 
 
@@ -276,6 +276,16 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
     can reuse it too. `body`/`profile` are the request body and the app's
     resolved privacy profile the pipeline call itself used, needed here for
     the display-redaction block and egress recognizers."""
+    # OpenAI envelope (step 10): every response shape is assembled as a dict in
+    # the pipeline WITHOUT these two fields, but OpenAI-compatible clients (the
+    # `openai` SDK, LangChain's ChatOpenAI, etc.) require both — the SDK's
+    # ChatCompletion model rejects a response missing `created`, which killed
+    # every turn before it reached a tool. Setting them here, the single
+    # post-model chokepoint every shape passes through (direct, cache hit,
+    # multi-step, and the streaming console record), keeps them consistent.
+    # `setdefault` so a shape that ever sets its own value wins.
+    resp.setdefault("object", "chat.completion")
+    resp.setdefault("created", int(time.time()))
     # B17: capture the client's workflow-run correlation id (opaque label).
     # Threaded onto the response dict so both history.record and the drilldown
     # (which read `resp`) carry it with no signature change, and passed to
@@ -309,7 +319,7 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
         if capture_io == "full" and (
                 app_policy.residency == "onprem_only" or app_langfuse is None):
             capture_io = "redacted"
-        prompt = body.messages[-1].content if body.messages else ""
+        prompt = (body.messages[-1].content or "") if body.messages else ""
         completion = ""
         try:
             completion = resp["choices"][0]["message"]["content"] or ""
