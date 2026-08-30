@@ -120,3 +120,22 @@ soft nudge. `onprem_only` requests can't reach cloud by construction (Rule 3), s
 0 in the demo — the point is it no longer misfires, and it *would* catch a real leak.
 Covered by `tests/test_history_store.py::test_fleet_onprem_violation_flags_only_real_breach`
 and `::test_fleet_unknown_provider_not_a_violation`.
+
+## 7. Application id is not explicitly labelled / copyable — TODO
+
+**Where:** Applications list rows and the Application Detail header
+(`ui/src/admin/ApplicationsPanel.tsx` — list row line renders
+`{a.id} · {residency} · {status}`; detail header renders `{app.name} ({app.id})`).
+
+**Problem:** the app **id** is the value operators must use for every admin API call
+(`PUT /admin/applications/{id}/policy`, tokens, etc.) and for scripted config, but the
+UI only shows it as unlabelled grey monospace — in a list row it reads as
+`millwise · onprem_only · active`, and in the header it's a parenthetical after the
+name. Customers don't recognise which token *is* the id (a real operator asked "where's
+the app id?" while trying to set a per-app policy denylist over curl). Nothing marks it
+as "Application ID" and there's no one-click copy.
+
+**Direction:** in the Application Detail header, add an explicit **`Application ID`**
+label with the value in monospace and a copy-to-clipboard button (mirror the token-row
+affordance). Optionally show a small `id: …` label in the list row too. Pure display —
+no API change. Use the `demo-ui` / `frontend-design` skill constraints.
