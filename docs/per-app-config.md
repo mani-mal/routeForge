@@ -36,6 +36,13 @@ placeholder before any model sees the text. For a document-generation app that n
 the real values in its output (customer names, order numbers, revision lines), that
 redaction is destructive. `pii_detection: off` (or a scoped `regex`) is the escape valve.
 
+> **Prefer the narrow lever.** `off` is the blunt instrument — it blinds the gate to
+> *everything*, and it is rejected for `onprem_only` apps. When the problem is a few
+> false-positive entity *types* (a shop-order number mis-tagged `US_DRIVER_LICENSE`, a
+> revision date mis-tagged `DATE_TIME`), reach for `pii_entity_denylist` /
+> `pii_score_threshold` (below) instead: they exempt exactly those types, keep every
+> other recognizer on, and are allowed for `onprem_only` apps.
+
 **Why it's safe:** detection drives *classification*, not residency. Residency is
 enforced independently by `_stricter(rule.residency, app.residency)` in
 `app/policy/context.py` regardless of what — or whether — the gate detected anything. An
@@ -86,6 +93,51 @@ enforced independently:
 - **Still blocked:** `onprem_only` + `full`; `full` with no own Langfuse project;
   `off`/`regex` + `capture_io=redacted`; the downgrade ceiling off. Each is a distinct
   422 with a message naming which guardrail fired.
+
+> **"My customer is on-prem, has no PII, and wants raw capture in Langfuse — can I just
+> flip residency?"** Yes, but residency is also the provider filter, so flipping it off
+> `onprem_only` un-pins routing to cloud. See the recommended config (residency +
+> `allowed_providers={"onprem"}` pin) in [`help/faq.md`](help/faq.md#recommended-config-raw-langfuse-capture-and-routing-pinned-on-prem).
+
+## `pii_entity_denylist` and `pii_score_threshold`
+
+Set on the same `PUT /admin/applications/{app_id}/policy` endpoint. These narrow the
+gate **without disabling it** — the surgical alternative to `pii_detection: off`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `pii_entity_denylist` | list of entity-type strings, or `null` | Entity **types** the gate still detects but does **not** redact for this app. Names must be Presidio built-ins (`app/policy/recognizers.py:PRESIDIO_BUILTINS`), e.g. `US_DRIVER_LICENSE`, `DATE_TIME`, `LOCATION`. `null`/`[]` = redact everything detected. |
+| `pii_score_threshold` | float in `[0.0, 1.0]`, or `null` | Detected entities scoring **below** this Presidio confidence are treated as non-matches. Culls low-confidence recognizers wholesale (many false positives score ~0.6). `null` = no floor. Only affects *scored* matches — regex/custom-recognizer hits (no score) are never dropped by it. |
+
+Implemented as `FilteredDetector` (`app/policy/effective.py`), which wraps the app's base
+detector and drops the denylisted / sub-threshold entities **before** redaction and
+classification. So a value the app exempted reaches the model verbatim, and — because it
+was never treated as an entity — never contributes to sensitivity/residency either.
+
+**Why this is the preferred lever:**
+
+- **Surgical, not wholesale.** The app keeps `PERSON`, `EMAIL_ADDRESS`, `US_SSN`, etc.
+  and only stops mangling the two or three types that were false positives on its data.
+- **Allowed for `onprem_only` apps.** Unlike `pii_detection: off/regex` (rejected for
+  `onprem_only`, see the floors above), a denylist is accepted while residency stays
+  `onprem_only` — the strongest posture. An `onprem_only` app is precisely the case where
+  in-boundary redaction of a *benign* identifier buys nothing (there is no third party to
+  protect it from), so exempting a false-positive type there is safe.
+
+**The one hard limit — `US_SSN` can never be suppressed.** It is in
+`FilteredDetector.PROTECTED_ENTITIES`: naming it in `pii_entity_denylist` is a 422, and no
+`pii_score_threshold` can drop it (its backstop scores `1.0`). This preserves CLAUDE.md
+rules 3/8 (`onprem_only` is absolute; an SSN can never slip the gate to cloud) regardless
+of how an app is tuned. Unknown entity names and out-of-range thresholds are also 422s.
+
+**Recommended recipe** for an app that carries structured business identifiers and must
+stay on-prem (no `pii_detection` change needed):
+
+```json
+PUT /admin/applications/{app_id}/policy
+{ "residency": "onprem_only",
+  "pii_entity_denylist": ["US_DRIVER_LICENSE", "DATE_TIME"] }
+```
 
 ## `stream_mode`
 

@@ -2,10 +2,58 @@
 (Presidio or regex). Built once per app and cached; see app/apps/privacy.py."""
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from app.models import Entity
 from app.policy.detectors import Detector, RegexDetector
 from app.policy.merge import dedupe
 from app.policy.recognizers import CustomRecognizer
+
+# The one entity type that carries an absolute privacy guarantee (CLAUDE.md
+# rules 3/8): an SSN must never slip the gate, so an app can neither denylist it
+# nor threshold it away. PresidioDetector seeds it with score=1.0 precisely so
+# it survives dedupe; FilteredDetector honors the same contract on egress from
+# the filter, so no per-app tuning can ever un-redact an SSN.
+PROTECTED_ENTITIES = frozenset({"US_SSN"})
+
+
+class FilteredDetector:
+    """Drops false-positive entity types (per-app `pii_entity_denylist`) and
+    entities scoring below a per-app `pii_score_threshold`, BEFORE redaction and
+    classification -- so an app can suppress a recognizer that mangles its data
+    (e.g. Presidio tagging a shop-order number `US_DRIVER_LICENSE`, or a revision
+    date `DATE_TIME`) WITHOUT disabling the whole gate. This is the narrow lever
+    that lets an app keep PERSON/EMAIL detection -- and stay onprem_only -- while
+    exempting exactly the types that are destroying mandatory field values.
+
+    `PROTECTED_ENTITIES` (US_SSN) can never be denylisted or thresholded away:
+    the denylist is filtered clean of them at construction, and the threshold
+    check skips them, so rules 3/8 hold no matter how the app is configured.
+    Entities with no score (RegexDetector, custom recognizers) are never dropped
+    by the threshold -- it only ever culls low-confidence *scored* matches."""
+
+    def __init__(self, base: Detector, denylist: Iterable[str] | None = None,
+                 score_threshold: float | None = None) -> None:
+        self._base = base
+        self._deny = frozenset(denylist or ()) - PROTECTED_ENTITIES
+        self._threshold = score_threshold
+
+    def _keep(self, e: Entity) -> bool:
+        if e.type in self._deny:
+            return False
+        if (self._threshold is not None and e.type not in PROTECTED_ENTITIES
+                and e.score is not None and e.score < self._threshold):
+            return False
+        return True
+
+    def analyze(self, text: str) -> list[Entity]:
+        return [e for e in self._base.analyze(text) if self._keep(e)]
+
+    def anonymize(self, text: str, entities: list[Entity]):
+        return self._base.anonymize(text, entities)
+
+    def warmup(self) -> None:
+        self._base.warmup()
 
 
 class EffectiveDetector:

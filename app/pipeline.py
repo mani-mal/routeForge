@@ -16,7 +16,7 @@ from app.models import (
 )
 from app.output.verify import verify
 from app.policy.detectors import Detector, make_detector
-from app.policy.effective import EffectiveDetector
+from app.policy.effective import EffectiveDetector, FilteredDetector
 from app.policy.gate import Gate
 from app.apps.privacy import AppPrivacyProfile, effective_rules
 from app.compression import CompressionResult, compress
@@ -135,6 +135,24 @@ class Pipeline:
         built.warmup()
         self._detectors[mode] = built
         return built
+
+    def _base_detector_for(self, app_policy) -> Detector:
+        """The app's base detector (`_detector_for`) wrapped in the app's PII
+        entity denylist / score threshold (FilteredDetector) when either is set.
+
+        This is the ONE seam that narrows detection per app WITHOUT disabling the
+        gate: it drops the false-positive entity types an app has denylisted (and
+        low-confidence matches below its threshold) BEFORE redaction/
+        classification, so the app keeps every other recognizer -- and its
+        residency/onprem_only floor, which is computed from `app_policy.residency`
+        in context.py and never consults detection, is untouched. US_SSN can never
+        be suppressed (FilteredDetector.PROTECTED_ENTITIES), so rules 3/8 hold."""
+        base = self._detector_for(app_policy.pii_detection if app_policy else None)
+        deny = app_policy.pii_entity_denylist if app_policy else None
+        thr = app_policy.pii_score_threshold if app_policy else None
+        if deny or thr is not None:
+            return FilteredDetector(base, deny, thr)
+        return base
 
     def _sanitize_msg(self, det: Detector, m: Message) -> Message:
         """Redact one message's text with the request's effective detector,
@@ -292,7 +310,7 @@ class Pipeline:
         # "off"/"regex" actually gets that detection mode instead of always
         # inheriting the process-wide default.
         try:
-            base = self._detector_for(app_policy.pii_detection if app_policy else None)
+            base = self._base_detector_for(app_policy)
             if profile is not None:
                 det = EffectiveDetector(base, list(profile.recognizers))
                 rules = effective_rules(profile, self._s)
@@ -614,7 +632,7 @@ class Pipeline:
         # Gate first -- identical composition to run() (per-app pii_detection
         # base detector + optional profile recognizers/rules; fail closed).
         try:
-            base = self._detector_for(app_policy.pii_detection if app_policy else None)
+            base = self._base_detector_for(app_policy)
             if profile is not None:
                 det = EffectiveDetector(base, list(profile.recognizers))
                 rules = effective_rules(profile, self._s)

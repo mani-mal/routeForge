@@ -2,7 +2,7 @@
 
 These are the regression tests that were missing: nothing asserted the
 response envelope, so a response with no `object`/`created` shipped and every
-OpenAI-client turn (MillWise, LangChain ChatOpenAI, the `openai` SDK) died
+OpenAI-client turn (any client app, LangChain ChatOpenAI, the `openai` SDK) died
 before it reached a tool. Likewise nothing exercised a tool-calling round-trip,
 so the direct path silently dropped `tools` at the gateway and flattened the
 conversation.
@@ -36,7 +36,7 @@ _TOOLS = [{
 
 def _validate_openai(body: dict) -> None:
     """Parse `body` with the actual openai SDK ChatCompletion model — the same
-    validation MillWise's client runs. Skips cleanly if openai isn't installed."""
+    validation a real OpenAI client runs. Skips cleanly if openai isn't installed."""
     ChatCompletion = pytest.importorskip("openai.types.chat").ChatCompletion
     ChatCompletion.model_validate(body)  # raises on any shape violation
 

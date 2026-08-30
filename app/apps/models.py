@@ -120,6 +120,16 @@ class AppPolicy(Base):
     # stream:true per server.reject_stream_requests). One of
     # app.policy.enums.STREAM_MODES.
     stream_mode: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    # Per-app PII entity denylist: entity TYPES the gate detects but must NOT
+    # redact for this app (false positives that mangle mandatory field values,
+    # e.g. US_DRIVER_LICENSE on a shop-order number). null/[] = redact everything
+    # detected. US_SSN can never be suppressed (FilteredDetector.PROTECTED_ENTITIES).
+    # Narrows detection only; residency/onprem_only is unaffected (context.py).
+    pii_entity_denylist: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Per-app minimum Presidio confidence [0,1]: detected entities scoring below
+    # this are treated as non-matches (culls low-confidence recognizers). null =
+    # no threshold. Never drops US_SSN (protected) or unscored regex/custom hits.
+    pii_score_threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     application: Mapped[Application] = relationship(back_populates="policy")
 

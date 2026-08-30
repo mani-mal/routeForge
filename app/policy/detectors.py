@@ -94,8 +94,13 @@ class PresidioDetector:
 
     def analyze(self, text: str) -> list[Entity]:
         results = self._analyzer.analyze(text=text, language="en")
+        # Carry Presidio's confidence onto the Entity: dedupe already treats a
+        # missing score as 0.0 (so this only ever SHARPENS same-span tie-breaks,
+        # and the SSN backstop's score=1.0 still wins), and it is what a per-app
+        # `pii_score_threshold` (FilteredDetector) needs to cull low-confidence
+        # matches like US_DRIVER_LICENSE/DATE_TIME while keeping PERSON/EMAIL.
         ents = [Entity(type=r.entity_type, start=r.start, end=r.end,
-                       value=text[r.start:r.end]) for r in results]
+                       value=text[r.start:r.end], score=r.score) for r in results]
         # score=1.0 is LOAD-BEARING, not cosmetic. An exact SSN-format match is a
         # high-confidence privacy signal that MUST win dedupe's same-span overlap
         # resolution. spaCy nondeterministically tags an SSN like 818-30-4221 as

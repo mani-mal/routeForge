@@ -33,6 +33,8 @@ class AppPolicyView:
     capture_io: str | None = None             # None = inherit global capture_io
     pii_detection: str | None = None          # None = inherit global pii_detection
     stream_mode: str | None = None            # None = inherit (reject inbound stream)
+    pii_entity_denylist: frozenset[str] | None = None  # entity types to NOT redact
+    pii_score_threshold: float | None = None  # min Presidio confidence; None = no floor
 
 
 def _fs(v) -> frozenset[str] | None:
@@ -57,6 +59,8 @@ def policy_view_from(app: Application) -> AppPolicyView:
         capture_io=p.capture_io,
         pii_detection=p.pii_detection,
         stream_mode=p.stream_mode,
+        pii_entity_denylist=_fs(p.pii_entity_denylist),
+        pii_score_threshold=p.pii_score_threshold,
     )
 
 

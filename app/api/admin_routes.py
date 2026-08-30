@@ -17,6 +17,7 @@ from app.apps.admin_auth import SESSION_COOKIE, require_admin
 from app.apps.langfuse_provision import LangfuseProvisioner, encrypt_secret
 from app.apps.probe import probe_endpoint
 from app.apps.tokens import new_token
+from app.policy.effective import PROTECTED_ENTITIES
 from app.policy.enums import PII_MODES, RESIDENCY, RISK_CLASS, SENSITIVITY, STREAM_MODES
 from app.policy.recognizers import PRESIDIO_BUILTINS, validate_recognizer
 
@@ -42,7 +43,9 @@ def _policy_dict(p) -> dict | None:
             "allowed_models": p.allowed_models, "residency": p.residency,
             "max_spend_usd_per_day": p.max_spend_usd_per_day, "max_rpm": p.max_rpm,
             "compression_enabled": p.compression_enabled, "capture_io": p.capture_io,
-            "pii_detection": p.pii_detection, "stream_mode": p.stream_mode}
+            "pii_detection": p.pii_detection, "stream_mode": p.stream_mode,
+            "pii_entity_denylist": p.pii_entity_denylist,
+            "pii_score_threshold": p.pii_score_threshold}
 
 
 def _onboarded_dict(m) -> dict:
@@ -101,6 +104,12 @@ class PolicyIn(BaseModel):
     capture_io: str | None = None   # None = inherit global; off|redacted|full
     pii_detection: str | None = None   # None = inherit global; off|regex|presidio
     stream_mode: str | None = None   # None = inherit (reject inbound stream); see STREAM_MODES
+    # Narrow the gate WITHOUT disabling it: entity types to detect-but-not-redact
+    # for this app (false positives that mangle mandatory field values), and a
+    # minimum Presidio confidence below which a match is dropped. US_SSN can
+    # never be denylisted (rules 3/8). See docs/per-app-config.md.
+    pii_entity_denylist: list[str] | None = None
+    pii_score_threshold: float | None = None
 
 
 class LangfuseCredsIn(BaseModel):
@@ -329,6 +338,19 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
             raise HTTPException(422, f"bad pii_detection {body.pii_detection!r}")
         if body.stream_mode is not None and body.stream_mode not in STREAM_MODES:
             raise HTTPException(422, f"bad stream_mode {body.stream_mode!r}")
+        if body.pii_entity_denylist is not None:
+            for ent in body.pii_entity_denylist:
+                if ent in PROTECTED_ENTITIES:
+                    raise HTTPException(
+                        422, f"{ent!r} cannot be denylisted: it carries an absolute "
+                        "redaction guarantee (CLAUDE.md rules 3/8)")
+                if ent not in PRESIDIO_BUILTINS:
+                    raise HTTPException(
+                        422, f"unknown pii entity {ent!r} (not a Presidio built-in)")
+        if body.pii_score_threshold is not None and not (
+                0.0 <= body.pii_score_threshold <= 1.0):
+            raise HTTPException(
+                422, f"pii_score_threshold {body.pii_score_threshold!r} out of range [0.0, 1.0]")
 
         # Resolve the EFFECTIVE post-write residency/capture_io/pii_detection
         # once. The PUT is a merge (see below), so "effective value = body

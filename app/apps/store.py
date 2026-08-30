@@ -241,7 +241,8 @@ async def upsert_policy(session: AsyncSession, app_id: str, **fields) -> AppPoli
     allowed = {"allowed_tiers", "allowed_providers", "allowed_models",
                "residency", "max_spend_usd_per_day", "max_rpm",
                "compression_enabled", "capture_io",
-               "pii_detection", "stream_mode"}
+               "pii_detection", "stream_mode",
+               "pii_entity_denylist", "pii_score_threshold"}
     for k, v in fields.items():
         if k in allowed:
             setattr(policy, k, v)
