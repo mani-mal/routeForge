@@ -175,6 +175,11 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                                ",".join(policy.get("detected_entities", [])))  # TYPES only
             if routing_policy_version:
                 root.set_attribute("sp.routing_policy_version", routing_policy_version)
+            if policy.get("app_policy_version"):
+                # Per-app policy content hash (residency/pii/denylist/allowlists);
+                # lets a trace consumer correlate a decision to the exact app
+                # policy it ran under, and spot a stale conformance probe.
+                root.set_attribute("sp.app_policy_version", policy["app_policy_version"])
             if prompt_version:
                 # Feature 3 (DSPy prompt-optimization) Task 1: sha256[:12]
                 # over the active managed-prompt texts (Settings.prompt_version).
