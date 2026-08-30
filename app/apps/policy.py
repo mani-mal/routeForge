@@ -8,6 +8,8 @@ still apply on top; per-app policy can only ever *narrow* them.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
+import json
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
@@ -35,6 +37,42 @@ class AppPolicyView:
     stream_mode: str | None = None            # None = inherit (reject inbound stream)
     pii_entity_denylist: frozenset[str] | None = None  # entity types to NOT redact
     pii_score_threshold: float | None = None  # min Presidio confidence; None = no floor
+
+    def version(self) -> str:
+        """First 12 hex of sha256 over this app policy's decision-relevant
+        fields. Stamped on every response (and trace) so a consumer — notably a
+        client's own conformance probe — can tell whether a cached PASS/FAIL
+        result predates a later policy change: the version differs the instant an
+        operator edits residency, pii_detection, the denylist, the score floor,
+        or a tier/model/provider allowlist (all mutated out-of-band via the admin
+        API, which is exactly what makes a stale probe indistinguishable from a
+        live one without this). Sorted-key JSON → stable across boots for equal
+        policy. Mirrors `app/config/loader.py::_policy_version` for routing.
+
+        Scope note: this covers the per-app `AppPolicy` surface only. Custom
+        recognizers / sensitivity rules live in the separate privacy *profile*
+        and are not folded in here."""
+        blob = json.dumps(
+            {
+                "residency": self.residency,
+                "allowed_tiers": sorted(self.allowed_tiers) if self.allowed_tiers else None,
+                "allowed_providers":
+                    sorted(self.allowed_providers) if self.allowed_providers else None,
+                "allowed_models": sorted(self.allowed_models) if self.allowed_models else None,
+                "max_spend_usd_per_day": self.max_spend_usd_per_day,
+                "max_rpm": self.max_rpm,
+                "compression_enabled": self.compression_enabled,
+                "capture_io": self.capture_io,
+                "pii_detection": self.pii_detection,
+                "stream_mode": self.stream_mode,
+                "pii_entity_denylist":
+                    sorted(self.pii_entity_denylist) if self.pii_entity_denylist else None,
+                "pii_score_threshold": self.pii_score_threshold,
+            },
+            sort_keys=True,
+            default=str,
+        )
+        return hashlib.sha256(blob.encode()).hexdigest()[:12]
 
 
 def _fs(v) -> frozenset[str] | None:

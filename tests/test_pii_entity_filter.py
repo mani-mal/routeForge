@@ -304,3 +304,83 @@ def test_http_setup_sheet_identifiers_survive(client, monkeypatch):
     wire = "".join(str(m.get("content") or "") for m in CALLS[-1]["messages"])
     assert "133212" in wire     # shop-order number reached the model intact
     assert "4/5/21" in wire      # revision date reached the model intact
+
+
+# --- app_policy_version: staleness detection ---------------------------------
+#
+# The debugging trap this closes: a red conformance-probe banner that was true
+# *before* an operator applied a denylist is byte-for-byte indistinguishable
+# from a live failure, because the response `policy` block carried no version of
+# the per-app policy. Diagnosing the last such case cost a manual cross-check of
+# pod access-log timestamps against the config-commit time. These tests assert
+# the response now carries `app_policy_version`, and that it CHANGES the instant
+# the app's policy changes -- so any consumer (a client's own probe included)
+# can tell a stale result from a live one.
+
+def test_app_policy_version_is_stable_and_reacts_to_changes():
+    """Unit: equal policies hash equal; any decision-relevant change flips it;
+    the denylist is a set, so member ORDER must not matter."""
+    a = AppPolicyView(residency="onprem_only",
+                      pii_entity_denylist=frozenset({"US_DRIVER_LICENSE", "DATE_TIME"}))
+    # Same policy, denylist built in the other order -> same version.
+    b = AppPolicyView(residency="onprem_only",
+                      pii_entity_denylist=frozenset({"DATE_TIME", "US_DRIVER_LICENSE"}))
+    assert a.version() == b.version()
+    assert a.version()  # non-empty
+
+    # Each of these is a different policy and must produce a different version.
+    assert AppPolicyView(residency="onprem_only").version() != a.version()  # denylist gone
+    assert a.version() != AppPolicyView(
+        residency="onprem_only",
+        pii_entity_denylist=frozenset({"US_DRIVER_LICENSE"})).version()      # denylist shrank
+    assert a.version() != AppPolicyView(
+        residency="onprem_only",
+        pii_entity_denylist=a.pii_entity_denylist,
+        pii_score_threshold=0.8).version()                                   # floor added
+    assert a.version() != AppPolicyView(
+        residency="private_cloud_ok",
+        pii_entity_denylist=a.pii_entity_denylist).version()                 # residency changed
+
+
+def test_response_policy_block_carries_app_policy_version():
+    """The stamp reaches the response `policy` block a probe reads, and equals
+    the app policy's own version()."""
+    pipe = _pipeline(_settings("regex"))
+    ap = AppPolicyView(residency="onprem_only",
+                       pii_entity_denylist=frozenset({"PHONE_NUMBER"}))
+    out = _run(pipe, "hello", app_policy=ap)
+    assert out["policy"]["app_policy_version"] == ap.version()
+    assert out["policy"]["app_policy_version"]  # non-empty
+
+
+def test_http_app_policy_version_changes_when_denylist_changes(client, monkeypatch):
+    """End to end, the guarantee that closes the stale-probe trap: probe an app,
+    change its denylist over the admin API, probe again -- the response's
+    app_policy_version must differ, so a cached earlier result is detectably
+    stale."""
+    from app.gateway.backends import litellm_backend
+    from tests._litellm_fake import CALLS, make_recording_acompletion, make_response
+
+    token = _configure_app(client, "ver-app", {
+        "residency": "onprem_only", "pii_entity_denylist": ["PHONE_NUMBER"]})
+
+    CALLS.clear()
+    monkeypatch.setattr(litellm_backend, "acompletion",
+                        make_recording_acompletion(make_response(content="ok")))
+
+    def _probe() -> str:
+        r = client.post("/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {token}"},
+                        json={"messages": [{"role": "user", "content": "ping"}]})
+        assert r.status_code == 200, r.text
+        v = r.json()["policy"]["app_policy_version"]
+        assert v, "app_policy_version missing from response policy block"
+        return v
+
+    before = _probe()
+    # Operator applies a new denylist out-of-band (the exact real-world action).
+    assert client.put("/admin/applications/ver-app/policy",
+                      json={"pii_entity_denylist": ["PHONE_NUMBER", "DATE_TIME"]}
+                      ).status_code == 200
+    after = _probe()
+    assert before != after, "policy changed but app_policy_version did not move"

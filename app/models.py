@@ -96,6 +96,13 @@ class ExecutionPolicyContext(BaseModel):
     # endpoint. None = inherit the live global co_cfg toggle; True/False =
     # force compression on/off for this app. Safety bypasses still apply.
     compression_override: bool | None = None
+    # Short content hash of the per-app AppPolicyView in force for this request
+    # (residency, pii_detection, denylist, score floor, tier/model/provider
+    # allowlists). Stamped on every response's `policy` block and on the trace so
+    # a consumer can detect a stale probe — a PASS/FAIL taken before a later
+    # policy edit. "" when no per-app policy applies. Mirrors
+    # Settings.routing_policy_version's empty-string default (upgrade-safe).
+    app_policy_version: str = ""
 
 
 class RejectedCandidate(BaseModel):

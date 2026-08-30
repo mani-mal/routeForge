@@ -117,4 +117,5 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
         redaction_map_id=redaction_map_id,
         compression_override=(app_policy.compression_enabled
                               if app_policy is not None else None),
+        app_policy_version=(app_policy.version() if app_policy is not None else ""),
     )

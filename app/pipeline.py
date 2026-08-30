@@ -284,7 +284,8 @@ class Pipeline:
             "quality": {"sum": 0.0, "chosen": None, "source": None},
             "policy": {"sensitivity": ctx.sensitivity, "onprem_only": ctx.onprem_only,
                        "allowed_providers": sorted(ctx.allowed_providers),
-                       "detected_entities": list(ctx.detected_entities)},
+                       "detected_entities": list(ctx.detected_entities),
+                       "app_policy_version": ctx.app_policy_version},
             "sanitized_prompt": sanitized,
             # No raw/pre-verify text exists for a cache hit (no model call ran
             # this request) -- `text` (the just-re-verified, redacted answer)
@@ -587,7 +588,8 @@ class Pipeline:
                         "source": chosen_q.quality_source if chosen_q else None},
             "policy": {"sensitivity": ctx.sensitivity, "onprem_only": ctx.onprem_only,
                        "allowed_providers": sorted(ctx.allowed_providers),
-                       "detected_entities": list(ctx.detected_entities)},
+                       "detected_entities": list(ctx.detected_entities),
+                       "app_policy_version": ctx.app_policy_version},
             "sanitized_prompt": sanitized,
             "raw_completion": result.text,
         }
@@ -767,7 +769,8 @@ class Pipeline:
                         "source": chosen_q.quality_source if chosen_q else None},
             "policy": {"sensitivity": ctx.sensitivity, "onprem_only": ctx.onprem_only,
                        "allowed_providers": sorted(ctx.allowed_providers),
-                       "detected_entities": list(ctx.detected_entities)},
+                       "detected_entities": list(ctx.detected_entities),
+                       "app_policy_version": ctx.app_policy_version},
             "sanitized_prompt": sanitized,
             "raw_completion": result.text,
             # Step-9 verification marker: "waived" this task. Tasks 6/7 refine to
@@ -897,7 +900,8 @@ class Pipeline:
                         "source": chosen_q.quality_source if chosen_q else None},
             "policy": {"sensitivity": ctx.sensitivity, "onprem_only": ctx.onprem_only,
                        "allowed_providers": sorted(ctx.allowed_providers),
-                       "detected_entities": list(ctx.detected_entities)},
+                       "detected_entities": list(ctx.detected_entities),
+                       "app_policy_version": ctx.app_policy_version},
             "sanitized_prompt": san_messages[-1].content if san_messages else "",
             "raw_completion": result.text,
         }
