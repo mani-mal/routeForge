@@ -37,6 +37,7 @@ class AppPolicyView:
     stream_mode: str | None = None            # None = inherit (reject inbound stream)
     pii_entity_denylist: frozenset[str] | None = None  # entity types to NOT redact
     pii_score_threshold: float | None = None  # min Presidio confidence; None = no floor
+    pii_exempt_patterns: frozenset[str] | None = None  # regexes; VALUE fullmatch => not redacted
 
     def version(self) -> str:
         """First 12 hex of sha256 over this app policy's decision-relevant
@@ -44,10 +45,11 @@ class AppPolicyView:
         client's own conformance probe — can tell whether a cached PASS/FAIL
         result predates a later policy change: the version differs the instant an
         operator edits residency, pii_detection, the denylist, the score floor,
-        or a tier/model/provider allowlist (all mutated out-of-band via the admin
-        API, which is exactly what makes a stale probe indistinguishable from a
-        live one without this). Sorted-key JSON → stable across boots for equal
-        policy. Mirrors `app/config/loader.py::_policy_version` for routing.
+        the value-shape exempt patterns, or a tier/model/provider allowlist (all
+        mutated out-of-band via the admin API, which is exactly what makes a
+        stale probe indistinguishable from a live one without this). Sorted-key
+        JSON → stable across boots for equal policy. Mirrors
+        `app/config/loader.py::_policy_version` for routing.
 
         Scope note: this covers the per-app `AppPolicy` surface only. Custom
         recognizers / sensitivity rules live in the separate privacy *profile*
@@ -68,6 +70,8 @@ class AppPolicyView:
                 "pii_entity_denylist":
                     sorted(self.pii_entity_denylist) if self.pii_entity_denylist else None,
                 "pii_score_threshold": self.pii_score_threshold,
+                "pii_exempt_patterns":
+                    sorted(self.pii_exempt_patterns) if self.pii_exempt_patterns else None,
             },
             sort_keys=True,
             default=str,
@@ -99,6 +103,7 @@ def policy_view_from(app: Application) -> AppPolicyView:
         stream_mode=p.stream_mode,
         pii_entity_denylist=_fs(p.pii_entity_denylist),
         pii_score_threshold=p.pii_score_threshold,
+        pii_exempt_patterns=_fs(p.pii_exempt_patterns),
     )
 
 
