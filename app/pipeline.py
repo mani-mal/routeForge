@@ -138,20 +138,23 @@ class Pipeline:
 
     def _base_detector_for(self, app_policy) -> Detector:
         """The app's base detector (`_detector_for`) wrapped in the app's PII
-        entity denylist / score threshold (FilteredDetector) when either is set.
+        entity denylist / score threshold / value-shape exemption
+        (FilteredDetector) when any is set.
 
         This is the ONE seam that narrows detection per app WITHOUT disabling the
-        gate: it drops the false-positive entity types an app has denylisted (and
-        low-confidence matches below its threshold) BEFORE redaction/
-        classification, so the app keeps every other recognizer -- and its
-        residency/onprem_only floor, which is computed from `app_policy.residency`
-        in context.py and never consults detection, is untouched. US_SSN can never
-        be suppressed (FilteredDetector.PROTECTED_ENTITIES), so rules 3/8 hold."""
+        gate: it drops the false-positive entity types an app has denylisted, the
+        low-confidence matches below its threshold, and the entities whose VALUE
+        matches its exempt patterns, BEFORE redaction/classification, so the app
+        keeps every other recognizer -- and its residency/onprem_only floor, which
+        is computed from `app_policy.residency` in context.py and never consults
+        detection, is untouched. US_SSN can never be suppressed
+        (FilteredDetector.PROTECTED_ENTITIES), so rules 3/8 hold."""
         base = self._detector_for(app_policy.pii_detection if app_policy else None)
         deny = app_policy.pii_entity_denylist if app_policy else None
         thr = app_policy.pii_score_threshold if app_policy else None
-        if deny or thr is not None:
-            return FilteredDetector(base, deny, thr)
+        exempt = app_policy.pii_exempt_patterns if app_policy else None
+        if deny or thr is not None or exempt:
+            return FilteredDetector(base, deny, thr, exempt)
         return base
 
     def _sanitize_msg(self, det: Detector, m: Message) -> Message:

@@ -45,7 +45,8 @@ def _policy_dict(p) -> dict | None:
             "compression_enabled": p.compression_enabled, "capture_io": p.capture_io,
             "pii_detection": p.pii_detection, "stream_mode": p.stream_mode,
             "pii_entity_denylist": p.pii_entity_denylist,
-            "pii_score_threshold": p.pii_score_threshold}
+            "pii_score_threshold": p.pii_score_threshold,
+            "pii_exempt_patterns": p.pii_exempt_patterns}
 
 
 def _onboarded_dict(m) -> dict:
@@ -93,6 +94,11 @@ class UpdateAppIn(BaseModel):
     default_residency: str | None = None
 
 
+# pii_exempt_patterns caps (ReDoS/DoS guard on operator-supplied regex).
+MAX_EXEMPT_PATTERNS = 25
+MAX_EXEMPT_PATTERN_LEN = 200
+
+
 class PolicyIn(BaseModel):
     allowed_tiers: list[str] | None = None
     allowed_providers: list[str] | None = None
@@ -110,6 +116,10 @@ class PolicyIn(BaseModel):
     # never be denylisted (rules 3/8). See docs/per-app-config.md.
     pii_entity_denylist: list[str] | None = None
     pii_score_threshold: float | None = None
+    # Type-independent complement to pii_entity_denylist: regexes over the
+    # detected entity's VALUE (fullmatch). US_SSN can never be exempted
+    # (rules 3/8). See docs/per-app-config.md.
+    pii_exempt_patterns: list[str] | None = None
 
 
 class LangfuseCredsIn(BaseModel):
@@ -351,6 +361,20 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
                 0.0 <= body.pii_score_threshold <= 1.0):
             raise HTTPException(
                 422, f"pii_score_threshold {body.pii_score_threshold!r} out of range [0.0, 1.0]")
+        if body.pii_exempt_patterns is not None:
+            if len(body.pii_exempt_patterns) > MAX_EXEMPT_PATTERNS:
+                raise HTTPException(
+                    422, f"pii_exempt_patterns: at most {MAX_EXEMPT_PATTERNS} patterns")
+            for pat in body.pii_exempt_patterns:
+                if len(pat) > MAX_EXEMPT_PATTERN_LEN:
+                    raise HTTPException(
+                        422, f"pii_exempt_patterns regex too long "
+                        f"(>{MAX_EXEMPT_PATTERN_LEN} chars): {pat!r}")
+                try:
+                    re.compile(pat)
+                except re.error as ex:
+                    raise HTTPException(
+                        422, f"invalid pii_exempt_patterns regex {pat!r}: {ex}")
 
         # Resolve the EFFECTIVE post-write residency/capture_io/pii_detection
         # once. The PUT is a merge (see below), so "effective value = body

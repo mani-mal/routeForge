@@ -130,6 +130,13 @@ class AppPolicy(Base):
     # this are treated as non-matches (culls low-confidence recognizers). null =
     # no threshold. Never drops US_SSN (protected) or unscored regex/custom hits.
     pii_score_threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Per-app value-shape exemption: regexes describing the app's OWN identifier
+    # formats (drawing/order numbers, etc.). Any detected entity whose VALUE
+    # fullmatches a pattern is dropped BEFORE redaction/classification, regardless
+    # of the entity TYPE Presidio assigned or surrounding whitespace -- the
+    # type-independent complement to pii_entity_denylist. US_SSN can never be
+    # exempted (FilteredDetector.PROTECTED_ENTITIES). null/[] = no exemption.
+    pii_exempt_patterns: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
     application: Mapped[Application] = relationship(back_populates="policy")
 

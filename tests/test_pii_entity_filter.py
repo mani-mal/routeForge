@@ -90,6 +90,50 @@ def test_no_config_is_a_passthrough():
     assert det.analyze("t") == ents
 
 
+# --- pii_exempt_patterns: type-independent value-shape exemption ------------
+#
+# Presidio assigns the SAME false-positive value DIFFERENT entity types
+# depending on surrounding whitespace (a compact drawing/order number scores
+# PHONE_NUMBER, the spaced form scores DATE_TIME) -- chasing types is
+# whack-a-mole. pii_exempt_patterns matches the entity's VALUE instead, so it
+# drops the false positive no matter which type Presidio picked.
+
+def _v(t: str, value: str, score: float | None = None) -> Entity:
+    return Entity(type=t, start=0, end=len(value), value=value, score=score)
+
+
+def test_exempt_pattern_drops_matching_value_regardless_of_type():
+    """The whole point: the same value, tagged two different types, is dropped
+    by ONE value-shape pattern -- type-independent."""
+    base = _StubDetector([
+        _v("DATE_TIME", "137961-01 01"),
+        _v("PHONE_NUMBER", "137961-01 01"),
+    ])
+    det = FilteredDetector(base, exempt_patterns=[r"\d{6}-\d{2} \d{2}"])
+    assert det.analyze("t") == []
+
+
+def test_exempt_pattern_can_never_drop_us_ssn():
+    base = _StubDetector([_v("US_SSN", "123-45-6789", score=1.0)])
+    det = FilteredDetector(base, exempt_patterns=[r"\d{3}-\d{2}-\d{4}"])
+    kept = {e.type for e in det.analyze("t")}
+    assert "US_SSN" in kept
+
+
+def test_exempt_pattern_is_fullmatch_not_search():
+    base = _StubDetector([_v("DATE_TIME", "137961-01 01 EXTRA")])
+    det = FilteredDetector(base, exempt_patterns=[r"\d{6}-\d{2} \d{2}"])
+    kept = {e.type for e in det.analyze("t")}
+    assert kept == {"DATE_TIME"}  # trailing text breaks fullmatch -> kept
+
+
+def test_exempt_pattern_leaves_non_matching_values_kept():
+    base = _StubDetector([_v("EMAIL_ADDRESS", "a@b.com")])
+    det = FilteredDetector(base, exempt_patterns=[r"\d{6}-\d{2} \d{2}"])
+    kept = {e.type for e in det.analyze("t")}
+    assert kept == {"EMAIL_ADDRESS"}
+
+
 # --- end-to-end through a real Pipeline --------------------------------------
 
 def _settings(mode: str = "regex"):
@@ -219,6 +263,46 @@ def test_admin_rejects_threshold_out_of_range(client):
     assert r.status_code == 422
 
 
+def test_admin_rejects_invalid_exempt_pattern_regex(client):
+    _login(client)
+    _mkapp(client, "ep-bad")
+    r = client.put("/admin/applications/ep-bad/policy",
+                   json={"pii_exempt_patterns": ["("]})
+    assert r.status_code == 422
+
+
+def test_admin_exempt_patterns_round_trip_and_move_app_policy_version(client, monkeypatch):
+    """Valid patterns round-trip through the admin API PUT (200), and applying
+    them moves app_policy_version on the response `/v1/chat/completions`
+    consumers actually probe -- the same stale-probe guarantee the denylist
+    gets, extended to the value-shape lever."""
+    from app.gateway.backends import litellm_backend
+    from tests._litellm_fake import CALLS, make_recording_acompletion, make_response
+
+    token = _configure_app(client, "ep-ver", {"residency": "onprem_only"})
+
+    CALLS.clear()
+    monkeypatch.setattr(litellm_backend, "acompletion",
+                        make_recording_acompletion(make_response(content="ok")))
+
+    def _probe() -> str:
+        r = client.post("/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {token}"},
+                        json={"messages": [{"role": "user", "content": "ping"}]})
+        assert r.status_code == 200, r.text
+        v = r.json()["policy"]["app_policy_version"]
+        assert v
+        return v
+
+    before = _probe()
+    after_put = client.put("/admin/applications/ep-ver/policy",
+                           json={"pii_exempt_patterns": [r"\d{6}-\d{2} \d{2}"]})
+    assert after_put.status_code == 200, after_put.text
+    assert after_put.json()["policy"]["pii_exempt_patterns"] == [r"\d{6}-\d{2} \d{2}"]
+    after = _probe()
+    assert before != after, "policy changed but app_policy_version did not move"
+
+
 def test_admin_denylist_allowed_for_onprem_only_app(client):
     """The whole point of §4.2b: unlike pii_detection:off (clamped away for
     onprem_only), a denylist is accepted while residency stays onprem_only."""
@@ -340,6 +424,21 @@ def test_app_policy_version_is_stable_and_reacts_to_changes():
     assert a.version() != AppPolicyView(
         residency="private_cloud_ok",
         pii_entity_denylist=a.pii_entity_denylist).version()                 # residency changed
+
+
+def test_app_policy_version_reacts_to_exempt_patterns_order_independent():
+    """pii_exempt_patterns is decision-relevant (moves the version) and, like
+    the denylist, is a set -- member ORDER must not matter."""
+    with_patterns = AppPolicyView(
+        residency="onprem_only",
+        pii_exempt_patterns=frozenset({r"\d{6}-\d{2} \d{2}", r"[A-Z]{2}-\d+"}))
+    without_patterns = AppPolicyView(residency="onprem_only")
+    assert with_patterns.version() != without_patterns.version()
+
+    same_patterns_other_order = AppPolicyView(
+        residency="onprem_only",
+        pii_exempt_patterns=frozenset({r"[A-Z]{2}-\d+", r"\d{6}-\d{2} \d{2}"}))
+    assert with_patterns.version() == same_patterns_other_order.version()
 
 
 def test_response_policy_block_carries_app_policy_version():
