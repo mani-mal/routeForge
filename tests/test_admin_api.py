@@ -190,14 +190,44 @@ def test_policy_pii_detection_downgrade_ok_when_any_residency_and_capture_off(cl
     assert r.json()["policy"]["pii_detection"] == "regex"
 
 
-def test_policy_pii_detection_downgrade_rejected_for_onprem_only(client):
-    # (b) pii_detection="off" on an onprem_only app -> 422.
+def test_policy_pii_detection_downgrade_allowed_for_onprem_only_with_capture_off(client):
+    # (b) pii_detection="off" on an onprem_only app is ALLOWED, provided no
+    # telemetry I/O is captured. Residency and detection are independent axes:
+    # the onprem_only floor comes from `app_policy.residency` in context.py and
+    # never consults pii_detection, so refusing this protected nothing while
+    # pushing operators toward the strictly-less-safe `residency: "any"` +
+    # allowed_providers pin. On-prem is the SAFEST place to run the gate open —
+    # the model is inside the customer's boundary. capture_io defaults to "off"
+    # globally (config/serving.yaml), so this write needs no capture_io at all.
     _login(client)
     client.post("/admin/applications", json={"id": "pii-onprem", "name": "PiiOnprem",
                                               "default_residency": "onprem_only"})
-    r = client.put("/admin/applications/pii-onprem/policy", json={"pii_detection": "off"})
+    # Residency sent explicitly so the clamp is judged on a stated onprem_only,
+    # not only on the application's default (which the policy row leaves null).
+    r = client.put("/admin/applications/pii-onprem/policy",
+                   json={"pii_detection": "off", "residency": "onprem_only"})
+    assert r.status_code == 200, r.text
+    got = client.get("/admin/applications/pii-onprem").json()
+    assert got["policy"]["pii_detection"] == "off"
+    # The residency floor is untouched by the downgrade — this is the whole
+    # point: unredacted prompts WITHOUT giving up rule 3.
+    assert got["policy"]["residency"] == "onprem_only"
+
+
+def test_policy_pii_downgrade_rejected_for_onprem_only_with_capture_redacted(client):
+    # (b2) the envelope: an onprem_only app may run detection off only while
+    # capture_io is "off". "redacted" telemetry reuses the gate's sanitized
+    # prompt — raw when detection is off — so it stays a 422, and the message
+    # must not offer 'full' as an alternative (unreachable for onprem_only).
+    _login(client)
+    client.post("/admin/applications", json={"id": "pii-onprem-cap",
+                                             "name": "PiiOnpremCap",
+                                             "default_residency": "onprem_only"})
+    r = client.put("/admin/applications/pii-onprem-cap/policy",
+                   json={"pii_detection": "off", "capture_io": "redacted"})
     assert r.status_code == 422
-    assert "onprem_only" in r.text.lower()
+    assert "capture_io" in r.text.lower()
+    assert "full" not in r.text.lower()
 
 
 def test_policy_pii_detection_downgrade_rejected_when_capture_enabled(client):
@@ -436,18 +466,46 @@ def test_policy_effective_pii_reevaluates_on_capture_only_put(client):
 
 
 def test_policy_effective_pii_reevaluates_on_residency_only_put(client):
-    # Fix round 1, secondary case: a stored pii=off app must not be flippable
-    # to onprem_only via a PUT that never mentions pii_detection.
+    # Fix round 1, secondary case, re-pointed at the guard that still exists:
+    # a stored pii=off + capture=full app must not be flippable to onprem_only
+    # via a PUT that never mentions capture_io. The capture_io=='full' clamp
+    # keys on the EFFECTIVE capture (stored 'full'), so the residency-only
+    # write is judged on it and rejected — rule 8, residency beats eval.
+    #
+    # (Tightening residency while capture is 'off' is now legal and desirable;
+    # see test_policy_pii_downgrade_can_tighten_residency_when_capture_off.)
     _login(client)
     client.post("/admin/applications", json={"id": "eff-pii-onprem", "name": "EffPiiOnprem"})
+    assert client.put("/admin/applications/eff-pii-onprem/langfuse", json={
+        "host": "https://eff-pii-langfuse:3000", "public_key": "pk",
+        "secret_key": "sk", "project_id": "proj_eff_pii"}).status_code == 200
     assert client.put("/admin/applications/eff-pii-onprem/policy",
-                      json={"pii_detection": "off", "capture_io": "off"}).status_code == 200
+                      json={"pii_detection": "off", "capture_io": "full"}).status_code == 200
     r = client.put("/admin/applications/eff-pii-onprem/policy",
                    json={"residency": "onprem_only"})
     assert r.status_code == 422, r.text
-    assert "onprem_only" in r.text.lower()
+    assert "onprem" in r.text.lower()
     got = client.get("/admin/applications/eff-pii-onprem").json()
     assert got["policy"]["residency"] != "onprem_only"
+
+
+def test_policy_pii_downgrade_can_tighten_residency_when_capture_off(client):
+    # The counterpart: a pii=off app with capture_io='off' may be tightened to
+    # onprem_only. Nothing about that write weakens anything — it strictly
+    # narrows routing while the telemetry envelope stays shut — and blocking it
+    # was what drove operators to leave residency at "any" (the reported bug).
+    _login(client)
+    client.post("/admin/applications", json={"id": "eff-pii-tighten",
+                                             "name": "EffPiiTighten"})
+    assert client.put("/admin/applications/eff-pii-tighten/policy",
+                      json={"pii_detection": "off", "capture_io": "off"}).status_code == 200
+    r = client.put("/admin/applications/eff-pii-tighten/policy",
+                   json={"residency": "onprem_only"})
+    assert r.status_code == 200, r.text
+    got = client.get("/admin/applications/eff-pii-tighten").json()
+    assert got["policy"]["residency"] == "onprem_only"
+    assert got["policy"]["pii_detection"] == "off"
+    assert got["policy"]["capture_io"] == "off"
 
 
 def test_policy_effective_pii_can_be_lifted_back_out(client):

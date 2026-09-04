@@ -415,28 +415,55 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
         # --- PII downgrade clamp: fires whenever the EFFECTIVE post-write
         # pii_detection is off/regex — whether this write is what sets it or
         # it was already in effect from a prior write. Re-validates the
-        # invariants (non-onprem, operator-flag-on, capture != redacted) on
+        # invariants (operator-flag-on, no unsanitized telemetry egress) on
         # every write while the app is in a pii-downgraded state, the same
-        # fail-closed shape as the capture_io=='full' clamp below. ---
+        # fail-closed shape as the capture_io=='full' clamp below.
+        #
+        # Residency is deliberately NOT a condition here. It used to be: an
+        # `onprem_only` app was refused a PII downgrade outright. That clamp
+        # was over-broad and actively harmful, because detection and residency
+        # are independent axes (`app/policy/context.py` computes the
+        # onprem_only/allowed_providers floor from `app_policy.residency` and
+        # never consults `pii_detection` — asserted by
+        # tests/test_pii_detection_pipeline.py). Refusing the downgrade for
+        # onprem_only apps therefore protected nothing, while pushing every
+        # operator who needed unredacted prompts toward the documented
+        # workaround of setting `residency: "any"` + an `allowed_providers`
+        # pin — which is STRICTLY LESS SAFE: it trades a hard residency floor
+        # that cloud cannot survive by construction (rule 3) for a mutable
+        # provider allowlist, and it drops `ctx.onprem_only`, which is what
+        # the step-9 streaming floor and the capture_io=='full' clamp key on.
+        # An on-prem-only deployment is precisely the case where turning the
+        # gate off is safest: the model is inside the customer's boundary and
+        # nothing external ever sees the prompt.
+        #
+        # What still holds the line, unchanged: the deployment ceiling below,
+        # the `redacted` check below, and the capture_io=='full' clamp further
+        # down (which rejects `full` for onprem_only apps). Together those mean
+        # an onprem_only app can reach pii_detection=off ONLY with
+        # capture_io='off' — no telemetry I/O at all, so there is no egress
+        # path for the unsanitized prompt. `_set_io` returns early on 'off' and
+        # the runtime downgrade in app/obs/export.py only ever steps 'full'
+        # down to 'redacted', never 'off' up, so that envelope cannot be
+        # widened at request time. ---
         if eff_pii in ("off", "regex"):
-            if eff_residency == "onprem_only":
-                raise HTTPException(
-                    422, "pii_detection cannot be downgraded for onprem_only apps")
             if not settings.serving.allow_app_pii_downgrade:
                 raise HTTPException(
                     422, "per-app PII downgrade disabled on this deployment")
             if eff_capture == "redacted":
+                alternatives = ("capture_io='off'." if eff_residency == "onprem_only"
+                                else "capture_io='full' with the app's own Langfuse "
+                                     "project, or capture_io='off'.")
                 raise HTTPException(
                     422,
                     "capture_io='redacted' cannot be combined with pii_detection "
                     "off/regex: redacted telemetry reuses the gate's sanitized "
                     "prompt, which is raw when PII detection is off. Use "
-                    "capture_io='full' with the app's own Langfuse project, or "
-                    "capture_io='off'.")
+                    + alternatives)
             # eff_capture == 'full' -> permitted here; the capture_io=='full'
             #   clamp below enforces non-onprem + own provisioned Langfuse on
-            #   the EFFECTIVE value.
-            # eff_capture == 'off'  -> always safe.
+            #   the EFFECTIVE value, so onprem_only + off + full is still 422.
+            # eff_capture == 'off'  -> always safe, at any residency.
 
         # --- stream_unverified clamp: key on the EFFECTIVE stream_mode, not
         # body.stream_mode alone, so a stored stream_unverified app can't

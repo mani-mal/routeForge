@@ -37,11 +37,13 @@ the real values in its output (customer names, order numbers, revision lines), t
 redaction is destructive. `pii_detection: off` (or a scoped `regex`) is the escape valve.
 
 > **Prefer the narrow lever.** `off` is the blunt instrument — it blinds the gate to
-> *everything*, and it is rejected for `onprem_only` apps. When the problem is a few
-> false-positive entity *types* (a shop-order number mis-tagged `US_DRIVER_LICENSE`, a
-> revision date mis-tagged `DATE_TIME`), reach for `pii_entity_denylist` /
-> `pii_score_threshold` (below) instead: they exempt exactly those types, keep every
-> other recognizer on, and are allowed for `onprem_only` apps.
+> *everything*, a real SSN included. When the problem is a few false-positive entity
+> *types* (a shop-order number mis-tagged `US_DRIVER_LICENSE`, a revision date mis-tagged
+> `DATE_TIME`) or a few false-positive *value shapes*, reach for `pii_entity_denylist` /
+> `pii_score_threshold` / `pii_exempt_patterns` (below) instead: they exempt exactly
+> those, and keep every other recognizer on. Reach for `off` when the app's entire input
+> is customer-owned content whose every field is load-bearing output — there is then
+> nothing to protect and no enumerable set of shapes to exempt.
 
 **Why it's safe:** detection drives *classification*, not residency. Residency is
 enforced independently by `_stricter(rule.residency, app.residency)` in
@@ -49,13 +51,18 @@ enforced independently by `_stricter(rule.residency, app.residency)` in
 `onprem_only` app with `pii_detection: off` still routes on-prem only; detection being
 off cannot lift it to cloud.
 
+That independence is why `onprem_only` apps **may** downgrade detection (with
+`capture_io: "off"` — see the floors). An on-prem-only app is the *safest* place to run
+the gate open: the model is inside the customer's boundary and no external party ever sees
+the prompt. Refusing it there bought no protection and pushed operators toward
+`residency: "any"` + an `allowed_providers` pin, which is strictly weaker — a mutable
+allowlist in place of a hard residency floor, with `ctx.onprem_only` (the step-9 streaming
+floor, the `capture_io=full` clamp) dropped along the way.
+
 **The floors (all enforced at admin write-time, `app/api/admin_routes.py:set_policy`,
 HTTP 422 on violation, keyed on the app's *effective* post-write residency/`capture_io` —
 request body value if provided, else the app's stored policy, else its default):**
 
-- `pii_detection` in `("off", "regex")` is **rejected** when the app's effective
-  residency is `onprem_only`. `onprem_only` never permits a PII downgrade, full stop —
-  see "Operator-gated raw eval capture" below.
 - **Deployment ceiling:** `policy.allow_app_pii_downgrade` in `config/serving.yaml`
   (default `true`; env override `SP_ALLOW_APP_PII_DOWNGRADE`). Set `false` to forbid
   *every* app on this deployment from downgrading detection at all — a locked-down
@@ -64,9 +71,16 @@ request body value if provided, else the app's stored policy, else its default):
   `capture_io` is `"redacted"` — the `redacted` exporter path reuses the gate's
   *sanitized* prompt (`app/obs/export.py:_set_io`); with detection off nothing was
   sanitized, so `redacted` telemetry would silently carry raw PII. `capture_io="off"` is
-  always safe with detection off. `capture_io="full"` is allowed, but only under the
-  guardrails below.
+  always safe with detection off, at **any** residency. `capture_io="full"` is allowed,
+  but only under the guardrails below — never for an `onprem_only` app.
 - An unrecognized value is a 422, never a silent fallback to `off`.
+
+  **Net envelope for an `onprem_only` app:** `pii_detection` may be `off`/`regex` only
+  while `capture_io` is `"off"` — the other two capture modes are each rejected by their
+  own clamp. No telemetry I/O is captured, so there is no egress path for the
+  unsanitized prompt, and the runtime cannot widen this: `_set_io` returns early on
+  `"off"`, and the fail-closed downgrade in `app/obs/export.py` only ever steps `full`
+  down to `redacted`, never `off` up.
 
 ### Operator-gated raw eval capture (`pii_detection=off` + `capture_io=full`)
 
@@ -76,10 +90,10 @@ deliberate, narrow exception to "telemetry is redacted on egress" (CLAUDE.md rul
 approved by the product owner — not a bug. Every one of these must hold, and each is
 enforced independently:
 
-- **`onprem_only` never permits it.** The residency clamp fires before the capture
-  clamp — an `onprem_only` app cannot reach `pii_detection=off` at all, so the
-  `capture_io=full` combination can never arise for one (CLAUDE.md rule 8: residency
-  beats eval).
+- **`onprem_only` never permits it.** The `capture_io=full` clamp rejects the write
+  outright for an `onprem_only` app, whether or not detection is downgraded (CLAUDE.md
+  rule 8: residency beats eval). This is the guard that holds — not the detection
+  downgrade, which an `onprem_only` app *may* take with `capture_io="off"`.
 - **Raw I/O only ever reaches the app's own provisioned Langfuse project**, never the
   shared/default project. `capture_io=full` is rejected (422) unless
   `load_app_langfuse(app)` resolves — the app must have its own project, either
@@ -98,6 +112,11 @@ enforced independently:
 > flip residency?"** Yes, but residency is also the provider filter, so flipping it off
 > `onprem_only` un-pins routing to cloud. See the recommended config (residency +
 > `allowed_providers={"onprem"}` pin) in [`help/faq.md`](help/faq.md#recommended-config-raw-langfuse-capture-and-routing-pinned-on-prem).
+>
+> **This applies to raw *telemetry* only.** If the app just needs unredacted prompts to
+> reach the model — the gate is mangling part numbers, field names, or engineering labels
+> — do **not** flip residency. Keep `onprem_only` and set `pii_detection: "off"` with
+> `capture_io: "off"`.
 
 ## `pii_entity_denylist` and `pii_score_threshold`
 
