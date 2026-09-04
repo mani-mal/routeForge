@@ -175,3 +175,49 @@ def test_pii_none_inherits_global_detector_end_to_end():
 
     assert "482-73-1946" not in out["sanitized_prompt"]
     assert "<US_SSN_1>" in out["sanitized_prompt"]
+
+
+# --- regression: engineering labels survive an onprem_only + pii=off app ----
+
+# The exact NC-table prompt from the field report (2026-09-04): CAD drawing
+# attribute tags on roll drawings, each naming a machining dimension. Under
+# Presidio, spaCy's statistical NER tags `HARD2` and `SOFT1` as PERSON (0.85)
+# and the value `42363` as DATE_TIME (0.85) -- purely context-dependent, so the
+# same labels in a short prose sentence come back clean. Nothing errors: the
+# model answers confidently about a dimension whose identity has been replaced
+# by `<PERSON_1>` while its value survives. Silent data corruption, and
+# undetectable from inside the calling application.
+_NC_TABLE = (
+    'List these keys exactly, one per line:\n'
+    '{"HARD1": "71.631°", "HARD2": "1.5105", "HARD3": "1.662", '
+    '"HARD4": ".094", "HARD5": "6.940", "HARD6": "9.883", "HARD7": "6.500", '
+    '"HARD8": ".2490", "HARD9": "42363", "SOFT1": "71.631", "SOFT2": "1.5055", '
+    '"SOFT3": "1.657", "SOFT4": ".094", "SOFT5": "9.913", "SOFT6": ".068", '
+    '"SOFT7": "3.250", "SOFT8": ".000", "SOFT9": ".2500", "SOFT10": ""}'
+)
+_NC_LABELS = [f"HARD{i}" for i in range(1, 10)] + [f"SOFT{i}" for i in range(1, 11)]
+
+
+def test_engineering_labels_survive_gate_for_onprem_only_pii_off_app():
+    """An `onprem_only` app with `pii_detection="off"` -- the configuration the
+    admin clamp used to forbid -- passes every NC-table label and value through
+    verbatim, while residency stays pinned on-prem.
+
+    This is the shape a document-extraction app needs: no third party to
+    protect (the model is inside the customer's boundary) and every field on
+    the drawing is load-bearing output it is contractually required to
+    reproduce. Asserted on the "off" path rather than on spaCy's tagging so the
+    test states the guarantee, not the model version's false positives."""
+    s = _settings_with_global_mode("presidio")
+    pipe = _pipeline(s)
+    app_policy = AppPolicyView(residency="onprem_only", pii_detection="off")
+
+    out = _run(pipe, _NC_TABLE, app_policy=app_policy)
+
+    for label in _NC_LABELS:
+        assert f'"{label}"' in out["sanitized_prompt"], f"{label} did not survive the gate"
+    assert "42363" in out["sanitized_prompt"]      # HARD9's value, tagged DATE_TIME
+    assert "PERSON" not in out["sanitized_prompt"]  # no placeholder spliced in
+    # ...and turning the gate off did not buy that at the cost of residency.
+    assert out["policy"]["onprem_only"] is True
+    assert out["policy"]["allowed_providers"] == ["onprem"]
