@@ -239,6 +239,18 @@ class ServingCfg(BaseModel):
     # detection regardless of its residency/capture_io state (admin_routes.
     # set_policy write-time clamp). Default true.
     allow_app_pii_downgrade: bool
+    # Deployment-wide default protection posture (app.policy.enums.POLICY_MODES).
+    # An app whose AppPolicy.policy_mode is null inherits this, so an install
+    # where no customer wants PII checks sets it once instead of per app.
+    # Defaulted for the same reason as `semantic_cache` below: a mounted
+    # serving.yaml that predates this feature has no such key, and a required
+    # field would KeyError every existing deployment on upgrade.
+    default_policy_mode: str = "enforced"
+    # Deployment ceiling, mirroring allow_app_pii_downgrade: whether ANY app may
+    # resolve to "passthrough" at all. false = locked-down deployment where the
+    # gate always runs, regardless of an app's own policy_mode or the default
+    # above. Defaulted (true) for the upgrade-safety reason given above.
+    allow_app_passthrough: bool = True
     reject_stream_requests: bool
     context_optimization: ContextOptimizationCfg
     memory: MemoryCfg = MemoryCfg()

@@ -113,6 +113,15 @@ class AppPolicy(Base):
     # provisioned Langfuse project may resolve to it (write-time lint in
     # admin_routes.set_policy + runtime clamp in api/routes.py).
     capture_io: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # Per-app protection posture. null = inherit the deployment-wide default
+    # (serving.yaml policy.default_policy_mode). One of
+    # app.policy.enums.POLICY_MODES (enforced|passthrough). "passthrough" turns
+    # this app into router + meter + tracer only: no PII detection, no input or
+    # egress redaction, no custom recognizers. It is a PROTECTION switch, never a
+    # placement one — residency/onprem_only and allowed_providers are untouched
+    # (CLAUDE.md rule 3 holds), and the deployment ceiling
+    # serving.policy.allow_app_passthrough can forbid it install-wide.
+    policy_mode: Mapped[str | None] = mapped_column(String(16), nullable=True)
     # Per-app PII-detection override. null = inherit live global
     # (s.serving.pii_detection). One of app.policy.enums.PII_MODES (off|regex|presidio).
     pii_detection: Mapped[str | None] = mapped_column(String(16), nullable=True)

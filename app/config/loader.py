@@ -83,6 +83,17 @@ def load_settings(config_dir: str = "config") -> Settings:
         if _allow_pii_dg_env is None
         else _allow_pii_dg_env.strip().lower() in ("on", "true", "1", "yes")
     )
+    # SP_ALLOW_APP_PASSTHROUGH overrides policy.allow_app_passthrough — same
+    # env-override pattern (and same deployment-ceiling role) as
+    # SP_ALLOW_APP_PII_DOWNGRADE above. Defaults to true (matches
+    # config/serving.yaml) if absent from both env and YAML, so a mounted
+    # serving.yaml predating this feature still boots.
+    _allow_passthrough_env = os.environ.get("SP_ALLOW_APP_PASSTHROUGH")
+    allow_app_passthrough = (
+        bool(serving_raw["policy"].get("allow_app_passthrough", True))
+        if _allow_passthrough_env is None
+        else _allow_passthrough_env.strip().lower() in ("on", "true", "1", "yes")
+    )
     # Feature 5 (Task 1) — memory.enabled. SP_MEMORY overrides serving.yaml's
     # memory.enabled — same env-override pattern as SP_CONTEXT_OPT above.
     # Substrate only: this cfg is surfaced but nothing constructs/uses a
@@ -124,6 +135,13 @@ def load_settings(config_dir: str = "config") -> Settings:
         pii_detection=os.environ.get(
             "SP_PII_DETECTION", serving_raw["policy"]["pii_detection"]),
         allow_app_pii_downgrade=allow_app_pii_downgrade,
+        # SP_DEFAULT_POLICY_MODE overrides policy.default_policy_mode — same
+        # env-override pattern as SP_PII_DETECTION above. .get() with the
+        # default so an older serving.yaml without the key still boots.
+        default_policy_mode=os.environ.get(
+            "SP_DEFAULT_POLICY_MODE",
+            serving_raw["policy"].get("default_policy_mode", "enforced")),
+        allow_app_passthrough=allow_app_passthrough,
         reject_stream_requests=serving_raw["server"]["reject_stream_requests"],
         context_optimization=ContextOptimizationCfg(
             enabled=co_enabled,

@@ -33,6 +33,9 @@ class AppPolicyView:
     max_rpm: int | None = None
     compression_enabled: bool | None = None   # None = inherit live global toggle
     capture_io: str | None = None             # None = inherit global capture_io
+    # enforced | passthrough. None = inherit serving.policy.default_policy_mode.
+    # Protection posture only — never widens placement (residency is separate).
+    policy_mode: str | None = None
     pii_detection: str | None = None          # None = inherit global pii_detection
     stream_mode: str | None = None            # None = inherit (reject inbound stream)
     pii_entity_denylist: frozenset[str] | None = None  # entity types to NOT redact
@@ -44,8 +47,10 @@ class AppPolicyView:
         fields. Stamped on every response (and trace) so a consumer — notably a
         client's own conformance probe — can tell whether a cached PASS/FAIL
         result predates a later policy change: the version differs the instant an
-        operator edits residency, pii_detection, the denylist, the score floor,
-        the value-shape exempt patterns, or a tier/model/provider allowlist (all
+        operator edits residency, policy_mode (the protection posture — an app
+        flipped to `passthrough` must never be unprotected invisibly),
+        pii_detection, the denylist, the score floor, the value-shape exempt
+        patterns, or a tier/model/provider allowlist (all
         mutated out-of-band via the admin API, which is exactly what makes a
         stale probe indistinguishable from a live one without this). Sorted-key
         JSON → stable across boots for equal policy. Mirrors
@@ -65,6 +70,7 @@ class AppPolicyView:
                 "max_rpm": self.max_rpm,
                 "compression_enabled": self.compression_enabled,
                 "capture_io": self.capture_io,
+                "policy_mode": self.policy_mode,
                 "pii_detection": self.pii_detection,
                 "stream_mode": self.stream_mode,
                 "pii_entity_denylist":
@@ -99,6 +105,7 @@ def policy_view_from(app: Application) -> AppPolicyView:
         max_rpm=p.max_rpm,
         compression_enabled=p.compression_enabled,
         capture_io=p.capture_io,
+        policy_mode=p.policy_mode,
         pii_detection=p.pii_detection,
         stream_mode=p.stream_mode,
         pii_entity_denylist=_fs(p.pii_entity_denylist),

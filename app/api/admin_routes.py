@@ -18,7 +18,14 @@ from app.apps.langfuse_provision import LangfuseProvisioner, encrypt_secret
 from app.apps.probe import probe_endpoint
 from app.apps.tokens import new_token
 from app.policy.effective import PROTECTED_ENTITIES
-from app.policy.enums import PII_MODES, RESIDENCY, RISK_CLASS, SENSITIVITY, STREAM_MODES
+from app.policy.enums import (
+    PII_MODES,
+    POLICY_MODES,
+    RESIDENCY,
+    RISK_CLASS,
+    SENSITIVITY,
+    STREAM_MODES,
+)
 from app.policy.recognizers import PRESIDIO_BUILTINS, validate_recognizer
 
 admin_router = APIRouter(prefix="/admin", tags=["admin"])
@@ -44,6 +51,7 @@ def _policy_dict(p) -> dict | None:
             "max_spend_usd_per_day": p.max_spend_usd_per_day, "max_rpm": p.max_rpm,
             "compression_enabled": p.compression_enabled, "capture_io": p.capture_io,
             "pii_detection": p.pii_detection, "stream_mode": p.stream_mode,
+            "policy_mode": p.policy_mode,
             "pii_entity_denylist": p.pii_entity_denylist,
             "pii_score_threshold": p.pii_score_threshold,
             "pii_exempt_patterns": p.pii_exempt_patterns}
@@ -110,6 +118,9 @@ class PolicyIn(BaseModel):
     capture_io: str | None = None   # None = inherit global; off|redacted|full
     pii_detection: str | None = None   # None = inherit global; off|regex|presidio
     stream_mode: str | None = None   # None = inherit (reject inbound stream); see STREAM_MODES
+    # Protection posture, independent of `residency` (which is placement only).
+    # None = inherit serving.policy.default_policy_mode; enforced|passthrough.
+    policy_mode: str | None = None
     # Narrow the gate WITHOUT disabling it: entity types to detect-but-not-redact
     # for this app (false positives that mangle mandatory field values), and a
     # minimum Presidio confidence below which a match is dropped. US_SSN can
@@ -348,6 +359,8 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
             raise HTTPException(422, f"bad pii_detection {body.pii_detection!r}")
         if body.stream_mode is not None and body.stream_mode not in STREAM_MODES:
             raise HTTPException(422, f"bad stream_mode {body.stream_mode!r}")
+        if body.policy_mode is not None and body.policy_mode not in POLICY_MODES:
+            raise HTTPException(422, f"bad policy_mode {body.policy_mode!r}")
         if body.pii_entity_denylist is not None:
             for ent in body.pii_entity_denylist:
                 if ent in PROTECTED_ENTITIES:
@@ -411,6 +424,28 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
         # (CLAUDE.md's boot-time cross-file lint), not a per-app write clamp.
         eff_pii = body.pii_detection if body.pii_detection is not None else (
             stored.pii_detection if stored else None)
+        # NOTE the deliberate ASYMMETRY with eff_pii directly above: this one
+        # DOES fall through to the deployment-wide default. It is not a
+        # copy/paste slip. `pii_detection` unset means "inherit the live global
+        # detector", and inheriting it is not itself an opt-out — so folding
+        # the global in there would make the downgrade clamp fire for every app
+        # on a deployment whose global default happens to be non-presidio.
+        # `policy_mode` is the opposite case: a deployment that sets
+        # `default_policy_mode: passthrough` has genuinely put every
+        # non-overriding app into the no-protection posture, and the ceiling +
+        # capture clamps below MUST see that — an app is exactly as unprotected
+        # whether the passthrough came from its own row or from the default.
+        eff_policy_mode = body.policy_mode if body.policy_mode is not None else (
+            (stored.policy_mode if stored else None)
+            or settings.serving.default_policy_mode)
+
+        # --- passthrough deployment ceiling: mirrors allow_app_pii_downgrade.
+        # A locked-down deployment sets allow_app_passthrough=false and NO app
+        # may resolve to passthrough — including via the deployment-wide
+        # default, which is why this keys on the EFFECTIVE value. ---
+        if eff_policy_mode == "passthrough" and not settings.serving.allow_app_passthrough:
+            raise HTTPException(
+                422, "per-app passthrough policy_mode disabled on this deployment")
 
         # --- PII downgrade clamp: fires whenever the EFFECTIVE post-write
         # pii_detection is off/regex — whether this write is what sets it or
@@ -465,6 +500,23 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
             #   the EFFECTIVE value, so onprem_only + off + full is still 422.
             # eff_capture == 'off'  -> always safe, at any residency.
 
+        # --- the same sanitized-prompt seam, reached by the OTHER no-protection
+        # route: policy_mode='passthrough'. The redacted exporter path reuses
+        # the gate's sanitized prompt, and in passthrough the gate sanitizes
+        # nothing, so "redacted" telemetry would carry raw I/O under a label
+        # that says it doesn't. Kept as its own check (not folded into the
+        # eff_pii branch) so the 422 names WHICH guardrail fired — passthrough
+        # and a per-app pii downgrade are separate operator decisions with
+        # separate deployment ceilings. ---
+        if eff_policy_mode == "passthrough" and eff_capture == "redacted":
+            raise HTTPException(
+                422,
+                "capture_io='redacted' cannot be combined with "
+                "policy_mode='passthrough': redacted telemetry reuses the gate's "
+                "sanitized prompt, which is raw when the gate is in passthrough. "
+                "Use capture_io='full' with the app's own Langfuse project, or "
+                "capture_io='off'.")
+
         # --- stream_unverified clamp: key on the EFFECTIVE stream_mode, not
         # body.stream_mode alone, so a stored stream_unverified app can't
         # reach onprem_only via a PUT that omits stream_mode entirely. No
@@ -479,14 +531,38 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
 
         # --- capture_io == 'full' clamp: key on EFFECTIVE capture, not
         # body.capture_io, so a stale stored 'full' is re-validated on every
-        # write (e.g. a partial PUT that only touches pii_detection). ---
+        # write (e.g. a partial PUT that only touches pii_detection).
+        #
+        # Two independent conditions, deliberately raised as two distinct 422s
+        # so the operator is told WHICH one they tripped:
+        #
+        # 1. Own provisioned Langfuse project — NEVER relaxed, by anything.
+        #    Raw I/O stays tenant-isolated: one customer's raw prompts must
+        #    never land in another's traces or in the shared project
+        #    (CLAUDE.md rule 2). passthrough does not touch this.
+        # 2. Posture. Before policy_mode existed, `onprem_only` was used as a
+        #    proxy for "maximum protection", so raw capture was refused for
+        #    onprem apps outright. That proxy is what this feature removes:
+        #    an app the operator has explicitly placed in `passthrough` has
+        #    declared a no-protection posture, and raw capture into its OWN
+        #    project is then coherent at any residency — which is the whole
+        #    point of onprem_only + passthrough (MillWise). For an app still
+        #    in `enforced` posture the old rule stands unchanged: the gate is
+        #    running, so onprem_only still beats eval convenience (rule 8).
         if eff_capture == "full":
             from app.apps.langfuse_provision import load_app_langfuse
-            if eff_residency == "onprem_only" or load_app_langfuse(app) is None:
+            if load_app_langfuse(app) is None:
                 raise HTTPException(
                     422, "capture_io='full' stores raw telemetry and is allowed only "
-                    "for a non-onprem application with its own provisioned Langfuse "
-                    "project (residency beats eval; CLAUDE.md rules 2/8). Use 'redacted'.")
+                    "for an application with its own provisioned Langfuse project "
+                    "(raw I/O must never reach the shared project; CLAUDE.md rule 2). "
+                    "Use 'redacted'.")
+            if eff_residency == "onprem_only" and eff_policy_mode != "passthrough":
+                raise HTTPException(
+                    422, "capture_io='full' stores raw telemetry and is not allowed "
+                    "for an onprem_only application whose policy_mode is 'enforced' "
+                    "(residency beats eval; CLAUDE.md rules 2/8). Use 'redacted', or "
+                    "set policy_mode='passthrough' to declare the app unprotected.")
 
         # exclude_none=True makes this a MERGE, not a full replace: an
         # omitted field keeps its stored value instead of being wiped to

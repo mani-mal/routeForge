@@ -122,3 +122,18 @@ def test_role_tier_unknown_is_caught():
     s = copy.deepcopy(load_settings())
     s.routing.stage_signals.role_tiers["plan"] = "strong"  # nonexistent tier
     assert any("ROLE_TIER_UNKNOWN" in e for e in lint_settings(s))
+
+
+def test_lint_rejects_bad_default_policy_mode():
+    # A typo in the deployment-wide protection posture must be a NAMED boot
+    # failure, not a silent resolve-to-not-passthrough.
+    s = copy.deepcopy(load_settings())
+    s.serving.default_policy_mode = "passthru"
+    with pytest.raises(ConfigLintError, match="default_policy_mode"):
+        enforce(s)
+
+
+def test_lint_accepts_passthrough_default_policy_mode():
+    s = copy.deepcopy(load_settings())
+    s.serving.default_policy_mode = "passthrough"
+    enforce(s)  # must not raise -- both POLICY_MODES values are legal

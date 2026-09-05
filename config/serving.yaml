@@ -71,6 +71,11 @@ policy:
   pii_detection: presidio        # presidio | regex | off
   fail_closed: true              # never relax this
   allow_app_pii_downgrade: true  # false = locked-down deployment: no app may weaken PII detection
+  # Protection posture inherited by any app whose policy_mode is null.
+  # enforced = privacy-first (detection + redaction); passthrough = router,
+  # meter and tracer only. Placement (residency/onprem_only) is unaffected.
+  default_policy_mode: enforced  # enforced | passthrough
+  allow_app_passthrough: true    # false = locked-down deployment: no app may be passthrough
   # sensitivity enum, default_sensitivity, budgets and residency: see policy.yaml
 
 observability:

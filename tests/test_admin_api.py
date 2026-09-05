@@ -537,3 +537,129 @@ def test_onprem_only_cannot_reach_full_even_with_manual_creds(client):
     r = client.put("/admin/applications/onprem-app/policy", json={"capture_io": "full"})
     assert r.status_code == 422
     assert "residency" in r.text.lower() or "onprem" in r.text.lower()
+
+
+# --- policy_mode (enforced | passthrough) -----------------------------------
+
+def test_policy_mode_passthrough_accepted_for_onprem_only_app(client):
+    # THE headline case (MillWise): "run only on my hardware, and don't touch
+    # my data". Placement and protection are independent axes now, so
+    # onprem_only + passthrough is a coherent, honest configuration — no more
+    # lying about residency to obtain a protection posture.
+    _login(client)
+    client.post("/admin/applications", json={"id": "millwise", "name": "MillWise",
+                                             "default_residency": "onprem_only"})
+    r = client.put("/admin/applications/millwise/policy",
+                   json={"residency": "onprem_only", "policy_mode": "passthrough"})
+    assert r.status_code == 200, r.text
+    assert r.json()["policy"]["policy_mode"] == "passthrough"
+    got = client.get("/admin/applications/millwise").json()
+    assert got["policy"]["policy_mode"] == "passthrough"
+    # residency is untouched by the posture change (rule 3 still holds)
+    assert got["policy"]["residency"] == "onprem_only"
+
+
+def test_policy_mode_passthrough_unlocks_full_capture_for_onprem_app(client):
+    # The point of the feature: onprem_only + passthrough + capture_io='full'
+    # into the app's OWN Langfuse project. This is a 422 without policy_mode.
+    _login(client)
+    client.post("/admin/applications", json={"id": "pt-full", "name": "PtFull",
+                                             "default_residency": "onprem_only"})
+    assert client.put("/admin/applications/pt-full/langfuse", json={
+        "host": "https://pt-full-langfuse:3000", "public_key": "pk",
+        "secret_key": "sk", "project_id": "proj_pt_full"}).status_code == 200
+    # enforced (the default) -> still refused, residency beats eval
+    r = client.put("/admin/applications/pt-full/policy",
+                   json={"residency": "onprem_only", "capture_io": "full"})
+    assert r.status_code == 422
+    assert "onprem" in r.text.lower()
+    # declared passthrough -> permitted
+    r = client.put("/admin/applications/pt-full/policy",
+                   json={"residency": "onprem_only", "policy_mode": "passthrough",
+                         "capture_io": "full"})
+    assert r.status_code == 200, r.text
+    assert r.json()["policy"]["capture_io"] == "full"
+    assert r.json()["policy"]["policy_mode"] == "passthrough"
+
+
+def test_policy_mode_passthrough_full_still_needs_own_langfuse(client):
+    # passthrough relaxes the residency condition on 'full', NEVER the
+    # own-project condition — raw I/O stays tenant-isolated (rule 2).
+    _login(client)
+    client.post("/admin/applications", json={"id": "pt-nolf", "name": "PtNoLf",
+                                             "default_residency": "onprem_only"})
+    r = client.put("/admin/applications/pt-nolf/policy",
+                   json={"policy_mode": "passthrough", "capture_io": "full"})
+    assert r.status_code == 422
+    assert "project" in r.text.lower()
+
+
+def test_policy_mode_passthrough_rejects_redacted_capture(client):
+    # Same sanitized-prompt seam as pii_detection off/regex: the redacted
+    # exporter reuses the gate's sanitized prompt, which is raw in passthrough.
+    _login(client)
+    client.post("/admin/applications", json={"id": "pt-redact", "name": "PtRedact"})
+    r = client.put("/admin/applications/pt-redact/policy",
+                   json={"policy_mode": "passthrough", "capture_io": "redacted"})
+    assert r.status_code == 422
+    assert "capture_io" in r.text.lower()
+    assert "passthrough" in r.text.lower()
+
+
+def test_policy_mode_effective_reevaluates_on_capture_only_put(client):
+    # Effective-value clamp: a STORED passthrough app must not be pushed to
+    # capture_io='redacted' by a PUT that never mentions policy_mode.
+    _login(client)
+    client.post("/admin/applications", json={"id": "pt-eff", "name": "PtEff"})
+    assert client.put("/admin/applications/pt-eff/policy",
+                      json={"policy_mode": "passthrough",
+                            "capture_io": "off"}).status_code == 200
+    r = client.put("/admin/applications/pt-eff/policy", json={"capture_io": "redacted"})
+    assert r.status_code == 422, r.text
+    assert "passthrough" in r.text.lower()
+    # nothing from the rejected write was persisted
+    got = client.get("/admin/applications/pt-eff").json()
+    assert got["policy"]["capture_io"] == "off"
+
+
+def test_policy_rejects_bad_policy_mode(client):
+    _login(client)
+    client.post("/admin/applications", json={"id": "pt-bad", "name": "PtBad"})
+    r = client.put("/admin/applications/pt-bad/policy", json={"policy_mode": "bogus"})
+    assert r.status_code == 422
+    assert "policy_mode" in r.text.lower()
+
+
+def test_policy_deployment_ceiling_blocks_passthrough(monkeypatch):
+    # allow_app_passthrough: false is an install-wide floor — no app may reach
+    # passthrough, whatever its own policy says (mirrors the pii-downgrade
+    # ceiling test above).
+    monkeypatch.setenv("SP_ALLOW_APP_PASSTHROUGH", "false")
+    with TestClient(create_app()) as c:
+        _login(c)
+        c.post("/admin/applications", json={"id": "pt-locked", "name": "PtLocked"})
+        r = c.put("/admin/applications/pt-locked/policy",
+                  json={"policy_mode": "passthrough"})
+        assert r.status_code == 422
+        assert "disabled" in r.text.lower()
+        # enforced is of course still writable
+        assert c.put("/admin/applications/pt-locked/policy",
+                     json={"policy_mode": "enforced"}).status_code == 200
+
+
+def test_policy_deployment_default_passthrough_is_seen_by_clamps(monkeypatch):
+    # eff_policy_mode falls through to serving.default_policy_mode (unlike
+    # eff_pii, deliberately): an app that never sets policy_mode is just as
+    # unprotected as one that does, so the redacted seam must still fire.
+    monkeypatch.setenv("SP_DEFAULT_POLICY_MODE", "passthrough")
+    with TestClient(create_app()) as c:
+        _login(c)
+        c.post("/admin/applications", json={"id": "pt-default", "name": "PtDefault"})
+        r = c.put("/admin/applications/pt-default/policy",
+                  json={"capture_io": "redacted"})
+        assert r.status_code == 422, r.text
+        assert "passthrough" in r.text.lower()
+        # and an explicit per-app opt-out of the global posture is honoured
+        assert c.put("/admin/applications/pt-default/policy",
+                     json={"policy_mode": "enforced",
+                           "capture_io": "redacted"}).status_code == 200
