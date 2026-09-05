@@ -60,16 +60,38 @@ guarantees.
    tool, and no telemetry sink sees the raw request until step 2 completes. Ordering
    is load-bearing, not stylistic.
 2. **Telemetry is redacted on egress — except raw capture an operator
-   explicitly opts a non-onprem app into.** Redact at the exporter by default —
-   tool outputs and model completions leak PII the input gate never saw. The one
-   exception: an operator may set `allow_app_pii_downgrade` and configure a
-   specific **non-`onprem_only`** app with `pii_detection=off` + `capture_io=full`,
-   sending raw I/O **only** to that app's **own** provisioned Langfuse project.
-   `onprem_only` never permits it; the shared project never receives raw I/O; the
-   exporter fails closed to `redacted` if the app's project is missing.
+   explicitly opts an app into.** Redact at the exporter by default — tool outputs
+   and model completions leak PII the input gate never saw. The one exception: an
+   operator may configure a specific app with `capture_io=full`, sending raw I/O
+   **only** to that app's **own** provisioned Langfuse project. It requires the
+   deployment ceiling to permit it (`allow_app_pii_downgrade` for
+   `pii_detection=off`, `allow_app_passthrough` for `policy_mode=passthrough`) and
+   the app to be in a declared no-protection posture. The shared project never
+   receives raw I/O; the exporter fails closed to `redacted` if the app's project
+   is missing.
+
+   *Amended 2026-09-05.* This rule used to key the exception on residency — a
+   **non-`onprem_only`** app only. That encoded an assumption the product no longer
+   makes: that on-prem implies maximum protection. It forced customers who want
+   RouteForge as a pure router/meter/tracer over their own data to misdeclare
+   residency to obtain a protection posture, which is strictly less safe (see rule
+   2a). Residency is placement; posture is protection.
+
+2a. **Placement and protection are separate axes; both are explicit.**
+   `residency` governs *where compute may run* and nothing else. `policy_mode`
+   governs *how much the gate does to the data*: `enforced` (default — detection,
+   redaction, sensitivity escalation, capture ceiling) or `passthrough` (router +
+   meter + tracer only, for a customer whose input is their own data and whose
+   every field is load-bearing output). `onprem_only` + `passthrough` is a valid,
+   honest configuration. Neither axis may be inferred from the other, and
+   `passthrough` must never widen `allowed_providers`, clear `onprem_only`, or
+   otherwise touch placement. A no-protection posture is never silent: it is
+   folded into `app_policy_version`, stamped on every response, and emitted on the
+   trace.
 3. **`onprem_only` is absolute.** If policy sets it, a cloud provider must be
    unreachable by construction — filtered out of the candidate pool before the router
-   scores anything. Never a post-hoc check.
+   scores anything. Never a post-hoc check. Unchanged by rule 2a: `policy_mode`
+   has no bearing on placement.
 4. **RouteForge hosts no compute; it orchestrates and consumes.** It routes. It never stands
    up or scales inference — it points at OpenAI-compatible endpoints that operators onboard.
    The Improvement Plane is **orchestrated, not hosted**: RouteForge may capture training

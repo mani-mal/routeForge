@@ -180,6 +180,14 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                 # lets a trace consumer correlate a decision to the exact app
                 # policy it ran under, and spot a stale conformance probe.
                 root.set_attribute("sp.app_policy_version", policy["app_policy_version"])
+            if policy.get("policy_mode"):
+                # Effective protection posture ("enforced" | "passthrough") this
+                # request actually ran under. Emitted alongside the policy
+                # version so a trace consumer can see -- never having to infer
+                # from an absence of redaction -- that the gate was intentionally
+                # bypassed for this app. An unprotected app must never be
+                # unprotected invisibly (the plan's "Never silent" guard).
+                root.set_attribute("sp.policy_mode", str(policy["policy_mode"]))
             if prompt_version:
                 # Feature 3 (DSPy prompt-optimization) Task 1: sha256[:12]
                 # over the active managed-prompt texts (Settings.prompt_version).

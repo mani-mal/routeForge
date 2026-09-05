@@ -20,6 +20,82 @@ to "inherit default" now needs an explicit value — omission (or an explicit JS
 which parses the same way) no longer clears a previously-set field. No test or UI flow
 in this codebase relies on clear-by-omit.
 
+## `policy_mode` — the protection posture
+
+**Start here.** This is the coarse switch; every knob below it is a refinement within
+the `enforced` posture.
+
+RouteForge separates two things that are easy to confuse:
+
+| Axis | Field | Question it answers |
+|---|---|---|
+| **Placement** | `residency` | *Where may compute run?* on-prem, private cloud, anywhere |
+| **Protection** | `policy_mode` | *How much does the gate do to the data?* |
+
+They are independent. `residency` says nothing about protection, and `policy_mode` says
+nothing about placement — it never widens `allowed_providers`, never clears
+`onprem_only`, and never touches `app/policy/context.py`. `onprem_only` + `passthrough`
+("run only on my hardware, and don't touch my data") is a valid, honest configuration.
+
+| Value | Meaning |
+|---|---|
+| `enforced` (or unset/`null`) | Privacy-first. PII detection, input redaction, egress redaction, sensitivity escalation, custom recognizers, capture ceiling. The hospital persona. |
+| `passthrough` | RouteForge is a **router, meter and tracer only.** No detection, no redaction in either direction, no custom recognizers. Raw capture permitted to the app's own Langfuse project. |
+
+Unset inherits the deployment-wide `policy.default_policy_mode` in
+`config/serving.yaml` (env `SP_DEFAULT_POLICY_MODE`), so an install where no customer
+wants PII checks sets it once rather than per app.
+
+### Which customers want `passthrough`
+
+The app's entire input is the customer's **own** content, and every field of it is
+load-bearing output the app is contractually required to reproduce — engineering
+drawings, order documents, contracts, medical forms the customer already owns. There is
+no third party to protect, and redaction is not a safety feature there but a
+correctness bug: a dimension label rewritten to `<PERSON_1>` destroys the identity of a
+value while leaving the value itself intact, silently.
+
+Reach for `passthrough` when there is nothing to protect **and** no enumerable set of
+shapes to exempt. If only a handful of false positives are the problem, stay `enforced`
+and use `pii_entity_denylist` / `pii_exempt_patterns` below — they keep every other
+recognizer on.
+
+### What you still get in `passthrough`
+
+Everything that is not protection: model routing and tier selection, cost scoring and
+the cheap-tier savings lever, budgets, rate limits, durable usage metering, the full
+`DecisionRecord` per step, the decision stream, and Langfuse tracing. Turning protection
+off does not turn RouteForge into a proxy — it is still the router and the meter.
+
+### Guards
+
+- **Deployment ceiling.** `policy.allow_app_passthrough` in `config/serving.yaml`
+  (default `true`; env `SP_ALLOW_APP_PASSTHROUGH`). Set `false` and **no** app on the
+  deployment may be `passthrough`, whatever its own policy says — the one setting a
+  locked-down (e.g. hospital) install flips instead of relying on per-app discipline.
+  A malformed `SP_ALLOW_APP_PASSTHROUGH` parses as `false`: the ceiling closes on a
+  typo rather than opening.
+- **Never silent.** `policy_mode` is folded into `AppPolicyView.version()`, stamped in
+  every response's `policy` block, and emitted on the trace as `sp.policy_mode`. An
+  unprotected app is never unprotected invisibly, and flipping the posture moves the
+  `app_policy_version` stamp — so a customer's conformance probe detects the change
+  instead of silently passing on a stale result.
+- **Raw capture stays tenant-isolated.** `capture_io: "full"` still requires the app's
+  own provisioned Langfuse project. `passthrough` relaxes the *residency* condition on
+  `full`, never the own-project one: one customer's raw data must never land in
+  another's traces or in the shared project.
+- **`capture_io: "redacted"` is rejected** for a `passthrough` app — that exporter path
+  reuses the gate's sanitized prompt, which is raw when nothing was sanitized. Use
+  `full` (with the app's own project) or `off`.
+- **Boot lint.** An unrecognized `default_policy_mode` fails the boot with a named
+  violation rather than resolving to something safe-but-silent.
+
+### Turning protection back on later
+
+`{"policy_mode": "enforced"}`. One field. The `app_policy_version` stamp changes on the
+next response, which is how a client's conformance probe learns the posture moved
+without anyone having to tell it.
+
 ## `pii_detection`
 
 Set on `PUT /admin/applications/{app_id}/policy` (or the equivalent admin UI field),
@@ -220,6 +296,25 @@ fails with a database error (missing column), not a clean validation error:
 ALTER TABLE app_policies ADD COLUMN pii_detection VARCHAR(16);
 ALTER TABLE app_policies ADD COLUMN stream_mode VARCHAR(24);
 ```
+
+The same applies to every column added since, each nullable and each meaning "inherit
+the deployment default" when `NULL`. On a database deployed before the corresponding
+release, run whichever it is missing:
+
+```sql
+ALTER TABLE app_policies ADD COLUMN pii_entity_denylist JSON;      -- 0.20.x
+ALTER TABLE app_policies ADD COLUMN pii_score_threshold FLOAT;     -- 0.20.x
+ALTER TABLE app_policies ADD COLUMN pii_exempt_patterns JSON;      -- 0.22.0
+ALTER TABLE app_policies ADD COLUMN policy_mode VARCHAR(16);       -- policy_mode release
+```
+
+`policy_mode` is `NULL` for every existing row, which inherits
+`serving.policy.default_policy_mode` — `enforced` on a deployment that has not changed
+it. So no existing application's protection posture moves as a result of the upgrade.
+Run the `ALTER` **before** rolling the new image, not after: the old image never
+references the column, so it is safe to apply early, while the new admin API errors with
+a raw database error (not a clean 422) if an operator sets `policy_mode` before the
+column exists.
 
 Both are nullable with no default — existing rows get `NULL`, which is exactly "inherit
 the deployment default" for both fields, so this is safe to run against a live database

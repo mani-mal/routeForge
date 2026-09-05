@@ -8,11 +8,50 @@ and telemetry. For the full per-app config reference see
 
 ## Privacy, residency & telemetry
 
-### The gate is mangling my app's data — it redacted an engineering label / part number / field name that isn't PII. How do I turn redaction off *without* giving up `onprem_only`?
+### My customer wants RouteForge only for routing, token/cost metering and Langfuse — no PII checks, no redaction, everything raw. Is that supported?
 
-**Set `pii_detection: "off"` and `capture_io: "off"`, and leave `residency` at
-`onprem_only`.** This is allowed, and it is the right configuration for an app whose
-prompts are the customer's own documents.
+**Yes. Set `policy_mode: "passthrough"`.** That is a first-class posture, not a
+workaround, and it does not cost you the `onprem_only` guarantee.
+
+```json
+{ "residency": "onprem_only",
+  "policy_mode": "passthrough",
+  "capture_io": "full" }
+```
+
+`residency` answers *where may compute run*. `policy_mode` answers *how much does the
+gate do to the data*. They are independent, so "run only on my hardware, and don't touch
+my data" is sayable in one configuration. `passthrough` never widens
+`allowed_providers`, never clears `onprem_only`, and never touches placement.
+
+You still get everything that isn't protection: routing and tier selection, cheap-tier
+cost savings, budgets, rate limits, durable usage metering, DecisionRecords and full
+Langfuse traces.
+
+Two requirements to know about:
+
+- **`capture_io: "full"` needs the app's own provisioned Langfuse project.** Raw I/O is
+  tenant-isolated — it never lands in the shared project. Attach one with
+  `PUT /admin/applications/{app_id}/langfuse` first, or the policy write is a 422.
+- **`capture_io: "redacted"` is rejected** for a `passthrough` app. That exporter path
+  reuses the gate's sanitized prompt, which is raw when nothing was sanitized, and it
+  writes to the *shared* project. Use `full` or `off`.
+
+If the deployment has `policy.allow_app_passthrough: false` in `serving.yaml`, no app can
+take this posture at all — that is the switch a locked-down install flips once.
+
+**Turning protection on later** is `{"policy_mode": "enforced"}`. One field. The
+`app_policy_version` stamp moves, so the customer's conformance probe sees the change
+rather than passing on a stale result.
+
+### The gate is mangling my app's data — it redacted an engineering label / part number / field name that isn't PII. What do I do?
+
+If the app's whole input is customer-owned content whose every field is load-bearing
+output, use `policy_mode: "passthrough"` (above) — that is the case it exists for.
+
+If you only need unredacted prompts and want **no** telemetry I/O at all, the narrower
+form is `pii_detection: "off"` with `capture_io: "off"`, keeping `residency` at
+`onprem_only`:
 
 ```json
 { "residency": "onprem_only", "pii_detection": "off", "capture_io": "off" }
@@ -24,17 +63,16 @@ detection off cannot lift the app to cloud — the model stays inside the custom
 boundary and no external party ever sees the prompt. On-prem is the *safest* place to run
 the gate open, not the most dangerous.
 
-`capture_io: "off"` is required, and it is what makes the combination airtight: with no
-telemetry I/O captured there is no egress path for the unsanitized prompt. The two
-telemetry modes stay blocked for this app — `redacted` because that exporter path reuses
-the gate's sanitized prompt (raw when detection is off), and `full` because raw capture is
-never available to an `onprem_only` app (rule 8). Both are still HTTP 422.
+`capture_io: "off"` is what makes that narrower form airtight: with no telemetry I/O
+captured there is no egress path for the unsanitized prompt. `redacted` stays blocked
+because that exporter path reuses the gate's sanitized prompt, which is raw when
+detection is off.
 
-> **Do not reach for `residency: "any"` + an `allowed_providers` pin to get this.** That
-> workaround is for raw *Langfuse capture* (next question), not for unredacted prompts,
-> and it is strictly weaker: it swaps a hard residency floor for a mutable allowlist and
-> drops `ctx.onprem_only`, which the step-9 streaming floor and the `capture_io=full`
-> clamp both key on.
+> **Don't reach for `residency: "any"` + an `allowed_providers` pin.** That was the old
+> workaround for getting raw capture, and it is strictly weaker: it swaps a hard
+> residency floor for a mutable allowlist and drops `ctx.onprem_only`, which the step-9
+> streaming floor keys on. `policy_mode` exists so nobody has to misdeclare residency to
+> get a protection posture.
 
 **Prefer a narrower lever when you can.** `pii_detection: off` blinds the gate to
 *everything*, including a real SSN. If only a few false positives are the problem, use
@@ -45,33 +83,49 @@ enumerable set of shapes to exempt.
 
 ### My customer is on-prem, has no PII, and wants to store *everything* (raw prompts + completions) in Langfuse. Can an `onprem_only` app do that?
 
-**No — not while the app is classed `onprem_only`.** An `onprem_only` app is capped at
-`capture_io` of `off` or `redacted`:
+**Yes — set `policy_mode: "passthrough"` and `capture_io: "full"`, and keep
+`residency: "onprem_only"`.** See the first question above for the full configuration.
+The app needs its own provisioned Langfuse project, because raw I/O is tenant-isolated
+and never lands in the shared one.
 
-- `capture_io=full` is rejected for `onprem_only` **whether PII detection is on or off.**
-- `capture_io=redacted` is rejected when detection is `off`/`regex` (the exporter's
-  "redacted" path reuses the gate's sanitized prompt, which is raw when detection is off).
+This used to be refused. The old rule capped an `onprem_only` app at `capture_io` of
+`off` or `redacted` on the reasoning that on-prem meant maximum protection. That
+conflated placement with posture and forced customers to misdeclare residency to get the
+behaviour they needed — so it was replaced by an explicit `policy_mode` (CLAUDE.md rule
+2 amended 2026-09-05; see the [per-app config reference](../per-app-config.md)).
 
-Note this question is specifically about **raw telemetry**. If all you need is unredacted
-prompts *reaching the model*, you do not have to move off `onprem_only` at all — see the
-previous question.
+**What has not changed, and will not:**
 
-This is deliberate, not a bug. `onprem_only` is the maximally-sensitive class (the
-hospital persona), and its *telemetry* ceiling is intentionally non-configurable so a
-good-faith "we don't need redaction here" can't silently become plaintext PII sitting in a
-trace console. That is the risk redaction defends even on-prem: raw PII in Langfuse is
-readable by anyone with console access to that project — staying on your infrastructure
-does not remove that exposure surface. Nothing above constrains what reaches the *model*,
-which is why detection can be turned off for an `onprem_only` app while capture cannot.
+- An `enforced` app — one that has *not* declared a no-protection posture — still cannot
+  reach `capture_io=full`, at any residency. Raw capture of a protected app was never
+  sensible.
+- `capture_io=redacted` is still rejected whenever nothing is being sanitized
+  (`passthrough`, or `pii_detection` `off`/`regex`), because that path reuses the gate's
+  sanitized prompt and writes to the **shared** project.
+- Raw I/O only ever reaches the app's **own** project.
+- `policy.allow_app_passthrough: false` forbids the whole posture install-wide.
 
-**Best available for a true `onprem_only` app:** `capture_io=redacted` with detection on.
+**Decide it deliberately.** The risk redaction defends even on-prem is that raw PII in
+Langfuse is readable by anyone with console access to that project — staying on your own
+infrastructure does not remove that exposure surface. `passthrough` is right when the
+data is the customer's own and every field is load-bearing; it is wrong for the hospital
+persona, which is exactly why the posture is explicit, stamped on every response and
+trace, and gated by a deployment ceiling.
+
+**If you'd rather not turn protection off:** `capture_io=redacted` with detection on.
 You still get full decision traces, routing, candidate list, cost, latency, and redacted
 I/O — everything except the raw entity text.
 
 ### Can I just set `residency=private_cloud_ok` (or `any`) so those customers can log everything raw?
 
-**Yes, the write succeeds — but residency is not only a telemetry gate, it is the
-provider filter, so this has a side effect you must handle deliberately.**
+> **Don't — this is no longer necessary.** Raw capture is unlocked by
+> `policy_mode: "passthrough"`, not by residency. Set the posture and leave residency
+> describing where compute may actually run. The rest of this answer is kept because
+> the side effect below is real for anyone who *does* move an app off `onprem_only`
+> for a legitimate placement reason.
+
+**The write succeeds — but residency is the provider filter, not a telemetry gate, so
+this has a side effect you must handle deliberately.**
 
 The valid residency values are `any`, `private_cloud_ok`, and `onprem_only`. Any value
 other than `onprem_only` allows the enabled cloud providers into the routing pool. So

@@ -157,6 +157,67 @@ class Pipeline:
             return FilteredDetector(base, deny, thr, exempt)
         return base
 
+    def _policy_mode_for(self, app_policy) -> str:
+        """The EFFECTIVE protection posture for this request: the app's own
+        `policy_mode`, else the deployment default (`serving.yaml
+        policy.default_policy_mode`) -- the same null-means-inherit resolution
+        `_detector_for` gives `pii_detection`.
+
+        Read live off `self._s` rather than snapshotted in `__init__`: nothing
+        is memoized on it, unlike `_global_pii_mode`, which seeds the detector
+        memo and must stay fixed for the life of the process.
+
+        Deployment ceiling: `serving.policy.allow_app_passthrough: false`
+        forbids `passthrough` install-wide, for EVERY app, regardless of the
+        per-app value or the default. It resolves back to "enforced" here --
+        fail closed (CLAUDE.md rule 5) -- as well as being refused at write
+        time by the admin API, so a policy row (or a `default_policy_mode`)
+        written before the ceiling was lowered can never run unprotected.
+        """
+        mode = getattr(app_policy, "policy_mode", None) if app_policy is not None else None
+        if mode is None:
+            mode = self._s.serving.default_policy_mode
+        if mode == "passthrough" and not self._s.serving.allow_app_passthrough:
+            return "enforced"
+        return mode
+
+    def _gate_inputs(self, app_policy, profile: AppPrivacyProfile | None
+                     ) -> tuple[Detector, list | None, str]:
+        """Compose `(detector, sensitivity rules, effective policy_mode)` for one
+        request. The ONE place the gate's detector is built: `run()` and
+        `run_stream()` both call it, so the two paths can never drift.
+
+        `passthrough` means NO protection, at all. The base detector is the
+        null detector regardless of the app's own `pii_detection`; the app's
+        custom recognizers are NOT layered on (no `EffectiveDetector`); and its
+        denylist / score floor / value-shape exemptions are moot, so no
+        `FilteredDetector` either. That is a deliberate behaviour difference
+        from `pii_detection: "off"`, which still runs profile recognizers -- an
+        app the operator has declared untouched must not have a leftover custom
+        recognizer silently redacting its data, which is exactly the class of
+        bug this mode exists to kill. Nothing is detected, so nothing is
+        redacted at intake, and `verify()` -- handed this SAME detector on both
+        the direct and cached paths -- finds nothing to redact on egress
+        either.
+
+        What `passthrough` does NOT change is PLACEMENT. `build_context`
+        derives `onprem_only` / `allowed_providers` from `app_policy.residency`
+        alone and never consults detection; with no entities found,
+        `_match_rule` returns the public rule (exactly as `pii_detection: "off"`
+        already does) and `_stricter` still carries the app's own residency
+        through. The app's sensitivity rules are still resolved here for the
+        same reason -- they can only ever pin residency STRICTER. CLAUDE.md
+        rule 3 holds unchanged.
+        """
+        mode = self._policy_mode_for(app_policy)
+        rules = effective_rules(profile, self._s) if profile is not None else None
+        if mode == "passthrough":
+            return self._detector_for("off"), rules, mode
+        base = self._base_detector_for(app_policy)
+        if profile is not None:
+            return EffectiveDetector(base, list(profile.recognizers)), rules, mode
+        return base, rules, mode
+
     def _sanitize_msg(self, det: Detector, m: Message) -> Message:
         """Redact one message's text with the request's effective detector,
         preserving role + tool-calling structure. Used on the tool-calling
@@ -246,7 +307,7 @@ class Pipeline:
 
     def _serve_from_cache(self, request_id: str, ctx: ExecutionPolicyContext,
                           sanitized: str, entry: CacheEntry, det: Detector,
-                          check_latency_ms: float) -> dict | None:
+                          check_latency_ms: float, policy_mode: str) -> dict | None:
         """C4 keystone: re-verify the cached text against the CURRENT
         request's per-app detector + ctx before ever serving it -- this is
         the step-9 verification for the served response; compress/gateway/
@@ -288,7 +349,10 @@ class Pipeline:
             "policy": {"sensitivity": ctx.sensitivity, "onprem_only": ctx.onprem_only,
                        "allowed_providers": sorted(ctx.allowed_providers),
                        "detected_entities": list(ctx.detected_entities),
-                       "app_policy_version": ctx.app_policy_version},
+                       "app_policy_version": ctx.app_policy_version,
+                       # EFFECTIVE posture (post-inherit, post-ceiling), never
+                       # the raw nullable column -- see `_policy_mode_for`.
+                       "policy_mode": policy_mode},
             "sanitized_prompt": sanitized,
             # No raw/pre-verify text exists for a cache hit (no model call ran
             # this request) -- `text` (the just-re-verified, redacted answer)
@@ -313,13 +377,13 @@ class Pipeline:
         # unconditionally the global `self._detector` -- an app set to
         # "off"/"regex" actually gets that detection mode instead of always
         # inheriting the process-wide default.
+        #
+        # Per-app policy_mode: an app resolving to "passthrough" short-circuits
+        # ALL of the above to the null detector with no recognizers layered on
+        # -- see `_gate_inputs`. Placement (onprem_only/allowed_providers) is
+        # untouched by that; only protection is.
         try:
-            base = self._base_detector_for(app_policy)
-            if profile is not None:
-                det = EffectiveDetector(base, list(profile.recognizers))
-                rules = effective_rules(profile, self._s)
-            else:
-                det, rules = base, None
+            det, rules, policy_mode = self._gate_inputs(app_policy, profile)
             ctx, sanitized, _map = self._gate.evaluate(
                 request_id, tenant_id, request, app_policy=app_policy,
                 detector=det, rules=rules)
@@ -400,7 +464,7 @@ class Pipeline:
             # pricing basis. san_messages (sanitized, not yet compressed)
             # still goes to the agent — each hop compresses its own view.
             return await self._run_multi_step(
-                request_id, ctx, request, san_messages, det,
+                request_id, ctx, request, san_messages, det, policy_mode,
                 recall.record, classifier_record=crec)
 
         # Feature #6 — semantic cache CHECK (direct path only; see the
@@ -443,7 +507,8 @@ class Pipeline:
                     # re-verify is treated as an ordinary miss below (falls
                     # through to compress/gateway/verify), never served.
                     hit_resp = self._serve_from_cache(
-                        request_id, ctx, sanitized, entry, det, check_latency_ms)
+                        request_id, ctx, sanitized, entry, det, check_latency_ms,
+                        policy_mode)
                     if hit_resp is not None:
                         return hit_resp
                 cache_record = CacheRecord(
@@ -592,7 +657,10 @@ class Pipeline:
             "policy": {"sensitivity": ctx.sensitivity, "onprem_only": ctx.onprem_only,
                        "allowed_providers": sorted(ctx.allowed_providers),
                        "detected_entities": list(ctx.detected_entities),
-                       "app_policy_version": ctx.app_policy_version},
+                       "app_policy_version": ctx.app_policy_version,
+                       # EFFECTIVE posture (post-inherit, post-ceiling), never
+                       # the raw nullable column -- see `_policy_mode_for`.
+                       "policy_mode": policy_mode},
             "sanitized_prompt": sanitized,
             "raw_completion": result.text,
         }
@@ -631,18 +699,15 @@ class Pipeline:
         response has started.
 
         Nothing external sees the raw request before the gate: the gate (with
-        the per-app `_detector_for` base detector + optional profile recognizers,
-        mirroring `run()`) runs first; compression runs strictly after it.
+        the per-app detector `_gate_inputs` composes, mirroring `run()`) runs
+        first; compression runs strictly after it.
         """
-        # Gate first -- identical composition to run() (per-app pii_detection
-        # base detector + optional profile recognizers/rules; fail closed).
+        # Gate first -- the SAME `_gate_inputs` composition run() uses (per-app
+        # policy_mode, pii_detection base detector, optional profile
+        # recognizers/rules; fail closed), so the streaming path can never
+        # drift from the direct one.
         try:
-            base = self._base_detector_for(app_policy)
-            if profile is not None:
-                det = EffectiveDetector(base, list(profile.recognizers))
-                rules = effective_rules(profile, self._s)
-            else:
-                det, rules = base, None
+            det, rules, policy_mode = self._gate_inputs(app_policy, profile)
             ctx, sanitized, _map = self._gate.evaluate(
                 request_id, tenant_id, request, app_policy=app_policy,
                 detector=det, rules=rules)
@@ -702,7 +767,8 @@ class Pipeline:
             if result is None:
                 raise PipelineRejected("stream ended without a final result")
             meta.update(self._assemble_stream_meta(
-                request_id, ctx, sanitized, comp, records, result, recall.record))
+                request_id, ctx, sanitized, comp, records, result, policy_mode,
+                recall.record))
 
         def get_meta() -> dict:
             if not meta:
@@ -727,6 +793,7 @@ class Pipeline:
 
     def _assemble_stream_meta(self, request_id: str, ctx: ExecutionPolicyContext,
                               sanitized: str, comp, records, result: GenerationResult,
+                              policy_mode: str,
                               mem_record: MemoryRecord | None = None) -> dict:
         """Assemble the final streaming metadata dict, mirroring run()'s record,
         two-lever cost, and quality assembly. Step-9 verification is WAIVED on
@@ -773,7 +840,10 @@ class Pipeline:
             "policy": {"sensitivity": ctx.sensitivity, "onprem_only": ctx.onprem_only,
                        "allowed_providers": sorted(ctx.allowed_providers),
                        "detected_entities": list(ctx.detected_entities),
-                       "app_policy_version": ctx.app_policy_version},
+                       "app_policy_version": ctx.app_policy_version,
+                       # EFFECTIVE posture (post-inherit, post-ceiling), never
+                       # the raw nullable column -- see `_policy_mode_for`.
+                       "policy_mode": policy_mode},
             "sanitized_prompt": sanitized,
             "raw_completion": result.text,
             # Step-9 verification marker: "waived" this task. Tasks 6/7 refine to
@@ -783,7 +853,7 @@ class Pipeline:
 
     async def _run_multi_step(self, request_id: str, ctx: ExecutionPolicyContext,
                               request: ChatRequest, san_messages: list[Message],
-                              det: Detector,
+                              det: Detector, policy_mode: str,
                               mem_record: MemoryRecord | None = None,
                               classifier_record: DecisionRecord | None = None) -> dict:
         # NOT wired to the semantic cache (feature #6, Task 2), deliberately:
@@ -904,7 +974,10 @@ class Pipeline:
             "policy": {"sensitivity": ctx.sensitivity, "onprem_only": ctx.onprem_only,
                        "allowed_providers": sorted(ctx.allowed_providers),
                        "detected_entities": list(ctx.detected_entities),
-                       "app_policy_version": ctx.app_policy_version},
+                       "app_policy_version": ctx.app_policy_version,
+                       # EFFECTIVE posture (post-inherit, post-ceiling), never
+                       # the raw nullable column -- see `_policy_mode_for`.
+                       "policy_mode": policy_mode},
             "sanitized_prompt": san_messages[-1].content if san_messages else "",
             "raw_completion": result.text,
         }

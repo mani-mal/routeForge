@@ -199,3 +199,36 @@ def test_http_per_app_compression_override(tmp_path):
             assert rec["bypass_reason"] == "below_min_tokens"
     finally:
         restore()
+
+
+# --- policy_mode: never-silent version stamp --------------------------------
+#
+# Mirrors the denylist/exempt-patterns version tests in test_pii_entity_filter.py.
+# policy_mode is the one field that can turn detection and redaction OFF for an
+# app, so "never silent" is load-bearing: flipping it MUST move
+# app_policy_version, or a customer's cached conformance PASS taken while the app
+# was still `enforced` is indistinguishable from a live one taken after.
+
+def test_app_policy_version_reacts_to_policy_mode():
+    """Equal policies hash equal; changing only policy_mode flips the version,
+    and null (inherit the deployment default) is distinct from an explicit
+    `enforced` — an operator pinning the mode is a real policy change."""
+    inherit_a = AppPolicyView(residency="onprem_only")
+    inherit_b = AppPolicyView(residency="onprem_only")
+    assert inherit_a.version() == inherit_b.version()
+
+    enforced = AppPolicyView(residency="onprem_only", policy_mode="enforced")
+    passthrough = AppPolicyView(residency="onprem_only", policy_mode="passthrough")
+    assert enforced.version() != passthrough.version()   # the protection flip
+    assert inherit_a.version() != enforced.version()     # null != pinned enforced
+    assert inherit_a.version() != passthrough.version()
+
+
+def test_policy_mode_defaults_to_inherit_and_is_orthogonal_to_residency():
+    """Null = inherit serving.policy.default_policy_mode; setting it must not
+    touch placement (CLAUDE.md rule 3 — residency stays exactly what it was)."""
+    assert AppPolicyView().policy_mode is None
+    ap = AppPolicyView(residency="onprem_only", policy_mode="passthrough")
+    assert ap.residency == "onprem_only"
+    ctx = _ctx(ap)
+    assert set(ctx.allowed_providers) == {"onprem"}

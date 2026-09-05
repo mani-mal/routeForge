@@ -2,6 +2,7 @@ import sys
 
 from app.config.loader import load_settings
 from app.config.schema import Settings
+from app.policy.enums import POLICY_MODES
 from app.policy.enums import RESIDENCY as valid_residency
 from app.prompts.store import load_artifact
 from app.routing.strategy import _STRATEGIES as _KNOWN_STRATEGIES
@@ -149,6 +150,17 @@ def enforce(s: Settings) -> None:
             "observability.langfuse.capture_io='full': RAW request/response I/O is "
             "being written to Langfuse for eval. Ensure the target project is "
             "residency-local and access-controlled with a retention TTL.")
+
+    # Deployment-wide protection posture. Enum first, same rationale as
+    # capture_io above: a typo (`passthru`) currently loads fine and resolves to
+    # "not passthrough" — safe in direction, but SILENT, and a silent
+    # misconfiguration of the axis that decides whether the gate runs at all is
+    # exactly what the boot lint exists to turn into a named boot failure
+    # (CLAUDE.md "Config lint at startup"; rule 5 — fail closed, loudly).
+    if s.serving.default_policy_mode not in POLICY_MODES:
+        raise ConfigLintError(
+            f"POLICY_MODE_UNKNOWN policy.default_policy_mode must be one of "
+            f"{list(POLICY_MODES)}; got {s.serving.default_policy_mode!r}")
 
     ccr = s.serving.context_optimization.ccr
     if ccr.enabled and ccr.residency != "local_only":
