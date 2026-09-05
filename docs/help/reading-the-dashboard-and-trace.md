@@ -8,6 +8,15 @@ questions that always come up.
 For the panel-by-panel UI reference see [`ui-guide.md`](./ui-guide.md); this doc is the
 *worked example* on top of it.
 
+> ⚠ **These screens were captured before the B10 / B11 / B12 fixes (all resolved
+> 2026-08-16).** Three specific values below reflect the *old, buggy* behaviour and no
+> longer reproduce: the negative `routing saved $-0.0082` (§5, §6b — the baseline now
+> prices output tokens, so routing savings are positive), the "Cloud-eligible" summary
+> headline on a request where cloud was excluded (§4, §6a), and the "excluded · residency"
+> label on the disabled Azure/Bedrock spurs (§5, §6a — now labelled "provider disabled").
+> The narrative of *what each panel means* is still accurate; the exact captured numbers
+> in §1/§4/§5 need a fresh demo capture to be re-trued. See §6 for the corrected reading.
+
 ---
 
 ## 0. The scenario that produced these screens
@@ -177,35 +186,37 @@ why" — the part that makes the demo credible.
 
 ---
 
-## 6. Two things to reconcile before you demo
+## 6. Two things the old capture got wrong — now fixed
 
-Both are worth knowing so a sharp customer question doesn't catch you out.
+Both were real defects in the capture above; both are **resolved** (2026-08-16, verified
+in code). They're kept here because the old screens are still in circulation and a sharp
+customer may have seen them — this is what you say now.
 
-**(a) "Cloud-eligible" but cloud was excluded.** The *What happened* PRIVACY card says
-"Cloud-eligible — every provider was eligible," yet SERVING PROVIDERS greys out Azure and
-Bedrock and the router rejected them for *residency*. Both can't be the headline. What
-actually happened: the **gate** didn't force on-prem (`onprem_only=false`), but Azure and
-Bedrock are **disabled at the infra kill-switch** (`config/serving.yaml`,
-`providers.{azure,bedrock}.enabled: false`), so `allowed_providers` collapses to `onprem`
-(see Policy Context) and the only eligible path is on-prem. The summary card reads the
-gate flag, not the effective candidate pool, so it overstates cloud-eligibility; the
-router additionally mislabels the disabled providers as "residency" exclusions. Narrate it
-as "cloud providers are turned off on this lab, so everything stays on-prem." Tracked as
-**B11** (summary card) and **B10** (router label) in
-[`../bugs-backlog.md`](../bugs-backlog.md).
+**(a) "Cloud-eligible" but cloud was excluded — fixed (B11 + B10).** The old capture's
+*What happened* PRIVACY card said "Cloud-eligible — every provider was eligible," yet
+SERVING PROVIDERS greyed out Azure and Bedrock and the router rejected them for
+*residency*. What actually happened: the **gate** didn't force on-prem
+(`onprem_only=false`), but Azure and Bedrock are **disabled at the infra kill-switch**
+(`config/serving.yaml`, `providers.{azure,bedrock}.enabled: false`), so `allowed_providers`
+collapses to `onprem` and the only eligible path is on-prem. The summary card used to read
+the gate flag instead of the effective candidate pool (overstating cloud-eligibility), and
+the router mislabelled the kill-switched providers as "residency" exclusions.
+**Now:** the eligibility line is derived from `allowed_providers` (so a request with cloud
+disabled reads as on-prem, not "cloud-eligible"), and a provider dropped by the kill-switch
+is labelled **"provider disabled"**, distinct from a residency exclusion. Narrate it simply
+as "cloud providers are turned off on this lab, so everything stays on-prem." (Was **B11**
+summary card / **B10** router label in [`../bugs-backlog.md`](../bugs-backlog.md).)
 
-**(b) "routing saved" is negative per-request but positive in aggregate.** This request
-shows `routing saved $-0.0082`, while the Overview shows `+$0.0255 / 27.4%` saved overall.
-Root cause: the "all-frontier baseline" is priced on `tokens_before` — the *pre-completion*
-token count (~the prompt only) — so it **omits the 972 output tokens the model actually
-generated**, while `actual spend` includes them. That understates the baseline to $0.0023
-and drives `routing_saved` negative, even though a real frontier model would generate those
-same output tokens (~$0.015) and cost *more*. The per-request baseline ($0.0023) and the
-implied aggregate baseline (~$0.0155/req) don't line up for the same reason. **Fix the
-baseline to price the actual input+output token basis** before showing the cost story —
-otherwise the flagship "we save money by routing" claim shows a negative number on the very
-screen that's supposed to prove it. Tracked as **B12** in
-[`../bugs-backlog.md`](../bugs-backlog.md).
+**(b) "routing saved" went negative per-request — fixed (B12).** The old capture showed
+`routing saved $-0.0082` on this request while the Overview showed a positive aggregate.
+Root cause: the "all-frontier baseline" was priced on `tokens_before` — roughly the prompt
+only — so it **omitted the 972 output tokens the model generated**, while `actual spend`
+included them. That understated the baseline and drove `routing_saved` negative, even
+though a real frontier model would generate those same output tokens and cost *more*.
+**Now:** the baseline prices the actual **input + output** token basis, so `routing_saved`
+is **positive** for a cheaper-tier request and zero for a same-tier one — the flagship "we
+save money by routing" number reads correctly on the screen meant to prove it. (Was **B12**
+in [`../bugs-backlog.md`](../bugs-backlog.md).)
 
 ---
 

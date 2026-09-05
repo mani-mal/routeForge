@@ -79,6 +79,14 @@ A standard `ChatCompletion` **plus routeForge-specific fields**:
 Notes:
 - `choices[0].message.content` is your answer — reading only that makes routeForge
   a drop-in for OpenAI.
+- **`message.content` is the *post-verification* answer, not the raw model output.**
+  Step 9 (Output Controls & Verification) can change it: egress PII redaction scrubs any
+  PII the model itself emitted (values the input gate never saw), and a request with
+  `require_verification` set is **rejected** if the completion is unverifiable. On the
+  common path — no PII in the completion and `require_verification` unset — `content` is
+  the model's answer verbatim. The `VerificationRecord` in `trace` (`step:"verify"`)
+  reports what step 9 did; the unmodified model output is available separately as
+  `raw_completion` (subject to the app's `capture_io`).
 - `model` is the slug; `model_display` is the human-readable name.
 - `created` is **not** emitted by the non-streaming path.
 - `policy.detected_entities` lists entity **types** (`US_SSN`, `EMAIL_ADDRESS`),

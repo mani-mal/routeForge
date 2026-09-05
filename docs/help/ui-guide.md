@@ -334,50 +334,89 @@ The ten step cards and the values each shows:
 
 ## 8. Settings tab
 
-`admin/ApplicationsPanel.tsx` (`AppConfig`). Per-app admin config — the **policy
-editor** (8a), the **privacy rules** editor (8b), the app's own **Langfuse
-credentials**, and **API tokens** (create / revoke; the full token is shown once at
-creation, only its prefix thereafter). This is CRUD over `/admin/*`, not a read view.
+`admin/AppSettings.tsx` (`AppConfig`, re-exported through `admin/ApplicationsPanel.tsx`
+so both the admin Applications panel and the per-app page mount the same component).
+Per-app admin config as a permanent **summary strip** and **six numbered, collapsible
+steps** (8a) — the last of which is the **privacy rules** editor (8b). This is CRUD over
+`/admin/*`, not a read view.
 
-### 8a. Policy editor
+### 8a. The six steps
 
-Since `:0.17.0` this form covers **every** field the admin policy API accepts. Before
+> **What should a new app be set to?** See
+> [`choosing-app-settings.md`](./choosing-app-settings.md) — three questions, three
+> recipes, and what each one costs you.
+
+Since `:0.18.0` the tab is six numbered, collapsible steps with a **Start from a
+recipe** picker; since `:0.17.0` this form covers **every** field the admin policy API
+accepts. Before
 that, six of them — `policy_mode`, `pii_detection`, `stream_mode`,
 `pii_entity_denylist`, `pii_score_threshold`, `pii_exempt_patterns` — existed only over
 `curl`, which is why some deployed apps carry values the console could not previously
 show you.
 
-The form is grouped into four labelled sections, and the grouping is the point rather
-than decoration: **placement and protection are separate axes**, and a flat stack of
-rows was exactly what let operators read one as implying the other.
+It used to render all of that as one flat scroll with every field expanded at the same
+visual weight. It is now six numbered steps, each **collapsed to a one-line summary of
+its own current values**, so the page is scannable before anything is opened. The
+numbering is the recommended order to work through for a new app; the grouping is the
+point rather than decoration: **placement and protection are separate axes**, and a flat
+stack of rows was exactly what let operators read one as implying the other.
 
-| Section | Controls | What it governs |
-|---|---|---|
-| **Placement — where compute may run** | `residency`, allowed `providers`, allowed `tiers`, allowed `models` | Where a request is permitted to execute. `onprem_only` is absolute: cloud providers are filtered out of the candidate pool *before* the router scores anything. Nothing in any section below can change this. |
-| **Protection — what the gate does to the data** | `policy_mode`, plus a nested **Detection & narrowing** sub-group: `pii detection`, `min confidence`, `exempt types`, `exempt values` | How much the policy gate does to the content. Independent of placement. |
-| **Telemetry** | `capture_io` (`off` / `redacted` / `full`) | What this app's traces carry. Raw I/O only ever reaches this app's *own* Langfuse project — never the shared one. |
-| **Delivery and limits** | `stream_mode`, Headroom (compression) override, `max rpm`, budget `$/day` | How the answer is delivered, and the app's quotas. |
+| # | Step | Controls | Saved by |
+|---|---|---|---|
+| **1** | **Access** | API tokens — list, issue, revoke | `POST /admin/applications/{id}/tokens`, `POST /admin/tokens/{token_id}/revoke` (immediate, no Save button) |
+| **2** | **Placement — where compute may run** | `residency`, allowed `providers`, allowed `tiers`, allowed `models` | **Save policy** |
+| **3** | **Protection — what the gate does to the data** | `policy_mode`, plus a collapsible **Detection & narrowing** sub-group: `pii detection`, `min confidence`, `exempt types`, `exempt values` | **Save policy** |
+| **4** | **Telemetry** | the app's own **Langfuse credentials**, then `capture_io` (`off` / `redacted` / `full`) | **Save credentials** (`PUT …/langfuse`) for the credentials; **Save policy** for `capture_io` |
+| **5** | **Delivery and limits** | `stream_mode`, Headroom (compression) override, `max rpm`, budget `$/day` | **Save policy** |
+| **6** | **Privacy rules** (badged *advanced*) | custom recognizers + sensitivity rules — see 8b | **Save privacy rules** (`PUT …/privacy`) |
 
-**`policy_mode` is the coarse switch.** `enforced` (the default) means detection,
-redaction in both directions, sensitivity escalation, custom recognizers, and the
-capture ceiling. `passthrough` means RouteForge is a router, meter and tracer only:
-nothing is detected and nothing is redacted, so the prompt reaches the model verbatim
-and the completion comes back verbatim. Selecting it raises an inline banner that says
-exactly that, alongside what *continues* unchanged — routing and tier selection,
-budgets, rate limits, usage metering, the full decision trace, Langfuse tracing — and
-one thing worth being blunt about: **`passthrough` does not touch placement.** Residency
-still decides where compute may run, `onprem_only` stays absolute, and `onprem_only` +
-`passthrough` ("run only on my hardware, and don't touch my data") is a valid, honest
-configuration with the on-prem guarantee fully intact. The posture is never silent: it
-is folded into `app_policy_version`, stamped on every response, and emitted on the
-trace.
+**The summary strip answers "what is this app set to?" without opening anything.** It
+sits above step 1 and never collapses: app **name**, app **id**, then the *effective*
+`residency` (violet — the residency dimension, §9c), `policy_mode` (amber when it is
+`passthrough`), `capture`, and `detection` (which reads `off (passthrough)` when the
+posture has turned detection off). While any step holds unsaved edits the strip says so
+by number — *"unsaved edits in steps 3, 4 — shown values are not saved yet"* — and each
+affected step header carries a dot.
 
-**The Detection & narrowing sub-group refines the `enforced` posture.** While
-`passthrough` is selected these controls dim and are labelled inert — nothing is
-detected, so there is nothing to narrow — but they stay editable and their stored
-values are **kept, not cleared**. Flipping the posture must never destroy the
-configuration you spent time on; set the app back to `enforced` and the same values
-apply again.
+A **Start from a recipe** picker sits between the summary strip and step 1. It offers the
+three recipes from [`choosing-app-settings.md`](./choosing-app-settings.md#2-the-three-recipes)
+— *Protected*, *Router only — no PII checks*, *Protected, no telemetry I/O* — shows what
+each would change as `field: current → new`, and **fills the form without saving**: you
+review the change and then press Save. It sets `policy_mode` and `capture_io` only and
+never touches placement.
+
+**Step 1 — Access.** The token list with each token's prefix, name and status. *+ issue
+token* mints one and reveals it **exactly once**, with a copy control; it is stored
+hashed and can never be shown again. *revoke* is immediate and cannot be undone — issue
+the replacement first, roll the caller over, then revoke the old one.
+
+**Step 2 — Placement.** Where a request is permitted to execute. `onprem_only` is
+absolute: cloud providers are filtered out of the candidate pool *before* the router
+scores anything. Nothing in any step below can change this. The `providers`, `tiers` and
+`models` controls all read "none/empty = all".
+
+**Step 3 — Protection.** `policy_mode` **is the coarse switch.** `enforced` (the default)
+means detection, redaction in both directions, sensitivity escalation, custom
+recognizers, and the capture ceiling. `passthrough` means RouteForge is a router, meter
+and tracer only: nothing is detected and nothing is redacted, so the prompt reaches the
+model verbatim and the completion comes back verbatim. Selecting it raises an inline
+banner that says exactly that, alongside what *continues* unchanged — routing and tier
+selection, budgets, rate limits, usage metering, the full decision trace, Langfuse
+tracing — and one thing worth being blunt about: **`passthrough` does not touch
+placement.** Residency in step 2 still decides where compute may run, `onprem_only` stays
+absolute, and `onprem_only` + `passthrough` ("run only on my hardware, and don't touch my
+data") is a valid, honest configuration with the on-prem guarantee fully intact. The
+posture is never silent: it is folded into `app_policy_version`, stamped on every
+response, and emitted on the trace.
+
+**The Detection & narrowing sub-group refines the `enforced` posture.** It is a
+collapsible group inside step 3: open by default while the posture is `enforced` (it is
+the substance of that posture), and collapsed to a single line under `passthrough`
+— *"inert while passthrough — 3 exempt types kept"* — instead of a screenful of controls
+that do nothing. It stays openable and editable there, and its stored values are **kept,
+not cleared**; opening it under `passthrough` shows a note saying so. Flipping the
+posture must never destroy the configuration you spent time on; set the app back to
+`enforced` and the same values apply again.
 
 - **`pii detection`** — leaving it unset inherits the deployment's live detector, which
   is *not* a downgrade. Only an explicit `off` or `regex` is, and it blinds the gate to
@@ -388,8 +427,8 @@ apply again.
   Blank the box to remove a stored floor entirely; `0` is a different setting — a floor
   that passes every score.
 - **`exempt types`** (`pii_entity_denylist`) — entity types the gate still detects but
-  does not redact for this app. Presidio built-ins only. `US_SSN` renders locked with a
-  🔒 and can never be selected.
+  does not redact for this app. Presidio built-ins only. `US_SSN` renders as
+  `US_SSN (locked)`, is not clickable, and can never be selected.
 - **`exempt values`** (`pii_exempt_patterns`) — regexes matched against the *whole
   detected value*, whatever type Presidio gave it: the type-independent complement to
   exempt types, for a value shape that keeps landing under a different label. Rows
@@ -397,6 +436,37 @@ apply again.
   line) to see which would be exempted. **That tester runs entirely in your browser** —
   nothing typed into it is sent anywhere. `US_SSN` is never exempted, however a pattern
   reads.
+
+**Step 4 — Telemetry.** `capture_io` decides what this app's traces carry. Raw I/O only
+ever reaches this app's *own* Langfuse project — never the shared one. **The app's
+Langfuse credentials now live here, directly above `capture_io`, because they gate it:**
+host, public key, secret key and project id, with their own **Save credentials** button
+(they used to sit at the very top of the tab, roughly a thousand pixels from the control
+they unlock). Use that project's **project**-scoped keys, not organization keys; `host`
+is the server-reachable ingestion host (e.g. `http://langfuse-web:3000`), not the browser
+URL. The line above the fields says whether credentials are set. The secret is
+write-only — it is never rendered back, before or after saving. Full detail in
+[`../langfuse-per-app-projects.md`](../langfuse-per-app-projects.md).
+
+**Step 5 — Delivery and limits.** How the answer is delivered, and the app's quotas.
+
+**Step 6 — Privacy rules.** Badged *advanced* and, like every other step, closed until
+you open it — see 8b.
+
+**Long explanations are one click away, not deleted.** Every control keeps one short
+inline hint; the longer prose — what the server clamps do and why — moves behind a small
+`?` toggle next to the label. Nothing was removed in the restructure, only relocated.
+
+**"Inherited" markers name the actual value.** Each control's unset option reads
+`(global default — redacted)` rather than a bare "(global default)", using the deployment
+envelope from `GET /admin/me` (`default_policy_mode`, `default_pii_detection`,
+`default_capture_io`, `reject_stream_requests` and the two ceilings). Two exceptions,
+both deliberate: `residency`'s unset option names the *application's* default
+(`(app default — onprem_only)`), and `stream_mode` has no deployment-wide default at all,
+so its unset option instead names what the deployment will do with `stream: true`
+("rejected", or "served unstreamed"). Headroom's "(global default)" is the one marker
+that still names no value — the envelope does not carry it. Against a server that
+predates the envelope the console falls back to naming nothing rather than guessing.
 
 **Options the server would refuse are disabled with the reason on the option itself**,
 not silently greyed. `capture_io = full` needs the app's own Langfuse project *and*, for
@@ -424,15 +494,26 @@ Two honesty notes about what this form does and doesn't guarantee:
   server refuses that write outright if it would leave an `enforced` `onprem_only` app
   still storing raw I/O.
 
+**One PUT covers steps 2–5.** Placement, protection, telemetry and delivery are one row
+server-side, so **Save policy** appears at the foot of each of those four steps and every
+copy does the same single `PUT /admin/applications/{id}/policy`. When other steps also
+hold unsaved edits the button says which ones it will carry along ("Also saves unsaved
+edits in steps 2, 5"), so a save from step 4 is never a surprise. The three genuinely
+separate writes keep their own buttons: **Save credentials** in step 4, **Save privacy
+rules** in step 6, and the token actions in step 1, which apply immediately.
+
 Field-by-field semantics, the clamps, and the equivalent `curl` are in
 [`../per-app-config.md`](../per-app-config.md).
 
 ### 8b. Privacy rules
 
-`admin/PrivacyRulesEditor.tsx`, mounted below the policy/token fields on the Settings
-tab. Lets an owner override this **one application's** classification without touching
-the global `config/policy.yaml` — the same rules that both the policy gate (step 2) and
-output verification (step 9) consult for this app. Backed by
+`admin/PrivacyRulesEditor.tsx`, mounted as **step 6** of the Settings tab and badged
+*advanced*; its header summarises what the app has (*"global defaults"*, or *"2 custom
+recognizers · 3 sensitivity rules"*). Once opened it stays mounted, so collapsing the
+step never throws away unsaved rule edits. Lets an owner override this **one
+application's** classification without touching
+the global `config/policy.yaml` — the same rules that both the policy gate (Serving
+Plane step 2) and output verification (Serving Plane step 9) consult for this app. Backed by
 `GET`/`PUT /admin/applications/{id}/privacy`.
 
 | Section | What it does |
@@ -512,7 +593,7 @@ cookie (`same-origin`); the packaged deploy's nginx reverse-proxies `/api`, `/ad
 | App request feed (seed) | `GET /api/requests?limit=500&app=<id>` | `ui_routes.list_requests` |
 | Drill-down full trace | `GET /api/requests/{id}` | `ui_routes.get_request` |
 | Live updates (all tabs) | `GET /api/stream` (SSE) | `ui_routes.stream` |
-| Settings (policy/tokens) | `/admin/applications/*`, `/admin/tokens/*` | `admin_routes` |
+| Settings steps 1–6 | `/admin/applications/*` (policy, langfuse, privacy, tokens), `/admin/tokens/*`, `/admin/me` | `admin_routes` |
 | Cross-app usage report | `GET /admin/usage/by-application` | `admin_routes` |
 | Infrastructure (onboard models) | `/admin/infra/models*` | `admin_routes` |
 | Headroom toggle (header) | `GET`/`POST /api/controls` | `ui_routes` |
@@ -579,8 +660,9 @@ with the server), reading `GET /api/controls` and writing `POST /api/controls`.
 | Console UI | ✅ **HeadroomToggle** in the header chrome (`App.tsx:64`). |
 
 **Scope:** this switch is the **global default** (`app.state.co_cfg`, server-wide). A
-per-application override in an app's **Settings** tab (`AppPolicy.compression_enabled`)
-**wins** over it; apps left at "(global default)" follow this switch. Safety bypasses
+per-application override in an app's **Settings** tab, step 5 Delivery and limits
+(`AppPolicy.compression_enabled`), **wins** over it; apps left at "(global default)"
+follow this switch. Safety bypasses
 (high-risk / restricted / below-min-tokens) still apply on top regardless — see
 `app/compression`.
 

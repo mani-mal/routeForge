@@ -334,8 +334,31 @@ const opts = (method: string, body?: object): RequestInit => ({
   ...(body ? { body: JSON.stringify(body) } : {}),
 });
 
+// The deployment-wide policy envelope every application sits inside, returned
+// read-only by GET /admin/me (app/api/admin_routes.py). The console needs it to
+// be honest about two things it otherwise has to guess: (1) what a per-app
+// field left null actually inherits — "(global default)" on its own tells an
+// operator nothing; (2) which postures the deployment ceilings forbid outright.
+// It is never editable here: an admin-editable ceiling would not be a ceiling.
+export interface DeploymentEnvelope {
+  default_policy_mode: string;
+  default_pii_detection: string;
+  default_capture_io: string;
+  reject_stream_requests: boolean;
+  allow_app_passthrough: boolean;
+  allow_app_pii_downgrade: boolean;
+}
+
+// `deployment` is optional so the console still boots (and still authenticates)
+// against a server that predates the envelope; consumers fall back to naming
+// nothing rather than guessing a value.
+export interface AdminMe {
+  admin_id: string;
+  deployment?: DeploymentEnvelope;
+}
+
 export const adminApi = {
-  me: () => fetch("/admin/me", { credentials: "same-origin" }).then(j<{ admin_id: string }>),
+  me: () => fetch("/admin/me", { credentials: "same-origin" }).then(j<AdminMe>),
   login: (email: string, password: string) =>
     fetch("/admin/login", opts("POST", { email, password })).then(j<{ email: string }>),
   logout: () => fetch("/admin/logout", opts("POST")).then(j<{ ok: boolean }>),
