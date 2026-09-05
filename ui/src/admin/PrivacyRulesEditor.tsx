@@ -18,7 +18,11 @@ const RESIDENCY = ["any", "private_cloud_ok", "onprem_only"];
 // Presidio built-in entity types (app/policy/recognizers.py PRESIDIO_BUILTINS).
 // Custom recognizer names (defined below, per-app) are appended to this list
 // when building the entities multi-select.
-const BUILTIN_ENTITIES = [
+// Presidio's built-in entity types — mirrors PRESIDIO_BUILTINS in
+// app/policy/recognizers.py. Exported so the policy editor's
+// `pii_entity_denylist` chips spell the list once for the whole console
+// (the server validates against its own copy and 422s on an unknown name).
+export const BUILTIN_ENTITIES = [
   "US_SSN", "CREDIT_CARD", "EMAIL_ADDRESS", "PHONE_NUMBER", "US_BANK_NUMBER",
   "PERSON", "LOCATION", "DATE_TIME", "IP_ADDRESS", "URL", "MEDICAL_LICENSE",
   "US_DRIVER_LICENSE", "US_PASSPORT", "IBAN_CODE", "NRP", "US_ITIN",

@@ -33,6 +33,80 @@ Sibling backlogs: `ui-open-items.md`, `eval-logging-backlog.md`.
 
 ---
 
+> **Update 2026-09-05 (`ui:0.17.0`).** Every per-app policy field is now settable from
+> the console (`AdminPolicy` completed to match `PolicyIn` 14-for-14). **B21** is
+> resolved, and two previously-undocumented bugs found while doing it are recorded
+> below as **B22** and **B23**. Both are the *same class of defect*: **the console had
+> encoded a server rule locally, and drifted when the server moved.** That is the
+> lesson worth carrying out of this change — a client-side copy of a policy rule is a
+> second authority, and a second authority is a bug waiting for the first one to
+> change. The console's job is to *explain* the server's clamps and show their 422s,
+> never to re-derive them; where it must predict one to disable a control, the
+> prediction has to be traceable to the server function it mirrors and be permissive
+> on doubt, because a UI that is stricter than the API silently removes a
+> configuration the operator is entitled to.
+
+## B22 — Console refused `capture_io=full` for every `onprem_only` app (stale mirror of a replaced server rule)  ✅ RESOLVED (2026-09-05, `ui:0.17.0`)
+
+**Severity:** medium (blocked a legitimate, shipped configuration; no data risk)
+**Found:** 2026-09-05, while adding the `policy_mode` control to the Settings tab
+
+**What it was.** `PolicyEditor` disabled the `full` option in the eval-capture dropdown
+whenever the app's effective residency was `onprem_only`. That mirrored the *old*
+server rule, where `onprem_only` doubled as a proxy for "maximum protection" and raw
+capture was refused for on-prem apps outright. PR #34 (`policy_mode`) replaced that
+proxy: placement (`residency`) and protection (`policy_mode`) are separate axes, and
+`set_policy` now refuses `full` only for an `onprem_only` app **still in the `enforced`
+posture** (`app/api/admin_routes.py`, `eff_residency == "onprem_only" and
+eff_policy_mode != "passthrough"`). The UI was never updated, so the console was
+**refusing a configuration the API accepts.**
+
+**Impact.** This is precisely what blocked the MillWise change and sent the operator to
+`curl`: `onprem_only` + `passthrough` + `full` is valid and honest — the on-prem
+guarantee is fully intact, the app has simply declared it has nothing to protect — and
+the console said no with no reason and no way forward. Nothing was unsafe; a supported
+posture was unreachable.
+
+**A second, quieter half.** The gate the UI *did* apply was also wrong on the other
+side: it tested `langfuse_project_id` alone, while the server's condition is
+`load_app_langfuse(app) is not None` — project id **and** a key pair. An app with a
+project id but no keys was offered `full` and got a 422 (which, per B23, it never saw).
+
+**Fix (`ui/src/admin/ApplicationsPanel.tsx`).** The predicate now mirrors `set_policy`
+exactly: `full` requires the app's own Langfuse project (`langfuse_project_id` **and**
+`has_langfuse_keys`) and, for an `onprem_only` app, an effective `policy_mode` of
+`passthrough`; when it is blocked the option is labelled with *why* and with the way
+out, rather than being silently greyed. The same pass corrected `redacted`, which is
+refused wherever nothing is sanitized (`passthrough`, or an explicit `pii_detection` of
+`off`/`regex`) and was previously always offered. The currently-stored value is never
+disabled, so an operator can always see what the app is actually set to.
+
+## B23 — `PolicyEditor.save()` swallowed every error; a rejected save looked like a no-op  ✅ RESOLVED (2026-09-05, `ui:0.17.0`)
+
+**Severity:** medium (silent failure on the one screen where the server does all the
+reasoning)
+**Found:** 2026-09-05, same read-through as B22
+
+**What it was.** `PolicyEditor.save()` was `try { … } finally { setBusy(false) }` — no
+`catch`, no error state. Every `PUT /admin/applications/{id}/policy` failure was
+discarded: the button flipped back to "Save policy" and nothing else changed. A 422 and
+a success were indistinguishable on screen.
+
+**Why that matters more here than elsewhere.** The admin clamps are the *authority* on
+every posture decision in this form, and each 422 `detail` is written to name the rule
+that fired and the alternative to use — "`capture_io='redacted'` cannot be combined
+with `policy_mode='passthrough'` … use `capture_io='full'` with the app's own Langfuse
+project, or `capture_io='off'`". That text is the operator's only guidance on this
+screen, and all of it went in the bin. Combined with B22 the failure was total: the
+console blocked one valid posture outright and, for everything it did let you attempt,
+refused to say why the server had said no.
+
+**Fix.** Two changes. `PolicyEditor` gained an error state rendered under the Save
+button, verbatim. And the shared `j<T>()` fetch helper in `ui/src/api.ts` gained
+`errDetail()`, which pulls FastAPI's `detail` out of a non-2xx body — previously every
+admin error surfaced as a bare status line, so even a `catch` would have had nothing
+useful to show. Both were needed; either alone leaves the operator guessing.
+
 ## B20 — SSN downgraded out of `onprem_only` when spaCy tags it DATE_TIME/PHONE (dedupe defeated the SSN backstop)  ✅ RESOLVED (2026-08-23)
 
 **Severity:** MEDIUM (real privacy-routing gap, not just a flaky test — surfaced *as* a
@@ -58,6 +132,49 @@ SSN is always typed `US_SSN` regardless of spaCy's per-process mood (fail-safe: 
 Regression locked at the dedupe level in `tests/test_policy_merge.py::
 test_scored_ssn_wins_type_over_coincidental_datetime_overlap` (deterministic, no Presidio
 dep). This restores B4's intent (an SSN never slips the gate) through the merge step.
+
+## B21 — Can't edit an onboarded model in the console (only enable/disable + delete)  ✅ RESOLVED (2026-09-05, `ui:0.17.0`)
+
+**Resolution.** `ModelRow` in `ui/src/admin/InfrastructurePanel.tsx` now has an **edit**
+action that expands an inline form over every field `OnboardIn` accepts — display name,
+endpoint URL, `api_key_env`, tier, prices, quality, context window, allowed-app list,
+notes — pre-filled from the row and submitted through the existing `onboardApi.update`
+(`PUT /admin/infra/models/{slug}`). No backend change, exactly as the write-up predicted.
+
+Two things the fix had to respect, both properties of the existing PUT:
+
+- **`slug` is read-only in the edit form.** The PUT is keyed by the *path* slug and
+  ignores a slug in the body, so a "rename" that looked like it worked would silently
+  edit the old row. Renaming a model is delete + re-onboard, and the form says so.
+- **The PUT re-probes on every call and still returns `200` when the probe fails**
+  (`final_enabled = body.enabled and ok`). So a save can succeed and leave the model
+  disabled. The row now renders the returned `probe_status` / `probe_error` after
+  saving instead of silently showing a model that is off. Original write-up kept below.
+
+**Severity:** medium (admin usability; forces delete-and-re-onboard)
+**Found:** 2026-08-28, Infrastructure panel
+
+Once a model is onboarded, the console has no way to change its fields. The
+`ModelRow` in `ui/src/admin/InfrastructurePanel.tsx:218-329` renders only a
+`Toggle` (enable/disable) and a `delete` button — there is no edit form. To
+correct a tier, endpoint URL, `api_key_env`, price, quality, context window,
+allowed-app list, display name, or notes, an operator must delete the row and
+re-onboard from scratch (re-probing, re-typing every field). This is the same
+class of gap as B6 (couldn't rename an application) but for the model fleet.
+
+**Not a backend gap.** The edit path already exists and is already wired: the
+enable toggle calls `PUT /admin/infra/models/{slug}` (`onboardApi.update`,
+`admin_routes.py:580 edit_onboarded_model`) with the *full* `OnboardIn` body,
+spreading the row's current fields and flipping only `enabled`
+(`InfrastructurePanel.tsx:236-252`). The PUT re-validates and re-probes the whole
+body on every call. So the fix is UI-only: surface an "edit" action that opens
+the same field set as `OnboardForm` (line 66), pre-filled from the row, and PUTs
+the edited body — the toggle proves the round-trip works.
+
+**Fix idea:** add an edit button/row-expander next to `delete` that reuses the
+`OnboardForm` inputs (prefilled), submitting via the existing `onboardApi.update`.
+`slug` stays the identity key (PUT is keyed by slug); if slug itself must change,
+that's a delete+create, so keep slug read-only in the edit form. Own SDD task.
 
 ## B1 — Multi-step 503s mislabeled "policy evaluation unavailable"  ✅ RESOLVED (2026-08-16, verified in code)
 

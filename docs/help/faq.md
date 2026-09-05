@@ -147,34 +147,37 @@ moving off `onprem_only` does two things at once:
   to cloud when the router scores it cheaper. Don't do this for an on-prem customer
   without the pin below.
 
-### Recommended config: raw Langfuse capture *and* routing pinned on-prem
+### Legacy config: raw capture via a residency flip + an `allowed_providers` pin
 
-Add the per-app `allowed_providers` pin so routing can never pick cloud regardless of
-residency:
+> **Superseded — don't build new deployments this way.** `policy_mode: "passthrough"`
+> (first question above) gets you raw capture while keeping `residency: onprem_only` and
+> the hard on-prem floor. This section documents the older workaround only so anyone who
+> already applied it can recognise and migrate it.
+
+The workaround was: move the app off `onprem_only` to unlock `capture_io=full`, then pin
+`allowed_providers: {"onprem"}` so routing couldn't actually reach cloud.
 
 | Field | Value | Effect |
 |---|---|---|
-| `residency` | `private_cloud_ok` (or `any`) | Clears the PII-downgrade / `full` restrictions |
-| `allowed_providers` | `{"onprem"}` | Hard-pins routing to on-prem regardless of residency |
+| `residency` | `private_cloud_ok` (or `any`) | Unlocked `full` under the old rule |
+| `allowed_providers` | `{"onprem"}` | Hard-pinned routing to on-prem |
 | `pii_detection` | `off` | No redaction |
 | `capture_io` | `full` | Raw I/O to the app's **own** Langfuse project |
-| deployment `allow_app_pii_downgrade` (`serving.yaml`) | `true` | Ceiling must permit downgrades |
-| app's own Langfuse project | provisioned | `capture_io=full` is rejected (422) without it |
 
-Two caveats to make consciously, per customer:
+**Why it is weaker, and worth migrating off:** it swaps a hard residency floor for a
+mutable allowlist. The two are not equivalent — `ctx.onprem_only` is false for such an
+app, so the step-9 streaming floor and every other check that keys on it no longer treat
+the app as on-prem. If anyone later clears `allowed_providers`, cloud routing silently
+becomes possible, and nothing in the app's declared residency says it shouldn't be.
 
-1. **`capture_io=full` still requires the app's own provisioned Langfuse project** — raw
-   I/O never lands in the shared/default project even after this change. Provision one per
-   app (see [`../langfuse-per-app-projects.md`](../langfuse-per-app-projects.md)).
-2. **You keep the on-prem *behavior* but lose the `onprem_only` *guarantee*.** These are
-   now cloud-eligible apps you've manually pinned, not privacy-first `onprem_only` apps in
-   routeForge's model. If someone later clears `allowed_providers`, cloud routing silently
-   becomes possible. Decide whether that residual risk is acceptable for each customer.
+**To migrate:** set `residency: "onprem_only"` and `policy_mode: "passthrough"` in one
+write. Keep or drop the `allowed_providers` pin as you like — it is now redundant rather
+than load-bearing. The `app_policy_version` stamp moves, so a conformance probe will see
+the change.
 
-**Rule of thumb:** the residency label should reflect the actual sensitivity of the data.
-If the data genuinely has no PII and raw eval capture is wanted, a non-`onprem_only` app
-with `allowed_providers={"onprem"}` is the honest configuration. If the data *is*
-sensitive, keep `onprem_only` and accept `capture_io=redacted` as the ceiling.
+**Rule of thumb, updated:** the residency label should describe where compute may
+actually run, and nothing else. Never adjust it to obtain a telemetry or detection
+outcome — that is what `policy_mode` and `capture_io` are for.
 
 ---
 

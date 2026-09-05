@@ -663,3 +663,209 @@ def test_policy_deployment_default_passthrough_is_seen_by_clamps(monkeypatch):
         assert c.put("/admin/applications/pt-default/policy",
                      json={"policy_mode": "enforced",
                            "capture_io": "redacted"}).status_code == 200
+
+
+def test_me_exposes_readonly_deployment_envelope(client):
+    """The console renders "(global default)" for any null per-app field and
+    decides whether a posture is offerable at all. Both need the deployment's
+    own values, so /admin/me carries them alongside the session identity."""
+    _login(client)
+    r = client.get("/admin/me")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["admin_id"]
+    d = body["deployment"]
+    assert set(d) == {"default_policy_mode", "default_pii_detection",
+                      "default_capture_io", "reject_stream_requests",
+                      "allow_app_passthrough", "allow_app_pii_downgrade"}
+    # Mirrors config, not a hardcoded guess: an install that flips a ceiling
+    # must see the flip here or the UI will offer a posture the write refuses.
+    from app.config.loader import load_settings
+    s = load_settings()
+    assert d["default_policy_mode"] == s.serving.default_policy_mode
+    assert d["allow_app_passthrough"] == s.serving.allow_app_passthrough
+    assert d["allow_app_pii_downgrade"] == s.serving.allow_app_pii_downgrade
+    assert d["default_capture_io"] == s.serving.observability.langfuse.capture_io
+
+
+def test_me_deployment_envelope_still_requires_admin(client):
+    """The envelope names the deployment's ceilings; it rides on the
+    admin-authed route and must not become readable without a session."""
+    assert client.get("/admin/me").status_code == 401
+
+
+# --- PolicyIn.reset: putting a field back to NULL ---------------------------
+# The PUT is a merge (`exclude_none=True`), so `null` means "leave it alone" and
+# a set field could never be returned to NULL = "inherit the deployment
+# default". `reset` names the fields to clear, applied AFTER the merge and
+# judged by the same clamps on the same effective values.
+
+def test_policy_reset_returns_a_field_to_inherit(client):
+    # Round trip: set -> reset -> the column is NULL again, and the merge is
+    # untouched for every field the reset didn't name.
+    _login(client)
+    client.post("/admin/applications", json={"id": "rst-basic", "name": "RstBasic"})
+    assert client.put("/admin/applications/rst-basic/policy",
+                      json={"pii_score_threshold": 0.85, "max_rpm": 20,
+                            "allowed_providers": ["onprem"]}).status_code == 200
+    r = client.put("/admin/applications/rst-basic/policy",
+                   json={"reset": ["pii_score_threshold", "allowed_providers"]})
+    assert r.status_code == 200, r.text
+    got = client.get("/admin/applications/rst-basic").json()["policy"]
+    assert got["pii_score_threshold"] is None
+    assert got["allowed_providers"] is None
+    # merge semantics unchanged: an unmentioned field keeps its stored value
+    assert got["max_rpm"] == 20
+
+
+def test_policy_reset_rejects_an_unknown_field_name(client):
+    # A typo'd name must never be silently dropped — that would leave the
+    # operator believing a field was cleared when it is still set.
+    _login(client)
+    client.post("/admin/applications", json={"id": "rst-typo", "name": "RstTypo"})
+    assert client.put("/admin/applications/rst-typo/policy",
+                      json={"max_rpm": 7}).status_code == 200
+    r = client.put("/admin/applications/rst-typo/policy",
+                   json={"reset": ["max_rpm", "pii_detecton"]})
+    assert r.status_code == 422
+    assert "pii_detecton" in r.text
+    # fail closed: the whole write is refused, including the legal half
+    assert client.get("/admin/applications/rst-typo").json()["policy"]["max_rpm"] == 7
+
+
+def test_policy_reset_and_value_for_the_same_field_is_refused(client):
+    # "clear it" + "set it to X" in one request is a contradiction. Refused
+    # rather than resolved by a silent precedence rule, because on policy_mode
+    # or capture_io either guess silently changes the app's protection posture.
+    _login(client)
+    client.post("/admin/applications", json={"id": "rst-both", "name": "RstBoth"})
+    assert client.put("/admin/applications/rst-both/policy",
+                      json={"policy_mode": "passthrough"}).status_code == 200
+    r = client.put("/admin/applications/rst-both/policy",
+                   json={"policy_mode": "enforced", "reset": ["policy_mode"]})
+    assert r.status_code == 422
+    assert "policy_mode" in r.text
+    got = client.get("/admin/applications/rst-both").json()["policy"]
+    assert got["policy_mode"] == "passthrough"   # nothing applied
+
+
+def test_policy_reset_of_policy_mode_cannot_strand_raw_capture_on_an_onprem_app(client):
+    """Regression guard on CLAUDE.md rules 2/8, not a shape check.
+
+    onprem_only + passthrough + capture_io=full is legal: the operator has
+    explicitly declared the app unprotected, so raw I/O into its OWN Langfuse
+    project is coherent. Resetting `policy_mode` ALONE reverts the posture to
+    the deployment default (`enforced`) — which would leave an ENFORCED
+    onprem_only application storing raw telemetry, precisely the state the
+    capture clamp exists to forbid. The reset must be judged on the effective
+    post-reset posture and the whole write refused.
+    """
+    _login(client)
+    client.post("/admin/applications", json={"id": "rst-posture", "name": "RstPosture",
+                                             "default_residency": "onprem_only"})
+    assert client.put("/admin/applications/rst-posture/langfuse", json={
+        "host": "https://rst-posture-langfuse:3000", "public_key": "pk",
+        "secret_key": "sk", "project_id": "proj_rst_posture"}).status_code == 200
+    assert client.put("/admin/applications/rst-posture/policy",
+                      json={"residency": "onprem_only", "policy_mode": "passthrough",
+                            "capture_io": "full"}).status_code == 200
+
+    r = client.put("/admin/applications/rst-posture/policy",
+                   json={"reset": ["policy_mode"]})
+    assert r.status_code == 422, r.text
+    assert "onprem" in r.text.lower()
+    # Fail closed: the app is still in the declared, coherent posture — the
+    # rejected write left no half-applied state behind.
+    got = client.get("/admin/applications/rst-posture").json()["policy"]
+    assert got["policy_mode"] == "passthrough"
+    assert got["capture_io"] == "full"
+
+
+def test_policy_reset_of_policy_mode_allowed_once_raw_capture_is_dropped(client):
+    # The counterpart to the guard above: the clamp is not a trap. Clearing the
+    # posture back to the deployment default is fine the moment raw capture goes
+    # with it, in one atomic write.
+    _login(client)
+    client.post("/admin/applications", json={"id": "rst-posture-ok",
+                                             "name": "RstPostureOk",
+                                             "default_residency": "onprem_only"})
+    assert client.put("/admin/applications/rst-posture-ok/langfuse", json={
+        "host": "https://rst-posture-ok-langfuse:3000", "public_key": "pk",
+        "secret_key": "sk", "project_id": "proj_rst_posture_ok"}).status_code == 200
+    assert client.put("/admin/applications/rst-posture-ok/policy",
+                      json={"residency": "onprem_only", "policy_mode": "passthrough",
+                            "capture_io": "full"}).status_code == 200
+    r = client.put("/admin/applications/rst-posture-ok/policy",
+                   json={"capture_io": "off", "reset": ["policy_mode"]})
+    assert r.status_code == 200, r.text
+    got = client.get("/admin/applications/rst-posture-ok").json()["policy"]
+    assert got["policy_mode"] is None      # inherits `enforced` again
+    assert got["capture_io"] == "off"
+    assert got["residency"] == "onprem_only"   # placement untouched (rule 2a)
+
+
+def test_policy_reset_of_residency_reevaluates_the_capture_clamp(client):
+    # The same effective-value reasoning on the OTHER axis: a policy row that
+    # overrides residency to "any" can hold capture_io='full' while enforced.
+    # Resetting `residency` hands the app back to its default_residency —
+    # onprem_only — so the write is judged on onprem_only + enforced + full and
+    # refused (rule 8: residency beats eval).
+    _login(client)
+    client.post("/admin/applications", json={"id": "rst-residency", "name": "RstResidency",
+                                             "default_residency": "onprem_only"})
+    assert client.put("/admin/applications/rst-residency/langfuse", json={
+        "host": "https://rst-residency-langfuse:3000", "public_key": "pk",
+        "secret_key": "sk", "project_id": "proj_rst_residency"}).status_code == 200
+    assert client.put("/admin/applications/rst-residency/policy",
+                      json={"residency": "any", "capture_io": "full"}).status_code == 200
+    r = client.put("/admin/applications/rst-residency/policy",
+                   json={"reset": ["residency"]})
+    assert r.status_code == 422, r.text
+    assert "onprem" in r.text.lower()
+    got = client.get("/admin/applications/rst-residency").json()["policy"]
+    assert got["residency"] == "any"
+
+
+def test_policy_reset_of_pii_detection_is_never_a_downgrade(client):
+    # eff_pii deliberately does NOT fall through to the global default, so
+    # clearing the override lands on None = "inherit the deployment's live
+    # detector". That is the state of an app that never overrode the field, so
+    # the downgrade clamp correctly does not fire.
+    _login(client)
+    client.post("/admin/applications", json={"id": "rst-pii", "name": "RstPii"})
+    assert client.put("/admin/applications/rst-pii/policy",
+                      json={"pii_detection": "off", "capture_io": "off"}).status_code == 200
+    r = client.put("/admin/applications/rst-pii/policy",
+                   json={"reset": ["pii_detection"]})
+    assert r.status_code == 200, r.text
+    assert client.get("/admin/applications/rst-pii").json()["policy"]["pii_detection"] is None
+
+
+def test_policy_reset_respects_the_passthrough_deployment_ceiling(monkeypatch):
+    # The ceiling keys on the EFFECTIVE value, so it must fire when the reset
+    # itself is what lands the app on a forbidden deployment default: a
+    # deployment can run default_policy_mode=passthrough with
+    # allow_app_passthrough=false, and clearing an app's explicit `enforced`
+    # would drop it into the posture the deployment forbids.
+    monkeypatch.setenv("SP_DEFAULT_POLICY_MODE", "passthrough")
+    monkeypatch.setenv("SP_ALLOW_APP_PASSTHROUGH", "false")
+    with TestClient(create_app()) as c:
+        _login(c)
+        c.post("/admin/applications", json={"id": "rst-ceiling", "name": "RstCeiling"})
+        assert c.put("/admin/applications/rst-ceiling/policy",
+                     json={"policy_mode": "enforced"}).status_code == 200
+        r = c.put("/admin/applications/rst-ceiling/policy",
+                  json={"reset": ["policy_mode"]})
+        assert r.status_code == 422, r.text
+        assert "disabled" in r.text.lower()
+        assert c.get("/admin/applications/rst-ceiling").json()["policy"]["policy_mode"] == "enforced"
+
+
+def test_policy_in_fields_match_the_store_authority(client):
+    # `reset` names are validated against store.POLICY_FIELDS, and the
+    # contradiction check reads the same names off PolicyIn. If the two drift,
+    # a new column becomes resettable-but-not-settable (or vice versa) and the
+    # contradiction check silently stops covering it.
+    from app.api.admin_routes import PolicyIn
+    from app.apps.store import POLICY_FIELDS
+    assert set(PolicyIn.model_fields) - {"reset"} == set(POLICY_FIELDS)
