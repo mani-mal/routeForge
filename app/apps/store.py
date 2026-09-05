@@ -232,19 +232,33 @@ async def update_application(session: AsyncSession, app_id: str, **fields
     return app
 
 
+# The writable per-app policy columns — the single authority for "is this a
+# legal policy field name?". `upsert_policy` filters writes through it, and the
+# admin API validates `PolicyIn.reset` names against it (a name outside this set
+# is a 422, never a silent no-op). Anything added here must also get a field on
+# `PolicyIn`; tests/test_admin_api.py asserts the two stay in step.
+POLICY_FIELDS: frozenset[str] = frozenset({
+    "allowed_tiers", "allowed_providers", "allowed_models",
+    "residency", "max_spend_usd_per_day", "max_rpm",
+    "compression_enabled", "capture_io",
+    "policy_mode", "pii_detection", "stream_mode",
+    "pii_entity_denylist", "pii_score_threshold", "pii_exempt_patterns"})
+
+
 async def upsert_policy(session: AsyncSession, app_id: str, **fields) -> AppPolicy:
-    """Create or update an application's policy row (caller commits)."""
+    """Create or update an application's policy row (caller commits).
+
+    An explicit `None` value here DOES write NULL — it is how a field is put
+    back to "inherit the deployment default". The merge/omit semantics live one
+    level up in the admin API (`exclude_none=True` on the request body), so a
+    caller that wants a NULL has to ask for it by name (`PolicyIn.reset`).
+    """
     policy = await session.get(AppPolicy, app_id)
     if policy is None:
         policy = AppPolicy(application_id=app_id)
         session.add(policy)
-    allowed = {"allowed_tiers", "allowed_providers", "allowed_models",
-               "residency", "max_spend_usd_per_day", "max_rpm",
-               "compression_enabled", "capture_io",
-               "policy_mode", "pii_detection", "stream_mode",
-               "pii_entity_denylist", "pii_score_threshold", "pii_exempt_patterns"}
     for k, v in fields.items():
-        if k in allowed:
+        if k in POLICY_FIELDS:
             setattr(policy, k, v)
     return policy
 

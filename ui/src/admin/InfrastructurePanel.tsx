@@ -1,16 +1,3 @@
-// Model onboarding admin section. routeForge is a pure router — it deploys
-// nothing. Operators stand up an OpenAI-compatible endpoint themselves (vLLM,
-// Dynamo, whatever) and onboard it here at runtime: name, slug, tier,
-// endpoint, price, and which applications may route to it. Backend:
-// app/api/admin_routes.py — POST/GET /admin/infra/models, PUT/DELETE
-// /admin/infra/models/{slug}. The PUT handler validates the full `OnboardIn`
-// body (it re-probes the endpoint on every edit), so the enabled-toggle in
-// the fleet table sends the row's full current field set with `enabled`
-// flipped — not a partial `{enabled}` patch, which would 422.
-//
-// Disabled fleet rows reuse the "learned-once" dim-node metaphor from the
-// junction inspector (RequestDrilldown's rejected-spur styling: opacity-60 on
-// a bg-ink/40 row) — a disabled model dims exactly like an excluded candidate.
 import { useEffect, useState } from "react";
 import { onboardApi, adminApi } from "../api";
 import type { OnboardedModel, OnboardIn, AdminApp } from "../api";
@@ -18,8 +5,6 @@ import { Panel, TierDot } from "../components/common";
 
 const TIERS = ["cheap", "mid", "frontier"] as const;
 
-// Shared toggle look (lifted from HeadroomToggle's switch) — used for each
-// fleet row's enabled state.
 function Toggle({ on, onToggle, label }: { on: boolean; onToggle: () => void; label: string }) {
   return (
     <button
@@ -47,8 +32,6 @@ function Toggle({ on, onToggle, label }: { on: boolean; onToggle: () => void; la
 const inputCls =
   "rounded bg-ink border border-edge px-2 py-1 text-xs font-mono text-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent";
 
-// --- Health badge ------------------------------------------------------------
-
 function HealthBadge({ status, error }: { status: string; error: string | null }) {
   const cls =
     status === "healthy" ? "text-cheap" : status === "unreachable" ? "text-alert" : "text-gray-500";
@@ -61,38 +44,176 @@ function HealthBadge({ status, error }: { status: string; error: string | null }
   );
 }
 
-// --- Onboard form -------------------------------------------------------------
+// The onboard/edit field set, held as strings (what the inputs actually carry)
+// so one control block serves both forms. Onboard (POST) and edit (PUT) take
+// the same full `OnboardIn` body server-side, so they take the same fields.
+type ModelFormFields = {
+  slug: string;
+  displayName: string;
+  tier: string;
+  endpoint: string;
+  apiKeyEnv: string;
+  priceInput: string;
+  priceOutput: string;
+  quality: string;
+  contextWindow: string;
+  appIds: string[];
+  notes: string;
+};
+
+const EMPTY_FIELDS: ModelFormFields = {
+  slug: "", displayName: "", tier: "mid", endpoint: "", apiKeyEnv: "",
+  priceInput: "", priceOutput: "", quality: "", contextWindow: "",
+  appIds: [], notes: "",
+};
+
+// Seed the edit form from the row the server already stored.
+function fieldsOf(m: OnboardedModel): ModelFormFields {
+  return {
+    slug: m.slug,
+    displayName: m.display_name,
+    tier: m.tier,
+    endpoint: m.endpoint,
+    apiKeyEnv: m.api_key_env ?? "",
+    priceInput: String(m.price_input),
+    priceOutput: String(m.price_output),
+    quality: m.quality === null ? "" : String(m.quality),
+    contextWindow: m.context_window === null ? "" : String(m.context_window),
+    appIds: m.allowed_app_ids ?? [],
+    notes: m.notes ?? "",
+  };
+}
+
+// One body shape for POST and PUT — the server re-validates and re-probes the
+// whole body on either. `enabled` is explicit admin intent; the server ANDs it
+// with the probe result, so an unreachable model is always saved disabled.
+function toBody(f: ModelFormFields, enabled: boolean): OnboardIn {
+  return {
+    slug: f.slug.trim(),
+    display_name: f.displayName.trim(),
+    tier: f.tier,
+    endpoint: f.endpoint.trim(),
+    api_key_env: f.apiKeyEnv.trim() ? f.apiKeyEnv.trim() : null,
+    price_input: Number(f.priceInput),
+    price_output: Number(f.priceOutput),
+    quality: f.quality.trim() ? Number(f.quality) : null,
+    context_window: f.contextWindow.trim() ? Number(f.contextWindow) : null,
+    allowed_app_ids: f.appIds.length > 0 ? f.appIds : null,
+    notes: f.notes.trim() ? f.notes.trim() : null,
+    enabled,
+  };
+}
+
+// The shared control block. `lockSlug` renders slug read-only: the PUT is keyed
+// by the path slug, so an edit can never rename a model — that is a delete +
+// re-onboard (B21).
+function ModelFields({
+  fields,
+  onChange,
+  apps,
+  lockSlug = false,
+}: {
+  fields: ModelFormFields;
+  onChange: (f: ModelFormFields) => void;
+  apps: AdminApp[];
+  lockSlug?: boolean;
+}) {
+  const set = (patch: Partial<ModelFormFields>) => onChange({ ...fields, ...patch });
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-3">
+        <label className="flex flex-col gap-1 text-xs text-gray-500">
+          display name
+          <input required value={fields.displayName} onChange={(e) => set({ displayName: e.target.value })} className={inputCls} />
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-gray-500">
+          slug{lockSlug ? " (fixed — delete & re-onboard to change)" : ""}
+          <input
+            required
+            readOnly={lockSlug}
+            value={fields.slug}
+            onChange={(e) => set({ slug: e.target.value })}
+            placeholder="e.g. llama-3-70b-onprem"
+            title={lockSlug ? "The slug is the model's identity and the key the endpoint is probed for — to change it, delete the model and onboard it again." : undefined}
+            className={`${inputCls}${lockSlug ? " text-gray-500 cursor-not-allowed" : ""}`}
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-gray-500">
+          tier
+          <select value={fields.tier} onChange={(e) => set({ tier: e.target.value })} className={inputCls}>
+            {TIERS.map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-gray-500">
+          endpoint
+          <input required value={fields.endpoint} onChange={(e) => set({ endpoint: e.target.value })} placeholder="http://host:port/v1" className={inputCls} />
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-gray-500">
+          api key env (optional)
+          <input value={fields.apiKeyEnv} onChange={(e) => set({ apiKeyEnv: e.target.value })} placeholder="(none)" className={inputCls} />
+        </label>
+        <div className="grid grid-cols-2 gap-3">
+          <label className="flex flex-col gap-1 text-xs text-gray-500">
+            price / 1M input ($)
+            <input required type="number" step="any" min={0} value={fields.priceInput} onChange={(e) => set({ priceInput: e.target.value })} className={inputCls} />
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-gray-500">
+            price / 1M output ($)
+            <input required type="number" step="any" min={0} value={fields.priceOutput} onChange={(e) => set({ priceOutput: e.target.value })} className={inputCls} />
+          </label>
+        </div>
+        <label className="flex flex-col gap-1 text-xs text-gray-500">
+          quality (optional)
+          <input type="number" step="any" min={0} value={fields.quality} onChange={(e) => set({ quality: e.target.value })} placeholder="(none)" className={inputCls} />
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-gray-500">
+          context window (optional)
+          <input type="number" step="1" min={0} value={fields.contextWindow} onChange={(e) => set({ contextWindow: e.target.value })} placeholder="(none)" className={inputCls} />
+        </label>
+      </div>
+
+      <label className="flex flex-col gap-1 text-xs text-gray-500">
+        applications (none selected = all apps)
+        <select
+          multiple
+          value={fields.appIds}
+          onChange={(e) => set({ appIds: Array.from(e.target.selectedOptions).map((o) => o.value) })}
+          className={`${inputCls} h-24`}
+        >
+          {apps.map((a) => (
+            <option key={a.id} value={a.id}>{a.name}</option>
+          ))}
+        </select>
+      </label>
+
+      <label className="flex flex-col gap-1 text-xs text-gray-500">
+        notes
+        <input value={fields.notes} onChange={(e) => set({ notes: e.target.value })} placeholder="(none)" className={inputCls} />
+      </label>
+    </>
+  );
+}
+
+// What the POST/PUT ack tells us: the probe re-ran, and `enabled` is the
+// intent-AND-probe result. Both forms report it the same way.
+function ProbeResult({ status, error }: { status: string; error: string | null }) {
+  return (
+    <span className={`text-xs ${status === "healthy" ? "text-cheap" : "text-alert"}`}>
+      {status === "healthy"
+        ? "probe ok — enabled"
+        : `probe failed — saved disabled: ${error ?? "unreachable"}`}
+    </span>
+  );
+}
 
 function OnboardForm({ apps, onOnboarded }: { apps: AdminApp[]; onOnboarded: () => void }) {
-  const [displayName, setDisplayName] = useState("");
-  const [slug, setSlug] = useState("");
-  const [tier, setTier] = useState<string>("mid");
-  const [endpoint, setEndpoint] = useState("");
-  const [apiKeyEnv, setApiKeyEnv] = useState("");
-  const [priceInput, setPriceInput] = useState("");
-  const [priceOutput, setPriceOutput] = useState("");
-  const [quality, setQuality] = useState("");
-  const [contextWindow, setContextWindow] = useState("");
-  const [appIds, setAppIds] = useState<string[]>([]);
-  const [notes, setNotes] = useState("");
+  const [fields, setFields] = useState<ModelFormFields>(EMPTY_FIELDS);
 
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ probe_status: string; probe_error: string | null } | null>(null);
   const [err, setErr] = useState<string | null>(null);
-
-  function reset() {
-    setDisplayName("");
-    setSlug("");
-    setTier("mid");
-    setEndpoint("");
-    setApiKeyEnv("");
-    setPriceInput("");
-    setPriceOutput("");
-    setQuality("");
-    setContextWindow("");
-    setAppIds([]);
-    setNotes("");
-  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -100,22 +221,9 @@ function OnboardForm({ apps, onOnboarded }: { apps: AdminApp[]; onOnboarded: () 
     setErr(null);
     setResult(null);
     try {
-      const body: OnboardIn = {
-        slug: slug.trim(),
-        display_name: displayName.trim(),
-        tier,
-        endpoint: endpoint.trim(),
-        api_key_env: apiKeyEnv.trim() ? apiKeyEnv.trim() : null,
-        price_input: Number(priceInput),
-        price_output: Number(priceOutput),
-        quality: quality.trim() ? Number(quality) : null,
-        context_window: contextWindow.trim() ? Number(contextWindow) : null,
-        allowed_app_ids: appIds.length > 0 ? appIds : null,
-        notes: notes.trim() ? notes.trim() : null,
-      };
-      const r = await onboardApi.create(body);
+      const r = await onboardApi.create(toBody(fields, true));
       setResult({ probe_status: r.probe_status, probe_error: r.probe_error });
-      reset();
+      setFields(EMPTY_FIELDS);
       onOnboarded();
     } catch (e) {
       setErr(e instanceof Error ? e.message : "onboard failed");
@@ -127,69 +235,7 @@ function OnboardForm({ apps, onOnboarded }: { apps: AdminApp[]; onOnboarded: () 
   return (
     <Panel title="Onboard a model">
       <form onSubmit={submit} className="flex flex-col gap-3">
-        <div className="grid grid-cols-2 gap-3">
-          <label className="flex flex-col gap-1 text-xs text-gray-500">
-            display name
-            <input required value={displayName} onChange={(e) => setDisplayName(e.target.value)} className={inputCls} />
-          </label>
-          <label className="flex flex-col gap-1 text-xs text-gray-500">
-            slug
-            <input required value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="e.g. llama-3-70b-onprem" className={inputCls} />
-          </label>
-          <label className="flex flex-col gap-1 text-xs text-gray-500">
-            tier
-            <select value={tier} onChange={(e) => setTier(e.target.value)} className={inputCls}>
-              {TIERS.map((t) => (
-                <option key={t} value={t}>{t}</option>
-              ))}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1 text-xs text-gray-500">
-            endpoint
-            <input required value={endpoint} onChange={(e) => setEndpoint(e.target.value)} placeholder="http://host:port/v1" className={inputCls} />
-          </label>
-          <label className="flex flex-col gap-1 text-xs text-gray-500">
-            api key env (optional)
-            <input value={apiKeyEnv} onChange={(e) => setApiKeyEnv(e.target.value)} placeholder="(none)" className={inputCls} />
-          </label>
-          <div className="grid grid-cols-2 gap-3">
-            <label className="flex flex-col gap-1 text-xs text-gray-500">
-              price / 1M input ($)
-              <input required type="number" step="any" min={0} value={priceInput} onChange={(e) => setPriceInput(e.target.value)} className={inputCls} />
-            </label>
-            <label className="flex flex-col gap-1 text-xs text-gray-500">
-              price / 1M output ($)
-              <input required type="number" step="any" min={0} value={priceOutput} onChange={(e) => setPriceOutput(e.target.value)} className={inputCls} />
-            </label>
-          </div>
-          <label className="flex flex-col gap-1 text-xs text-gray-500">
-            quality (optional)
-            <input type="number" step="any" min={0} value={quality} onChange={(e) => setQuality(e.target.value)} placeholder="(none)" className={inputCls} />
-          </label>
-          <label className="flex flex-col gap-1 text-xs text-gray-500">
-            context window (optional)
-            <input type="number" step="1" min={0} value={contextWindow} onChange={(e) => setContextWindow(e.target.value)} placeholder="(none)" className={inputCls} />
-          </label>
-        </div>
-
-        <label className="flex flex-col gap-1 text-xs text-gray-500">
-          applications (none selected = all apps)
-          <select
-            multiple
-            value={appIds}
-            onChange={(e) => setAppIds(Array.from(e.target.selectedOptions).map((o) => o.value))}
-            className={`${inputCls} h-24`}
-          >
-            {apps.map((a) => (
-              <option key={a.id} value={a.id}>{a.name}</option>
-            ))}
-          </select>
-        </label>
-
-        <label className="flex flex-col gap-1 text-xs text-gray-500">
-          notes
-          <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="(none)" className={inputCls} />
-        </label>
+        <ModelFields fields={fields} onChange={setFields} apps={apps} />
 
         <div className="flex items-center gap-3">
           <button
@@ -199,21 +245,13 @@ function OnboardForm({ apps, onOnboarded }: { apps: AdminApp[]; onOnboarded: () 
           >
             {busy ? "onboarding…" : "Onboard"}
           </button>
-          {result && (
-            <span className={`text-xs ${result.probe_status === "healthy" ? "text-cheap" : "text-alert"}`}>
-              {result.probe_status === "healthy"
-                ? "probe ok — enabled"
-                : `probe failed — saved disabled: ${result.probe_error ?? "unreachable"}`}
-            </span>
-          )}
+          {result && <ProbeResult status={result.probe_status} error={result.probe_error} />}
           {err && <span className="text-xs text-frontier">{err}</span>}
         </div>
       </form>
     </Panel>
   );
 }
-
-// --- Fleet table --------------------------------------------------------------
 
 function ModelRow({
   model,
@@ -226,36 +264,57 @@ function ModelRow({
 }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [fields, setFields] = useState<ModelFormFields>(() => fieldsOf(model));
+  const [result, setResult] = useState<{ probe_status: string; probe_error: string | null } | null>(null);
+
+  // Re-seed from the server row whenever it changes underneath us — the panel
+  // refetches after every mutation — but never while the operator is typing.
+  useEffect(() => {
+    if (!editing) setFields(fieldsOf(model));
+  }, [model, editing]);
 
   async function toggleEnabled() {
     setBusy(true);
     setErr(null);
     try {
-      // PUT validates the full OnboardIn body (it re-probes on every edit), so
-      // we spread the row's current fields rather than sending a partial patch.
-      const body: OnboardIn = {
-        slug: model.slug,
-        display_name: model.display_name,
-        tier: model.tier,
-        endpoint: model.endpoint,
-        api_key_env: model.api_key_env,
-        price_input: model.price_input,
-        price_output: model.price_output,
-        quality: model.quality,
-        context_window: model.context_window,
-        allowed_app_ids: model.allowed_app_ids,
-        notes: model.notes,
-      };
-      // onChanged() below re-fetches the full list, so the row reflects the
-      // PUT's actual persisted enabled/probe_status (post intent-AND-probe),
-      // not an optimistic local flip.
-      await onboardApi.update(model.slug, { ...body, enabled: !model.enabled });
+      await onboardApi.update(model.slug, toBody(fieldsOf(model), !model.enabled));
       onChanged();
     } catch (e) {
       setErr(e instanceof Error ? e.message : "update failed");
     } finally {
       setBusy(false);
     }
+  }
+
+  // B21: edit an onboarded model in place. Same PUT the toggle uses, with the
+  // edited body instead of a flipped `enabled` — enablement stays the Toggle's
+  // job, so an edit carries the model's current state through. The PUT re-probes
+  // the (possibly new) endpoint for this slug, so the ack's probe outcome is
+  // reported and the panel refetch below re-renders the health badge from it.
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setErr(null);
+    setResult(null);
+    try {
+      const r = await onboardApi.update(model.slug, toBody(fields, model.enabled));
+      setResult({ probe_status: r.probe_status, probe_error: r.probe_error });
+      setEditing(false);
+      onChanged();
+    } catch (e) {
+      // 404/409/422 from the admin clamps (bad tier, non-http endpoint,
+      // negative price, unknown application) — say so instead of silently
+      // leaving the form as it was.
+      setErr(e instanceof Error ? e.message : "save failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function cancel() {
+    setEditing(false); // the effect above re-seeds the fields from the row
+    setErr(null);
   }
 
   async function remove() {
@@ -280,51 +339,89 @@ function ModelRow({
       : "all";
 
   return (
-    // The dim-node metaphor (spec §12): a disabled row dims exactly like a
-    // rejected/excluded candidate in the junction inspector — same idiom as
-    // RequestDrilldown's rejected spurs (`bg-ink/40 ... opacity-60`), not just
-    // faded text.
-    <tr
-      className={`border-b border-edge/60 last:border-0 transition-colors ${
-        model.enabled ? "" : "bg-ink/40 opacity-60"
-      }`}
-    >
-      <td className="py-2 pr-3 align-top">
-        <div className="text-sm text-gray-100">{model.display_name}</div>
-        <div className="font-mono text-xs text-gray-500">{model.slug}</div>
-      </td>
-      <td className="py-2 pr-3 align-top">
-        <span className="flex items-center gap-1.5">
-          <TierDot tier={model.tier} />
-          <span className="text-xs text-gray-400">{model.tier}</span>
-        </span>
-      </td>
-      <td className="py-2 pr-3 align-top">
-        <span className="font-mono text-xs text-gray-400 break-all">{model.endpoint}</span>
-      </td>
-      <td className="py-2 pr-3 align-top">
-        <span className="text-xs text-gray-400">{appNames}</span>
-      </td>
-      <td className="py-2 pr-3 align-top">
-        <Toggle on={model.enabled} onToggle={toggleEnabled} label={`${model.display_name} enabled`} />
-      </td>
-      <td className="py-2 pr-3 align-top">
-        <HealthBadge status={model.probe_status} error={model.probe_error} />
-      </td>
-      <td className="py-2 align-top">
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={remove}
-            disabled={busy}
-            className="rounded border border-edge text-gray-400 hover:text-alert hover:border-alert px-2 py-1 text-xs disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-          >
-            delete
-          </button>
-          {err && <span className="text-xs text-frontier">{err}</span>}
-        </div>
-      </td>
-    </tr>
+    <>
+      <tr
+        className={`border-b border-edge/60 last:border-0 transition-colors ${
+          model.enabled ? "" : "bg-ink/40 opacity-60"
+        }`}
+      >
+        <td className="py-2 pr-3 align-top">
+          <div className="text-sm text-gray-100">{model.display_name}</div>
+          <div className="font-mono text-xs text-gray-500">{model.slug}</div>
+        </td>
+        <td className="py-2 pr-3 align-top">
+          <span className="flex items-center gap-1.5">
+            <TierDot tier={model.tier} />
+            <span className="text-xs text-gray-400">{model.tier}</span>
+          </span>
+        </td>
+        <td className="py-2 pr-3 align-top">
+          <span className="font-mono text-xs text-gray-400 break-all">{model.endpoint}</span>
+        </td>
+        <td className="py-2 pr-3 align-top">
+          <span className="text-xs text-gray-400">{appNames}</span>
+        </td>
+        <td className="py-2 pr-3 align-top">
+          <Toggle on={model.enabled} onToggle={toggleEnabled} label={`${model.display_name} enabled`} />
+        </td>
+        <td className="py-2 pr-3 align-top">
+          <HealthBadge status={model.probe_status} error={model.probe_error} />
+        </td>
+        <td className="py-2 align-top">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => (editing ? cancel() : setEditing(true))}
+              disabled={busy}
+              aria-expanded={editing}
+              className="rounded border border-edge text-gray-400 hover:text-accent hover:border-accent px-2 py-1 text-xs disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              {editing ? "close" : "edit"}
+            </button>
+            <button
+              type="button"
+              onClick={remove}
+              disabled={busy}
+              className="rounded border border-edge text-gray-400 hover:text-alert hover:border-alert px-2 py-1 text-xs disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              delete
+            </button>
+            {!editing && result && <ProbeResult status={result.probe_status} error={result.probe_error} />}
+            {!editing && err && <span className="text-xs text-frontier">{err}</span>}
+          </div>
+        </td>
+      </tr>
+      {editing && (
+        <tr className="border-b border-edge/60 last:border-0">
+          <td colSpan={7} className="pb-3">
+            <form onSubmit={save} className="flex flex-col gap-3 rounded-md border border-edge bg-ink/40 p-3">
+              <ModelFields fields={fields} onChange={setFields} apps={apps} lockSlug />
+              <div className="flex items-center gap-3">
+                <button
+                  type="submit"
+                  disabled={busy}
+                  className="rounded-md border border-accent bg-accent/20 text-accent px-3 py-1 text-xs disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                >
+                  {busy ? "saving…" : "Save"}
+                </button>
+                <button
+                  type="button"
+                  onClick={cancel}
+                  disabled={busy}
+                  className="text-xs text-gray-500 hover:underline"
+                >
+                  Cancel
+                </button>
+                <span className="text-[10px] text-gray-600">
+                  saving re-probes the endpoint for this slug; an unreachable model is saved disabled
+                </span>
+                {err && <span className="text-xs text-frontier">{err}</span>}
+              </div>
+            </form>
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 

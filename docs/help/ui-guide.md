@@ -158,9 +158,9 @@ did we save?*
 
 A horizontal bar split into **two independent levers, never merged**:
 
-- **routing** (blue `#38bdf8`) — dollars saved by **sending the request to a cheaper
+- **routing** (blue `#4C8DFF`) — dollars saved by **sending the request to a cheaper
   tier** instead of frontier.
-- **compression** (amber `#f59e0b`) — dollars saved because **Headroom removed tokens**
+- **compression** (amber `#F5A524`) — dollars saved because **Headroom removed tokens**
   before pricing. Reads **"off / not run"** whenever `compression_saved == 0` (Headroom
   disabled or it never fired).
 
@@ -253,14 +253,15 @@ fast?*
 | Value | Meaning |
 |---|---|
 | **N** (big) + **requests** | Request volume for this app. |
-| **Tier mix** (donut) | Requests per tier, coloured cheap green / mid blue / frontier red. A legend beneath lists `tier count`. Hover a slice for the count. |
+| **Tier mix** (donut) | Requests per tier, coloured cheap mint / mid blue / frontier amber (§9a). A legend beneath lists `tier count`. Hover a slice for the count. |
 | **p50 latency** | Median request latency (ms). |
 | **p95 latency** | 95th-percentile request latency (ms). |
 | **% multi-step** | Share of requests that took the **agent path** (`hops > 1`) — i.e. made more than one routed LLM call. |
 
-> ⚠ **Known bug:** multi-step (agent) requests currently report **0 ms** latency, which
-> drags p50/p95 down and makes the latency figures understate reality. Per-hop latency
-> isn't summed into the request total yet. Tracked; single-shot latency is correct.
+> **Multi-step latency now sums per-hop.** Agent-path requests report the total of every
+> hop's real latency (fixed 2026-08-06; earlier builds reported 0 ms because per-hop
+> latency wasn't summed into the request total). Both single-shot and multi-step latency
+> are correct.
 
 ---
 
@@ -333,12 +334,100 @@ The ten step cards and the values each shows:
 
 ## 8. Settings tab
 
-`admin/ApplicationsPanel.tsx` (`AppConfig`). Per-app admin config — policy (default
-sensitivity, residency, budgets) and **API tokens** (create / revoke; the full token is
-shown once at creation, only its prefix thereafter). This is CRUD over `/admin/*`, not a
-read view.
+`admin/ApplicationsPanel.tsx` (`AppConfig`). Per-app admin config — the **policy
+editor** (8a), the **privacy rules** editor (8b), the app's own **Langfuse
+credentials**, and **API tokens** (create / revoke; the full token is shown once at
+creation, only its prefix thereafter). This is CRUD over `/admin/*`, not a read view.
 
-### 8a. Privacy rules
+### 8a. Policy editor
+
+Since `:0.17.0` this form covers **every** field the admin policy API accepts. Before
+that, six of them — `policy_mode`, `pii_detection`, `stream_mode`,
+`pii_entity_denylist`, `pii_score_threshold`, `pii_exempt_patterns` — existed only over
+`curl`, which is why some deployed apps carry values the console could not previously
+show you.
+
+The form is grouped into four labelled sections, and the grouping is the point rather
+than decoration: **placement and protection are separate axes**, and a flat stack of
+rows was exactly what let operators read one as implying the other.
+
+| Section | Controls | What it governs |
+|---|---|---|
+| **Placement — where compute may run** | `residency`, allowed `providers`, allowed `tiers`, allowed `models` | Where a request is permitted to execute. `onprem_only` is absolute: cloud providers are filtered out of the candidate pool *before* the router scores anything. Nothing in any section below can change this. |
+| **Protection — what the gate does to the data** | `policy_mode`, plus a nested **Detection & narrowing** sub-group: `pii detection`, `min confidence`, `exempt types`, `exempt values` | How much the policy gate does to the content. Independent of placement. |
+| **Telemetry** | `capture_io` (`off` / `redacted` / `full`) | What this app's traces carry. Raw I/O only ever reaches this app's *own* Langfuse project — never the shared one. |
+| **Delivery and limits** | `stream_mode`, Headroom (compression) override, `max rpm`, budget `$/day` | How the answer is delivered, and the app's quotas. |
+
+**`policy_mode` is the coarse switch.** `enforced` (the default) means detection,
+redaction in both directions, sensitivity escalation, custom recognizers, and the
+capture ceiling. `passthrough` means RouteForge is a router, meter and tracer only:
+nothing is detected and nothing is redacted, so the prompt reaches the model verbatim
+and the completion comes back verbatim. Selecting it raises an inline banner that says
+exactly that, alongside what *continues* unchanged — routing and tier selection,
+budgets, rate limits, usage metering, the full decision trace, Langfuse tracing — and
+one thing worth being blunt about: **`passthrough` does not touch placement.** Residency
+still decides where compute may run, `onprem_only` stays absolute, and `onprem_only` +
+`passthrough` ("run only on my hardware, and don't touch my data") is a valid, honest
+configuration with the on-prem guarantee fully intact. The posture is never silent: it
+is folded into `app_policy_version`, stamped on every response, and emitted on the
+trace.
+
+**The Detection & narrowing sub-group refines the `enforced` posture.** While
+`passthrough` is selected these controls dim and are labelled inert — nothing is
+detected, so there is nothing to narrow — but they stay editable and their stored
+values are **kept, not cleared**. Flipping the posture must never destroy the
+configuration you spent time on; set the app back to `enforced` and the same values
+apply again.
+
+- **`pii detection`** — leaving it unset inherits the deployment's live detector, which
+  is *not* a downgrade. Only an explicit `off` or `regex` is, and it blinds the gate to
+  everything. Prefer the three narrow levers.
+- **`min confidence`** (`pii_score_threshold`) — drops detected entities scoring below
+  it before redaction; many false positives score around 0.6. Never applies to
+  `US_SSN`, and never drops regex or custom-recognizer hits, which carry no score.
+  Blank the box to remove a stored floor entirely; `0` is a different setting — a floor
+  that passes every score.
+- **`exempt types`** (`pii_entity_denylist`) — entity types the gate still detects but
+  does not redact for this app. Presidio built-ins only. `US_SSN` renders locked with a
+  🔒 and can never be selected.
+- **`exempt values`** (`pii_exempt_patterns`) — regexes matched against the *whole
+  detected value*, whatever type Presidio gave it: the type-independent complement to
+  exempt types, for a value shape that keeps landing under a different label. Rows
+  validate as you type, and a tester below lets you paste candidate values (one per
+  line) to see which would be exempted. **That tester runs entirely in your browser** —
+  nothing typed into it is sent anywhere. `US_SSN` is never exempted, however a pattern
+  reads.
+
+**Options the server would refuse are disabled with the reason on the option itself**,
+not silently greyed. `capture_io = full` needs the app's own Langfuse project *and*, for
+an `onprem_only` app, `policy_mode = passthrough`; `capture_io = redacted` is
+unavailable under `passthrough` or an explicit `pii_detection` of `off`/`regex`, because
+that export path reuses the gate's sanitized prompt and there is no sanitized prompt to
+reuse; `stream_unverified` is unavailable for an `onprem_only` app, which may never
+waive step-9 verification. The value an app is *currently* set to is never disabled —
+you can always see what it actually is.
+
+Two honesty notes about what this form does and doesn't guarantee:
+
+- **The server is the authority, not this form.** The console mirrors the write-time
+  clamps so you find out early, but it never invents a rule of its own. When a save is
+  rejected, the server's 422 appears verbatim under the Save button — it names the rule
+  that fired and the alternative to use, and that text is your guidance. (Until
+  `:0.17.0` this form discarded every error, so a rejected save looked like a no-op.
+  See B22/B23 in `bugs-backlog.md`.)
+- **Saving merges — with one deliberate exception.** A control you don't touch keeps
+  whatever the app has stored. Moving a control back to its "(global default)" option is
+  the exception: that field is cleared and the app inherits the deployment default again
+  (the console sends it in the PUT's `reset` list). The line above Save names exactly
+  which stored values a save will clear, because clearing one is a real change — dropping
+  `policy_mode`, for instance, hands the app back to the deployment's posture, and the
+  server refuses that write outright if it would leave an `enforced` `onprem_only` app
+  still storing raw I/O.
+
+Field-by-field semantics, the clamps, and the equivalent `curl` are in
+[`../per-app-config.md`](../per-app-config.md).
+
+### 8b. Privacy rules
 
 `admin/PrivacyRulesEditor.tsx`, mounted below the policy/token fields on the Settings
 tab. Lets an owner override this **one application's** classification without touching
@@ -364,42 +453,49 @@ no longer trips the medium risk floor and stays on the cheap tier.
 
 ## 9. Colour & label legend
 
-**There are two separate colour systems, and both contain a blue — don't confuse them.**
+**Colour carries meaning here — the same hue means the same thing everywhere.** The
+palette is single-sourced in `ui/src/tokens.ts`; that file is the authority if this table
+ever drifts from it again.
 
 ### 9a. Tier colours — *which model/tier the router chose*
 
 Used on **request-row dots, the Traffic donut, the fleet mini-bars, and rejected
-candidates** (`TIER_COLOR` in `api.ts`). The dot answers "*what ran?*", **not** anything
-about compression.
+candidates** (`TIER_HEX`). The dot answers "*what ran?*", **not** anything about
+compression.
 
 | Tier | Colour | Means |
 |---|---|---|
-| `cheap` | 🟢 green `#22c55e` | routed to the cheap tier (`local-8b`) |
-| `mid` | 🔵 blue `#3b82f6` | routed to the mid tier (`local-32b`) |
-| `frontier` | 🔴 red `#ef4444` | routed to the frontier tier |
+| `cheap` | 🟢 mint `#35D6A0` | routed to the cheap tier (`local-8b`) |
+| `mid` | 🔵 blue `#4C8DFF` | routed to the mid tier (`local-32b`) |
+| `frontier` | 🟠 amber `#F5A524` | routed to the frontier tier |
 | `?` (unknown) | ⚪ grey `#6b7280` | tier not resolved |
 
-> **Example:** in the Requests list, a plain public question shows a **green** dot (cheap
-> tier); a `confidential` / `2 hops` request shows a **blue** dot (mid tier) — the router
-> picks a higher tier for heavier/more-sensitive work. Green vs blue here has **nothing to
-> do with compression** (which may be off for both).
+> **Frontier is amber, not red.** Red is reserved — see 9c. Landing on the frontier tier
+> is an expensive outcome worth noticing, not a failure, and the palette says so.
 
 There is **no `strong` tier** — tiers are exactly `cheap | mid | frontier`.
 
 ### 9b. Savings-lever colours — *how money was saved* (Cost tab only)
 
 Used **only** on the Cost tab "Savings by lever" bar. This answers "*how did we save?*",
-not "what ran."
+not "what ran." Both levers deliberately reuse a tier hex rather than introducing new
+hues (`LEVER_HEX`):
 
 | Lever | Colour | Means |
 |---|---|---|
-| routing | 🔵 blue `#38bdf8` | saved by choosing a cheaper model |
-| compression | 🟠 amber `#f59e0b` | saved by removing tokens (Headroom) |
+| routing | 🔵 blue `#4C8DFF` (= mid) | saved by choosing a cheaper model |
+| compression | 🟠 amber `#F5A524` (= frontier) | saved by removing tokens (Headroom) |
 
-> **Heads-up — the two blues are close.** Mid-tier `#3b82f6` and routing `#38bdf8` are
-> both blue but mean unrelated things (a *tier* vs a *savings lever*) and never appear in
-> the same panel. If they still read as related on a projector, recolour one (see the
-> FAQ / open items).
+### 9c. Signal colours — *dimensions that are not tiers*
+
+| Signal | Colour | Means |
+|---|---|---|
+| privacy / residency | 🟣 violet `#8B7BF7` | the residency dimension — never a tier |
+| alert | 🔴 red `#F2555A` | **residency breach or health failure only** |
+| quality | 🩷 pink `#EC4899` | the quality-proxy axis (cost-vs-quality chart) |
+
+> **Red means something is wrong.** It is not used for any tier, cost or lever. If you
+> see red, read it as an alarm — most often the fleet's residency-breach glyph.
 
 ---
 
@@ -499,12 +595,6 @@ curl -X POST http://<api-host>:30808/api/controls \
   -d '{"headroom_enabled": true}'
 ```
 
-### "Why does multi-step latency read 0 ms?"
-
-**Known bug** (Traffic tab and drill-down). Per-hop latency on the agent path isn't yet
-summed into the request-level total, so multi-step requests report 0 ms and pull the
-p50/p95 down. Single-shot latency is correct. Tracked for a fix.
-
 ### "What's in Langfuse vs. this console?"
 
 Different jobs, same source. **Langfuse** is the operator's system of record — every
@@ -528,10 +618,10 @@ renders raw input**. The **answer** is shown at the Response step; the prompts l
 
 ---
 
-**Known gaps & deferred UI work:** see `docs/ui-open-items.md` — includes the planned
-redesign of the "What happened" band (§7b), the 0 ms multi-step latency bug, per-request
-`$0.0000` precision, and the two-blues recolour. (The Headroom toggle — formerly a gap —
-now ships in the header chrome; see the FAQ.)
+**Known gaps & deferred UI work:** see `docs/ui-open-items.md` — the one item still open
+is #7 (label the Application ID and make it copyable). The "What happened" redesign,
+per-request `$0.0000` precision, the two-blues recolour, the Headroom toggle and the 0 ms
+multi-step latency bug have all shipped.
 
 ---
 

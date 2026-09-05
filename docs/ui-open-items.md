@@ -121,7 +121,23 @@ soft nudge. `onprem_only` requests can't reach cloud by construction (Rule 3), s
 Covered by `tests/test_history_store.py::test_fleet_onprem_violation_flags_only_real_breach`
 and `::test_fleet_unknown_provider_not_a_violation`.
 
-## 7. Application id is not explicitly labelled / copyable — TODO
+## 7. Application id is not explicitly labelled / copyable — DONE (shipped ui:0.17.0)
+
+**Built 2026-09-05.** The Application Detail header now renders the name on its own
+line with an `APPLICATION ID` label, the id in selectable monospace, and a **copy**
+button (`CopyableId` / `CopyButton` in `ui/src/admin/ApplicationsPanel.tsx`). List rows
+gained an explicit `id` prefix. The one-time `TokenReveal` banner — which told the
+operator to "copy it now" while giving them no way to — got the same copy button.
+
+**The part that mattered more than the button.** `navigator.clipboard` is only defined
+in a **secure context**. This console is routinely served over plain http on a NodePort
+(the DGX lab reaches it at `http://<node>:30808`), where the entire API is `undefined`,
+so a button wired straight to it would have done nothing at all in exactly the
+environment operators use — and done it silently. `copyText()` falls back to the
+`execCommand("copy")` textarea path and the button reports `copy failed` rather than
+showing a "copied" tick that didn't happen.
+
+<details><summary>original write-up (the problem this solved)</summary>
 
 **Where:** Applications list rows and the Application Detail header
 (`ui/src/admin/ApplicationsPanel.tsx` — list row line renders
@@ -139,3 +155,5 @@ as "Application ID" and there's no one-click copy.
 label with the value in monospace and a copy-to-clipboard button (mirror the token-row
 affordance). Optionally show a small `id: …` label in the list row too. Pure display —
 no API change. Use the `demo-ui` / `frontend-design` skill constraints.
+
+</details>

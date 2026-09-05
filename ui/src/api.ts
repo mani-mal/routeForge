@@ -137,8 +137,36 @@ export type StreamEvent =
   | { type: "request"; summary: RequestSummary }
   | { type: "step"; request_id: string; record: TraceRecord; index: number };
 
+// Pull the human-facing message out of a non-2xx response. FastAPI answers
+// `{"detail": "..."}` for an HTTPException and `{"detail": [{loc, msg}, …]}`
+// for a request-validation failure. The admin policy clamps are the authority
+// on every posture decision and their 422 `detail` names which rule fired and
+// what to do instead — that text IS the product's guidance, so it must reach
+// the operator instead of a bare "422 Unprocessable Entity". Falls back to the
+// status line when the body isn't JSON (proxy/HTML error pages).
+async function errDetail(r: Response): Promise<string> {
+  const status = `${r.status} ${r.statusText}`;
+  try {
+    const body = (await r.json()) as { detail?: unknown };
+    const d = body?.detail;
+    if (typeof d === "string" && d.trim()) return d;
+    if (Array.isArray(d) && d.length) {
+      const parts = (d as { loc?: (string | number)[]; msg?: string }[])
+        .map((e) => [(e.loc ?? []).slice(1).join("."), e.msg].filter(Boolean).join(": "))
+        .filter(Boolean);
+      if (parts.length) return parts.join("; ");
+    }
+  } catch {
+    /* non-JSON error body; keep the status line */
+  }
+  return status;
+}
+
+// Every caller that renders `e.message` (PolicyEditor, InfrastructurePanel,
+// PrivacyRulesEditor) gets the server's explanation for free; callers that
+// only care that it threw are unaffected.
 async function j<T>(r: Response): Promise<T> {
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+  if (!r.ok) throw new Error(await errDetail(r));
   return (await r.json()) as T;
 }
 
@@ -220,7 +248,25 @@ export interface AdminPolicy {
   max_spend_usd_per_day: number | null;
   max_rpm: number | null;
   compression_enabled: boolean | null;   // null = inherit global Headroom toggle
-  capture_io: string | null;   // null = inherit global capture_io
+  capture_io: string | null;   // null = inherit global capture_io; off|redacted|full
+  // --- per-app protection posture + detector overrides (PolicyIn, app/api/admin_routes.py).
+  // Every one of these is clamped server-side; the UI explains the clamps, it
+  // never invents its own. See docs/per-app-config.md.
+  pii_detection: string | null;   // null = inherit the deployment's live global detector; PII_MODES
+  stream_mode: string | null;   // null = inherit (inbound stream rejected); STREAM_MODES
+  policy_mode: string | null;   // null = inherit serving.policy.default_policy_mode; POLICY_MODES
+  pii_entity_denylist: string[] | null;   // null = inherit (nothing exempt); detect-but-don't-redact types
+  pii_score_threshold: number | null;   // null = inherit (no floor); 0.0–1.0 min Presidio confidence
+  pii_exempt_patterns: string[] | null;   // null = inherit (none); regexes fullmatched against the entity VALUE
+}
+
+// The PUT body: a policy plus the one escape from its merge semantics. `null`
+// in the body still means "leave the stored value alone"; `reset` names the
+// fields to write back to NULL ("inherit the deployment default"). Naming a
+// field in `reset` while also sending a value for it is a 422, so the editor
+// only ever lists fields it is sending as null.
+export interface AdminPolicyWrite extends AdminPolicy {
+  reset?: string[];
 }
 
 export interface AdminApp {
@@ -298,7 +344,7 @@ export const adminApi = {
     fetch("/admin/applications", opts("POST", body)).then(j<{ application: AdminApp; token: string }>),
   updateApp: (id: string, body: Partial<{ name: string; owner_email: string; status: string; default_residency: string }>) =>
     fetch(`/admin/applications/${id}`, opts("PATCH", body)).then(j<AdminApp>),
-  setPolicy: (id: string, body: AdminPolicy) =>
+  setPolicy: (id: string, body: AdminPolicyWrite) =>
     fetch(`/admin/applications/${id}/policy`, opts("PUT", body)).then(j<AdminApp>),
   // Manual per-app Langfuse creds (B15) — for an air-gapped operator who can't
   // reach the org-scoped auto-provisioning API. Secret is write-only: never
@@ -387,16 +433,7 @@ export async function getPrivacy(appId: string): Promise<PrivacyProfile> {
 // the server now serves).
 export async function putPrivacy(appId: string, profile: PrivacyProfile): Promise<void> {
   const r = await fetch(`/admin/applications/${appId}/privacy`, opts("PUT", profile));
-  if (!r.ok) {
-    let detail = `${r.status} ${r.statusText}`;
-    try {
-      const body = await r.json();
-      if (body?.detail) detail = body.detail;
-    } catch {
-      /* non-JSON error body; keep the status line */
-    }
-    throw new Error(detail);
-  }
+  if (!r.ok) throw new Error(await errDetail(r));
 }
 
 // The ten serving-plane steps, in order, for the flow visualizer. `caption` is

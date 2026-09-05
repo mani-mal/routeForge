@@ -131,6 +131,20 @@ class PolicyIn(BaseModel):
     # detected entity's VALUE (fullmatch). US_SSN can never be exempted
     # (rules 3/8). See docs/per-app-config.md.
     pii_exempt_patterns: list[str] | None = None
+    # --- the one escape from the merge -------------------------------------
+    # This PUT is a MERGE: `null` means "leave the stored value alone", which
+    # plenty of callers depend on. That left no way to put a field BACK to NULL
+    # ("inherit the deployment default") once it had been set — an operator who
+    # set pii_score_threshold=0.85 or policy_mode=passthrough was stuck with it.
+    # `reset` names the fields to NULL out, applied after the merge. It is
+    # additive and explicit: merge semantics are unchanged, and a field is only
+    # cleared when it is named here. Names are validated against
+    # `store.POLICY_FIELDS` (422 on an unknown name — never silently ignored),
+    # and naming a field here AND giving it a non-null value in the same request
+    # is a 422 rather than a silent precedence rule. Every clamp below keys on
+    # the post-RESET effective value, so a reset can never sneak an app into a
+    # posture the clamps forbid.
+    reset: list[str] | None = None
 
 
 class LangfuseCredsIn(BaseModel):
@@ -251,7 +265,33 @@ async def logout(request: Request, response: Response) -> dict:
 
 @admin_router.get("/me")
 async def me(request: Request, admin_id: str = Depends(require_admin)) -> dict:
-    return {"admin_id": admin_id}
+    """Session identity plus the deployment's read-only policy envelope.
+
+    The console needs the second half to be honest about two things it
+    otherwise has to guess at. (1) A per-app field left null inherits a
+    deployment default, and a control that renders that as a bare
+    "(global default)" tells the operator nothing — it can now name the
+    value being inherited. (2) The deployment ceilings decide whether a
+    posture is reachable AT ALL; without them the UI can only offer
+    `passthrough` and let the write fail with a 422.
+
+    Deliberately read-only. These live in `serving.yaml` (the operator's
+    ConfigMap) and constrain what an admin may do — an admin-editable
+    ceiling would not be a ceiling. Nothing here is per-tenant or secret:
+    it is the same envelope every app in this deployment sits inside.
+    """
+    s = request.app.state.settings
+    return {
+        "admin_id": admin_id,
+        "deployment": {
+            "default_policy_mode": s.serving.default_policy_mode,
+            "default_pii_detection": s.serving.pii_detection,
+            "default_capture_io": s.serving.observability.langfuse.capture_io,
+            "reject_stream_requests": s.serving.reject_stream_requests,
+            "allow_app_passthrough": s.serving.allow_app_passthrough,
+            "allow_app_pii_downgrade": s.serving.allow_app_pii_downgrade,
+        },
+    }
 
 
 # --- applications -----------------------------------------------------------
@@ -353,6 +393,30 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
         app = await store.get_application_with_policy(session, app_id)
         if app is None:
             raise HTTPException(404, "application not found")
+
+        # --- `reset`: validate the names before anything else looks at them.
+        # store.POLICY_FIELDS is the authority on what a policy column is; an
+        # unknown name is a typo that would otherwise silently leave the field
+        # set, so it is refused rather than dropped.
+        reset_fields = set(body.reset or ())
+        unknown = sorted(reset_fields - store.POLICY_FIELDS)
+        if unknown:
+            raise HTTPException(
+                422, f"reset names unknown policy field(s) {unknown}; legal fields: "
+                f"{sorted(store.POLICY_FIELDS)}")
+        # Naming a field in `reset` AND sending a value for it in the same
+        # request is a contradiction ("clear it" + "set it to X"). Refuse it
+        # instead of inventing a precedence rule: either order would be a silent
+        # guess at intent on the exact fields (policy_mode, capture_io) where
+        # guessing wrong changes the app's protection posture, and a UI that
+        # emits both is buggy in a way the operator must be told about.
+        conflicting = sorted(f for f in reset_fields if getattr(body, f, None) is not None)
+        if conflicting:
+            raise HTTPException(
+                422, f"reset names field(s) {conflicting} that also carry a value in "
+                "this request. Send either the value (to set it) or the name in "
+                "`reset` (to clear it back to the deployment default), not both.")
+
         if body.residency is not None and body.residency not in RESIDENCY:
             raise HTTPException(422, f"bad residency {body.residency!r}")
         if body.pii_detection is not None and body.pii_detection not in PII_MODES:
@@ -403,10 +467,30 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
         # all, silently skipping the whole downgrade branch).
         settings = request.app.state.settings
         stored = app.policy
-        eff_residency = (body.residency or (stored.residency if stored else None)) \
+
+        def _stored(field: str):
+            """The stored value this write will leave behind, BEFORE the body's
+            own value is layered on: NULL for anything named in `reset`.
+
+            Every eff_* below goes through this, and that is the whole safety
+            argument for `reset`. A reset changes the effective post-write
+            value, so a clamp that read `stored.<field>` directly would validate
+            a state that is not the one being written — e.g. resetting
+            `policy_mode` on an onprem_only + passthrough + capture_io=full app
+            reverts the posture to the deployment default (normally `enforced`)
+            and leaves an ENFORCED onprem_only app storing raw I/O, exactly what
+            the capture_io=='full' clamp exists to forbid (CLAUDE.md rules 2/8).
+            Routed through here, eff_policy_mode sees `enforced` and that write
+            is refused, whole, like any other clamp failure.
+            """
+            if field in reset_fields:
+                return None
+            return getattr(stored, field) if stored else None
+
+        eff_residency = (body.residency or _stored("residency")) \
             or app.default_residency
         eff_capture = body.capture_io if body.capture_io is not None else (
-            (stored.capture_io if stored else None)
+            _stored("capture_io")
             or settings.serving.observability.langfuse.capture_io)
         # NOTE: unlike eff_residency/eff_capture, this deliberately does NOT
         # fall through to the global default (`settings.serving.pii_detection`).
@@ -422,8 +506,13 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
         # is always allowed" invariant. A non-presidio *global* default
         # combined with capture is a deployment-wide config-lint concern
         # (CLAUDE.md's boot-time cross-file lint), not a per-app write clamp.
+        # A `reset` of pii_detection therefore lands on None = "inherit the live
+        # global detector", which by the rule above is not a downgrade and does
+        # not trip the clamp — correct, because it leaves the app in exactly the
+        # state of one that never overrode the field. It can only ever move
+        # protection toward the deployment default, never below it.
         eff_pii = body.pii_detection if body.pii_detection is not None else (
-            stored.pii_detection if stored else None)
+            _stored("pii_detection"))
         # NOTE the deliberate ASYMMETRY with eff_pii directly above: this one
         # DOES fall through to the deployment-wide default. It is not a
         # copy/paste slip. `pii_detection` unset means "inherit the live global
@@ -435,8 +524,15 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
         # non-overriding app into the no-protection posture, and the ceiling +
         # capture clamps below MUST see that — an app is exactly as unprotected
         # whether the passthrough came from its own row or from the default.
+        # This is also why a `reset` of policy_mode is a real posture change and
+        # not a no-op: it hands the app back to `default_policy_mode`, in BOTH
+        # directions. Reverting passthrough -> enforced re-arms the capture
+        # clamp below; and on a deployment whose default is `passthrough` with
+        # allow_app_passthrough=false, clearing an app's explicit `enforced` is
+        # refused by the ceiling immediately below — the app cannot be dropped
+        # into a posture the deployment forbids by way of its own default.
         eff_policy_mode = body.policy_mode if body.policy_mode is not None else (
-            (stored.policy_mode if stored else None)
+            _stored("policy_mode")
             or settings.serving.default_policy_mode)
 
         # --- passthrough deployment ceiling: mirrors allow_app_pii_downgrade.
@@ -524,7 +620,7 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
         # global" semantics) -- stream_mode has no global default; None just
         # means "no streaming opt-in for this app." ---
         eff_stream_mode = body.stream_mode if body.stream_mode is not None else (
-            stored.stream_mode if stored else None)
+            _stored("stream_mode"))
         if eff_stream_mode == "stream_unverified" and eff_residency == "onprem_only":
             raise HTTPException(
                 422, "stream_unverified not allowed for onprem_only apps")
@@ -567,9 +663,16 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
         # exclude_none=True makes this a MERGE, not a full replace: an
         # omitted field keeps its stored value instead of being wiped to
         # None (the Critical this fixed — see Part A in the task-9 brief).
-        # Trade-off: clearing a field back to "inherit default" now requires
-        # sending an explicit value, not omission.
-        await store.upsert_policy(session, app_id, **body.model_dump(exclude_none=True))
+        # `reset` is the one explicit escape from that (see PolicyIn): the
+        # named fields are written as NULL after the merge, so "inherit the
+        # deployment default" is reachable without weakening the merge for
+        # every other caller. It is applied last, and only reaches here once
+        # every clamp above has judged the post-reset effective state — a
+        # refused write applies nothing at all (no commit has happened yet).
+        fields = body.model_dump(exclude_none=True)
+        fields.pop("reset", None)   # a request knob, not a policy column
+        fields.update({f: None for f in reset_fields})
+        await store.upsert_policy(session, app_id, **fields)
         await session.commit()
         # `app.policy` was eager-loaded (possibly as None) above for the
         # eligibility check; expire it so upsert_policy's write is actually
