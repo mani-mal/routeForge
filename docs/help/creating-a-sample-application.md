@@ -24,12 +24,14 @@ token), see [`integrating-an-app.md`](./integrating-an-app.md).
 
 **UI:** Admin → Applications → **Create application**. Give it an **id** (a stable slug,
 e.g. `sample-app`) and a **name**. A token is issued and shown **once** — copy it now.
+(Later tokens are issued and revoked in the app's **Settings** tab, **step 1 Access**;
+each is likewise revealed only once.)
 
 **API:**
 
 ```bash
 curl -sX POST http://10.89.197.201:30808/admin/applications \
-  -H "Content-Type: application/json" --cookie "rf_admin=<session>" \
+  -H "Content-Type: application/json" --cookie "rf_admin_session=<session>" \
   -d '{"id":"sample-app","name":"Sample App","default_residency":"any"}'
 # → {"application": {...}, "token": "rf_live_…"}   ← the token appears ONCE
 ```
@@ -44,13 +46,17 @@ This is the app-side half of scoping. Leave a field **null/empty to allow everyt
 set it to restrict. To let `sample-app` reach a **mid-tier on-prem** model like the
 Nemotron, its policy must allow the `mid` tier and the `onprem` provider.
 
-**UI:** Admin → Applications → *sample-app* → **Policy**.
+**UI:** Admin → Applications → *sample-app* → **Settings**. Tiers, providers, residency
+and models are **step 2 Placement**; the budget and rate caps are **step 5 Delivery and
+limits**. Both steps share one **Save policy** button — pressing it in either saves both.
+(Unsure what a new app should be set to? See
+[`choosing-app-settings.md`](./choosing-app-settings.md).)
 
 **API:**
 
 ```bash
 curl -sX PUT http://10.89.197.201:30808/admin/applications/sample-app/policy \
-  -H "Content-Type: application/json" --cookie "rf_admin=<session>" \
+  -H "Content-Type: application/json" --cookie "rf_admin_session=<session>" \
   -d '{
         "allowed_tiers": ["cheap","mid","frontier"],
         "allowed_providers": ["onprem"],
@@ -80,7 +86,7 @@ in-place edit button — so change the app scope one of two ways:
   set and the new `allowed_app_ids`. The handler re-probes the endpoint on every edit.
   ```bash
   curl -sX PUT http://10.89.197.201:30808/admin/infra/models/nvidia/llama-3.1-nemotron-nano-8b-v1 \
-    -H "Content-Type: application/json" --cookie "rf_admin=<session>" \
+    -H "Content-Type: application/json" --cookie "rf_admin_session=<session>" \
     -d '{
           "slug":"nvidia/llama-3.1-nemotron-nano-8b-v1",
           "display_name":"nemotron-nano-8b-v1",

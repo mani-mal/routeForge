@@ -8,6 +8,11 @@ and telemetry. For the full per-app config reference see
 
 ## Privacy, residency & telemetry
 
+> **Onboarding a new app and not sure what to set?** Start with
+> [`choosing-app-settings.md`](./choosing-app-settings.md) — the decision guide that
+> picks one of three recipes for you. The questions below are the specific cases it
+> generalizes.
+
 ### My customer wants RouteForge only for routing, token/cost metering and Langfuse — no PII checks, no redaction, everything raw. Is that supported?
 
 **Yes. Set `policy_mode: "passthrough"`.** That is a first-class posture, not a

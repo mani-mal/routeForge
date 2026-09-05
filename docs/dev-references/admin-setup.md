@@ -224,8 +224,11 @@ curl -b cookies.txt -X PUT \
 > [`../per-app-config.md`](../per-app-config.md).
 >
 > **All of the above is also settable in the console** — *Application → Settings tab*,
-> since `ui:0.17.0`. Same endpoint, same clamps; the console shows the server's 422
-> verbatim. This API remains the scriptable path.
+> since `ui:0.17.0`. The tab is six numbered steps: **1 Access** (tokens), **2 Placement**,
+> **3 Protection**, **4 Telemetry** (the app's Langfuse credentials, then `capture_io`),
+> **5 Delivery and limits**, **6 Privacy rules**; steps 2–5 all write through this one
+> PUT. Same endpoint, same clamps; the console shows the server's 422 verbatim. This API
+> remains the scriptable path.
 
 > **Residency beats everything.** `onprem_only` removes cloud providers from the
 > candidate pool *by construction* before routing scores anything. When no on-prem model

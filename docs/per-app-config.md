@@ -4,7 +4,10 @@ Operator-facing reference for the per-app override knobs — `policy_mode`,
 `pii_detection`, `pii_entity_denylist`, `pii_score_threshold`, `pii_exempt_patterns`
 and `stream_mode`. For the *why* (which knobs are safe to expose per-app and which
 aren't), read `docs/architecture/per-app-config-flexibility.md` first — this page is the
-how-to.
+how-to. If the question is *"I have a new app, what should I set?"* rather than *"what
+does this field do?"*, start with
+[`help/choosing-app-settings.md`](help/choosing-app-settings.md) — the decision guide and
+its three recipes — and come back here for the field-level detail.
 
 They all follow the same shape as the existing `capture_io` / `compression_enabled`
 per-app overrides: `null` (unset) inherits the deployment-wide default; a set value
@@ -16,17 +19,19 @@ override from ever being able to breach a hard guarantee.
 Every field on this page can be set either way; they hit the same endpoint and the same
 clamps.
 
-- **Console** — *Application → Settings tab → the policy editor.* Since `ui:0.17.0`
-  every field `PolicyIn` accepts has a control there, grouped into four labelled
-  sections: **Placement** (residency, providers, tiers, models), **Protection**
-  (`policy_mode`, with a nested *Detection & narrowing* sub-group holding
-  `pii_detection`, `pii_score_threshold`, `pii_entity_denylist` and
-  `pii_exempt_patterns`), **Telemetry** (`capture_io`), and **Delivery and limits**
-  (`stream_mode`, Headroom, rate limit, budget). The console mirrors the clamps below
-  to disable an option it knows the server will refuse — always with the reason and the
-  way out on the option itself — and shows the server's 422 verbatim under the Save
-  button when a write is rejected anyway. The server remains the authority; the console
-  only explains it.
+- **Console** — *Application → Settings tab.* Since `ui:0.17.0` every field `PolicyIn`
+  accepts has a control there. The tab is six numbered, collapsible steps, each showing a
+  one-line summary of its current values: **1 Access** (API tokens), **2 Placement**
+  (residency, providers, tiers, models), **3 Protection** (`policy_mode`, with a
+  collapsible *Detection & narrowing* sub-group holding `pii_detection`,
+  `pii_score_threshold`, `pii_entity_denylist` and `pii_exempt_patterns`), **4 Telemetry**
+  (the app's own Langfuse credentials, then `capture_io`), **5 Delivery and limits**
+  (`stream_mode`, Headroom, rate limit, budget) and **6 Privacy rules**. Steps 2–5 are one
+  row server-side and one PUT: **Save policy** appears at the foot of each of them and
+  every copy writes all four. The console mirrors the clamps below to disable an option it
+  knows the server will refuse — always with the reason and the way out on the option
+  itself — and shows the server's 422 verbatim under the Save button when a write is
+  rejected anyway. The server remains the authority; the console only explains it.
 - **Admin API** — `PUT /admin/applications/{app_id}/policy`, as in the examples
   throughout this page. Still the scriptable path, and still exactly equivalent.
 
@@ -80,7 +85,8 @@ PUT /admin/applications/millwise/policy
   live global detector", the state of an app that never overrode the field.
 
 **Console:** moving a control back to its "(global default)" option now clears that field.
-The editor lists exactly which stored values a save will clear, above the Save button.
+Each of steps 2–5 lists exactly which stored values a save will clear, above its Save
+button.
 
 `pii_score_threshold` is worth a note: `{"reset": ["pii_score_threshold"]}` removes the
 floor entirely, which is **not** the same as `0`. A `0` floor still runs
@@ -92,13 +98,15 @@ score is below `0.0`, so it passes everything); `null` means no per-app floor at
 **Start here.** This is the coarse switch; every knob below it is a refinement within
 the `enforced` posture.
 
-> **Console:** *Settings → Protection → policy mode.* Selecting `passthrough` raises an
+> **Console:** *Settings → step 3 Protection → policy mode.* Selecting `passthrough` raises an
 > inline banner stating exactly what stops (detection, redaction in both directions,
 > custom recognizers, sensitivity rules), what continues (routing, budgets, metering,
-> the decision trace, Langfuse), and that **placement is untouched** — residency above
-> still decides where compute may run. The narrowing knobs below dim while
-> `passthrough` is selected, because nothing is detected, but their stored values are
-> **kept, not cleared**, and apply again the moment the app returns to `enforced`.
+> the decision trace, Langfuse), and that **placement is untouched** — residency in step
+> 2 still decides where compute may run. The *Detection & narrowing* sub-group below
+> collapses to a one-line summary while `passthrough` is selected, because nothing is
+> detected, but it stays openable and editable and its stored values are **kept, not
+> cleared** — the summary names what is being kept — and they apply again the moment the
+> app returns to `enforced`.
 > **API:** `PUT /admin/applications/{app_id}/policy`, field `policy_mode`.
 
 RouteForge separates two things that are easy to confuse:
@@ -174,7 +182,7 @@ without anyone having to tell it.
 
 ## `pii_detection`
 
-**Console:** *Settings → Protection → Detection & narrowing → pii detection.*
+**Console:** *Settings → step 3 Protection → Detection & narrowing → pii detection.*
 **API:** `PUT /admin/applications/{app_id}/policy`, body field `pii_detection`.
 Values, from `app/policy/enums.py:PII_MODES`:
 
@@ -265,8 +273,9 @@ independently:
   shared/default project. `capture_io=full` is rejected (422) unless
   `load_app_langfuse(app)` resolves — the app must have its own project, either
   auto-provisioned at creation or attached manually via
-  `PUT /admin/applications/{app_id}/langfuse` (see `docs/onboarding-models.md`-adjacent
-  Langfuse provisioning notes). `app/obs/export.py` fails closed to `redacted` at export
+  `PUT /admin/applications/{app_id}/langfuse` — in the console the credential fields sit in
+  *Settings → step 4 Telemetry*, directly above `capture_io`, because they gate it (see
+  `docs/onboarding-models.md`-adjacent Langfuse provisioning notes). `app/obs/export.py` fails closed to `redacted` at export
   time if the per-app tracer build ever fails, as an independent runtime backstop.
   `app/obs/*` was not changed by this feature — it already had this behavior.
 - **`allow_app_pii_downgrade` still gates it.** A deployment with the ceiling set
@@ -294,9 +303,9 @@ independently:
 
 ## `pii_entity_denylist` and `pii_score_threshold`
 
-**Console:** *Settings → Protection → Detection & narrowing → **exempt types** (a chip
-per Presidio built-in; `US_SSN` is rendered locked with a 🔒 and cannot be selected) and
-**min confidence** (the threshold box).*
+**Console:** *Settings → step 3 Protection → Detection & narrowing → **exempt types** (a
+chip per Presidio built-in; `US_SSN` renders as `US_SSN (locked)`, is not clickable and
+cannot be selected) and **min confidence** (the threshold box).*
 **API:** the same `PUT /admin/applications/{app_id}/policy` endpoint.
 
 These narrow the gate **without disabling it** — the surgical alternative to
@@ -343,7 +352,7 @@ PUT /admin/applications/{app_id}/policy
 
 ## `pii_exempt_patterns`
 
-**Console:** *Settings → Protection → Detection & narrowing → **exempt values**.* Add
+**Console:** *Settings → step 3 Protection → Detection & narrowing → **exempt values**.* Add
 one regex per row; each row validates as you type (length, then compilability) and a
 browser-only tester lets you paste candidate values and see, line by line, which would
 be exempted. Nothing typed into that tester is sent anywhere.
@@ -377,8 +386,10 @@ Same guarantee as the denylist and the threshold, enforced at the same seam.
 
 ## `stream_mode`
 
-**Console:** *Settings → Delivery and limits → streaming.* The unset option is labelled
-"(unset — `stream: true` rejected)", because `stream_mode` has no deployment-wide
+**Console:** *Settings → step 5 Delivery and limits → streaming.* The unset option names
+what this deployment will actually do with `stream: true` — "(unset — `stream: true`
+rejected)", or "(unset — `stream: true` served unstreamed)" where
+`server.reject_stream_requests` is false — because `stream_mode` has no deployment-wide
 default: unset simply means this app never opted in. `stream_unverified` is disabled for
 an `onprem_only` app, with the reason on the option.
 **API:** the same `PUT /admin/applications/{app_id}/policy` endpoint, body field

@@ -18,7 +18,7 @@ Enterprise license.
 | Path | What you get | Setup | Needs EE? |
 |---|---|---|---|
 | **Shared project** (default) | Every app's traces in one project, still redacted on egress; all privacy rules hold. | Nothing. | No |
-| **Manual per-app** | Each app's traces in **its own** project — full tenant isolation, and the only way to enable the raw-capture path (rule 2). | Per app, once: create a project in Langfuse, then paste its **project** keys into the app (Console → Applications → *Langfuse credentials*, or `PUT /admin/applications/{id}/langfuse`). | No |
+| **Manual per-app** | Each app's traces in **its own** project — full tenant isolation, and the only way to enable the raw-capture path (rule 2). | Per app, once: create a project in Langfuse, then paste its **project** keys into the app (Console → Applications → the app → **Settings** → *step 4 Telemetry*, where the credential fields sit directly above `capture_io`; or `PUT /admin/applications/{id}/langfuse`). | No |
 | **Auto-provision** | Same per-app isolation as manual, but the project is created **automatically** on onboard — no per-app step. | One-time: set an org-scoped key pair (`LANGFUSE_ORG_*`) once. | **Yes** — org keys / project creation are EE-only on self-hosted. |
 
 **How to choose:**
