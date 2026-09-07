@@ -1,0 +1,41 @@
+# deploy/spark/docker-compose.langfuse.yml
+#
+# OPTIONAL overlay: point the api at a self-hosted Langfuse running in the same
+# stack. It adds nothing but environment — the Langfuse services themselves come
+# from deploy/compose/langfuse.yml, reused verbatim so there is one source of
+# truth for that stack (its four boot fixes included).
+#
+# Layer all three files, in this order:
+#
+#   docker compose -p routeforge-spark \
+#     -f deploy/spark/docker-compose.yml \
+#     -f deploy/compose/langfuse.yml \
+#     -f deploy/spark/docker-compose.langfuse.yml \
+#     up -d --build
+#
+# This file must come LAST: it restores the project name that langfuse.yml would
+# otherwise override, and its api overrides merge on top.
+#
+# Cost of the overlay: six extra containers (langfuse-web, langfuse-worker,
+# postgres, clickhouse, redis, minio). Fine on a Spark's 128GB, but skip it if
+# you only want the router.
+name: routeforge-spark
+
+services:
+  api:
+    environment:
+      # In-container OTLP target (Docker DNS name), not browser-reachable.
+      LANGFUSE_HOST: http://langfuse-web:3000
+      # Browser-reachable URL for the console's "Langfuse trace" deep-link.
+      # Set SPARK_HOST to the Spark's hostname/IP if you open the UI from
+      # another machine — `localhost` there points at the wrong box.
+      LANGFUSE_PUBLIC_URL: http://${SPARK_HOST:-localhost}:${LANGFUSE_PORT:-3000}
+      # Demo keys, matching langfuse.yml's LANGFUSE_INIT_PROJECT_* seed values.
+      # Change both in .env for anything but a lab.
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-pk-lf-local}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-sk-lf-local}
+    depends_on:
+      # Merges with the db dependency from the base file. service_started, not
+      # healthy: trace export is best-effort and the api never blocks on it, so
+      # it may boot while Langfuse is still migrating.
+      langfuse-web: {condition: service_started}

@@ -3,6 +3,10 @@
 Two targets (greenlake-deploy skill): **Compose is what you demo from**; **Helm**
 proves it deploys to the customer's Kubernetes.
 
+Two single-machine variants of the compose path also live here:
+`deploy/dgx_lab/` (Kubernetes manifests for the Run:ai lab cluster) and
+`deploy/spark/` (an **NVIDIA DGX Spark** workstation — see below).
+
 ## Local demo — Docker Compose
 
 ```bash
@@ -30,6 +34,20 @@ docker compose -f deploy/compose/docker-compose.yml --profile gpu up
 > First build compiles the API image with the NAT (`agent`) extra, which is large —
 > the "< 5 minutes" target assumes images are already built/pulled. For a lean
 > mock-only image build with `--build-arg EXTRAS=""`.
+
+## Single workstation — NVIDIA DGX Spark
+
+A Spark (GB10, aarch64, Docker, no Kubernetes) has its own bundle — the
+`deploy/dgx_lab/` manifests do not apply to it:
+
+```bash
+cp deploy/spark/.env.example deploy/spark/.env   # set ADMIN_PASSWORD, POSTGRES_PASSWORD
+bash deploy/spark/install.sh                     # preflight, then build + up
+```
+
+Builds natively arm64 on the machine, stores state in Postgres so onboarding
+survives a restart, and makes Langfuse an optional overlay. See
+`deploy/spark/README.md`.
 
 ## Kubernetes / HPE GreenLake — Helm
 

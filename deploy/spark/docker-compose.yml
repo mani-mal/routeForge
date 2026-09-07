@@ -1,0 +1,95 @@
+# deploy/spark/docker-compose.yml
+#
+# routeForge on an NVIDIA DGX Spark (GB10, aarch64, DGX OS + Docker).
+#
+# A DGX Spark is a single workstation, not the Run:ai Kubernetes lab — so the
+# manifests in deploy/dgx_lab/ do NOT apply here (they assume the
+# runai-routeforge namespace, a ghcr-pull secret, NodePorts and an in-cluster
+# vLLM). This file is the single-node equivalent: everything is built from
+# source ON the Spark, so the images are natively arm64.
+#
+#   docker compose -p routeforge-spark -f deploy/spark/docker-compose.yml up -d --build
+#
+# Brings up:
+#   db   — Postgres 16, the durable multi-tenant store (applications, tokens,
+#          per-app policies, usage records, onboarded models, admin users).
+#          Postgres rather than the default in-container SQLite so onboarding
+#          survives `down`/`up` and image rebuilds. Same choice the DGX lab
+#          makes (deploy/dgx_lab/routeforge-app.yaml).
+#   api  — FastAPI router (steps 1-10) on :8080
+#   ui   — nginx-served React console on :3001, proxying /api and /v1 -> api:8080
+#
+# routeForge is a PURE ROUTER: this stack deploys NO inference. The on-prem pool
+# boots empty. Stand up your own OpenAI-compatible server on the Spark's GPU and
+# onboard it at runtime (see README.md step 5 and docs/onboarding-models.md).
+#
+# Langfuse is optional and OFF in this file — add it by layering
+# docker-compose.langfuse.yml (see README.md). With no LANGFUSE_PUBLIC_KEY /
+# LANGFUSE_SECRET_KEY in the environment the exporter logs one warning at boot
+# and stays disabled; nothing in the request path blocks on it.
+name: routeforge-spark
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: routeforge
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/spark/.env}
+      POSTGRES_DB: routeforge
+    volumes: [rf-db:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U routeforge -d routeforge"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  api:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      args:
+        # NAT multi-step agent + Langfuse export + asyncpg (needed for the
+        # Postgres DATABASE_URL below). Add `presidio` for the full PII
+        # detector — it downloads the en_core_web_lg spaCy model at BUILD time,
+        # so the Spark needs internet during that build. See README.md.
+        EXTRAS: ${API_EXTRAS:-agent,observability,postgres}
+    restart: unless-stopped
+    ports: ["${API_PORT:-8080}:8080"]
+    # Lets the api container reach a model server running on the Spark HOST
+    # (e.g. vLLM or ollama on the GPU) as http://host.docker.internal:PORT.
+    # Docker on Linux does not provide this name by default.
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    environment:
+      # regex is the offline-safe detector. Set presidio here ONLY if the image
+      # was built with the presidio extra (API_EXTRAS), or boot fails.
+      SP_PII_DETECTION: ${SP_PII_DETECTION:-regex}
+      SP_SERVER_PORT: "8080"
+      DATABASE_URL: postgresql+asyncpg://routeforge:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/spark/.env}@db:5432/routeforge
+      # Bearer token sent to onboarded on-prem endpoints. vLLM/ollama started
+      # without --api-key ignore it; a dummy value keeps LiteLLM happy.
+      SP_ONPREM_API_KEY: ${SP_ONPREM_API_KEY:-sk-noauth}
+      # Admin console login. No default password on purpose — .env must set it.
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@routeforge.local}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in deploy/spark/.env}
+    depends_on:
+      db: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 30s
+
+  ui:
+    build:
+      context: ../../ui
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports: ["${UI_PORT:-3001}:80"]
+    depends_on:
+      api: {condition: service_healthy}   # nginx proxies /api,/v1 -> api:8080
+
+volumes:
+  rf-db: {}
