@@ -146,8 +146,11 @@ requires RouteForge to host training or inference compute.
 1. **Fix B13 redaction** — feed the exporter the gate's sanitized prompt + redaction map so
    `redacted` telemetry is never weaker than what the model saw. Prerequisite for trusting
    `redacted` as the shareable Target-A substrate.
-2. **B14 per-app `capture_io` (off | redacted | full)** with the strict per-app residency lint and
-   symmetric UI display. Metadata stays always-on regardless.
+2. **B14 per-app `capture_io` (off | redacted | full)** with write-time clamps and symmetric UI
+   display. Metadata stays always-on regardless. ✅ **SHIPPED.** The clamps landed as an
+   own-Langfuse-project requirement on `full` (never relaxed) plus a **posture** condition —
+   an `onprem_only` app must declare `policy_mode: "passthrough"` to reach `full` — rather
+   than the flat residency lint sketched here; see `docs/per-app-config.md`.
 3. **B15 remainder** — admin cross-app reporting from RouteForge's own store + a manual per-app
    Langfuse-creds path (air-gapped operators with no org key). Project isolation core is done.
 4. **B16 feedback + dataset substrate** — `POST /v1/feedback` → trace-linked score, correction-

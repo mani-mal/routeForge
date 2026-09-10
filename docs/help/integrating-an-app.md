@@ -133,6 +133,8 @@ are not PII and are present regardless of the app's `capture_io` mode):
 | `sp.sensitivity`, `sp.onprem_only` | policy verdict |
 | `sp.detected_entities` | entity **types** only (e.g. `US_SSN`), never values |
 | `sp.routing_policy_version` | routing+pricing content hash at decision time |
+| `sp.app_policy_version` | content hash of the per-app policy in force (moves on every policy edit — pair it with a conformance-probe result to tell a stale PASS from a live one) |
+| `sp.policy_mode` | the app's protection posture (`enforced` \| `passthrough`), emitted whenever it resolves |
 | `langfuse.session.id` | groups turns into one Langfuse **Session** (see below) |
 
 When routeForge runs the **multi-step path**, per-hop **child spans** `serving.step-N`
@@ -155,7 +157,8 @@ value is silently dropped, not rejected): **max 128 chars**, charset **`[A-Za-z0
 
 **Raw text vs. metadata.** All attributes above are **always on** — enough for
 reward/routing eval. Raw prompt/completion (`input.value` / `output.value`) exist **only**
-when the app's `capture_io = full`, which is gated to non-`onprem_only` apps with their
-own Langfuse project (see the F1 capture-substrate design). So SFT/DPO `{prompt, chosen,
-rejected}` pairs come only from `full`-eligible apps; scores and routing signal come from
-everywhere.
+when the app's `capture_io = full`, which requires the app's **own** provisioned Langfuse
+project (never relaxed — raw I/O is tenant-isolated) and, for an `onprem_only` app, an
+explicitly declared `policy_mode: "passthrough"`. See
+[`../per-app-config.md`](../per-app-config.md). So SFT/DPO `{prompt, chosen, rejected}`
+pairs come only from `full`-eligible apps; scores and routing signal come from everywhere.

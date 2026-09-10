@@ -58,6 +58,16 @@ What you get and owe with Pattern A:
   complete verified response. Agent loops don't need token streaming anyway; they
   need the finished step. (See `stream_mode` in `../per-app-config.md`.)
 
+### Native tool calling
+
+You do not have to hand-roll tool parsing: routeForge accepts `tools` /
+`tool_choice` on the request and returns a standard `tool_calls` assistant turn
+with `finish_reason: "tool_calls"`. Your framework's normal tool loop works
+unchanged — the wire format and the replay shape are in
+[`api-reference.md`](./api-reference.md#tool-calling). Note that a request
+carrying `tools` is always served as a single completion (it never enters
+routeForge's own agent runtime) and bypasses step-5 compression.
+
 ### Tool outputs contain data the input gate never saw
 
 When a tool returns a customer record, feed that tool output back as a message on
@@ -81,8 +91,12 @@ API flag. A request goes multi-step when **either**:
 2. the last **user** message contains a trigger phrase — `"step by step"` or
    `"look up"`.
 
-Otherwise it's a single direct call. (The LLM task classifier is off in this
-build; these are rules only.)
+Otherwise it's a single direct call. (An optional LLM task classifier exists
+(`app/routing/task_mode_llm.py`) but is **off by default** — it needs
+`routing.prompt_opt.enabled: true` plus a pinned `task_mode_classifier` prompt
+artifact. With it off, the two rules above are the whole decision. A request that
+carries `tools` never takes this path at all — see
+[`api-reference.md`](./api-reference.md#tool-calling).)
 
 ```bash
 curl http://<host>:<port>/v1/chat/completions \
@@ -99,7 +113,7 @@ curl http://<host>:<port>/v1/chat/completions \
 - `cost` = summed per-hop actual vs baseline (routing and compression levers kept
   separate).
 - `trace[]` = one `DecisionRecord` per hop (`step:"agent_hop"`, with `hop_index`,
-  `chosen`, `actual_cost_usd`, `latency_ms`, `tokens_priced`, `serving_engine`),
+  `chosen`, `chosen_tier`, `actual_cost_usd`, `latency_ms`, `tokens_priced`),
   interleaved `CompressionRecord`s, and a final `VerificationRecord`. This is how
   you read per-hop cost/latency/model out of one response.
 

@@ -79,11 +79,22 @@ full Target A / Target B split. Summary for dataset export:
 | `full` | the app's own **residency-local** Langfuse project | raw prompt + raw pre-verify completion | Target A **and** Target B |
 
 **Target B (SFT/DPO on the underlying LLM) requires `full` capture in a
-residency-local project.** `full` is only reachable when the config lint has cleared it
-(no `onprem_only` tenant) and the app has its own residency-local Langfuse project —
-so raw I/O only ever lands in that app's own project, never the shared one. If you're
-building a preference dataset and your export came from the shared/default project,
-stop: it's redacted-only by construction (see §5).
+residency-local project.** Per-app `full` is gated at policy-write time
+(`app/api/admin_routes.py:set_policy`), not by the boot config lint. Two independent
+conditions:
+
+- the app has its **own** provisioned residency-local Langfuse project — never relaxed,
+  so raw I/O only ever lands in that app's own project, never the shared one; **and**
+- if the app is `onprem_only`, its `policy_mode` is explicitly `passthrough`. An
+  `onprem_only` app still in the `enforced` posture cannot reach `full` at all
+  (CLAUDE.md rules 2/8). See [`../per-app-config.md`](../per-app-config.md).
+
+(The boot config lint is a separate, deployment-wide check: it rejects a global
+`observability.langfuse.capture_io: full` in `serving.yaml` whenever any tenant is
+`onprem_only`.)
+
+If you're building a preference dataset and your export came from the shared/default
+project, stop: it's redacted-only by construction (see §5).
 
 ## 4. The `{prompt, chosen, rejected}` transform
 

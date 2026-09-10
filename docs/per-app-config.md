@@ -291,7 +291,7 @@ independently:
 > hard residency floor (cloud is filtered out of the candidate pool by construction,
 > rule 3) *and* gives the app raw capture into its own Langfuse project. Flipping
 > residency to `any` + an `allowed_providers` pin — the workaround this page used to
-> recommend, see [`help/faq.md`](help/faq.md#recommended-config-raw-langfuse-capture-and-routing-pinned-on-prem)
+> recommend, see [`help/faq.md`](help/faq.md#legacy-config-raw-capture-via-a-residency-flip--an-allowed_providers-pin)
 > — is strictly weaker: it trades a floor cloud cannot survive for a mutable allowlist,
 > and drops `ctx.onprem_only`, which is what the step-9 streaming floor keys on.
 >

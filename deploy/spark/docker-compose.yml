@@ -56,7 +56,7 @@ services:
         # so the Spark needs internet during that build. See README.md.
         EXTRAS: ${API_EXTRAS:-agent,observability,postgres}
     restart: unless-stopped
-    ports: ["${API_PORT:-8080}:8080"]
+    ports: ["${BIND_ADDR:-0.0.0.0}:${API_PORT:-8080}:8080"]
     # Lets the api container reach a model server running on the Spark HOST
     # (e.g. vLLM or ollama on the GPU) as http://host.docker.internal:PORT.
     # Docker on Linux does not provide this name by default.
@@ -87,7 +87,7 @@ services:
       context: ../../ui
       dockerfile: Dockerfile
     restart: unless-stopped
-    ports: ["${UI_PORT:-3001}:80"]
+    ports: ["${BIND_ADDR:-0.0.0.0}:${UI_PORT:-3001}:80"]
     depends_on:
       api: {condition: service_healthy}   # nginx proxies /api,/v1 -> api:8080
 

@@ -7,6 +7,32 @@ for the task-by-task build). See `docs/per-app-config.md` for the operator how-t
 **Related:** per-app privacy rules (PR #3, `app/apps/models.py`); MillWise integration
 assessment; CLAUDE.md §Configuration; `.claude/skills/privacy-gate`, `.claude/skills/output-controls`
 
+> ### ⚠ Partially superseded — read this before the clamp details below
+>
+> The **governing rule** (§"expose a per-app override only when an *independent*
+> mechanism holds the floor") and **Decision 2** (streaming) are unchanged and still
+> current. The **specific residency clamps recorded under Decision 1 are not.** Two
+> later changes replaced them:
+>
+> 1. **The `onprem_only` PII-downgrade clamp was removed** (commit `09a28db`). It was
+>    over-broad: `app/policy/context.py` computes the residency floor from
+>    `app_policy.residency` and never consults `pii_detection`, so refusing the
+>    downgrade for on-prem apps protected nothing while pushing operators toward
+>    `residency: "any"` + an `allowed_providers` pin — strictly weaker. An
+>    `onprem_only` app may now set `pii_detection: off|regex`, gated on
+>    `capture_io: "off"`.
+> 2. **`policy_mode` (`enforced | passthrough`) split placement from protection**
+>    (PR #34, 2026-09-05; CLAUDE.md rule 2 amended, rule 2a added). `onprem_only` is
+>    no longer used as a proxy for "maximum protection", so `capture_io: "full"` is
+>    reachable for an `onprem_only` app that has explicitly declared
+>    `policy_mode: "passthrough"` — into its **own** Langfuse project only.
+>
+> What did **not** change: the own-project condition on `full` (never relaxed), the
+> `redacted`-wherever-nothing-is-sanitized refusal, the `allow_app_pii_downgrade`
+> ceiling, and the fact that placement is untouched by any protection knob.
+> **`docs/per-app-config.md` is the current authority on every clamp**; the sections
+> below are the design record of how they got here.
+
 This note answers: *which Serving-Plane settings can safely become per-application
 overrides, and why `pii_detection` qualifies but a raw per-app `reject_stream_requests`
 toggle does not — including, from first principles, what it would actually take to give
@@ -80,9 +106,13 @@ missing lever: such an app picks `off` (or a scoped `regex`) and keeps its conte
    `off` (and `regex`) whenever the app is `onprem_only` or its effective `capture_io` is
    `"redacted"`. `capture_io="off"` is always safe with detection off.
 
+   *(Superseded in part: the `onprem_only` half of this clamp was removed in `09a28db` —
+   see the banner at the top. The `capture_io="redacted"` half stands unchanged.)*
+
    **Deliberate, narrower exception — operator-gated raw eval capture (2026-08-21,
    product-owner approved, relaxes CLAUDE.md rule 2):** `capture_io="full"` is *not*
-   clamped away by the rule above. A **non-`onprem_only`** app may combine
+   clamped away by the rule above. As written at the time, a **non-`onprem_only`** app
+   may combine
    `pii_detection=off` with `capture_io="full"`: `app/obs/export.py`'s `full` branch sends
    RAW (unredacted) I/O, routed via a per-app tracer to the app's **own** provisioned
    Langfuse project — never the shared/default one — and fails closed to `redacted` if that
@@ -94,6 +124,12 @@ missing lever: such an app picks `off` (or a scoped `regex`) and keeps its conte
    existing `capture_io='full'` eligibility clamp (`load_app_langfuse(app) is not None`).
    `allow_app_pii_downgrade` gates this combination exactly like any other PII downgrade —
    an operator who sets that ceiling `false` cannot reach raw capture either.
+
+   *(Superseded 2026-09-05: the residency condition on `full` became a **posture**
+   condition. An `onprem_only` app that declares `policy_mode: "passthrough"` may now
+   reach `full`; one still in `enforced` may not, at any residency. The own-project
+   containment argument in this paragraph is unchanged and is what still bounds the blast
+   radius.)*
 3. **Fail closed on validation.** An unknown/invalid mode at admin-write time → 422. Never
    silently fall back to `off`.
 4. **Deployment ceiling.** A global switch — shipped as `policy.allow_app_pii_downgrade`
@@ -129,7 +165,8 @@ the second's guardrails trustworthy:
   one resolved *effective* post-write residency/`capture_io` pair, computed once, so a
   partial PUT is judged on the state it will actually produce.
 - **Shipped the operator-gated raw eval capture described above** (`pii_detection=off` +
-  `capture_io=full` for a non-`onprem_only` app with its own Langfuse project), which
+  `capture_io=full` for a non-`onprem_only` app with its own Langfuse project — the
+  residency condition has since become a `policy_mode` condition, see the banner), which
   depends on that same effective-value fix — the `capture_io=='full'` clamp now
   re-validates on every write instead of trusting a stored value that a partial PUT might
   otherwise have left stale.
@@ -258,10 +295,13 @@ runs independently of RouteForge's inbound-streaming policy.
 |---|---|---|
 | `residency` | monotonic-tightening (`_stricter`) | already per-app |
 | `allowed_tiers` / `allowed_models` / `allowed_providers` | monotonic-tightening | already per-app |
-| `capture_io` | free-but-floored (clamp for `onprem_only`) | already per-app |
+| `capture_io` | free-but-floored (own-project clamp on `full`, always; posture clamp for `onprem_only` + `enforced`) | already per-app |
 | `compression_enabled` | free-but-floored | already per-app |
-| `pii_detection` | free-but-floored (clamp for `onprem_only`/capture) | ✅ shipped (Decision 1) |
+| `pii_detection` | free-but-floored (clamp on the `redacted` capture seam + the `allow_app_pii_downgrade` ceiling — **not** on residency) | ✅ shipped (Decision 1) |
+| `pii_entity_denylist` / `pii_score_threshold` / `pii_exempt_patterns` | monotonic-tightening within `enforced` (narrowing, not a downgrade — `US_SSN` is unreachable by any of them) | ✅ shipped |
+| `policy_mode` | free-but-floored (`allow_app_passthrough` ceiling + the capture clamps; placement untouched) | ✅ shipped (PR #34, 2026-09-05) |
 | `stream_mode` | free-but-floored (`StreamFallback` + write-time clamp hold the floor, not the app's choice) | ✅ shipped (Decision 2) |
+| `residency` | placement, monotonic-tightening — **never** inferred from or by a protection knob | already per-app |
 | `fail_closed` | the floor itself | never per-app |
 
 **Rule of thumb for any future knob:** if it is monotonic-tightening or free-but-floored,
@@ -274,9 +314,11 @@ it can be per-app; if it is the floor itself, it stays global. Classify before e
 Both decisions are **implemented** (`feat/per-app-flexibility`, 2026-08-20).
 
 - **Decision 1 (`pii_detection` per-app):** ✅ shipped. `AppPolicy.pii_detection` column +
-  admin write-time 422 clamp (`onprem_only` residency, `capture_io != "off"`) + the
-  `allow_app_pii_downgrade` deployment ceiling + singleton per-mode detector selection +
-  the invariant test pinning the residency floor. See `docs/per-app-config.md`.
+  admin write-time 422 clamps + the `allow_app_pii_downgrade` deployment ceiling +
+  singleton per-mode detector selection + the invariant test pinning the residency floor.
+  **The clamp set has since changed** — the `onprem_only` residency condition was removed
+  (`09a28db`) and `policy_mode` was added (PR #34); see the superseded banner at the top of
+  this page. `docs/per-app-config.md` is the current authority.
 - **Decision 2 (streaming):** ✅ shipped, all three `stream_mode` values.
   `verified_then_stream` chunks a finished, fully-verified answer — no real backend
   streaming, no TTFT win. `stream_unverified` and `incremental_verify` are REAL backend

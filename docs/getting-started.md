@@ -101,9 +101,18 @@ Quick map of what each field controls:
 | `max_spend_usd_per_day` | Daily USD budget; over it → request rejected. |
 | `max_rpm` | Requests-per-minute cap. |
 | `compression_enabled` | Turn Headroom context compression on/off for this app. |
+| `policy_mode` | **How much the gate does to the data at all** — the coarse protection switch. *(detailed below)* |
 | `pii_detection` | **How hard the gate looks for PII** before redacting. *(detailed below)* |
+| `pii_entity_denylist` / `pii_score_threshold` / `pii_exempt_patterns` | Narrow the gate without disabling it — exempt specific entity types, low-confidence matches, or value shapes. See [`per-app-config.md`](per-app-config.md). |
 | `capture_io` | **How much of the prompt/answer is stored in telemetry.** *(detailed below)* |
 | `stream_mode` | Whether/how token streaming is allowed. *(summary below)* |
+| `reset` | The one way to put a field *back* to `null` — see the merge note below. |
+
+> **The PUT merges — `null` does not clear.** A field you omit, *or send as an
+> explicit JSON `null`*, keeps the app's currently stored value. To clear a list,
+> send `[]`. To return any field to "inherit the deployment default", name it in
+> `reset`, e.g. `{"reset": ["policy_mode", "pii_score_threshold"]}`. Every floor
+> below is evaluated on the **effective post-merge, post-reset** state.
 
 ### `residency` — where a request may run
 
@@ -138,6 +147,42 @@ off by default so you can measure spend before/after.
 
 ---
 
+### `policy_mode` — the protection posture (start here)
+
+**This is the coarse switch; `pii_detection` and the narrowing levers are refinements
+*within* it.** RouteForge keeps two things apart that are easy to confuse:
+
+| Axis | Field | Question it answers |
+|---|---|---|
+| **Placement** | `residency` | *Where may compute run?* |
+| **Protection** | `policy_mode` | *How much does the gate do to the data?* |
+
+They are **independent**. `policy_mode` never widens `allowed_providers`, never clears
+`onprem_only`, and never touches placement.
+
+| Value | Meaning |
+|---|---|
+| `enforced` *(default; also what `null` inherits)* | Privacy-first: PII detection, input redaction, egress redaction, sensitivity escalation, custom recognizers, the capture ceiling. |
+| `passthrough` | RouteForge is a **router, meter and tracer only** — nothing detected, nothing redacted in either direction, no custom recognizers. |
+
+Reach for `passthrough` when the app's whole input is the customer's **own** content
+and every field of it is load-bearing output it must reproduce (engineering drawings,
+order documents, contracts). There, redaction is a correctness bug, not a safety
+feature. `onprem_only` + `passthrough` — *"run only on my hardware, and don't touch my
+data"* — is a valid, honest configuration.
+
+**Guards:** the deployment ceiling `policy.allow_app_passthrough` in `serving.yaml`
+(default `true`; set `false` and no app may take the posture); `capture_io: redacted`
+is refused under `passthrough` (nothing was sanitized); and the posture is never
+silent — it is folded into `app_policy_version`, stamped in every response's `policy`
+block, and emitted on the trace as `sp.policy_mode`.
+
+Unset inherits the deployment-wide `policy.default_policy_mode` in `config/serving.yaml`
+(env `SP_DEFAULT_POLICY_MODE`). Deep dive: [`per-app-config.md`](per-app-config.md);
+decision guide: [`help/choosing-app-settings.md`](help/choosing-app-settings.md).
+
+---
+
 ### `pii_detection` — how hard the gate looks for PII  ⭐ (your question)
 
 **What it is:** before *anything* downstream sees the request, the gate scans the text for
@@ -162,13 +207,24 @@ let data escape on-prem. Residency is enforced *separately*. An `onprem_only` ap
 not *where the request may go*.
 
 **Safety floors (enforced when you save the policy — you'll get a `422` if you violate one):**
-- **`onprem_only` apps may not set `off` or `regex`.** The strictest residency never permits a
-  PII downgrade.
 - **A deployment-wide lock:** `allow_app_pii_downgrade` in `serving.yaml` (default `true`). A
   hospital-grade deployment sets this `false` once, and then *no* app can downgrade detection.
 - **`off`/`regex` is rejected if `capture_io` is `redacted`** — because "redacted" telemetry
   reuses the gate's sanitized text, and if nothing was sanitized, "redacted" traces would
   silently carry raw PII. (Pair `off` with `capture_io: off` or `full` instead.)
+- **`onprem_only` apps *may* downgrade detection** — detection and residency are independent
+  axes, so this buys nothing to refuse. In the `enforced` posture that pairing needs
+  `capture_io: "off"`: with no telemetry I/O captured there is no egress path for the
+  unsanitized prompt. Do **not** flip residency to `any` + an `allowed_providers` pin to
+  work around a detection or telemetry rule — that swaps a hard residency floor for a
+  mutable allowlist and is strictly weaker.
+- An unrecognized value is a `422`, never a silent fallback to `off`.
+
+**Prefer the narrow levers.** `off` blinds the gate to *everything*, a real SSN included.
+When only a few false positives are the problem, keep detection on and use
+`pii_entity_denylist` (exempt entity *types*), `pii_score_threshold` (drop low-confidence
+matches) or `pii_exempt_patterns` (exempt *value shapes*). They carry no clamp of their own
+at any residency, and `US_SSN` can never be exempted by any of them.
 
 Deep dive: [`per-app-config.md`](per-app-config.md).
 
@@ -183,7 +239,7 @@ only about the trace payload.
 
 | Value | What's stored in the trace | Use it for |
 |---|---|---|
-| `off` *(deployment default)* | **No prompt/answer text at all** — only metadata (model, tokens, cost, latency, sensitivity, status). | Maximum privacy. The safe default; required for `onprem_only`. |
+| `off` *(deployment default)* | **No prompt/answer text at all** — only metadata (model, tokens, cost, latency, sensitivity, status). | Maximum privacy. The safe default, and the one setting that is always legal at any residency and any posture. |
 | `redacted` | The **gate-sanitized** prompt and the verified answer — i.e. with PII already replaced by placeholders. | Debugging and observability without exposing raw PII. |
 | `full` | The **raw, unredacted** prompt and completion. | Evaluation / prompt-tuning where you need the real text. **Tightly gated (below).** |
 
@@ -191,14 +247,24 @@ only about the trace payload.
 - Start at **`off`** (or the deployment default). You still get full cost/routing metadata.
 - Move to **`redacted`** when developers need to *see the conversations* to debug, but you
   never want raw PII in Langfuse.
-- Use **`full`** only for a dedicated eval app where you deliberately want raw I/O — and only
-  under all these guardrails, each enforced independently:
-  - **Never for `onprem_only`.** Residency beats eval — an `onprem_only` app can't reach the
-    `off` detection state that `full` capture implies, so the combination can't arise.
+- Use **`full`** only for an app you deliberately want raw I/O from — and only under these
+  guardrails, each enforced independently at policy-write time:
   - **Only to the app's *own* Langfuse project.** `full` is rejected unless the app has its own
-    provisioned project; raw I/O never touches the shared/default project. If that per-app
-    project can't be built at runtime, the exporter **fails closed to `redacted`.**
-  - **The deployment lock still applies** (`allow_app_pii_downgrade`).
+    provisioned project; raw I/O never touches the shared/default project. **This condition is
+    never relaxed by anything.** If that per-app project can't be built at runtime, the
+    exporter **fails closed to `redacted`.**
+  - **An `onprem_only` app must first declare `policy_mode: "passthrough"`.** While it is in
+    the `enforced` posture the gate is running, so residency beats eval convenience and `full`
+    is refused. Declaring the no-protection posture makes raw capture into the app's own
+    project coherent at any residency — that is exactly what `policy_mode` is for. Placement
+    does not move either way: `onprem_only` stays absolute in both postures.
+  - **`redacted` is refused wherever nothing is sanitized** — under `passthrough`, or with
+    `pii_detection` of `off`/`regex`. Use `full` (own project) or `off`.
+
+  *(Before the 2026-09-05 `policy_mode` release, `onprem_only` was used as a proxy for
+  "maximum protection" and `full` was refused for on-prem apps outright. That forced
+  customers to misdeclare residency to get a protection posture, which is strictly less
+  safe — hence the split into two explicit axes.)*
 
 In short: `off` = metadata only, `redacted` = safe text, `full` = raw text for eval behind a
 fence. Deep dive: [`per-app-config.md`](per-app-config.md).
@@ -285,9 +351,9 @@ Usage/billing records store metadata only — never prompt or answer text — no
 
 ---
 
-## 8. Three starter recipes
+## 8. Four starter recipes
 
-Concrete policies for common apps (the same three used in the flows doc):
+Concrete policies for common apps (the first three are the ones traced in the flows doc):
 
 **Internal chatbot** — low sensitivity, cloud fine, cost-capped:
 ```jsonc
@@ -302,8 +368,10 @@ Concrete policies for common apps (the same three used in the flows doc):
   "max_spend_usd_per_day": 50.0,
   "pii_detection": "presidio", "capture_io": "off", "stream_mode": "verified_then_stream" }
 ```
-*(For `onprem_only`, `pii_detection` must stay `presidio`/inherit, `capture_io: full` is refused,
-and `stream_unverified` is refused — the guarantees can't be waived.)*
+*(For an `onprem_only` app in the default `enforced` posture, `capture_io: full` and
+`stream_unverified` are both refused — those guarantees can't be waived. `pii_detection` is
+free to downgrade even here, but then needs `capture_io: "off"`; for a hospital app you want
+it left at `presidio` anyway.)*
 
 **Eval / prompt-tuning app** — cloud, raw capture for analysis (its own Langfuse project):
 ```jsonc
@@ -311,6 +379,18 @@ and `stream_unverified` is refused — the guarantees can't be waived.)*
   "allowed_providers": ["azure","bedrock"],
   "pii_detection": "off", "capture_io": "full" }
 ```
+
+**Router-only / load-bearing data** — the customer's own documents, every field must be
+reproduced verbatim, and they want raw traces, all while staying on their hardware:
+```jsonc
+{ "residency": "onprem_only", "policy_mode": "passthrough", "capture_io": "full" }
+```
+*(Needs the app's own Langfuse project. The on-prem floor is fully intact — `passthrough`
+turns off protection, never placement.)*
+
+For picking between these on a real onboarding, use
+[`help/choosing-app-settings.md`](help/choosing-app-settings.md) — three questions, three
+recipes, and what each one costs you.
 
 ---
 

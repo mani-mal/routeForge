@@ -26,6 +26,16 @@ authoritative until the `.drawio` is redrawn to match.
 > compression move out like RLHF did?" question, see
 > [`compression-in-scope.md`](./compression-in-scope.md).
 
+> **What belongs in the calling application vs. RouteForge** — the general placement
+> test ("you cannot move a boundary-enforcing component outside the boundary it
+> enforces"), the three-bucket sort (chokepoint / in-boundary lever / the app's own
+> business), and the worked cases: client-side compressors like rtk, Headroom, the
+> semantic cache, and **the two families of "prompt caching"** (app-side caches are
+> invisible and fine; provider-side `cache_control` / `prompt_cache_key` markers pass
+> *through* RouteForge and are currently stripped). See
+> [`app-vs-routeforge-boundary.md`](./app-vs-routeforge-boundary.md); the cost backlog
+> that fixes the lossy half is [`caching-cost-feature-fit.md`](./caching-cost-feature-fit.md).
+
 > **Which Serving-Plane settings can safely become per-application overrides** —
 > for "should `pii_detection` / streaming be per-app?" and the rule for classifying
 > any new per-app knob (monotonic-tightening vs free-but-floored vs floor-itself),
@@ -47,6 +57,13 @@ authoritative until the `.drawio` is redrawn to match.
 > **Residency contract for persistent memory (mem0-style, step-5 extension)** — the
 > CCR-class guarantees a cross-request memory store must honor, see
 > [`persistent-memory-residency-spec.md`](./persistent-memory-residency-spec.md).
+
+> **Which features are IP-worthy, and what the prior art forecloses** — the ranked
+> menu (IP-1…12, R1…R9) is [`ip-and-research-opportunities.md`](./ip-and-research-opportunities.md).
+> **Briefing a new reviewer on it?** Give them
+> [`ip-review-handoff.md`](./ip-review-handoff.md) — reading order, what is already
+> settled, the gaps that are the actual assignment, and the disclosure-before-filing
+> constraint.
 
 ## Canonical step count: 1–10
 

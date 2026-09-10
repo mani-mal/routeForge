@@ -98,6 +98,11 @@ compose network), the api container reaches it at
 explicitly, since Docker on Linux doesn't provide it. If you run it as another
 container on the same compose network, use its service name.
 
+A host-run server bound to `127.0.0.1` (ollama's default) is **not** reachable
+from the api container, and onboarding will save the row disabled with
+`probe_status: "unreachable"`. Widen the bind and scope it with a firewall
+rather than leaving it open on the network — see *Exposure notes* below.
+
 **Onboard it** — console *Infrastructure → Onboard a model*, or the admin API.
 The admin API is **cookie-authed**: the login and the write must share one
 cookie jar.
@@ -157,6 +162,58 @@ stack, and it must match what you started with.
 **No schema migrations.** `create_all` creates missing tables but never `ALTER`s
 an existing one. After pulling a version that adds a column, either apply the
 `ALTER` by hand or `down -v` and re-onboard.
+
+---
+
+## Exposure notes — read before putting this on a network you share
+
+This stack has an admin console and an admin API. Check what you are publishing
+them on, especially on a workstation that sits on office or home wifi rather
+than in a rack.
+
+**`BIND_ADDR` controls the host address the api and ui ports publish on, and
+naming an address explicitly is load-bearing.** With the host address omitted,
+Docker binds `0.0.0.0` *and* `[::]` — so on any machine with a globally routable
+IPv6 address (most consumer ISPs hand out a /64 these days), the console and the
+admin API are published straight onto the public internet, filtered only by
+whatever the upstream router happens to do. Naming an IPv4 address restricts the
+publish to IPv4. The shipped default is an explicit `0.0.0.0`.
+
+```bash
+ss -ltn | grep -E ':(8080|3001)'      # a [::] line means IPv6-published
+ip -o addr show scope global | grep inet6   # a 2000::/3 address is public
+```
+
+Set `BIND_ADDR=127.0.0.1` for loopback-only and reach the console over a tunnel:
+
+```bash
+ssh -L 3001:127.0.0.1:3001 -L 8080:127.0.0.1:8080 user@spark
+```
+
+**A host firewall will not save you here.** Docker's rules bypass ufw's INPUT
+chain, so `ufw deny 8080` does nothing to a published container port — the bind
+address is the control that works. ufw still matters for *host* services (sshd,
+and a model server you run as a host process).
+
+**If you run the model server on the host, scope it to Docker, not to the LAN.**
+An OpenAI-compatible server usually has no authentication, and ollama's API can
+pull and delete models and drive the GPU. It has to listen on more than loopback
+for the api container to reach it, so pair that with a firewall rule:
+
+```bash
+# ollama: reachable from containers, not from the network
+sudo ufw allow from 172.16.0.0/12 to any port 11434 proto tcp
+```
+
+`172.16.0.0/12` — Docker's whole default pool — not just `172.17.0.0/16`.
+`host.docker.internal` resolves to docker0's gateway (`172.17.0.1`), but a
+Compose service runs on its own network and reaches it with a `172.18.x` **source**
+address. A rule matching only `172.17.0.0/16` drops it, and onboarding then fails
+with `probe_status: "unreachable"` for what looks like no reason.
+
+**Testing from the host itself proves nothing.** `curl` from the machine to its
+own LAN address goes over loopback, never traverses the firewall's INPUT chain,
+and always succeeds. Test from a different machine.
 
 ---
 
