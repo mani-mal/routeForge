@@ -37,7 +37,7 @@ path) and `mock_confidence` / `mock_fail` (mock-backend generation hints). See
 > exact slug.** With `"auto"`, routeForge picks the tier from request complexity
 > and the risk floor, clamps to your app's `allowed_tiers` / `allowed_providers` /
 > `allowed_models`, then scores within the tier. If you send a concrete slug
-> instead (e.g. `"local-8b"`), the router drops every candidate whose name
+> instead (e.g. `"onprem-7b"`), the router drops every candidate whose name
 > doesn't match — routing is pinned to that one model, and the semantic cache
 > honors the pin too. If the pinned slug isn't in your app's permitted/available
 > pool the request is **rejected `422`** with
@@ -57,8 +57,8 @@ A standard `ChatCompletion` **plus routeForge-specific fields**:
   "id": "req-1a2b3c4d",                      // request id — correlates trace + usage
   "object": "chat.completion",
   "created": 1757030400,                     // unix seconds — always present
-  "model": "local-8b",                       // slug of the model actually chosen
-  "model_display": "Qwen2.5-7B-Instruct (local)",
+  "model": "onprem-7b",                      // slug of the model actually chosen
+  "model_display": "Qwen2.5-7B-Instruct (on-prem)",
   "choices": [
     { "index": 0,
       "message": { "role": "assistant", "content": "…" },

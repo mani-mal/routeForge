@@ -158,7 +158,7 @@ The full eligible/rejected candidate set for that routing decision:
 
 ```json
 [
-  {"model": "local-8b", "tier": "cheap", "provider": "onprem",  "eligible": true,  "reason": "..."},
+  {"model": "onprem-7b", "tier": "cheap", "provider": "onprem",  "eligible": true,  "reason": "..."},
   {"model": "gpt-4o",   "tier": "frontier", "provider": "bedrock", "eligible": false, "reason": "excluded · residency"}
 ]
 ```

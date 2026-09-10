@@ -80,12 +80,13 @@ swap (2026-07-30), when LiteLLM became the single egress path for every provider
 that need determinism fake the LiteLLM SDK call itself (`tests/_litellm_fake.py`), not a
 mock backend class.
 
-The `inference_backend: vllm | dynamo | none` axis was **removed** in the pure-router
-pivot (2026-08-03). routeForge no longer picks an on-prem backend in YAML — on-prem models
-are **onboarded at runtime** (each with its own OpenAI-compatible `endpoint`) and live in
-the `ModelRegistry`; see `docs/onboarding-models.md`. The on-prem pool boots empty. The
-managed-cloud path's availability is still `providers.{azure,bedrock}.enabled`, and there
-is **no** separate `serving_paths` config axis.
+The old YAML backend-selection axis (`vllm | dynamo | none`) was **removed** in the
+pure-router pivot (2026-08-03). routeForge no longer picks an on-prem backend in YAML —
+on-prem models are **onboarded at runtime** (each with its own OpenAI-compatible
+`endpoint`) and live in the `ModelRegistry`; see `docs/onboarding-models.md`. The on-prem
+pool boots empty. The managed-cloud path's availability is still
+`providers.{azure,bedrock}.enabled`; there is **no** separate config axis for serving
+paths (see `docs/architecture-review.md` for the pre-pivot config shape this replaced).
 
 So the honest "what's real vs simulated?" answer is: onboarded vLLM/Dynamo endpoints =
 real on-prem paths; `managed_cloud` = real cloud path; **nothing here is a demo-safe

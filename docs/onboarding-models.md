@@ -2,7 +2,7 @@
 
 routeForge is a pure router. It points at externally-deployed
 OpenAI-compatible endpoints and deploys, scales, or load-balances nothing.
-There is no bundled demo model and no `inference_backend` config axis — the
+There is no bundled demo model and no backend-selection config axis — the
 on-prem model pool boots **empty**, and every on-prem candidate the router
 can pick is one an operator has explicitly onboarded through the admin API
 or UI.
@@ -85,7 +85,7 @@ If no onboarded model is currently enabled, `ModelRegistry.has_healthy_onprem()`
 is `false`. The policy context drops `onprem` from `allowed_providers` in
 that case, so an `onprem_only` request has no eligible candidate and is
 **rejected** — never silently routed to cloud. This is the same privacy
-guarantee the old `inference_backend: none` reject gave; it's now derived
+guarantee the old backend-selection `none` reject gave; it's now derived
 from onboarding state instead of a static config value, and it holds even
 if a previously-healthy model goes unreachable and is later disabled by an
 edit or a failed re-probe.

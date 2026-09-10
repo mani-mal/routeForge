@@ -384,13 +384,13 @@ semantics for anything before the gate clears. Own SDD task.
 
 Post-LiteLLM-swap, each agent hop does **real** ~16–24s vLLM inference (was
 instant fake). Under a burst, dozens of long-lived multi-step requests overlap
-on the **single** `vllm-local-8b` pod; some exceed `vllm.timeout_s: 60` →
+on the **single** on-prem vLLM pod; some exceed `vllm.timeout_s: 60` →
 exception → B1 503. **Lowering rps does not help** — the requests are
 long-lived, so they overlap regardless of arrival rate (19/150 failed at rps=3
 vs 21/150 at rps=8, all `multi_step`).
 
 **Levers (pick per goal):**
-- Scale vLLM (2–3 replicas behind the `vllm-local-8b` service) — real fix, needs GPU + manifest change.
+- Scale vLLM (2–3 replicas behind the on-prem vLLM service) — real fix, needs GPU + manifest change.
 - Trim the `multi_step` share in `tests/personas.yaml` for the burst demo — cheap, keeps the "500-req burst" moment clean.
 - Raise `vllm.timeout_s` and/or bound agent concurrency — mitigates, doesn't remove.
 - Blocked from scaling the **API** tier by B3.

@@ -15,8 +15,9 @@ token), see [`integrating-an-app.md`](./integrating-an-app.md).
 
 - You're logged into the admin console (`admin@routeforge.local` on the lab).
 - At least one model is onboarded and **healthy** (Infrastructure → Onboard). On the DGX
-  lab that's `local-8b` (cheap, all apps) and `nemotron-nano-8b-v1` (mid, scoped to
-  `routeforge_sample`).
+  lab that's a cheap on-prem model available to all apps, plus `nemotron-nano-8b-v1`
+  (mid, scoped to `routeforge_sample`) — check Infrastructure → Models for the current
+  slugs on your deployment.
 - Base URLs on the DGX lab: UI `http://10.89.197.201:30800`, API
   `http://10.89.197.201:30808`.
 
