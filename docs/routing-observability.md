@@ -191,7 +191,8 @@ A content hash over the active managed-prompt texts (`Settings.prompt_version`),
 added by feature 4 (DSPy prompt-optimization). Stamped on every trace's root
 span **when non-empty**, mirroring `sp.routing_policy_version` exactly — so a
 later eval pipeline can also group decisions by the exact managed-prompt set in
-effect. Source: `app/obs/export.py` (docstring ~line 112, set ~line 183).
+effect. Source: `app/obs/export.py` (docstring lines 112-114, `set_attribute` at
+line 196).
 
 ---
 

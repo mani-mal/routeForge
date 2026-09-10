@@ -173,6 +173,9 @@ off does not turn RouteForge into a proxy — it is still the router and the met
   `full` (with the app's own project) or `off`.
 - **Boot lint.** An unrecognized `default_policy_mode` fails the boot with a named
   violation rather than resolving to something safe-but-silent.
+- **Write-time validation.** An unrecognized per-app `policy_mode` value is a **422**
+  (`bad policy_mode '<value>'`), never a silent fallback to `enforced` — the same
+  guarantee `pii_detection` gives (`app/api/admin_routes.py:set_policy`).
 
 ### Turning protection back on later
 
@@ -401,6 +404,10 @@ an `onprem_only` app, with the reason on the option.
 | `verified_then_stream` | The full request runs through the normal verified pipeline (including step 9), then the finished answer is chunked out as OpenAI-compatible SSE. | No — post-hoc chunking of an already-verified answer. No time-to-first-token benefit. |
 | `stream_unverified` | Real token-by-token streaming straight from the backend. Step-9 verification is explicitly **waived** for this app's streamed traffic (recorded in the trace as `performed=False, reason="waived: stream_unverified"`). | Yes |
 | `incremental_verify` | Real token-by-token streaming through a hold-back redactor (`app/output/streaming_verify.py`) that never releases raw entity text across a chunk boundary. Recorded as `performed=True, reason="incremental"`. | Yes |
+
+An unrecognized `stream_mode` value is a **422** (`bad stream_mode '<value>'`), never a
+silent fallback to `off` — the same guarantee `pii_detection` gives
+(`app/api/admin_routes.py:set_policy`).
 
 **`incremental_verify`'s documented limitation:** the hold-back verifier protects
 against *per-entity* leakage split across a chunk boundary (e.g. an SSN arriving as
