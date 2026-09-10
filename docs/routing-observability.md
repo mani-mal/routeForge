@@ -22,7 +22,9 @@ where the two disagree, this page is right.
 ## 1. Prometheus `/metrics`
 
 `GET /metrics` on the API app returns Prometheus text exposition
-(`text/plain; version=0.0.4`). It is an **in-process exporter** — counters live
+(`text/plain`; the exact `version=` parameter tracks whatever `prometheus_client`
+version is installed — `pyproject.toml` pins `prometheus-client>=0.20` with no
+upper bound). It is an **in-process exporter** — counters live
 in the API pod's memory and are incremented inline as requests flow. RouteForge
 bundles **no** Prometheus server; point your own monitoring at this endpoint.
 Metrics reset to zero on every API-pod restart (persistence is the scraper's

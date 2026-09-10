@@ -72,10 +72,15 @@ A standard `ChatCompletion` **plus routeForge-specific fields**:
               "routing_saved_usd": 0.00078, "compression_saved_usd": 0.0 },
               // "cache_saved_usd" is also present when the semantic cache is enabled
   "quality":{ "sum": 0.5, "chosen": 0.5, "source": "tier_default" },
-  "policy": { "sensitivity": "low", "onprem_only": false,
+  "policy": { "sensitivity": "public", "onprem_only": false,
               "allowed_providers": ["azure","bedrock","onprem"],
-              "detected_entities": [] },        // entity TYPES only, never values
-  "langfuse_url": "https://…"                   // present only when telemetry is configured
+              "detected_entities": [],           // entity TYPES only, never values
+              "app_policy_version": "39260c5ee1ad",
+              "policy_mode": "enforced" },
+  "session_id": null,                        // echoes X-RouteForge-Session, or null
+  "display": { "mode": "off", "input": null, "output": null },  // console-internal, see below
+  "langfuse_url": "https://…",                  // present only when telemetry is configured
+  "trace_id": "abc123…"                         // present only when telemetry is configured; use for POST /v1/feedback
 }
 ```
 
@@ -96,7 +101,18 @@ Notes:
   rejects a response missing `created`, so both are set at the single post-model
   chokepoint every shape passes through (`app/api/routes.py:_finalize`).
 - `policy.detected_entities` lists entity **types** (`US_SSN`, `EMAIL_ADDRESS`),
-  never the values. Raw PII never appears in the response metadata.
+  never the values. Raw PII never appears in the response metadata. `sensitivity` is one
+  of the four canonical values (`public | internal | confidential | restricted`), never a
+  risk-class value like `"low"`. `app_policy_version` and `policy_mode` are always present
+  — see [`../per-app-config.md`](../per-app-config.md) for what each means.
+- `session_id` echoes the sanitized `X-RouteForge-Session` request header (`null` if you
+  didn't send one or it failed validation) — an opaque workflow-run correlation label, never
+  a policy input. See [`agentic-app-guide.md`](./agentic-app-guide.md).
+- `display` is additive metadata for the admin console's own drilldown (mode-appropriate
+  redacted/raw copies of the prompt and completion, per the app's `capture_io`) — **not** a
+  telemetry channel and not meant for API clients to consume; ignore it.
+- `trace_id` is the Langfuse trace id, present only when telemetry export succeeded. Pass it
+  as `trace_id` to `POST /v1/feedback` to attach a score to this request.
 
 ### The `trace` array
 
