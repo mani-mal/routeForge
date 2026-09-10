@@ -188,50 +188,53 @@ densities are a tier-quality proxy and need a per-model quality score.
 ### 4e. How baseline & "% saved" are computed
 
 The **all-frontier baseline** is **not a flat per-request number** — it is computed from
-**each request's own token count**, re-priced at the frontier model's rate, then summed
-across every request in the app.
+**each request's own input/output token counts**, re-priced at the frontier model's
+rates, then summed across every request in the app.
 
 Prices are USD per 1M tokens; the frontier baseline model is `bedrock-frontier`. Cloud
 prices come from `config/pricing.yaml`; **on-prem prices do not** — an onboarded model
 carries its own `price_input` / `price_output`, set at onboarding time and stored on its
 `onboarded_models` row (see [`../onboarding-models.md`](../onboarding-models.md)):
 
-| Model (slug) | Tier | Input /1M | Output /1M | Combined /1M | Source |
-|---|---|---|---|---|---|
-| *your onboarded on-prem model* | as onboarded | as onboarded | as onboarded | — | `onboarded_models` row |
-| `azure-gpt-mid` | mid | $0.15 | $0.60 | $0.75 | `pricing.yaml` |
-| `bedrock-frontier` | **frontier (baseline)** | $3.00 | $15.00 | **$18.00** | `pricing.yaml` |
+| Model (slug) | Tier | Input /1M | Output /1M | Source |
+|---|---|---|---|---|
+| *your onboarded on-prem model* | as onboarded | as onboarded | as onboarded | `onboarded_models` row |
+| `azure-gpt-mid` | mid | $0.15 | $0.60 | `pricing.yaml` |
+| `bedrock-frontier` | **frontier (baseline)** | $3.00 | $15.00 | `pricing.yaml` |
 
 The worked example below uses an illustrative on-prem cheap model at **$0.05 in /
-$0.05 out** (`$0.10` combined) — substitute your own onboarding prices.
+$0.05 out** — substitute your own onboarding prices.
 
-The cost code (`app/pipeline.py:48-50`) prices a request's tokens at the **combined**
-input+output rate:
-
-```
-baseline_for_one_request = total_tokens / 1,000,000 × ($3.00 + $15.00)   # = ×$18.00/1M
-```
-
-**Worked example — one request using 10,000 tokens, served on the cheap on-prem tier:**
+The cost code (`Pipeline._baseline`, `app/pipeline.py:263-268`; the same per-token-type
+split prices the actual spend in `app/gateway/backends/litellm_backend.py:120,179`)
+prices **input and output tokens separately, each at its own frontier rate** — not one
+blended rate applied to the total token count:
 
 ```
-baseline (if it had gone to frontier):  10,000 / 1e6 × $18.00 = $0.1800
-actual   (cheap on-prem @ $0.10/1M):    10,000 / 1e6 × $0.10  = $0.0010
-routing saved on this request:          $0.1800 − $0.0010     = $0.1790
+baseline_for_one_request = (input_tokens × $3.00 + output_tokens × $15.00) / 1,000,000
 ```
 
-Sum across the app's requests to get the tab's figures, e.g. for 148 requests:
+**Worked example (executed against a real request through `TestClient` with a mocked
+152-in/972-out completion, and cross-checked against `Pipeline._baseline` directly) —
+scaled here to a round 2,000 input + 8,000 output tokens, served on the cheap on-prem
+tier:**
 
 ```
-Σ baseline = $15.0340     (every request re-priced at frontier $18/1M)
-Σ actual   = $0.1700      (each at whatever tier it really used)
-Σ saved    = $14.8640  →  98.9%   ← the headline
+baseline (if it had gone to frontier):
+  (2,000 × $3.00 + 8,000 × $15.00) / 1e6                  = $0.1260
+actual   (cheap on-prem @ $0.05 in / $0.05 out):
+  (2,000 × $0.05 + 8,000 × $0.05) / 1e6                   = $0.0005
+routing saved on this request:            $0.1260 − $0.0005 = $0.1255
 ```
 
-(Sanity check: `$15.0340 ÷ $18/1M ≈ 835k tokens` across 148 requests, ~5.6k each.) The
-baseline is **live** — it moves with real traffic, nothing is hardcoded. On-prem tiers
-are priced at a small **representative amortized** rate (not $0), so actual spend and
-routing savings read believably rather than as a flat 100%.
+Because input and output are priced at **different** rates, the input/output *ratio*
+changes the baseline for the same total token count — a mostly-output request costs more
+against the frontier baseline than a mostly-input one at the same total. There is no
+single "combined $/1M" figure you can multiply a request's total tokens by. Sum each
+request's own baseline and actual across the app to get the tab's aggregate figures and
+the headline `% saved`. The baseline is **live** — it moves with real traffic, nothing is
+hardcoded. On-prem tiers are priced at a small **representative amortized** rate (not
+$0), so actual spend and routing savings read believably rather than as a flat 100%.
 
 ---
 
@@ -312,8 +315,12 @@ scores to the app's own Langfuse project.
 Beneath all of that, the **Serving providers** strip — three chips **On-Prem / Azure /
 Bedrock**:
 
-- **eligible** (green) vs **excluded — residency** / **excluded by policy** (grey).
-- For an `onprem_only` request the two cloud chips grey out with *"excluded — residency"*.
+- **eligible** (green) vs, when excluded (grey): **"excluded · residency"** for an
+  `onprem_only` request, or **"provider off"** otherwise (e.g. a cloud provider disabled
+  at the infra kill-switch on a request that wasn't itself pinned on-prem) — the reason
+  string is keyed on the request's own `onprem_only`, not on why the provider is actually
+  unavailable (`ProviderStrip` in `RequestDrilldown.tsx`).
+- For an `onprem_only` request the two cloud chips grey out with *"excluded · residency"*.
   **This grey-out is the whole privacy story** — cloud was removed from the candidate
   pool *before* the router scored anything, not filtered after. Eligibility comes from
   the request's `policy.allowed_providers`.
@@ -335,7 +342,7 @@ The ten step cards and the values each shows:
 | **3 Policy Context** | Immutable policy travels with the request | **allowed providers** (the pool the router is locked to); `onprem_only`; sensitivity. |
 | **4 Task Mode** | Direct answer vs. multi-step agent | mode: `direct answer` or `multi-step agent (N hops)`. |
 | **5 Compression** | Headroom shrinks tool output & history | per hop: `tokens_before → tokens_after` + **reduction %** *via &lt;compressor&gt;*, or **"bypassed — reason"**; plus **CCR stored / CCR retrievals / → cloud** (counts only, never cache contents). "off / not applicable" when it didn't run. |
-| **6 Model Router** | Picks model + tier per call, by cost & risk | **one card per hop.** chosen model (green) + reason; **rejected** candidates each with tier dot, name, `(provider)`, and **reason** (e.g. "excluded by policy (residency)", "below target tier"); est/actual cost, tokens priced, and **cumulative** spend across hops. |
+| **6 Model Router** | Picks model + tier per call, by cost & risk | **one card per hop.** chosen model (green) + reason; **rejected** candidates each with tier dot, name, `(provider)`, and **reason** — the exact strings `app/routing/router.py` emits, e.g. "excluded · residency" (`onprem_only` requests only), "excluded · app policy", "below target tier"; est/actual cost, tokens priced, and **cumulative** spend across hops. |
 | **7 Gateway** | Quotas, breakers, fallback on failure | "No fallback — the first chosen backend succeeded", or the fallback reason if a backend failed. |
 | **8 Backend** | Runs on the chosen serving path | served model; latency (first hop); **tokens** `in / out`. The real serving path (mock / vLLM / Dynamo). |
 | **9 Verify** | Leakage check on the completion | required; performed; passed; escalated; **found (types)**; note. Egress leakage check — redaction on the way out, not just intake. |
@@ -650,12 +657,17 @@ Not all of them are *reachable*. The effective pool the router scores is built b
 | Half | Where it comes from | Real on a typical deploy? |
 |---|---|---|
 | **On-prem candidates** | Whatever an operator has **onboarded** and left enabled (Infrastructure → Onboard; `onboarded_models`). The pool **boots empty** — routeForge ships no bundled model. | ✅ Real — these are the operator's own OpenAI-compatible endpoints, and are what actually serves. |
-| `azure-gpt-mid` (mid) — GPT-4o mini (Azure) | `config/routing.yaml` → `model_pool` | ❌ Candidate only while `providers.azure.enabled: false`. |
-| `bedrock-frontier` (frontier) — Claude Sonnet (Bedrock) | `config/routing.yaml` → `model_pool` | ❌ Candidate only while `providers.bedrock.enabled: false`. |
+| `azure-gpt-mid` (mid) — GPT-4o mini (Azure) | `config/routing.yaml` → `model_pool`, but **only when `providers.azure.enabled: true`** | ❌ On a typical deploy `providers.azure.enabled` is `false`, and a disabled provider's models are dropped from the pool *before* the router ever sees them (`ModelRegistry.effective_pool`, `app/apps/registry.py:68-69` — the B10 fix, so a killed provider can never surface as a phantom rejected spur). |
+| `bedrock-frontier` (frontier) — Claude Sonnet (Bedrock) | `config/routing.yaml` → `model_pool`, same `providers.bedrock.enabled` gate | ❌ Same as above. |
 
-The two cloud models exist **in the pool so the routing story is visible** — they appear
-in the **rejected / greyed-out** list with a reason ("provider disabled", or "excluded ·
-residency" for an `onprem_only` request). A model that was *chosen and served* is always
+**On a typical lab (cloud disabled at the infra kill-switch), the two cloud models never
+appear anywhere in the trace** — not chosen, not rejected — because `effective_pool()`
+removed them before scoring started. They only show up in the **rejected / greyed-out**
+list at all when an operator has turned a cloud provider **on** (`enabled: true`) and a
+*specific request* still can't reach it — most commonly `onprem_only` residency, which
+rejects it with reason **"excluded · residency"** (`app/routing/router.py`). There is no
+"provider disabled" reason string anywhere in the code; a disabled provider's models are
+simply absent, not a labelled rejection. A model that was *chosen and served* is always
 an onboarded on-prem one on a lab with cloud switched off. See
 [`../onboarding-models.md`](../onboarding-models.md).
 

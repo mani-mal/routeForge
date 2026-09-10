@@ -16,6 +16,22 @@ For the panel-by-panel UI reference see [`ui-guide.md`](./ui-guide.md); this doc
 > label on the disabled Azure/Bedrock spurs (§5, §6a — now labelled "provider disabled").
 > The narrative of *what each panel means* is still accurate; the exact captured numbers
 > in §1/§4/§5 need a fresh demo capture to be re-trued. See §6 for the corrected reading.
+>
+> **Status check 2026-09-10.** §6a's own description of the *current* (fixed) label is
+> itself now stale, verified against `ui/src/console/RequestDrilldown.tsx` and
+> `app/routing/router.py`: there is no `"provider disabled"` string anywhere in the code.
+> A cloud provider disabled at the infra kill-switch (`providers.{azure,bedrock}.enabled:
+> false`) is dropped from the candidate pool entirely before the router scores anything
+> (`ModelRegistry.effective_pool`, `app/apps/registry.py:68-69`) — it never appears as a
+> rejected spur at all on a typical lab, disabled or not. The "What happened" band's
+> **Serving providers** chips (§4) use a *different* mechanism and show **"provider
+> off"** (not "excluded by policy") for a non-`onprem_only` request's excluded providers;
+> the Technical-trace rejected-candidate reason for a cloud model excluded by app/tenant
+> scope (when its provider *is* enabled) is **"excluded · app policy"**, not "excluded by
+> policy (residency)". Confirmed by sending a live request through
+> `TestClient(create_app())` with the default (cloud-disabled) config and inspecting the
+> `router` trace record: only on-prem candidates appear, rejected or chosen. Current
+> authority: [`ui-guide.md`](./ui-guide.md) §7b, §12.
 
 ---
 
