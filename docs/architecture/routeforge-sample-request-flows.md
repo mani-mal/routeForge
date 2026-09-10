@@ -73,9 +73,15 @@ them; `null` on any field means "inherit / no restriction."
   "max_spend_usd_per_day": 5.0,
   "max_rpm": 120,
   "pii_detection": "regex",
-  "capture_io": "redacted",
+  "capture_io": "off",
   "stream_mode": "verified_then_stream" }
 ```
+
+> `pii_detection: regex` pairs only with `capture_io: "off"` or `"full"` — not `"redacted"`:
+> the `redacted` exporter path reuses the gate's sanitized prompt, and with a downgraded
+> detector that "sanitized" text is raw (`app/api/admin_routes.py`, the
+> `eff_pii in ("off", "regex")` + `eff_capture == "redacted"` clamp — a 422 on write). See
+> [`../getting-started.md`](../getting-started.md)'s identical Internal-chatbot recipe.
 
 ### App B — `hospital-phi` (onprem_only, Presidio, high sensitivity)
 
@@ -162,11 +168,11 @@ This is the baseline: classifier OFF, cache/memory/compression all OFF. Trace:
 | 4a · Memory recall | `memory.enabled=false` → bypass `"disabled"`. Nothing added. | (no record) |
 | 5a · Cache lookup | `semantic_cache.enabled=false` → skipped entirely. | (no record) |
 | 5b · Compression | `context_optimization.enabled=false` → bypass `"disabled"`. Tokens unchanged. | `bypass_reason=disabled` |
-| 6 · Route | Router scores the `{azure}` × `{cheap,mid}` candidates on ~8 tokens, `complexity≈0.004`. Picks the cheapest allowed — `azure-gpt-mid` (cheap-tier slot). | `step=route, chosen=azure-gpt-mid, est_cost=$0.0000xx` |
+| 6 · Route | Router scores the `{azure}` × `{cheap,mid}` candidates on ~8 tokens, `complexity≈0.004` → target tier `cheap`. `azure-gpt-mid` is the only `azure` candidate in the static cloud pool (it is **mid**-tier, not cheap — `config/routing.yaml` has no cheap-tier `azure` entry), so the router escalates and picks it. | `step=route, chosen=azure-gpt-mid, chosen_tier=mid, reason="tier mid (target cheap)", est_cost=$0.0000xx` |
 | 7 · Gateway | LiteLLM calls Azure. Returns "Paris." | `actual_cost=$0.0000xx, latency_ms=180, tokens_out=3` |
 | 8 · Verify | Leakage checks pass; `require_verification=false`. | `step=verify, ok=true` |
 | 9 · Memory write | `memory.enabled=false` → skipped. | — |
-| 10 · Response | Assemble governed response + full trace. Return `200`. Emit **redacted** trace to Langfuse (`capture_io=redacted`). | — |
+| 10 · Response | Assemble governed response + full trace. Return `200`. Because `capture_io=off`, Langfuse gets the decision trace **with no I/O** — no raw prompt, no completion. | — |
 
 **Takeaway:** with the three step-5 features off, "Step 5" is a no-op and the request is
 essentially *gate → route → verify*. This is the default posture.
@@ -276,7 +282,15 @@ imports it. The runtime:
 
 1. `load_config("config/nat_workflow.yaml")` — a `tool_calling_agent` workflow with **one LLM
    named `sp_router` (`model_name: auto`)** and three tools: `calculator`, `doc_search`,
-   `crm_lookup` (registered in the `nat_tools` package).
+   `crm_lookup` (registered in the `nat_tools` package). **These are RouteForge's own
+   built-in demo tools, not `research-agent`'s (or any app's) real tools** — `doc_search`
+   and `crm_lookup` are docstring-labelled `FAKE` and return a canned string with no real
+   call (`nat_tools/src/nat_tools/tools.py:72,110`); only `calculator` computes anything.
+   They exist to demonstrate the per-hop routing mechanism below, not to perform real work.
+   The supported path for an application's *real* tools is the client-driven loop —
+   RouteForge never executes an app's own tools itself (`tools`/`tool_choice` on
+   `/v1/chat/completions` come back as `tool_calls` for the *client* to run and replay; see
+   [`../dev-references/api-reference.md`](../dev-references/api-reference.md)).
 2. **Repoints that LLM at RouteForge itself:** `base_url =
    http://127.0.0.1:{port}/internal/v1/{run_id}`. This is the trick — the agent thinks it's
    calling one OpenAI endpoint named "auto", but every call loops back **into RouteForge's own
@@ -388,7 +402,7 @@ guarantee.
 | Agent runtime | — | — | — | **NeMo Agent Toolkit** |
 | Router + gateway | LiteLLM → Azure | LiteLLM → Azure | LiteLLM → **on-prem only** | LiteLLM, per hop |
 | Verify | basic | basic | **`require_verification`** | once, after loop |
-| Langfuse capture | redacted | redacted | **off (no I/O)** | redacted per-hop |
+| Langfuse capture | off (no I/O) | off (no I/O) | **off (no I/O)** | redacted per-hop |
 
 Every row of every flow emits a `DecisionRecord`. The "why" in those records — which
 candidates were rejected and why — is the product.

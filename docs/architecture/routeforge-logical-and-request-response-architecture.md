@@ -9,7 +9,8 @@ Companion notes for the draw.io diagrams in
 - `diagrams/routeforge-physical-architecture.drawio` — the Kubernetes pods (covered in
   [`api-load-balancing.md`](api-load-balancing.md) / the Helm chart, not repeated here).
 
-> **This file is verified against the code at api:0.18.0.** Every component below carries a
+> **This file is verified against the code at api:0.24.0 (2026-09-10 re-verification; every
+> row below was re-checked against HEAD).** Every component below carries a
 > status marker. **Read the [status legend](#status-legend) first.** Application-scope
 > concerns that live outside RouteForge — prompt-optimization (DSPy), a mem0-style persistent
 > memory, and NeMo Guardrails — are **not** part of the router and are intentionally absent
