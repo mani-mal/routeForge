@@ -359,8 +359,11 @@ Concrete policies for common apps (the first three are the ones traced in the fl
 ```jsonc
 { "allowed_tiers": ["cheap","mid"], "allowed_providers": ["azure"],
   "max_spend_usd_per_day": 5.0, "max_rpm": 120,
-  "pii_detection": "regex", "capture_io": "redacted", "stream_mode": "verified_then_stream" }
+  "pii_detection": "regex", "capture_io": "off", "stream_mode": "verified_then_stream" }
 ```
+*(`pii_detection: regex` pairs only with `capture_io: "off"` or `"full"` — not `"redacted"`: the
+`redacted` exporter path reuses the gate's sanitized prompt, and with a downgraded detector that
+"sanitized" text is raw. See the `capture_io` section below.)*
 
 **Hospital / PHI** — nothing leaves on-prem, strongest detection, verified:
 ```jsonc
