@@ -119,7 +119,7 @@ is allowed to use.
 
 Open the console (`http://10.89.197.201:30800`) → live decision stream / request
 drilldown. Per request you'll see the tier picked, the model chosen, every rejected
-candidate with its reason (`excluded by policy (residency)`, `not permitted for
+candidate with its reason (`excluded · residency`, `not permitted for
 application`, `above target tier`, `lower score`…), cost, and latency.
 
 **Why a mid-tier model may not get traffic:** the router picks a **target tier from the
