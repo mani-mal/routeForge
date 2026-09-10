@@ -344,8 +344,8 @@ recent negative results argue this is tractable.
 
 These are already built and working. They are cheap to file and they fence the core.
 
-- **IP-9. Derived rejection from an empty eligible set.** No static backend-selection flag
-  for the empty case; instead `has_healthy_onprem()` false → `onprem` drops from `allowed_providers` → an
+- **IP-9. Derived rejection from an empty eligible set.** No `inference_backend: none` flag; <!-- purged-ok -->
+  instead `has_healthy_onprem()` false → `onprem` drops from `allowed_providers` → an
   `onprem_only` request has no eligible candidate → reject. AWS/Databricks/Azure route among
   *pre-declared* endpoints; none treats pool emptiness as itself the trigger for a hard reject
   rather than a silent cloud fallback. (`app/policy/context.py:63-64`)
