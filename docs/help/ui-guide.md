@@ -103,7 +103,7 @@ Sortable (click any column header; ▲/▼ shows the active sort). Columns:
 | **On-prem** | Requests this app kept on-prem (`onprem_only`). |
 | **p50** | Median request latency (ms) for this app. |
 | **Tiers** | A mini stacked bar of the app's tier mix (cheap green / mid blue / frontier red). Hover for exact counts. |
-| **⚠** | Amber warning when **sensitive traffic was not fully kept on-prem** — i.e. `pii_count > 0` **and** `onprem_count < pii_count`. It flags a possible residency gap for that app. |
+| **⚠** | Fires only on a **genuine residency breach** — an `onprem_only` request that was served off-prem (`fleet()['onprem_violations'] > 0`, `FleetOverview.tsx:51`). Because `onprem_only` requests can't reach cloud by construction (rule 3) this is normally `0`; if the glyph ever shows, it means a real leak. *(It used to fire on the much looser `pii_count > 0 && onprem_count < pii_count`, which flagged compliant `private_cloud_ok` traffic as a problem — see `docs/ui-open-items.md` #6.)* |
 
 A tier legend (cheap / mid / frontier dots) sits top-right of the table.
 
@@ -191,15 +191,19 @@ The **all-frontier baseline** is **not a flat per-request number** — it is com
 **each request's own token count**, re-priced at the frontier model's rate, then summed
 across every request in the app.
 
-Prices are USD per 1M tokens (`config/pricing.yaml`); the frontier baseline model is
-`bedrock-frontier`:
+Prices are USD per 1M tokens; the frontier baseline model is `bedrock-frontier`. Cloud
+prices come from `config/pricing.yaml`; **on-prem prices do not** — an onboarded model
+carries its own `price_input` / `price_output`, set at onboarding time and stored on its
+`onboarded_models` row (see [`../onboarding-models.md`](../onboarding-models.md)):
 
-| Model (slug) | Tier | Input /1M | Output /1M | Combined /1M |
-|---|---|---|---|---|
-| `local-8b` | cheap | $0.05 | $0.05 | **$0.10** |
-| `local-32b` | mid | $0.10 | $0.10 | **$0.20** |
-| `azure-gpt-mid` | mid | $0.15 | $0.60 | $0.75 |
-| `bedrock-frontier` | **frontier (baseline)** | $3.00 | $15.00 | **$18.00** |
+| Model (slug) | Tier | Input /1M | Output /1M | Combined /1M | Source |
+|---|---|---|---|---|---|
+| *your onboarded on-prem model* | as onboarded | as onboarded | as onboarded | — | `onboarded_models` row |
+| `azure-gpt-mid` | mid | $0.15 | $0.60 | $0.75 | `pricing.yaml` |
+| `bedrock-frontier` | **frontier (baseline)** | $3.00 | $15.00 | **$18.00** | `pricing.yaml` |
+
+The worked example below uses an illustrative on-prem cheap model at **$0.05 in /
+$0.05 out** (`$0.10` combined) — substitute your own onboarding prices.
 
 The cost code (`app/pipeline.py:48-50`) prices a request's tokens at the **combined**
 input+output rate:
@@ -208,11 +212,11 @@ input+output rate:
 baseline_for_one_request = total_tokens / 1,000,000 × ($3.00 + $15.00)   # = ×$18.00/1M
 ```
 
-**Worked example — one request using 10,000 tokens, served on the cheap local tier:**
+**Worked example — one request using 10,000 tokens, served on the cheap on-prem tier:**
 
 ```
 baseline (if it had gone to frontier):  10,000 / 1e6 × $18.00 = $0.1800
-actual   (it went to local-8b):         10,000 / 1e6 × $0.10  = $0.0010
+actual   (cheap on-prem @ $0.10/1M):    10,000 / 1e6 × $0.10  = $0.0010
 routing saved on this request:          $0.1800 − $0.0010     = $0.1790
 ```
 
@@ -276,8 +280,9 @@ fast?*
 `components/RequestList.tsx`. Newest first; selected row highlighted green. Each row:
 
 - **Tier dot** — cheap green / mid blue / frontier red.
-- **Model** — human-facing name (`Qwen2.5-7B-Instruct (local)`); hover shows the routing
-  slug (`local-8b`). From `display_name` in `config/routing.yaml`.
+- **Model** — human-facing name (e.g. `Qwen2.5-7B-Instruct (local)`); hover shows the
+  routing slug. From `display_name` — on the cloud pool that comes from
+  `config/routing.yaml`, on an on-prem model from its onboarded row.
 - **`N hops`** badge — multi-step requests (agent path).
 - **Cost** (right, USD 4dp).
 - **Sensitivity** (`public` / `confidential` / `restricted`) and **latency** beneath.
@@ -289,14 +294,23 @@ trace.
 
 #### Band 1 — "What happened" (owner-facing)
 
-One sentence, no jargon:
+`PlainSummary` in `RequestDrilldown.tsx`. No jargon, no step numbers — **labelled outcome
+cards**, each answering one question an owner actually asks (the run-on arrow-chain
+sentence this replaced was retired in `:0.5.0`, `docs/ui-open-items.md` #1):
 
-> Checked for sensitive data (**found DATE_TIME** / **none**) → **kept on your
-> infrastructure** / **eligible for cloud** → answered by **&lt;model&gt;** → **verified
-> clean** / **flagged for review** / **not verified**, in **&lt;latency&gt;** for
-> **&lt;cost&gt;**.
+| Card | Verdict | The *why* line beneath it |
+|---|---|---|
+| **Privacy** (shield) | **Kept on-prem** / **On-prem only** / **Cloud-eligible** | Derived from the *effective candidate pool* (`policy.allowed_providers`), **not** `onprem_only` alone — so a request whose cloud providers are simply disabled reads "On-prem only", not "Cloud-eligible". Detected entity **types** render as chips below. |
+| **Model** (chip) | tier dot + model display name + `<tier> tier` | States why this model won — "cheapest model in the *N* tier, the lowest tier that met this task's risk bar", or the hop count for a multi-step request. |
 
-Beneath it, the **Serving providers** strip — three chips **On-Prem / Azure / Bedrock**:
+Under the two cards, a row of three metric chips — **Verified** (`Clean` / `Flagged` /
+`Not checked`), **Cost** (precise USD, vs the all-frontier baseline) and **Latency**
+(end-to-end, or `N hops`) — then a thumbs up/down feedback control and a collapsible
+reviewer **correction form** (`corrected_output`, optional `preferred_model`), which post
+scores to the app's own Langfuse project.
+
+Beneath all of that, the **Serving providers** strip — three chips **On-Prem / Azure /
+Bedrock**:
 
 - **eligible** (green) vs **excluded — residency** / **excluded by policy** (grey).
 - For an `onprem_only` request the two cloud chips grey out with *"excluded — residency"*.
@@ -546,8 +560,8 @@ compression.
 
 | Tier | Colour | Means |
 |---|---|---|
-| `cheap` | 🟢 mint `#35D6A0` | routed to the cheap tier (`local-8b`) |
-| `mid` | 🔵 blue `#4C8DFF` | routed to the mid tier (`local-32b`) |
+| `cheap` | 🟢 mint `#35D6A0` | routed to the cheap tier |
+| `mid` | 🔵 blue `#4C8DFF` | routed to the mid tier |
 | `frontier` | 🟠 amber `#F5A524` | routed to the frontier tier |
 | `?` (unknown) | ⚪ grey `#6b7280` | tier not resolved |
 
@@ -630,19 +644,20 @@ is per-call, not per-request** — the single most important behaviour this prod
 
 ### "The rejected list shows several models — are they all real?"
 
-No. There are **four models in the pool** (`config/routing.yaml` → `model_pool`), but on
-the current DGX deploy only **one** is actually served:
+Not all of them are *reachable*. The effective pool the router scores is built by the
+`ModelRegistry` and has two halves:
 
-| Model in pool | Display name | Real on this deploy? |
+| Half | Where it comes from | Real on a typical deploy? |
 |---|---|---|
-| `local-8b` (cheap) | Qwen2.5-7B-Instruct (local) | ✅ Real — served by vLLM. |
-| `local-32b` (mid) | Qwen2.5-7B-Instruct (local) | ✅ Real, but **the same 7B** — an alias until a distinct 32B lands. Representative, not distinct. |
-| `azure-gpt-mid` (mid) | GPT-4o mini (Azure) | ❌ Candidate only — `providers.azure.enabled: false`. |
-| `bedrock-frontier` (frontier) | Claude Sonnet (Bedrock) | ❌ Candidate only — `providers.bedrock.enabled: false`. |
+| **On-prem candidates** | Whatever an operator has **onboarded** and left enabled (Infrastructure → Onboard; `onboarded_models`). The pool **boots empty** — routeForge ships no bundled model. | ✅ Real — these are the operator's own OpenAI-compatible endpoints, and are what actually serves. |
+| `azure-gpt-mid` (mid) — GPT-4o mini (Azure) | `config/routing.yaml` → `model_pool` | ❌ Candidate only while `providers.azure.enabled: false`. |
+| `bedrock-frontier` (frontier) — Claude Sonnet (Bedrock) | `config/routing.yaml` → `model_pool` | ❌ Candidate only while `providers.bedrock.enabled: false`. |
 
 The two cloud models exist **in the pool so the routing story is visible** — they appear
-in the **rejected / greyed-out** list with a reason. A model that was *chosen and served*
-is always one of the local pair today.
+in the **rejected / greyed-out** list with a reason ("provider disabled", or "excluded ·
+residency" for an `onprem_only` request). A model that was *chosen and served* is always
+an onboarded on-prem one on a lab with cloud switched off. See
+[`../onboarding-models.md`](../onboarding-models.md).
 
 ### "How do I turn Headroom (compression) on?"
 
@@ -700,10 +715,10 @@ renders raw input**. The **answer** is shown at the Response step; the prompts l
 
 ---
 
-**Known gaps & deferred UI work:** see `docs/ui-open-items.md` — the one item still open
-is #7 (label the Application ID and make it copyable). The "What happened" redesign,
-per-request `$0.0000` precision, the two-blues recolour, the Headroom toggle and the 0 ms
-multi-step latency bug have all shipped.
+**Known gaps & deferred UI work:** see `docs/ui-open-items.md` — **all seven items are now
+closed.** The "What happened" redesign, the Headroom toggle, the 0 ms multi-step latency
+bug, per-request `$0.0000` precision, the two-blues recolour, the over-eager fleet ⚠, and
+the labelled/copyable Application ID (#7, shipped `ui:0.17.0`) have all shipped.
 
 ---
 

@@ -165,9 +165,13 @@ Scroll the trace. You don't have to read every card; hit these beats:
 > safe to keep."
 
 *(Per-app `capture_io` shipped: the default `off` is what's described above — I/O null.
-An operator can opt a specific non-`onprem_only` app into `redacted` (masked I/O) or `full`
-(raw I/O to that app's **own** provisioned project) — in those modes prompts/answers are
-**not** null. `onprem_only` never permits it and the shared project never receives raw I/O.)*
+An operator can opt a specific app into `redacted` (masked I/O) or `full` (raw I/O to that
+app's **own** provisioned project) — in those modes prompts/answers are **not** null. The
+shared project never receives raw I/O, at any setting. `full` additionally requires that
+the app has declared a no-protection posture (`policy_mode: "passthrough"`) if it is
+`onprem_only`: placement and protection are separate axes since 2026-09-05, so "on my
+hardware, and don't touch my data" is a configuration the operator states explicitly rather
+than obtains by misdeclaring residency.)*
 
 ### 6a. The forward-looking value — custom agent-harness training *(roadmap, say it as roadmap)*
 

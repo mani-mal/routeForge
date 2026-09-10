@@ -22,9 +22,11 @@ Body:
 
 | Field | Type | Required | Default | Notes |
 |---|---|---|---|---|
-| `messages` | array of `{role, content}` | **yes** | — | Standard chat messages. `role` is `system`/`user`/`assistant`; `content` is a string. |
+| `messages` | array of `{role, content, …}` | **yes** | — | Standard chat messages. `role` is `system`/`user`/`assistant`/`tool`; `content` is a string **or `null`** (an assistant turn that only requested tools). Tool-calling turns may also carry `tool_calls`, `tool_call_id` and `name` — see [Tool calling](#tool-calling). |
 | `model` | string | no | `"auto"` | `"auto"` lets the router choose. **A non-`"auto"` value is a hard model pin** — see below. |
 | `stream` | bool | no | `false` | Per-app capability via `stream_mode`; default (unset) still **rejected** (`400`). See [Streaming](#streaming). |
+| `tools` | array of tool definitions | no | `null` | Standard OpenAI tool/function definitions, passed through to the backend. See [Tool calling](#tool-calling). |
+| `tool_choice` | string \| object | no | `null` | Standard OpenAI tool-choice control, passed through with `tools`. |
 
 Unknown fields are **accepted, not rejected** (the model allows extras). Two
 demo-only hint fields are read if present: `mock_multistep` (force the agent
@@ -54,6 +56,7 @@ A standard `ChatCompletion` **plus routeForge-specific fields**:
 {
   "id": "req-1a2b3c4d",                      // request id — correlates trace + usage
   "object": "chat.completion",
+  "created": 1757030400,                     // unix seconds — always present
   "model": "local-8b",                       // slug of the model actually chosen
   "model_display": "Qwen2.5-7B-Instruct (local)",
   "choices": [
@@ -88,7 +91,10 @@ Notes:
   reports what step 9 did; the unmodified model output is available separately as
   `raw_completion` (subject to the app's `capture_io`).
 - `model` is the slug; `model_display` is the human-readable name.
-- `created` is **not** emitted by the non-streaming path.
+- `object` and `created` are **always** emitted, on every response shape (direct,
+  cache hit, multi-step and streaming). The `openai` SDK's `ChatCompletion` model
+  rejects a response missing `created`, so both are set at the single post-model
+  chokepoint every shape passes through (`app/api/routes.py:_finalize`).
 - `policy.detected_entities` lists entity **types** (`US_SSN`, `EMAIL_ADDRESS`),
   never the values. Raw PII never appears in the response metadata.
 
@@ -103,14 +109,14 @@ per hop, `step:"agent_hop"`, for a multi-step request):
 |---|---|
 | `step` | `router` \| `agent_hop` |
 | `chosen` / `chosen_display_name` | Model slug / human name selected |
+| `chosen_tier` / `chosen_provider` | Tier and provider of the chosen candidate |
 | `reason` | Human-readable rationale (the demo line) |
 | `rejected[]` | Candidates not chosen — each `{name, provider, tier, reason, display_name}`, including "excluded by policy" |
 | `est_cost_usd` / `actual_cost_usd` | Estimated vs actual USD for this call |
 | `latency_ms` | This call's latency |
 | `hop_index` | Which agent hop (0 for direct) |
-| `tokens_priced` | Post-compression tokens the cost was computed on |
-| `quality_score` / `quality_source` | Expected quality and where it came from |
-| `serving_engine` | e.g. `vllm`, `trtllm` |
+| `tokens_priced` / `tokens_out` | Post-compression prompt tokens the cost was computed on / completion tokens for this hop |
+| `quality_score` / `quality_source` | Expected quality and where it came from (`customer` \| `calibrated` \| `published` \| `tier_default`) |
 
 **`VerificationRecord`** (`step:"verify"`) — `required, performed, passed,
 entities_found, escalated, escalations_used, reason, latency_ms`.
@@ -128,6 +134,52 @@ trace.
 `enabled, hit, bypass_reason, tokens_saved, cache_saved_usd, entries_size,
 blocked_cloud_entries, latency_ms`. Present only when the semantic cache is
 enabled. No query or response text ever reaches the trace.
+
+---
+
+## Tool calling
+
+routeForge is a drop-in OpenAI endpoint for tool-using clients. Send `tools`
+(and optionally `tool_choice`) exactly as you would to OpenAI; both are threaded
+through the gateway to the backend unchanged, and the assistant turn comes back
+in the standard shape:
+
+```jsonc
+"choices": [
+  { "index": 0,
+    "message": {
+      "role": "assistant",
+      "content": null,                         // null when the turn only requested tools
+      "tool_calls": [
+        { "id": "call_abc", "type": "function",
+          "function": { "name": "get_order", "arguments": "{\"id\":\"4821\"}" } }
+      ]
+    },
+    "finish_reason": "tool_calls" }             // "stop" for an ordinary answer
+]
+```
+
+Switch on `finish_reason`: `"tool_calls"` means run your tools and replay the
+result. Replay it the normal way — append the assistant turn verbatim, then a
+`{"role": "tool", "tool_call_id": "call_abc", "content": "…"}` message — and send
+the whole list back as a new request.
+
+Three things specific to routeForge:
+
+- **Your loop, not routeForge's.** A request carrying `tools` is served as a
+  single completion; it is never handed to routeForge's own internal agent
+  runtime. The client drives the loop (this is Pattern A in
+  [`agentic-app-guide.md`](./agentic-app-guide.md)).
+- **Every turn is a fresh, independently-gated request, redacted per message.** A
+  tool conversation keeps its roles and `tool_calls` / `tool_call_id` structure
+  intact and the gate redacts **each message's text individually**, rather than
+  flattening the whole request into one blob as the ordinary single-prompt path
+  does. So data a tool pulled is detected and its residency enforced on the turn
+  that carries it, with the tool round-trip still well-formed.
+- **Compression, the semantic cache and persistent memory are all skipped.** They
+  each assume that single flattened prompt, and Headroom would corrupt tool-call
+  structure. The trace records
+  `CompressionRecord.bypass_reason = "tool_calling"`.
 
 ---
 

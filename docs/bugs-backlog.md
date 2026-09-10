@@ -18,6 +18,10 @@ Sibling backlogs: `ui-open-items.md`, `eval-logging-backlog.md`.
 >
 > _Prior sweep 2026-08-16: listed B2/B3/B13 + B14–B16 as open._
 >
+> _Superseded 2026-09-05: **B24** below is an open code-correctness bug, found after this
+> sweep. The sweep's "no open code-correctness bug remains" is accurate as of its own date
+> only._
+>
 > **Update 2026-08-23 (DGX `:0.18.0`).** The **seven-feature** program is now MERGED to
 > `main` and deployed. Six landed as PRs #18–#23 (commits numbered #1/7…#6/7): role-aware
 > raise-only tier bias, failure-driven lateral model switch, semantic cache (CCR-class),
@@ -30,6 +34,180 @@ Sibling backlogs: `ui-open-items.md`, `eval-logging-backlog.md`.
 > while integrating the program — B20 below — initially read as a flaky test but was a
 > **real MEDIUM privacy-routing bug** (an SSN could downgrade off `onprem_only` and route
 > to cloud); now **RESOLVED**.
+
+---
+
+> **Update 2026-09-05 (docs audit).** A sweep of `docs/` against the code turned up one
+> **open code-correctness bug**, recorded below as **B24**. It is a straggler from the
+> OpenAI tool-calling change (`0546fab`, 2026-08-29), which widened `Message.content` to
+> `str | None`: three of the four consumers that read raw message text were updated to
+> coerce it, one was not. Same class as B22/B23 in shape — a contract moved and one
+> mirror of it didn't — but here both copies are server-side.
+
+---
+
+> **Update 2026-09-07 (tool-execution boundary).** Recorded **B25**: RouteForge's internal
+> NAT agent can only reach tools compiled into the image, so an application's own tools
+> require a source change — unacceptable, since RouteForge cannot be customised per
+> customer. **Decision: no serving-path change.** Tool execution stays with the
+> application via the client-driven loop; the internal agent path is a routing
+> demonstration, not a tool runtime, and docs/diagrams should say so. B25 captures the
+> deployment-time design (registry + generic HTTP adapter + per-app allowlist) and the
+> residency/egress/tenancy constraints it must answer, for whenever it is picked up.
+
+## B25 — FEATURE: application-registered tools must be deployment-time, not a RouteForge source change
+
+**Severity:** design debt (no defect in the serving path; the shipped behaviour is correct
+and safe — this is about a missing operator surface)
+**Found:** 2026-09-07, tracing what the request-flow diagram actually claims. **Open, not scheduled.**
+
+**Decision taken now (2026-09-07):** *no change to the serving path.* Tool execution stays
+with the **application** — the client-driven loop (`tools` in the request → RouteForge
+returns `finish_reason: "tool_calls"` → the app runs the tool and replays) is the one
+supported path for real tools, and it is complete. The internal NAT agent path is a
+**demonstration of multi-hop routing**, not a tool runtime, and should be described that
+way in docs and in any diagram. This item records the gap so the eventual fix isn't
+re-derived from scratch.
+
+### What's wrong today
+
+Tools reachable by RouteForge's own NAT agent are fixed at **build time**:
+
+- `nat_tools/` is a proper NAT plugin package (`[project.entry-points.'nat.components']`),
+  installed as an editable path dep (`pyproject.toml:44,80`). Adding a tool means writing
+  a Python `@register_function` into that package and **rebuilding the image**.
+- The tool list is a static YAML literal — `config/nat_workflow.yaml:37`
+  `tool_names: [calculator, doc_search, crm_lookup]` — and the path to that file is a
+  hardcoded constant with no env override (`app/agent/runtime.py:53`). Nothing mounts it
+  (`deploy/compose/docker-compose.yml` declares no volumes), so it is baked into the image
+  too: even the *list* can't be changed on a running deployment, unlike the four main YAMLs.
+- Two of the three shipped tools are deliberate placeholders — `doc_search` and `crm_lookup`
+  return a canned string and make no call (`nat_tools/src/nat_tools/tools.py:90,129`, both
+  docstring-labelled FAKE). Only `calculator` computes anything.
+- The tool set is **global**, not per-app. There is no `AppPolicy` field scoping which
+  application may reach which tool — unlike `allowed_models`, `residency`, `stream_mode`.
+
+So a customer who wants their own tool has to fork RouteForge. **We cannot customise the
+source per customer** — that is the whole objection. Compare model onboarding, which got
+this right: the pool boots empty, the operator adds an endpoint through an admin API,
+probe-gated, no restart (`docs/onboarding-models.md`). Tools should mirror that shape.
+
+### What "right" looks like
+
+Deployment-time registration, no RouteForge code change, per-app scoped:
+
+- An `onboarded_tools` table + registry alongside `onboarded_models`, with an admin API
+  (`POST /admin/infra/tools`) and console screen.
+- A **generic HTTP-tool adapter** driven by a stored OpenAI function-schema + endpoint +
+  auth-ref, so registering a tool is data, not Python. No per-customer plugin package.
+- Per-app allowlist (`AppPolicy.allowed_tools`), folded into `app_policy_version` like
+  every other posture field.
+- The agent's tool list assembled **per request** from (registry ∩ app allowlist) instead
+  of read from static YAML — the same move `ModelRegistry.effective_pool()` already makes
+  for models.
+- Probe-gated onboarding (call the tool endpoint once, validate the schema) so a broken
+  tool fails at registration, not mid-trajectory.
+
+### Constraints any design must answer first
+
+Tool execution puts RouteForge on the data path to a customer's internal systems, which
+model routing does not. These are not details to settle in implementation:
+
+1. **Residency (rule 3).** A tool endpoint has a *placement*. An `onprem_only` app must not
+   have its arguments POSTed to a SaaS tool. The tool registry needs a residency attribute
+   and the same filter-before-selection treatment the candidate pool gets — never a
+   post-hoc check.
+2. **Egress redaction (rule 2).** Tool *arguments* are model output crossing a boundary,
+   and tool *results* re-enter the prompt. Both are exactly the leak surface step 9 and the
+   exporter exist for. Arguments need the egress path; results need to be treated as
+   untrusted input, not as instructions.
+3. **Trust boundary.** A tool result is attacker-influenceable text entering the agent
+   loop (prompt injection). Whatever the answer is, it has to be stated, not assumed.
+4. **Multi-tenancy.** Tenant A's tool must be unreachable on tenant B's request by
+   construction, not by prompt.
+5. **Budget + observability.** A tool call costs wall-clock and can fail; it needs a
+   timeout, a per-request cap folded into `agent_budgets`, and its own `DecisionRecord`
+   (tool chosen, why, latency, outcome) or the trajectory has an invisible hop — same
+   defect class as B5's `latency_ms: 0`.
+6. **Boundary check (rule 4).** Registering a tool endpoint is pointing at something the
+   operator runs — the same posture as onboarding a model, so it stays in scope. *Hosting*
+   or executing customer code inside RouteForge does not.
+
+### Interim (no code change)
+
+- Keep describing tool execution as the application's job; the app-driven loop is
+  documented, tested (`tests/test_openai_compat.py`) and correct.
+- Where docs or diagrams show RouteForge calling a tool transparently to the application,
+  label it as the internal demo agent with its three built-in tools — not as the
+  integration path a customer uses.
+- Related: **B17** (grouping a client-driven workflow's requests under one parent row) is
+  the observability half of the app-driven loop, and gets *more* valuable given this
+  decision — if the app owns the loop, the console has to be able to show it as one story.
+
+---
+
+## B24 — `task_mode.decide()` crashes on a user message with `content: null` → `500 internal error`
+
+**Severity:** low-medium (correctness; wrong status code on a legitimately-shaped request)
+**Found:** 2026-09-05, docs-vs-code audit. **Open.**
+
+`app/routing/task_mode.py:19-25` reads the last user message and lowercases it
+without coercing `None`:
+
+```python
+last_user = ""
+for m in reversed(request.messages):
+    if m.role == "user":
+        last_user = m.content        # ← str | None since 0546fab
+        break
+lowered = last_user.lower()          # ← AttributeError when content is None
+```
+
+`Message.content` became `str | None` in the OpenAI tool-calling fix (`0546fab`) so a
+tool round-trip could parse, and its own docstring says consumers reading raw text
+"MUST coerce `content or ""`". Three did — `app/policy/gate.py:36`,
+`app/api/routes.py:322`, and `count_tokens` (`app/gateway/backends/base.py:16`, which
+funnels every token-count call site). `task_mode.decide()` is the one that was missed.
+
+**Reproduced:**
+
+```
+ChatRequest(messages=[Message(role="user", content=None)])
+→ decide(ctx, req) → AttributeError: 'NoneType' object has no attribute 'lower'
+```
+
+**Blast radius.** The gate runs *before* step 4 and survives (it coerces), so this is
+not a privacy hole — nothing is routed or egressed. The exception falls through to the
+catch-all in `app/api/routes.py` and becomes **`500 internal error`** with
+`metrics.observe_request("-", "error")`. That is the actual defect: a malformed-input
+case reported as a server fault, which contradicts the honest-status-code work in B1
+and would page an operator for a client-side problem.
+
+**Reachability.** Narrow but real — it needs the *last* `role: "user"` message to carry
+a null/absent `content`:
+- `content` is optional on the model, so `{"role": "user"}` with the key omitted hits it;
+- clients replaying a turn that carried only attachments/multimodal parts send
+  `"content": null`;
+- it does **not** fire on the tool-calling path, which forces `direct` and never calls
+  `decide()` (`app/pipeline.py:422`) — so the change that introduced it also hid it from
+  its own tests.
+
+**Fix (one line, plus the guard that stops it recurring):**
+- `last_user = m.content or ""` in `app/routing/task_mode.py`.
+- Optional but worth it: decide whether a user turn with no text is a `422` at the API
+  boundary rather than silently classifying as `direct` — if a request has no readable
+  user text at all, "malformed body" is the more honest answer than routing it.
+- Add a `content=None` case to `tests/test_compression_and_mode.py`, which is where the
+  step-4 rules `decide()` is pinned today. `tests/test_openai_compat.py` won't catch it:
+  it exercises the tool-calling path, which bypasses `decide()` entirely.
+
+**Related cleanup (not a bug, no behaviour change):** `AppPolicy.capture_io`'s docstring
+in `app/apps/models.py` still states the pre-PR-#34 rule — that `full` requires an app
+that is "NOT onprem_only". The live rule is own-Langfuse-project (always) **plus**
+`policy_mode: "passthrough"` for an `onprem_only` app; see `docs/per-app-config.md`.
+Worth correcting in the same pass so the model file doesn't read as a third authority.
+(The similar comment in `app/config/schema.py`'s `LangfuseCfg` is *correct* — it
+describes the deployment-wide boot lint, which is still residency-keyed.)
 
 ---
 

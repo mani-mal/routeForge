@@ -70,7 +70,8 @@ curl -sX PUT http://10.89.197.201:30808/admin/applications/sample-app/policy \
 - `allowed_providers` — `onprem`, `azure`, `bedrock`. On the lab only `onprem` is on.
 - `allowed_models` — optional allow-list of specific slugs; null = any model the tiers/
   providers permit.
-- `residency` — per-app residency (`any` | `onprem_only`), same meaning as step 1.
+- `residency` — per-app residency (`any` | `private_cloud_ok` | `onprem_only`), same
+  meaning as step 1.
 - `max_spend_usd_per_day` / `max_rpm` — budget and rate caps (`429` when exceeded).
 
 ## 3. Scope the model to the application (model side)
@@ -79,11 +80,13 @@ If you onboarded the model with **applications = (none selected)** it's usable b
 apps and you can skip this. If you scoped it to specific apps (e.g. Nemotron →
 `routeforge_sample`), add your new app so it becomes a candidate.
 
-Today the fleet table exposes only **enable/disable** and **delete** — there is no
-in-place edit button — so change the app scope one of two ways:
+Change the app scope either way — both hit the same `PUT` and both re-probe the endpoint:
 
-- **API (no data loss):** `PUT /admin/infra/models/{slug}` with the model's full field
-  set and the new `allowed_app_ids`. The handler re-probes the endpoint on every edit.
+- **UI (shipped `ui:0.17.0`, B21):** Infrastructure → the model's row → **edit**. The form
+  is seeded from the stored row, so you only change `allowed_app_ids` and save. The slug is
+  fixed by the path and can't be renamed by an edit (that's a delete + re-onboard).
+- **API:** `PUT /admin/infra/models/{slug}` with the model's full field set and the new
+  `allowed_app_ids`.
   ```bash
   curl -sX PUT http://10.89.197.201:30808/admin/infra/models/nvidia/llama-3.1-nemotron-nano-8b-v1 \
     -H "Content-Type: application/json" --cookie "rf_admin_session=<session>" \
@@ -96,7 +99,6 @@ in-place edit button — so change the app scope one of two ways:
           "allowed_app_ids":["routeforge_sample","sample-app"]
         }'
   ```
-- **UI:** delete the row and re-onboard with the updated application selection.
 
 ## 4. Send a test request
 
