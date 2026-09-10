@@ -13,25 +13,28 @@ For the panel-by-panel UI reference see [`ui-guide.md`](./ui-guide.md); this doc
 > longer reproduce: the negative `routing saved $-0.0082` (§5, §6b — the baseline now
 > prices output tokens, so routing savings are positive), the "Cloud-eligible" summary
 > headline on a request where cloud was excluded (§4, §6a), and the "excluded · residency"
-> label on the disabled Azure/Bedrock spurs (§5, §6a — now labelled "provider disabled").
+> label on the disabled Azure/Bedrock spurs (§5, §6a — the B10 fix removes a kill-switched
+> provider from the candidate pool entirely, so it no longer appears as a rejected spur at
+> all; see the 2026-09-10 status note below for the exact current labels).
 > The narrative of *what each panel means* is still accurate; the exact captured numbers
 > in §1/§4/§5 need a fresh demo capture to be re-trued. See §6 for the corrected reading.
 >
-> **Status check 2026-09-10.** §6a's own description of the *current* (fixed) label is
-> itself now stale, verified against `ui/src/console/RequestDrilldown.tsx` and
-> `app/routing/router.py`: there is no `"provider disabled"` string anywhere in the code.
-> A cloud provider disabled at the infra kill-switch (`providers.{azure,bedrock}.enabled:
+> **Status check 2026-09-10.** §6a previously described the *current* (fixed) state as
+> the kill-switched provider being relabelled `"provider disabled"` — that string does not
+> exist anywhere in the code (verified against `ui/src/console/RequestDrilldown.tsx` and
+> `app/routing/router.py`) and §6a has been corrected below. The actual current behaviour:
+> a cloud provider disabled at the infra kill-switch (`providers.{azure,bedrock}.enabled:
 > false`) is dropped from the candidate pool entirely before the router scores anything
-> (`ModelRegistry.effective_pool`, `app/apps/registry.py:68-69`) — it never appears as a
-> rejected spur at all on a typical lab, disabled or not. The "What happened" band's
-> **Serving providers** chips (§4) use a *different* mechanism and show **"provider
-> off"** (not "excluded by policy") for a non-`onprem_only` request's excluded providers;
-> the Technical-trace rejected-candidate reason for a cloud model excluded by app/tenant
-> scope (when its provider *is* enabled) is **"excluded · app policy"**, not "excluded by
-> policy (residency)". Confirmed by sending a live request through
-> `TestClient(create_app())` with the default (cloud-disabled) config and inspecting the
-> `router` trace record: only on-prem candidates appear, rejected or chosen. Current
-> authority: [`ui-guide.md`](./ui-guide.md) §7b, §12.
+> (`ModelRegistry.effective_pool`, `app/apps/registry.py:67-68`) — it never appears as a
+> rejected spur at all on a typical lab. The "What happened" band's **Serving providers**
+> chips (§4) use a *different*, always-on 3-slot mechanism and show **"provider off"**
+> (not "excluded by policy") for a non-`onprem_only` request's excluded providers; the
+> Technical-trace rejected-candidate reason for a cloud model excluded by app/tenant scope
+> (when its provider *is* enabled) is **"excluded · app policy"**, not "excluded by policy
+> (residency)". Confirmed by sending a live request through `TestClient(create_app())`
+> with the default (cloud-disabled) config and inspecting the `router` trace record: only
+> on-prem candidates appear, rejected or chosen. Current authority:
+> [`ui-guide.md`](./ui-guide.md) §7b, §12.
 
 ---
 
@@ -218,10 +221,15 @@ collapses to `onprem` and the only eligible path is on-prem. The summary card us
 the gate flag instead of the effective candidate pool (overstating cloud-eligibility), and
 the router mislabelled the kill-switched providers as "residency" exclusions.
 **Now:** the eligibility line is derived from `allowed_providers` (so a request with cloud
-disabled reads as on-prem, not "cloud-eligible"), and a provider dropped by the kill-switch
-is labelled **"provider disabled"**, distinct from a residency exclusion. Narrate it simply
-as "cloud providers are turned off on this lab, so everything stays on-prem." (Was **B11**
-summary card / **B10** router label in [`../bugs-backlog.md`](../bugs-backlog.md).)
+disabled reads as on-prem, not "cloud-eligible"), and the router's fix goes further than a
+relabel — a provider dropped by the kill-switch is removed from the candidate pool
+*entirely*, before the router scores anything (`ModelRegistry.effective_pool`,
+`app/apps/registry.py:67-68`), so it never surfaces in the rejected list at all, under any
+label. (The top-band **Serving providers** chip strip is a separate, always-on 3-slot
+display — see §4 — and still shows a kill-switched provider as **"provider off"**, not
+"excluded by policy" or "provider disabled".) Narrate it simply as "cloud providers are
+turned off on this lab, so everything stays on-prem." (Was **B11** summary card / **B10**
+router-pool fix in [`../bugs-backlog.md`](../bugs-backlog.md).)
 
 **(b) "routing saved" went negative per-request — fixed (B12).** The old capture showed
 `routing saved $-0.0082` on this request while the Overview showed a positive aggregate.
