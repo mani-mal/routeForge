@@ -95,9 +95,11 @@ Langfuse export (`app/obs/export.py:export_trace`). "Record every action" — ge
 
 **Gap.** *"Tamper-proof, always available"* — **not yet.** These are plain mutable
 SQLAlchemy rows; there is no append-only enforcement, no hash-chaining, no signing, and
-housekeeping paths actively `DELETE` (`store.py:prune_snapshots`, `revoke_token`). Langfuse
-export is best-effort and redacted (no content integrity guarantee). For regulated buyers
-this is the single highest-value gap — see G3′.
+housekeeping actively `DELETE`s (`store.py:prune_snapshots`). Revocation is softer —
+`store.py:revoke_token` only flips `token.status = "revoked"` and stamps `revoked_at`,
+it does not delete the row — but neither path is append-only or tamper-evident, which is
+the actual gap. Langfuse export is best-effort and redacted (no content integrity
+guarantee). For regulated buyers this is the single highest-value gap — see G3′.
 
 ### G4 — Identity Management / Agent Identity 🟡
 
