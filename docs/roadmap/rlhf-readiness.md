@@ -5,14 +5,14 @@
 > F1 Phase D): `sp.candidates` and `sp.routing_policy_version` in `app/obs/export.py`,
 > `POST /v1/feedback` + `SCORE_NAMES`/`post_score` in `app/obs/scores.py`
 > (`app/api/routes.py`), and the offline `tools/recommend/`, `tools/prompt_opt/`,
-> `tools/orchestrate/` tools plus `docs/help/exporting-eval-datasets.md` all exist and
+> `tools/orchestrate/` tools plus `docs/guides/exporting-eval-datasets.md` all exist and
 > match the claims below. Only the *training itself* stays external and out of scope —
 > that boundary is unchanged. Current authority: the "Status update" section
-> immediately below (§0) and `docs/help/exporting-eval-datasets.md`.
+> immediately below (§0) and `docs/guides/exporting-eval-datasets.md`.
 
 **Status:** ~~design-only, build later~~ — **substrate shipped** (0.11.0 + F1 Phase D,
 see the status check above); external training/promotion remains out of scope.
-Logged from `docs/help/rlhf.txt` (owner's research note) on 2026-08-05.
+Logged from the owner's research note (a scratch file, never checked into this repo) on 2026-08-05.
 
 > **Update 2026-08-19:** the substrate this doc designs (F1–F5 in §6, and the three
 > gaps in §4) has since shipped, across **0.11.0** and **F1 Phase D**. See the status
@@ -39,7 +39,7 @@ gates, promotion, registry — is **out of scope** for routeForge and stays exte
 scope, and what this feature builds, is the **data/feedback substrate** that makes
 external RLHF possible: capturing user + reviewer feedback as Langfuse scores linked
 to traces, emitting RLHF-ready decision metadata, and making traces exportable as
-training/eval datasets. This is consistent with `docs/eval-logging-backlog.md`:
+training/eval datasets. This is consistent with `docs/archive/eval-logging-backlog.md`:
 *capturing the data is fine and in scope; building training pipelines on top is the
 out-of-scope part.* routeForge **captures and exports**; something outside **trains
 and promotes**.
@@ -81,7 +81,7 @@ and dataset-export substrate this doc called for is real, not just designed:
   [`docs/guides/exporting-eval-datasets.md`](../guides/exporting-eval-datasets.md).
 - **Session grouping**: multi-call agentic trajectories can be tied together via the
   `x-routeforge-session` header → `langfuse.session.id`, documented in
-  `docs/help/integrating-an-app.md` §7.
+  `docs/guides/integrating-an-app.md` §7.
 
 **What has not changed:** the scope boundary in the intro above. RouteForge produces
 substrate and orchestrates; it does not train, evaluate-gate, or promote. Target B

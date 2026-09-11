@@ -2,7 +2,7 @@
 
 Reference catalog of the metrics RouteForge should surface, the open-source tools that
 produce them, and corrected definitions. Captured from a collected research note.
-Related: ties to `docs/eval-logging-backlog.md` and `docs/rlhf-readiness.md`
+Related: ties to `docs/archive/eval-logging-backlog.md` and `docs/roadmap/rlhf-readiness.md`
 (feedback/score metrics).
 
 **Tool layers at a glance:**

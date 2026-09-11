@@ -66,7 +66,7 @@ only `confidential` entities that is **compliant**, not a leak. The heuristic co
 "any PII entity detected" with "sensitive data that must be on-prem", and so it *undersells*
 the exact story you want to tell.
 
-**Fixed 2026-07-30 (`docs/ui-open-items.md` #6).** The warning now fires only on a genuine
+**Fixed 2026-07-30 (`docs/archive/ui-open-items.md` #6).** The warning now fires only on a genuine
 residency breach — an `onprem_only` request served **off-prem**
 (`fleet()['onprem_violations']`, red glyph). Because `onprem_only` requests can't reach
 cloud by construction (Rule 3), this is 0 in the demo: Acme no longer warns, and the glyph

@@ -2,7 +2,7 @@
 
 **Status:** implemented (2026-08-20) — both decisions below shipped on
 `feat/per-app-flexibility` (see `docs/superpowers/plans/2026-08-20-per-app-flexibility-plan.md`
-for the task-by-task build). See `docs/per-app-config.md` for the operator how-to
+for the task-by-task build). See `docs/reference/per-app-config.md` for the operator how-to
 (field values, floors, manual `ALTER` for already-deployed DBs).
 **Related:** per-app privacy rules (PR #3, `app/apps/models.py`); MillWise integration
 assessment; CLAUDE.md §Configuration; `.claude/skills/privacy-gate`, `.claude/skills/output-controls`
@@ -30,7 +30,7 @@ assessment; CLAUDE.md §Configuration; `.claude/skills/privacy-gate`, `.claude/s
 > What did **not** change: the own-project condition on `full` (never relaxed), the
 > `redacted`-wherever-nothing-is-sanitized refusal, the `allow_app_pii_downgrade`
 > ceiling, and the fact that placement is untouched by any protection knob.
-> **`docs/per-app-config.md` is the current authority on every clamp**; the sections
+> **`docs/reference/per-app-config.md` is the current authority on every clamp**; the sections
 > below are the design record of how they got here.
 
 This note answers: *which Serving-Plane settings can safely become per-application
@@ -186,7 +186,7 @@ no operator opt-in and no runtime backstop. Fixed by resolving `eff_pii` the sam
 and keying the clamp on it: `eff_pii = body.pii_detection if body.pii_detection is not
 None else (stored.pii_detection if stored else None)` — **deliberately with no further
 fallback to the global default**, unlike `eff_residency`/`eff_capture`. Per this doc and
-`docs/per-app-config.md`, unset/`None` means "inherit the deployment's live global
+`docs/reference/per-app-config.md`, unset/`None` means "inherit the deployment's live global
 detector" and is explicitly *not itself a downgrade* — only an actual per-app override
 (this write's body, or a value already stored on this app's row) is what the clamp
 guards. Falling back further to `settings.serving.pii_detection` was tried and reverted:
@@ -319,14 +319,14 @@ Both decisions are **implemented** (`feat/per-app-flexibility`, 2026-08-20).
   singleton per-mode detector selection + the invariant test pinning the residency floor.
   **The clamp set has since changed** — the `onprem_only` residency condition was removed
   (`09a28db`) and `policy_mode` was added (PR #34); see the superseded banner at the top of
-  this page. `docs/per-app-config.md` is the current authority.
+  this page. `docs/reference/per-app-config.md` is the current authority.
 - **Decision 2 (streaming):** ✅ shipped, all three `stream_mode` values.
   `verified_then_stream` chunks a finished, fully-verified answer — no real backend
   streaming, no TTFT win. `stream_unverified` and `incremental_verify` are REAL backend
   token streaming; they do NOT buffer-then-chunk. The fail-closed floor
   (`app/pipeline.py:run_stream` → `StreamFallback`) is enforced independently of the
   app's chosen mode, at both admin write-time and runtime — see the "Decision — shipped"
-  section above and `docs/per-app-config.md` for the operator-facing summary.
+  section above and `docs/reference/per-app-config.md` for the operator-facing summary.
 - **Open follow-up:** none tracked for this workstream. A future holistic
   streaming-verification scheme (rejecting an in-flight stream on a whole-response
   verdict, not just per-entity redaction) remains explicitly out of scope — see the

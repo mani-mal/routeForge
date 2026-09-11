@@ -65,7 +65,7 @@ internal report `NVIDIA_Nemotron_and_Switchyard_Report.docx`.
    inside the invariants — escalation only ever moves within `allowed_providers`, so an
    `onprem_only` task escalates cheap→mid→frontier-on-prem and **never** lifts to cloud
    (CLAUDE.md hard rule 8). Depends on real per-hop signal aggregation, which is now in
-   place — the multi-step latency=0 bug this used to be gated on is resolved (`docs/bugs-backlog.md`
+   place — the multi-step latency=0 bug this used to be gated on is resolved (`docs/backlog/bugs.md`
    B5: per-hop `latency_ms` flows end-to-end via `app/agent/internal_endpoint.py` +
    `app/api/history.py`) — so this borrow no longer has a plumbing blocker, only the
    feature work itself.

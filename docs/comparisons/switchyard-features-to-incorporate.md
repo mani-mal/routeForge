@@ -46,7 +46,7 @@ multi-step agent loop, let sustained difficulty escalate the tier for subsequent
 **Guardrails:** escalation moves only within `allowed_providers` — an `onprem_only` task
 escalates cheap→mid→frontier-**on-prem** and is **never** lifted to cloud to satisfy a
 floor (hard rule 8). Needs real per-hop signal aggregation, which is now in place — the
-multi-step latency=0 bug this was gated on is resolved (`docs/bugs-backlog.md` B5,
+multi-step latency=0 bug this was gated on is resolved (`docs/backlog/bugs.md` B5,
 2026-08-06); the prerequisite is satisfied, only the escalation feature itself remains
 to build.
 

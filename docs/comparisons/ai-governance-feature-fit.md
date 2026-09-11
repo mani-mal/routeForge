@@ -232,7 +232,7 @@ redacted) — competitors have to scrape logs to get what we stream natively.
 
 **Rule-fit — the important one.** Keep it **advisory, not authority** — the same discipline
 RouteForge already applies to `stage_signals` and the step-4 LLM classifier ("advisory
-signal, not decision-maker"; see `docs/architecture/external-router-feature-analysis.md`
+signal, not decision-maker"; see `docs/comparisons/external-router-feature-analysis.md`
 §1). It **alerts**, it does not autonomously block or re-route. It must run **locally**
 (air-gap; no phone-home to a cloud anomaly service). If any ML detector is used, it's an
 **onboarded on-prem model** producing an advisory score — RouteForge hosts no detector
@@ -288,8 +288,8 @@ switch) → G6′ (anomaly radar) → G1′ (pluggable policy) last.**
 
 ---
 
-*Related: `docs/architecture/external-router-feature-analysis.md` (advisory-signal-not-authority
-pattern, reused by G6′), `docs/architecture/self-improving-agent-feature-fit.md` (the
-orchestrated-not-hosted boundary that G6′ detectors must respect), `docs/per-app-config.md`
-(the per-app config seam G2′/G4′ extend), `docs/routing-observability.md` (the `DecisionRecord`
+*Related: `docs/comparisons/external-router-feature-analysis.md` (advisory-signal-not-authority
+pattern, reused by G6′), `docs/architecture/decisions/self-improving-agent-feature-fit.md` (the
+orchestrated-not-hosted boundary that G6′ detectors must respect), `docs/reference/per-app-config.md`
+(the per-app config seam G2′/G4′ extend), `docs/reference/routing-observability.md` (the `DecisionRecord`
 stream G3′/G6′ build on).*

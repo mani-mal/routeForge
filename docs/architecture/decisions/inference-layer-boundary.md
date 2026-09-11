@@ -52,7 +52,7 @@ than any router could, and one that differs at every customer site.
 ## The backend options routeForge offers — and who owns serving
 
 On-prem models are **onboarded at runtime** (admin UI → Infrastructure → Onboard, or
-`POST /admin/infra/models`), not selected in YAML — see `docs/onboarding-models.md`. Each
+`POST /admin/infra/models`), not selected in YAML — see `docs/guides/onboarding-models.md`. Each
 onboarded model carries its own OpenAI-compatible `endpoint`. Every path egresses through
 the **same** LiteLLM path, always behind the policy gate.
 
@@ -104,7 +104,7 @@ annotate decisions and the UI displayed them. routeForge **rendered and deployed
 nothing** from them (CLAUDE.md hard rule 4; infra-management design §10).
 
 > **Status check 2026-09-10.** The 2026-08-03 pure-router pivot replaced this
-> declared-facts model with the leaner onboarding flow in `docs/onboarding-models.md`:
+> declared-facts model with the leaner onboarding flow in `docs/guides/onboarding-models.md`:
 > `OnboardIn` carries `slug`, `display_name`, `tier`, `endpoint`, `api_key_env`,
 > `price_input`/`price_output`, `quality`, `context_window`, `allowed_app_ids`, `notes`,
 > `enabled` — no `engine`, `tensor_parallel`, `min_replicas`/`max_replicas`, `gpu_type`,
@@ -112,7 +112,7 @@ nothing** from them (CLAUDE.md hard rule 4; infra-management design §10).
 > (`app/apps/registry.py::_OnboardedRow`, `app/api/admin_routes.py`). **The decision
 > this section argues for is unaffected**: routeForge still only declares/consumes and
 > never deploys or enacts serving infrastructure — only the declared-facts example
-> above is now historical. Current authority: `docs/onboarding-models.md`.
+> above is now historical. Current authority: `docs/guides/onboarding-models.md`.
 
 We considered an "enactment" track: have routeForge turn those declared facts into a
 real Dynamo/TensorRT-LLM deployment. **Rejected.** Reasons, in the context of shipping

@@ -167,7 +167,7 @@ The full eligible/rejected candidate set for that routing decision:
 
 The chosen candidate is `eligible: true`; each rejected candidate is
 `eligible: false` with its rejection reason. This is the RLHF/eval substrate
-(see `docs/rlhf-readiness.md`) — it records *what else could have been chosen and
+(see `docs/roadmap/rlhf-readiness.md`) — it records *what else could have been chosen and
 why it wasn't*, without building any feedback API (that stays out of scope).
 
 ### `sp.routing_policy_version` — on the root span
@@ -212,8 +212,8 @@ curl -s http://<api>/metrics | grep -E '^# TYPE routeforge_'
 
 ## Related
 
-- `docs/onboarding-models.md` — the model pool `sp.candidates` is drawn from.
-- `docs/rlhf-readiness.md` — what the candidate snapshot + policy version feed.
+- `docs/guides/onboarding-models.md` — the model pool `sp.candidates` is drawn from.
+- `docs/roadmap/rlhf-readiness.md` — what the candidate snapshot + policy version feed.
 - `docs/architecture/routing-tier-selection.md` — the `cheap|mid|frontier` ladder
   the signal biases (length-based complexity, no modality/capability axis).
 - Design record: `docs/superpowers/specs/2026-08-15-routing-observability-and-signals-design.md`.

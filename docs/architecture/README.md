@@ -83,7 +83,7 @@ mock backend class.
 The `inference_backend: vllm | dynamo | none` axis was **removed** in the pure-router <!-- purged-ok -->
 pivot (2026-08-03). routeForge no longer picks an on-prem backend in YAML — on-prem models
 are **onboarded at runtime** (each with its own OpenAI-compatible `endpoint`) and live in
-the `ModelRegistry`; see `docs/onboarding-models.md`. The on-prem pool boots empty. The
+the `ModelRegistry`; see `docs/guides/onboarding-models.md`. The on-prem pool boots empty. The
 managed-cloud path's availability is still `providers.{azure,bedrock}.enabled`, and there
 is **no** separate `serving_paths` config axis. <!-- purged-ok -->
 See [architecture-review.md](../archive/2026-07-25-architecture-review.md) for the pre-pivot config shape

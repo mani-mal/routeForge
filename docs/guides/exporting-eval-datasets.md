@@ -5,7 +5,7 @@ and feedback scores into a training or evaluation dataset — typically a custom
 engineer running Hugging Face TRL, OpenRLHF, or an equivalent offline pipeline.
 
 routeForge does not run this pipeline itself. Per the project's control-plane
-boundary (`CLAUDE.md` rule #4; see `docs/architecture/self-improving-agent-feature-fit.md`
+boundary (`CLAUDE.md` rule #4; see `docs/architecture/decisions/self-improving-agent-feature-fit.md`
 §1), routeForge **produces the substrate** — traces and feedback scores in Langfuse — and
 may **trigger** an external training job later, but it hosts no training compute and has
 no in-process promotion path. Everything below runs in a **separate project**, against
@@ -14,7 +14,7 @@ Langfuse's own API, outside routeForge's process.
 ## 1. What you read
 
 Two Langfuse surfaces, both scoped to the project(s) your application(s) were exported
-to (see `docs/help/integrating-an-app.md` §5 for how an app gets its own project):
+to (see `docs/guides/integrating-an-app.md` §5 for how an app gets its own project):
 
 - **Traces** — via the Langfuse UI, its export/blob features, or its API. Each request
   routeForge serves emits one `serving.request` trace, plus per-hop `serving.step-N`
@@ -45,7 +45,7 @@ Set in `app/obs/export.py` (`_set_io`, `export_trace`). All of these except
 | `langfuse.session.id` | Groups turns from one multi-call trajectory into a Langfuse Session | when the app sent `x-routeforge-session` |
 
 The full attribute reference, including the multi-step child-span fields, lives in
-`docs/help/integrating-an-app.md` §7 — read it before writing an export script; this
+`docs/guides/integrating-an-app.md` §7 — read it before writing an export script; this
 guide only adds the dataset-column mapping on top.
 
 ### Feedback scores
@@ -69,7 +69,7 @@ sent as the fourth argument to `post_score(app_langfuse, trace_id, "corrected_ou
 ## 3. Capture-mode prerequisite
 
 Which trace fields exist at all depends on the app's `capture_io` setting and which
-Langfuse project the trace landed in — see `docs/rlhf-readiness.md` §2 and §5 for the
+Langfuse project the trace landed in — see `docs/roadmap/rlhf-readiness.md` §2 and §5 for the
 full Target A / Target B split. Summary for dataset export:
 
 | `capture_io` | Project | `input.value` / `output.value` | Usable for |
@@ -179,7 +179,7 @@ call of an agentic run, routeForge stamps it as `langfuse.session.id` and Langfu
 groups the N per-turn traces into one Session. Walk the Session to reconstruct a
 trajectory instead of treating each turn as an independent example. Full details
 (header rules, what gets grouped, and why) are in
-`docs/help/integrating-an-app.md` §7 — this guide doesn't restate them.
+`docs/guides/integrating-an-app.md` §7 — this guide doesn't restate them.
 
 ## 6. Privacy note
 

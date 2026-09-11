@@ -4,9 +4,9 @@
 mem0, prompt optimization / DSPy, harness self-improvement, RLHF weight-training libs) against
 RouteForge's product boundaries, and records the **owner's scope decisions** (2026-08-17) that
 move those boundaries. Written **before** the Langfuse capture changes (B13→B16) so the capture
-topology serves the full roadmap. Sibling reads: `docs/rlhf-readiness.md`,
-`docs/eval-logging-backlog.md`, `docs/architecture/inference-layer-boundary.md`,
-`docs/architecture/nemo-switchyard-comparison.md`.
+topology serves the full roadmap. Sibling reads: `docs/roadmap/rlhf-readiness.md`,
+`docs/archive/eval-logging-backlog.md`, `docs/architecture/decisions/inference-layer-boundary.md`,
+`docs/comparisons/nemo-switchyard-comparison.md`.
 
 Source material (owner's research, `/tmp/harness-rlhf`):
 - *Architecting the Self-Evolving Agent* (RSI, OPSD, Mem0, trace mining)
@@ -150,7 +150,7 @@ requires RouteForge to host training or inference compute.
    display. Metadata stays always-on regardless. ✅ **SHIPPED.** The clamps landed as an
    own-Langfuse-project requirement on `full` (never relaxed) plus a **posture** condition —
    an `onprem_only` app must declare `policy_mode: "passthrough"` to reach `full` — rather
-   than the flat residency lint sketched here; see `docs/per-app-config.md`.
+   than the flat residency lint sketched here; see `docs/reference/per-app-config.md`.
 3. **B15 remainder** — admin cross-app reporting from RouteForge's own store + a manual per-app
    Langfuse-creds path (air-gapped operators with no org key). Project isolation core is done.
 4. **B16 feedback + dataset substrate** — `POST /v1/feedback` → trace-linked score, correction-
@@ -189,7 +189,7 @@ RouteForge already occupies. The single architectural invariant that carries the
 **Status check 2026-09-10: applied.** Every amendment listed below has since landed in
 `CLAUDE.md` verbatim — rule #4 reads "RouteForge hosts no compute; it orchestrates and
 consumes... The Improvement Plane is orchestrated, not hosted", the scope banner uses that
-framing, and `docs/architecture/self-improving-agent-feature-fit.md` (this doc) is its
+framing, and `docs/architecture/decisions/self-improving-agent-feature-fit.md` (this doc) is its
 cited authority. The boundary this doc states still matches CLAUDE.md rule #4 exactly.
 This section is kept as the historical record of what was proposed and why; treat it as
 already executed, not pending.

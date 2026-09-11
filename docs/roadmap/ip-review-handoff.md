@@ -133,7 +133,7 @@ the four `config/*.yaml`.
   noise for this task.
 - [`../archive/2026-07-25-architecture-review.md`](../archive/2026-07-25-architecture-review.md) — carries its own
   historical-snapshot banner; predates two pivots.
-- `docs/help/`, `docs/dev-references/`, `deploy/`, `ui/`, `docs/marketing/` — operator,
+- `docs/guides/`, `docs/reference/`, `deploy/`, `ui/`, `docs/marketing/` — operator,
   developer and packaging surfaces. None bears on IP.
 
 ---

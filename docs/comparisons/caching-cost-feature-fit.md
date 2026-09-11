@@ -172,7 +172,7 @@ switch cost 34% > budget 20%") — the *why* stays auditable.
 > session to keep caches warm can mean not dropping to a cheaper tier. The switch-cost budget is
 > the arbitration, and it's only correct once F1 lets RouteForge price the cached hit. This is
 > the exact same "advisory bias, residency-clamped, logged" pattern as `stage_signals` — see
-> `docs/architecture/external-router-feature-analysis.md` §3.1 (F2/F3), which this converges
+> `docs/comparisons/external-router-feature-analysis.md` §3.1 (F2/F3), which this converges
 > with: the caching diagram and the Plano/Devin-Fusion comparison point at **one** build.
 
 ### F3 — Provider prompt-cache enablement
@@ -229,7 +229,7 @@ decision stays residency-clamped and logged in the `DecisionRecord`.
 
 ---
 
-*Related: `docs/architecture/external-router-feature-analysis.md` §3.1 (F2/F3 cache-aware routing
-+ switch-cost budget — same build, reached from the routing angle), `docs/routing-observability.md`
+*Related: `docs/comparisons/external-router-feature-analysis.md` §3.1 (F2/F3 cache-aware routing
++ switch-cost budget — same build, reached from the routing angle), `docs/reference/routing-observability.md`
 (the `DecisionRecord` these decisions must log), the `inference-backends` skill (what runs behind
-an onboarded endpoint — where KV/prefix caches actually live), `docs/onboarding-models.md`.*
+an onboarded endpoint — where KV/prefix caches actually live), `docs/guides/onboarding-models.md`.*

@@ -43,7 +43,7 @@ RouteForge ships with **no bundled model**: the on-prem pool boots empty by desi
 pure router doesn't carry inference with it — CLAUDE.md hard rule 4). Everything from
 section 3 onward assumes an operator has already onboarded at least one OpenAI-compatible
 on-prem endpoint (Infrastructure → Onboard, or `POST /admin/infra/models`; see
-`docs/onboarding-models.md`) so there's a cheap tier for step 1 of the walkthrough to
+`docs/guides/onboarding-models.md`) so there's a cheap tier for step 1 of the walkthrough to
 land on. Do this **before** the recording starts, off camera — it's a one-time setup
 step, not part of the story you're telling the customer. If you skip it, `onprem_only`
 traffic (the hospital persona) has no eligible candidate and is rejected outright, not
@@ -272,7 +272,7 @@ config axis for RouteForge to select among them.
 > demo model and the `inference_backend` config axis <!-- purged-ok --> — there is no
 > bundled "mock backend" demo mode any more. If you're demoing without GPU hardware
 > at hand, stand up a real (even tiny) OpenAI-compatible endpoint and onboard it; see
-> `docs/onboarding-models.md`. Current authority: that doc.
+> `docs/guides/onboarding-models.md`. Current authority: that doc.
 
 > **Are Azure/Bedrock in this demo?** By default, no — `providers.azure.enabled` and
 > `providers.bedrock.enabled` are `false` in `config/serving.yaml`, and a disabled
@@ -338,6 +338,6 @@ config axis for RouteForge to select among them.
 
 ---
 
-*Source of truth for the console's every value: `docs/help/ui-guide.md`. Dashboard-reading
-nuances (PII vs on-prem, the ⚠ heuristic): `docs/demo-dashboard-notes.md`. The eval/
-training roadmap: `docs/eval-logging-backlog.md`.*
+*Source of truth for the console's every value: `docs/guides/ui-guide.md`. Dashboard-reading
+nuances (PII vs on-prem, the ⚠ heuristic): `docs/marketing/demo-dashboard-notes.md`. The eval/
+training roadmap: `docs/archive/eval-logging-backlog.md`.*

@@ -3,7 +3,7 @@
 Operator-facing reference for the per-app override knobs — `policy_mode`,
 `pii_detection`, `pii_entity_denylist`, `pii_score_threshold`, `pii_exempt_patterns`
 and `stream_mode`. For the *why* (which knobs are safe to expose per-app and which
-aren't), read `docs/architecture/per-app-config-flexibility.md` first — this page is the
+aren't), read `docs/architecture/decisions/per-app-config-flexibility.md` first — this page is the
 how-to. If the question is *"I have a new app, what should I set?"* rather than *"what
 does this field do?"*, start with
 [`choosing-app-settings.md`](../guides/choosing-app-settings.md) — the decision guide and
@@ -278,7 +278,7 @@ independently:
   auto-provisioned at creation or attached manually via
   `PUT /admin/applications/{app_id}/langfuse` — in the console the credential fields sit in
   *Settings → step 4 Telemetry*, directly above `capture_io`, because they gate it (see
-  `docs/onboarding-models.md`-adjacent Langfuse provisioning notes). `app/obs/export.py` fails closed to `redacted` at export
+  `docs/guides/onboarding-models.md`-adjacent Langfuse provisioning notes). `app/obs/export.py` fails closed to `redacted` at export
   time if the per-app tracer build ever fails, as an independent runtime backstop.
   `app/obs/*` was not changed by this feature — it already had this behavior.
 - **`allow_app_pii_downgrade` still gates it.** A deployment with the ceiling set
@@ -447,7 +447,7 @@ live view and never carries chat tokens, regardless of any app's `stream_mode`.
 
 RouteForge has no migration tool — `Base.metadata.create_all` (SQLAlchemy) only creates
 *missing* tables at boot; it never `ALTER`s an existing table to add a new column (see
-`docs/onboarding-models.md` §(f) for the same pattern with an earlier column addition).
+`docs/guides/onboarding-models.md` §(f) for the same pattern with an earlier column addition).
 `pii_detection` and `stream_mode` are two new nullable columns on the existing
 `app_policies` table (confirmed against `app/apps/models.py:AppPolicy`:
 `String(16)` / `String(24)` respectively). A **fresh** database picks these up

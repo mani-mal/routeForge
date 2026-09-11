@@ -6,7 +6,7 @@
 > the repo as it stood then — the `inference_backend` axis and the `mock` backend were
 > later **removed**; on-prem models are now onboarded at runtime. Kept as a point-in-time
 > record; for current state read `CLAUDE.md`, `README.md`, and
-> `docs/architecture/inference-layer-boundary.md`.
+> `docs/architecture/decisions/inference-layer-boundary.md`.
 >
 > **Further out of date (deployed `api:0.18.0`).** The whole seven-feature program shipped
 > *after* this snapshot: stage/role-aware routing signals, the failure-driven gateway
@@ -15,9 +15,9 @@
 > semantic cache, and persistent memory — plus a pluggable `RoutingStrategy` seam and a
 > quality/accuracy axis on the cost dashboard. So §4 "What still needs building" and the
 > "Current verdict" below both predate `api:0.18.0`; read them as of mid-2026, not now.
-> For current state see `docs/routing-observability.md`,
-> `docs/architecture/semantic-cache-residency-spec.md`, and
-> `docs/architecture/persistent-memory-residency-spec.md`.
+> For current state see `docs/reference/routing-observability.md`,
+> `docs/architecture/specs/semantic-cache-residency-spec.md`, and
+> `docs/architecture/specs/persistent-memory-residency-spec.md`.
 
 **Original review:** 2026-07-20, against the design package (drawio, `CLAUDE.md`,
 skills, `BUILD_PLAN.md`, four configs) — *before any code existed*.

@@ -56,7 +56,7 @@ What you get and owe with Pattern A:
 - **Streaming is a per-app capability, off by default.** Unless your admin sets
   your app's `stream_mode`, `stream:true` is rejected and each call returns a
   complete verified response. Agent loops don't need token streaming anyway; they
-  need the finished step. (See `stream_mode` in `../per-app-config.md`.)
+  need the finished step. (See `stream_mode` in [`../reference/per-app-config.md`](../reference/per-app-config.md).)
 
 ### Native tool calling
 

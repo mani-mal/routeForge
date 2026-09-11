@@ -1,7 +1,7 @@
 # Console UI — open items / backlog
 
 Deferred UI work surfaced while walking the per-application console. None are
-blocking; listed newest-concern first. See `docs/help/ui-guide.md` for how each
+blocking; listed newest-concern first. See `docs/guides/ui-guide.md` for how each
 region currently behaves.
 
 ---

@@ -103,7 +103,7 @@ Sortable (click any column header; ▲/▼ shows the active sort). Columns:
 | **On-prem** | Requests this app kept on-prem (`onprem_only`). |
 | **p50** | Median request latency (ms) for this app. |
 | **Tiers** | A mini stacked bar of the app's tier mix (cheap green / mid blue / frontier red). Hover for exact counts. |
-| **⚠** | Fires only on a **genuine residency breach** — an `onprem_only` request that was served off-prem (`fleet()['onprem_violations'] > 0`, `FleetOverview.tsx:51`). Because `onprem_only` requests can't reach cloud by construction (rule 3) this is normally `0`; if the glyph ever shows, it means a real leak. *(It used to fire on the much looser `pii_count > 0 && onprem_count < pii_count`, which flagged compliant `private_cloud_ok` traffic as a problem — see `docs/ui-open-items.md` #6.)* |
+| **⚠** | Fires only on a **genuine residency breach** — an `onprem_only` request that was served off-prem (`fleet()['onprem_violations'] > 0`, `FleetOverview.tsx:51`). Because `onprem_only` requests can't reach cloud by construction (rule 3) this is normally `0`; if the glyph ever shows, it means a real leak. *(It used to fire on the much looser `pii_count > 0 && onprem_count < pii_count`, which flagged compliant `private_cloud_ok` traffic as a problem — see `docs/archive/ui-open-items.md` #6.)* |
 
 A tier legend (cheap / mid / frontier dots) sits top-right of the table.
 
@@ -299,7 +299,7 @@ trace.
 
 `PlainSummary` in `RequestDrilldown.tsx`. No jargon, no step numbers — **labelled outcome
 cards**, each answering one question an owner actually asks (the run-on arrow-chain
-sentence this replaced was retired in `:0.5.0`, `docs/ui-open-items.md` #1):
+sentence this replaced was retired in `:0.5.0`, `docs/archive/ui-open-items.md` #1):
 
 | Card | Verdict | The *why* line beneath it |
 |---|---|---|
@@ -505,7 +505,7 @@ Two honesty notes about what this form does and doesn't guarantee:
   rejected, the server's 422 appears verbatim under the Save button — it names the rule
   that fired and the alternative to use, and that text is your guidance. (Until
   `:0.17.0` this form discarded every error, so a rejected save looked like a no-op.
-  See B22/B23 in `bugs-backlog.md`.)
+  See B22/B23 in [`bugs.md`](../backlog/bugs.md).)
 - **Saving merges — with one deliberate exception.** A control you don't touch keeps
   whatever the app has stored. Moving a control back to its "(global default)" option is
   the exception: that field is cleared and the app inherits the deployment default again
@@ -546,10 +546,12 @@ Plane step 2) and output verification (Serving Plane step 9) consult for this ap
 | **Save / Reset to global defaults** | **Save privacy rules** persists the recognizers + rules for this app. **Reset to global defaults** clears both lists so the app falls back to classifying exactly like the global `policy.yaml` (identical to an app with no profile at all). |
 
 No custom recognizers or rules means the app classifies with the global defaults only —
-the panel says so under each empty list. This is the mechanism behind
-architecture-review.md §4.1: the seeded RAG/Support Agent profiles demote `LOCATION`/
-`DATE_TIME` to `internal`/`low` so a casual place-name mention (e.g. "capital of France")
-no longer trips the medium risk floor and stays on the cheap tier.
+the panel says so under each empty list. This is the mechanism that closed the historical
+tier-selection bug tracked in the archived
+[`architecture-review.md` §4.1](../archive/2026-07-25-architecture-review.md): the seeded
+RAG/Support Agent profiles demote `LOCATION`/`DATE_TIME` to `internal`/`low` so a casual
+place-name mention (e.g. "capital of France") no longer trips the medium risk floor and
+stays on the cheap tier.
 
 ---
 
@@ -727,7 +729,7 @@ renders raw input**. The **answer** is shown at the Response step; the prompts l
 
 ---
 
-**Known gaps & deferred UI work:** see `docs/ui-open-items.md` — **all seven items are now
+**Known gaps & deferred UI work:** see `docs/archive/ui-open-items.md` — **all seven items are now
 closed.** The "What happened" redesign, the Headroom toggle, the 0 ms multi-step latency
 bug, per-request `$0.0000` precision, the two-blues recolour, the over-eager fleet ⚠, and
 the labelled/copyable Application ID (#7, shipped `ui:0.17.0`) have all shipped.

@@ -269,7 +269,7 @@ Tools reachable by RouteForge's own NAT agent are fixed at **build time**:
 So a customer who wants their own tool has to fork RouteForge. **We cannot customise the
 source per customer** — that is the whole objection. Compare model onboarding, which got
 this right: the pool boots empty, the operator adds an endpoint through an admin API,
-probe-gated, no restart (`docs/onboarding-models.md`). Tools should mirror that shape.
+probe-gated, no restart (`docs/guides/onboarding-models.md`). Tools should mirror that shape.
 
 ### What "right" looks like
 
@@ -383,7 +383,7 @@ a null/absent `content`:
 **Related cleanup (not a bug, no behaviour change):** `AppPolicy.capture_io`'s docstring
 in `app/apps/models.py` still states the pre-PR-#34 rule — that `full` requires an app
 that is "NOT onprem_only". The live rule is own-Langfuse-project (always) **plus**
-`policy_mode: "passthrough"` for an `onprem_only` app; see `docs/per-app-config.md`.
+`policy_mode: "passthrough"` for an `onprem_only` app; see `docs/reference/per-app-config.md`.
 Worth correcting in the same pass so the model file doesn't read as a third authority.
 (The similar comment in `app/config/schema.py`'s `LangfuseCfg` is *correct* — it
 describes the deployment-wide boot lint, which is still residency-keyed.)
@@ -899,7 +899,7 @@ no sensitive data. Per-app capture removes that false coupling.
   it to send raw PHI to a shared project (Rules #2/#6/#8; residency beats eval).
 - **Fail closed:** missing/invalid/unknown → most-restrictive (`off`/`redacted`),
   never raw.
-- **RLHF amendment (see B16 / `docs/rlhf-readiness.md`):** `capture_io` gates only
+- **RLHF amendment (see B16 / `docs/roadmap/rlhf-readiness.md`):** `capture_io` gates only
   the raw prompt/completion **I/O**. Router-diagnostic metadata (eligible/rejected
   candidate snapshot, selection reason, routing-policy version) is **not PII** and
   must be emitted **always-on**, independent of the tri-state — even an `off` app must
@@ -990,7 +990,7 @@ back to `off`/shared-redacted, **never raw-to-shared**. The per-app residency li
 (B14) binds the export target. Admin cross-app reporting served from routeForge's
 admin console (1), with the redacted rollup project (2) optional.
 
-**RLHF amendment (see B16 / `docs/rlhf-readiness.md`):** feedback scores must be
+**RLHF amendment (see B16 / `docs/roadmap/rlhf-readiness.md`):** feedback scores must be
 written to the **same Langfuse project as the trace** they annotate (scores are
 trace-linked within a project), using that app's `app_langfuse` creds. The redacted
 rollup project suffices for cross-app router eval; LLM fine-tuning reads the app's own
@@ -1013,7 +1013,7 @@ Original write-up kept below.
 
 **Prior status 2026-08-16 (historical):** gaps 1 & 2 shipped; gap 3 still open.
 
-**Type:** feature (future; design in `docs/rlhf-readiness.md`).
+**Type:** feature (future; design in `docs/roadmap/rlhf-readiness.md`).
 **Severity:** low-now / high-later (unlocks feedback-driven router + model
 improvement; owner flagged 2026-08-05 as a future build).
 **Scope boundary:** routeForge builds only the **capture/feedback/export substrate**.
@@ -1028,7 +1028,7 @@ corrected outputs, datasets, experiments, export) — not the trainer. Two impro
 targets: **(A) the routeForge router** (highest value; trains a small classifier/
 reranker/bandit or better rules from feedback — works on **redacted** data), and
 **(B) an underlying LLM** (SFT/DPO from corrected outputs — needs **`full`,
-residency-local** capture). See `docs/rlhf-readiness.md` §2/§5.
+residency-local** capture). See `docs/roadmap/rlhf-readiness.md` §2/§5.
 
 **Three gaps to close (grounded in code):**
 1. **Eligible/rejected snapshot never reaches Langfuse.** `app/routing/router.py`
@@ -1046,7 +1046,7 @@ residency-local** capture). See `docs/rlhf-readiness.md` §2/§5.
 **Also:** routing-specific score configs (`route_correct`, `preferred_model`,
 `failure_type`); dataset-export readiness (traces + corrected outputs → Langfuse
 datasets → external TRL prompt/chosen/rejected transform). Full field list, matrix,
-and pipeline progression in `docs/rlhf-readiness.md`. Own SDD task; plan first
+and pipeline progression in `docs/roadmap/rlhf-readiness.md`. Own SDD task; plan first
 (after/with B13–B15).
 
 ## B17 — FEATURE: group a client-driven workflow's requests under one parent row (correlation id)
