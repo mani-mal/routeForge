@@ -1,7 +1,7 @@
 """Feature 5, Task 2 -- persistent memory wired into the pipeline (direct
 path): READ after san_messages/before compress(), WRITE after step-9 verify()
 passes. Exercises the residency contract in
-docs/architecture/persistent-memory-residency-spec.md (R1-R7) end to end
+docs/architecture/specs/persistent-memory-residency-spec.md (R1-R7) end to end
 through a real `Pipeline`, mirroring tests/test_pii_detection_pipeline.py's
 fixture pattern (deterministic backend, seeded on-prem models) so these tests
 actually exercise app/pipeline.py and app/memory/__init__.py under test,

@@ -4,7 +4,7 @@
 > here simulate many client applications hammering the router so the dashboard
 > fills with realistic traffic — they are test fixtures, not real accounts. A
 > real application integrates via an admin-issued API token; see
-> [`docs/help/integrating-an-app.md`](../../docs/help/integrating-an-app.md).
+> [`docs/guides/integrating-an-app.md`](../../docs/guides/integrating-an-app.md).
 > The personas send the legacy seeded tokens (`acme-key`, `hospital-key`,
 > `demo-key`), which map to the seeded demo applications.
 

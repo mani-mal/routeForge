@@ -306,7 +306,8 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
     sanitized_prompt = resp.pop("sanitized_prompt", "")
     raw_completion = resp.pop("raw_completion", "")   # pre-verify; NEVER client-visible
     try:
-        # Eval-capture (docs/eval-logging-backlog.md): when capture_io is
+        # Eval-capture (docs/archive/eval-logging-backlog.md; current capture_io
+        # contract in docs/reference/per-app-config.md): when capture_io is
         # redacted|full, attach the request prompt + response completion to the
         # trace. `off` (demo default) passes empty strings and sets nothing.
         # The raw body prompt is redacted inside export_trace for `redacted`

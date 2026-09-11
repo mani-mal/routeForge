@@ -1,6 +1,6 @@
 """Substrate tests for persistent memory (Feature 5, Task 1). Mirrors the CCR
 test pattern (tests/test_ccr_store.py): a fake monotonic clock drives TTL.
-See docs/architecture/persistent-memory-residency-spec.md for the guarantees
+See docs/architecture/specs/persistent-memory-residency-spec.md for the guarantees
 these invariants enforce (R1-R7)."""
 import pytest
 

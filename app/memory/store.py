@@ -1,7 +1,7 @@
 """Persistent memory substrate (mem0-style, step-5 extension) -- CCR-class
 residency posture (CLAUDE.md rule 6): local, TTL-bounded, tenant-partitioned,
 sanitized-only, NEVER exported. See
-docs/architecture/persistent-memory-residency-spec.md for the binding
+docs/architecture/specs/persistent-memory-residency-spec.md for the binding
 contract (R1-R7).
 
 `DeterministicMemoryStore` mirrors `app.compression.ccr.CCRStore` exactly:

@@ -98,7 +98,7 @@ accumulator the demo depends on.
 
 The **effective** pool is the `ModelRegistry`'s merge of the static YAML pool
 (`config/routing.yaml`'s `model_pool` + `tiers` — cloud built-ins) with every currently
-**enabled** onboarded on-prem row (`docs/onboarding-models.md`). `routing.yaml` is
+**enabled** onboarded on-prem row (`docs/guides/onboarding-models.md`). `routing.yaml` is
 still the single source of truth for the cloud pool and the canonical tier list — do
 not restate it here or in code. There are exactly three tiers: `cheap | mid | frontier`
 (there is no `strong` tier). Read the pool through the registry and provider names from
@@ -138,7 +138,7 @@ routers exist in this system and conflating them causes confusion:
 
 There is no `inference_backend` axis and no separate `serving_paths` block. On-prem
 candidates come from the `ModelRegistry` — whatever the operator has onboarded and
-enabled (`docs/onboarding-models.md`); routeForge deploys none of what's behind an
+enabled (`docs/guides/onboarding-models.md`); routeForge deploys none of what's behind an
 onboarded endpoint, whether that's a bare vLLM server, a Dynamo-fronted TensorRT-LLM
 pool, or NIM. The managed-cloud path's availability is `providers.azure.enabled` /
 `providers.bedrock.enabled`, independent of on-prem onboarding state. See

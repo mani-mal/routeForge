@@ -314,7 +314,7 @@ class Pipeline:
         verify are NOT re-run. Returns None (never a response) when the
         re-verify fails, so the caller treats this as an ordinary MISS and
         falls through to the normal flow -- the cached text is never served
-        un-re-verified (see docs/architecture/semantic-cache-residency-spec.md
+        un-re-verified (see docs/architecture/specs/semantic-cache-residency-spec.md
         C4)."""
         text, vrec = verify(det, ctx, entry.response_text)
         if not vrec.passed:

@@ -217,7 +217,7 @@ def enforce(s: Settings) -> None:
     # Feature #6 semantic cache — same CCR-class guards (CLAUDE.md rule 6), plus
     # an enforced-TTL check CCR doesn't need to repeat (CCR's TTL has no
     # equivalent boot guard; this store's design gate calls it out explicitly —
-    # see docs/architecture/semantic-cache-residency-spec.md C5). Only
+    # see docs/architecture/specs/semantic-cache-residency-spec.md C5). Only
     # load-bearing when the cache is enabled — a drifted value on a disabled
     # cache does not fail the boot, mirroring the ccr guards above.
     sc = s.serving.semantic_cache

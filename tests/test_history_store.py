@@ -122,7 +122,8 @@ def test_fleet_onprem_violation_flags_only_real_breach():
     """The fleet warning must fire only on a genuine residency breach — an
     onprem_only request served off-prem — never on any detected entity. A
     private_cloud_ok tenant carrying low-risk entities and served on (private)
-    cloud is compliant and must NOT be flagged (docs/ui-open-items.md #6)."""
+    cloud is compliant and must NOT be flagged (docs/archive/ui-open-items.md #6;
+    tracked live in docs/backlog/bugs.md)."""
     from app.api.history import HistoryStore
     store = HistoryStore()
 

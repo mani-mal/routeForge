@@ -18,7 +18,7 @@ Services: `api` (FastAPI + NAT + Headroom library), `ui` (nginx-served React),
 `headroom` proxy sidecar when `context_optimization.mode: proxy`. There is no `vllm`
 service in compose any more — routeForge deploys nothing; `docker compose up` boots
 with an empty on-prem pool and no GPU/API keys required. On-prem models are onboarded
-against an externally-reachable endpoint after boot (`docs/onboarding-models.md`).
+against an externally-reachable endpoint after boot (`docs/guides/onboarding-models.md`).
 
 Healthchecks on every service; `depends_on: condition: service_healthy` so the
 API doesn't race Langfuse's migrations.
@@ -117,7 +117,7 @@ is also standing up a Dynamo-fronted on-prem endpoint in the same cluster (to on
 into routeForge afterward), don't write that deployment by hand. Use NVIDIA's verified
 skills (`dynamo-recipe-runner` for K8s recipes, `dynamo-interconnect-check` to validate
 NIXL/UCX/NCCL before blaming the app). Dynamo requires GPU nodes. See
-`inference-backends` skill and `docs/onboarding-models.md`.
+`inference-backends` skill and `docs/guides/onboarding-models.md`.
 
 ## Pre-demo checklist
 

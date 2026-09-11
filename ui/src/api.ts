@@ -251,7 +251,7 @@ export interface AdminPolicy {
   capture_io: string | null;   // null = inherit global capture_io; off|redacted|full
   // --- per-app protection posture + detector overrides (PolicyIn, app/api/admin_routes.py).
   // Every one of these is clamped server-side; the UI explains the clamps, it
-  // never invents its own. See docs/per-app-config.md.
+  // never invents its own. See docs/reference/per-app-config.md.
   pii_detection: string | null;   // null = inherit the deployment's live global detector; PII_MODES
   stream_mode: string | null;   // null = inherit (inbound stream rejected); STREAM_MODES
   policy_mode: string | null;   // null = inherit serving.policy.default_policy_mode; POLICY_MODES

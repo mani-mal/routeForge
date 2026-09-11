@@ -77,7 +77,8 @@ def _configure_nat_telemetry(config) -> None:
     any `@register_telemetry_exporter` config type, so it can't be selected via
     `config.general.telemetry.tracing`. Capturing full per-hop I/O for eval is a
     separate, deliberately-gated feature (redacted|full, residency-bounded) — see
-    docs/eval-logging-backlog.md — NOT this accidental raw firehose. So we leave
+    docs/archive/eval-logging-backlog.md (archived; current contract in
+    docs/reference/per-app-config.md) — NOT this accidental raw firehose. So we leave
     NAT's native exporter OFF and rely on our own redacted export path.
     """
     return None

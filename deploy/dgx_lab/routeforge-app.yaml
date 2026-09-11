@@ -147,7 +147,7 @@ items:
           # onboard (POST /admin/applications), set the in-cluster Langfuse host
           # plus an organization-scoped API key pair (Langfuse org settings ->
           # API keys). All three are required together; absent -> apps share the
-          # default project (still works). See docs/langfuse-per-app-projects.md.
+          # default project (still works). See docs/guides/langfuse-per-app-projects.md.
           # - {name: LANGFUSE_HOST, value: "http://langfuse-web:3000"}
           # - name: LANGFUSE_ORG_PUBLIC_KEY
           #   valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: LANGFUSE_ORG_PUBLIC_KEY}}

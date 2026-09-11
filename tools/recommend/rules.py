@@ -181,7 +181,7 @@ def onprem_capacity_pressure(agg: Aggregates, routing: RoutingCfg) -> Recommenda
     """A meaningful share of rejected/errored requests were flagged
     onprem_only — on-prem capacity looks like a binding constraint. This is
     an advisory recommendation, NOT a routing.yaml value: it points at
-    onboarding more on-prem capacity (docs/onboarding-models.md / Task 2's
+    onboarding more on-prem capacity (docs/guides/onboarding-models.md / Task 2's
     trigger hook), which is out of this job's scope by design (rule 4)."""
     non_ok = agg.n_rejected + agg.n_error
     if non_ok < MIN_NON_OK_FOR_ONPREM_RULE:
@@ -196,7 +196,7 @@ def onprem_capacity_pressure(agg: Aggregates, routing: RoutingCfg) -> Recommenda
             "A meaningful share of rejected/errored requests were flagged "
             "onprem_only, suggesting on-prem capacity is a binding "
             "constraint. This is not a routing.yaml value — onboard more "
-            "on-prem endpoints (see docs/onboarding-models.md)."),
+            "on-prem endpoints (see docs/guides/onboarding-models.md)."),
         evidence=(
             f"onprem_only_reject_share={agg.onprem_only_reject_share:.2f} "
             f"(> {ONPREM_REJECT_SHARE_TRIGGER}) over {non_ok} non-OK requests"),

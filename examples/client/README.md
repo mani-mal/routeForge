@@ -10,5 +10,5 @@ export ROUTEFORGE_TOKEN="rf_live_..."     # create one in Admin → Applications
 python chat.py "What is the capital of France?"
 ```
 
-See [`docs/help/integrating-an-app.md`](../../docs/help/integrating-an-app.md) for the
+See [`docs/guides/integrating-an-app.md`](../../docs/guides/integrating-an-app.md) for the
 full integration path (tokens, policy, quotas, errors, observability).

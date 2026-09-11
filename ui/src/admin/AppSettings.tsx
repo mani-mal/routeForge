@@ -572,7 +572,7 @@ function PolicySave({ busy, err, onSave, pendingReset, alsoSaving }: {
 }
 
 // --- the recipes, made executable ------------------------------------------
-// docs/help/choosing-app-settings.md §2 is the contract; this is that section
+// docs/guides/choosing-app-settings.md §2 is the contract; this is that section
 // with a button on it. The names and the two values each recipe sets are that
 // page's, verbatim — if they ever disagree, the doc is right and this is a bug.
 //

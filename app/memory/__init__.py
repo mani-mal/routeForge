@@ -2,7 +2,7 @@
 `DeterministicMemoryStore` (app/memory/store.py) into the serving pipeline.
 CCR-class residency posture (CLAUDE.md rule 6): local-only, TTL-bounded,
 tenant-partitioned, sanitized-only, never exported. See
-docs/architecture/persistent-memory-residency-spec.md for the binding
+docs/architecture/specs/persistent-memory-residency-spec.md for the binding
 guarantees (R1-R7) this module enforces.
 
 Mirrors app/compression/__init__.py's shape: a `_bypass` idiom plus two

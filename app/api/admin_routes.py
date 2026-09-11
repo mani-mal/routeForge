@@ -124,12 +124,12 @@ class PolicyIn(BaseModel):
     # Narrow the gate WITHOUT disabling it: entity types to detect-but-not-redact
     # for this app (false positives that mangle mandatory field values), and a
     # minimum Presidio confidence below which a match is dropped. US_SSN can
-    # never be denylisted (rules 3/8). See docs/per-app-config.md.
+    # never be denylisted (rules 3/8). See docs/reference/per-app-config.md.
     pii_entity_denylist: list[str] | None = None
     pii_score_threshold: float | None = None
     # Type-independent complement to pii_entity_denylist: regexes over the
     # detected entity's VALUE (fullmatch). US_SSN can never be exempted
-    # (rules 3/8). See docs/per-app-config.md.
+    # (rules 3/8). See docs/reference/per-app-config.md.
     pii_exempt_patterns: list[str] | None = None
     # --- the one escape from the merge -------------------------------------
     # This PUT is a MERGE: `null` means "leave the stored value alone", which
@@ -494,7 +494,7 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
             or settings.serving.observability.langfuse.capture_io)
         # NOTE: unlike eff_residency/eff_capture, this deliberately does NOT
         # fall through to the global default (`settings.serving.pii_detection`).
-        # Per `docs/per-app-config.md`, unset/None for this field means
+        # Per `docs/reference/per-app-config.md`, unset/None for this field means
         # "inherit the deployment's live global detector" and is NOT itself a
         # downgrade — only an actual per-app override (this write's body, or
         # a previously-stored one) is. Falling back to the global default

@@ -173,7 +173,7 @@ class CacheRecord(BaseModel):
     """Semantic-cache trace record (feature #6). COUNTS ONLY -- mirrors
     CompressionRecord. Never a query or response/content field: cache
     contents live only in-process and must never leave it (CLAUDE.md rule 6;
-    see docs/architecture/semantic-cache-residency-spec.md C6). If a content
+    see docs/architecture/specs/semantic-cache-residency-spec.md C6). If a content
     field is ever added here it MUST also be added to
     app/obs/otel.py::REDACT_KEYS."""
     step: str = "cache"

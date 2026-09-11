@@ -5,7 +5,7 @@
 # values here — the startup config lint (see CLAUDE.md §Config lint) fails the boot
 # if the same concern is owned by two files.
 
-# On-prem models are onboarded at runtime (see docs/onboarding-models.md);
+# On-prem models are onboarded at runtime (see docs/guides/onboarding-models.md);
 # routeForge deploys nothing. There is no `inference_backend` axis any more —
 # every provider (onprem/azure/bedrock alike) egresses through the single
 # LiteLLM SDK path, and on-prem endpoints come from the ModelRegistry (onboarded
@@ -36,7 +36,7 @@ context_optimization:
 # CCR-class residency posture (rule 6): local-only, TTL-bounded,
 # tenant-partitioned, sanitized-only, NEVER exported. Substrate only here —
 # default OFF, no pipeline wiring yet (Task 2 wires read/write in). See
-# docs/architecture/persistent-memory-residency-spec.md. Env override: SP_MEMORY.
+# docs/architecture/specs/persistent-memory-residency-spec.md. Env override: SP_MEMORY.
 memory:
   enabled: false                 # default OFF (store wired into pipeline; opt-in)
   residency: local_only          # NEVER external store — see hard rule 6
@@ -51,7 +51,7 @@ memory:
 # Feature #6 — semantic cache (design-gate substrate, Task 1). CCR-class: local,
 # TTL-enforced, never exported, tenant+residency-partitioned so an onprem_only
 # request can never be served a cloud-produced cached response (see
-# docs/architecture/semantic-cache-residency-spec.md). Default OFF: with
+# docs/architecture/specs/semantic-cache-residency-spec.md). Default OFF: with
 # enabled: false nothing in the pipeline constructs or touches a cache instance
 # at all — Task 2 wires the check/store calls into the pipeline behind this flag.
 # Env override: SP_SEMANTIC_CACHE (see loader), mirrors SP_CONTEXT_OPT above.
@@ -91,7 +91,8 @@ observability:
     #   full     — attach RAW prompt/completion for eval; the config lint REJECTS
     #              this whenever any tenant is onprem_only (residency beats eval —
     #              rule 6), and it must target a residency-local Langfuse only.
-    # Env override: SP_CAPTURE_IO (see loader). See docs/eval-logging-backlog.md.
+    # Env override: SP_CAPTURE_IO (see loader). See docs/archive/eval-logging-backlog.md
+    # (archived; current contract in docs/reference/per-app-config.md).
     # Quoted: bare `off` is a YAML boolean, but this is a string enum.
     capture_io: "off"   # off | redacted | full
 

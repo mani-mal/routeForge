@@ -39,7 +39,7 @@ Then, because the on-prem pool **boots empty**:
    `changeme` — change these for anything real).
 2. **Onboard a model**: Infrastructure → Onboard, or `POST /admin/infra/models`, pointing
    at your own OpenAI-compatible endpoint. RouteForge probes it and only enables it if it's
-   reachable. See [`docs/onboarding-models.md`](docs/onboarding-models.md).
+   reachable. See [`docs/guides/onboarding-models.md`](docs/guides/onboarding-models.md).
 3. **Create an application** and issue its `rf_live_…` token, then call the OpenAI-compatible
    API:
 
@@ -68,8 +68,10 @@ onboarding mistake.
 | **Admin session cookie** `rf_admin_session` | A human admin (dashboard) | `/admin/*` management, `/api/*` console (history, stats, live decision SSE) |
 
 An app token **cannot** call `/admin/*` or `/api/*`, and an admin cookie is **not** used
-for inference. See [`docs/dev-references/`](docs/dev-references/) for the full admin +
-developer onboarding path and the exact HTTP contract.
+for inference. See [`docs/guides/admin-setup.md`](docs/guides/admin-setup.md) and
+[`docs/guides/agentic-app-guide.md`](docs/guides/agentic-app-guide.md) for the full admin +
+developer onboarding path, and [`docs/reference/api-reference.md`](docs/reference/api-reference.md)
+for the exact HTTP contract.
 
 ## Deployment
 

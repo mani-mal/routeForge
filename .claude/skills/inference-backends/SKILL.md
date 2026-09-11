@@ -9,7 +9,7 @@ routeForge is a pure router: it points at externally-deployed OpenAI-compatible
 endpoints and deploys, scales, or load-balances nothing itself. There is no
 `inference_backend` config axis any more — on-prem models are onboarded at runtime
 (admin UI or `POST /admin/infra/models`), not selected by a startup config value. See
-`docs/onboarding-models.md` for the onboarding flow and field reference.
+`docs/guides/onboarding-models.md` for the onboarding flow and field reference.
 
 This skill covers the *other* side of that boundary: what an operator stands up on
 their own infrastructure — vLLM, NVIDIA Dynamo + TensorRT-LLM, NIM, or any other
@@ -121,7 +121,7 @@ server behind the endpoint determines them.
 
 vLLM exposes an OpenAI-compatible server. Onboard it by pointing `endpoint` at that
 server and `--served-model-name <slug>` at the `slug` you onboard with — see
-`docs/onboarding-models.md`. `LiteLLMBackend` addresses any onboarded on-prem endpoint
+`docs/guides/onboarding-models.md`. `LiteLLMBackend` addresses any onboarded on-prem endpoint
 through LiteLLM's `openai/` prefix; there is no separate `AsyncOpenAI`-based adapter.
 
 ## dynamo
@@ -201,7 +201,7 @@ currently `enabled`, `ModelRegistry.has_healthy_onprem()` is `false`, which drop
 `onprem` from `allowed_providers` in `app/policy/context.py`. An `onprem_only`
 request's `allowed_providers` is then empty and the router rejects it downstream.
 Never silently route it to cloud — that inverts the entire privacy claim. See
-`docs/onboarding-models.md` §(e) and CLAUDE.md's "No on-prem model onboarded ⇒ derived
+`docs/guides/onboarding-models.md` §(e) and CLAUDE.md's "No on-prem model onboarded ⇒ derived
 reject, not a backend value" note. Test this explicitly.
 
 ## No boot-time backend health check
@@ -209,7 +209,7 @@ reject, not a backend value" note. Test this explicitly.
 There is no `inference_backend` to validate at startup and no `allow_backend_fallback`
 — both are gone. `LiteLLMBackend.health()` always reports `ok=True` with no network
 probe (`app/gateway/backends/factory.py::resolve_backend`); per-model reachability is
-probed **at onboard time** instead (`probe_endpoint`, `docs/onboarding-models.md`
+probed **at onboard time** instead (`probe_endpoint`, `docs/guides/onboarding-models.md`
 §(c)), and re-probed on every edit. An unreachable onboarded endpoint is saved
 disabled, never a boot failure — the server keeps running with whatever else is
 onboarded and enabled.
