@@ -127,23 +127,47 @@ but that safety is incidental to how the fall-through happens to interact with t
 exporter, not a deliberate, validated default, and it is silent: the operator gets no
 signal that their config value was nonsense. Every sibling field would have told them.
 
-## B28 — Purged `inference_backend` axis survives in the HPE Helm values <!-- purged-ok -->
+## B28 — Purged `inference_backend` axis survives in the HPE Helm values (values, templates, and a stale wiring claim) <!-- purged-ok -->
 
-**Severity:** low (cosmetic/documentation risk only — the code does not read these keys)
-**Found:** 2026-09-10, docs-reclassification Task 5. **Open, deliberately not fixed here.**
+**Severity:** low (cosmetic/documentation risk only — no application code reads these keys)
+**Found:** 2026-09-10, docs-reclassification Task 5; extended 2026-09-10 (fix round 1 —
+review caught two more stale artifacts from the same axis, listed below as 3 and 4).
+**Open, deliberately not fixed here.**
 
-`deploy/hpe/routeforge/values.yaml:114` still declares
-`inferenceBackend: mock        # mock | vllm | dynamo | none` and `:117-118` a
-`vllm: {baseUrl: http://vllm:8000/v1}` block. Both belong to the `inference_backend` <!-- purged-ok -->
-axis the 2026-08-03 pure-router pivot removed (CLAUDE.md: "There is no `inference_backend` <!-- purged-ok -->
-axis and no separate `serving_paths` block"). Confirmed the app no longer reads it: there <!-- purged-ok -->
-is no `inference_backend` / `INFERENCE_BACKEND` reference anywhere under `app/config/` <!-- purged-ok -->
-or `app/main.py` — the Pydantic settings schema has no such field. The Helm templates
-still render the dead value into a ConfigMap and an env var
-(`deploy/hpe/routeforge/templates/serving-config.yaml:17`, `templates/api.yaml:51`,
-`templates/NOTES.txt:6,30-31`), but nothing on the Python side consumes it, so it is
-harmless — just misleading to an operator reading the values file who would reasonably
-assume it still selects something.
+Four stale artifacts, all from the `inference_backend` axis the 2026-08-03 pure-router <!-- purged-ok -->
+pivot removed (CLAUDE.md: "There is no `inference_backend` axis and no separate <!-- purged-ok -->
+`serving_paths` block"): <!-- purged-ok -->
+
+1. `deploy/hpe/routeforge/values.yaml:114` — `inferenceBackend: mock # mock | vllm | dynamo | none`.
+2. `deploy/hpe/routeforge/values.yaml:117-118` — `vllm: {baseUrl: http://vllm:8000/v1}`.
+3. `deploy/hpe/routeforge/values.yaml:120-123` — the adjacent `dynamo:` block
+   (`endpoint`, `routerMode: kv`, `timeoutS: 60`), equally dead, previously uncited here.
+4. `deploy/hpe/routeforge/templates/api.yaml:47-49` — worse than dead: the comment
+   directly above the container's env vars claims `SP_INFERENCE_BACKEND` (line 50) is <!-- purged-ok -->
+   "read from env by `app/config/loader.py`, and env WINS over the mounted
+   serving.yaml." Traced `app/config/loader.py` in full: `SP_INFERENCE_BACKEND` is not <!-- purged-ok -->
+   read there, or anywhere in the codebase. The chart doesn't just carry a dead key —
+   it carries an operator-facing comment actively asserting the dead key is wired up.
+   (The "env wins" claim is true of `SP_PII_DETECTION`, the sibling var in the same
+   block — just not of `SP_INFERENCE_BACKEND`.) <!-- purged-ok -->
+
+**Confirmed no application code reads any of them** — this claim is scoped to actual
+reads, not mentions: `\grep -rl "inference_backend\|INFERENCE_BACKEND" app/` returns <!-- purged-ok -->
+exactly two files, and both are comments/docstrings *documenting the removal*, not
+reads — `app/policy/context.py:62` ("... never silently routed to cloud (CLAUDE.md <!-- purged-ok -->
+backend rule; replaces the old `inference_backend == "none"` drop)") and <!-- purged-ok -->
+`app/gateway/backends/README.md:4` ("There is no `inference_backend` axis..."). <!-- purged-ok -->
+`\grep -rl dynamo app/**/*.py` similarly turns up only a docstring in
+`litellm_backend.py` naming what it replaced. No file under `app/` treats any of these
+keys as live config — the Pydantic settings schema has no `inference_backend` field. <!-- purged-ok -->
+
+The Helm templates still render all four into a ConfigMap and container env
+(`deploy/hpe/routeforge/templates/serving-config.yaml:17-27`, `templates/api.yaml:50-51`,
+`templates/NOTES.txt:6,30-31`), but nothing on the Python side consumes it. Harmless
+today, but misleading on two counts: an operator reading `values.yaml` would reasonably
+assume `inferenceBackend`/`vllm`/`dynamo` still select something, and one reading
+`api.yaml`'s comment would be told outright (incorrectly) that `SP_INFERENCE_BACKEND` is <!-- purged-ok -->
+consumed.
 
 **Deliberately not fixed in this task.** Editing a Helm values file (and the templates
 that render it) is deployment-affecting and needs its own change with its own testing —
