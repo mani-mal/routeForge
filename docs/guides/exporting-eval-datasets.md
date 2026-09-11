@@ -191,5 +191,5 @@ dataset built from a shared-project export is redacted-only by construction: it 
 for Target A (router) training but cannot be used for Target B (LLM fine-tuning), which
 needs the real text. If you need a `{prompt, chosen, rejected}` dataset with real text,
 confirm with the routeForge admin that the source app is provisioned with `capture_io:
-full` and its own residency-local Langfuse project (`docs/rlhf-readiness.md` §5)
+full` and its own residency-local Langfuse project (`docs/roadmap/rlhf-readiness.md` §5)
 before you export.
