@@ -24,8 +24,8 @@ RouteForge is a self-hosted request router and policy gateway that sits in front
 your model endpoints. For every call it filters out any endpoint that residency or
 tenant policy rules out, picks a cost tier from the request's length, risk
 classification, and any escalation from a low-confidence prior answer, then scores the
-remaining candidates in that tier on cost, quality, latency, and capacity — and records
-why in a full decision trace. It connects to endpoints you deploy and operate yourself
+remaining candidates in that tier on cost, quality, and latency — and records why in a
+full decision trace. It connects to endpoints you deploy and operate yourself
 (vLLM, TensorRT-LLM, NVIDIA Dynamo, or any other OpenAI-compatible server); it never
 runs, schedules, or tunes the inference stack behind them. Integrated Langfuse
 observability captures every decision — model chosen, alternatives rejected and why,
@@ -43,7 +43,7 @@ GPU to place a worker on) that belong to the serving stack the operator runs.
 
 | Layer | Who decides it | What actually happens |
 |---|---|---|
-| Routing & governance | **RouteForge** | Filters candidates by residency and per-app policy, picks a tier from `max(length-based complexity, risk floor, escalation floor)` clamped to the best residency-permitted tier, then scores the surviving candidates on cost, quality, latency, and capacity. Every decision is captured in a trace, chosen and rejected candidates alike. |
+| Routing & governance | **RouteForge** | Filters candidates by residency and per-app policy, picks a tier from `max(length-based complexity, risk floor, escalation floor)` clamped to the best residency-permitted tier, then scores the surviving candidates on cost, quality, and latency (a `capacity` scoring weight also exists in config but is not yet fed a live signal — see "Core message" below before quoting it). Every decision is captured in a trace, chosen and rejected candidates alike. |
 | Model selection within a tier | **RouteForge** | Chooses *which onboarded model* answers, from the models the operator has registered in that tier — on cost, a quality score (published at onboarding or a tier-default), and latency. |
 | Quantization, batching, KV-cache strategy | **The operator's serving stack** | Fixed by whatever the operator deployed behind the endpoint they onboarded (vLLM / TensorRT-LLM / NVIDIA Dynamo / any OpenAI-compatible server). RouteForge has no quantization axis and no view into batching or cache internals — see `docs/architecture/inference-layer-boundary.md`. |
 | GPU pool, region, cluster placement | **The operator's platform** | Kubernetes / Dynamo's job, not RouteForge's. RouteForge doesn't observe GPU availability and doesn't route to a region or cluster. |
