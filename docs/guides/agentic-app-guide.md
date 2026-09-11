@@ -64,7 +64,7 @@ You do not have to hand-roll tool parsing: routeForge accepts `tools` /
 `tool_choice` on the request and returns a standard `tool_calls` assistant turn
 with `finish_reason: "tool_calls"`. Your framework's normal tool loop works
 unchanged — the wire format and the replay shape are in
-[`api-reference.md`](./api-reference.md#tool-calling). Note that a request
+[`api-reference.md`](../reference/api-reference.md#tool-calling). Note that a request
 carrying `tools` is always served as a single completion (it never enters
 routeForge's own agent runtime) and bypasses step-5 compression.
 
@@ -96,7 +96,7 @@ Otherwise it's a single direct call. (An optional LLM task classifier exists
 `routing.prompt_opt.enabled: true` plus a pinned `task_mode_classifier` prompt
 artifact. With it off, the two rules above are the whole decision. A request that
 carries `tools` never takes this path at all — see
-[`api-reference.md`](./api-reference.md#tool-calling).)
+[`api-reference.md`](../reference/api-reference.md#tool-calling).)
 
 ```bash
 curl http://<host>:<port>/v1/chat/completions \
@@ -190,5 +190,5 @@ the privacy gate; `policy.onprem_only` tells you it was pinned on-prem.
 - **Feed tool outputs back through routeForge**, not around it, so the egress gate
   sees them.
 
-See [`api-reference.md`](./api-reference.md) for the exact schemas and error
+See [`api-reference.md`](../reference/api-reference.md) for the exact schemas and error
 table, and [`admin-setup.md`](./admin-setup.md) for what your admin controls.

@@ -92,7 +92,7 @@ with post-gate sanitized content.** If residency can't be guaranteed for a tenan
 disabled for them, exactly like CCR. Memory retrieval re-enters gate → compression → router like
 any other call. Design its residency model in its own spec before build (it is the newest, least
 specified surface). ✅ **SHIPPED** — that spec now exists
-([`persistent-memory-residency-spec.md`](./persistent-memory-residency-spec.md)) and the feature
+([`persistent-memory-residency-spec.md`](../specs/persistent-memory-residency-spec.md)) and the feature
 landed (`app/memory/`).
 
 ### D. Prompt optimization — stanfordnlp/dspy

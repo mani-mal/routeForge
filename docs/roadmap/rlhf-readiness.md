@@ -78,7 +78,7 @@ and dataset-export substrate this doc called for is real, not just designed:
   blocking gap for Target B.
 - **F4 — dataset-export readiness**: the trace/score → dataset-column mapping and the
   `{prompt, chosen, rejected}` transform (with a worked example) are now written up in
-  [`docs/help/exporting-eval-datasets.md`](help/exporting-eval-datasets.md).
+  [`docs/guides/exporting-eval-datasets.md`](../guides/exporting-eval-datasets.md).
 - **Session grouping**: multi-call agentic trajectories can be tied together via the
   `x-routeforge-session` header → `langfuse.session.id`, documented in
   `docs/help/integrating-an-app.md` §7.
@@ -222,7 +222,7 @@ Left as originally scoped below for the record.
   corrected outputs into Langfuse **datasets**, and the export → TRL prompt/chosen/
   rejected transform (the transform lives *outside* routeForge).
   **✅ Shipped F1 Phase D** — see
-  [`docs/help/exporting-eval-datasets.md`](help/exporting-eval-datasets.md) for the
+  [`docs/guides/exporting-eval-datasets.md`](../guides/exporting-eval-datasets.md) for the
   field mapping and worked transform.
 - **F5 — Routing-specific score configs**: `route_correct` (bool), `preferred_model`
   (categorical), `failure_type` (categorical), plus overall thumbs — standardized so

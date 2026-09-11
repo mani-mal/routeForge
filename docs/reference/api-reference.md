@@ -31,7 +31,7 @@ Body:
 Unknown fields are **accepted, not rejected** (the model allows extras). Two
 demo-only hint fields are read if present: `mock_multistep` (force the agent
 path) and `mock_confidence` / `mock_fail` (mock-backend generation hints). See
-[`agentic-app-guide.md`](./agentic-app-guide.md).
+[`agentic-app-guide.md`](../guides/agentic-app-guide.md).
 
 > **`model: "auto"` lets the router choose; any other value pins routing to that
 > exact slug.** With `"auto"`, routeForge picks the tier from request complexity
@@ -104,10 +104,10 @@ Notes:
   never the values. Raw PII never appears in the response metadata. `sensitivity` is one
   of the four canonical values (`public | internal | confidential | restricted`), never a
   risk-class value like `"low"`. `app_policy_version` and `policy_mode` are always present
-  — see [`../per-app-config.md`](../per-app-config.md) for what each means.
+  — see [`per-app-config.md`](./per-app-config.md) for what each means.
 - `session_id` echoes the sanitized `X-RouteForge-Session` request header (`null` if you
   didn't send one or it failed validation) — an opaque workflow-run correlation label, never
-  a policy input. See [`agentic-app-guide.md`](./agentic-app-guide.md).
+  a policy input. See [`agentic-app-guide.md`](../guides/agentic-app-guide.md).
 - `display` is additive metadata for the admin console's own drilldown (mode-appropriate
   redacted/raw copies of the prompt and completion, per the app's `capture_io`) — **not** a
   telemetry channel and not meant for API clients to consume; ignore it.
@@ -185,7 +185,7 @@ Three things specific to routeForge:
 - **Your loop, not routeForge's.** A request carrying `tools` is served as a
   single completion; it is never handed to routeForge's own internal agent
   runtime. The client drives the loop (this is Pattern A in
-  [`agentic-app-guide.md`](./agentic-app-guide.md)).
+  [`agentic-app-guide.md`](../guides/agentic-app-guide.md)).
 - **Every turn is a fresh, independently-gated request, redacted per message.** A
   tool conversation keeps its roles and `tool_calls` / `tool_call_id` structure
   intact and the gate redacts **each message's text individually**, rather than
@@ -204,7 +204,7 @@ Three things specific to routeForge:
 Inbound streaming is a **per-app capability**, not a flat rejection. Your admin
 sets your `AppPolicy.stream_mode` — one of `off | verified_then_stream |
 stream_unverified | incremental_verify` (see
-[`../per-app-config.md`](../per-app-config.md) for what each mode guarantees).
+[`per-app-config.md`](./per-app-config.md) for what each mode guarantees).
 
 If your app has no `stream_mode` set (or it's `off`) and the deployment rejects
 inbound streaming (`server.reject_stream_requests`), sending `"stream": true`
@@ -275,7 +275,7 @@ missing project is not an error.
 No auth. A Prometheus scrape surface (in-process exporter; `503 metrics
 unavailable: install the observability extra` when the `observability` extra
 isn't installed). Bounded labels only — no tenant or PII. See
-[`../routing-observability.md`](../routing-observability.md).
+[`routing-observability.md`](./routing-observability.md).
 
 ---
 
@@ -337,4 +337,4 @@ works normally; reach the routeForge extras via `resp.model_dump()` (or a raw
 `httpx`/`requests` call if you prefer the plain dict).
 
 Next: if you're building an agent, read
-[`agentic-app-guide.md`](./agentic-app-guide.md).
+[`agentic-app-guide.md`](../guides/agentic-app-guide.md).

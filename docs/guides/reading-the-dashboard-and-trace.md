@@ -229,7 +229,7 @@ label. (The top-band **Serving providers** chip strip is a separate, always-on 3
 display — see §4 — and still shows a kill-switched provider as **"provider off"**, not
 "excluded by policy" or "provider disabled".) Narrate it simply as "cloud providers are
 turned off on this lab, so everything stays on-prem." (Was **B11** summary card / **B10**
-router-pool fix in [`../bugs-backlog.md`](../bugs-backlog.md).)
+router-pool fix in [`../backlog/bugs.md`](../backlog/bugs.md).)
 
 **(b) "routing saved" went negative per-request — fixed (B12).** The old capture showed
 `routing saved $-0.0082` on this request while the Overview showed a positive aggregate.
@@ -240,7 +240,7 @@ though a real frontier model would generate those same output tokens and cost *m
 **Now:** the baseline prices the actual **input + output** token basis, so `routing_saved`
 is **positive** for a cheaper-tier request and zero for a same-tier one — the flagship "we
 save money by routing" number reads correctly on the screen meant to prove it. (Was **B12**
-in [`../bugs-backlog.md`](../bugs-backlog.md).)
+in [`../backlog/bugs.md`](../backlog/bugs.md).)
 
 ---
 
@@ -281,7 +281,7 @@ that used to leak them has already been closed.** Details, because it's a fair w
   the trace view the demo relies on.
 - **Full raw I/O capture is a deliberate, gated opt-in** (`capture_io: off | redacted |
   full`, default effectively off/redacted) intended only for a residency-local eval
-  store — never on by default. See [`../eval-logging-backlog.md`](../eval-logging-backlog.md)
+  store — never on by default. See [`../archive/eval-logging-backlog.md`](../archive/eval-logging-backlog.md)
   for the full design and guardrails.
 
 So: for this demo, Langfuse is **already** free of raw prompts; the redacted trace is

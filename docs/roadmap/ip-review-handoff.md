@@ -76,8 +76,8 @@ the gate fails closed (rule 5).
 |---|---|---|
 | 1 | [`../../CLAUDE.md`](../../CLAUDE.md) | The constitution: the nine rules and the two scope boundaries. §2 above is a summary, not a substitute. |
 | 2 | [`ip-and-research-opportunities.md`](./ip-and-research-opportunities.md) | The existing ranked menu and the foreclosed prior art. Your baseline. |
-| 3 | [`../getting-started.md`](../getting-started.md) | What the product is and every policy option, concept-level. Fastest route to competence. |
-| 4 | [`routeforge-logical-and-request-response-architecture.md`](./routeforge-logical-and-request-response-architecture.md) then [`routeforge-sample-request-flows.md`](./routeforge-sample-request-flows.md) | The ten Serving-Plane steps, then three worked request traces through them. |
+| 3 | [`../guides/getting-started.md`](../guides/getting-started.md) | What the product is and every policy option, concept-level. Fastest route to competence. |
+| 4 | [`logical-and-request-flow.md`](../architecture/logical-and-request-flow.md) then [`sample-request-flows.md`](../architecture/sample-request-flows.md) | The ten Serving-Plane steps, then three worked request traces through them. |
 
 ### Tier 1 — the mechanisms the IP claims rest on
 
@@ -86,29 +86,29 @@ implementation cost without the mechanism:
 
 | Document | Claims it underpins |
 |---|---|
-| [`../per-app-config.md`](../per-app-config.md) | IP-2 (redaction-cost accounting), IP-6 (unified policy context). The exemption levers and every write-time clamp. |
-| [`routing-tier-selection.md`](./routing-tier-selection.md) | IP-2, R2. Tier is `min(1.0, tokens_after_compression / 2000)` — *literally a function of token count*, which is why redaction demonstrably moves price. |
-| [`../routing-observability.md`](../routing-observability.md) | IP-4 (decision ledger), IP-7 (TOCTOU revocation), IP-11 (raise-only signals). `sp.candidates`, `routing_policy_version`, `app_policy_version`. |
-| [`semantic-cache-residency-spec.md`](./semantic-cache-residency-spec.md) | IP-10, R6. The partition key and dual write/read enforcement. |
-| [`persistent-memory-residency-spec.md`](./persistent-memory-residency-spec.md) | CCR-class residency rules (rule 6). |
-| [`../onboarding-models.md`](../onboarding-models.md) | IP-8 (cold-start routing), IP-9 (derived rejection). The pool boots **empty**; onboarding is probe-gated. |
-| [`inference-layer-boundary.md`](./inference-layer-boundary.md) | Keeps proposals inside rule 4. Answers "does RouteForge do llm-d / DRA / Gateway API / prefill-decode?" |
+| [`../reference/per-app-config.md`](../reference/per-app-config.md) | IP-2 (redaction-cost accounting), IP-6 (unified policy context). The exemption levers and every write-time clamp. |
+| [`routing-tier-selection.md`](../architecture/routing-tier-selection.md) | IP-2, R2. Tier is `min(1.0, tokens_after_compression / 2000)` — *literally a function of token count*, which is why redaction demonstrably moves price. |
+| [`../reference/routing-observability.md`](../reference/routing-observability.md) | IP-4 (decision ledger), IP-7 (TOCTOU revocation), IP-11 (raise-only signals). `sp.candidates`, `routing_policy_version`, `app_policy_version`. |
+| [`semantic-cache-residency-spec.md`](../architecture/specs/semantic-cache-residency-spec.md) | IP-10, R6. The partition key and dual write/read enforcement. |
+| [`persistent-memory-residency-spec.md`](../architecture/specs/persistent-memory-residency-spec.md) | CCR-class residency rules (rule 6). |
+| [`../guides/onboarding-models.md`](../guides/onboarding-models.md) | IP-8 (cold-start routing), IP-9 (derived rejection). The pool boots **empty**; onboarding is probe-gated. |
+| [`inference-layer-boundary.md`](../architecture/decisions/inference-layer-boundary.md) | Keeps proposals inside rule 4. Answers "does RouteForge do llm-d / DRA / Gateway API / prefill-decode?" |
 
 ### Tier 2 — scans already run; read so you don't repeat them
 
 | Document | What it already settles |
 |---|---|
-| [`external-router-feature-analysis.md`](./external-router-feature-analysis.md) | Plano, Devin Fusion, multi-model report. Includes the decision that a small LLM is an *advisory signal, never an authority*. |
-| [`caching-cost-feature-fit.md`](./caching-cost-feature-fit.md) | The four caches (KV/prefix/prompt/semantic); KV is delegated to Dynamo, confirmed. Contains the F1 cached-token cost gap that IP-5 and R5 depend on. |
-| [`ai-governance-feature-fit.md`](./ai-governance-feature-fit.md) | The governance backlog (G2′ scoped per-tool identity, G3′ immutable audit, G4′ per-run identity) that IP-4 and IP-6 reference directly. |
-| [`nemo-switchyard-comparison.md`](./nemo-switchyard-comparison.md) + [`switchyard-features-to-incorporate.md`](./switchyard-features-to-incorporate.md) | NVIDIA overlap: what to borrow, what to refuse on scope grounds, and the deferred replace-decision. |
-| [`self-improving-agent-feature-fit.md`](./self-improving-agent-feature-fit.md) | The 2026-08-17 control-plane-vs-compute scope decision that set rule 4's current wording. |
-| [`compression-in-scope.md`](./compression-in-scope.md) | Why step-5 compression stays in RouteForge while RLHF moved out — the reasoning any scope-boundary proposal must engage with. |
+| [`external-router-feature-analysis.md`](../comparisons/external-router-feature-analysis.md) | Plano, Devin Fusion, multi-model report. Includes the decision that a small LLM is an *advisory signal, never an authority*. |
+| [`caching-cost-feature-fit.md`](../comparisons/caching-cost-feature-fit.md) | The four caches (KV/prefix/prompt/semantic); KV is delegated to Dynamo, confirmed. Contains the F1 cached-token cost gap that IP-5 and R5 depend on. |
+| [`ai-governance-feature-fit.md`](../comparisons/ai-governance-feature-fit.md) | The governance backlog (G2′ scoped per-tool identity, G3′ immutable audit, G4′ per-run identity) that IP-4 and IP-6 reference directly. |
+| [`nemo-switchyard-comparison.md`](../comparisons/nemo-switchyard-comparison.md) + [`switchyard-features-to-incorporate.md`](../comparisons/switchyard-features-to-incorporate.md) | NVIDIA overlap: what to borrow, what to refuse on scope grounds, and the deferred replace-decision. |
+| [`self-improving-agent-feature-fit.md`](../architecture/decisions/self-improving-agent-feature-fit.md) | The 2026-08-17 control-plane-vs-compute scope decision that set rule 4's current wording. |
+| [`compression-in-scope.md`](../architecture/decisions/compression-in-scope.md) | Why step-5 compression stays in RouteForge while RLHF moved out — the reasoning any scope-boundary proposal must engage with. |
 
 ### Tier 3 — reality check
 
-- [`../bugs-backlog.md`](../bugs-backlog.md) — current defects, including **B24 (open)**.
-- [`../rlhf-readiness.md`](../rlhf-readiness.md), [`../eval-logging-backlog.md`](../eval-logging-backlog.md) — the capture substrate feeding Target A/B datasets.
+- [`../backlog/bugs.md`](../backlog/bugs.md) — current defects, including **B24 (open)**.
+- [`rlhf-readiness.md`](./rlhf-readiness.md), [`../archive/eval-logging-backlog.md`](../archive/eval-logging-backlog.md) — the capture substrate feeding Target A/B datasets.
 
 **Do not skip this tier.** IP §4 lists three correctness items that must land *regardless
 of any IP decision*, because every number a filing or paper would cite depends on them:
@@ -131,7 +131,7 @@ the four `config/*.yaml`.
 
 - `docs/superpowers/plans/` and `docs/superpowers/specs/` — ~60 dated build records. Pure
   noise for this task.
-- [`../architecture-review.md`](../architecture-review.md) — carries its own
+- [`../archive/2026-07-25-architecture-review.md`](../archive/2026-07-25-architecture-review.md) — carries its own
   historical-snapshot banner; predates two pivots.
 - `docs/help/`, `docs/dev-references/`, `deploy/`, `ui/`, `docs/marketing/` — operator,
   developer and packaging surfaces. None bears on IP.
@@ -207,8 +207,8 @@ Why it plausibly belongs in Tier 1: the document's entire thesis is that eligibi
 never touching placement. Nothing in the §1 prior-art table addresses the separation of
 these axes. Assess it; do not rediscover it by accident.
 
-Start from [`../per-app-config.md`](../per-app-config.md) (`policy_mode` section) and
-[`../help/choosing-app-settings.md`](../help/choosing-app-settings.md) for the operator
+Start from [`../reference/per-app-config.md`](../reference/per-app-config.md) (`policy_mode` section) and
+[`../guides/choosing-app-settings.md`](../guides/choosing-app-settings.md) for the operator
 decision model and the real customer case that forced it.
 
 ---

@@ -12,7 +12,7 @@ All ✅/🟡/❌ statuses are confirmed against code (refs inline).
 > **Boundary companion (2026-09-06):** for *"can a customer just use a prompt-caching
 > library in their own application, and does that affect RouteForge?"* — and the
 > app-vs-RouteForge placement test behind it — see
-> [`app-vs-routeforge-boundary.md`](./app-vs-routeforge-boundary.md). It splits
+> [`app-vs-routeforge-boundary.md`](../architecture/decisions/app-vs-routeforge-boundary.md). It splits
 > "prompt caching" into **Family A** (caches above RouteForge: invisible, fine) and
 > **Family B** (provider-side `cache_control` / `prompt_cache_key` markers: they pass
 > *through* RouteForge and are currently stripped — §2c below), and adds the
@@ -124,7 +124,7 @@ composes the null detector (`app/pipeline.py:190-214`), so the payload is unmodi
 Under `enforced`, redaction rewrites message text whenever entities are found and Headroom
 rewrites it again — so an app's cache hit rate becomes **data-dependent and silently
 variable** rather than cleanly absent. F3 must say which postures it can honestly promise a
-hit under. See [`app-vs-routeforge-boundary.md`](./app-vs-routeforge-boundary.md) §6c.
+hit under. See [`app-vs-routeforge-boundary.md`](../architecture/decisions/app-vs-routeforge-boundary.md) §6c.
 
 ### 2d. No downstream KV hint ❌
 

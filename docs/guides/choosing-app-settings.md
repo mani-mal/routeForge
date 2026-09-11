@@ -3,7 +3,7 @@
 **The question this page answers: "I have a new customer app — what should I set?"**
 
 The [FAQ](./faq.md) answers specific questions and
-[`per-app-config.md`](../per-app-config.md) is a per-field reference. Neither is what you
+[`per-app-config.md`](../reference/per-app-config.md) is a per-field reference. Neither is what you
 want in front of you while onboarding. This page is: three questions, three recipes, and
 the handful of things that have actually cost us time.
 
@@ -313,7 +313,7 @@ posture, and are not subject to the `allow_app_pii_downgrade` ceiling:
 | `pii_score_threshold` | step 3 Protection → Detection & narrowing → **min confidence** | Low-confidence recognizers are the noise; many false positives score around 0.6 |
 | `pii_exempt_patterns` | step 3 Protection → Detection & narrowing → **exempt values** | The same *value shape* keeps landing under a different type from one request to the next |
 
-Full field reference: [`per-app-config.md`](../per-app-config.md).
+Full field reference: [`per-app-config.md`](../reference/per-app-config.md).
 
 Two intermediate stops between "narrow lever" and Recipe B, before you conclude the whole
 posture has to go:
@@ -472,7 +472,7 @@ RouteForge has no migration tool. `create_all` only creates *missing tables*; it
 `ALTER`s an existing one. On a database that predates a field's release, the first admin
 write touching it fails with a raw database error rather than a clean 422 — **including
 from the console**, which writes through the same endpoint. Run the `ALTER`s listed in
-[`per-app-config.md`](../per-app-config.md#manual-db-migration-for-already-deployed-databases)
+[`per-app-config.md`](../reference/per-app-config.md#manual-db-migration-for-already-deployed-databases)
 before rolling the new image.
 
 ---
@@ -533,12 +533,12 @@ The reverse trip — `enforced` → `passthrough` — is the same single field, 
 
 ## See also
 
-- [`per-app-config.md`](../per-app-config.md) — the per-field reference for every knob
+- [`per-app-config.md`](../reference/per-app-config.md) — the per-field reference for every knob
   named here, with the exact clamps and their 422 messages.
 - [`faq.md`](./faq.md) — the specific questions these recipes generalize.
 - [`ui-guide.md`](./ui-guide.md#8a-the-six-steps) — what each console control does, step
   by step.
-- [`admin-setup.md`](../dev-references/admin-setup.md) — creating the application,
+- [`admin-setup.md`](./admin-setup.md) — creating the application,
   tokens, and per-app Langfuse credentials (console: steps 1 and 4).
-- [`langfuse-per-app-projects.md`](../langfuse-per-app-projects.md) — auto-provision vs.
+- [`langfuse-per-app-projects.md`](./langfuse-per-app-projects.md) — auto-provision vs.
   the manual per-app key path, in full.

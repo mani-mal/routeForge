@@ -2,7 +2,7 @@
 
 Questions that come up repeatedly while configuring per-application policy, residency,
 and telemetry. For the full per-app config reference see
-[`../per-app-config.md`](../per-app-config.md).
+[`../reference/per-app-config.md`](../reference/per-app-config.md).
 
 ---
 
@@ -81,7 +81,7 @@ detection is off.
 
 **Prefer a narrower lever when you can.** `pii_detection: off` blinds the gate to
 *everything*, including a real SSN. If only a few false positives are the problem, use
-[`pii_entity_denylist` / `pii_exempt_patterns`](../per-app-config.md) instead — they also
+[`pii_entity_denylist` / `pii_exempt_patterns`](../reference/per-app-config.md) instead — they also
 work while `onprem_only`. Reach for `off` when the app's whole input is customer-owned
 content whose every field is load-bearing output, so there is nothing to protect and no
 enumerable set of shapes to exempt.
@@ -97,7 +97,7 @@ This used to be refused. The old rule capped an `onprem_only` app at `capture_io
 `off` or `redacted` on the reasoning that on-prem meant maximum protection. That
 conflated placement with posture and forced customers to misdeclare residency to get the
 behaviour they needed — so it was replaced by an explicit `policy_mode` (CLAUDE.md rule
-2 amended 2026-09-05; see the [per-app config reference](../per-app-config.md)).
+2 amended 2026-09-05; see the [per-app config reference](../reference/per-app-config.md)).
 
 **What has not changed, and will not:**
 

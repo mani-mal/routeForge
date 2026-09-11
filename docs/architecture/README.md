@@ -7,14 +7,14 @@ authoritative until the `.drawio` is redrawn to match.
 > **Where routeForge stops and the serving layer begins** — for the recurring
 > "does routeForge do llm-d / DRA / Gateway API / prefill-decode?" question and the
 > "why routeForge does not deploy Dynamo" decision, see
-> [`inference-layer-boundary.md`](./inference-layer-boundary.md).
+> [`inference-layer-boundary.md`](./decisions/inference-layer-boundary.md).
 
 > **NeMo Switchyard vs. our step-6 router** — what to borrow from NVIDIA NeMo
 > Switchyard, what to refuse on scope grounds, and the (deferred, not rejected)
 > "should we replace our custom router with it?" decision, see
-> [`nemo-switchyard-comparison.md`](./nemo-switchyard-comparison.md). The action-oriented
+> [`nemo-switchyard-comparison.md`](../comparisons/nemo-switchyard-comparison.md). The action-oriented
 > per-feature incorporation plan is
-> [`switchyard-features-to-incorporate.md`](./switchyard-features-to-incorporate.md).
+> [`switchyard-features-to-incorporate.md`](../comparisons/switchyard-features-to-incorporate.md).
 
 > **How a request actually gets a tier (and why "easy question → cheap" is really
 > "short prompt → cheap"), plus the text-only / no-modality boundary** — for the
@@ -24,7 +24,7 @@ authoritative until the `.drawio` is redrawn to match.
 > **Why context compression (Headroom, step 5) lives in RouteForge and not the
 > calling app** — for the recurring "the app owns its own harness, so shouldn't
 > compression move out like RLHF did?" question, see
-> [`compression-in-scope.md`](./compression-in-scope.md).
+> [`compression-in-scope.md`](./decisions/compression-in-scope.md).
 
 > **What belongs in the calling application vs. RouteForge** — the general placement
 > test ("you cannot move a boundary-enforcing component outside the boundary it
@@ -33,13 +33,13 @@ authoritative until the `.drawio` is redrawn to match.
 > semantic cache, and **the two families of "prompt caching"** (app-side caches are
 > invisible and fine; provider-side `cache_control` / `prompt_cache_key` markers pass
 > *through* RouteForge and are currently stripped). See
-> [`app-vs-routeforge-boundary.md`](./app-vs-routeforge-boundary.md); the cost backlog
-> that fixes the lossy half is [`caching-cost-feature-fit.md`](./caching-cost-feature-fit.md).
+> [`app-vs-routeforge-boundary.md`](./decisions/app-vs-routeforge-boundary.md); the cost backlog
+> that fixes the lossy half is [`caching-cost-feature-fit.md`](../comparisons/caching-cost-feature-fit.md).
 
 > **Which Serving-Plane settings can safely become per-application overrides** —
 > for "should `pii_detection` / streaming be per-app?" and the rule for classifying
 > any new per-app knob (monotonic-tightening vs free-but-floored vs floor-itself),
-> see [`per-app-config-flexibility.md`](./per-app-config-flexibility.md).
+> see [`per-app-config-flexibility.md`](./decisions/per-app-config-flexibility.md).
 
 > **How the `api` deployment scales horizontally** — the L4/L7 balancing layers, why
 > per-pod in-memory state was a bug, and how to scale replicas, see
@@ -48,20 +48,20 @@ authoritative until the `.drawio` is redrawn to match.
 > **Where the self-improving-agent research lands vs. RouteForge's scope** — the
 > 2026-08-17 control-plane-vs-compute boundary decision (compression, prompt-opt,
 > memory, distillation-and-onboard all orchestrated, not hosted), see
-> [`self-improving-agent-feature-fit.md`](./self-improving-agent-feature-fit.md).
+> [`self-improving-agent-feature-fit.md`](./decisions/self-improving-agent-feature-fit.md).
 
 > **Residency + correctness contract for the semantic cache (feature #6)** — why a
 > cached answer is a second copy that must stay CCR-class and residency-partitioned,
-> see [`semantic-cache-residency-spec.md`](./semantic-cache-residency-spec.md).
+> see [`semantic-cache-residency-spec.md`](./specs/semantic-cache-residency-spec.md).
 
 > **Residency contract for persistent memory (mem0-style, step-5 extension)** — the
 > CCR-class guarantees a cross-request memory store must honor, see
-> [`persistent-memory-residency-spec.md`](./persistent-memory-residency-spec.md).
+> [`persistent-memory-residency-spec.md`](./specs/persistent-memory-residency-spec.md).
 
 > **Which features are IP-worthy, and what the prior art forecloses** — the ranked
-> menu (IP-1…12, R1…R9) is [`ip-and-research-opportunities.md`](./ip-and-research-opportunities.md).
+> menu (IP-1…12, R1…R9) is [`ip-and-research-opportunities.md`](../roadmap/ip-and-research-opportunities.md).
 > **Briefing a new reviewer on it?** Give them
-> [`ip-review-handoff.md`](./ip-review-handoff.md) — reading order, what is already
+> [`ip-review-handoff.md`](../roadmap/ip-review-handoff.md) — reading order, what is already
 > settled, the gaps that are the actual assignment, and the disclosure-before-filing
 > constraint.
 
@@ -86,7 +86,7 @@ are **onboarded at runtime** (each with its own OpenAI-compatible `endpoint`) an
 the `ModelRegistry`; see `docs/onboarding-models.md`. The on-prem pool boots empty. The
 managed-cloud path's availability is still `providers.{azure,bedrock}.enabled`, and there
 is **no** separate `serving_paths` config axis. <!-- purged-ok -->
-See [architecture-review.md](../architecture-review.md) for the pre-pivot config shape
+See [architecture-review.md](../archive/2026-07-25-architecture-review.md) for the pre-pivot config shape
 this replaced.
 
 So the honest "what's real vs simulated?" answer is: onboarded vLLM/Dynamo endpoints =

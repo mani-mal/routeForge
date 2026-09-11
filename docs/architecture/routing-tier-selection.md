@@ -173,7 +173,7 @@ customer use case pulls for it.
 None of the above uses NVIDIA NeMo Switchyard — the current router is RouteForge's own
 native cost/risk scorer. (Our step-6 module carries the internal codename "Switchyard,"
 which predates and is unrelated to NVIDIA's project — see
-[`nemo-switchyard-comparison.md`](./nemo-switchyard-comparison.md) for the name-collision
+[`nemo-switchyard-comparison.md`](../comparisons/nemo-switchyard-comparison.md) for the name-collision
 note.) The one mechanism that *rhymes* with Switchyard is the confidence escalation in
 Part 1 — but it is native and **reactive** (fires on low confidence / step-9 failure),
 not Switchyard's turn-by-turn *progress-driven* escalation. Of Switchyard's genuinely
@@ -182,4 +182,4 @@ distinct ideas, several have since **shipped**: the pluggable strategy family
 axis), and Stage Router signals (`app/routing/signals.py`, default OFF). Progress-driven
 escalation remains backlog and the Prefill Router stays *rejected* as Improvement-Plane —
 all tracked in that doc and in
-[`switchyard-features-to-incorporate.md`](./switchyard-features-to-incorporate.md).
+[`switchyard-features-to-incorporate.md`](../comparisons/switchyard-features-to-incorporate.md).

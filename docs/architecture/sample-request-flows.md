@@ -1,6 +1,6 @@
 # RouteForge — Sample Request Flows (worked examples)
 
-A companion to [`routeforge-logical-and-request-response-architecture.md`](routeforge-logical-and-request-response-architecture.md)
+A companion to [`logical-and-request-flow.md`](./logical-and-request-flow.md)
 and the [`diagrams/routeforge-request-flow.drawio`](diagrams/routeforge-request-flow.drawio).
 
 That doc tells you *what* each of the ten steps is. **This doc walks real requests through
@@ -81,7 +81,7 @@ them; `null` on any field means "inherit / no restriction."
 > the `redacted` exporter path reuses the gate's sanitized prompt, and with a downgraded
 > detector that "sanitized" text is raw (`app/api/admin_routes.py`, the
 > `eff_pii in ("off", "regex")` + `eff_capture == "redacted"` clamp — a 422 on write). See
-> [`../getting-started.md`](../getting-started.md)'s identical Internal-chatbot recipe.
+> [`../guides/getting-started.md`](../guides/getting-started.md)'s identical Internal-chatbot recipe.
 
 ### App B — `hospital-phi` (onprem_only, Presidio, high sensitivity)
 
@@ -115,7 +115,7 @@ them; `null` on any field means "inherit / no restriction."
 > egress path for an unsanitized prompt. An app that genuinely has nothing to protect
 > declares `policy_mode: "passthrough"` instead — which unlocks `capture_io: full` into its
 > **own** Langfuse project while leaving `onprem_only` absolute. See
-> [`../per-app-config.md`](../per-app-config.md).
+> [`../reference/per-app-config.md`](../reference/per-app-config.md).
 
 ### App C — `research-agent` (multi-step, cloud + frontier)
 
@@ -298,7 +298,7 @@ imports it. The runtime:
    The supported path for an application's *real* tools is the client-driven loop —
    RouteForge never executes an app's own tools itself (`tools`/`tool_choice` on
    `/v1/chat/completions` come back as `tool_calls` for the *client* to run and replay; see
-   [`../dev-references/api-reference.md`](../dev-references/api-reference.md)).
+   [`../reference/api-reference.md`](../reference/api-reference.md)).
 2. **Repoints that LLM at RouteForge itself:** `base_url =
    http://127.0.0.1:{port}/internal/v1/{run_id}`. This is the trick — the agent thinks it's
    calling one OpenAI endpoint named "auto", but every call loops back **into RouteForge's own
@@ -419,7 +419,7 @@ candidates were rejected and why — is the product.
 
 ## See also
 
-- [`routeforge-logical-and-request-response-architecture.md`](routeforge-logical-and-request-response-architecture.md) — the ten steps and their libraries, with status markers.
-- [`../per-app-config.md`](../per-app-config.md) — the `pii_detection` / `stream_mode` knobs and their write-time floors.
-- [`../onboarding-models.md`](../onboarding-models.md) — how the on-prem pool is populated at runtime (Flow B needs a healthy on-prem model).
-- [`../routing-observability.md`](../routing-observability.md) — `sp.candidates`, stage signals, `/metrics`.
+- [`logical-and-request-flow.md`](./logical-and-request-flow.md) — the ten steps and their libraries, with status markers.
+- [`../reference/per-app-config.md`](../reference/per-app-config.md) — the `pii_detection` / `stream_mode` knobs and their write-time floors.
+- [`../guides/onboarding-models.md`](../guides/onboarding-models.md) — how the on-prem pool is populated at runtime (Flow B needs a healthy on-prem model).
+- [`../reference/routing-observability.md`](../reference/routing-observability.md) — `sp.candidates`, stage signals, `/metrics`.

@@ -194,7 +194,7 @@ rates, then summed across every request in the app.
 Prices are USD per 1M tokens; the frontier baseline model is `bedrock-frontier`. Cloud
 prices come from `config/pricing.yaml`; **on-prem prices do not** — an onboarded model
 carries its own `price_input` / `price_output`, set at onboarding time and stored on its
-`onboarded_models` row (see [`../onboarding-models.md`](../onboarding-models.md)):
+`onboarded_models` row (see [`onboarding-models.md`](./onboarding-models.md)):
 
 | Model (slug) | Tier | Input /1M | Output /1M | Source |
 |---|---|---|---|---|
@@ -467,7 +467,7 @@ they unlock). Use that project's **project**-scoped keys, not organization keys;
 is the server-reachable ingestion host (e.g. `http://langfuse-web:3000`), not the browser
 URL. The line above the fields says whether credentials are set. The secret is
 write-only — it is never rendered back, before or after saving. Full detail in
-[`../langfuse-per-app-projects.md`](../langfuse-per-app-projects.md).
+[`langfuse-per-app-projects.md`](./langfuse-per-app-projects.md).
 
 **Step 5 — Delivery and limits.** How the answer is delivered, and the app's quotas.
 
@@ -524,7 +524,7 @@ separate writes keep their own buttons: **Save credentials** in step 4, **Save p
 rules** in step 6, and the token actions in step 1, which apply immediately.
 
 Field-by-field semantics, the clamps, and the equivalent `curl` are in
-[`../per-app-config.md`](../per-app-config.md).
+[`../reference/per-app-config.md`](../reference/per-app-config.md).
 
 ### 8b. Privacy rules
 
@@ -669,7 +669,7 @@ rejects it with reason **"excluded · residency"** (`app/routing/router.py`). Th
 "provider disabled" reason string anywhere in the code; a disabled provider's models are
 simply absent, not a labelled rejection. A model that was *chosen and served* is always
 an onboarded on-prem one on a lab with cloud switched off. See
-[`../onboarding-models.md`](../onboarding-models.md).
+[`onboarding-models.md`](./onboarding-models.md).
 
 ### "How do I turn Headroom (compression) on?"
 

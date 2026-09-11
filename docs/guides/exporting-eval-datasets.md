@@ -87,7 +87,7 @@ conditions:
   so raw I/O only ever lands in that app's own project, never the shared one; **and**
 - if the app is `onprem_only`, its `policy_mode` is explicitly `passthrough`. An
   `onprem_only` app still in the `enforced` posture cannot reach `full` at all
-  (CLAUDE.md rules 2/8). See [`../per-app-config.md`](../per-app-config.md).
+  (CLAUDE.md rules 2/8). See [`../reference/per-app-config.md`](../reference/per-app-config.md).
 
 (The boot config lint is a separate, deployment-wide check: it rejects a global
 `observability.langfuse.capture_io: full` in `serving.yaml` whenever any tenant is

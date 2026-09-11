@@ -3,12 +3,12 @@
 **Read this first.** It explains, in plain language, what RouteForge is, how to set it up,
 and — the part most people get stuck on — **what every policy option means and how to choose
 between the values.** Once this makes sense, the companion doc
-[`architecture/routeforge-sample-request-flows.md`](architecture/routeforge-sample-request-flows.md)
+[`architecture/sample-request-flows.md`](../architecture/sample-request-flows.md)
 walks real requests through the internals and the open-source libraries.
 
 - **This doc = the *what* and the *how to configure*.** Concepts and decisions.
-- **`routeforge-sample-request-flows.md` = the *how it works inside*.** Worked traces.
-- **[`dev-references/admin-setup.md`](dev-references/admin-setup.md) = the exact HTTP reference.**
+- **`sample-request-flows.md` = the *how it works inside*.** Worked traces.
+- **[`admin-setup.md`](./admin-setup.md) = the exact HTTP reference.**
   Every endpoint and curl. This guide links to it rather than repeating it.
 
 ---
@@ -68,7 +68,7 @@ OpenAI-compatible endpoint (vLLM / NIM / Azure / etc.). Console → Infrastructu
 Full details: [`onboarding-models.md`](onboarding-models.md).
 
 **③ Create an app.** `POST /admin/applications` mints the app and returns its token **once**
-— copy it now. (Exact call: [`admin-setup.md` §2](dev-references/admin-setup.md).)
+— copy it now. (Exact call: [`admin-setup.md` §2](./admin-setup.md).)
 
 **④ Set its policy.** `PUT /admin/applications/{id}/policy` — this is where all the options in
 §4 below live. Policy **merges**: a field you omit keeps its stored value.
@@ -103,7 +103,7 @@ Quick map of what each field controls:
 | `compression_enabled` | Turn Headroom context compression on/off for this app. |
 | `policy_mode` | **How much the gate does to the data at all** — the coarse protection switch. *(detailed below)* |
 | `pii_detection` | **How hard the gate looks for PII** before redacting. *(detailed below)* |
-| `pii_entity_denylist` / `pii_score_threshold` / `pii_exempt_patterns` | Narrow the gate without disabling it — exempt specific entity types, low-confidence matches, or value shapes. See [`per-app-config.md`](per-app-config.md). |
+| `pii_entity_denylist` / `pii_score_threshold` / `pii_exempt_patterns` | Narrow the gate without disabling it — exempt specific entity types, low-confidence matches, or value shapes. See [`per-app-config.md`](../reference/per-app-config.md). |
 | `capture_io` | **How much of the prompt/answer is stored in telemetry.** *(detailed below)* |
 | `stream_mode` | Whether/how token streaming is allowed. *(summary below)* |
 | `reset` | The one way to put a field *back* to `null` — see the merge note below. |
@@ -178,8 +178,8 @@ silent — it is folded into `app_policy_version`, stamped in every response's `
 block, and emitted on the trace as `sp.policy_mode`.
 
 Unset inherits the deployment-wide `policy.default_policy_mode` in `config/serving.yaml`
-(env `SP_DEFAULT_POLICY_MODE`). Deep dive: [`per-app-config.md`](per-app-config.md);
-decision guide: [`help/choosing-app-settings.md`](help/choosing-app-settings.md).
+(env `SP_DEFAULT_POLICY_MODE`). Deep dive: [`per-app-config.md`](../reference/per-app-config.md);
+decision guide: [`choosing-app-settings.md`](./choosing-app-settings.md).
 
 ---
 
@@ -226,7 +226,7 @@ When only a few false positives are the problem, keep detection on and use
 matches) or `pii_exempt_patterns` (exempt *value shapes*). They carry no clamp of their own
 at any residency, and `US_SSN` can never be exempted by any of them.
 
-Deep dive: [`per-app-config.md`](per-app-config.md).
+Deep dive: [`per-app-config.md`](../reference/per-app-config.md).
 
 ---
 
@@ -267,7 +267,7 @@ only about the trace payload.
   safe — hence the split into two explicit axes.)*
 
 In short: `off` = metadata only, `redacted` = safe text, `full` = raw text for eval behind a
-fence. Deep dive: [`per-app-config.md`](per-app-config.md).
+fence. Deep dive: [`per-app-config.md`](../reference/per-app-config.md).
 
 ---
 
@@ -285,7 +285,7 @@ answer before releasing it. An app can opt into one of four modes:
 
 **Fail-closed floor:** `onprem_only` or `require_verification` requests can *never* have
 verification waived — they fall back to `verified_then_stream` no matter what the app set. Deep
-dive: [`per-app-config.md`](per-app-config.md).
+dive: [`per-app-config.md`](../reference/per-app-config.md).
 
 ---
 
@@ -300,7 +300,7 @@ Set separately via `PUT /admin/applications/{id}/privacy`. Two parts:
   (`sensitivity` / `risk_class` / `residency` / `require_verification`). This is how detecting an
   SSN forces `restricted` + `onprem_only`. See §5.
 
-Exact shapes and limits: [`admin-setup.md` §5](dev-references/admin-setup.md).
+Exact shapes and limits: [`admin-setup.md` §5](./admin-setup.md).
 
 ---
 
@@ -331,7 +331,7 @@ Each step that ran contributes a record: which model was chosen, which candidate
 and why, cost, latency, the policy verdict, the verification result. That trace is the product's
 core value: you can always see *why* a request went where it did.
 
-The exact response shape is in [`dev-references/api-reference.md`](dev-references/api-reference.md).
+The exact response shape is in [`api-reference.md`](../reference/api-reference.md).
 
 ---
 
@@ -392,18 +392,18 @@ reproduced verbatim, and they want raw traces, all while staying on their hardwa
 turns off protection, never placement.)*
 
 For picking between these on a real onboarding, use
-[`help/choosing-app-settings.md`](help/choosing-app-settings.md) — three questions, three
+[`choosing-app-settings.md`](./choosing-app-settings.md) — three questions, three
 recipes, and what each one costs you.
 
 ---
 
 ## Next
 
-Now read [`architecture/routeforge-sample-request-flows.md`](architecture/routeforge-sample-request-flows.md)
+Now read [`architecture/sample-request-flows.md`](../architecture/sample-request-flows.md)
 — it takes these same three apps and traces real requests through all ten steps, showing exactly
 where each open-source library (Presidio, LiteLLM, NeMo Agent Toolkit, Headroom) does its work.
 
-**See also:** [`dev-references/admin-setup.md`](dev-references/admin-setup.md) (exact HTTP) ·
-[`per-app-config.md`](per-app-config.md) (`pii_detection`/`capture_io`/`stream_mode` floors) ·
-[`onboarding-models.md`](onboarding-models.md) (populating the on-prem pool) ·
-[`help/ui-guide.md`](help/ui-guide.md) (the console).
+**See also:** [`admin-setup.md`](./admin-setup.md) (exact HTTP) ·
+[`per-app-config.md`](../reference/per-app-config.md) (`pii_detection`/`capture_io`/`stream_mode` floors) ·
+[`onboarding-models.md`](./onboarding-models.md) (populating the on-prem pool) ·
+[`ui-guide.md`](./ui-guide.md) (the console).

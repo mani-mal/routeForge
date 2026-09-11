@@ -9,8 +9,8 @@ a prompt-caching library — can it? Does that affect RouteForge? Isn't RouteFor
 cost-cutting router?"*
 
 **Siblings:** [`compression-in-scope.md`](./compression-in-scope.md) (why Headroom is in,
-the long form) · [`caching-cost-feature-fit.md`](./caching-cost-feature-fit.md) (the four
-caches + the F1–F5 cost backlog) · [`semantic-cache-residency-spec.md`](./semantic-cache-residency-spec.md)
+the long form) · [`caching-cost-feature-fit.md`](../../comparisons/caching-cost-feature-fit.md) (the four
+caches + the F1–F5 cost backlog) · [`semantic-cache-residency-spec.md`](../specs/semantic-cache-residency-spec.md)
 (the cache's binding contract) · [`inference-layer-boundary.md`](./inference-layer-boundary.md)
 (the other boundary — where RouteForge stops and serving begins).
 
@@ -88,7 +88,7 @@ that a *cloud* model produced to an `onprem_only` request is a rule-3 breach exa
 real as routing the live call to cloud. Hence the partition key
 `(tenant_id, onprem_only, allowed_providers)`, the per-entry producing-provider record,
 refusal on both write and read, and step-9 re-verification on a hit. An app-side cache has
-none of that. Binding contract: [`semantic-cache-residency-spec.md`](./semantic-cache-residency-spec.md).
+none of that. Binding contract: [`semantic-cache-residency-spec.md`](../specs/semantic-cache-residency-spec.md).
 
 **Why it is *not* a selling point** — and the honest, concrete reason:
 
@@ -96,7 +96,7 @@ none of that. Binding contract: [`semantic-cache-residency-spec.md`](./semantic-
   **exact normalized-query match** (not embedding similarity — that seam is deferred),
   **off by default**, and consulted on the **direct path only**.
 - With `replicaCount.api = N` behind the Service, hit rate degrades toward **1/N**. See
-  [`api-load-balancing.md`](./api-load-balancing.md) — per-pod in-memory state is a known
+  [`api-load-balancing.md`](../api-load-balancing.md) — per-pod in-memory state is a known
   bug class here, not a design goal.
 
 A customer who wants serious caching wants Redis or a vector store, and that is theirs to
@@ -178,7 +178,7 @@ Today it is faithful in Family A and **lossy in Family B**. Not absorbing the cu
 cache is correct; silently deleting the customer's caching directives is a different thing
 and is not correct.
 
-The fix is already ranked in [`caching-cost-feature-fit.md`](./caching-cost-feature-fit.md)
+The fix is already ranked in [`caching-cost-feature-fit.md`](../../comparisons/caching-cost-feature-fit.md)
 §3 — **F1** count cached tokens and price them honestly → **F2** session affinity with a
 switch-cost budget so a warm prefix survives the next turn → **F3** pass through / set the
 provider markers. None of them make RouteForge *host* a cache; they make it stop breaking

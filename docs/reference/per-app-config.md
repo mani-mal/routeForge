@@ -6,7 +6,7 @@ and `stream_mode`. For the *why* (which knobs are safe to expose per-app and whi
 aren't), read `docs/architecture/per-app-config-flexibility.md` first — this page is the
 how-to. If the question is *"I have a new app, what should I set?"* rather than *"what
 does this field do?"*, start with
-[`help/choosing-app-settings.md`](help/choosing-app-settings.md) — the decision guide and
+[`choosing-app-settings.md`](../guides/choosing-app-settings.md) — the decision guide and
 its three recipes — and come back here for the field-level detail.
 
 They all follow the same shape as the existing `capture_io` / `compression_enabled`
@@ -294,7 +294,7 @@ independently:
 > hard residency floor (cloud is filtered out of the candidate pool by construction,
 > rule 3) *and* gives the app raw capture into its own Langfuse project. Flipping
 > residency to `any` + an `allowed_providers` pin — the workaround this page used to
-> recommend, see [`help/faq.md`](help/faq.md#legacy-config-raw-capture-via-a-residency-flip--an-allowed_providers-pin)
+> recommend, see [`faq.md`](../guides/faq.md#legacy-config-raw-capture-via-a-residency-flip--an-allowed_providers-pin)
 > — is strictly weaker: it trades a floor cloud cannot survive for a mutable allowlist,
 > and drops `ctx.onprem_only`, which is what the step-9 streaming floor keys on.
 >

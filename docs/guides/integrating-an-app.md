@@ -65,7 +65,7 @@ A runnable example is in [`examples/client/chat.py`](../../examples/client/chat.
   any app with no `stream_mode` set. An admin can opt your app into streaming via
   `AppPolicy.stream_mode` (`verified_then_stream | stream_unverified |
   incremental_verify`); the `onprem_only` / `require_verification` floor still forces the
-  fully-verified path regardless. See [`../per-app-config.md`](../per-app-config.md). (The
+  fully-verified path regardless. See [`../reference/per-app-config.md`](../reference/per-app-config.md). (The
   dashboard's live decision stream is a separate channel and always on.)
 - **Errors:** `401` invalid/missing/revoked token; `429` rate/budget exceeded; `400`
   streaming requested by an app not opted into a `stream_mode`; `422` response failed
@@ -110,7 +110,7 @@ Four things to get right when the harness lives in your app:
    (output verification needs the complete response), so configure your model client to
    disable streaming or every call fails with `400`. If your workload needs streaming,
    ask your admin to set a `stream_mode` on the app — subject to the verification floor
-   (see §4 and [`../per-app-config.md`](../per-app-config.md)).
+   (see §4 and [`../reference/per-app-config.md`](../reference/per-app-config.md)).
 3. **Tool calls pass through the gateway.** `tools` / `tool_choice` in, `tool_calls`
    out, unchanged — this is what makes a tool-using agent work. If you rely on
    tool-calling, validate the round-trip against your onboarded model first.
@@ -160,5 +160,5 @@ reward/routing eval. Raw prompt/completion (`input.value` / `output.value`) exis
 when the app's `capture_io = full`, which requires the app's **own** provisioned Langfuse
 project (never relaxed — raw I/O is tenant-isolated) and, for an `onprem_only` app, an
 explicitly declared `policy_mode: "passthrough"`. See
-[`../per-app-config.md`](../per-app-config.md). So SFT/DPO `{prompt, chosen, rejected}`
+[`../reference/per-app-config.md`](../reference/per-app-config.md). So SFT/DPO `{prompt, chosen, rejected}`
 pairs come only from `full`-eligible apps; scores and routing signal come from everywhere.

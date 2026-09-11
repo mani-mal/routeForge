@@ -120,7 +120,7 @@ additive and gives ops teams a standard surface without touching the trace pipel
 prompt/PII or tenant-identifying free-text in a label (egress-redaction rule 2).
 
 ### 4. Semantic caching — incorporate, but govern it like CCR
-✅ **SHIPPED** (`app/cache/store.py`, default OFF): built CCR-class exactly as this section prescribes — residency-partitioned, TTL-enforced, never exported, tenant-isolated; an `onprem_only` request can never be served a cloud-produced entry. See [`semantic-cache-residency-spec.md`](./semantic-cache-residency-spec.md).
+✅ **SHIPPED** (`app/cache/store.py`, default OFF): built CCR-class exactly as this section prescribes — residency-partitioned, TTL-enforced, never exported, tenant-isolated; an `onprem_only` request can never be served a cloud-produced entry. See [`semantic-cache-residency-spec.md`](../architecture/specs/semantic-cache-residency-spec.md).
 
 Returning a cached answer for a semantically duplicate subtask eliminates redundant
 inference — attractive for agent loops that re-ask similar things. **But a response
@@ -163,7 +163,7 @@ a major vendor independently drew them. Worth citing to skeptics.
 - **Nemotron 3.5 Lightning as a bundled default model** / RTX-Jetson-DGX placement:
   routeForge deploys and bundles **no** inference. Nemotron is a fine thing for an
   *operator* to onboard as an on-prem endpoint, but device placement (RTX vs DGX) is the
-  serving layer's job — see [`inference-layer-boundary.md`](./inference-layer-boundary.md).
+  serving layer's job — see [`inference-layer-boundary.md`](../architecture/decisions/inference-layer-boundary.md).
 - **Adopting the Rust binary itself:** deferred — see the companion comparison doc's
   decision section (pre-alpha, Rust vs our Python/air-gapped target, and a generic router
   can't enforce our invariants).

@@ -1,8 +1,8 @@
 # Bugs backlog — work later
 
 Running list of known defects/observations to pick up later. Newest first.
-**This is now the single backlog.** `docs/ui-open-items.md` and
-`docs/eval-logging-backlog.md` have been folded in and archived to
+**This is now the single backlog.** [`docs/ui-open-items.md`](../archive/ui-open-items.md) and
+[`docs/eval-logging-backlog.md`](../archive/eval-logging-backlog.md) have been folded in and archived to
 `docs/archive/` — every item in both was verified against the code (not
 assumed from its status heading) during the 2026-09-10 docs sweep, and every
 one was confirmed closed; nothing was migrated because nothing was live. See
@@ -55,8 +55,8 @@ the audit trail in that sweep's task report.
 > turned up while verifying the `docs/` tree against the code for the docs
 > reclassification project (not while adding a feature) — recorded below as
 > **B26**–**B30**. None are fixed here; this sweep only writes backlog entries.
-> The same sweep also folded `docs/ui-open-items.md` and
-> `docs/eval-logging-backlog.md` into this file (see the note at the top) —
+> The same sweep also folded [`docs/ui-open-items.md`](../archive/ui-open-items.md) and
+> [`docs/eval-logging-backlog.md`](../archive/eval-logging-backlog.md) into this file (see the note at the top) —
 > every item in both verified closed, nothing migrated.
 
 ## B26 — Catch-all exception handler in the request path logs nothing
@@ -850,7 +850,7 @@ map (the same masking the model received), not `body.messages[-1].content`; then
 card, drive the actual request+response *display* from the per-app setting
 (symmetric: both bodies shown redacted/raw, or metadata-only when `off`). Short-term
 demo mitigation: set `SP_CAPTURE_IO=off` on the DGX deploy to restore blank Input.
-Cross-ref `docs/eval-logging-backlog.md` and B14. Own SDD task.
+Cross-ref [`docs/eval-logging-backlog.md`](../archive/eval-logging-backlog.md) and B14. Own SDD task.
 
 ## B14 — FEATURE: per-application capture_io (off | redacted | full) in app settings  ✅ SHIPPED (F1 Phase B :0.12.0; + pii_detection/stream_mode in PR #17 :0.14.0)
 
@@ -866,7 +866,7 @@ too coarse for a multi-tenant product).
 **Severity:** medium (unblocks per-app eval/audit without breaking the privacy
 story; requested by owner 2026-08-04).
 **Depends on:** B13 (redaction gap) — per-app `redacted` is only trustworthy once
-`redacted` actually redacts. Cross-ref `docs/eval-logging-backlog.md`.
+`redacted` actually redacts. Cross-ref [`docs/eval-logging-backlog.md`](../archive/eval-logging-backlog.md).
 
 **What:** move `capture_io` from a single global switch
 (`serving.observability.langfuse.capture_io` + `SP_CAPTURE_IO`) to a

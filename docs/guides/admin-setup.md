@@ -34,7 +34,7 @@ boot-time config lint fails otherwise):
 - `config/pricing.yaml` — per-model USD and the savings baseline.
 - `config/serving.yaml` — infra switches (`pii_detection`, provider on/off, Langfuse
   on/off, `reject_stream_requests`). On-prem models are **onboarded at runtime**, not set
-  here — see [`../onboarding-models.md`](../onboarding-models.md).
+  here — see [`onboarding-models.md`](./onboarding-models.md).
 
 > The **model slugs** live in the `ModelRegistry`: cloud built-ins from `routing.yaml`'s
 > `model_pool` (e.g. `azure-gpt-mid`, `bedrock-frontier`) plus whatever on-prem models the
@@ -203,13 +203,13 @@ curl -b cookies.txt -X PUT \
 | `max_spend_usd_per_day` | float \| null | Daily USD cap. Over it → request rejected `429` and a `rejected` usage row recorded. |
 | `max_rpm` | int \| null | Requests/minute (sliding window). Over it → `429`. |
 | `compression_enabled` | bool \| null | Gate Headroom compression for this app. `null` = inherit the global toggle. Safety bypass rules still apply regardless. |
-| `capture_io` | str \| null | `off \| redacted \| full` telemetry I/O capture. `null` = inherit global. `full` **always** needs the app's own Langfuse project, and is refused for an `onprem_only` app whose effective `policy_mode` is `enforced` — set `policy_mode: passthrough` to declare the app unprotected. `redacted` is refused wherever nothing is sanitized (`passthrough`, or `pii_detection` `off`/`regex`). See [`../per-app-config.md`](../per-app-config.md). |
+| `capture_io` | str \| null | `off \| redacted \| full` telemetry I/O capture. `null` = inherit global. `full` **always** needs the app's own Langfuse project, and is refused for an `onprem_only` app whose effective `policy_mode` is `enforced` — set `policy_mode: passthrough` to declare the app unprotected. `redacted` is refused wherever nothing is sanitized (`passthrough`, or `pii_detection` `off`/`regex`). See [`../reference/per-app-config.md`](../reference/per-app-config.md). |
 | `policy_mode` | str \| null | `enforced \| passthrough` — the **protection** posture. `null` = inherit `policy.default_policy_mode`. `enforced` runs detection, redaction, escalation and the capture ceiling; `passthrough` makes RouteForge a router, meter and tracer only. Refused when the deployment sets `allow_app_passthrough: false`. **It never touches placement** — it cannot widen `allowed_providers` or clear `onprem_only`, and `onprem_only` + `passthrough` is a valid configuration. |
 | `pii_detection` | str \| null | `off \| regex \| presidio` per-app override of the detector. `null` = inherit global (not a downgrade). An explicit `off`/`regex` is refused unless the deployment sets `allow_app_pii_downgrade`, and is refused in combination with `capture_io: redacted`. It is **allowed** for an `onprem_only` app (detection and residency are independent axes) — in the `enforced` posture that pairing needs `capture_io: off`. |
 | `pii_entity_denylist` | list[str] \| null | Entity **types** the gate detects but does not redact for this app. Presidio built-in names only; an unknown name is a 422. `US_SSN` can never be named. No deployment ceiling — this is a narrowing, not a downgrade. |
 | `pii_score_threshold` | float \| null | `[0.0, 1.0]`. Scored entities below this confidence are dropped before redaction. Never applies to `US_SSN`; never drops unscored (regex / custom-recognizer) hits. To remove a stored floor entirely, name it in `reset`; `0` is a different thing — a floor that passes every score. |
 | `pii_exempt_patterns` | list[str] \| null | Regexes `fullmatch`ed against a detected entity's **value**, whatever type it was given — the type-independent complement to the denylist. Max 25 patterns, 200 chars each, each must compile under Python `re`. Never exempts `US_SSN`. |
-| `stream_mode` | str \| null | `off \| verified_then_stream \| stream_unverified \| incremental_verify`. `null`/`off` = reject inbound `stream:true`. `stream_unverified` is refused for `onprem_only` apps at write time; `onprem_only`/`require_verification` requests always fall back to the verified path at runtime. See [`../per-app-config.md`](../per-app-config.md). |
+| `stream_mode` | str \| null | `off \| verified_then_stream \| stream_unverified \| incremental_verify`. `null`/`off` = reject inbound `stream:true`. `stream_unverified` is refused for `onprem_only` apps at write time; `onprem_only`/`require_verification` requests always fall back to the verified path at runtime. See [`../reference/per-app-config.md`](../reference/per-app-config.md). |
 | `reset` | list[str] \| null | Policy field names to write back to `NULL` ("inherit the deployment default"), applied **after** the merge — the only way to clear a field, since `null` in the body means "leave it alone". An unknown name is a 422 (never silently ignored), and naming a field here *and* sending a value for it in the same request is a 422 contradiction. Every clamp above is judged on the **post-reset** effective state, so a reset that would produce a forbidden posture is refused whole. |
 
 > **The PUT merges — `null` does not clear; `reset` does.** The body is persisted with
@@ -221,7 +221,7 @@ curl -b cookies.txt -X PUT \
 > write will actually produce — clearing `policy_mode` on an `onprem_only` app that is
 > storing `capture_io: full` is refused, because the app would land back in the
 > `enforced` posture while still capturing raw I/O. Full detail in
-> [`../per-app-config.md`](../per-app-config.md).
+> [`../reference/per-app-config.md`](../reference/per-app-config.md).
 >
 > **All of the above is also settable in the console** — *Application → Settings tab*,
 > since `ui:0.17.0`. The tab is six numbered steps: **1 Access** (tokens), **2 Placement**,
@@ -325,4 +325,4 @@ sensitivity, status) — **never** prompt or answer text.
 5. [ ] `PUT …/privacy` — custom recognizers + sensitivity rules (if any).
 6. [ ] (Optional) confirm the per-app Langfuse project was created.
 7. [ ] Hand the developer: the **base URL** (`…/v1`) and the **token**. Point
-       them at [`api-reference.md`](./api-reference.md).
+       them at [`api-reference.md`](../reference/api-reference.md).
