@@ -37,6 +37,20 @@ Everything on screen ladders back to one of these. Say the claim, then point at 
 
 ---
 
+## 2b. Before you start — onboard a model first
+
+RouteForge ships with **no bundled model**: the on-prem pool boots empty by design (a
+pure router doesn't carry inference with it — CLAUDE.md hard rule 4). Everything from
+section 3 onward assumes an operator has already onboarded at least one OpenAI-compatible
+on-prem endpoint (Infrastructure → Onboard, or `POST /admin/infra/models`; see
+`docs/onboarding-models.md`) so there's a cheap tier for step 1 of the walkthrough to
+land on. Do this **before** the recording starts, off camera — it's a one-time setup
+step, not part of the story you're telling the customer. If you skip it, `onprem_only`
+traffic (the hospital persona) has no eligible candidate and is rejected outright, not
+silently served — which is correct behavior, but not the demo you want to show.
+
+---
+
 ## 3. Logging in
 
 **Show:** the sign-in screen → land on the Fleet Overview.
@@ -243,16 +257,31 @@ any backend.
 | **OpenTelemetry** (SDK + OTLP exporter) | Apache 2.0 | The vendor-neutral telemetry pipeline — every decision becomes a span, exported over a standard protocol (not a proprietary agent). |
 | **Langfuse** (self-hosted) | MIT | The operator's **system of record** — traces, per-hop spans, cost, latency, **PII-redacted on export**. Self-hosted, so your audit trail never leaves your infrastructure. |
 
-### 7d. Inference backends (swappable, config-selected)
+### 7d. Inference backends (operator-deployed, onboarded at runtime)
+
+RouteForge deploys none of these — an operator stands one up and **onboards** its
+OpenAI-compatible endpoint (`POST /admin/infra/models`); there is no `inference_backend` <!-- purged-ok -->
+config axis for RouteForge to select among them.
 
 | Tool | License | What it does in RouteForge |
 |---|---|---|
-| **vLLM** | Apache 2.0 | The **on-prem serving path** — runs the local open-weight models (e.g. Qwen2.5-7B-Instruct) behind an OpenAI-compatible endpoint. Active on the current deploy. |
-| **NVIDIA Dynamo + TensorRT-LLM** | Apache 2.0 | Alternative on-prem backend for GPU load distribution and scaling inference workers across a cluster. Config-selectable. |
-| *(mock backend)* | — | Deterministic canned responses with seeded cost/latency — the default, laptop-friendly, no-GPU demo mode. |
+| **vLLM** | Apache 2.0 | One common choice for the **on-prem serving path** — the operator runs the open-weight model (e.g. Qwen2.5-7B-Instruct) behind an OpenAI-compatible endpoint and onboards it. |
+| **NVIDIA Dynamo + TensorRT-LLM** | Apache 2.0 | Alternative on-prem serving stack an operator can run instead, for GPU load distribution and scaling inference workers across a cluster — onboarded the same way. |
 
-> Managed-cloud adapters (Azure, Bedrock) also exist but ship **disabled** — they appear in
-> the router's *rejected* list to make the routing story visible, exactly as you saw.
+> **Status check 2026-09-10.** The pure-router pivot (2026-08-03) purged the built-in
+> demo model and the `inference_backend` config axis <!-- purged-ok --> — there is no
+> bundled "mock backend" demo mode any more. If you're demoing without GPU hardware
+> at hand, stand up a real (even tiny) OpenAI-compatible endpoint and onboard it; see
+> `docs/onboarding-models.md`. Current authority: that doc.
+
+> **Are Azure/Bedrock in this demo?** By default, no — `providers.azure.enabled` and
+> `providers.bedrock.enabled` are `false` in `config/serving.yaml`, and a disabled
+> provider's model never enters the router's candidate pool at all
+> (`app/apps/registry.py::ModelRegistry.effective_pool`), so it can't appear in the
+> *rejected* list either. What you see in the request trace instead is the **Serving
+> Providers** strip, driven by the request's `allowed_providers` (residency), not by
+> the router's actual candidate set — see the Appendix entry "Are those cloud models
+> real?" below for what to say if asked.
 
 ### 7e. Console UI
 
@@ -300,7 +329,7 @@ any backend.
 
 | They ask… | You say… |
 |---|---|
-| "Are those cloud models real?" | "The pool has four models; on this deploy the served ones are local. The cloud entries stay in the pool **on purpose** — so you can see them appear in the rejected list with a reason. That rejected-with-a-reason list *is* the routing proof." |
+| "Are those cloud models real?" | "In this config, Azure and Bedrock ship **disabled** — a disabled provider never even enters the candidate pool, so it won't show up in the rejected list; what serves every request here is the on-prem endpoint the operator onboarded. The routing proof is the residency filter itself: an `onprem_only` request's Serving Providers strip greys out Azure/Bedrock *before* anything is scored. If you want a live cloud candidate to actually appear and lose in the rejected list — say, to show a `private_cloud_ok` tenant's cost/quality trade-off — enable a real provider with real credentials first; a disabled one can't play that role." |
 | "Why is the local cost so low?" | "On-prem tiers are priced at a small representative amortized rate, not literally zero — so the savings read as honest cost *reduction*, not a fake 'free.' A single local request is a fraction of a cent, so the per-request row shows it **in cents** (e.g. `0.003¢`, or `<0.001¢` when it's tinier still) rather than a dollar figure that would round to `$0.0000`." |
 | "Is this just PII pattern-matching?" | "Detection is one input. Residency is decided by the entity's **risk class** *and* the **tenant's own policy** — low-risk data on a cloud-eligible tenant is redacted and allowed out; high-risk data, or any request on an `onprem_only` tenant, is forced local." |
 | "What about streaming responses?" | "By default we verify the *complete* response before returning it — that's what makes the leakage check trustworthy — so inbound token-streaming is off in this demo config. It's not all-or-nothing, though: a per-app `stream_mode` shipped (e.g. verified-then-stream, or incremental hold-back redaction), and the floor is absolute — an `onprem_only` or verification-required request always falls back to the fully-verified path regardless. The console's own live updates are a separate channel and stay on." |

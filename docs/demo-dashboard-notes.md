@@ -72,3 +72,34 @@ residency breach — an `onprem_only` request served **off-prem**
 cloud by construction (Rule 3), this is 0 in the demo: Acme no longer warns, and the glyph
 now means a real leak if it ever shows. So the narration above ("PII detected ≠ must be
 on-prem") is exactly what the dashboard now reflects, instead of contradicting it.
+
+## Verified 2026-09-10
+
+Re-ran the exact mechanism this doc describes against a live app (`POST /admin/login`,
+then `run_traffic(base_url, n=500, rps=200, seed=42, ...)` — the same call
+`/api/traffic` makes) rather than trusting the numbers as written:
+
+- **`/api/traffic` and the persona mix**: confirmed against `app/api/ui_routes.py` —
+  the endpoint body is `{requests, rps}` (`TrafficStart`, defaults 100/20), it returns
+  `{"status": "started", "requests": n}` immediately, and it drives
+  `tests.traffic.generator.run_traffic` with the fixed seed 42, exactly as described.
+  `tests/personas.yaml`'s six weighted personas (45/20/15/12/5/3, `acme-key` /
+  `hospital-key`) matched what's described above.
+- **Real split at n=500, seed=42, current code**: **408 acme / 92 hospital** (this
+  dev environment runs the `regex` PII detector, not Presidio — see below — so
+  entity-level PII counts aren't directly comparable, but the acme/hospital *split*
+  depends only on persona sampling, not the detector). The `onprem_count` for hospital
+  came back **92**, matching this doc's own worked-example figure — the **93** quoted
+  for hospital in `docs/marketing/routeforge-demo-talking-points.md`'s Fleet Overview
+  table is off by one against a from-scratch run on current code. Treat every exact
+  digit in both docs as **illustrative, from one past captured run** — the mechanism
+  (risk-class-driven residency, the fixed warning heuristic) is what's load-bearing
+  and what was re-verified here, not the specific dollar/count figures, which drift
+  slightly as personas/code evolve even with a fixed seed.
+- **PII entity counts specifically** (the 161/92 in the worked example above) need
+  Presidio to reproduce — this dev environment doesn't have `presidio-analyzer`
+  installed, so those exact counts weren't independently re-derived. The underlying
+  rule they rest on (`config/policy.yaml → sensitivity_rules`, `LOCATION`/`DATE_TIME`
+  → `confidential` → `private_cloud_ok`; `US_SSN` et al. → `restricted` →
+  `onprem_only`) was read directly from the current config and matches this doc's
+  description.
