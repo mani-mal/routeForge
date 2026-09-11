@@ -6,8 +6,7 @@
     ]},
     {"title": "RouteForge workloads", "nodes": [
       {"id": "ui", "label": "ui  (Deployment)\nnginx: React build + reverse-proxy", "color": "blue"},
-      {"id": "apipod", "label": "api  (Deployment + HPA)\nFastAPI / Uvicorn  :8080", "color": "orange", "bold": true},
-      {"id": "vllmstub", "label": "vllm-stub (Deployment)\noptional · disabled by default", "color": "gray", "dashed": true}
+      {"id": "apipod", "label": "api  (Deployment + HPA)\nFastAPI / Uvicorn  :8080", "color": "orange", "bold": true}
     ]},
     {"title": "Langfuse application pods", "nodes": [
       {"id": "lfweb", "label": "langfuse-web\n:3000  (UI + OTLP ingest)", "color": "purple"},

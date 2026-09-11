@@ -12,9 +12,11 @@ Companion notes for the draw.io diagrams in
 > **This file is verified against the code at api:0.24.0 (2026-09-10 re-verification; every
 > row below was re-checked against HEAD).** Every component below carries a
 > status marker. **Read the [status legend](#status-legend) first.** Application-scope
-> concerns that live outside RouteForge — prompt-optimization (DSPy), a mem0-style persistent
-> memory, and NeMo Guardrails — are **not** part of the router and are intentionally absent
-> from the diagrams and the tables below.
+> concerns that live outside RouteForge — prompt-optimization (DSPy) and NeMo Guardrails —
+> are **not** part of the router and are intentionally absent from the diagrams and the
+> tables below. Persistent memory (mem0-style) is **not** one of these — see the Step 5
+> table and the Scope note below: it shipped as an in-house step-5 extension, inside the
+> router.
 
 ---
 
@@ -58,6 +60,7 @@ Companion notes for the draw.io diagrams in
 | Compression (real ML) | **Headroom** (`headroom-ai`) | 🔶 Optional | `uv sync --extra compression`, lazy-imported in `compression/headroom.py`; only selected when the extra is installed. |
 | CCR (cache of originals) | in-house `CCRStore` | 🔶 Optional | Local, TTL-bounded, residency-fenced; only active when compression is on. |
 | Semantic cache | in-house `DeterministicSemanticCache` | ⚠️ Name ≠ reality | **Default-OFF** (`semantic_cache.enabled: false`). Despite the name it keys on a **normalized query string** (case/whitespace) — **no embeddings, no similarity** ("no embedding library is imported"; fuzzy/embedding backend is a deferred seam, C8). It is an exact-match cache, not semantic retrieval. |
+| Persistent memory | in-house `DeterministicMemoryStore` | 🔶 Optional | **Default-OFF** (`memory.enabled: false`, `SP_MEMORY` override) but **wired into the pipeline**, not just substrate — `app/pipeline.py` calls `recall_memory`/`write_memory` on both the direct and streaming paths. Session-scoped, most-recent-first recall (`max_recall: 3`); sanitized-input + post-verify-output only, never raw text; CCR-class residency (`local_only`, TTL-enforced, `export_to_telemetry: false`). Ships as an in-house step-5 extension, not mem0 itself — see [`self-improving-agent-feature-fit.md`](self-improving-agent-feature-fit.md) (✅ **SHIPPED**, 2026-08-17 scope decision) and [`persistent-memory-residency-spec.md`](persistent-memory-residency-spec.md). |
 
 ### Step 6 / 7 / 8 · Adaptive router + model gateway — `app/routing/`, `app/gateway/`
 | Component | Library | Status | Notes |
@@ -103,7 +106,7 @@ spine; 14–15 are the telemetry tap. **Every step emits a `DecisionRecord`.**
 | 3 | gate → policy context | Build the immutable `ExecutionPolicyContext`: residency (`onprem_only`), `allowed_providers`, budget. Gate errors → **reject** (fail closed). |
 | 4 | context → task-mode router | Classify **direct** vs **multi-step** (rules-first). |
 | 5 | → agent runtime (NAT) | *Multi-step only.* NeMo Agent Toolkit drives hops; **each hop re-enters steps 5–8**. |
-| 6 | → context optimization | Direct path (or per hop): semantic-cache lookup → Headroom compression. *All default-OFF.* |
+| 6 | → context optimization | Direct path (or per hop): memory recall (prepend) → semantic-cache lookup → Headroom compression. *All default-OFF.* See [`routeforge-sample-request-flows.md`](routeforge-sample-request-flows.md) for the exact per-call order, including the memory-write step on the success path. |
 | 7 | optimization → adaptive router | Score candidates on **post-compression** token cost; apply residency clamp. |
 | 8 | router → model gateway | Select model + backend (LiteLLM); quotas, breakers, fallback. |
 | 9 | gateway → backend | Dispatch to an on-prem endpoint, **or** managed cloud *only if allowed* (never for `onprem_only`). |
@@ -117,14 +120,21 @@ spine; 14–15 are the telemetry tap. **Every step emits a `DecisionRecord`.**
 
 ## Scope note — what is deliberately not here
 
-RouteForge is the **router / policy gateway**. Three things that belong to the *application*
+RouteForge is the **router / policy gateway**. Two things that belong to the *application*
 built on top of it — not to the router — are intentionally excluded from these diagrams and
 tables:
 
 - **Prompt-optimization (DSPy)** — an offline concern of the application, not the serving path.
-- **Persistent memory (mem0-style)** — application-side conversational memory. RouteForge's
-  own step-5 cache/compression stay; mem0 is not a router component.
 - **NeMo Guardrails** — not a RouteForge dependency; the gate is Presidio/regex + rules only.
+
+**Persistent memory (mem0-style) is NOT one of these** — it is an in-house **step-5
+extension inside the router** (`app/memory/`, `DeterministicMemoryStore`), wired into
+`app/pipeline.py`'s recall/write calls on both the direct and streaming paths (default-OFF,
+`memory.enabled: false`), governed by the same CCR-class residency rules as compression
+(local-only, TTL-enforced, never exported to telemetry). See the Step 5 table above and
+[`self-improving-agent-feature-fit.md`](self-improving-agent-feature-fit.md) for the
+2026-08-17 scope decision that shipped it as an in-scope extension rather than an
+application-side concern.
 
 One naming caveat remains inside the router itself:
 

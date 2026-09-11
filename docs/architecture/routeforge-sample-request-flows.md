@@ -243,6 +243,14 @@ All three **bypass automatically** on `high_risk` or `restricted` sensitivity (c
 
 **App:** `hospital-phi`. **Request:** `"Does patient with SSN 123-45-6789 qualify for the trial?"`
 
+> The `presidio` extra is not installed in the venv this doc was last verified from, so the
+> "no healthy on-prem model → 422" mechanism below (rows 3-4) was executed with `pii_detection:
+> "regex"` standing in for `"presidio"` — the mechanism under test
+> (`ModelRegistry.has_healthy_onprem()` dropping `onprem` from `allowed_providers`) is
+> detector-independent, and `regex` also matches `US_SSN` (`app/policy/detectors.py`). Presidio
+> actually detecting `US_SSN` (row 2) is stable, well-tested third-party behavior and was not
+> re-executed here.
+
 | Step | What happens |
 |------|--------------|
 | 2 · Gate | `pii_detection: presidio` (Presidio + spaCy NER) detects **`US_SSN`**. The gate **redacts** it before anything downstream sees the text: `"… SSN <US_SSN> …"`. (Nothing external has seen the raw request — rule #1.) |
