@@ -1,7 +1,12 @@
 # Bugs backlog — work later
 
 Running list of known defects/observations to pick up later. Newest first.
-Sibling backlogs: `ui-open-items.md`, `eval-logging-backlog.md`.
+**This is now the single backlog.** `docs/ui-open-items.md` and
+`docs/eval-logging-backlog.md` have been folded in and archived to
+`docs/archive/` — every item in both was verified against the code (not
+assumed from its status heading) during the 2026-09-10 docs sweep, and every
+one was confirmed closed; nothing was migrated because nothing was live. See
+the audit trail in that sweep's task report.
 
 > **Status sweep 2026-08-22.** Re-verified against the code at `main` (merge `ed64312`,
 > deployed DGX `:0.14.0`). Resolved-but-unmarked items carry a `✅ RESOLVED` / `PARTIAL`
@@ -43,6 +48,156 @@ Sibling backlogs: `ui-open-items.md`, `eval-logging-backlog.md`.
 > `str | None`: three of the four consumers that read raw message text were updated to
 > coerce it, one was not. Same class as B22/B23 in shape — a contract moved and one
 > mirror of it didn't — but here both copies are server-side.
+
+---
+
+> **Update 2026-09-10 (docs-reclassification sweep).** Five code/config findings
+> turned up while verifying the `docs/` tree against the code for the docs
+> reclassification project (not while adding a feature) — recorded below as
+> **B26**–**B30**. None are fixed here; this sweep only writes backlog entries.
+> The same sweep also folded `docs/ui-open-items.md` and
+> `docs/eval-logging-backlog.md` into this file (see the note at the top) —
+> every item in both verified closed, nothing migrated.
+
+## B26 — Catch-all exception handler in the request path logs nothing
+
+**Severity:** medium (operational; makes production 500s undiagnosable)
+**Found:** 2026-09-10, docs-reclassification Task 3, while debugging a multi-step example
+that returned a bare `500 internal error`. **Open.**
+
+`app/api/routes.py:247-249`:
+
+```python
+except Exception:
+    metrics.observe_request("-", "error")
+    raise HTTPException(500, "internal error")
+```
+
+This is the last handler in the chat-completions endpoint's exception chain (after the
+named `PipelineRejected` / `NoEligibleCandidate` / `AgentCapExceeded` /
+`BackendUnavailable` / `PolicyGateError` / `HTTPException` cases). It catches every
+other exception, bumps the `error` metric, and raises a generic 500 — but never calls
+`logging.*` or `log.exception(...)`, unlike the other `except Exception` blocks in this
+same file (e.g. lines 365-366, 387-388, 402-403, 442-443, 461-462, 605-606, 630-631,
+all of which log via `logging.getLogger("serving.obs").exception(...)` or `log.exception(...)`).
+The traceback for whatever actually broke is discarded the moment this branch is hit;
+only the metric and a generic client-facing message survive. Operationally this means a
+genuine bug anywhere in `pipeline.run()` is invisible in logs — it shows up only as an
+unexplained 500 count on the dashboard, with no way to tell which of the countless
+possible causes it was.
+
+## B27 — `capture_io` accepts an invalid value with 200 and stores it silently
+
+**Severity:** low-medium (fail-safe today, but silent, undocumented, and inconsistent
+with its three sibling fields)
+**Found:** 2026-09-10, docs-reclassification Task 4 review. **Open.**
+
+`app/api/admin_routes.py`'s `set_policy` validates `residency`, `pii_detection`,
+`stream_mode`, and `policy_mode` against their enums and returns `422` on an unrecognized
+value (lines 420-427):
+
+```python
+if body.residency is not None and body.residency not in RESIDENCY:
+    raise HTTPException(422, f"bad residency {body.residency!r}")
+if body.pii_detection is not None and body.pii_detection not in PII_MODES:
+    raise HTTPException(422, f"bad pii_detection {body.pii_detection!r}")
+if body.stream_mode is not None and body.stream_mode not in STREAM_MODES:
+    raise HTTPException(422, f"bad stream_mode {body.stream_mode!r}")
+if body.policy_mode is not None and body.policy_mode not in POLICY_MODES:
+    raise HTTPException(422, f"bad policy_mode {body.policy_mode!r}")
+```
+
+`capture_io` (`PolicyIn.capture_io`, `app/api/admin_routes.py:118`) has no such check —
+there is no `CAPTURE_IO_MODES` import or membership test anywhere in `set_policy`.
+**Confirmed by execution** (not just reading): a fresh `TestClient(create_app())` against
+an in-memory SQLite DB, logged in as admin, `PUT /admin/applications/{id}/policy` with
+`{"capture_io": "bogus_capture"}` returns **`200`**, and the follow-up response body
+echoes `"capture_io": "bogus_capture"` back in the stored policy — it is persisted
+verbatim, not rejected or normalized.
+
+At serve time, `app/obs/export.py:_set_io` (lines 66-80) only special-cases `"off"`
+(early return), `"redacted"` (redact then set), and `"full"` (set raw, gated on the
+process-global `_capture_io_full` flag which is only ever armed for a real `"full"`
+value). An unrecognized string matches none of the three branches and falls through to
+the unconditional `set_attribute` calls at the bottom — but since `_capture_io_full`
+stays `False` for anything other than a literal `"full"`, `RedactingSpanExporter`
+(`app/obs/otel.py:217`) still redacts the `input.value`/`output.value` keys on export.
+So the practical effect today is fail-safe (equivalent to `redacted`, not a raw leak) —
+but that safety is incidental to how the fall-through happens to interact with the
+exporter, not a deliberate, validated default, and it is silent: the operator gets no
+signal that their config value was nonsense. Every sibling field would have told them.
+
+## B28 — Purged `inference_backend` axis survives in the HPE Helm values <!-- purged-ok -->
+
+**Severity:** low (cosmetic/documentation risk only — the code does not read these keys)
+**Found:** 2026-09-10, docs-reclassification Task 5. **Open, deliberately not fixed here.**
+
+`deploy/hpe/routeforge/values.yaml:114` still declares
+`inferenceBackend: mock        # mock | vllm | dynamo | none` and `:117-118` a
+`vllm: {baseUrl: http://vllm:8000/v1}` block. Both belong to the `inference_backend` <!-- purged-ok -->
+axis the 2026-08-03 pure-router pivot removed (CLAUDE.md: "There is no `inference_backend` <!-- purged-ok -->
+axis and no separate `serving_paths` block"). Confirmed the app no longer reads it: there <!-- purged-ok -->
+is no `inference_backend` / `INFERENCE_BACKEND` reference anywhere under `app/config/` <!-- purged-ok -->
+or `app/main.py` — the Pydantic settings schema has no such field. The Helm templates
+still render the dead value into a ConfigMap and an env var
+(`deploy/hpe/routeforge/templates/serving-config.yaml:17`, `templates/api.yaml:51`,
+`templates/NOTES.txt:6,30-31`), but nothing on the Python side consumes it, so it is
+harmless — just misleading to an operator reading the values file who would reasonably
+assume it still selects something.
+
+**Deliberately not fixed in this task.** Editing a Helm values file (and the templates
+that render it) is deployment-affecting and needs its own change with its own testing —
+out of scope for a docs-only sweep.
+
+## B29 — UI stats type omits `cache_saved_usd`, which the API already returns
+
+**Severity:** medium (a real savings figure the API produces cannot be rendered)
+**Found:** 2026-09-10, docs-reclassification Task 7 review. **Open.**
+
+`ui/src/api.ts`'s `RequestSummary` interface (lines 9-25) declares `routing_saved_usd`
+and `compression_saved_usd` (lines 19-20) but has no `cache_saved_usd` field anywhere in
+the file — confirmed absent. `GET /api/stats` and `GET /api/fleet`
+(`app/api/ui_routes.py:135-146`, via `stats_over`/`fleet_over` in `app/api/history.py`)
+both return `cache_saved_usd` (`app/api/history.py:43`, aggregated at lines 142-144 and
+171-173 — "feature #6: the third savings lever (skipped model)"). The console has no
+type-level knowledge this field exists, so it cannot render it: confirmed
+`ui/src/console/sections/CostSection.tsx` has no mention of "cache" at all — the
+Savings-by-lever chart shows only routing and compression, silently dropping the third
+lever the API already computes and ships.
+
+This is an instance of this project's **documented recurring defect class**: the console
+re-encoding a piece of the server contract and drifting from it once the server moves
+(see **B22**/**B23** above, and the "Never silent" lesson recorded in this file's
+2026-09-05 update note) — here the drift is an omission (a returned field with no
+client-side type) rather than a stricter re-derived rule, but the root cause is the same:
+a second, hand-maintained copy of a server contract that nothing keeps in sync.
+
+## B30 — Router's `capacity` scoring term is a constant, not a signal
+
+**Severity:** low (no incorrect ranking today, but the scoring function is less rich
+than it presents itself, and `routing.yaml`'s weight implies otherwise)
+**Found:** 2026-09-10, docs-reclassification Task 8; independently confirmed in review.
+**Open.**
+
+`app/routing/strategy.py:60`, `DefaultRoutingStrategy.rank`'s `score()`:
+
+```python
+return (weights["quality"] * q - weights["cost"] * norm
+        - weights["latency"] * _L[c.tier] + weights["capacity"] * 1.0)
+```
+
+`weights["capacity"] * 1.0` is added identically to every candidate's score — a literal
+constant, not a per-candidate term, so it can never change the ranking (it shifts every
+candidate's score by the same amount, which `sorted()` is invariant to). Confirmed there
+is no live signal it could vary on even in principle: `PoolCandidate`
+(`app/config/schema.py:6-22`) has fields for `name`, `provider`, `tier`, `display_name`,
+`litellm_model`, and `quality` — no `capacity` attribute of any kind. Meanwhile
+`config/routing.yaml:15` gives it a real, nonzero weight
+(`weights: {quality: 1.0, cost: 0.6, latency: 0.3, capacity: 0.2}`), which makes the
+scoring function look like it accounts for a fourth dimension (candidate capacity/load)
+that it does not. Either it should be fed a real per-candidate signal or the term
+(and its config weight) should be removed so the scoring function's inputs match what it
+actually computes.
 
 ---
 
