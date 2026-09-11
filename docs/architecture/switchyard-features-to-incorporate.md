@@ -45,8 +45,10 @@ multi-step agent loop, let sustained difficulty escalate the tier for subsequent
 
 **Guardrails:** escalation moves only within `allowed_providers` — an `onprem_only` task
 escalates cheap→mid→frontier-**on-prem** and is **never** lifted to cloud to satisfy a
-floor (hard rule 8). Needs real per-hop signal aggregation, which the open multi-step
-latency=0 bug currently lacks — that fix is a prerequisite.
+floor (hard rule 8). Needs real per-hop signal aggregation, which is now in place — the
+multi-step latency=0 bug this was gated on is resolved (`docs/bugs-backlog.md` B5,
+2026-08-06); the prerequisite is satisfied, only the escalation feature itself remains
+to build.
 
 ### 11. Failure-driven model *switch* (not just a higher tier)
 ✅ **SHIPPED** (`app/gateway/gateway.py`): on backend failure the gateway re-selects, excluding every model already failed this request, staying within `allowed_providers`.
@@ -172,8 +174,9 @@ a major vendor independently drew them. Worth citing to skeptics.
 2. **#2 Stage-Router tool signals** + **#12 role-aware routing** into step-6 — both are
    rules-first per-hop routing features, no new dependencies; land them together.
 3. **#1 Escalation loop/drift signals** + **#11 failure-driven model switch** — one body
-   of work (per-hop failure signals → escalate tier *and* switch model); gated on fixing
-   the multi-step latency=0 bug. **#13** decides rules-based vs LLM judge here.
+   of work (per-hop failure signals → escalate tier *and* switch model); the multi-step
+   latency=0 bug this used to be gated on is resolved, so this can start unblocked.
+   **#13** decides rules-based vs LLM judge here.
 4. **#6 low-confidence fallback** — small config + router change once #1's escalation
    plumbing exists.
 5. **#4 semantic cache** — last, behind a flag, only after CCR-class guarantees are wired.

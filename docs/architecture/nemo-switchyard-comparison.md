@@ -64,8 +64,11 @@ internal report `NVIDIA_Nemotron_and_Switchyard_Report.docx`.
    a task is visibly struggling, rather than only reacting after step 9 fails. Stays
    inside the invariants — escalation only ever moves within `allowed_providers`, so an
    `onprem_only` task escalates cheap→mid→frontier-on-prem and **never** lifts to cloud
-   (CLAUDE.md hard rule 8). Also depends on real per-hop signal aggregation, which the
-   open multi-step latency=0 bug currently lacks.
+   (CLAUDE.md hard rule 8). Depends on real per-hop signal aggregation, which is now in
+   place — the multi-step latency=0 bug this used to be gated on is resolved (`docs/bugs-backlog.md`
+   B5: per-hop `latency_ms` flows end-to-end via `app/agent/internal_endpoint.py` +
+   `app/api/history.py`) — so this borrow no longer has a plumbing blocker, only the
+   feature work itself.
 
 2. **Tool-activity as a routing feature (Stage Router).** Feed the NAT runtime's
    tool-call history into the step-6 scorer as a feature: exploration/error phase →
