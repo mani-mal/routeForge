@@ -143,7 +143,8 @@ class LangfuseCfg(BaseModel):
     host: str  # in-cluster URL for OTLP export (e.g. http://langfuse-web:3000)
     redact_on_export: bool
     # Eval-capture switch for request/response I/O attached to the serving.request
-    # root span (docs/eval-logging-backlog.md). `off` = today's behaviour (no I/O
+    # root span (docs/archive/eval-logging-backlog.md; current contract in
+    # docs/reference/per-app-config.md). `off` = today's behaviour (no I/O
     # captured — the demo default, keeps rule 2 intact). `redacted` = attach
     # redact()'d prompt/completion (entity VALUES masked to <TYPE>; structure kept,
     # eval-usable, no raw PII). `full` = raw prompt/completion for eval — gated by
@@ -189,7 +190,7 @@ class MemoryCfg(BaseModel):
     residency posture (CLAUDE.md rule 6): local-only, enforced TTL, never
     exported. Default OFF; Task 1 adds NO pipeline wiring, so flipping this
     to true still has no effect on a request until Task 2 wires read/write
-    in. See docs/architecture/persistent-memory-residency-spec.md."""
+    in. See docs/architecture/specs/persistent-memory-residency-spec.md."""
     enabled: bool = False
     residency: str = "local_only"
     ttl_hours: int = 24
@@ -207,7 +208,7 @@ class SemanticCacheCfg(BaseModel):
     placement/shape. Default OFF (C7): with enabled=false nothing in the
     pipeline constructs a DeterministicSemanticCache (Task 1 wires no
     pipeline code at all). See
-    docs/architecture/semantic-cache-residency-spec.md."""
+    docs/architecture/specs/semantic-cache-residency-spec.md."""
     enabled: bool = False
     residency: str = "local_only"     # lint-enforced when enabled -- CLAUDE.md rule 6
     ttl_hours: int = 24                # lint-enforced > 0 when enabled

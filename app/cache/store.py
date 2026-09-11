@@ -8,7 +8,7 @@ read / honesty-counter machinery, but keys on a CONTENT-DERIVED normalized
 query instead of an opaque uuid, and additionally partitions by residency: a
 cache hit skips the model entirely, so serving a cloud-produced answer to an
 onprem_only request would be as real a Rule-3 breach as routing the live call
-to the cloud. See docs/architecture/semantic-cache-residency-spec.md
+to the cloud. See docs/architecture/specs/semantic-cache-residency-spec.md
 (guarantees C1-C8; this module builds C2, C3, C5, C6, C8's typed seam).
 
 NOT wired into the pipeline -- Task 2 does the check/store calls. This module
@@ -92,7 +92,7 @@ class SemanticCacheBackend(Protocol):
 
 class DeterministicSemanticCache:
     """Deterministic exact/normalized-query match cache. See module docstring
-    and docs/architecture/semantic-cache-residency-spec.md."""
+    and docs/architecture/specs/semantic-cache-residency-spec.md."""
 
     def __init__(self, ttl_seconds: int,
                  clock: Callable[[], float] = time.monotonic) -> None:

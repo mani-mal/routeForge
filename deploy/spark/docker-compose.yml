@@ -21,7 +21,7 @@
 #
 # routeForge is a PURE ROUTER: this stack deploys NO inference. The on-prem pool
 # boots empty. Stand up your own OpenAI-compatible server on the Spark's GPU and
-# onboard it at runtime (see README.md step 5 and docs/onboarding-models.md).
+# onboard it at runtime (see README.md step 5 and docs/guides/onboarding-models.md).
 #
 # Langfuse is optional and OFF in this file — add it by layering
 # docker-compose.langfuse.yml (see README.md). With no LANGFUSE_PUBLIC_KEY /

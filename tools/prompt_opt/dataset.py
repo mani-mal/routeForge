@@ -2,7 +2,7 @@
 
 No `{input, label}` dataset exists in this repo -- feedback lives only in
 Langfuse, and assembling a local training file is an external, residency-
-bound activity (see `docs/help/exporting-eval-datasets.md`): raw-text
+bound activity (see `docs/guides/exporting-eval-datasets.md`): raw-text
 training data may only be exported from a `full`-capture, residency-local
 Langfuse project. This loader itself does no network I/O and never reaches
 into Langfuse in-process -- it just reads a caller-supplied local file.

@@ -28,18 +28,18 @@ The path, step by step:
 | 2 · Gate | `app/policy/gate.py` | No PII → `sensitivity=public`, `risk_class=low`, `residency=any` |
 | 4 · Task mode | `app/routing/task_mode.py` | Rules-only, classifier OFF. No trigger phrase (`"step by step"`, `"look up"`) → `direct` |
 | 5 · Compression | `app/compression/` | Short prompt; a handful of tokens |
-| — · Complexity | `app/pipeline.py:131` | `complexity = min(1.0, comp.tokens_after / 2000)` → ~7 tokens → **≈ 0.003** |
-| 6 · Tier from complexity | `app/routing/router.py:39` | `0.003 ≤ cheap_max (0.35)` → **cheap** |
-| 6 · Risk floor | `config/routing.yaml:48` | `low → cheap`. Target = `max(cheap, cheap)` = **cheap** |
-| 6 · Residency clamp | `router.py:104` | `any` — nothing dropped, target stays cheap |
+| — · Complexity | `app/pipeline.py:531` | `complexity = min(1.0, comp.tokens_after / 2000)` → ~7 tokens → **≈ 0.003** |
+| 6 · Tier from complexity | `app/routing/router.py:45-46` | `0.003 ≤ cheap_max (0.35)` → **cheap** |
+| 6 · Risk floor | `config/routing.yaml:62` | `low → cheap`. Target = `max(cheap, cheap)` = **cheap** |
+| 6 · Residency clamp | `router.py:119-121` | `any` — nothing dropped, target stays cheap |
 | 6 · Within-tier score | `router.py:150` | Among cheap candidates: `quality·1.0 − cost·0.6 − latency·0.3 + capacity·0.2` → cheapest/best cheap model wins (an onboarded on-prem model usually wins on cost). Ranking is now delegated to the pluggable strategy (`ordered = self._strategy.rank(...)`, `app/routing/strategy.py`); the default strategy reproduces this native formula |
 
 ### The load-bearing line
 
 ```python
-# app/pipeline.py:131  (direct path)
+# app/pipeline.py:531  (direct path; also :748 in run_stream())
 complexity = min(1.0, comp.tokens_after / 2000)
-# app/agent/internal_endpoint.py:151  (per hop, multi-step path)
+# app/agent/internal_endpoint.py:153  (per hop, multi-step path)
 complexity = min(1.0, tokens_after / 2000)
 ```
 
@@ -66,7 +66,7 @@ which is why the "~70% to cheap" demo story holds. But it inverts at the extreme
 ### The backstop: confidence-driven escalation
 
 The short-but-hard case is (partly) caught *after the fact* by escalation, not by better
-up-front tier selection (`config/routing.yaml:30`):
+up-front tier selection (`config/routing.yaml:40,48-49`):
 
 ```yaml
 confidence_escalation_threshold: 0.60
@@ -110,20 +110,28 @@ tier / cost / provider / residency / quality.
 
 ### Evidence in the code
 
-1. **One endpoint.** `app/api/routes.py:72` exposes only `POST /v1/chat/completions`
-   (plus `/health` and UI routes). No `/v1/images/generations`, `/v1/embeddings`, or
-   `/v1/audio/*`. An image-generation call 404s.
+1. **One endpoint.** `app/api/routes.py:115` exposes `POST /v1/chat/completions` (plus
+   `/health`, `/metrics`, `/v1/feedback`, and UI routes — none of them OpenAI media
+   endpoints). No `/v1/images/generations`, `/v1/embeddings`, or `/v1/audio/*`. An
+   image-generation call 404s.
 
 2. **The request schema can't carry an image.** `app/models.py:9`:
    ```python
    class Message(BaseModel):
        role: str
-       content: str        # plain string — NOT OpenAI's content-parts array
+       content: str | None = None   # a plain string (or None on a tool-only turn) —
+                                     # NOT OpenAI's content-parts array
+       tool_calls: list[dict] | None = None
+       tool_call_id: str | None = None
+       name: str | None = None
    ```
-   OpenAI vision *input* uses `content: [{"type":"text",…},{"type":"image_url",…}]`.
-   `Message.content` is a strict `str`, so a vision request fails validation (422) before
-   it reaches the router. The handler confirms the text assumption: `prompt =
-   body.messages[-1].content` and it reads back `choices[0].message.content` as a string.
+   `content` was widened from a strict `str` to `str | None` for the OpenAI tool-calling
+   round-trip (an assistant turn that only requested tools carries `content: null`) — but
+   it is still never a content-parts array. OpenAI vision *input* uses `content:
+   [{"type":"text",…},{"type":"image_url",…}]`; that shape is neither `str` nor `None`, so
+   a vision request still fails validation (422) before it reaches the router. The handler
+   confirms the text assumption, now guarding the nullable field: `prompt =
+   (body.messages[-1].content or "") if body.messages else ""` (`app/api/routes.py:322`).
 
 3. **Onboarded models carry no capability field.** `OnboardIn` (`app/api/admin_routes.py`)
    and `_OnboardedRow` (`app/apps/registry.py:13`) have: `slug, display_name,
@@ -165,7 +173,7 @@ customer use case pulls for it.
 None of the above uses NVIDIA NeMo Switchyard — the current router is RouteForge's own
 native cost/risk scorer. (Our step-6 module carries the internal codename "Switchyard,"
 which predates and is unrelated to NVIDIA's project — see
-[`nemo-switchyard-comparison.md`](./nemo-switchyard-comparison.md) for the name-collision
+[`nemo-switchyard-comparison.md`](../comparisons/nemo-switchyard-comparison.md) for the name-collision
 note.) The one mechanism that *rhymes* with Switchyard is the confidence escalation in
 Part 1 — but it is native and **reactive** (fires on low confidence / step-9 failure),
 not Switchyard's turn-by-turn *progress-driven* escalation. Of Switchyard's genuinely
@@ -174,4 +182,4 @@ distinct ideas, several have since **shipped**: the pluggable strategy family
 axis), and Stage Router signals (`app/routing/signals.py`, default OFF). Progress-driven
 escalation remains backlog and the Prefill Router stays *rejected* as Improvement-Plane —
 all tracked in that doc and in
-[`switchyard-features-to-incorporate.md`](./switchyard-features-to-incorporate.md).
+[`switchyard-features-to-incorporate.md`](../comparisons/switchyard-features-to-incorporate.md).

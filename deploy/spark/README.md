@@ -89,7 +89,7 @@ ollama pull qwen2.5:7b
 ```
 
 The only thing routeForge cares about: the model id the server reports in
-`GET /v1/models` is the `slug` you onboard. See `docs/onboarding-models.md` and
+`GET /v1/models` is the `slug` you onboard. See `docs/guides/onboarding-models.md` and
 the `inference-backends` skill for vLLM / NIM / Dynamo on the Spark's GPU.
 
 **Endpoint address.** If the server runs on the Spark **host** (not in this

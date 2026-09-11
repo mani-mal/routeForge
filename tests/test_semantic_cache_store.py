@@ -1,6 +1,6 @@
 """DeterministicSemanticCache — CCR-class semantic-cache substrate (feature #6
 Task 1). NOT wired into the pipeline yet; these tests exercise the store in
-isolation. See docs/architecture/semantic-cache-residency-spec.md."""
+isolation. See docs/architecture/specs/semantic-cache-residency-spec.md."""
 
 from app.cache.store import DeterministicSemanticCache
 

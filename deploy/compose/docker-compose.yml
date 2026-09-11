@@ -5,7 +5,7 @@
 # Brings up: api (FastAPI + NAT + Headroom), ui (nginx-served React), and the
 # self-hosted Langfuse stack (web/worker + postgres/clickhouse/redis/minio).
 # routeForge is a pure router — it runs no inference backend; on-prem models are
-# onboarded at runtime (see docs/onboarding-models.md). Regex PII detection → no
+# onboarded at runtime (see docs/guides/onboarding-models.md). Regex PII detection → no
 # GPU, no API keys needed for a local bring-up.
 #
 # Open http://localhost:3001 for the UI, http://localhost:3000 for Langfuse

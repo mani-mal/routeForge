@@ -4,7 +4,7 @@ direct pipeline path. Reuses the compression/pii pipeline test fixtures
 these are real end-to-end `Pipeline.run()` calls, not a re-implementation of
 the wiring under test.
 
-See docs/architecture/semantic-cache-residency-spec.md (C1-C8) and
+See docs/architecture/specs/semantic-cache-residency-spec.md (C1-C8) and
 .superpowers/sdd/semantic-cache/task-2-brief.md for the contract each test
 below is named after.
 """

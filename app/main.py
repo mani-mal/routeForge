@@ -136,7 +136,7 @@ def create_app() -> FastAPI:
     # .enabled is true (C7: with it false, nothing in the request path ever
     # calls into this instance). Local, TTL-bounded, tenant+residency-
     # partitioned — see app/cache/store.py and
-    # docs/architecture/semantic-cache-residency-spec.md.
+    # docs/architecture/specs/semantic-cache-residency-spec.md.
     cache = DeterministicSemanticCache(
         ttl_seconds=settings.serving.semantic_cache.ttl_hours * 3600)
     app.state.cache = cache

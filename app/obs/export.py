@@ -44,7 +44,8 @@ def _set_io(root, capture_io: str, prompt: str, completion: str,
             recognizers=None, sanitized_prompt: str = "",
             raw_completion: str = "") -> None:
     """Attach request/response I/O to the root span per the eval-capture mode
-    (docs/eval-logging-backlog.md). `input.value`/`output.value` are the OTel
+    (docs/archive/eval-logging-backlog.md; current contract in
+    docs/reference/per-app-config.md). `input.value`/`output.value` are the OTel
     attributes Langfuse reads as a trace's Input/Output.
 
     - off      → set nothing (today's behaviour; Input column stays blank).

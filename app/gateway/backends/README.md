@@ -4,7 +4,7 @@ One `InferenceBackend` Protocol (`base.py`), one implementation
 (`LiteLLMBackend`, `litellm_backend.py`). There is no `inference_backend` axis
 any more — routeForge deploys nothing; on-prem models are onboarded at
 runtime (endpoint + auth env registered per model, see
-`docs/onboarding-models.md` and `app/apps/registry.py`'s `ModelRegistry`).
+`docs/guides/onboarding-models.md` and `app/apps/registry.py`'s `ModelRegistry`).
 Every provider (onprem/azure/bedrock alike) egresses through this single
 LiteLLM SDK path. See `.claude/skills/inference-backends/SKILL.md` and
 `.claude/skills/routing-and-gateway/SKILL.md` for the full design.
@@ -47,7 +47,7 @@ lingering reference doesn't break) — there is no probe left to skip.
 Point routeForge at a live OpenAI-compatible endpoint (vLLM, Dynamo+TRT-LLM,
 or anything else that speaks the OpenAI chat-completions API) via the
 onboarding admin flow — no code changes, no deploy. See
-`docs/onboarding-models.md`. Deploying the inference server itself (vLLM,
+`docs/guides/onboarding-models.md`. Deploying the inference server itself (vLLM,
 NVIDIA Dynamo, K8s, GPUs) is out of scope for routeForge — use NVIDIA's
 verified skills for that (`dynamo-router-starter`, `dynamo-recipe-runner`,
 `dynamo-troubleshoot`, `dynamo-interconnect-check`; see the

@@ -1,69 +1,78 @@
-# Architecture diagram — reading notes
+# Architecture
 
-`llm orchestration loop.drawio` is the canonical picture of the **Serving Plane**.
-Two things the current diagram does not yet draw explicitly; treat these notes as
-authoritative until the `.drawio` is redrawn to match.
+How RouteForge works today. **Every claim in this directory is checkable
+against HEAD** — it was verified during the 2026-09-10 docs reclassification
+sweep.
 
-> **Where routeForge stops and the serving layer begins** — for the recurring
-> "does routeForge do llm-d / DRA / Gateway API / prefill-decode?" question and the
-> "why routeForge does not deploy Dynamo" decision, see
-> [`inference-layer-boundary.md`](./inference-layer-boundary.md).
+## `architecture/` vs `decisions/` vs `specs/`
 
-> **NeMo Switchyard vs. our step-6 router** — what to borrow from NVIDIA NeMo
-> Switchyard, what to refuse on scope grounds, and the (deferred, not rejected)
-> "should we replace our custom router with it?" decision, see
-> [`nemo-switchyard-comparison.md`](./nemo-switchyard-comparison.md). The action-oriented
-> per-feature incorporation plan is
-> [`switchyard-features-to-incorporate.md`](./switchyard-features-to-incorporate.md).
+Three subdirectories, three different kinds of trust:
 
-> **How a request actually gets a tier (and why "easy question → cheap" is really
-> "short prompt → cheap"), plus the text-only / no-modality boundary** — for the
-> recurring "why did this land on cheap/frontier?" and "can it route text vs image
-> models?" questions, see [`routing-tier-selection.md`](./routing-tier-selection.md).
+- **`architecture/`** (this directory) — descriptive. What RouteForge does
+  today, checkable against the current code and diagrams.
+- **`architecture/decisions/`** — a dated scope call: why RouteForge does or
+  doesn't do X, and when that call was made. A decision doesn't expire just
+  because time passes; if a later decision supersedes an earlier one, the
+  superseded doc carries a banner saying so rather than being deleted.
+- **`architecture/specs/`** — a binding contract for a shipped feature, cited
+  by path from the application code that implements it. Treat these as
+  load-bearing: a change to the code that violates one should update the spec
+  in the same change.
 
-> **Why context compression (Headroom, step 5) lives in RouteForge and not the
-> calling app** — for the recurring "the app owns its own harness, so shouldn't
-> compression move out like RLHF did?" question, see
-> [`compression-in-scope.md`](./compression-in-scope.md).
+## Files in `architecture/`
 
-> **What belongs in the calling application vs. RouteForge** — the general placement
-> test ("you cannot move a boundary-enforcing component outside the boundary it
-> enforces"), the three-bucket sort (chokepoint / in-boundary lever / the app's own
-> business), and the worked cases: client-side compressors like rtk, Headroom, the
-> semantic cache, and **the two families of "prompt caching"** (app-side caches are
-> invisible and fine; provider-side `cache_control` / `prompt_cache_key` markers pass
-> *through* RouteForge and are currently stripped). See
-> [`app-vs-routeforge-boundary.md`](./app-vs-routeforge-boundary.md); the cost backlog
-> that fixes the lossy half is [`caching-cost-feature-fit.md`](./caching-cost-feature-fit.md).
+| Doc | Summary |
+|---|---|
+| [`logical-and-request-flow.md`](logical-and-request-flow.md) | Companion notes to the draw.io diagrams — the ten Serving-Plane steps and the end-to-end request/response flow. |
+| [`sample-request-flows.md`](sample-request-flows.md) | Worked examples: real requests walked through the ten steps, branch by branch. |
+| [`routing-tier-selection.md`](routing-tier-selection.md) | How the step-6 router actually picks a tier and model (length-based complexity, not semantic difficulty) and what it can't key on (no modality/capability axis). |
+| [`api-load-balancing.md`](api-load-balancing.md) | How the `api` deployment scales horizontally — L4/L7 balancing layers and why per-pod in-memory state was a bug. |
 
-> **Which Serving-Plane settings can safely become per-application overrides** —
-> for "should `pii_detection` / streaming be per-app?" and the rule for classifying
-> any new per-app knob (monotonic-tightening vs free-but-floored vs floor-itself),
-> see [`per-app-config-flexibility.md`](./per-app-config-flexibility.md).
+## Files in `architecture/decisions/`
 
-> **How the `api` deployment scales horizontally** — the L4/L7 balancing layers, why
-> per-pod in-memory state was a bug, and how to scale replicas, see
-> [`api-load-balancing.md`](./api-load-balancing.md).
+| Doc | Summary |
+|---|---|
+| [`inference-layer-boundary.md`](decisions/inference-layer-boundary.md) | Where RouteForge stops and the serving layer begins — the recurring "does RouteForge do llm-d / DRA / Gateway API / prefill-decode?" question, and why RouteForge doesn't deploy Dynamo. |
+| [`compression-in-scope.md`](decisions/compression-in-scope.md) | Why context compression (Headroom, step 5) stays inside RouteForge rather than moving to the calling application, unlike agent-harness self-improvement and RLHF. |
+| [`app-vs-routeforge-boundary.md`](decisions/app-vs-routeforge-boundary.md) | The general placement test for what belongs in the calling application vs. RouteForge, worked through client-side compressors, the semantic cache, and the two families of "prompt caching". |
+| [`per-app-config-flexibility.md`](decisions/per-app-config-flexibility.md) | Which Serving-Plane settings can safely become per-application overrides, and the rule for classifying any new per-app knob. |
+| [`self-improving-agent-feature-fit.md`](decisions/self-improving-agent-feature-fit.md) | The 2026-08-17 control-plane-vs-compute boundary decision: where self-improving-agent research (memory, prompt-opt, distillation) lands vs. RouteForge's scope — orchestrated, not hosted. |
 
-> **Where the self-improving-agent research lands vs. RouteForge's scope** — the
-> 2026-08-17 control-plane-vs-compute boundary decision (compression, prompt-opt,
-> memory, distillation-and-onboard all orchestrated, not hosted), see
-> [`self-improving-agent-feature-fit.md`](./self-improving-agent-feature-fit.md).
+## Files in `architecture/specs/`
 
-> **Residency + correctness contract for the semantic cache (feature #6)** — why a
-> cached answer is a second copy that must stay CCR-class and residency-partitioned,
-> see [`semantic-cache-residency-spec.md`](./semantic-cache-residency-spec.md).
+| Doc | Summary |
+|---|---|
+| [`semantic-cache-residency-spec.md`](specs/semantic-cache-residency-spec.md) | Binding residency + correctness contract for the semantic cache (`app/cache/store.py`) — a cached answer is a second copy that must stay CCR-class and residency-partitioned. |
+| [`persistent-memory-residency-spec.md`](specs/persistent-memory-residency-spec.md) | Binding residency contract for persistent memory (mem0-style, step-5 extension) — the CCR-class guarantees a cross-request memory store must honor. |
 
-> **Residency contract for persistent memory (mem0-style, step-5 extension)** — the
-> CCR-class guarantees a cross-request memory store must honor, see
-> [`persistent-memory-residency-spec.md`](./persistent-memory-residency-spec.md).
+## Diagrams
 
-> **Which features are IP-worthy, and what the prior art forecloses** — the ranked
-> menu (IP-1…12, R1…R9) is [`ip-and-research-opportunities.md`](./ip-and-research-opportunities.md).
-> **Briefing a new reviewer on it?** Give them
-> [`ip-review-handoff.md`](./ip-review-handoff.md) — reading order, what is already
-> settled, the gaps that are the actual assignment, and the disclosure-before-filing
-> constraint.
+See [`diagrams/README.md`](diagrams/README.md) for the three draw.io diagrams
+(logical architecture, physical architecture, request flow) and how to
+regenerate them from their JSON specs.
+
+`llm orchestration loop.drawio` (this directory) is the original diagram,
+superseded by the three above — retained only because
+[`decisions/self-improving-agent-feature-fit.md`](decisions/self-improving-agent-feature-fit.md)
+cites its "Prompt / Instructions — DSPy / NAT optimizer" node as evidence that
+prompt optimization was in the design from day one; that node has no
+counterpart in any of the three current diagrams, so it is the one thing the
+old file still shows that the new ones don't.
+
+## Related docs in other buckets
+
+- **NeMo Switchyard vs. our step-6 router** — what to borrow, what to refuse,
+  and the (deferred, not rejected) "should we replace our router with it?"
+  question: [`../comparisons/nemo-switchyard-comparison.md`](../comparisons/nemo-switchyard-comparison.md),
+  with the action-oriented incorporation plan in
+  [`../comparisons/switchyard-features-to-incorporate.md`](../comparisons/switchyard-features-to-incorporate.md).
+- **The cost gap left by provider-side prompt caching** (the lossy half of the
+  `app-vs-routeforge-boundary.md` decision above):
+  [`../comparisons/caching-cost-feature-fit.md`](../comparisons/caching-cost-feature-fit.md).
+- **Which features are IP-worthy, and what prior art forecloses**:
+  [`../roadmap/ip-and-research-opportunities.md`](../roadmap/ip-and-research-opportunities.md),
+  with the reviewer hand-off brief at
+  [`../roadmap/ip-review-handoff.md`](../roadmap/ip-review-handoff.md).
 
 ## Canonical step count: 1–10
 
@@ -80,12 +89,14 @@ swap (2026-07-30), when LiteLLM became the single egress path for every provider
 that need determinism fake the LiteLLM SDK call itself (`tests/_litellm_fake.py`), not a
 mock backend class.
 
-The `inference_backend: vllm | dynamo | none` axis was **removed** in the pure-router
+The `inference_backend: vllm | dynamo | none` axis was **removed** in the pure-router <!-- purged-ok -->
 pivot (2026-08-03). routeForge no longer picks an on-prem backend in YAML — on-prem models
 are **onboarded at runtime** (each with its own OpenAI-compatible `endpoint`) and live in
-the `ModelRegistry`; see `docs/onboarding-models.md`. The on-prem pool boots empty. The
+the `ModelRegistry`; see `docs/guides/onboarding-models.md`. The on-prem pool boots empty. The
 managed-cloud path's availability is still `providers.{azure,bedrock}.enabled`, and there
-is **no** separate `serving_paths` config axis.
+is **no** separate `serving_paths` config axis. <!-- purged-ok -->
+See [architecture-review.md](../archive/2026-07-25-architecture-review.md) for the pre-pivot config shape
+this replaced.
 
 So the honest "what's real vs simulated?" answer is: onboarded vLLM/Dynamo endpoints =
 real on-prem paths; `managed_cloud` = real cloud path; **nothing here is a demo-safe

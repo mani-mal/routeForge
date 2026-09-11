@@ -8,7 +8,7 @@ often air-gapped). Applications register, get API tokens, and call the OpenAI-co
 `/v1/chat/completions`; an admin configures per-application allowed models, providers,
 residency, and budgets, and views usage. On-prem models are onboarded at runtime — the
 pool boots empty and the operator points RouteForge at their own OpenAI-compatible
-endpoints (see `docs/onboarding-models.md`).
+endpoints (see `docs/guides/onboarding-models.md`).
 
 Internally it implements **steps 1–10 of the Unified LLM Orchestration architecture —
 the Serving Plane** (the diagram's canonical count; use "steps 1–10" everywhere, not
@@ -31,7 +31,7 @@ because the seams are the product's value. RouteForge delivers three guarantees:
   result** — but it runs no training loop, hosts no training or inference compute, and has no
   in-process promotion path. Onboarding stays the only path a model enters. If asked to make
   RouteForge **host** training or inference compute (not just orchestrate it), say it is out of
-  scope and stop. (See `docs/architecture/self-improving-agent-feature-fit.md` for the full
+  scope and stop. (See `docs/architecture/decisions/self-improving-agent-feature-fit.md` for the full
   scope decision, 2026-08-17.)
 
 ## Definition of done
@@ -128,7 +128,7 @@ value is showing the seams.
 | 5 | Conditional Context Optimization | `app/compression/` | **Headroom.** Compress tool outputs/history. Conditional. |
 | 6 | Adaptive Model & Backend Router | `app/routing/router.py` | Every LLM call. Scores **post-compression** cost |
 | 7 | Model Gateway & Provider Controls | `app/gateway/` | Adapters, quotas, breakers, fallback |
-| 8 | Approved Inference Serving Paths | `app/gateway/backends/` | Onboarded on-prem endpoints (via `ModelRegistry`) + managed cloud. routeForge deploys none of it — see `docs/onboarding-models.md` |
+| 8 | Approved Inference Serving Paths | `app/gateway/backends/` | Onboarded on-prem endpoints (via `ModelRegistry`) + managed cloud. routeForge deploys none of it — see `docs/guides/onboarding-models.md` |
 | 9 | Output Controls & Verification | `app/output/verify.py` | Leakage checks, escalation, sampling |
 | 10 | Governed Response / Action | `app/api/routes.py` | Response + full decision trace |
 
@@ -154,7 +154,7 @@ chunk boundary, but cannot enforce a whole-response verdict. The floor is absolu
 independent of the app's choice: `onprem_only` or `require_verification` can never waive
 step-9 verification — those requests fall back to `verified_then_stream` regardless of
 `stream_mode`. The UI's decision stream (SSE of DecisionRecords) is a separate channel
-and stays on. See `docs/per-app-config.md`.
+and stays on. See `docs/reference/per-app-config.md`.
 
 **Routing scopes** — four distinct routers; don't conflate them:
 - **NAT Router Agent** (step 4) selects workflow mode
@@ -163,7 +163,7 @@ and stays on. See `docs/per-app-config.md`.
 - **Dynamo** (step 8) selects/scales inference workers and KV placement
 
 **Routing observability & signals** (shipped `0.11.0`; see
-`docs/routing-observability.md`): (1) `GET /metrics` is an in-process Prometheus
+`docs/reference/routing-observability.md`): (1) `GET /metrics` is an in-process Prometheus
 exporter — four `routeforge_*` families, bounded labels only, **no
 tenant/PII**, opt-in `observability` extra (503 without it), no bundled server;
 (2) `routing.stage_signals` (default **OFF**) feeds a **raise-only** `min_tier`
@@ -199,7 +199,7 @@ providers:                     # availability only; tier membership lives in rou
 ```
 
 On-prem models are onboarded at runtime, not declared in YAML — see
-`docs/onboarding-models.md`. `providers.onprem.enabled` is an infra kill-switch, not a
+`docs/guides/onboarding-models.md`. `providers.onprem.enabled` is an infra kill-switch, not a
 backend selector: on-prem endpoints, prices, and tiers come from the `ModelRegistry`
 (YAML cloud pool ∪ enabled onboarded rows), never a static `base_url` here.
 
@@ -209,7 +209,7 @@ backend selector: on-prem endpoints, prices, and tiers come from the `ModelRegis
 - Sensitivity enum is `public | internal | confidential | restricted`, defined once in
   `policy.yaml`.
 - There is no `inference_backend` axis and no separate `serving_paths` block. On-prem
-  candidates are whatever the operator has onboarded (`docs/onboarding-models.md`);
+  candidates are whatever the operator has onboarded (`docs/guides/onboarding-models.md`);
   cloud path availability = `providers.{azure,bedrock}.enabled`.
 
 ### Config lint at startup — the highest-leverage guardrail
@@ -236,7 +236,7 @@ config layer.
 eligible candidate and is **rejected**, never silently sent to cloud. This is the same
 privacy guarantee the old `none` backend gave; it now falls naturally out of onboarding
 state (empty pool, or every onboarded model unreachable/disabled) instead of a static
-config flag. See `docs/onboarding-models.md` and the `inference-backends` skill.
+config flag. See `docs/guides/onboarding-models.md` and the `inference-backends` skill.
 
 ## Tech stack — use these, don't substitute
 
@@ -295,7 +295,7 @@ must serve; it's a useful end-to-end exercise of every branch.
 
 **Before the walkthrough:** the on-prem pool boots empty — there is no bundled model.
 The operator onboards their own on-prem endpoint first (Infrastructure → Onboard, or
-`POST /admin/infra/models`; see `docs/onboarding-models.md`) so step 1 below has a
+`POST /admin/infra/models`; see `docs/guides/onboarding-models.md`) so step 1 below has a
 cheap tier to land on.
 
 1. Simple question → cheap local model → fractions of a cent.
