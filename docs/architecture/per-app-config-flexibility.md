@@ -62,7 +62,9 @@ Two shapes are safe; a third is not:
   the deployment ceiling and guards cross-knob interactions. Precedent already in the code:
   `capture_io` and `compression_enabled` are `serving.yaml` infra switches that apps override
   per-app (`AppPolicy.capture_io`, `.compression_enabled`), and `capture_io='full'` is
-  *clamped* for `onprem_only` tenants (admin write-time lint).
+  *clamped* for `onprem_only` tenants still in `enforced` posture (admin write-time lint;
+  since 2026-09-05 an `onprem_only` app declaring `policy_mode: "passthrough"` can reach
+  `full` — see the superseded banner above).
 - **NOT safe: the knob is the floor.** If flipping the setting is itself the breach, with no
   independent mechanism to catch it, it must stay global (or tighten-only). A naked
   `reject_stream_requests` per-app flag is this case — see Decision 2.
