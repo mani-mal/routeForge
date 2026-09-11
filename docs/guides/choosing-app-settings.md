@@ -505,11 +505,12 @@ What happens:
   accumulated exemption work survives the round trip.
 - `app_policy_version` moves on the next response, which is how the customer's
   conformance probe learns the posture changed without anyone having to tell it.
-- **You must deal with `capture_io` in the same write** if it is `full`: an `enforced`
-  app cannot hold `capture_io: "full"` at any residency, and an `onprem_only` +
-  `enforced` app certainly cannot. Send it together:
-  `{"policy_mode": "enforced", "capture_io": "off"}` (or `"redacted"`, which is legal
-  again once the gate is sanitizing something).
+- **You must deal with `capture_io` in the same write if the app is `onprem_only`**
+  and it is `full`: an `onprem_only` + `enforced` app cannot hold `capture_io: "full"`
+  — a non-`onprem_only` app in `enforced` posture can already hold it (own Langfuse
+  project required), so this pairing only bites when residency is `onprem_only`. Send
+  it together: `{"policy_mode": "enforced", "capture_io": "off"}` (or `"redacted"`,
+  which is legal again once the gate is sanitizing something).
 - Placement does not move, in either direction. It never did.
 
 The reverse trip — `enforced` → `passthrough` — is the same single field, plus the

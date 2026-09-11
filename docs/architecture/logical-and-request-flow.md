@@ -41,7 +41,7 @@ Companion notes for the draw.io diagrams in
 ### Step 2 / 3 · Identity, privacy & policy gate — `app/policy/` (runs first, fails closed)
 | Component | Library | Status | Notes |
 |-----------|---------|--------|-------|
-| PII/PHI detection | **Presidio** (+ spaCy NER) | 🔶 Optional | `uv sync --extra presidio`, lazy-imported in `detectors.py::PresidioDetector`. **The default detector is regex** (`make_detector`); per-app `pii_detection` = `off \| regex \| presidio`. |
+| PII/PHI detection | **Presidio** (+ spaCy NER) | 🔶 Optional | `uv sync --extra presidio`, lazy-imported in `detectors.py::PresidioDetector`. **The configured default is `presidio`** (`config/serving.yaml` `policy.pii_detection`; `make_detector` takes no default and raises on an unknown mode). The bundled Compose and Spark deploys override this to `regex` (offline-safe — no spaCy model download); per-app `pii_detection` = `off \| regex \| presidio`. |
 | Custom recognizers | **`regex`** (ReDoS-safe) | ✅ Used | Core dep; powers the per-app custom recognizers. |
 | Auth + API tokens | **argon2-cffi** | ✅ Used | Admin password + API-token hashing. |
 | App / usage store | **SQLAlchemy** (async) | ✅ Used | `aiosqlite` (dev) core; `asyncpg` (prod Postgres) via `--extra postgres`. |

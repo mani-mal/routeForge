@@ -1,8 +1,8 @@
 # Bugs backlog — work later
 
 Running list of known defects/observations to pick up later. Newest first.
-**This is now the single backlog.** [`docs/ui-open-items.md`](../archive/ui-open-items.md) and
-[`docs/eval-logging-backlog.md`](../archive/eval-logging-backlog.md) have been folded in and archived to
+**This is now the single backlog.** [`archive/ui-open-items.md`](../archive/ui-open-items.md) and
+[`archive/eval-logging-backlog.md`](../archive/eval-logging-backlog.md) have been folded in and archived to
 `docs/archive/` — every item in both was verified against the code (not
 assumed from its status heading) during the 2026-09-10 docs sweep, and every
 one was confirmed closed; nothing was migrated because nothing was live. See
@@ -55,9 +55,35 @@ the audit trail in that sweep's task report.
 > turned up while verifying the `docs/` tree against the code for the docs
 > reclassification project (not while adding a feature) — recorded below as
 > **B26**–**B30**. None are fixed here; this sweep only writes backlog entries.
-> The same sweep also folded [`docs/ui-open-items.md`](../archive/ui-open-items.md) and
-> [`docs/eval-logging-backlog.md`](../archive/eval-logging-backlog.md) into this file (see the note at the top) —
+> The same sweep also folded [`archive/ui-open-items.md`](../archive/ui-open-items.md) and
+> [`archive/eval-logging-backlog.md`](../archive/eval-logging-backlog.md) into this file (see the note at the top) —
 > every item in both verified closed, nothing migrated.
+
+---
+
+> **Update 2026-09-11 (final whole-branch review, PR #39).** One code/spec gap
+> found while reviewing the whole `docs/reclassification` branch — recorded
+> below as **B31**. Not fixed here; this review only writes the backlog entry.
+
+## B31 — CLAUDE.md rule 2's "declared no-protection posture" isn't enforced for non-onprem_only apps
+
+**Severity:** medium (spec/code mismatch — either the rule overstates what is enforced,
+or the `capture_io=full` clamp is missing a condition)
+**Found:** 2026-09-11, final whole-branch review of PR #39 (docs-reclassification). **Open.**
+
+CLAUDE.md rule 2 says raw capture (`capture_io="full"`) requires "the app to be in a
+declared no-protection posture." `app/api/admin_routes.py`'s clamp (`~648-661`) enforces
+that only for `onprem_only` apps: it refuses `full` when `eff_residency == "onprem_only"
+AND eff_policy_mode != "passthrough"`. A non-`onprem_only` app with `pii_detection` left
+at `presidio`, its own provisioned Langfuse project, and `capture_io: "full"` is
+**accepted** — `tests/test_admin_api.py::test_policy_raw_capture_allowed_for_non_onprem_app_with_own_langfuse`
+confirms this (no `policy_mode` in the request body, so it inherits `enforced`). That app
+has declared no no-protection posture at all: `policy_mode` is `enforced` and
+`pii_detection` is the fully-protective default. Either the rule overstates what the code
+enforces, or the clamp is missing a residency-independent posture check. This is also
+*why* the `docs/guides/faq.md` line fixed elsewhere in this same review read as plausible
+before the fix — the code really does let an `enforced` app hold `capture_io=full` once
+it is not `onprem_only`.
 
 ## B26 — Catch-all exception handler in the request path logs nothing
 

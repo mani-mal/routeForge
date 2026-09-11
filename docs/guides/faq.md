@@ -101,9 +101,11 @@ behaviour they needed — so it was replaced by an explicit `policy_mode` (CLAUD
 
 **What has not changed, and will not:**
 
-- An `enforced` app — one that has *not* declared a no-protection posture — still cannot
-  reach `capture_io=full`, at any residency. Raw capture of a protected app was never
-  sensible.
+- An `onprem_only` app in `enforced` posture — one that has *not* declared a
+  no-protection posture — still cannot reach `capture_io=full`. Raw capture of a
+  protected, on-prem-confined app was never sensible. A non-`onprem_only` app in
+  `enforced` posture already can hold `capture_io=full` (own project required) — that
+  is exactly the side effect the next question walks through.
 - `capture_io=redacted` is still rejected whenever nothing is being sanitized
   (`passthrough`, or `pii_detection` `off`/`regex`), because that path reuses the gate's
   sanitized prompt and writes to the **shared** project.
