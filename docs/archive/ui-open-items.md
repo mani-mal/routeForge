@@ -1,5 +1,9 @@
 # Console UI — open items / backlog
 
+> **Superseded by [`docs/backlog/bugs.md`](../backlog/bugs.md).** Retained for the
+> decision trail. All 7 items here were verified closed against the code during the
+> 2026-09-10 docs sweep; nothing was migrated because nothing was live.
+
 Deferred UI work surfaced while walking the per-application console. None are
 blocking; listed newest-concern first. See `docs/guides/ui-guide.md` for how each
 region currently behaves.

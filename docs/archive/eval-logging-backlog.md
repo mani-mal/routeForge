@@ -1,5 +1,9 @@
 # Backlog: capture full request/response I/O in Langfuse for eval
 
+> **Superseded by [`docs/backlog/bugs.md`](../backlog/bugs.md).** Retained for the
+> decision trail. Both sub-items here were verified closed against the code during
+> the 2026-09-10 docs sweep; nothing was migrated because nothing was live.
+
 **Status:** BUILT 2026-07-29 (`capture_io: off|redacted|full`). Both sub-items below
 are now done. Logged 2026-07-28; the raw-leak gap (item 2) was closed by E1 and the
 eval-capture switch (item 1) landed in the `:0.4.0` batch (uncommitted at time of
