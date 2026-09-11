@@ -51,6 +51,14 @@ See [`diagrams/README.md`](diagrams/README.md) for the three draw.io diagrams
 (logical architecture, physical architecture, request flow) and how to
 regenerate them from their JSON specs.
 
+`llm orchestration loop.drawio` (this directory) is the original diagram,
+superseded by the three above — retained only because
+[`decisions/self-improving-agent-feature-fit.md`](decisions/self-improving-agent-feature-fit.md)
+cites its "Prompt / Instructions — DSPy / NAT optimizer" node as evidence that
+prompt optimization was in the design from day one; that node has no
+counterpart in any of the three current diagrams, so it is the one thing the
+old file still shows that the new ones don't.
+
 ## Related docs in other buckets
 
 - **NeMo Switchyard vs. our step-6 router** — what to borrow, what to refuse,
