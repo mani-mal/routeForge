@@ -128,12 +128,21 @@ verdict, no step-9 verification.** If the customer's reason for deploying RouteF
 
 Verified against `api:0.24.0`:
 
-1. **The markers are stripped.** `_to_wire()`
-   (`app/gateway/backends/litellm_backend.py:34`, used at `:97` and `:149`) serialises each
-   message to `{role, content}` plus tool-calling fields only — a per-message
-   `cache_control` block is discarded. `drop_params: True`
-   (`litellm_backend.py:100`, `:153`) removes top-level params such as
-   `prompt_cache_key`. The app sets them; the provider never sees them.
+1. **The markers are stripped, for two different reasons.** A per-message `cache_control`
+   block never survives request parsing at all: `Message` (`app/models.py`) declares no
+   such field and silently drops unknown ones, so `_to_wire()`
+   (`app/gateway/backends/litellm_backend.py:34`, used at `:97` and `:149`) — which
+   serialises each message to `{role, content}` plus tool-calling fields only — never sees
+   it either way. A top-level `prompt_cache_key` survives one step further: `ChatRequest`
+   allows extra fields, so it lands in `request.model_extra` — but nothing downstream
+   (`Pipeline.run`, the gateway call construction) ever reads `model_extra`, so it is never
+   added to the `call` dict passed to `acompletion()`. `drop_params: True`
+   (`litellm_backend.py:100`, `:153`) never gets the chance to act on it — the param is
+   simply never forwarded, not dropped by that flag. Verified 2026-09-10:
+   `Message(role=..., cache_control=...).model_dump()` omits the field, and
+   `ChatRequest(..., prompt_cache_key=...).model_extra == {"prompt_cache_key": ...}` while
+   grep confirms `model_extra` is read nowhere in `app/`. The app sets them; the provider
+   never sees them.
 2. **Even if they survived, nothing keeps a session on one route.** RouteForge re-selects a
    model from scratch on every call and every agent hop, so turn 2 can land elsewhere and
    cold-miss the prefix the app just paid to warm (`caching-cost-feature-fit.md` §2b).

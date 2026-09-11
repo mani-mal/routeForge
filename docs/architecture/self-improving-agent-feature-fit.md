@@ -186,6 +186,14 @@ RouteForge already occupies. The single architectural invariant that carries the
 
 ## 6. CLAUDE.md amendments this implies (owner approval required before editing)
 
+**Status check 2026-09-10: applied.** Every amendment listed below has since landed in
+`CLAUDE.md` verbatim — rule #4 reads "RouteForge hosts no compute; it orchestrates and
+consumes... The Improvement Plane is orchestrated, not hosted", the scope banner uses that
+framing, and `docs/architecture/self-improving-agent-feature-fit.md` (this doc) is its
+cited authority. The boundary this doc states still matches CLAUDE.md rule #4 exactly.
+This section is kept as the historical record of what was proposed and why; treat it as
+already executed, not pending.
+
 These decisions contradict the current "non-negotiable rules" as written. Flagging for an explicit,
 owner-approved edit — do **not** silently drift:
 - **Rule #4** — from "promotes/trains nothing, serves only; if asked to close the loop, stop" →

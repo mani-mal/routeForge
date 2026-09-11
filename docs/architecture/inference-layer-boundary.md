@@ -14,7 +14,9 @@ llm-d / inference-optimization talk): *"the video covered prefill/decode splitti
 Dynamic Resource Allocation, Kubernetes Gateway API endpoint-pickers, models-as-volumes,
 llm-d… does routeForge do those?"* The honest answer is **"those live one layer below
 routeForge, and are owned by Dynamo / the inference engine / Kubernetes — by design."**
-See `docs/llm-d.txt` for the source write-up those questions come from.
+(The scratch write-up those questions came from, `docs/llm-d.txt`, was a throwaway
+note whose content was captured into this doc; the `.txt` itself no longer exists —
+this doc is now the only source to read.)
 
 ---
 
@@ -75,7 +77,7 @@ onboarding state.
 | Concept (from the talk / `docs/llm-d.txt`) | Layer that owns it | routeForge status |
 |---|---|---|
 | **Prefill/decode disaggregation** | Dynamo (disaggregated serving) | Delegated — not built. Correct. |
-| **KV-cache-aware routing** | Dynamo KV router (`router_mode: kv`) | Delegated. `config/serving.yaml` already points at it. |
+| **KV-cache-aware routing** | Dynamo KV router (`router_mode: kv`) | Delegated — configured on the customer's own Dynamo deployment, not in routeForge's `config/serving.yaml` (which carries no `dynamo`/`router_mode` field; the mock/vllm/dynamo per-backend configs were retired when the single LiteLLM egress path shipped — see `ServingCfg` in `app/config/schema.py`). |
 | **Model-aware / body-based routing** (the "model ID is in the POST body" problem) | routeForge **and/or** a Gateway API endpoint-picker | Solved **in-app** (`app/routing/router.py`) — richer than an endpoint-picker (routes on sensitivity/cost/quality, not just model ID). No K8s Gateway API resources, and none needed for a single service. |
 | **Dynamic Resource Allocation (DRA)** | Kubernetes (≥1.35) + device drivers | Not adopted. Manifests use static `nodeSelector: nvidia.com/gpu.product`. A deploy-manifest concern, independent of app code. |
 | **Models-as-containers / image-volumes; distributed layer cache (Spigel)** | Kubernetes storage layer | Not adopted. Weights are HF-downloaded into a `local-path` PVC. Deploy-only concern. |
@@ -94,12 +96,23 @@ deployment-manifest optimizations that belong to the customer's packaging layer.
 
 ## Why routeForge does NOT deploy Dynamo ("enactment") — decision, 2026-08-03
 
-The infra-management feature (`feat/infra-management-config`) lets an admin **declare**
-per-model serving facts — `engine` (vllm|trtllm), `tensor_parallel`,
+The infra-management feature (`feat/infra-management-config`) originally let an admin
+**declare** per-model serving facts — `engine` (vllm|trtllm), `tensor_parallel`,
 `min_replicas`/`max_replicas`, `gpu_type`, `runai_scheduled` — and the cluster fact
-`runai_licensed`. These are **describe-and-consume**: the router reads them to gate/
-annotate decisions and the UI displays them. routeForge **renders and deploys nothing**
-from them (CLAUDE.md hard rule 4; infra-management design §10).
+`runai_licensed`. These were **describe-and-consume**: the router read them to gate/
+annotate decisions and the UI displayed them. routeForge **rendered and deployed
+nothing** from them (CLAUDE.md hard rule 4; infra-management design §10).
+
+> **Status check 2026-09-10.** The 2026-08-03 pure-router pivot replaced this
+> declared-facts model with the leaner onboarding flow in `docs/onboarding-models.md`:
+> `OnboardIn` carries `slug`, `display_name`, `tier`, `endpoint`, `api_key_env`,
+> `price_input`/`price_output`, `quality`, `context_window`, `allowed_app_ids`, `notes`,
+> `enabled` — no `engine`, `tensor_parallel`, `min_replicas`/`max_replicas`, `gpu_type`,
+> `runai_scheduled`, or `runai_licensed` field exists in the current schema
+> (`app/apps/registry.py::_OnboardedRow`, `app/api/admin_routes.py`). **The decision
+> this section argues for is unaffected**: routeForge still only declares/consumes and
+> never deploys or enacts serving infrastructure — only the declared-facts example
+> above is now historical. Current authority: `docs/onboarding-models.md`.
 
 We considered an "enactment" track: have routeForge turn those declared facts into a
 real Dynamo/TensorRT-LLM deployment. **Rejected.** Reasons, in the context of shipping
@@ -141,8 +154,11 @@ This keeps rule 4 intact, needs no RBAC, and still gives customers a running sta
 ## FAQ (SE / customer-facing)
 
 **Q: Does routeForge do prefill/decode splitting or KV-cache-aware routing?**
-Not itself — it delegates to Dynamo, which owns those. routeForge already targets
-Dynamo's KV router (`router_mode: kv`). This is the recommended division of labor.
+Not itself — it delegates to Dynamo, which owns those. routeForge has no `router_mode`
+setting of its own (that per-backend config axis was retired when the single LiteLLM
+egress path shipped); the customer's own Dynamo deployment configures and owns its KV
+router, and routeForge just onboards its OpenAI-compatible endpoint. This is the
+recommended division of labor.
 
 **Q: Does routeForge use the Kubernetes Gateway API / endpoint-pickers?**
 No. The "route on the model ID buried in the request body" problem is solved *in-app*

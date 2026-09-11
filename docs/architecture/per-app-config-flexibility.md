@@ -293,7 +293,7 @@ runs independently of RouteForge's inbound-streaming policy.
 
 | Knob | Class | Per-app? |
 |---|---|---|
-| `residency` | monotonic-tightening (`_stricter`) | already per-app |
+| `residency` | placement, monotonic-tightening (`_stricter`) — **never** inferred from or by a protection knob | already per-app |
 | `allowed_tiers` / `allowed_models` / `allowed_providers` | monotonic-tightening | already per-app |
 | `capture_io` | free-but-floored (own-project clamp on `full`, always; posture clamp for `onprem_only` + `enforced`) | already per-app |
 | `compression_enabled` | free-but-floored | already per-app |
@@ -301,7 +301,6 @@ runs independently of RouteForge's inbound-streaming policy.
 | `pii_entity_denylist` / `pii_score_threshold` / `pii_exempt_patterns` | monotonic-tightening within `enforced` (narrowing, not a downgrade — `US_SSN` is unreachable by any of them) | ✅ shipped |
 | `policy_mode` | free-but-floored (`allow_app_passthrough` ceiling + the capture clamps; placement untouched) | ✅ shipped (PR #34, 2026-09-05) |
 | `stream_mode` | free-but-floored (`StreamFallback` + write-time clamp hold the floor, not the app's choice) | ✅ shipped (Decision 2) |
-| `residency` | placement, monotonic-tightening — **never** inferred from or by a protection knob | already per-app |
 | `fail_closed` | the floor itself | never per-app |
 
 **Rule of thumb for any future knob:** if it is monotonic-tightening or free-but-floored,
