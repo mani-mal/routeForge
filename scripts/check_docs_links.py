@@ -39,10 +39,7 @@ SCAN_SUFFIXES = {
 }
 
 # Docs allowed to contain purged vocabulary: they are historical records.
-# docs/architecture-review.md is a pre-pivot snapshot that legitimately discusses
-# the removed inference_backend/serving_paths axes and the removed local-8b model;
-# Task 10 moves it under docs/archive/ and removes this entry.
-VOCAB_EXEMPT = ("docs/archive/", "docs/superpowers/", "docs/architecture-review.md")
+VOCAB_EXEMPT = ("docs/archive/", "docs/superpowers/")
 
 # The SDD build log is append-only: never link-checked, never edited.
 SKIP_PREFIXES = ("docs/superpowers/",)
