@@ -77,6 +77,43 @@ Then open the console at `http://<spark>:3001` and log in with `ADMIN_EMAIL` /
 `ADMIN_PASSWORD`. On a cold boot `/health` may report `models: []` — that is
 correct, the pool is empty until step 5.
 
+### Admin logins
+
+There is **no sign-up page** — the console is admin-only. Applications don't log
+in; they get API tokens (step 6). The api seeds one admin from `ADMIN_EMAIL` /
+`ADMIN_PASSWORD` on boot, and only **if that email isn't already in the
+database**. So:
+
+- Changing `ADMIN_PASSWORD` after the first boot does **nothing** — the original
+  password stays valid.
+- Changing `ADMIN_EMAIL` to a new address and restarting the api adds a
+  **second** admin; the first one remains.
+- Sessions live in api process memory: **every api restart logs everyone out.**
+
+Add another admin (no UI or API for this):
+
+```bash
+docker compose -p routeforge-spark -f deploy/spark/docker-compose.yml exec api python -c '
+import asyncio
+from app.apps.db import Database
+from app.apps.admin_auth import create_admin
+async def main():
+    db = Database()
+    async with db.session() as s:
+        await create_admin(s, email="you@example.com", password="a-strong-password")
+        await s.commit()
+    await db.dispose()
+asyncio.run(main())'
+```
+
+Forgot the password — delete the row, restart, and it is re-seeded from `.env`:
+
+```bash
+docker compose -p routeforge-spark -f deploy/spark/docker-compose.yml exec db \
+  psql -U routeforge -d routeforge -c "delete from admin_users where email='admin@routeforge.local';"
+docker compose -p routeforge-spark -f deploy/spark/docker-compose.yml restart api
+```
+
 ## 5. Bring your own model server, then onboard it
 
 **Outside routeForge** — this stack starts no inference and never will (hard
@@ -158,6 +195,20 @@ docker compose -p routeforge-spark down -v              # stop and WIPE the data
 
 `-p routeforge-spark` on every command — the project name is what ties them to this
 stack, and it must match what you started with.
+
+**Moving the checkout** (e.g. into `~/projects/`) is safe: the database is the
+named volume `routeforge-spark_rf-db`, keyed by the project name, not the path,
+and there are no bind mounts. Stop, move, start from the new path — `up -d`
+reuses the already-built images, and `.env` moves with the directory:
+
+```bash
+cd ~/routeForge && docker compose -p routeforge-spark -f deploy/spark/docker-compose.yml down
+mv ~/routeForge ~/projects/routeForge
+cd ~/projects/routeForge && docker compose -p routeforge-spark -f deploy/spark/docker-compose.yml up -d
+```
+
+Onboarded models, applications and tokens survive; admin sessions don't, so log
+in again.
 
 **No schema migrations.** `create_all` creates missing tables but never `ALTER`s
 an existing one. After pulling a version that adds a column, either apply the
