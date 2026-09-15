@@ -51,6 +51,29 @@ def test_max_tokens_counts_toward_the_budget_over_http():
     assert small.status_code == 200, small.text
 
 
+@pytest.mark.parametrize("field", ["max_tokens", "max_completion_tokens"])
+@pytest.mark.parametrize("bad", ["abc", [5], 0, -100_000_000])
+def test_invalid_output_token_cap_is_a_clean_4xx(client, field, bad):
+    r = client.post("/v1/chat/completions", headers={"Authorization": "Bearer demo-key"},
+                    json={field: bad, "messages": [{"role": "user", "content": "hi"}]})
+    assert 400 <= r.status_code < 500, r.text
+    assert field in r.text
+
+
+def test_negative_max_tokens_cannot_bypass_the_cost_cap():
+    # A 25K-token prompt on a $10/$10 model is over the $0.05 cap on its own; a
+    # negative max_tokens must not drive the estimate below the cap.
+    prompt = "word " * 100_000
+    with conformance_client() as c:
+        disable_seeded_models(c)
+        add_model(c, "conf-model", price_input=10.0, price_output=10.0)
+        app = onboard(c, "est-negative")
+        r = app.chat({"max_tokens": -100_000_000,
+                      "messages": [{"role": "user", "content": prompt}]})
+    assert r.status_code != 200, r.text
+    assert 400 <= r.status_code < 500, r.text
+
+
 def test_tool_schemas_count_as_prompt_tokens(client):
     tools = [{"type": "function", "function": {"name": f"t{i}", "description": "x" * 400,
               "parameters": {"type": "object", "properties": {}}}} for i in range(5)]
