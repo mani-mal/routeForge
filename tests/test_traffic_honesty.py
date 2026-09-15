@@ -58,7 +58,7 @@ class RecordingBackend:
         self.models_called: list[str] = []
 
     async def generate(self, model, messages, price, tier, hint, tools: list[dict] | None = None,
-                       tool_choice: str | dict | None = None):
+                       tool_choice: str | dict | None = None, params: dict | None = None):
         self.models_called.append(model)
         return await self.inner.generate(model, messages, price, tier, hint)
 

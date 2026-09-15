@@ -90,7 +90,8 @@ class LiteLLMBackend:
     async def generate(self, model: str, messages: list[Message], price: PriceCfg,
                         tier: str, hint: dict,
                         tools: list[dict] | None = None,
-                        tool_choice: str | dict | None = None) -> GenerationResult:
+                        tool_choice: str | dict | None = None,
+                        params: dict | None = None) -> GenerationResult:
         litellm_model, conn = self._map(model)
         call: dict = {
             "model": litellm_model,
@@ -104,6 +105,8 @@ class LiteLLMBackend:
             call["tools"] = tools
         if tool_choice is not None:
             call["tool_choice"] = tool_choice
+        for k, v in (params or {}).items():
+            call.setdefault(k, v)   # never overrides model/messages/stream/tools
         start = time.monotonic()
         resp = await acompletion(**call)
         latency_ms = (time.monotonic() - start) * 1000
@@ -134,7 +137,8 @@ class LiteLLMBackend:
     async def generate_stream(self, model: str, messages: list[Message], price: PriceCfg,
                               tier: str, hint: dict,
                               tools: list[dict] | None = None,
-                              tool_choice: str | dict | None = None
+                              tool_choice: str | dict | None = None,
+                              params: dict | None = None
                               ) -> AsyncIterator[StreamChunk]:
         """Real token streaming (step 8). Mirrors `generate()`'s call
         construction but with `stream=True`, `stream_options={"include_usage":
@@ -157,6 +161,8 @@ class LiteLLMBackend:
             call["tools"] = tools
         if tool_choice is not None:
             call["tool_choice"] = tool_choice
+        for k, v in (params or {}).items():
+            call.setdefault(k, v)   # never overrides model/messages/stream/tools
         start = time.monotonic()
         parts: list[str] = []
         usage: dict = {}

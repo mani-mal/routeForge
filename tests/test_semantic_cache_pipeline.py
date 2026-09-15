@@ -40,7 +40,7 @@ class _FixedTextBackend(_DeterministicLiteLLM):
         self._text = text
 
     async def generate(self, model, messages, price, tier, hint, tools=None,
-                       tool_choice=None):
+                       tool_choice=None, params=None):
         result = await super().generate(model, messages, price, tier, hint, tools)
         return result.model_copy(update={"text": self._text})
 

@@ -5,6 +5,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 RISK_CLASSES = ("low", "medium", "high")
 RESIDENCIES = ("any", "private_cloud_ok", "onprem_only")
 
+# OpenAI sampling/length knobs a client sets and expects the model to honour.
+# Structural keys (model, messages, stream, tools, n) are deliberately absent:
+# RouteForge owns those.
+FORWARDED_PARAMS = (
+    "max_tokens", "max_completion_tokens", "temperature", "top_p", "stop", "seed",
+    "presence_penalty", "frequency_penalty", "response_format", "parallel_tool_calls",
+)
+
 
 class Message(BaseModel):
     role: str
@@ -50,6 +58,11 @@ class ChatRequest(BaseModel):
     # a tools request to its internal NAT agent — see Pipeline.run).
     tools: list[dict] | None = None
     tool_choice: str | dict | None = None
+
+    def generation_params(self) -> dict:
+        """The client's sampling/length parameters, to pass to the model."""
+        extra = self.model_extra or {}
+        return {k: extra[k] for k in FORWARDED_PARAMS if extra.get(k) is not None}
 
 
 class Usage(BaseModel):

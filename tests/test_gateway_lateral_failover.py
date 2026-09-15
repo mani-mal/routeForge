@@ -62,7 +62,7 @@ class _FailForModels(_DeterministicLiteLLM):
         self.calls: list[str] = []
 
     async def generate(self, model, messages, price, tier, hint, tools=None,
-                       tool_choice=None):
+                       tool_choice=None, params=None):
         self.calls.append(model)
         if model in self._fail:
             raise RuntimeError(f"forced failure for {model}")

@@ -44,7 +44,8 @@ class Gateway:
     async def run(self, ctx: ExecutionPolicyContext, messages: list[Message],
                   tokens_after: int, complexity: float, hint: dict,
                   tools: list[dict] | None = None,
-                  tool_choice: str | dict | None = None
+                  tool_choice: str | dict | None = None,
+                  params: dict | None = None
                   ) -> tuple[GenerationResult, list[DecisionRecord]]:
         records: list[DecisionRecord] = []
         threshold = self._s.routing.confidence_escalation_threshold
@@ -81,7 +82,7 @@ class Gateway:
             try:
                 result = await self._backend.generate(
                     cand.name, messages, price, cand.tier, hint,
-                    tools=tools, tool_choice=tool_choice)
+                    tools=tools, tool_choice=tool_choice, params=params)
             except Exception as exc:
                 records.append(DecisionRecord(
                     step="gateway", chosen=None,
@@ -124,7 +125,8 @@ class Gateway:
     async def run_stream(self, ctx: ExecutionPolicyContext, messages: list[Message],
                          tokens_after: int, complexity: float, hint: dict,
                          tools: list[dict] | None = None,
-                         tool_choice: str | dict | None = None
+                         tool_choice: str | dict | None = None,
+                         params: dict | None = None
                          ) -> tuple[AsyncIterator[StreamChunk], list[DecisionRecord]]:
         """Real streaming counterpart of `run()` for the direct (single-shot)
         path. Performs the SAME residency-clamped router selection and emits the
@@ -159,7 +161,7 @@ class Gateway:
         async def _agen() -> AsyncIterator[StreamChunk]:
             async for chunk in self._backend.generate_stream(
                     cand.name, messages, price, cand.tier, hint,
-                    tools=tools, tool_choice=tool_choice):
+                    tools=tools, tool_choice=tool_choice, params=params):
                 if chunk.final is not None:
                     record.actual_cost_usd = chunk.final.cost_usd
                     record.latency_ms = chunk.final.latency_ms

@@ -69,7 +69,7 @@ class _ScriptedBackend:
         self.calls: list[dict] = []
 
     async def generate(self, model, messages, price, tier, hint, tools=None,
-                       tool_choice=None):
+                       tool_choice=None, params=None):
         self.calls.append({"model": model, "messages": messages, "tier": tier})
         if self.raise_exc is not None:
             raise self.raise_exc
@@ -96,7 +96,7 @@ class RecordingBackend:
         self.models_called: list[str] = []
 
     async def generate(self, model, messages, price, tier, hint, tools=None,
-                       tool_choice=None):
+                       tool_choice=None, params=None):
         self.models_called.append(model)
         return await self.inner.generate(model, messages, price, tier, hint)
 

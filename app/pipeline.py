@@ -541,7 +541,7 @@ class Pipeline:
                 if hasattr(request, k)}
         result, records = await self._gateway.run(
             ctx, comp.messages, comp.tokens_after, complexity, hint,
-            tools=tools, tool_choice=tool_choice)
+            tools=tools, tool_choice=tool_choice, params=request.generation_params())
         if crec is not None:
             # Fold the classifier's own DecisionRecord into the SAME trace/
             # cost accumulation as the router's -- its cost must not be
@@ -766,7 +766,8 @@ class Pipeline:
         hint = {k: getattr(request, k) for k in ("mock_confidence", "mock_fail")
                 if hasattr(request, k)}
         stream, records = await self._gateway.run_stream(
-            ctx, comp.messages, comp.tokens_after, complexity, hint)
+            ctx, comp.messages, comp.tokens_after, complexity, hint,
+            params=request.generation_params())
         if crec is not None:
             # Same fold as run() -- the classifier's cost/reason reach the
             # SAME trace `_assemble_stream_meta` builds below.

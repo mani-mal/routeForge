@@ -14,7 +14,7 @@ REG = make_test_registry(S)
 
 class _AlwaysLowBackend(_DeterministicLiteLLM):
     async def generate(self, model, messages, price, tier, hint, tools=None,
-                       tool_choice=None):
+                       tool_choice=None, params=None):
         r = await super().generate(model, messages, price, tier, {})
         return r.model_copy(update={"confidence": 0.1})
 
