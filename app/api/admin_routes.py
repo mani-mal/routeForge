@@ -802,7 +802,14 @@ async def onboard_model(body: OnboardIn, request: Request,
     yaml_names = {c.name for c in s.routing.model_pool}
     _static_validate_onboard(body, s)
     async with request.app.state.db.session() as session:
-        if body.slug in yaml_names or await store.get_onboarded(session, body.slug):
+        # yaml cloud-pool names are never re-onboardable. An existing onboarded
+        # row 409s only when it is ENABLED (edit a working model with PUT); a
+        # DISABLED row — e.g. one saved unreachable on a first attempt with a
+        # stray-typo endpoint — is re-probed and upserted below, so a bad
+        # onboarding self-heals via a clean re-POST instead of needing a manual
+        # DB delete (B19).
+        existing = await store.get_onboarded(session, body.slug)
+        if body.slug in yaml_names or (existing is not None and existing.enabled):
             raise HTTPException(409, f"slug {body.slug!r} already exists")
         if body.allowed_app_ids:
             for aid in body.allowed_app_ids:
@@ -829,7 +836,12 @@ async def onboard_model(body: OnboardIn, request: Request,
             "probe_error": None if ok else detail}
 
 
-@admin_router.put("/infra/models/{slug}")
+# {slug:path} (not {slug}) so real OpenAI-compatible ids that contain a slash
+# — Qwen/Qwen2.5-1.5B-Instruct, meta-llama/Llama-3.1-8B-Instruct — are captured.
+# A bare {slug} matches [^/]+, so a slashed slug 404s and the row becomes
+# un-editable/un-deletable (B19). The UI already sends encodeURIComponent(slug);
+# uvicorn decodes %2F back to '/' before routing, which {slug:path} then matches.
+@admin_router.put("/infra/models/{slug:path}")
 async def edit_onboarded_model(slug: str, body: OnboardIn, request: Request,
                                _: str = Depends(require_admin)) -> dict:
     s = request.app.state.settings
@@ -860,7 +872,7 @@ async def edit_onboarded_model(slug: str, body: OnboardIn, request: Request,
             "probe_error": None if ok else detail}
 
 
-@admin_router.delete("/infra/models/{slug}")
+@admin_router.delete("/infra/models/{slug:path}")  # {slug:path} for slashed ids — see PUT above (B19)
 async def delete_onboarded_model(slug: str, request: Request,
                                  _: str = Depends(require_admin)) -> dict:
     reg = request.app.state.registry
