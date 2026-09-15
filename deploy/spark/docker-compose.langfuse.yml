@@ -22,6 +22,17 @@
 name: routeforge-spark
 
 services:
+  langfuse-web:
+    # langfuse.yml publishes a bare "3000:3000". Replaced, not merged (compose
+    # appends ports across files): a bare mapping also binds [::] — the public-
+    # IPv6 exposure BIND_ADDR exists to prevent — and 3000 is often taken on a
+    # workstation (open-webui defaults to it).
+    ports: !override ["${BIND_ADDR:-0.0.0.0}:${LANGFUSE_PORT:-3000}:3000"]
+    environment:
+      # Login redirects go here; langfuse.yml's localhost:3000 breaks any
+      # browser that is not on the Spark itself, or any other LANGFUSE_PORT.
+      NEXTAUTH_URL: http://${SPARK_HOST:-localhost}:${LANGFUSE_PORT:-3000}
+
   api:
     environment:
       # In-container OTLP target (Docker DNS name), not browser-reachable.

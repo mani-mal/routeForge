@@ -47,7 +47,7 @@ ok "docker daemon reachable"
 # and ui images are built locally, so they are not in this list.
 if [ "$arch" = "aarch64" ] || [ "$arch" = "arm64" ]; then
   images="postgres:16"
-  [ "$WITH_LANGFUSE" = 1 ] && images="$images langfuse/langfuse:3 langfuse/langfuse-worker:3 clickhouse/clickhouse-server:24 redis:7 minio/minio minio/mc"
+  [ "$WITH_LANGFUSE" = 1 ] && images="$images langfuse/langfuse:3 langfuse/langfuse-worker:3 clickhouse/clickhouse-server:24 redis:7 quay.io/minio/minio quay.io/minio/mc"
   has_arm64() { docker manifest inspect "$1" 2>/dev/null | grep -q '"architecture": *"arm64"'; }
   for img in $images; do
     # Tried twice: the first registry call of a session can fail while the
