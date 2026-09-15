@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.onboarding.clients import CLIENTS
+from tests.onboarding.clients import CLIENTS, STREAM_CLIENTS
 from tests.onboarding.harness import (
     add_model, conformance_client, disable_seeded_models, install_dual_fake, onboard,
 )
@@ -41,6 +41,36 @@ HINT_WORDS = (
     "max_rpm", "max_spend_usd_per_day",
 )
 
+# Fixed framing the product puts around every rejection. Stripped before the
+# HINT_WORDS check: "no candidates after residency filter" contains "residency",
+# so matching the raw detail would pass every residency 422 without a fix hint.
+FIXED_PREFIXES = (
+    "no model is available for this request's policy: ",
+    "no candidates after residency filter",
+    "no candidates after budget filter",
+    "model request rejected: ",
+    "requested model",
+    "no backend could serve this request",
+    "streaming is not supported for this application",
+)
+
+
+def _hint_text(detail: str) -> str:
+    for prefix in FIXED_PREFIXES:
+        detail = detail.replace(prefix, "")
+    return detail
+
+
+def expected_status(client: str, recipe: str, setup: str) -> int | None:
+    """The pinned outcome for a cell, or None when only 'served or told why'
+    applies. A free on-prem model must serve every client, except a streaming
+    client on an app that never opted into streaming."""
+    if setup != "free_onprem":
+        return None
+    if recipe == "default" and client in STREAM_CLIENTS:
+        return 400
+    return 200
+
 
 def known_bug(client: str, recipe: str, setup: str) -> str | None:
     return None
@@ -68,11 +98,17 @@ def test_real_client_is_served_or_told_why(client_name, recipe, setup, dual_fake
         r = app.chat(CLIENTS[client_name]())
 
     assert r.status_code not in (500, 502, 503), r.text
+    expected = expected_status(client_name, recipe, setup)
+    if expected is not None:
+        assert r.status_code == expected, r.text
+        if expected == 400:
+            assert "stream_mode" in r.json().get("detail", ""), r.text
     if r.status_code == 200:
         return
     assert r.status_code in (400, 422, 429), r.text
     detail = r.json().get("detail", "")
-    assert any(w in detail for w in HINT_WORDS), f"unactionable rejection: {detail!r}"
+    assert any(w in _hint_text(detail) for w in HINT_WORDS), \
+        f"unactionable rejection: {detail!r}"
 
 
 @pytest.mark.parametrize("recipe", sorted(RECIPES))
