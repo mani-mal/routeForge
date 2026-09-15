@@ -137,3 +137,12 @@ def test_lint_accepts_passthrough_default_policy_mode():
     s = copy.deepcopy(load_settings())
     s.serving.default_policy_mode = "passthrough"
     enforce(s)  # must not raise -- both POLICY_MODES values are legal
+
+
+def test_missing_default_estimated_output_tokens_is_a_boot_failure():
+    s = copy.deepcopy(load_settings())
+    del s.policy.budgets["default_estimated_output_tokens"]
+    errs = lint_settings(s)
+    assert any("default_estimated_output_tokens" in e for e in errs), errs
+    with pytest.raises(SystemExit):
+        enforce(s)
