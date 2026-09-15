@@ -43,14 +43,23 @@ class StreamFallback(Exception):
     `verified_then_stream` (buffer the full answer, run step-9 verification,
     then chunk the finished text).
 
-    Raised in exactly ONE place -- `run_stream` -- for exactly two reasons, both
+    Raised in exactly ONE place -- `run_stream` -- for three reasons. Two are
     the privacy backstop from Global Constraint 1:
       * the request routes `multi_step` (streaming is direct-path only), or
       * `ctx.onprem_only` or `ctx.require_verification` is set (a residency- or
         risk-floored request is never streamed without a complete-response
         verification).
+    The third is structural: a client-driven tool conversation, which only
+    `run()` can serve (tools forwarded, per-message structure kept).
     """
     pass
+
+
+def _is_tool_conversation(request: ChatRequest) -> bool:
+    """True when the client is driving its own tool loop: it offered `tools`,
+    or replays assistant tool_calls / role:"tool" results."""
+    return bool(request.tools) or any(
+        m.tool_calls or m.tool_call_id for m in request.messages)
 
 
 class Pipeline:
@@ -416,8 +425,7 @@ class Pipeline:
         # all of which assume that single flattened prompt.
         tools = request.tools
         tool_choice = request.tool_choice
-        tool_mode = bool(tools) or any(
-            m.tool_calls or m.tool_call_id for m in request.messages)
+        tool_mode = _is_tool_conversation(request)
 
         if tool_mode:
             mode, crec = "direct", None
@@ -715,6 +723,16 @@ class Pipeline:
             raise
         except Exception as e:
             raise PolicyGateError("policy evaluation failed") from e
+
+        # A client-driven tool conversation needs run()'s structured path: it
+        # forwards `tools` and keeps per-message roles/tool_call_ids, where the
+        # live token path below flattens everything into one prompt and has no
+        # way to stream a tool_calls answer. Serve it as one complete
+        # completion; the route then emits it (tool_calls included) as SSE.
+        if _is_tool_conversation(request):
+            raise StreamFallback(
+                "tool-calling conversation: served as one complete completion, "
+                "then streamed")
 
         # Streaming is the direct/single-shot path only. Same optional-LLM-
         # classifier-else-rules resolution as run() (Task 2).

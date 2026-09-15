@@ -28,21 +28,25 @@ SSE_DONE = "data: [DONE]\n\n"
 def openai_chunk(request_id: str, model: str, *, delta: str | None = None,
                   role: str | None = None,
                   finish_reason: str | None = None,
-                  created: int | None = None) -> dict:
+                  created: int | None = None,
+                  tool_calls: list[dict] | None = None) -> dict:
     """Build one OpenAI-compatible `chat.completion.chunk` frame.
 
     `role` (e.g. "assistant") opens the stream, `delta` carries a content
-    fragment, and `finish_reason` closes it — callers pass exactly one of
-    `role`/`delta`, or neither for the terminal finish-reason-only frame.
+    fragment, `tool_calls` carries the assistant's tool calls (each with its
+    stream `index`), and `finish_reason` closes it — callers pass exactly one
+    of `role`/`delta`/`tool_calls`, or none for the terminal frame.
     `created` defaults to "now" when omitted, but a multi-frame stream
     (`chunk_text` below) computes it once and threads the same value through
     every frame -- a real OpenAI stream holds `created` constant for the
     whole response, it doesn't drift frame to frame."""
-    d: dict[str, str] = {}
+    d: dict[str, object] = {}
     if role is not None:
         d["role"] = role
     if delta is not None:
         d["content"] = delta
+    if tool_calls is not None:
+        d["tool_calls"] = tool_calls
     return {
         "id": request_id,
         "object": "chat.completion.chunk",
@@ -78,19 +82,30 @@ def _split_on_word_boundaries(text: str, chunk_size: int) -> list[str]:
 
 async def chunk_text(request_id: str, model: str, text: str, *,
                       chunk_size: int = 48,
-                      created: int | None = None) -> AsyncIterator[str]:
+                      created: int | None = None,
+                      tool_calls: list[dict] | None = None) -> AsyncIterator[str]:
     """Yield a full OpenAI-style SSE stream for an already-finished,
     already-verified `text`: a role-opening frame, then content frames
     splitting `text` on ~word boundaries, a `finish_reason="stop"` frame, and
     the terminal `[DONE]` frame. `created` is computed once (or taken from
     the caller, e.g. the response's own `created` if it has one) and held
-    constant across every frame in this stream, not recomputed per frame."""
+    constant across every frame in this stream, not recomputed per frame.
+
+    When the finished answer carries `tool_calls`, they go out in one frame
+    after any content, each stamped with its stream `index` (OpenAI clients
+    key the delta merge on it), and the stream finishes with "tool_calls"."""
     if created is None:
         created = int(time.time())
     yield sse_frame(openai_chunk(request_id, model, role="assistant", created=created))
     for piece in _split_on_word_boundaries(text, chunk_size):
         yield sse_frame(openai_chunk(request_id, model, delta=piece, created=created))
-    yield sse_frame(openai_chunk(request_id, model, finish_reason="stop", created=created))
+    if tool_calls:
+        indexed = [{"index": i, **tc} for i, tc in enumerate(tool_calls)]
+        yield sse_frame(openai_chunk(request_id, model, tool_calls=indexed,
+                                     created=created))
+    finish_reason = "tool_calls" if tool_calls else "stop"
+    yield sse_frame(openai_chunk(request_id, model, finish_reason=finish_reason,
+                                 created=created))
     yield SSE_DONE
 
 

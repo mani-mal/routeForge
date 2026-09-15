@@ -439,6 +439,17 @@ Both checks live independently of the app's own configured mode, so no value an 
 can lower the floor — the same "free-but-floored" shape as `pii_detection` and
 `capture_io`.
 
+**Tool-calling conversations stream as a finished answer.** Agentic clients (Qwen Code,
+the `openai` SDK, LangChain) send `stream: true` on every turn, including the turns where
+the model should call a tool. A request that offers `tools`, or replays assistant
+`tool_calls` / `role: "tool"` results, is always served by the complete, structured
+pipeline — `run_stream` raises `StreamFallback` for it, whatever the app's `stream_mode`.
+The finished answer is then sent as SSE: any content frames, one frame carrying the
+`tool_calls` delta (each call stamped with its stream `index`), and `finish_reason:
+"tool_calls"`. The client's tool loop works in every streaming mode; the cost is no
+time-to-first-token benefit on those turns — bytes arrive once the model has finished.
+Live token streaming of tool calls is not implemented.
+
 The decision-stream SSE (`GET /api/stream`, admin-gated, `app/api/ui_routes.py`) is a
 **separate channel** from all of this — it streams `DecisionRecord`s for the console's
 live view and never carries chat tokens, regardless of any app's `stream_mode`.
