@@ -1555,20 +1555,20 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
         </Row>
 
         <Row label="max rpm" htmlFor={`${uid}-rpm`} hint="requests per minute; blank = no rate limit">
-          <input id={`${uid}-rpm`} type="number" min={0} value={p.max_rpm ?? ""}
+          <input id={`${uid}-rpm`} type="number" min={1} value={p.max_rpm ?? ""}
             onChange={(e) => setP({ ...p, max_rpm: e.target.value ? Number(e.target.value) : null })}
             className={`${inputCls} w-20`} />
         </Row>
 
         <Row label="budget $/day" htmlFor={`${uid}-budget`} hint="daily spend cap; blank = uncapped">
-          <input id={`${uid}-budget`} type="number" min={0} step="0.01" value={p.max_spend_usd_per_day ?? ""}
+          <input id={`${uid}-budget`} type="number" min={0.01} step="0.01" value={p.max_spend_usd_per_day ?? ""}
             onChange={(e) => setP({ ...p, max_spend_usd_per_day: e.target.value ? Number(e.target.value) : null })}
             className={`${inputCls} w-24`} />
         </Row>
 
         <Row label="cost cap $/request" htmlFor={`${uid}-reqcap`}
           hint="estimated cost cap per request; blank = deployment default (agent clients need more)">
-          <input id={`${uid}-reqcap`} type="number" min={0} step="0.01" value={p.max_cost_usd_per_request ?? ""}
+          <input id={`${uid}-reqcap`} type="number" min={0.01} step="0.01" value={p.max_cost_usd_per_request ?? ""}
             onChange={(e) => setP({ ...p, max_cost_usd_per_request: e.target.value ? Number(e.target.value) : null })}
             className={`${inputCls} w-24`} />
         </Row>
