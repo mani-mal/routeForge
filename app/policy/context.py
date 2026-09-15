@@ -83,15 +83,18 @@ def pinned_model_reason(pool, ctx: ExecutionPolicyContext, registry: "ModelRegis
                         tenant_id: str, name: str) -> str:
     """Which gate refused a pinned `model`, phrased as what to change."""
     c = next((c for c in pool if c.name == name), None)
+    not_found = "it is not onboarded, or is disabled (see GET /v1/models)"
     if c is None:
-        return "it is not onboarded, or is disabled (see GET /v1/models)"
+        return not_found
     if c.provider not in ctx.allowed_providers:
         return (f"provider {c.provider!r} is excluded by residency or the "
                 "application's allowed_providers")
     if ctx.model_scope_active and name not in ctx.allowed_models:
         return "it is outside the application's allowed_tiers / allowed_models"
     if registry is not None and not registry.is_allowed_for_app(name, tenant_id):
-        return "the model's allowed_app_ids does not include this application"
+        # Same text as an unknown slug: naming allowed_app_ids would disclose
+        # that a model scoped to another application exists (cross-tenant).
+        return not_found
     return "it is disabled"
 
 
