@@ -256,6 +256,26 @@ to serve this safely," not "server crashed."
 
 ---
 
+## `GET /v1/models`
+
+App-token authenticated (same `Authorization: Bearer rf_live_…` as inference;
+`401` without a valid token). Returns the OpenAI model list, **scoped to your
+application**: exactly the ids you may send as `model` on
+`/v1/chat/completions`. The list applies your app's residency,
+`allowed_providers`, `allowed_tiers` and `allowed_models`, plus per-model
+onboarding restrictions, and drops disabled models.
+
+```json
+{"object": "list",
+ "data": [{"id": "qwen3.8-27b", "object": "model", "created": 0, "owned_by": "onprem"}]}
+```
+
+A request whose content raises residency (for example PII under an
+`onprem_only` rule) can narrow the choice further than this list. `created` is
+always `0`. Omitting `model` still lets RouteForge route.
+
+---
+
 ## `POST /v1/feedback`
 
 App-token authenticated (same `Authorization: Bearer rf_live_…` as inference).
