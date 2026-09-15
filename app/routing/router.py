@@ -136,6 +136,7 @@ class Router:
         # the clamp above guarantees a match exists; avail[-1] is a defensive fallback
         tier_pick = next((t for t in avail if _ORDER[t] >= _ORDER[target]), avail[-1])
 
+        fallback_from: str | None = None
         # 3. keep only the target tier; 4. drop over-budget
         eligible: list[tuple[PoolCandidate, float]] = []
         for c in allowed:
@@ -154,6 +155,34 @@ class Router:
             else:
                 eligible.append((c, est))
         if not eligible:
+            # Budget fallback: step DOWN to the most capable cheaper allowed
+            # tier that fits the cap. Floor = risk floor / escalation min_tier
+            # (never undercut; complexity is the only thing budget may
+            # override). Only `allowed` candidates are considered, so
+            # residency and app scope are untouched (rules 3/8).
+            floor_tiers = [self._s.routing.risk_floors[ctx.risk_class]]
+            if min_tier:
+                floor_tiers.append(min_tier)
+            floor = max(floor_tiers, key=lambda t: _ORDER[t])
+            lower = sorted((t for t in avail
+                            if _ORDER[floor] <= _ORDER[t] < _ORDER[tier_pick]),
+                           key=lambda t: -_ORDER[t])
+            for t in lower:
+                fits = [(c, e) for c, e in
+                        ((c, self._est_cost(c, tokens_after, out_tokens))
+                         for c in allowed if c.tier == t)
+                        if e <= ctx.max_cost_usd]
+                if fits:
+                    fits_names = {c.name for c, _ in fits}
+                    rejected = [r for r in rejected
+                                if not (r.tier == t and r.reason == "below target tier")]
+                    rejected.extend(
+                        RejectedCandidate(name=c.name, provider=c.provider, tier=c.tier,
+                                          display_name=c.display_name, reason="over budget")
+                        for c in allowed if c.tier == t and c.name not in fits_names)
+                    fallback_from, tier_pick, eligible = tier_pick, t, fits
+                    break
+        if not eligible:
             raise NoEligibleCandidate("no candidates after budget filter")
 
         # 5. score within the tier (chooses provider/model — cheaper on-prem
@@ -171,5 +200,7 @@ class Router:
         chosen_q = self._quality.resolve(chosen.name)
         return RoutingDecision(
             chosen=chosen, est_cost_usd=est,
-            reason=f"tier {chosen.tier} (target {target})", rejected=rejected,
+            reason=(f"tier {chosen.tier} (target {target}, budget fallback from {fallback_from})"
+                    if fallback_from else f"tier {chosen.tier} (target {target})"),
+            rejected=rejected,
             quality_score=chosen_q.score, quality_source=chosen_q.source)
