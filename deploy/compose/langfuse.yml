@@ -72,14 +72,16 @@ services:
   redis:
     image: redis:7
   minio:
-    image: minio/minio
+    # quay.io, not Docker Hub: minio/minio and minio/mc were removed from
+    # Docker Hub (pull access denied, confirmed 2026-09-14).
+    image: quay.io/minio/minio
     command: server /data --console-address ":9001"
     environment: {MINIO_ROOT_USER: minio, MINIO_ROOT_PASSWORD: miniosecret}
     volumes: [obs-minio:/data]
   # One-shot: wait for MinIO, then create the langfuse bucket so OTel event
   # uploads succeed (Langfuse v3 does not auto-create the bucket).
   minio-init:
-    image: minio/mc
+    image: quay.io/minio/mc
     depends_on: [minio]
     entrypoint: >
       /bin/sh -c "

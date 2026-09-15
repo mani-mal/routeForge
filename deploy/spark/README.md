@@ -274,12 +274,17 @@ and always succeeds. Test from a different machine.
   x86_64 laptop for the DGX lab and are amd64-only. This stack builds locally,
   which is why it doesn't reference them.
 - Every third-party image this stack pulls (`postgres:16`, `redis:7`,
-  `clickhouse/clickhouse-server:24`, `minio/minio`, `minio/mc`,
+  `clickhouse/clickhouse-server:24`, `quay.io/minio/minio`, `quay.io/minio/mc`,
   `langfuse/langfuse:3`, `langfuse/langfuse-worker:3`) was confirmed to publish
-  an arm64 variant on 2026-09-07. `install.sh` re-checks each with
-  `docker manifest inspect` anyway, since tags move. A missing variant would
-  surface as `no matching manifest for linux/arm64`; drop `--langfuse` and run
-  the router alone if one of the observability images ever becomes the blocker.
+  an arm64 variant on 2026-09-07. MinIO comes from **quay.io**: `minio/minio`
+  and `minio/mc` were removed from Docker Hub (pull access denied, 2026-09-14).
+  `install.sh` re-checks each with `docker manifest inspect` anyway, since tags
+  move. A missing variant would surface as `no matching manifest for
+  linux/arm64`; drop `--langfuse` and run the router alone if one of the
+  observability images ever becomes the blocker.
+- **The Langfuse UI publishes on `LANGFUSE_PORT`, not 3000.** 3000 is often
+  already taken on a workstation (open-webui defaults to it); the overlay
+  replaces `langfuse.yml`'s bare `3000:3000`, which would also bind `[::]`.
 - **The Python build needs no compiler on arm64.** Every package in `uv.lock`
   that ships binary wheels also ships a linux aarch64 wheel (checked across all
   197 locked packages) — so `uv sync --frozen` resolves to wheels rather than
