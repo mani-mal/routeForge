@@ -15,6 +15,7 @@ from app.models import (
     Message, Usage, VerificationRecord,
 )
 from app.output.verify import verify
+from app.policy.context import registry_permits
 from app.policy.detectors import Detector, make_detector
 from app.policy.effective import EffectiveDetector, FilteredDetector
 from app.policy.gate import Gate
@@ -406,9 +407,7 @@ class Pipeline:
                 c.name for c in pool
                 if c.provider in ctx.allowed_providers
                 and (not ctx.model_scope_active or c.name in ctx.allowed_models)
-                and (self._reg is None or self._reg.is_allowed_for_app(c.name, tenant_id))
-                and (c.provider != "onprem" or self._reg is None
-                     or self._reg.is_enabled(c.name))
+                and registry_permits(self._reg, c, tenant_id)
             }
             if ctx.requested_model not in permitted:
                 raise PipelineRejected(

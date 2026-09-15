@@ -26,6 +26,7 @@ from app.obs.redact import redact
 from app.obs.scores import SCORE_NAMES, ensure_score_config, post_score
 from app.output.streaming_verify import StreamingVerifier
 from app.pipeline import PipelineRejected, StreamFallback
+from app.policy.context import requestable_models
 from app.policy.enums import STREAM_MODES
 
 router = APIRouter()
@@ -92,6 +93,24 @@ def prometheus_metrics() -> Response:
         raise HTTPException(503, "metrics unavailable: install the observability extra")
     body, content_type = metrics.render()
     return Response(content=body, media_type=content_type)
+
+
+@router.get("/v1/models")
+async def list_models(request: Request) -> dict:
+    """OpenAI model list, scoped to the calling application: exactly the ids it
+    may send as `model` on /v1/chat/completions. App-token authenticated and
+    fail closed, like inference. `created` is 0: onboarding time is not part of
+    the OpenAI contract clients rely on."""
+    auth = await _authenticate(request)
+    if auth is None:
+        raise HTTPException(401, "invalid or missing API token")
+    tenant, app_policy, _ = auth
+    registry = request.app.state.registry
+    await registry.ensure_loaded(request.app.state.db)
+    models = requestable_models(request.app.state.settings, registry, tenant, app_policy)
+    return {"object": "list",
+            "data": [{"id": c.name, "object": "model", "created": 0,
+                      "owned_by": c.provider} for c in models]}
 
 
 def _resolve_stream_mode(body: ChatRequest, app_policy: AppPolicyView, s) -> str | None:
