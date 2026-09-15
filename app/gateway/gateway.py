@@ -9,7 +9,7 @@ from app.errors import BackendUnavailable, NoEligibleCandidate
 from app.gateway.backends.base import InferenceBackend, StreamChunk
 from app.models import DecisionRecord, ExecutionPolicyContext, GenerationResult, Message
 from app.obs import metrics
-from app.routing.router import Router
+from app.routing.router import Router, expected_output_tokens
 
 if TYPE_CHECKING:
     from app.apps.registry import ModelRegistry
@@ -62,13 +62,14 @@ class Gateway:
         failed_models: set[str] = set()
         failover_attempts = 0
         result: GenerationResult | None = None
+        out_tokens = expected_output_tokens(self._s, params)
 
         while True:
             try:
                 with metrics.time_routing():
                     decision = self._router.select(
                         ctx, tokens_after, complexity, min_tier,
-                        exclude=frozenset(failed_models))
+                        exclude=frozenset(failed_models), output_tokens=out_tokens)
             except NoEligibleCandidate:
                 # Every reachable candidate has now been excluded by prior
                 # failures -> exhausted, not a genuine no-candidate reject.
@@ -142,7 +143,9 @@ class Gateway:
         arrives, so the iterator patches the record in place when it sees `final`.
         """
         with metrics.time_routing():
-            decision = self._router.select(ctx, tokens_after, complexity, None)
+            decision = self._router.select(
+                ctx, tokens_after, complexity, None,
+                output_tokens=expected_output_tokens(self._s, params))
         cand = decision.chosen
         price = (self._reg.price_for(cand.name) if self._reg
                  else self._s.pricing.models[cand.name])

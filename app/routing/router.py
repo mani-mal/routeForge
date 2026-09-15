@@ -15,6 +15,16 @@ if TYPE_CHECKING:
 _ORDER = {"cheap": 0, "mid": 1, "frontier": 2}
 
 
+def expected_output_tokens(settings: Settings, params: dict | None) -> int:
+    """Output tokens to price a request at: the client's own cap, else the
+    deployment's `budgets.default_estimated_output_tokens`."""
+    p = params or {}
+    for key in ("max_completion_tokens", "max_tokens"):
+        if p.get(key):
+            return int(p[key])
+    return int(settings.policy.budgets["default_estimated_output_tokens"])
+
+
 @dataclass
 class RoutingDecision:
     chosen: PoolCandidate
@@ -48,14 +58,17 @@ class Router:
             return "mid"
         return "frontier"
 
-    def _est_cost(self, cand: PoolCandidate, tokens_after: int) -> float:
+    def _est_cost(self, cand: PoolCandidate, tokens_after: int, output_tokens: int) -> float:
         p = (self._reg.price_for(cand.name) if self._reg
              else self._s.pricing.models[cand.name])
-        return tokens_after / 1_000_000 * (p.input + p.output)
+        return (tokens_after * p.input + output_tokens * p.output) / 1_000_000
 
     def select(self, ctx: ExecutionPolicyContext, tokens_after: int,
                complexity: float, min_tier: str | None = None,
-               exclude: frozenset[str] = frozenset()) -> RoutingDecision:
+               exclude: frozenset[str] = frozenset(),
+               output_tokens: int | None = None) -> RoutingDecision:
+        out_tokens = (output_tokens if output_tokens is not None
+                      else expected_output_tokens(self._s, None))
         rejected: list[RejectedCandidate] = []
         pool = self._reg.effective_pool() if self._reg else self._s.routing.model_pool
 
@@ -133,7 +146,7 @@ class Router:
                     name=c.name, provider=c.provider, tier=c.tier,
                     display_name=c.display_name, reason=reason))
                 continue
-            est = self._est_cost(c, tokens_after)
+            est = self._est_cost(c, tokens_after, out_tokens)
             if est > ctx.max_cost_usd:
                 rejected.append(RejectedCandidate(
                     name=c.name, provider=c.provider, tier=c.tier,

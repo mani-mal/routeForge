@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import time
 from typing import AsyncIterator, Callable, TYPE_CHECKING
@@ -527,7 +528,12 @@ class Pipeline:
             # No compression on a tool conversation: Headroom rewrites text and
             # would corrupt tool_call/tool_result structure. Build a bypassed
             # CompressionResult so the cost/trace accounting below is identical.
-            tb = sum(count_tokens(m.content) for m in san_messages)
+            # Tool schemas and replayed tool_call arguments are billed prompt
+            # tokens too; leaving them out under-priced every agent turn.
+            tb = (sum(count_tokens(m.content) for m in san_messages)
+                  + sum(count_tokens(json.dumps(m.tool_calls))
+                        for m in san_messages if m.tool_calls)
+                  + (count_tokens(json.dumps(tools)) if tools else 0))
             comp = CompressionResult(
                 san_messages, tb, tb,
                 CompressionRecord(

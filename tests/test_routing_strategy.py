@@ -23,7 +23,7 @@ from app.config.loader import load_settings
 from app.config.schema import PoolCandidate
 from app.models import ExecutionPolicyContext
 from app.routing.quality import QualityResolver
-from app.routing.router import Router
+from app.routing.router import Router, expected_output_tokens
 from app.routing.strategy import DefaultRoutingStrategy, build_strategy
 from tests._litellm_fake import make_test_registry
 
@@ -72,11 +72,12 @@ def test_default_strategy_matches_pre_refactor_scoring(tokens_after, complexity,
                               min_tier=min_tier)
     pool = REG.effective_pool()
     tier = decision.chosen.tier
+    out_tokens = expected_output_tokens(S, None)
     eligible = []
     for c in pool:
         if c.provider not in ctx.allowed_providers or c.tier != tier:
             continue
-        est = router._est_cost(c, tokens_after)
+        est = router._est_cost(c, tokens_after, out_tokens)
         if est <= ctx.max_cost_usd:
             eligible.append((c, est))
 
@@ -202,7 +203,8 @@ def test_default_strategy_returns_same_members_only_reordered():
     ctx = _ctx({"onprem", "azure", "bedrock"})
     pool = REG.effective_pool()
     tier = "mid"
-    eligible = [(c, router._est_cost(c, 200)) for c in pool
+    out_tokens = expected_output_tokens(S, None)
+    eligible = [(c, router._est_cost(c, 200, out_tokens)) for c in pool
                 if c.provider in ctx.allowed_providers and c.tier == tier]
     assert len(eligible) >= 2  # otherwise this test proves nothing
 

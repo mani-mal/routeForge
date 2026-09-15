@@ -33,6 +33,9 @@ sensitivity_rules:
 budgets:
   default_max_spend_usd: 0.05
   default_max_latency_ms: 15000
+  # Output tokens assumed by the per-request cost estimate when a request sets
+  # no max_tokens / max_completion_tokens.
+  default_estimated_output_tokens: 512
 
 # Multi-step agent caps (NeMo Agent Toolkit). Owned here as a budget concern; not
 # duplicated in serving.yaml or routing.yaml.
