@@ -19,7 +19,7 @@ def decide(ctx: ExecutionPolicyContext, request: ChatRequest) -> str:
     last_user = ""
     for m in reversed(request.messages):
         if m.role == "user":
-            last_user = m.content
+            last_user = m.content or ""
             break
 
     lowered = last_user.lower()

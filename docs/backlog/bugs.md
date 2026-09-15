@@ -422,10 +422,12 @@ model routing does not. These are not details to settle in implementation:
 
 ---
 
-## B24 — `task_mode.decide()` crashes on a user message with `content: null` → `500 internal error`
+## B24 — `task_mode.decide()` crashes on a user message with `content: null` → `500 internal error` ✅ RESOLVED (2026-09-15)
 
 **Severity:** low-medium (correctness; wrong status code on a legitimately-shaped request)
-**Found:** 2026-09-05, docs-vs-code audit. **Open.**
+**Found:** 2026-09-05, docs-vs-code audit. **Resolved 2026-09-15.**
+
+Fixed: task_mode coerces None content to ""; regression tests/test_task_mode_null_content.py and the conformance matrix.
 
 `app/routing/task_mode.py:19-25` reads the last user message and lowercases it
 without coercing `None`:

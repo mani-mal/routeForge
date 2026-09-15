@@ -43,8 +43,6 @@ HINT_WORDS = (
 
 
 def known_bug(client: str, recipe: str, setup: str) -> str | None:
-    if client == "chat_ui_null_content":
-        return "B24: task_mode calls .lower() on None content -> 500 (Task 2)"
     if recipe == "default" and client in STREAM_CLIENTS:
         return "stream 400 does not name stream_mode (Task 7)"
     if setup == "priced_10" and client == "qwen_code_turn":
