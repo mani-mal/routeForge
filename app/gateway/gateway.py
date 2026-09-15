@@ -60,6 +60,7 @@ class Gateway:
         # max_failover_attempts; residency is preserved because exclude only ever
         # removes candidates (see Router.select).
         failed_models: set[str] = set()
+        last_error = ""
         failover_attempts = 0
         result: GenerationResult | None = None
         out_tokens = expected_output_tokens(self._s, params)
@@ -75,7 +76,8 @@ class Gateway:
                 # failures -> exhausted, not a genuine no-candidate reject.
                 if failed_models:
                     raise BackendUnavailable(
-                        "backend failed on all reachable candidates for this request")
+                        "backend failed on all reachable candidates for this request "
+                        f"(last error: {last_error})")
                 raise
             cand = decision.chosen
             price = (self._reg.price_for(cand.name) if self._reg
@@ -85,6 +87,7 @@ class Gateway:
                     cand.name, messages, price, cand.tier, hint,
                     tools=tools, tool_choice=tool_choice, params=params)
             except Exception as exc:
+                last_error = f"{cand.name}: {type(exc).__name__}: {str(exc)[:200]}"
                 records.append(DecisionRecord(
                     step="gateway", chosen=None,
                     reason=f"{cand.name} failed; retrying peer/escalating",
@@ -94,7 +97,8 @@ class Gateway:
                 failover_attempts += 1
                 if failover_attempts > max_failover:
                     raise BackendUnavailable(
-                        "backend failed on all reachable candidates for this request"
+                        "backend failed on all reachable candidates for this request "
+                        f"(last error: {last_error})"
                     ) from exc
                 continue
 

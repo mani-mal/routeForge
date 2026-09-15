@@ -31,6 +31,10 @@ from app.policy.enums import STREAM_MODES
 
 router = APIRouter()
 
+_STREAM_REJECT = ("streaming is not supported for this application: set the "
+                  "application's stream_mode (verified_then_stream, stream_unverified "
+                  "or incremental_verify)")
+
 
 # B17: opaque, client-supplied workflow-run correlation id. A label only —
 # never a policy control — so it FAILS OPEN: absent / over-long / malformed
@@ -128,7 +132,7 @@ def _resolve_stream_mode(body: ChatRequest, app_policy: AppPolicyView, s) -> str
         return None
     mode = app_policy.stream_mode
     if mode in (None, STREAM_MODES[0]) and s.serving.reject_stream_requests:
-        raise HTTPException(400, "streaming is not supported for this application")
+        raise HTTPException(400, _STREAM_REJECT)
     return None if mode in (None, STREAM_MODES[0]) else mode
 
 
@@ -145,7 +149,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
         # backwards compatible even for this edge case.
         metrics.observe_request("-", "unauthorized")
         if body.stream and s.serving.reject_stream_requests:
-            raise HTTPException(400, "streaming is not supported for this application")
+            raise HTTPException(400, _STREAM_REJECT)
         raise HTTPException(401, "invalid or missing API token")
     tenant, app_policy, app_langfuse = auth
     stream_mode = _resolve_stream_mode(body, app_policy, s)
@@ -256,9 +260,9 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
     except AgentCapExceeded:
         metrics.observe_request("-", "rejected")
         raise HTTPException(500, "agent did not converge within its step limit")
-    except BackendUnavailable:
+    except BackendUnavailable as e:
         metrics.observe_request("-", "rejected")
-        raise HTTPException(502, "no backend could serve this request")
+        raise HTTPException(502, f"no backend could serve this request: {e}")
     except PolicyGateError:
         metrics.observe_request("-", "rejected")
         raise HTTPException(503, "policy evaluation unavailable")

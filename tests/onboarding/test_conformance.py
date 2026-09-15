@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.onboarding.clients import CLIENTS, STREAM_CLIENTS
+from tests.onboarding.clients import CLIENTS
 from tests.onboarding.harness import (
     add_model, conformance_client, disable_seeded_models, install_dual_fake, onboard,
 )
@@ -43,10 +43,6 @@ HINT_WORDS = (
 
 
 def known_bug(client: str, recipe: str, setup: str) -> str | None:
-    if recipe == "default" and client in STREAM_CLIENTS:
-        return "stream 400 does not name stream_mode (Task 7)"
-    if setup == "priced_10" and client == "qwen_code_turn":
-        return "budget 422 does not name max_cost_usd_per_request (Task 7)"
     return None
 
 

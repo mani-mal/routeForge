@@ -16,7 +16,7 @@ from app.models import (
     Message, Usage, VerificationRecord,
 )
 from app.output.verify import verify
-from app.policy.context import registry_permits
+from app.policy.context import pinned_model_reason, registry_permits
 from app.policy.detectors import Detector, make_detector
 from app.policy.effective import EffectiveDetector, FilteredDetector
 from app.policy.gate import Gate
@@ -412,7 +412,8 @@ class Pipeline:
             }
             if ctx.requested_model not in permitted:
                 raise PipelineRejected(
-                    f"requested model {ctx.requested_model!r} is not permitted or unavailable")
+                    f"requested model {ctx.requested_model!r} is not permitted or "
+                    f"unavailable: {pinned_model_reason(pool, ctx, self._reg, tenant_id, ctx.requested_model)}")
         mem_cfg = self._s.serving.memory
         # A client that supplies `tools` (or replays assistant/tool turns) is
         # driving its OWN agent loop: RouteForge serves a SINGLE completion that

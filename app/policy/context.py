@@ -79,6 +79,22 @@ def registry_permits(registry: "ModelRegistry | None", c, tenant_id: str) -> boo
             and (c.provider != "onprem" or registry.is_enabled(c.name)))
 
 
+def pinned_model_reason(pool, ctx: ExecutionPolicyContext, registry: "ModelRegistry | None",
+                        tenant_id: str, name: str) -> str:
+    """Which gate refused a pinned `model`, phrased as what to change."""
+    c = next((c for c in pool if c.name == name), None)
+    if c is None:
+        return "it is not onboarded, or is disabled (see GET /v1/models)"
+    if c.provider not in ctx.allowed_providers:
+        return (f"provider {c.provider!r} is excluded by residency or the "
+                "application's allowed_providers")
+    if ctx.model_scope_active and name not in ctx.allowed_models:
+        return "it is outside the application's allowed_tiers / allowed_models"
+    if registry is not None and not registry.is_allowed_for_app(name, tenant_id):
+        return "the model's allowed_app_ids does not include this application"
+    return "it is disabled"
+
+
 def requestable_models(settings: Settings, registry: "ModelRegistry | None",
                        tenant_id: str, app_policy: "AppPolicyView") -> list:
     """The pool candidates this application may pin as `model` on a request

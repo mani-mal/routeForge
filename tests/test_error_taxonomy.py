@@ -34,7 +34,7 @@ def test_backend_failure_is_502(client, monkeypatch):
     monkeypatch.setattr(litellm_backend, "acompletion", always_fail)
     r = client.post("/v1/chat/completions", headers=_AUTH, json=_MSG)
     assert r.status_code == 502
-    assert r.json()["detail"] == "no backend could serve this request"
+    assert r.json()["detail"].startswith("no backend could serve this request")
 
 
 def test_agent_non_convergence_is_500(client, monkeypatch):
