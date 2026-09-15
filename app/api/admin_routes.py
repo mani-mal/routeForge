@@ -48,7 +48,8 @@ def _policy_dict(p) -> dict | None:
         return None
     return {"allowed_tiers": p.allowed_tiers, "allowed_providers": p.allowed_providers,
             "allowed_models": p.allowed_models, "residency": p.residency,
-            "max_spend_usd_per_day": p.max_spend_usd_per_day, "max_rpm": p.max_rpm,
+            "max_spend_usd_per_day": p.max_spend_usd_per_day,
+            "max_cost_usd_per_request": p.max_cost_usd_per_request, "max_rpm": p.max_rpm,
             "compression_enabled": p.compression_enabled, "capture_io": p.capture_io,
             "pii_detection": p.pii_detection, "stream_mode": p.stream_mode,
             "policy_mode": p.policy_mode,
@@ -113,6 +114,7 @@ class PolicyIn(BaseModel):
     allowed_models: list[str] | None = None
     residency: str | None = None
     max_spend_usd_per_day: float | None = None
+    max_cost_usd_per_request: float | None = None  # None = inherit budgets.default_max_spend_usd
     max_rpm: int | None = None
     compression_enabled: bool | None = None   # None = inherit global Headroom toggle
     capture_io: str | None = None   # None = inherit global; off|redacted|full
@@ -438,6 +440,10 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
                 0.0 <= body.pii_score_threshold <= 1.0):
             raise HTTPException(
                 422, f"pii_score_threshold {body.pii_score_threshold!r} out of range [0.0, 1.0]")
+        if body.max_cost_usd_per_request is not None and not body.max_cost_usd_per_request > 0:
+            raise HTTPException(
+                422, "max_cost_usd_per_request must be > 0. Omit it, or name it in "
+                "`reset`, to inherit the deployment's budgets.default_max_spend_usd.")
         if body.pii_exempt_patterns is not None:
             if len(body.pii_exempt_patterns) > MAX_EXEMPT_PATTERNS:
                 raise HTTPException(

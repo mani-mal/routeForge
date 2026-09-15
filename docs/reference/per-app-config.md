@@ -463,6 +463,10 @@ The decision-stream SSE (`GET /api/stream`, admin-gated, `app/api/ui_routes.py`)
 **separate channel** from all of this — it streams `DecisionRecord`s for the console's
 live view and never carries chat tokens, regardless of any app's `stream_mode`.
 
+### `max_cost_usd_per_request`
+
+Estimated-cost cap for one request, in USD. `null` inherits `budgets.default_max_spend_usd` (policy.yaml, 0.05). The router estimates `prompt_tokens × input price + (max_tokens or budgets.default_estimated_output_tokens) × output price`. It falls back to a cheaper allowed tier before rejecting, and never goes below the risk floor. A coding agent (≈25K prompt tokens, `max_tokens` 8192) on a model priced $10/$10 per 1M estimates ≈$0.33 and needs this raised, or the model priced realistically. On-prem models are often priced 0.
+
 ## Manual DB migration for already-deployed databases
 
 RouteForge has no migration tool — `Base.metadata.create_all` (SQLAlchemy) only creates
@@ -489,6 +493,7 @@ ALTER TABLE app_policies ADD COLUMN pii_entity_denylist JSON;      -- 0.20.x
 ALTER TABLE app_policies ADD COLUMN pii_score_threshold FLOAT;     -- 0.20.x
 ALTER TABLE app_policies ADD COLUMN pii_exempt_patterns JSON;      -- 0.22.0
 ALTER TABLE app_policies ADD COLUMN policy_mode VARCHAR(16);       -- policy_mode release
+ALTER TABLE app_policies ADD COLUMN max_cost_usd_per_request FLOAT; -- 2026-09-15
 ```
 
 > **The console does not exempt you from this.** Since `ui:0.17.0` the Settings tab

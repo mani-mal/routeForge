@@ -30,6 +30,7 @@ class AppPolicyView:
     allowed_providers: frozenset[str] | None = None
     allowed_models: frozenset[str] | None = None
     max_spend_usd_per_day: float | None = None
+    max_cost_usd_per_request: float | None = None  # None = inherit budgets.default_max_spend_usd
     max_rpm: int | None = None
     compression_enabled: bool | None = None   # None = inherit live global toggle
     capture_io: str | None = None             # None = inherit global capture_io
@@ -59,29 +60,30 @@ class AppPolicyView:
         Scope note: this covers the per-app `AppPolicy` surface only. Custom
         recognizers / sensitivity rules live in the separate privacy *profile*
         and are not folded in here."""
-        blob = json.dumps(
-            {
-                "residency": self.residency,
-                "allowed_tiers": sorted(self.allowed_tiers) if self.allowed_tiers else None,
-                "allowed_providers":
-                    sorted(self.allowed_providers) if self.allowed_providers else None,
-                "allowed_models": sorted(self.allowed_models) if self.allowed_models else None,
-                "max_spend_usd_per_day": self.max_spend_usd_per_day,
-                "max_rpm": self.max_rpm,
-                "compression_enabled": self.compression_enabled,
-                "capture_io": self.capture_io,
-                "policy_mode": self.policy_mode,
-                "pii_detection": self.pii_detection,
-                "stream_mode": self.stream_mode,
-                "pii_entity_denylist":
-                    sorted(self.pii_entity_denylist) if self.pii_entity_denylist else None,
-                "pii_score_threshold": self.pii_score_threshold,
-                "pii_exempt_patterns":
-                    sorted(self.pii_exempt_patterns) if self.pii_exempt_patterns else None,
-            },
-            sort_keys=True,
-            default=str,
-        )
+        fields = {
+            "residency": self.residency,
+            "allowed_tiers": sorted(self.allowed_tiers) if self.allowed_tiers else None,
+            "allowed_providers":
+                sorted(self.allowed_providers) if self.allowed_providers else None,
+            "allowed_models": sorted(self.allowed_models) if self.allowed_models else None,
+            "max_spend_usd_per_day": self.max_spend_usd_per_day,
+            "max_rpm": self.max_rpm,
+            "compression_enabled": self.compression_enabled,
+            "capture_io": self.capture_io,
+            "policy_mode": self.policy_mode,
+            "pii_detection": self.pii_detection,
+            "stream_mode": self.stream_mode,
+            "pii_entity_denylist":
+                sorted(self.pii_entity_denylist) if self.pii_entity_denylist else None,
+            "pii_score_threshold": self.pii_score_threshold,
+            "pii_exempt_patterns":
+                sorted(self.pii_exempt_patterns) if self.pii_exempt_patterns else None,
+        }
+        # Folded in only when set, so an unset cap leaves every existing app's
+        # version hash unchanged (matches the field's null = inherit default).
+        if self.max_cost_usd_per_request is not None:
+            fields["max_cost_usd_per_request"] = self.max_cost_usd_per_request
+        blob = json.dumps(fields, sort_keys=True, default=str)
         return hashlib.sha256(blob.encode()).hexdigest()[:12]
 
 
@@ -102,6 +104,7 @@ def policy_view_from(app: Application) -> AppPolicyView:
         allowed_providers=_fs(p.allowed_providers),
         allowed_models=_fs(p.allowed_models),
         max_spend_usd_per_day=p.max_spend_usd_per_day,
+        max_cost_usd_per_request=p.max_cost_usd_per_request,
         max_rpm=p.max_rpm,
         compression_enabled=p.compression_enabled,
         capture_io=p.capture_io,

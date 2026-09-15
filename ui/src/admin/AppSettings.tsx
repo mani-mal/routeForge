@@ -129,7 +129,7 @@ const STEP_FIELDS: Record<number, (keyof AdminPolicy)[]> = {
   2: ["residency", "allowed_providers", "allowed_tiers", "allowed_models"],
   3: ["policy_mode", "pii_detection", "pii_score_threshold", "pii_entity_denylist", "pii_exempt_patterns"],
   4: ["capture_io"],
-  5: ["stream_mode", "compression_enabled", "max_rpm", "max_spend_usd_per_day"],
+  5: ["stream_mode", "compression_enabled", "max_rpm", "max_spend_usd_per_day", "max_cost_usd_per_request"],
 };
 
 // Order-insensitive comparison, so re-toggling a chip back to where it started
@@ -370,6 +370,7 @@ function deliverySummary(p: AdminPolicy, dep: DeploymentEnvelope | null): string
   const limits: string[] = [];
   if (p.max_rpm) limits.push(`${p.max_rpm} rpm`);
   if (p.max_spend_usd_per_day) limits.push(`$${p.max_spend_usd_per_day}/day`);
+  if (p.max_cost_usd_per_request) limits.push(`$${p.max_cost_usd_per_request}/request`);
   return [stream, headroom, limits.length ? limits.join(" · ") : "no limits"].join(" · ");
 }
 
@@ -947,7 +948,7 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
   const [p, setP] = useState<AdminPolicy>(
     app.policy ?? {
       allowed_tiers: null, allowed_providers: null, allowed_models: null,
-      residency: null, max_spend_usd_per_day: null, max_rpm: null,
+      residency: null, max_spend_usd_per_day: null, max_cost_usd_per_request: null, max_rpm: null,
       compression_enabled: null, capture_io: null,
       pii_detection: null, stream_mode: null, policy_mode: null,
       pii_entity_denylist: null, pii_score_threshold: null, pii_exempt_patterns: null,
@@ -1562,6 +1563,13 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
         <Row label="budget $/day" htmlFor={`${uid}-budget`} hint="daily spend cap; blank = uncapped">
           <input id={`${uid}-budget`} type="number" min={0} step="0.01" value={p.max_spend_usd_per_day ?? ""}
             onChange={(e) => setP({ ...p, max_spend_usd_per_day: e.target.value ? Number(e.target.value) : null })}
+            className={`${inputCls} w-24`} />
+        </Row>
+
+        <Row label="cost cap $/request" htmlFor={`${uid}-reqcap`}
+          hint="estimated cost cap per request; blank = deployment default (agent clients need more)">
+          <input id={`${uid}-reqcap`} type="number" min={0} step="0.01" value={p.max_cost_usd_per_request ?? ""}
+            onChange={(e) => setP({ ...p, max_cost_usd_per_request: e.target.value ? Number(e.target.value) : null })}
             className={`${inputCls} w-24`} />
         </Row>
 

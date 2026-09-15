@@ -239,7 +239,7 @@ async def update_application(session: AsyncSession, app_id: str, **fields
 # `PolicyIn`; tests/test_admin_api.py asserts the two stay in step.
 POLICY_FIELDS: frozenset[str] = frozenset({
     "allowed_tiers", "allowed_providers", "allowed_models",
-    "residency", "max_spend_usd_per_day", "max_rpm",
+    "residency", "max_spend_usd_per_day", "max_cost_usd_per_request", "max_rpm",
     "compression_enabled", "capture_io",
     "policy_mode", "pii_detection", "stream_mode",
     "pii_entity_denylist", "pii_score_threshold", "pii_exempt_patterns"})
