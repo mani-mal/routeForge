@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 from typing import AsyncIterator
@@ -15,6 +16,15 @@ if TYPE_CHECKING:
     from app.apps.registry import ModelRegistry
 
 _NEXT = {"cheap": "mid", "mid": "frontier", "frontier": None}
+
+# Upstream error text reaches the client in the 502 detail. Endpoints (URLs,
+# IPv4 addresses) are internal topology, so they are scrubbed first.
+_URL = re.compile(r"https?://[^\s'\"<>()]+")
+_IPV4 = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b")
+
+
+def _scrub_endpoints(text: str) -> str:
+    return _IPV4.sub("<endpoint>", _URL.sub("<endpoint>", text))
 
 
 class Gateway:
@@ -97,7 +107,8 @@ class Gateway:
                     cand.name, messages, price, cand.tier, hint,
                     tools=tools, tool_choice=tool_choice, params=params)
             except Exception as exc:
-                last_error = f"{cand.name}: {type(exc).__name__}: {str(exc)[:200]}"
+                last_error = (f"{cand.name}: {type(exc).__name__}: "
+                              f"{_scrub_endpoints(str(exc))[:200]}")
                 records.append(DecisionRecord(
                     step="gateway", chosen=None,
                     reason=f"{cand.name} failed; retrying peer/escalating",
