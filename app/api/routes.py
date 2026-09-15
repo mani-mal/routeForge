@@ -1,3 +1,4 @@
+import json
 import logging
 import re
 import time
@@ -264,6 +265,40 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
                                    tool_calls=message.get("tool_calls")))
 
 
+def _full_capture_io(body: ChatRequest, resp: dict, prompt: str, completion: str,
+                     raw_completion: str) -> tuple[str, str, str]:
+    """Trace input/output for `capture_io == "full"` (the app's OWN project only;
+    the caller has already applied the full-eligibility clamp).
+
+    Input: the whole request -- every message with its tool structure, plus
+    `tools` / `tool_choice` -- as JSON, whenever there is more than one message
+    or tools are offered. A single plain message stays plain text.
+
+    Output: when the model called tools, the assistant message as JSON with its
+    `tool_calls` (content is the pre-verify raw text, or null). Otherwise the
+    plain-text completion is unchanged. Returns (prompt, completion,
+    raw_completion) with raw_completion carrying the same value, so the
+    exporter's "prefer raw_completion" rule picks it up."""
+    if len(body.messages) > 1 or body.tools:
+        request_io: dict = {"messages": [m.model_dump(exclude_none=True)
+                                         for m in body.messages]}
+        if body.tools:
+            request_io["tools"] = body.tools
+        if body.tool_choice is not None:
+            request_io["tool_choice"] = body.tool_choice
+        prompt = json.dumps(request_io)
+    try:
+        tool_calls = resp["choices"][0]["message"].get("tool_calls")
+    except (KeyError, IndexError, TypeError, AttributeError):
+        tool_calls = None
+    if tool_calls:
+        completion = raw_completion = json.dumps({
+            "role": "assistant",
+            "content": raw_completion or completion or None,
+            "tool_calls": tool_calls})
+    return prompt, completion, raw_completion
+
+
 async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
                     tenant: str, app_policy: AppPolicyView,
                     app_langfuse: object | None, profile: AppPrivacyProfile,
@@ -327,6 +362,13 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
             completion = resp["choices"][0]["message"]["content"] or ""
         except (KeyError, IndexError, TypeError):
             completion = ""
+        if capture_io == "full":
+            # `full` stores the WHOLE exchange in the app's own project, not
+            # just the last message's text: an agentic client's earlier turns,
+            # tool results, offered tools and the assistant's tool_calls are
+            # the load-bearing part of its trace.
+            prompt, completion, raw_completion = _full_capture_io(
+                body, resp, prompt, completion, raw_completion)
         # First-party console view (Phase C Part 1). Mode-appropriate bodies for
         # the admin drilldown ONLY — this is the request_snapshots cache, same
         # residency boundary as serving, NOT a telemetry egress (export_trace

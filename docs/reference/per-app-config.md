@@ -288,6 +288,15 @@ independently:
   either deployment ceiling off. Each is a distinct 422 with a message naming which
   guardrail fired, and the console prints that message verbatim.
 
+**What `full` stores.** The whole exchange, not just the last message. When a request
+has more than one message or offers `tools`, the trace Input is JSON —
+`{"messages": [...], "tools": [...], "tool_choice": ...}` — with every message's role,
+content, `tool_calls` and `tool_call_id` intact, so an agentic client's earlier turns and
+tool results are all there. When the model calls tools, the trace Output is the
+assistant message as JSON with its `tool_calls` (a tool-call turn has no text, so it
+used to be blank). A single plain message and a plain text answer stay plain text.
+`redacted` and `off` are unchanged: raw tool arguments never leave for them.
+
 > **"My customer is on-prem, has no PII, and wants raw capture in Langfuse — do I have
 > to flip residency?"** **No — and you shouldn't.** Since PR #34 the answer is
 > `policy_mode: "passthrough"` while `residency` stays `onprem_only`. That keeps the
