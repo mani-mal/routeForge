@@ -73,6 +73,28 @@ the audit trail in that sweep's task report.
 > B19). The other is a UX gap, recorded below as **B32**. Setting up a per-app
 > Langfuse project on the same box then took several saves, recorded as **B33**.
 
+---
+
+> **Update 2026-09-15 (onboarding conformance, Tasks 1–10).** Every new app
+> deployment hit a different policy failure because tests sent tiny synthetic
+> requests and real clients sent complex shapes (20+ tools, streaming, content
+> parts, null content, 25K tokens). The admin API also accepted impossible
+> configurations and rejected them opaquely, so every incident took several
+> rounds. Resolved with a conformance matrix (`tests/onboarding/`), forwarded
+> generation params, budget estimation at `max_tokens`, per-app `max_cost_usd_per_request`,
+> tier fallback when over budget, and actionable rejection messages — recorded
+> below as **B34**.
+
+## B34 — Every new app onboarding hit a different policy failure  ✅ RESOLVED (2026-09-15)
+
+**Root cause.** Tests sent tiny synthetic requests, one policy field at a time; real clients (Qwen Code, openai SDK, LangChain) send content parts, `stream:true` on every turn, 20+ tool schemas, replayed tool turns, `content:null` and 25K-token prompts. The admin API also accepted configurations that could never route, and rejections did not name the field to change, so each incident took several rounds (16 incidents across millwise, demo, kit-gtm).
+
+**Fixed.** `tests/onboarding/` conformance matrix (real client shape × policy recipe × model price, "served or told why"); B24; generation params forwarded; budget estimate prices output at `max_tokens` and counts tool schemas; tier fallback when over budget; per-app `max_cost_usd_per_request`; actionable 400/422/502 details; save-time refusal of impossible policies plus `warnings` for unroutable apps and agent-blocking model prices.
+
+**Rule for new request-path work.** Add the client shape to `tests/onboarding/clients.py` and let the matrix run it under every recipe.
+
+---
+
 ## B33 — Per-app Langfuse credentials form always looks like "add new", never "edit existing", and never checks what it saves
 
 **Severity:** low–medium (UX; no privacy impact — raw capture still only goes to
