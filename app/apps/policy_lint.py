@@ -3,7 +3,12 @@
 Hard impossibilities are refused (422) in admin_routes.set_policy. Everything
 here is a WARNING: the configuration is legal and may be intentional or
 temporary (e.g. an app created before its model is onboarded), but the
-operator must see that requests will be rejected before a client finds out."""
+operator must see that requests will be rejected before a client finds out.
+
+The agent-turn warning is a heuristic: it prices a typical coding-agent turn
+against each requestable model's own price and ignores risk floors and tier
+targeting, so the router may pick a different (pricier or cheaper) model for
+the same request than the one the warning reasons about."""
 from __future__ import annotations
 
 from app.apps.policy import AppPolicyView

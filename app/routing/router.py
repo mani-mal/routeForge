@@ -21,6 +21,9 @@ _FIX_HINTS = {
     "not permitted for application": "check the application's allowed_providers / allowed_tiers / allowed_models and the model's allowed_app_ids",
     "not requested model": "the request pinned a different model (see GET /v1/models)",
     "disabled by admin": "the model is disabled: re-enable it under Infrastructure",
+    # Not an operator fix hint. Safe only because app/gateway/gateway.py rewraps
+    # an exclude-driven NoEligibleCandidate into BackendUnavailable (502 with
+    # the upstream error), so this text never reaches a client as a policy 422.
     "excluded · prior failure": "the model already failed on this request",
 }
 
@@ -190,6 +193,7 @@ class Router:
             lower = sorted((t for t in avail
                             if _ORDER[floor] <= _ORDER[t] < _ORDER[tier_pick]),
                            key=lambda t: -_ORDER[t])
+            skipped: list[str] = []   # lower tiers passed over: every member over budget
             for t in lower:
                 fits = [(c, e) for c, e in
                         ((c, self._est_cost(c, tokens_after, out_tokens))
@@ -197,14 +201,17 @@ class Router:
                         if e <= ctx.max_cost_usd]
                 if fits:
                     fits_names = {c.name for c, _ in fits}
+                    relabel = {t, *skipped}
                     rejected = [r for r in rejected
-                                if not (r.tier == t and r.reason == "below target tier")]
+                                if not (r.tier in relabel and r.reason == "below target tier")]
                     rejected.extend(
                         RejectedCandidate(name=c.name, provider=c.provider, tier=c.tier,
                                           display_name=c.display_name, reason="over budget")
-                        for c in allowed if c.tier == t and c.name not in fits_names)
+                        for c in allowed
+                        if c.tier in relabel and c.name not in fits_names)
                     fallback_from, tier_pick, eligible = tier_pick, t, fits
                     break
+                skipped.append(t)
         if not eligible:
             cheapest, cheapest_est = min(over, key=lambda ce: ce[1])
             raise NoEligibleCandidate(
