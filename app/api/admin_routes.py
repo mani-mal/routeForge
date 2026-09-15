@@ -7,6 +7,7 @@ audience. The dashboard (Phase 4) is the only intended client.
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -474,7 +475,7 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
         # all, silently skipping the whole downgrade branch).
         settings = request.app.state.settings
         stored = app.policy
-        await _validate_policy_values(body, settings, session)
+        await _validate_policy_values(body, settings, session, stored)
 
         def _stored(field: str):
             """The stored value this write will leave behind, BEFORE the body's
@@ -695,10 +696,18 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
     # db.session(), which would deadlock on the non-reentrant SQLite
     # write-lock (app/apps/db.py) if called while the outer session above is
     # still open.
-    registry = request.app.state.registry
-    await registry.ensure_loaded(request.app.state.db)
-    from app.apps.policy_lint import policy_warnings
-    return {**app_dict, "warnings": policy_warnings(settings, registry, app_id, view)}
+    # The policy is already committed: a failure computing advisory warnings
+    # must never turn a successful save into a 500.
+    try:
+        registry = request.app.state.registry
+        await registry.ensure_loaded(request.app.state.db)
+        from app.apps import policy_lint
+        warnings = policy_lint.policy_warnings(settings, registry, app_id, view)
+    except Exception:
+        logging.getLogger("serving.admin").exception(
+            "policy saved for %s but computing warnings failed", app_id)
+        warnings = []
+    return {**app_dict, "warnings": warnings}
 
 
 # --- tokens -----------------------------------------------------------------
@@ -802,40 +811,50 @@ async def put_privacy(app_id: str, body: PrivacyProfileIn, request: Request,
 # routing. `provider` is always forced to "onprem" — never taken from the
 # request body.
 
-async def _validate_policy_values(body: "PolicyIn", settings, session) -> None:
+async def _validate_policy_values(body: "PolicyIn", settings, session,
+                                  stored=None) -> None:
     """Refuse values that can never route. Empty allowlists are refused because
     the store reads [] as 'no restriction', the opposite of what an operator
-    who clears a list means."""
+    who clears a list means.
+
+    Only values this write CHANGES are checked. The console always sends the
+    whole policy, so a value stored before these checks existed (max_rpm=0, a
+    since-retired model slug) must not block an unrelated edit; changing it,
+    or setting a new illegal value, is still refused."""
+    def changed(field: str) -> bool:
+        v = getattr(body, field)
+        return v is not None and v != (getattr(stored, field) if stored else None)
+
     for field in ("allowed_tiers", "allowed_providers", "allowed_models"):
         v = getattr(body, field)
-        if v is not None and len(v) == 0:
+        if changed(field) and len(v) == 0:
             raise HTTPException(
                 422, f"{field} is an empty list, which RouteForge reads as 'no "
                 "restriction'. Omit the field to leave it unchanged, or name it in "
                 "`reset` to clear it.")
-    if body.allowed_tiers:
+    if changed("allowed_tiers"):
         bad = sorted(set(body.allowed_tiers) - set(settings.routing.tiers))
         if bad:
             raise HTTPException(
                 422, f"unknown tier(s) {bad}; legal tiers: {list(settings.routing.tiers)}")
-    if body.allowed_providers:
+    if changed("allowed_providers"):
         bad = sorted(set(body.allowed_providers) - set(settings.serving.providers))
         if bad:
             raise HTTPException(
                 422, f"unknown provider(s) {bad}; legal providers: "
                 f"{sorted(settings.serving.providers)}")
-    if body.allowed_models:
+    if changed("allowed_models"):
         known = ({c.name for c in settings.routing.model_pool}
                  | {m.slug for m in await store.list_onboarded(session)})
         bad = sorted(set(body.allowed_models) - known)
         if bad:
             raise HTTPException(
                 422, f"unknown model(s) {bad}: not in the YAML pool and not onboarded")
-    if body.max_rpm is not None and body.max_rpm < 1:
+    if changed("max_rpm") and body.max_rpm < 1:
         raise HTTPException(
             422, "max_rpm must be >= 1 (0 rejects every request). Omit it, or reset it, "
             "for no rate limit.")
-    if body.max_spend_usd_per_day is not None and not body.max_spend_usd_per_day > 0:
+    if changed("max_spend_usd_per_day") and not body.max_spend_usd_per_day > 0:
         raise HTTPException(
             422, "max_spend_usd_per_day must be > 0 (0 rejects every request). Omit it, "
             "or reset it, for no daily cap.")

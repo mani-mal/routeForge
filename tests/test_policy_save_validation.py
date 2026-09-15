@@ -75,3 +75,40 @@ def test_app_warns_when_every_model_is_over_its_cap(admin):
     r = _put(admin, allowed_models=["pricey"])
     assert r.status_code == 200
     assert any("typical coding-agent turn" in w for w in r.json()["warnings"])
+
+
+def test_unchanged_stored_illegal_value_does_not_block_an_unrelated_save(admin):
+    # The console always sends the whole policy. A value stored before save-time
+    # validation existed must not make an unrelated edit (capture_io) fail.
+    from tests.onboarding.harness import set_policy_direct
+    set_policy_direct(admin, "lint", max_rpm=0, allowed_tiers=[])
+    r = _put(admin, max_rpm=0, allowed_tiers=[], capture_io="off")
+    assert r.status_code == 200, r.text
+    assert r.json()["policy"]["capture_io"] == "off"
+
+
+def test_changed_illegal_value_is_still_refused(admin):
+    from tests.onboarding.harness import set_policy_direct
+    set_policy_direct(admin, "lint", max_rpm=0)
+    r = _put(admin, max_rpm=-1, capture_io="off")
+    assert r.status_code == 422, r.text
+    assert "max_rpm" in r.json()["detail"]
+
+
+def test_stale_stored_model_slug_does_not_block_an_unrelated_save(admin):
+    from tests.onboarding.harness import set_policy_direct
+    set_policy_direct(admin, "lint", allowed_models=["retired-model"])
+    r = _put(admin, allowed_models=["retired-model"], capture_io="off")
+    assert r.status_code == 200, r.text
+
+
+def test_warnings_failure_after_commit_is_not_a_500(admin, monkeypatch):
+    import app.apps.policy_lint as pl
+
+    def boom(*a, **k):
+        raise RuntimeError("lint exploded")
+
+    monkeypatch.setattr(pl, "policy_warnings", boom)
+    r = _put(admin, capture_io="off")
+    assert r.status_code == 200, r.text
+    assert r.json()["warnings"] == []
