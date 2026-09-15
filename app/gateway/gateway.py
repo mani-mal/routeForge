@@ -71,7 +71,17 @@ class Gateway:
                     decision = self._router.select(
                         ctx, tokens_after, complexity, min_tier,
                         exclude=frozenset(failed_models), output_tokens=out_tokens)
-            except NoEligibleCandidate:
+            except NoEligibleCandidate as exc:
+                # A confidence escalation found nothing eligible at the higher
+                # tier (e.g. it is over the per-request budget the served answer
+                # fell back under). Keep the answer already served -- and its
+                # cost, which is metered from `records` -- and say why.
+                if result is not None and escalations > 0 and min_tier is not None:
+                    records.append(DecisionRecord(
+                        step="gateway", chosen=None,
+                        reason=f"escalation skipped: no eligible candidate at {min_tier} ({exc})",
+                        latency_ms=0.0, hop_index=len(records)))
+                    break
                 # Every reachable candidate has now been excluded by prior
                 # failures -> exhausted, not a genuine no-candidate reject.
                 if failed_models:
