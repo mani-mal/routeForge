@@ -496,6 +496,13 @@ ALTER TABLE app_policies ADD COLUMN policy_mode VARCHAR(16);       -- policy_mod
 ALTER TABLE app_policies ADD COLUMN max_cost_usd_per_request FLOAT; -- 2026-09-15
 ```
 
+> **Upgrade order for `max_cost_usd_per_request` (2026-09-15): migrate first, then roll
+> the image.** Run this `ALTER` (or `scripts/migrate_app_policies.py`) **before** rolling
+> out the new image. The new image reads this column on every policy lookup, so on a
+> database without it **every authenticated request fails with `500`** — not just admin
+> writes — until the column exists. The old image never references the column, so
+> applying it early is safe.
+
 > **The console does not exempt you from this.** Since `ui:0.17.0` the Settings tab
 > offers a control for every one of these fields, and it writes through the same
 > `PUT /admin/applications/{id}/policy`. On a database missing the column, saving from

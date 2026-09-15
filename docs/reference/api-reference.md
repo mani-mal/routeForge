@@ -27,8 +27,8 @@ Body:
 | `stream` | bool | no | `false` | Per-app capability via `stream_mode`; default (unset) still **rejected** (`400`). See [Streaming](#streaming). |
 | `tools` | array of tool definitions | no | `null` | Standard OpenAI tool/function definitions, passed through to the backend. See [Tool calling](#tool-calling). |
 | `tool_choice` | string \| object | no | `null` | Standard OpenAI tool-choice control, passed through with `tools`. |
-| `max_tokens` | integer | no | — | Output length cap — forwarded to the backend. Priced at this cap if set, else the default estimated output tokens. |
-| `max_completion_tokens` | integer | no | — | OpenAI-compatible alias for `max_tokens` — forwarded to the backend. |
+| `max_tokens` | integer ≥ 1 | no | — | Output length cap — forwarded to the backend. Priced at this cap if set, else the default estimated output tokens. A non-integer or value < 1 is rejected `422`. Because it is forwarded, a value larger than the backend's context window fails upstream (`502`) rather than being silently dropped. |
+| `max_completion_tokens` | integer ≥ 1 | no | — | OpenAI-compatible alias for `max_tokens` — forwarded to the backend, validated the same way. |
 | `temperature` | float | no | — | Forwarded to the backend. |
 | `top_p` | float | no | — | Forwarded to the backend. |
 | `stop` | string \| array | no | — | Stop sequences — forwarded to the backend. |
@@ -51,7 +51,8 @@ path) and `mock_confidence` / `mock_fail` (mock-backend generation hints). See
 > doesn't match — routing is pinned to that one model, and the semantic cache
 > honors the pin too. If the pinned slug isn't in your app's permitted/available
 > pool the request is **rejected `422`** with
-> `model request rejected: requested model '<slug>' is not permitted or unavailable`.
+> `model request rejected: requested model '<model>' is not permitted or unavailable: <gate>`,
+> where `<gate>` names what refused it (see the error table below).
 > The pin can only narrow within your policy; it can't reach a model your admin
 > hasn't allowed.
 >
