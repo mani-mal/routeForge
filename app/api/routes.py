@@ -259,8 +259,9 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
     # `stream_unverified`/`incremental_verify` requests that hit the runtime
     # floor (StreamFallback above) -- a floored request is always verified as a
     # complete response, never streamed unverified/incrementally.
-    content = resp["choices"][0]["message"]["content"] or ""
-    return sse_response(chunk_text(request_id, resp["model"], content))
+    message = resp["choices"][0]["message"]
+    return sse_response(chunk_text(request_id, resp["model"], message["content"] or "",
+                                   tool_calls=message.get("tool_calls")))
 
 
 async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
