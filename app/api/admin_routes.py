@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, field_validator
 from app.apps import store
 from app.apps.admin_auth import SESSION_COOKIE, require_admin
 from app.apps.langfuse_provision import LangfuseProvisioner, encrypt_secret
+from app.apps.policy_lint import price_warnings
 from app.apps.probe import probe_endpoint
 from app.apps.tokens import new_token
 from app.policy.effective import PROTECTED_ENTITIES
@@ -473,6 +474,7 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
         # all, silently skipping the whole downgrade branch).
         settings = request.app.state.settings
         stored = app.policy
+        await _validate_policy_values(body, settings, session)
 
         def _stored(field: str):
             """The stored value this write will leave behind, BEFORE the body's
@@ -686,7 +688,17 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
         # (expire_on_commit=False on this sessionmaker).
         session.expire(app)
         full = await store.get_application_with_policy(session, app_id)
-        return _app_dict(full)
+        app_dict = _app_dict(full)
+        from app.apps.policy import policy_view_from
+        view = policy_view_from(full)
+    # Outside the session block: registry.ensure_loaded() opens its own
+    # db.session(), which would deadlock on the non-reentrant SQLite
+    # write-lock (app/apps/db.py) if called while the outer session above is
+    # still open.
+    registry = request.app.state.registry
+    await registry.ensure_loaded(request.app.state.db)
+    from app.apps.policy_lint import policy_warnings
+    return {**app_dict, "warnings": policy_warnings(settings, registry, app_id, view)}
 
 
 # --- tokens -----------------------------------------------------------------
@@ -790,6 +802,45 @@ async def put_privacy(app_id: str, body: PrivacyProfileIn, request: Request,
 # routing. `provider` is always forced to "onprem" — never taken from the
 # request body.
 
+async def _validate_policy_values(body: "PolicyIn", settings, session) -> None:
+    """Refuse values that can never route. Empty allowlists are refused because
+    the store reads [] as 'no restriction', the opposite of what an operator
+    who clears a list means."""
+    for field in ("allowed_tiers", "allowed_providers", "allowed_models"):
+        v = getattr(body, field)
+        if v is not None and len(v) == 0:
+            raise HTTPException(
+                422, f"{field} is an empty list, which RouteForge reads as 'no "
+                "restriction'. Omit the field to leave it unchanged, or name it in "
+                "`reset` to clear it.")
+    if body.allowed_tiers:
+        bad = sorted(set(body.allowed_tiers) - set(settings.routing.tiers))
+        if bad:
+            raise HTTPException(
+                422, f"unknown tier(s) {bad}; legal tiers: {list(settings.routing.tiers)}")
+    if body.allowed_providers:
+        bad = sorted(set(body.allowed_providers) - set(settings.serving.providers))
+        if bad:
+            raise HTTPException(
+                422, f"unknown provider(s) {bad}; legal providers: "
+                f"{sorted(settings.serving.providers)}")
+    if body.allowed_models:
+        known = ({c.name for c in settings.routing.model_pool}
+                 | {m.slug for m in await store.list_onboarded(session)})
+        bad = sorted(set(body.allowed_models) - known)
+        if bad:
+            raise HTTPException(
+                422, f"unknown model(s) {bad}: not in the YAML pool and not onboarded")
+    if body.max_rpm is not None and body.max_rpm < 1:
+        raise HTTPException(
+            422, "max_rpm must be >= 1 (0 rejects every request). Omit it, or reset it, "
+            "for no rate limit.")
+    if body.max_spend_usd_per_day is not None and not body.max_spend_usd_per_day > 0:
+        raise HTTPException(
+            422, "max_spend_usd_per_day must be > 0 (0 rejects every request). Omit it, "
+            "or reset it, for no daily cap.")
+
+
 def _static_validate_onboard(body: OnboardIn, s) -> None:
     tiers = set(s.routing.tiers)
     if body.tier not in tiers:
@@ -839,7 +890,8 @@ async def onboard_model(body: OnboardIn, request: Request,
     await reg.refresh(request.app.state.db)
     return {"slug": body.slug, "enabled": final_enabled,
             "probe_status": "healthy" if ok else "unreachable",
-            "probe_error": None if ok else detail}
+            "probe_error": None if ok else detail,
+            "warnings": price_warnings(s, body.price_input, body.price_output)}
 
 
 # {slug:path} (not {slug}) so real OpenAI-compatible ids that contain a slash
@@ -875,7 +927,8 @@ async def edit_onboarded_model(slug: str, body: OnboardIn, request: Request,
     await reg.refresh(request.app.state.db)
     return {"slug": slug, "enabled": final_enabled,
             "probe_status": "healthy" if ok else "unreachable",
-            "probe_error": None if ok else detail}
+            "probe_error": None if ok else detail,
+            "warnings": price_warnings(s, body.price_input, body.price_output)}
 
 
 @admin_router.delete("/infra/models/{slug:path}")  # {slug:path} for slashed ids — see PUT above (B19)
