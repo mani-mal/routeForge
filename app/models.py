@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 RISK_CLASSES = ("low", "medium", "high")
 RESIDENCIES = ("any", "private_cloud_ok", "onprem_only")
@@ -14,6 +14,21 @@ class Message(BaseModel):
     # str for every ordinary user/assistant turn. Consumers that read raw text
     # (the gate, compression, token counting) MUST coerce `content or ""`.
     content: str | None = None
+
+    @field_validator("content", mode="before")
+    @classmethod
+    def _flatten_content_parts(cls, v):
+        # OpenAI also allows content as a list of parts
+        # ([{"type":"text","text":...}], as sent by Qwen Code and other
+        # openai-SDK agents). Join the text parts into one string so every
+        # consumer -- including the PII gate -- still sees plain text. Non-text
+        # parts (images) are dropped; extra keys like cache_control are ignored.
+        if isinstance(v, list):
+            return "\n".join(
+                p.get("text") or "" for p in v
+                if isinstance(p, dict) and p.get("type") == "text"
+            )
+        return v
     # OpenAI tool-calling fields. Accepted on request messages (so a client can
     # replay an assistant/tool turn back to us) and emitted on the response
     # assistant message. `tool_calls` items are OpenAI-shape dicts:
