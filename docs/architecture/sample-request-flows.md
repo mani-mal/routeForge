@@ -77,10 +77,12 @@ them; `null` on any field means "inherit / no restriction."
   "stream_mode": "verified_then_stream" }
 ```
 
-> `pii_detection: regex` pairs only with `capture_io: "off"` or `"full"` — not `"redacted"`:
-> the `redacted` exporter path reuses the gate's sanitized prompt, and with a downgraded
-> detector that "sanitized" text is raw (`app/api/admin_routes.py`, the
-> `eff_pii in ("off", "regex")` + `eff_capture == "redacted"` clamp — a 422 on write). See
+> `pii_detection: regex` pairs with any `capture_io`, including `"redacted"` — the regex
+> detector still redacts (SSNs, cards, emails, custom recognizers), just at lower
+> fidelity than `presidio` (it misses entities without a pattern, e.g. names). Only
+> `pii_detection: "off"` is refused in combination with `capture_io: "redacted"`
+> (`app/api/admin_routes.py`, the `eff_pii == "off"` + `eff_capture == "redacted"` clamp
+> — a 422 on write). See
 > [`../guides/getting-started.md`](../guides/getting-started.md)'s identical Internal-chatbot recipe.
 
 ### App B — `hospital-phi` (onprem_only, Presidio, high sensitivity)

@@ -38,8 +38,10 @@ honest configuration; so is `any` + full protection.
 Do they want to open Langfuse and read the actual text a model was sent and returned —
 to score it, build an eval set, or debug output quality?
 
-- **Yes → Recipe B (Router only).** Raw capture requires a declared no-protection
-  posture *and* the app's own Langfuse project.
+- **Yes → Recipe B (Router only).** Raw capture (`capture_io: "full"`) always requires
+  the app's own Langfuse project; it also needs a declared no-protection posture
+  (`policy_mode: "passthrough"`) but **only if** the app is `onprem_only` — a
+  non-`onprem_only` app may use `full` while still `enforced`.
 - **No, and they'd rather no I/O left the serving path at all → Recipe C.**
 - **No, redacted traces are fine → Recipe A.**
 
@@ -160,7 +162,11 @@ and emitted on the trace as `sp.policy_mode`.
 `allowed_providers`, never clears `onprem_only`, and never touches placement at all. With
 `residency: "onprem_only"` the cloud providers are filtered out of the candidate pool
 *before* the router scores anything — the on-prem guarantee is fully intact. "Run only on
-my hardware, and don't touch my data" is one honest configuration, not a compromise.
+my hardware, and turn off PII detection/redaction and output verification" is one
+honest configuration, not a compromise. It does **not** turn off context compression:
+if Headroom is enabled deployment-wide, it can still transform tool outputs/history for
+this app — an app that needs byte-exact content end to end also needs compression
+disabled.
 
 > **Never flip residency to get this.** The old workaround —
 > `residency: "any"` + an `allowed_providers: ["onprem"]` pin — is strictly weaker: it
@@ -366,12 +372,17 @@ save 422s.
 Two independent 422s, each naming which guardrail fired:
 
 - `policy_mode: "passthrough"` + `capture_io: "redacted"`
-- `pii_detection` of `off` or `regex` + `capture_io: "redacted"`
+- `pii_detection: "off"` + `capture_io: "redacted"`
 
 The reason is the same in both cases and it is not pedantry: the `redacted` exporter path
 **reuses the gate's sanitized prompt**. When the gate sanitized nothing, that "sanitized"
 prompt is the raw one — so `redacted` telemetry would carry raw I/O under a label saying
 it doesn't, into the *shared* project. Use `full` (with the app's own project) or `off`.
+
+`pii_detection: "regex"` + `capture_io: "redacted"` is **allowed** — the regex detector
+still redacts (SSNs, cards, emails, custom recognizers), so the "sanitized" prompt is
+genuinely sanitized, just at lower fidelity than `presidio` (it misses entities that
+need language understanding, e.g. a bare name).
 
 Every clamp is evaluated on the **effective post-write value**, not on what your request
 body happens to name. A partial PUT that touches only `pii_detection` is still judged
