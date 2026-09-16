@@ -47,6 +47,31 @@ def test_await_cancels_the_work_when_client_disconnects():
     assert cancelled.get("yes") is True
 
 
+def test_wait_or_cancel_on_shutdown_cancels_task_when_handler_itself_is_cancelled():
+    """M1 (final-review fix wave): if the request handler coroutine itself is
+    cancelled while waiting on the pipeline task (e.g. server shutdown, not a
+    client disconnect), the pipeline task must be cancelled too -- otherwise
+    it keeps running, orphaned, with no caller left to await or record it.
+    Shared by both `_await_unless_disconnected` and the keepalive-vs-direct
+    wait in `chat_completions`."""
+    async def go():
+        async def work():
+            await asyncio.sleep(10)
+
+        task = asyncio.create_task(work())
+        await asyncio.sleep(0)  # let it actually start
+
+        outer = asyncio.create_task(routes._wait_or_cancel_on_shutdown(task, 5.0))
+        await asyncio.sleep(0)
+        outer.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await outer
+        await asyncio.sleep(0)  # let the cancellation land in `task`
+        return task.cancelled()
+
+    assert asyncio.run(go()) is True
+
+
 def test_await_reraises_pipeline_errors():
     async def go():
         async def boom():
@@ -197,3 +222,82 @@ def test_keepalive_stream_polls_is_disconnected_and_records_cancelled_once(monke
     # frame follows it.
     assert frames and all(f.startswith(": keepalive") for f in frames)
     assert recorded == [("acme", "req-poll")]
+
+
+def test_keepalive_stream_real_asgi_disconnect_still_records_cancelled(monkeypatch):
+    """I1 (final-review fix wave): in production (uvicorn ASGI spec 2.3,
+    Starlette 1.3.1) `StreamingResponse` runs `listen_for_disconnect` in an
+    anyio task group. On a real ASGI disconnect that task group's cancel
+    scope cancels the body generator AND KEEPS RE-CANCELLING it, so the first
+    `await` inside `_keepalive_stream`'s `finally` (the `asyncio.gather(task,
+    ...)` that retrieves the already-cancelled backend task) raises
+    CancelledError again and `_record_cancelled` never runs -- the disconnect
+    is silently unmetered.
+
+    Unlike the two tests above (which drive the generator directly via
+    `aclose()`/manual iteration -- a GeneratorExit, not the anyio cancel-scope
+    re-cancellation Starlette's real disconnect listener produces), this one
+    drives the REAL `StreamingResponse.__call__(scope, receive, send)` with a
+    `receive` that reports `http.disconnect` shortly after the first
+    keepalive frame, so it actually exercises Starlette's own cancellation
+    path. Confirmed to fail before the `anyio.CancelScope(shield=True)` fix:
+    the task never gets cancelled and `_record_cancelled` never runs."""
+    from app.api import routes
+    from app.api.streaming import sse_response
+    from app.apps.policy import AppPolicyView
+    from app.apps.privacy import AppPrivacyProfile
+    from app.config.loader import load_settings
+    from app.models import ChatRequest, Message
+
+    recorded = []
+
+    async def fake_record_cancelled(request, *, tenant, request_id, started):
+        recorded.append((tenant, request_id))
+
+    monkeypatch.setattr(routes, "_record_cancelled", fake_record_cancelled)
+
+    class StubRequest:
+        """Never trips the route's own is_disconnected() poll -- this test
+        isolates the REAL ASGI/Starlette disconnect path, not the polling
+        path the two tests above already cover."""
+
+        async def is_disconnected(self):
+            return False
+
+    async def go():
+        work_cancelled = {}
+
+        async def work():
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                work_cancelled["yes"] = True
+                raise
+
+        task = asyncio.create_task(work())
+        await asyncio.sleep(0)  # let `work` actually start before anything
+                                 # cancels it -- matches a real in-flight call
+        body = ChatRequest(model="auto", messages=[Message(role="user", content="hi")])
+        gen = routes._keepalive_stream(
+            StubRequest(), task=task, keepalive_s=0.02, request_id="req-real-disc",
+            body=body, tenant="acme", app_policy=AppPolicyView(),
+            app_langfuse=None, profile=AppPrivacyProfile(recognizers=(), rules=()),
+            session_id=None, s=load_settings(), started=0.0)
+        resp = sse_response(gen)
+
+        async def receive():
+            await asyncio.sleep(0.1)  # after the first keepalive is on the wire
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            pass
+
+        scope = {"type": "http", "asgi": {"spec_version": "2.3"}}
+        await resp(scope, receive, send)
+        await asyncio.sleep(0.05)  # let any shielded cleanup settle
+        return task.cancelled(), work_cancelled.get("yes")
+
+    cancelled, work_was_cancelled = asyncio.run(go())
+    assert cancelled is True
+    assert work_was_cancelled is True
+    assert recorded == [("acme", "req-real-disc")]

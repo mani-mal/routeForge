@@ -10,6 +10,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Callable
 
+import anyio
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -225,6 +226,21 @@ class ClientDisconnected(Exception):
     """The client went away before a complete answer was ready."""
 
 
+async def _wait_or_cancel_on_shutdown(task: "asyncio.Task", timeout: float):
+    """`asyncio.wait` for `task`, but if THIS coroutine itself is cancelled
+    before the wait completes (e.g. the request handler is torn down on
+    server shutdown, not a client disconnect), cancel `task` too instead of
+    re-raising and leaving it orphaned -- still running, unawaited, with no
+    caller left to record or await its outcome. Re-raises either way; the
+    caller's own cleanup (or lack of one, on shutdown) is unaffected."""
+    try:
+        return await asyncio.wait({task}, timeout=timeout)
+    except asyncio.CancelledError:
+        if not task.done():
+            task.cancel()
+        raise
+
+
 async def _await_unless_disconnected(task: "asyncio.Task", is_disconnected,
                                      poll_s: float):
     """Await `task`, polling the client connection every `poll_s`. A client that
@@ -233,7 +249,7 @@ async def _await_unless_disconnected(task: "asyncio.Task", is_disconnected,
     Only for paths that wait for a complete answer; real token streaming keeps
     its drain-on-disconnect accounting."""
     while True:
-        done, _ = await asyncio.wait({task}, timeout=poll_s)
+        done, _ = await _wait_or_cancel_on_shutdown(task, poll_s)
         if done:
             return task.result()
         if await is_disconnected():
@@ -401,7 +417,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
                 request_id, tenant, body, app_policy=app_policy, profile=profile,
                 session_id=client_session_id))
             keepalive = s.serving.stream_keepalive_s
-            done, _ = await asyncio.wait({task}, timeout=keepalive)
+            done, _ = await _wait_or_cancel_on_shutdown(task, keepalive)
             if not done:
                 return sse_response(_keepalive_stream(
                     request, task=task, keepalive_s=keepalive, request_id=request_id,
@@ -743,9 +759,17 @@ async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
                 break
             if await request.is_disconnected():
                 task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
-                await _record_cancelled(request, tenant=tenant, request_id=request_id,
-                                        started=started)
+                # Shielded: on a real ASGI disconnect Starlette's own
+                # disconnect-listener cancel scope keeps re-cancelling this
+                # generator (see the `finally` below), so an unshielded await
+                # here would raise CancelledError before `_record_cancelled`
+                # ever ran. Only retrieving the just-cancelled task and
+                # writing the cancelled row are shielded -- no long backend
+                # wait happens here.
+                with anyio.CancelScope(shield=True):
+                    await asyncio.gather(task, return_exceptions=True)
+                    await _record_cancelled(request, tenant=tenant, request_id=request_id,
+                                            started=started)
                 cancelled_recorded = True
                 return  # client is gone -- no keepalive/answer/error frame follows
             yield SSE_KEEPALIVE
@@ -766,10 +790,17 @@ async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
             yield sse_error_frame(*mapped)
             yield SSE_DONE
             return
-        await _finalize(request, resp, body=body, tenant=tenant, app_policy=app_policy,
-                        app_langfuse=app_langfuse, profile=profile,
-                        session_id=session_id, s=s, request_id=request_id,
-                        started_ns=started_ns)
+        # Shielded (ledger T2, deferred minor): `_finalize` writes the `ok`
+        # usage row and snapshot. A disconnect landing mid-`_finalize` would
+        # otherwise deliver Starlette's re-cancelling cancel scope into one of
+        # its awaited DB writes -- caught by `except Exception` there for a
+        # normal error, but CancelledError is a BaseException and would skip
+        # right past it, silently losing the row.
+        with anyio.CancelScope(shield=True):
+            await _finalize(request, resp, body=body, tenant=tenant, app_policy=app_policy,
+                            app_langfuse=app_langfuse, profile=profile,
+                            session_id=session_id, s=s, request_id=request_id,
+                            started_ns=started_ns)
         message = resp["choices"][0]["message"]
         async for frame in chunk_text(request_id, resp["model"], message["content"] or "",
                                       tool_calls=message.get("tool_calls")):
@@ -785,14 +816,23 @@ async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
         was_done = task.done()
         if not was_done:
             task.cancel()
-        # Retrieve the outcome on every exit path -- a task that finished
-        # (successfully or with an exception) between the last check and
-        # generator close must still have its result/exception consumed, or
-        # asyncio logs "Task exception was never retrieved".
-        await asyncio.gather(task, return_exceptions=True)
-        if not was_done and not cancelled_recorded:
-            await _record_cancelled(request, tenant=tenant, request_id=request_id,
-                                    started=started)
+        # Shielded: on a real ASGI disconnect (uvicorn ASGI spec 2.3 +
+        # Starlette 1.3.1), `StreamingResponse` runs `listen_for_disconnect`
+        # in an anyio task group whose cancel scope cancels this generator
+        # AND KEEPS RE-CANCELLING it -- so the first unshielded await below
+        # would raise CancelledError again immediately, and `_record_cancelled`
+        # would never run. `task.cancel()` above stays unshielded (no await);
+        # only retrieving the already-cancelled/already-done task and writing
+        # the cancelled row are shielded -- never a long wait on the backend.
+        with anyio.CancelScope(shield=True):
+            # Retrieve the outcome on every exit path -- a task that finished
+            # (successfully or with an exception) between the last check and
+            # generator close must still have its result/exception consumed, or
+            # asyncio logs "Task exception was never retrieved".
+            await asyncio.gather(task, return_exceptions=True)
+            if not was_done and not cancelled_recorded:
+                await _record_cancelled(request, tenant=tenant, request_id=request_id,
+                                        started=started)
 
 
 def _stream_unverified_response(
