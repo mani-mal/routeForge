@@ -83,7 +83,7 @@ the audit trail in that sweep's task report.
 > rounds. Resolved with a conformance matrix (`tests/onboarding/`), forwarded
 > generation params, budget estimation at `max_tokens`, per-app `max_cost_usd_per_request`,
 > tier fallback when over budget, and actionable rejection messages — recorded
-> below as **B35** and **B34**.
+> below as **B34**.
 
 ---
 
@@ -102,8 +102,8 @@ cause.
 - Streamed turns that wait for a complete answer get SSE keepalives after
   `server.stream_keepalive_s`. Late failures become SSE error frames.
 - A client disconnect cancels the backend work and meters it as `cancelled`.
-- Trace spans carry real timings, and the served router hop is a Langfuse
-  generation with model, tokens and cost.
+- Trace spans carry real timings, and every router hop that chose a model is a
+  Langfuse generation with its model, tokens and cost.
 - A session id is derived when the client sends none.
 - Upstream backend failures and unhandled errors are logged.
 

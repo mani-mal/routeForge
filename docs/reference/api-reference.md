@@ -236,7 +236,7 @@ decision stream is a *separate*, admin-only channel — see
 
 When a request waits for a complete, verified answer — such as a tool turn, `verified_then_stream` streaming, or a request floored to the fully-verified path — RouteForge sends SSE keepalive comment lines every `server.stream_keepalive_s` seconds (default 5) once the answer takes longer than one interval. The format is `: keepalive` on a line by itself. OpenAI-compatible clients ignore comment lines, so keepalive frames do not affect request/response semantics. They are transparent to tool calling and standard streaming clients.
 
-**Why keepalives matter:** Some OpenAI-SDK-based agent clients apply a separate request timeout (often 120 s) to connect and first response bytes. Without keepalives, a request that produces its first byte after 120 s abandons the backend work and retries, leading to overlapped computation, multiple identical usage rows, and traces with zero latency. Keepalives hold the connection open without consuming bandwidth.
+**Why keepalives matter:** Some OpenAI-SDK-based agent clients apply a separate request timeout (often 120 s) to connect and first response bytes. Without keepalives, a request that produces its first byte after 120 s abandons the backend work and retries, leading to overlapped computation, multiple identical usage rows, and traces with zero latency. Keepalives are a few bytes each and hold the connection open.
 
 ### Late failures as SSE error frames
 
@@ -247,15 +247,15 @@ data: {"error": {"message": "<detail>", "type": "routeforge_error", "code": <htt
 data: [DONE]
 ```
 
-The message text is identical to what the HTTP error response would contain. Clients that parse SSE will raise an `APIError` on the error frame. 
+The message text is identical to what the HTTP error response would contain. Clients that parse SSE will raise an `APIError` on the error frame.
 
 **Fast responses and rejections** — errors that occur before streaming starts (validation, policy gate, no-eligible-model checks) — still return their normal HTTP status code and do not use SSE frames.
 
 ### Client disconnect handling
 
-When a client disconnects while waiting for a complete answer, the backend work is cancelled and the usage row is recorded with `status: cancelled`. 
+When a client disconnects while waiting for a complete answer, the backend work is cancelled and the usage row is recorded with `status: cancelled`.
 
-For non-streamed requests (where `stream_mode` is `off` or unset), a disconnected client receives:
+For non-streamed requests (`stream: false`), a disconnected client receives:
 
 ```
 499  (empty body)
