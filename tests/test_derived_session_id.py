@@ -47,3 +47,44 @@ def test_switch_off_keeps_old_behaviour(client):
     r = client.post("/v1/chat/completions", headers={"Authorization": "Bearer demo-key"},
                     json={"messages": [U1]})
     assert not r.json().get("session_id")
+
+def test_malformed_header_with_derivation_on_still_derives(client):
+    r = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer demo-key",
+                 "x-routeforge-session": "has spaces & @!"},
+        json={"messages": [U1]},
+    )
+    assert r.status_code == 200
+    assert r.json()["session_id"].startswith("auto-")
+
+def test_derived_session_id_never_becomes_the_memory_partition_key(client, monkeypatch):
+    """Fix round 1 (Important): the derived id is for trace/console grouping
+    ONLY. `pipeline.run`'s `session_id=` kwarg -- the memory partition key --
+    must keep seeing exactly what the client sent (None when there is no
+    header), never the server-derived `auto-...` id, even though the HTTP
+    response and Langfuse trace do carry the derived id."""
+    calls: list[str | None] = []
+    real = client.app.state.pipeline.run
+
+    async def recording(*a, **kw):
+        calls.append(kw.get("session_id"))
+        return await real(*a, **kw)
+
+    monkeypatch.setattr(client.app.state.pipeline, "run", recording)
+
+    r = client.post("/v1/chat/completions", headers={"Authorization": "Bearer demo-key"},
+                    json={"messages": [U1]})
+    assert r.status_code == 200
+    assert calls[-1] is None                          # memory partition key: untouched
+    assert r.json()["session_id"].startswith("auto-")  # response/trace: derived
+
+    calls.clear()
+    r2 = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer demo-key", "x-routeforge-session": "wf-999"},
+        json={"messages": [U1]},
+    )
+    assert r2.status_code == 200
+    assert calls[-1] == "wf-999"                # memory partition key: the header value
+    assert r2.json()["session_id"] == "wf-999"  # response/trace: same, explicit wins

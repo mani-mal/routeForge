@@ -50,7 +50,9 @@ class RequestSummary(BaseModel):
     quality_sum: float = 0.0            # Σ per-call quality — TID/CID numerator
     quality: float | None = None        # chosen model's score (display)
     quality_source: str | None = None   # provenance of `quality` (display)
-    session_id: str | None = None       # B17: client workflow-run correlation id (opaque)
+    session_id: str | None = None       # B17: client-supplied (x-routeforge-session) or
+                                         # server-derived (server.derive_session_id) workflow/
+                                         # conversation correlation id (opaque)
 
 
 def summarize(resp: dict, tenant_id: str, tier: str, provider: str = "?") -> RequestSummary:

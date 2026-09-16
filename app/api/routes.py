@@ -275,11 +275,18 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
 
     # Read the opaque workflow-correlation id once, up front: the streaming
     # branch below returns before the old (post-pipeline) read site, and every
-    # response shape's _finalize needs it. If the client sent none, derive a
-    # stable one from the app id + opening turns (unless the operator has
-    # switched that off) so an agent conversation with no header still groups
-    # into one session as its history grows.
-    session_id = _read_session_id(request)
+    # response shape's _finalize needs it. `client_session_id` is the raw
+    # client-supplied header value ONLY -- it is the memory PARTITION key
+    # (threaded into every `pipeline.run`/`run_stream` call below), so memory
+    # semantics must never change based on derivation. `session_id` may be
+    # server-derived from the app id + opening turns when the client sent none
+    # (unless the operator has switched that off): it is for TRACE/CONSOLE
+    # grouping only (_finalize/_finalize_stream/_keepalive_stream/
+    # _stream_unverified_response/_incremental_verify_response), so an agent
+    # conversation with no header still groups into one session there as its
+    # history grows -- without touching what memory partition it reads/writes.
+    client_session_id = _read_session_id(request)
+    session_id = client_session_id
     if session_id is None and s.serving.derive_session_id:
         session_id = _derive_session_id(body, tenant)
 
@@ -320,7 +327,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
             try:
                 deltas, get_meta = await request.app.state.pipeline.run_stream(
                     request_id, tenant, body, app_policy=app_policy, profile=profile,
-                    session_id=session_id)
+                    session_id=client_session_id)
             except StreamFallback:
                 pass  # fall through: run the FULL verified pipeline, then chunk it
             else:
@@ -345,7 +352,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
         if stream_mode is not None:
             task = asyncio.create_task(request.app.state.pipeline.run(
                 request_id, tenant, body, app_policy=app_policy, profile=profile,
-                session_id=session_id))
+                session_id=client_session_id))
             keepalive = s.serving.stream_keepalive_s
             done, _ = await asyncio.wait({task}, timeout=keepalive)
             if not done:
@@ -359,7 +366,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
         else:
             task = asyncio.create_task(request.app.state.pipeline.run(
                 request_id, tenant, body, app_policy=app_policy, profile=profile,
-                session_id=session_id))
+                session_id=client_session_id))
             resp = await _await_unless_disconnected(
                 task, request.is_disconnected, s.serving.stream_keepalive_s)
     except HTTPException:
