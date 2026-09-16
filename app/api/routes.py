@@ -378,8 +378,13 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
     except Exception as e:
         mapped = _error_status_detail(e)
         if mapped is None:
+            logging.getLogger("serving.api").exception(
+                "unhandled error for %s", request_id)
             metrics.observe_request("-", "error")
             raise HTTPException(500, "internal error")
+        if mapped[0] >= 500:
+            logging.getLogger("serving.api").warning(
+                "request %s failed with %d: %s", request_id, mapped[0], mapped[1])
         metrics.observe_request("-", "rejected")
         raise HTTPException(mapped[0], mapped[1])
     await _finalize(request, resp, body=body, tenant=tenant, app_policy=app_policy,
@@ -707,6 +712,9 @@ async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
                 metrics.observe_request("-", "error")
                 mapped = (500, "internal error")
             else:
+                if mapped[0] >= 500:
+                    logging.getLogger("serving.api").warning(
+                        "request %s failed with %d: %s", request_id, mapped[0], mapped[1])
                 metrics.observe_request("-", "rejected")
             yield sse_error_frame(*mapped)
             yield SSE_DONE
