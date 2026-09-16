@@ -168,8 +168,11 @@ They are **independent**. `policy_mode` never widens `allowed_providers`, never 
 Reach for `passthrough` when the app's whole input is the customer's **own** content
 and every field of it is load-bearing output it must reproduce (engineering drawings,
 order documents, contracts). There, redaction is a correctness bug, not a safety
-feature. `onprem_only` + `passthrough` — *"run only on my hardware, and don't touch my
-data"* — is a valid, honest configuration.
+feature. `passthrough` disables PII detection/redaction and output verification — it
+does **not** disable context compression: if Headroom is enabled, it can still
+transform tool outputs/history, so a byte-exact requirement also needs compression
+turned off for the app. `onprem_only` + `passthrough` — *"run only on my hardware, and
+turn the gate off"* — is a valid, honest configuration.
 
 **Guards:** the deployment ceiling `policy.allow_app_passthrough` in `serving.yaml`
 (default `true`; set `false` and no app may take the posture); `capture_io: redacted`
@@ -209,15 +212,22 @@ not *where the request may go*.
 **Safety floors (enforced when you save the policy — you'll get a `422` if you violate one):**
 - **A deployment-wide lock:** `allow_app_pii_downgrade` in `serving.yaml` (default `true`). A
   hospital-grade deployment sets this `false` once, and then *no* app can downgrade detection.
-- **`off`/`regex` is rejected if `capture_io` is `redacted`** — because "redacted" telemetry
-  reuses the gate's sanitized text, and if nothing was sanitized, "redacted" traces would
-  silently carry raw PII. (Pair `off` with `capture_io: off` or `full` instead.)
+- **`off` is rejected if `capture_io` is `redacted`** — because "redacted" telemetry
+  reuses the gate's sanitized text, and with detection off nothing was sanitized, so
+  "redacted" traces would silently carry raw PII. (Pair `off` with `capture_io: off` or
+  `full` instead.) **`regex` + `capture_io: redacted` is allowed** — the regex detector
+  still redacts (SSNs, cards, emails, custom recognizers), so the sanitized text is
+  genuinely redacted, just at regex quality: it misses entities that need language
+  understanding (e.g. a bare name).
 - **`onprem_only` apps *may* downgrade detection** — detection and residency are independent
-  axes, so this buys nothing to refuse. In the `enforced` posture that pairing needs
-  `capture_io: "off"`: with no telemetry I/O captured there is no egress path for the
-  unsanitized prompt. Do **not** flip residency to `any` + an `allowed_providers` pin to
-  work around a detection or telemetry rule — that swaps a hard residency floor for a
-  mutable allowlist and is strictly weaker.
+  axes, so this buys nothing to refuse. In the `enforced` posture, `pii_detection: "off"`
+  needs `capture_io: "off"`: with no telemetry I/O captured there is no egress path for
+  the unsanitized prompt. (`pii_detection: "regex"` is not `off` — it still sanitizes —
+  so an `onprem_only` app running `regex` may also use `capture_io: "redacted"`; only
+  `capture_io: "full"` needs `policy_mode: "passthrough"`, regardless of `pii_detection`.)
+  Do **not** flip residency to `any` + an `allowed_providers` pin to work around a
+  detection or telemetry rule — that swaps a hard residency floor for a mutable allowlist
+  and is strictly weaker.
 - An unrecognized value is a `422`, never a silent fallback to `off`.
 
 **Prefer the narrow levers.** `off` blinds the gate to *everything*, a real SSN included.
@@ -259,7 +269,9 @@ only about the trace payload.
     project coherent at any residency — that is exactly what `policy_mode` is for. Placement
     does not move either way: `onprem_only` stays absolute in both postures.
   - **`redacted` is refused wherever nothing is sanitized** — under `passthrough`, or with
-    `pii_detection` of `off`/`regex`. Use `full` (own project) or `off`.
+    `pii_detection: off`. Use `full` (own project) or `off`. (`pii_detection: regex` is
+    fine with `redacted`: the regex detector still sanitizes, just at lower fidelity than
+    `presidio`.)
 
   *(Before the 2026-09-05 `policy_mode` release, `onprem_only` was used as a proxy for
   "maximum protection" and `full` was refused for on-prem apps outright. That forced
@@ -361,9 +373,9 @@ Concrete policies for common apps (the first three are the ones traced in the fl
   "max_spend_usd_per_day": 5.0, "max_rpm": 120,
   "pii_detection": "regex", "capture_io": "off", "stream_mode": "verified_then_stream" }
 ```
-*(`pii_detection: regex` pairs only with `capture_io: "off"` or `"full"` — not `"redacted"`: the
-`redacted` exporter path reuses the gate's sanitized prompt, and with a downgraded detector that
-"sanitized" text is raw. See the `capture_io` section below.)*
+*(`pii_detection: regex` is compatible with any `capture_io`, including `"redacted"` — the
+regex detector still sanitizes the prompt, just at lower fidelity than `presidio` (it misses
+entities without a pattern, e.g. names). See the `capture_io` section below.)*
 
 **Hospital / PHI** — nothing leaves on-prem, strongest detection, verified:
 ```jsonc
@@ -373,8 +385,9 @@ Concrete policies for common apps (the first three are the ones traced in the fl
 ```
 *(For an `onprem_only` app in the default `enforced` posture, `capture_io: full` and
 `stream_unverified` are both refused — those guarantees can't be waived. `pii_detection` is
-free to downgrade even here, but then needs `capture_io: "off"`; for a hospital app you want
-it left at `presidio` anyway.)*
+free to downgrade even here: `off` then needs `capture_io: "off"`, while `regex` may also
+use `capture_io: "redacted"` (it still sanitizes); for a hospital app you want detection
+left at `presidio` anyway.)*
 
 **Eval / prompt-tuning app** — cloud, raw capture for analysis (its own Langfuse project):
 ```jsonc

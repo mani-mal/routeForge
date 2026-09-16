@@ -469,7 +469,8 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
 
 
 def _full_capture_io(body: ChatRequest, resp: dict, prompt: str, completion: str,
-                     raw_completion: str) -> tuple[str, str, str]:
+                     raw_completion: str, raw_tool_calls: list[dict] | None = None
+                     ) -> tuple[str, str, str, str]:
     """Trace input/output for `capture_io == "full"` (the app's OWN project only;
     the caller has already applied the full-eligibility clamp).
 
@@ -478,10 +479,27 @@ def _full_capture_io(body: ChatRequest, resp: dict, prompt: str, completion: str
     or tools are offered. A single plain message stays plain text.
 
     Output: when the model called tools, the assistant message as JSON with its
-    `tool_calls` (content is the pre-verify raw text, or null). Otherwise the
-    plain-text completion is unchanged. Returns (prompt, completion,
-    raw_completion) with raw_completion carrying the same value, so the
-    exporter's "prefer raw_completion" rule picks it up."""
+    `tool_calls` (content is the pre-verify raw text, or null). Returns (prompt,
+    completion, raw_completion, display_completion).
+
+    `completion`/`raw_completion` are for `export_trace` ONLY -- the app's own
+    Langfuse project, per CLAUDE.md rule 2's `capture_io: full` exception --
+    and carry the model's RAW (pre-egress-redaction) tool_calls via
+    `raw_tool_calls` (Task 2), preferred over `resp`'s `message.tool_calls`
+    (which by this point has already been egress-redacted). Falls back to the
+    (redacted) message tool_calls when no raw copy was produced (e.g. a
+    response shape that never carries `raw_tool_calls`), so this stays a
+    no-op there rather than dropping output entirely.
+
+    `display_completion` is DIFFERENT on purpose (fix round 1): it is built
+    ONLY from the CLIENT-FACING (already egress-redacted) message, never from
+    `raw_completion`/`raw_tool_calls`. It feeds `resp["display"]["output"]`
+    (`_finalize`, below), which is not a telemetry egress but IS part of the
+    dict returned to the calling client on the non-stream path, AND is what
+    the admin console's `/api/requests/{id}` drilldown reads back out of
+    `request_snapshots.full_json=resp` -- neither of which is the app's OWN
+    Langfuse project. `display` must never show raw, even for a full-eligible
+    app (see tests/test_raw_completion_capture.py's contract)."""
     if len(body.messages) > 1 or body.tools:
         request_io: dict = {"messages": [m.model_dump(exclude_none=True)
                                          for m in body.messages]}
@@ -491,15 +509,26 @@ def _full_capture_io(body: ChatRequest, resp: dict, prompt: str, completion: str
             request_io["tool_choice"] = body.tool_choice
         prompt = json.dumps(request_io)
     try:
-        tool_calls = resp["choices"][0]["message"].get("tool_calls")
-    except (KeyError, IndexError, TypeError, AttributeError):
-        tool_calls = None
+        message = resp["choices"][0]["message"]
+    except (KeyError, IndexError, TypeError):
+        message = {}
+    redacted_tool_calls = message.get("tool_calls") if isinstance(message, dict) else None
+    tool_calls = raw_tool_calls or redacted_tool_calls
+    display_completion = completion
     if tool_calls:
         completion = raw_completion = json.dumps({
             "role": "assistant",
             "content": raw_completion or completion or None,
             "tool_calls": tool_calls})
-    return prompt, completion, raw_completion
+    if redacted_tool_calls:
+        # Built from ONLY the client-facing message -- never `raw_completion`/
+        # `raw_tool_calls` -- so a full-capture app's raw arguments can reach
+        # its own Langfuse project (above) without ever reaching `display`.
+        display_completion = json.dumps({
+            "role": "assistant",
+            "content": message.get("content"),
+            "tool_calls": redacted_tool_calls})
+    return prompt, completion, raw_completion, display_completion
 
 
 async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
@@ -545,6 +574,10 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
     # longer carry them. They're consumed only inside the try, via these locals.
     sanitized_prompt = resp.pop("sanitized_prompt", "")
     raw_completion = resp.pop("raw_completion", "")   # pre-verify; NEVER client-visible
+    # Pre-egress-redaction tool_calls (Task 2) -- same never-client-visible
+    # contract as `raw_completion` immediately above, popped at the same
+    # chokepoint so it can never leak through any response shape.
+    raw_tool_calls = resp.pop("raw_tool_calls", None)
     try:
         # Eval-capture (docs/archive/eval-logging-backlog.md; current capture_io
         # contract in docs/reference/per-app-config.md): when capture_io is
@@ -566,20 +599,26 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
             completion = resp["choices"][0]["message"]["content"] or ""
         except (KeyError, IndexError, TypeError):
             completion = ""
+        # `display_completion` is what `resp["display"]["output"]` (below) may
+        # show -- client-facing (already egress-redacted) by default. `full`
+        # mode is the only branch that can diverge `completion`/`raw_completion`
+        # (own-project telemetry) away from it -- see `_full_capture_io`'s
+        # docstring (fix round 1: display must never carry raw tool_calls).
+        display_completion = completion
         if capture_io == "full":
             # `full` stores the WHOLE exchange in the app's own project, not
             # just the last message's text: an agentic client's earlier turns,
             # tool results, offered tools and the assistant's tool_calls are
             # the load-bearing part of its trace.
-            prompt, completion, raw_completion = _full_capture_io(
-                body, resp, prompt, completion, raw_completion)
+            prompt, completion, raw_completion, display_completion = _full_capture_io(
+                body, resp, prompt, completion, raw_completion, raw_tool_calls)
         # First-party console view (Phase C Part 1). Mode-appropriate bodies for
         # the admin drilldown ONLY — this is the request_snapshots cache, same
         # residency boundary as serving, NOT a telemetry egress (export_trace
         # is unchanged).
         # `choices[]` stays raw for the calling client; this is additive metadata.
         if capture_io == "full":
-            resp["display"] = {"mode": "full", "input": prompt, "output": completion}
+            resp["display"] = {"mode": "full", "input": prompt, "output": display_completion}
         elif capture_io == "redacted":
             resp["display"] = {
                 "mode": "redacted",

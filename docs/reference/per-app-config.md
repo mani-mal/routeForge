@@ -119,7 +119,10 @@ RouteForge separates two things that are easy to confuse:
 They are independent. `residency` says nothing about protection, and `policy_mode` says
 nothing about placement — it never widens `allowed_providers`, never clears
 `onprem_only`, and never touches `app/policy/context.py`. `onprem_only` + `passthrough`
-("run only on my hardware, and don't touch my data") is a valid, honest configuration.
+("run only on my hardware, with PII detection/redaction and output verification
+switched off") is a valid, honest configuration. Note `passthrough` does not touch
+context compression: if Headroom is enabled deployment-wide, it can still transform
+tool outputs/history for this app — disable compression too for byte-exact content.
 
 | Value | Meaning |
 |---|---|
@@ -200,6 +203,31 @@ placeholder before any model sees the text. For a document-generation app that n
 the real values in its output (customer names, order numbers, revision lines), that
 redaction is destructive. `pii_detection: off` (or a scoped `regex`) is the escape valve.
 
+**Tool calls are scanned and redacted too.** Under `enforced`, `function.arguments` on
+both a replayed assistant turn (ingress) and a model-generated tool call (egress) is
+classified and redacted exactly like message content — an entity that appears only in
+tool-call arguments still contributes to sensitivity/`onprem_only` escalation, and the
+detector's redaction is applied to the arguments. Redaction keeps `arguments` valid JSON:
+JSON arguments are redacted value by value (object keys are left alone) and re-serialized
+only if something was redacted — arguments with no detected entity are forwarded
+byte-for-byte; arguments that are not valid JSON are redacted as a plain string.
+`passthrough` leaves tool call arguments untouched in both directions, same as message
+content.
+
+> **Tool arguments are machine-consumed — plan for false positives.** Under `enforced`,
+> every value in `arguments` participates in classification the same way message content
+> does, **numbers included**: a long numeric ID or Unix timestamp can match
+> `US_BANK_NUMBER`/`PHONE_NUMBER`/`DATE_TIME`, and so can raise sensitivity or set
+> `onprem_only` exactly as it would in a message. And a matched value is *replaced*: the
+> client (or the model, on a replayed turn) receives a placeholder string such as
+> `"<URL_1>"` or `"<DATE_TIME_1>"` where the real value was — a JSON number becomes that
+> placeholder string — and a tool loop will execute with it. Typical offenders are URLs
+> (`URL`), dates and timestamps (`DATE_TIME`), file paths or identifiers tagged `PERSON`,
+> and long numbers. A tool-driven app that needs exact argument values should exempt
+> those entity types with `pii_entity_denylist` (or specific value shapes with
+> `pii_exempt_patterns`), or run in `policy_mode: passthrough`. `US_SSN` can never be
+> exempted.
+
 > **Prefer the narrow lever.** `off` is the blunt instrument — it blinds the gate to
 > *everything*, a real SSN included. When the problem is a few false-positive entity
 > *types* (a shop-order number mis-tagged `US_DRIVER_LICENSE`, a revision date mis-tagged
@@ -231,20 +259,27 @@ request body value if provided, else the app's stored policy, else its default):
   (default `true`; env override `SP_ALLOW_APP_PII_DOWNGRADE`). Set `false` to forbid
   *every* app on this deployment from downgrading detection at all — a locked-down
   (e.g. hospital) deployment sets this once instead of relying on per-app discipline.
-- `pii_detection` in `("off", "regex")` is **rejected** when the app's effective
-  `capture_io` is `"redacted"` — the `redacted` exporter path reuses the gate's
-  *sanitized* prompt (`app/obs/export.py:_set_io`); with detection off nothing was
-  sanitized, so `redacted` telemetry would silently carry raw PII. `capture_io="off"` is
-  always safe with detection off, at **any** residency. `capture_io="full"` is allowed,
-  but only under the guardrails below.
+- `pii_detection == "off"` is **rejected** when the app's effective `capture_io` is
+  `"redacted"` — the `redacted` exporter path reuses the gate's *sanitized* prompt
+  (`app/obs/export.py:_set_io`); with detection off nothing was sanitized, so
+  `redacted` telemetry would silently carry raw PII. `capture_io="off"` is always safe
+  with detection off, at **any** residency. `capture_io="full"` is allowed, but only
+  under the guardrails below. `pii_detection == "regex"` is **not** rejected by this
+  clamp: the `RegexDetector` still redacts (SSN/card/email/custom recognizers), so the
+  sanitized prompt `redacted` telemetry reuses is genuinely redacted — at regex quality,
+  which misses entities without a pattern (e.g. names) — not raw. `allow_app_pii_downgrade`
+  still gates `regex` the same as `off`; only the `redacted`-specific rejection is
+  narrower.
 - An unrecognized value is a 422, never a silent fallback to `off`.
 
   **Net envelope for an `onprem_only` app:** while the app is in the `enforced`
-  posture, `pii_detection` may be `off`/`regex` only with `capture_io: "off"` — the
-  other two capture modes are each rejected by their own clamp. No telemetry I/O is
-  captured, so there is no egress path for the unsanitized prompt, and the runtime
-  cannot widen it: `_set_io` returns early on `"off"`, and the fail-closed downgrade in
-  `app/obs/export.py` only ever steps `full` down to `redacted`, never `off` up.
+  posture, `pii_detection: "off"` may only be paired with `capture_io: "off"` — the
+  other two capture modes are each rejected by their own clamp. (`pii_detection: "regex"`
+  is not subject to this `redacted` restriction — see above.) No telemetry I/O is
+  captured for `off` + `off`, so there is no egress path for the unsanitized prompt, and
+  the runtime cannot widen it: `_set_io` returns early on `"off"`, and the fail-closed
+  downgrade in `app/obs/export.py` only ever steps `full` down to `redacted`, never `off`
+  up.
 
   *Amended by PR #34.* The `full` half of that envelope is a property of the
   **`enforced` posture**, not of `onprem_only` itself. An `onprem_only` app the
@@ -284,9 +319,10 @@ independently:
 - **`allow_app_pii_downgrade` still gates it.** A deployment with the ceiling set
   `false` cannot reach this combination either, same as any other PII downgrade.
 - **Still blocked:** `onprem_only` + `enforced` + `full`; `full` with no own Langfuse
-  project; `passthrough` + `capture_io=redacted`; `off`/`regex` + `capture_io=redacted`;
-  either deployment ceiling off. Each is a distinct 422 with a message naming which
-  guardrail fired, and the console prints that message verbatim.
+  project; `passthrough` + `capture_io=redacted`; `pii_detection=off` +
+  `capture_io=redacted` (`regex` + `redacted` is allowed — see above); either
+  deployment ceiling off. Each is a distinct 422 with a message naming which guardrail
+  fired, and the console prints that message verbatim.
 
 **What `full` stores.** The whole exchange, not just the last message. When a request
 has more than one message or offers `tools`, the trace Input is JSON —

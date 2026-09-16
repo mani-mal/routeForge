@@ -419,16 +419,19 @@ scores anything. Nothing in any step below can change this. The `providers`, `ti
 **Step 3 — Protection.** `policy_mode` **is the coarse switch.** `enforced` (the default)
 means detection, redaction in both directions, sensitivity escalation, custom
 recognizers, and the capture ceiling. `passthrough` means RouteForge is a router, meter
-and tracer only: nothing is detected and nothing is redacted, so the prompt reaches the
-model verbatim and the completion comes back verbatim. Selecting it raises an inline
+and tracer only: PII detection/redaction and output verification are skipped, so the
+gate itself doesn't touch the prompt or completion. Selecting it raises an inline
 banner that says exactly that, alongside what *continues* unchanged — routing and tier
 selection, budgets, rate limits, usage metering, the full decision trace, Langfuse
-tracing — and one thing worth being blunt about: **`passthrough` does not touch
-placement.** Residency in step 2 still decides where compute may run, `onprem_only` stays
-absolute, and `onprem_only` + `passthrough` ("run only on my hardware, and don't touch my
-data") is a valid, honest configuration with the on-prem guarantee fully intact. The
-posture is never silent: it is folded into `app_policy_version`, stamped on every
-response, and emitted on the trace.
+tracing — and two things worth being blunt about: **`passthrough` does not touch
+placement**, and it does not touch context compression either — if Headroom is enabled
+for the deployment, it can still transform tool outputs/history, so an app that needs
+byte-exact content end to end must also have compression disabled. Residency in step 2
+still decides where compute may run, `onprem_only` stays absolute, and `onprem_only` +
+`passthrough` ("run only on my hardware, with the gate turned off") is a valid, honest
+configuration with the on-prem guarantee fully intact. The posture is never silent: it
+is folded into `app_policy_version`, stamped on every response, and emitted on the
+trace.
 
 **The Detection & narrowing sub-group refines the `enforced` posture.** It is a
 collapsible group inside step 3: open by default while the posture is `enforced` (it is
@@ -492,11 +495,12 @@ predates the envelope the console falls back to naming nothing rather than guess
 **Options the server would refuse are disabled with the reason on the option itself**,
 not silently greyed. `capture_io = full` needs the app's own Langfuse project *and*, for
 an `onprem_only` app, `policy_mode = passthrough`; `capture_io = redacted` is
-unavailable under `passthrough` or an explicit `pii_detection` of `off`/`regex`, because
-that export path reuses the gate's sanitized prompt and there is no sanitized prompt to
-reuse; `stream_unverified` is unavailable for an `onprem_only` app, which may never
-waive step-9 verification. The value an app is *currently* set to is never disabled —
-you can always see what it actually is.
+unavailable under `passthrough` or an explicit `pii_detection = off`, because that
+export path reuses the gate's sanitized prompt and there is no sanitized prompt to
+reuse — `pii_detection = regex` is not blocked, since the regex detector still produces
+a sanitized (if lower-fidelity) prompt; `stream_unverified` is unavailable for an
+`onprem_only` app, which may never waive step-9 verification. The value an app is
+*currently* set to is never disabled — you can always see what it actually is.
 
 Two honesty notes about what this form does and doesn't guarantee:
 

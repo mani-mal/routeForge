@@ -104,8 +104,11 @@ Notes:
   `require_verification` set is **rejected** if the completion is unverifiable. On the
   common path — no PII in the completion and `require_verification` unset — `content` is
   the model's answer verbatim. The `VerificationRecord` in `trace` (`step:"verify"`)
-  reports what step 9 did; the unmodified model output is available separately as
-  `raw_completion` (subject to the app's `capture_io`).
+  reports what step 9 did. The unmodified model output — and, for tool calls, the
+  unredacted `function.arguments` — is kept internally as `raw_completion` /
+  `raw_tool_calls`: popped before serialization, **never** a key on this response body
+  or on `display.output`. It reaches telemetry only when the app is configured
+  `capture_io: "full"`, and only into that app's own Langfuse project.
 - `model` is the slug; `model_display` is the human-readable name.
 - `object` and `created` are **always** emitted, on every response shape (direct,
   cache hit, multi-step and streaming). The `openai` SDK's `ChatCompletion` model

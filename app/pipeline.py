@@ -19,7 +19,7 @@ from app.output.verify import verify
 from app.policy.context import pinned_model_reason, registry_permits
 from app.policy.detectors import Detector, make_detector
 from app.policy.effective import EffectiveDetector, FilteredDetector
-from app.policy.gate import Gate
+from app.policy.gate import Gate, redact_tool_calls, redact_tool_calls_with_entities
 from app.apps.privacy import AppPrivacyProfile, effective_rules
 from app.compression import CompressionResult, compress
 from app.compression.ccr import CCRStore
@@ -235,11 +235,15 @@ class Pipeline:
         path so the full structured conversation reaches the model with every
         message's PII masked (CLAUDE.md rule 1) -- the per-message analogue of
         the flattened path's single sanitized blob. A None content (an
-        assistant turn that only carries tool_calls) passes through untouched."""
+        assistant turn that only carries tool_calls) passes through untouched.
+        `tool_calls` arguments are redacted the same way via `redact_tool_calls`
+        (app/policy/gate.py) -- a replayed assistant tool call whose arguments
+        carry an SSN must not forward it to the model untouched."""
         content = m.content
         if content:
             content, _ = det.anonymize(content, det.analyze(content))
-        return Message(role=m.role, content=content, tool_calls=m.tool_calls,
+        return Message(role=m.role, content=content,
+                       tool_calls=redact_tool_calls(m.tool_calls, det),
                        tool_call_id=m.tool_call_id, name=m.name)
 
     def _classifier_enabled(self) -> bool:
@@ -565,6 +569,29 @@ class Pipeline:
         if not vrec.passed:
             raise PipelineRejected(vrec.reason)
 
+        # Egress tool-call redaction (Task 2): verify() above only scans
+        # `result.text` -- a model that answers via `tool_calls` (content is
+        # often null) would otherwise reach the client with raw PII in
+        # `function.arguments` untouched (CLAUDE.md rule 2). Reuse the SAME
+        # `redact_tool_calls_with_entities` helper ingress uses
+        # (app/policy/gate.py) -- one JSON-safe redaction implementation, both
+        # directions, and no separate detection pass here (the helper runs at
+        # most two `analyze` calls in total): the entity TYPES it found are
+        # folded into `vrec.entities_found` (merged, sorted, de-duplicated) so
+        # the trace stays honest about what egress carried, not just the text
+        # half of it -- values never enter the record. `raw_tool_calls`
+        # (pre-redaction) is kept ONLY for `capture_io: full`'s own-project
+        # export (routes.py pops it right alongside `raw_completion`, same
+        # never-client-visible contract); it is never returned to the client.
+        # A None/empty `result.tool_calls` leaves `vrec` untouched.
+        raw_tool_calls = result.tool_calls
+        tc_redaction = redact_tool_calls_with_entities(raw_tool_calls, det)
+        redacted_tool_calls = tc_redaction.tool_calls
+        if tc_redaction.entity_types:
+            vrec = vrec.model_copy(update={
+                "entities_found": tuple(sorted(
+                    set(vrec.entities_found) | tc_redaction.entity_types))})
+
         # Memory WRITE (Feature 5, Task 2): success path ONLY (a rejected/
         # failed request writes nothing -- unreachable above since a failed
         # verify already raised). R1 sanitized-only: built from `sanitized`
@@ -652,7 +679,9 @@ class Pipeline:
         # message carries `tool_calls` with `content: null` and the choice's
         # finish_reason is "tool_calls" (OpenAI clients switch on this to run
         # their tools and call back). Ordinary answers keep content + "stop".
-        tool_calls = result.tool_calls or None
+        # `redacted_tool_calls` (not `result.tool_calls`): the client-facing
+        # message must carry egress-redacted arguments (Task 2).
+        tool_calls = redacted_tool_calls or None
         assistant = Message(
             role="assistant",
             content=(text or None) if tool_calls else text,
@@ -682,6 +711,11 @@ class Pipeline:
                        "policy_mode": policy_mode},
             "sanitized_prompt": sanitized,
             "raw_completion": result.text,
+            # Internal-only, popped in routes.py alongside `raw_completion` --
+            # NEVER serialized to the client. Pre-redaction tool_calls, kept
+            # only so `capture_io: full` can export the model's raw arguments
+            # to the app's OWN Langfuse project (CLAUDE.md rule 2 exception).
+            "raw_tool_calls": raw_tool_calls,
         }
 
     async def run_stream(self, request_id: str, tenant_id: str,

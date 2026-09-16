@@ -25,9 +25,12 @@ workaround, and it does not cost you the `onprem_only` guarantee.
 ```
 
 `residency` answers *where may compute run*. `policy_mode` answers *how much does the
-gate do to the data*. They are independent, so "run only on my hardware, and don't touch
-my data" is sayable in one configuration. `passthrough` never widens
-`allowed_providers`, never clears `onprem_only`, and never touches placement.
+gate do to the data*. They are independent, so "run only on my hardware, and skip PII
+detection/redaction and output verification" is sayable in one configuration.
+`passthrough` never widens `allowed_providers`, never clears `onprem_only`, and never
+touches placement. Note that `passthrough` does not touch context compression: if
+Headroom is enabled for the deployment, it can still transform tool outputs/history —
+disable compression too if the app needs byte-exact content end to end.
 
 You still get everything that isn't protection: routing and tier selection, cheap-tier
 cost savings, budgets, rate limits, durable usage metering, DecisionRecords and full
@@ -107,8 +110,10 @@ behaviour they needed — so it was replaced by an explicit `policy_mode` (CLAUD
   `enforced` posture already can hold `capture_io=full` (own project required) — that
   is exactly the side effect the next question walks through.
 - `capture_io=redacted` is still rejected whenever nothing is being sanitized
-  (`passthrough`, or `pii_detection` `off`/`regex`), because that path reuses the gate's
-  sanitized prompt and writes to the **shared** project.
+  (`passthrough`, or `pii_detection: "off"`), because that path reuses the gate's
+  sanitized prompt and writes to the **shared** project. `pii_detection: "regex"` is
+  fine with `redacted` — the regex detector still sanitizes, just at lower fidelity
+  than `presidio` (it misses entities without a pattern, e.g. names).
 - Raw I/O only ever reaches the app's **own** project.
 - `policy.allow_app_passthrough: false` forbids the whole posture install-wide.
 
@@ -196,9 +201,11 @@ outcome — that is what `policy_mode` and `capture_io` are for.
 OpenAI-compatible and, in the common case, `choices[0].message.content` is the model's
 answer verbatim with routeForge fields (`trace`, `cost`, `policy`, …) added *around* it.
 But **step 9 (Output Controls & Verification) can alter or block the completion** before
-you see it — what the user receives is the *post-verification* text, and the raw model
-output is preserved separately in `raw_completion` for telemetry, never substituted into
-`choices[0].message.content`.
+you see it — what the user receives is the *post-verification* text. The raw model
+output is kept internally as `raw_completion` (and, for tool calls, `raw_tool_calls`
+holds the unredacted arguments) — popped before serialization, never a key on the
+response body, never substituted into `choices[0].message.content`, and it reaches
+telemetry only in the app's own Langfuse project when `capture_io: "full"`.
 
 Three ways the completion can differ from the raw model output:
 
@@ -226,5 +233,11 @@ answer for style or content — but it does enforce output controls, which can r
 the model emitted or block an unverifiable response.* The `VerificationRecord` in the
 `trace` (`step:"verify"`, fields `performed / passed / entities_found / escalated`) tells
 you exactly what step 9 did on any given request. (Note: `raw_completion` and
-`sanitized_prompt` are returned for full-capture telemetry; whether they reach Langfuse
-still obeys the app's `capture_io` — see the residency/PII entries above.)
+`raw_tool_calls` are internal-only — popped before serialization, never in the public
+response, `display.output`, or any console snapshot. They reach Langfuse only in the
+app's own provisioned project, and only under `capture_io: "full"` — see the
+residency/PII entries above. `sanitized_prompt` is different: it's the gate's
+already-*redacted* prompt, not raw, so it isn't covered by that restriction — it's also
+popped before the public response, but it *is* what `capture_io: "redacted"` telemetry
+and the console's `display.input` show, in whichever project that app's traces normally
+go to, not gated to the app's own.)

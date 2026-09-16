@@ -1035,10 +1035,14 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
   // `redacted` reuses the gate's sanitized prompt, so it is refused wherever
   // nothing is sanitized. Note pii_detection = null means "inherit the live
   // global detector", which the server does NOT treat as a downgrade — only an
-  // explicit off/regex trips this.
+  // explicit `off` trips this. `regex` is NOT blocked: the RegexDetector still
+  // redacts (SSN/card/email/custom recognizers), so the sanitized prompt is
+  // not raw — lower fidelity than presidio (it misses entities without a
+  // pattern, e.g. names), but genuinely redacted, so `redacted` telemetry is
+  // valid under `regex`.
   const redactedBlockedFor = (mode: string) => mode === "passthrough"
     ? "policy_mode = passthrough sanitizes nothing"
-    : p.pii_detection === "off" || p.pii_detection === "regex"
+    : p.pii_detection === "off"
       ? `pii_detection = ${p.pii_detection} sanitizes nothing`
       : null;
   const redactedBlocked = redactedBlockedFor(effPolicyMode);

@@ -241,6 +241,39 @@ def test_policy_pii_detection_downgrade_rejected_when_capture_enabled(client):
     assert "capture_io" in r.text.lower()
 
 
+def test_policy_regex_downgrade_accepted_with_capture_redacted(client):
+    # Task 3: the over-strict validator used to reject `pii_detection=regex`
+    # combined with `capture_io=redacted`, claiming the sanitized prompt "is
+    # raw". Under `regex` the gate's RegexDetector DOES redact (SSN/card/
+    # email/custom recognizers), so the sanitized prompt is not raw --
+    # `regex` + `redacted` must be accepted (with the deployment's default
+    # `allow_app_pii_downgrade=true`, as the other regex tests above arrange).
+    _login(client)
+    client.post("/admin/applications", json={"id": "regex-redacted", "name": "RegexRedacted"})
+    r = client.put("/admin/applications/regex-redacted/policy",
+                   json={"pii_detection": "regex", "capture_io": "redacted"})
+    assert r.status_code == 200, r.text
+    assert r.json()["policy"]["pii_detection"] == "regex"
+    assert r.json()["policy"]["capture_io"] == "redacted"
+    got = client.get("/admin/applications/regex-redacted").json()
+    assert got["policy"]["pii_detection"] == "regex"
+    assert got["policy"]["capture_io"] == "redacted"
+
+
+def test_policy_off_downgrade_still_rejected_with_capture_redacted(client):
+    # Counterpart to the test above: only `off` -- not `regex` -- leaves the
+    # "sanitized" prompt actually raw, so only `off` + `redacted` stays a 422.
+    # The message must name `off`, not the old blanket `off/regex` wording.
+    _login(client)
+    client.post("/admin/applications", json={"id": "off-redacted", "name": "OffRedacted"})
+    r = client.put("/admin/applications/off-redacted/policy",
+                   json={"pii_detection": "off", "capture_io": "redacted"})
+    assert r.status_code == 422
+    detail = r.json()["detail"]
+    assert "cannot be combined with pii_detection off" in detail
+    assert "off/regex" not in detail.lower()
+
+
 def test_policy_stream_unverified_rejected_for_onprem_only(client):
     # (d) stream_mode="stream_unverified" on an onprem_only app -> 422.
     _login(client)
@@ -595,8 +628,8 @@ def test_policy_mode_passthrough_full_still_needs_own_langfuse(client):
 
 
 def test_policy_mode_passthrough_rejects_redacted_capture(client):
-    # Same sanitized-prompt seam as pii_detection off/regex: the redacted
-    # exporter reuses the gate's sanitized prompt, which is raw in passthrough.
+    # Same sanitized-prompt seam as pii_detection off: the redacted exporter
+    # reuses the gate's sanitized prompt, which is raw in passthrough.
     _login(client)
     client.post("/admin/applications", json={"id": "pt-redact", "name": "PtRedact"})
     r = client.put("/admin/applications/pt-redact/policy",
