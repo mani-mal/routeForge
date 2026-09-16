@@ -123,3 +123,8 @@ server:
   # not abort a long generation. Fast responses and fast rejections are
   # unaffected (they finish inside the first interval and keep their HTTP status).
   stream_keepalive_s: 5
+  # When a request has no x-routeforge-session header, derive a session id from
+  # a hash of the app id, the first system message and the first user message, so
+  # an agent conversation groups into one session in Langfuse and the console as
+  # its history grows. The hash is one-way; no content is stored in the id.
+  derive_session_id: true

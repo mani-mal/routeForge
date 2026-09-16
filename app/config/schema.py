@@ -254,6 +254,11 @@ class ServingCfg(BaseModel):
     allow_app_passthrough: bool = True
     reject_stream_requests: bool
     stream_keepalive_s: float = 5.0
+    # Derive a stable per-conversation session id (auto-<24 hex>) when the
+    # client sends no x-routeforge-session header. Defaulted (true) for the
+    # same upgrade-safety reason as stream_keepalive_s above: a mounted
+    # serving.yaml that predates this feature has no such key.
+    derive_session_id: bool = True
     context_optimization: ContextOptimizationCfg
     memory: MemoryCfg = MemoryCfg()
     # Optional/defaulted like `memory` and `context_optimization`: a mounted

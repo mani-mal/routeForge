@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -62,6 +63,21 @@ def _sanitize_session_id(raw: str | None) -> str | None:
 
 def _read_session_id(request: Request) -> str | None:
     return _sanitize_session_id(request.headers.get("x-routeforge-session"))
+
+
+def _derive_session_id(body: ChatRequest, tenant: str) -> str | None:
+    """A stable session id for a conversation whose client sent none: a one-way
+    hash of the app id plus the conversation's opening turns (first system
+    message, first user message). Later turns append history but keep those
+    opening turns, so every request in one conversation shares the id."""
+    first_user = next((m.content for m in body.messages
+                       if m.role == "user" and m.content), None)
+    if not first_user:
+        return None
+    system = next((m.content or "" for m in body.messages if m.role == "system"), "")
+    digest = hashlib.sha256(
+        f"{tenant}\x00{system}\x00{first_user}".encode()).hexdigest()[:24]
+    return f"auto-{digest}"
 
 
 async def _authenticate(request: Request
@@ -259,8 +275,13 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
 
     # Read the opaque workflow-correlation id once, up front: the streaming
     # branch below returns before the old (post-pipeline) read site, and every
-    # response shape's _finalize needs it.
+    # response shape's _finalize needs it. If the client sent none, derive a
+    # stable one from the app id + opening turns (unless the operator has
+    # switched that off) so an agent conversation with no header still groups
+    # into one session as its history grows.
     session_id = _read_session_id(request)
+    if session_id is None and s.serving.derive_session_id:
+        session_id = _derive_session_id(body, tenant)
 
     try:
         # Per-app privacy profile (custom recognizers + sensitivity rules,

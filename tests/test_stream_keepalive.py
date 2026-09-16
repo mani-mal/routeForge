@@ -155,3 +155,24 @@ def test_config_default_and_older_serving_yaml(tmp_path):
         (tmp_path / f).write_text(pathlib.Path("config", f).read_text())
     s = load_settings(config_dir=str(tmp_path))  # must not raise
     assert s.serving.stream_keepalive_s == 5.0
+
+
+def test_derive_session_id_default_and_older_serving_yaml(tmp_path):
+    from app.config.loader import load_settings
+    # Shipped config carries the key and loads True.
+    assert load_settings().serving.derive_session_id is True
+
+    # Upgrade safety: a mounted serving.yaml that predates this feature has no
+    # `derive_session_id` key at all -- the .get()-with-default in the loader
+    # must still boot it at the same default, not KeyError.
+    import pathlib
+
+    import yaml
+
+    raw = yaml.safe_load(pathlib.Path("config/serving.yaml").read_text())
+    raw["server"].pop("derive_session_id", None)
+    (tmp_path / "serving.yaml").write_text(yaml.safe_dump(raw))
+    for f in ("policy.yaml", "routing.yaml", "pricing.yaml"):
+        (tmp_path / f).write_text(pathlib.Path("config", f).read_text())
+    s = load_settings(config_dir=str(tmp_path))  # must not raise
+    assert s.serving.derive_session_id is True
