@@ -579,10 +579,13 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
         #
         # What still holds the line, unchanged: the deployment ceiling below,
         # the `redacted` check below, and the capture_io=='full' clamp further
-        # down (which rejects `full` for onprem_only apps). Together those mean
-        # an onprem_only app can reach pii_detection=off ONLY with
+        # down (which rejects `full` for an onprem_only app unless its
+        # effective policy_mode is 'passthrough'). Together those mean an
+        # onprem_only + enforced app can reach pii_detection=off ONLY with
         # capture_io='off' — no telemetry I/O at all, so there is no egress
-        # path for the unsanitized prompt. `_set_io` returns early on 'off' and
+        # path for the unsanitized prompt. (An onprem_only + passthrough app
+        # may instead use 'full' into its OWN provisioned Langfuse project —
+        # a declared no-protection posture, CLAUDE.md rule 2.) `_set_io` returns early on 'off' and
         # the runtime downgrade in app/obs/export.py only ever steps 'full'
         # down to 'redacted', never 'off' up, so that envelope cannot be
         # widened at request time.
@@ -612,8 +615,9 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
                     + alternatives)
             # eff_pii == 'regex' -> redacted permitted (regex-quality redaction).
             # eff_capture == 'full' -> permitted here; the capture_io=='full'
-            #   clamp below enforces non-onprem + own provisioned Langfuse on
-            #   the EFFECTIVE value, so onprem_only + off + full is still 422.
+            #   clamp below enforces an own provisioned Langfuse project and
+            #   rejects onprem_only unless the EFFECTIVE policy_mode is
+            #   'passthrough', so onprem_only + enforced + off + full is 422.
             # eff_capture == 'off'  -> always safe, at any residency.
 
         # --- the same sanitized-prompt seam, reached by the OTHER no-protection

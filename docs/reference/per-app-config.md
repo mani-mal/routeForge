@@ -207,8 +207,26 @@ redaction is destructive. `pii_detection: off` (or a scoped `regex`) is the esca
 both a replayed assistant turn (ingress) and a model-generated tool call (egress) is
 classified and redacted exactly like message content — an entity that appears only in
 tool-call arguments still contributes to sensitivity/`onprem_only` escalation, and the
-detector's redaction applies to the arguments string in place. `passthrough` leaves tool
-call arguments untouched in both directions, same as message content.
+detector's redaction is applied to the arguments. Redaction keeps `arguments` valid JSON:
+JSON arguments are redacted value by value (object keys are left alone) and re-serialized
+only if something was redacted — arguments with no detected entity are forwarded
+byte-for-byte; arguments that are not valid JSON are redacted as a plain string.
+`passthrough` leaves tool call arguments untouched in both directions, same as message
+content.
+
+> **Tool arguments are machine-consumed — plan for false positives.** Under `enforced`,
+> every value in `arguments` participates in classification the same way message content
+> does, **numbers included**: a long numeric ID or Unix timestamp can match
+> `US_BANK_NUMBER`/`PHONE_NUMBER`/`DATE_TIME`, and so can raise sensitivity or set
+> `onprem_only` exactly as it would in a message. And a matched value is *replaced*: the
+> client (or the model, on a replayed turn) receives a placeholder string such as
+> `"<URL_1>"` or `"<DATE_TIME_1>"` where the real value was — a JSON number becomes that
+> placeholder string — and a tool loop will execute with it. Typical offenders are URLs
+> (`URL`), dates and timestamps (`DATE_TIME`), file paths or identifiers tagged `PERSON`,
+> and long numbers. A tool-driven app that needs exact argument values should exempt
+> those entity types with `pii_entity_denylist` (or specific value shapes with
+> `pii_exempt_patterns`), or run in `policy_mode: passthrough`. `US_SSN` can never be
+> exempted.
 
 > **Prefer the narrow lever.** `off` is the blunt instrument — it blinds the gate to
 > *everything*, a real SSN included. When the problem is a few false-positive entity

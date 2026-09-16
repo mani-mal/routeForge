@@ -269,8 +269,9 @@ def test_policy_off_downgrade_still_rejected_with_capture_redacted(client):
     r = client.put("/admin/applications/off-redacted/policy",
                    json={"pii_detection": "off", "capture_io": "redacted"})
     assert r.status_code == 422
-    assert "off" in r.text.lower()
-    assert "off/regex" not in r.text.lower()
+    detail = r.json()["detail"]
+    assert "cannot be combined with pii_detection off" in detail
+    assert "off/regex" not in detail.lower()
 
 
 def test_policy_stream_unverified_rejected_for_onprem_only(client):
