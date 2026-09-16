@@ -585,21 +585,32 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
         # path for the unsanitized prompt. `_set_io` returns early on 'off' and
         # the runtime downgrade in app/obs/export.py only ever steps 'full'
         # down to 'redacted', never 'off' up, so that envelope cannot be
-        # widened at request time. ---
+        # widened at request time.
+        #
+        # The `redacted` check right below is scoped to `eff_pii == 'off'`
+        # only, NOT `regex`: under `regex` the gate's RegexDetector still runs
+        # and still redacts (SSN/card/email/custom recognizers), so the
+        # sanitized prompt `redacted` telemetry reuses is not raw — it is
+        # lower-fidelity than presidio (it misses entities without a pattern,
+        # e.g. names) but genuinely redacted. Only `off` leaves the "sanitized"
+        # prompt actually raw, which is what this check exists to catch. The
+        # deployment ceiling above (`allow_app_pii_downgrade`) still gates both
+        # `off` and `regex` — this only narrows the `redacted`-specific 422. ---
         if eff_pii in ("off", "regex"):
             if not settings.serving.allow_app_pii_downgrade:
                 raise HTTPException(
                     422, "per-app PII downgrade disabled on this deployment")
-            if eff_capture == "redacted":
+            if eff_pii == "off" and eff_capture == "redacted":
                 alternatives = ("capture_io='off'." if eff_residency == "onprem_only"
                                 else "capture_io='full' with the app's own Langfuse "
                                      "project, or capture_io='off'.")
                 raise HTTPException(
                     422,
                     "capture_io='redacted' cannot be combined with pii_detection "
-                    "off/regex: redacted telemetry reuses the gate's sanitized "
+                    "off: redacted telemetry reuses the gate's sanitized "
                     "prompt, which is raw when PII detection is off. Use "
                     + alternatives)
+            # eff_pii == 'regex' -> redacted permitted (regex-quality redaction).
             # eff_capture == 'full' -> permitted here; the capture_io=='full'
             #   clamp below enforces non-onprem + own provisioned Langfuse on
             #   the EFFECTIVE value, so onprem_only + off + full is still 422.
