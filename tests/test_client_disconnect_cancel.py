@@ -121,3 +121,79 @@ def test_keepalive_stream_closed_by_client_cancels_work_and_records_cancelled(mo
     assert cancelled is True
     assert work_was_cancelled is True
     assert recorded == [("acme", "req-test")]
+
+
+def test_keepalive_stream_polls_is_disconnected_and_records_cancelled_once(monkeypatch):
+    """Primary disconnect detection (fix round 1, Important finding):
+    `_keepalive_stream` cannot rely solely on Starlette cancelling the
+    generator. Starlette only does that via a concurrent disconnect-listener
+    task on ASGI spec_version < 2.4, or by letting `send()` raise OSError on
+    spec_version >= 2.4. uvicorn 0.51.0 advertises 2.3 today (the listener
+    path), but uvicorn's h11 `send()` silently returns instead of raising
+    once the connection is closed -- so a future uvicorn advertising >= 2.4
+    would leave this generator with no cancellation signal at all, streaming
+    into the void until the task finished and got recorded `ok`.
+
+    This drives the generator with a stub `request` whose `is_disconnected()`
+    flips from False to True, and asserts the poll path alone catches it:
+    the backend task is cancelled, `_record_cancelled` runs exactly once, no
+    further frames (keepalive, answer, or error) are yielded once the
+    disconnect is detected, and a subsequent `aclose()` on the now-exhausted
+    generator does not record a second time."""
+    from app.api import routes
+    from app.apps.policy import AppPolicyView
+    from app.apps.privacy import AppPrivacyProfile
+    from app.config.loader import load_settings
+    from app.models import ChatRequest, Message
+
+    recorded = []
+
+    async def fake_record_cancelled(request, *, tenant, request_id, started):
+        recorded.append((tenant, request_id))
+
+    monkeypatch.setattr(routes, "_record_cancelled", fake_record_cancelled)
+
+    class StubRequest:
+        def __init__(self):
+            self.calls = 0
+
+        async def is_disconnected(self):
+            self.calls += 1
+            return self.calls >= 2  # connected on the first poll, gone after
+
+    async def go():
+        work_cancelled = {}
+
+        async def work():
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                work_cancelled["yes"] = True
+                raise
+
+        task = asyncio.create_task(work())
+        await asyncio.sleep(0)  # let `work` actually start before anything
+                                 # cancels it -- matches a real in-flight call
+        body = ChatRequest(model="auto", messages=[Message(role="user", content="hi")])
+        stub = StubRequest()
+        gen = routes._keepalive_stream(
+            stub, task=task, keepalive_s=0.01, request_id="req-poll",
+            body=body, tenant="acme", app_policy=AppPolicyView(),
+            app_langfuse=None, profile=AppPrivacyProfile(recognizers=(), rules=()),
+            session_id=None, s=load_settings(), started=0.0)
+
+        frames = []
+        async for frame in gen:
+            frames.append(frame)
+        # The generator already returned (StopAsyncIteration) -- closing an
+        # already-exhausted generator must not re-run the finally block.
+        await gen.aclose()
+        return frames, task.cancelled(), work_cancelled.get("yes")
+
+    frames, cancelled, work_was_cancelled = asyncio.run(go())
+    assert cancelled is True
+    assert work_was_cancelled is True
+    # Only keepalives before the disconnect is caught -- no answer, no error
+    # frame follows it.
+    assert frames and all(f.startswith(": keepalive") for f in frames)
+    assert recorded == [("acme", "req-poll")]

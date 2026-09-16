@@ -178,6 +178,10 @@ async def _await_unless_disconnected(task: "asyncio.Task", is_disconnected,
             try:
                 await task
             except (asyncio.CancelledError, Exception):
+                # Swallow whatever `task` raises here -- its own cancellation,
+                # or a real pipeline exception that happened to land while we
+                # were awaiting `is_disconnected()`. Either way the client is
+                # already gone, so no status is ever read for this request.
                 pass
             raise ClientDisconnected()
 
@@ -617,13 +621,29 @@ async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
     so it goes out as one error frame (same status and detail as the HTTP path)
     followed by [DONE].
 
-    Wrapped in try/finally: Starlette cancels this generator (throws
-    GeneratorExit / cancels the driving task) when the client disconnects
-    mid-stream. The `finally` retrieves the task's outcome on every exit path
-    -- normal completion, an error frame, or a disconnect -- so a still-running
-    task is always cancelled and awaited (never leaving a dangling "Task
-    exception was never retrieved" task), and a disconnect that happened
-    before the answer was delivered is metered as `cancelled`, never `ok`."""
+    Primary disconnect detection is an explicit `request.is_disconnected()`
+    poll once per keepalive interval (the same pattern
+    `_await_unless_disconnected` uses for the non-stream path): relying only
+    on Starlette to cancel this generator is not safe across ASGI server
+    versions. Starlette cancels a streaming response via a concurrent
+    disconnect-listener task on ASGI spec_version < 2.4, or by letting
+    `send()` raise OSError on spec_version >= 2.4. uvicorn 0.51.0 advertises
+    2.3 today, so the listener path runs -- but uvicorn's h11 `send()`
+    silently returns instead of raising once the connection is already
+    closed (h11_impl.py:464), so a future uvicorn that advertises >= 2.4
+    would leave this generator with no cancellation signal at all: it would
+    stream into the void until the task finished and get recorded `ok`.
+    Polling `is_disconnected()` directly doesn't depend on any of that.
+
+    Wrapped in try/finally as a second line of defence (e.g. if Starlette's
+    own cancellation lands first): the `finally` retrieves the task's outcome
+    on every exit path -- normal completion, an error frame, or a disconnect
+    -- so a still-running task is always cancelled and awaited (never leaving
+    a dangling "Task exception was never retrieved" task), and a disconnect
+    that happened before the answer was delivered is metered as `cancelled`,
+    never `ok`. `cancelled_recorded` keeps the two paths from double-recording
+    the same disconnect."""
+    cancelled_recorded = False
     try:
         yield SSE_KEEPALIVE  # one immediately: the route already waited one
                              # full interval before opening this stream, so
@@ -633,6 +653,13 @@ async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
             done, _ = await asyncio.wait({task}, timeout=keepalive_s)
             if done:
                 break
+            if await request.is_disconnected():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                await _record_cancelled(request, tenant=tenant, request_id=request_id,
+                                        started=started)
+                cancelled_recorded = True
+                return  # client is gone -- no keepalive/answer/error frame follows
             yield SSE_KEEPALIVE
         try:
             resp = task.result()
@@ -671,7 +698,7 @@ async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
         # generator close must still have its result/exception consumed, or
         # asyncio logs "Task exception was never retrieved".
         await asyncio.gather(task, return_exceptions=True)
-        if not was_done:
+        if not was_done and not cancelled_recorded:
             await _record_cancelled(request, tenant=tenant, request_id=request_id,
                                     started=started)
 
