@@ -19,7 +19,7 @@ from app.output.verify import verify
 from app.policy.context import pinned_model_reason, registry_permits
 from app.policy.detectors import Detector, make_detector
 from app.policy.effective import EffectiveDetector, FilteredDetector
-from app.policy.gate import Gate, redact_tool_calls
+from app.policy.gate import Gate, redact_tool_calls, tool_call_arg_text
 from app.apps.privacy import AppPrivacyProfile, effective_rules
 from app.compression import CompressionResult, compress
 from app.compression.ccr import CCRStore
@@ -569,6 +569,30 @@ class Pipeline:
         if not vrec.passed:
             raise PipelineRejected(vrec.reason)
 
+        # Egress tool-call redaction (Task 2): verify() above only scans
+        # `result.text` -- a model that answers via `tool_calls` (content is
+        # often null) would otherwise reach the client with raw PII in
+        # `function.arguments` untouched (CLAUDE.md rule 2). Reuse the SAME
+        # `redact_tool_calls`/`tool_call_arg_text` helpers ingress uses
+        # (app/policy/gate.py) -- one redaction implementation, both
+        # directions. `raw_tool_calls` (pre-redaction) is kept ONLY for
+        # `capture_io: full`'s own-project export (routes.py pops it right
+        # alongside `raw_completion`, same never-client-visible contract);
+        # it is never returned to the client. Entity TYPES found in argument
+        # text are folded into `vrec.entities_found` (merged, sorted,
+        # de-duplicated) so the trace stays honest about what egress carried,
+        # not just the text half of it -- values never enter the record. A
+        # None/empty `result.tool_calls` leaves `vrec` and the redaction
+        # helpers as pure no-ops (unchanged behaviour, see their docstrings).
+        raw_tool_calls = result.tool_calls
+        redacted_tool_calls = redact_tool_calls(raw_tool_calls, det)
+        arg_text = tool_call_arg_text(Message(role="assistant", tool_calls=raw_tool_calls))
+        if arg_text:
+            tc_entities = {e.type for e in det.analyze(arg_text)}
+            if tc_entities:
+                vrec = vrec.model_copy(update={
+                    "entities_found": tuple(sorted(set(vrec.entities_found) | tc_entities))})
+
         # Memory WRITE (Feature 5, Task 2): success path ONLY (a rejected/
         # failed request writes nothing -- unreachable above since a failed
         # verify already raised). R1 sanitized-only: built from `sanitized`
@@ -656,7 +680,9 @@ class Pipeline:
         # message carries `tool_calls` with `content: null` and the choice's
         # finish_reason is "tool_calls" (OpenAI clients switch on this to run
         # their tools and call back). Ordinary answers keep content + "stop".
-        tool_calls = result.tool_calls or None
+        # `redacted_tool_calls` (not `result.tool_calls`): the client-facing
+        # message must carry egress-redacted arguments (Task 2).
+        tool_calls = redacted_tool_calls or None
         assistant = Message(
             role="assistant",
             content=(text or None) if tool_calls else text,
@@ -686,6 +712,11 @@ class Pipeline:
                        "policy_mode": policy_mode},
             "sanitized_prompt": sanitized,
             "raw_completion": result.text,
+            # Internal-only, popped in routes.py alongside `raw_completion` --
+            # NEVER serialized to the client. Pre-redaction tool_calls, kept
+            # only so `capture_io: full` can export the model's raw arguments
+            # to the app's OWN Langfuse project (CLAUDE.md rule 2 exception).
+            "raw_tool_calls": raw_tool_calls,
         }
 
     async def run_stream(self, request_id: str, tenant_id: str,

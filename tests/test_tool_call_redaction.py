@@ -94,7 +94,6 @@ def test_passthrough_app_tool_call_arguments_reach_model_unchanged(client, monke
     assert SSN in json.dumps(sent)  # untouched, not redacted
 
 
-@pytest.mark.xfail(strict=True, reason="egress tool_calls verification — Task 2")
 def test_model_generated_tool_call_arguments_are_verified_on_egress(client, monkeypatch):
     CALLS.clear()
     tc = {"id": "c1", "type": "function",
@@ -104,4 +103,79 @@ def test_model_generated_tool_call_arguments_are_verified_on_egress(client, monk
     r = client.post("/v1/chat/completions", headers=_AUTH, json={
         "messages": [{"role": "user", "content": "find the ticket"}], "tools": _TOOLS})
     assert r.status_code == 200, r.text
-    assert SSN not in json.dumps(r.json()["choices"])
+    body = r.json()
+    assert SSN not in json.dumps(body["choices"])
+    # Structure preserved: `id`/`type`/`function.name` untouched, only the
+    # argument STRING is redacted (no JSON re-parse per the plan's constraint).
+    tool_calls = body["choices"][0]["message"]["tool_calls"]
+    assert tool_calls[0]["id"] == "c1"
+    assert tool_calls[0]["type"] == "function"
+    assert tool_calls[0]["function"]["name"] == "find_support_ticket"
+    # The internal pre-redaction keys must never reach the client, on any
+    # response shape.
+    raw_body = json.dumps(body)
+    assert "raw_completion" not in raw_body
+    assert "raw_tool_calls" not in raw_body
+    assert "raw_completion" not in body
+    assert "raw_tool_calls" not in body
+
+def test_model_generated_tool_call_arguments_stream_ssn_absent_from_sse(client, monkeypatch):
+    """A client-driven tool conversation with `stream: true` is served as one
+    complete completion and emitted as SSE (PR #41) -- the SSN in the model's
+    tool_calls arguments must be redacted before it reaches ANY SSE frame,
+    exactly as it is in the non-streaming response body."""
+    from tests.test_admin_api import _login
+
+    _login(client)
+    created = client.post("/admin/applications", json={"id": "stream-tc-egress", "name": "S"})
+    assert created.status_code == 200, created.text
+    token = created.json()["token"]
+    pr = client.put("/admin/applications/stream-tc-egress/policy",
+                    json={"stream_mode": "stream_unverified"})
+    assert pr.status_code == 200, pr.text
+
+    CALLS.clear()
+    tc = {"id": "c1", "type": "function",
+          "function": {"name": "find_support_ticket", "arguments": json.dumps({"ssn": SSN})}}
+    monkeypatch.setattr(litellm_backend, "acompletion",
+                        make_recording_acompletion(make_response(content=None, tool_calls=[tc])))
+    r = client.post("/v1/chat/completions", headers={"Authorization": f"Bearer {token}"}, json={
+        "model": "auto", "stream": True, "tools": _TOOLS,
+        "messages": [{"role": "user", "content": "find the ticket"}]})
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("text/event-stream")
+    assert SSN not in r.text
+    for block in r.text.strip("\n").split("\n\n"):
+        payload = block.strip()[len("data: "):]
+        assert SSN not in payload
+        if payload != "[DONE]":
+            assert "raw_completion" not in payload
+            assert "raw_tool_calls" not in payload
+
+def test_passthrough_app_model_generated_tool_call_arguments_reach_client_unchanged(
+        client, monkeypatch):
+    """Global Constraint: `policy_mode: passthrough` is the null detector, so
+    egress redaction of model-generated tool-call arguments must naturally be
+    a no-op there too -- the egress-direction analogue of the ingress
+    passthrough no-op above."""
+    login = client.post("/admin/login", json=_ADMIN)
+    assert login.status_code == 200, login.text
+    created = client.post("/admin/applications", json={"id": "passthru-out", "name": "P"})
+    assert created.status_code == 200, created.text
+    token = created.json()["token"]
+    put = client.put("/admin/applications/passthru-out/policy",
+                     json={"policy_mode": "passthrough"})
+    assert put.status_code == 200, put.text
+
+    CALLS.clear()
+    args = json.dumps({"ssn": SSN})
+    tc = {"id": "c1", "type": "function",
+          "function": {"name": "find_support_ticket", "arguments": args}}
+    monkeypatch.setattr(litellm_backend, "acompletion",
+                        make_recording_acompletion(make_response(content=None, tool_calls=[tc])))
+    r = client.post("/v1/chat/completions", headers={"Authorization": f"Bearer {token}"}, json={
+        "messages": [{"role": "user", "content": "find the ticket"}], "tools": _TOOLS})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"] == args
+    assert SSN in json.dumps(body["choices"])  # untouched, not redacted
