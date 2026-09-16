@@ -158,10 +158,58 @@ def _error_status_detail(exc: BaseException) -> tuple[int, str] | None:
     return None
 
 
+class ClientDisconnected(Exception):
+    """The client went away before a complete answer was ready."""
+
+
+async def _await_unless_disconnected(task: "asyncio.Task", is_disconnected,
+                                     poll_s: float):
+    """Await `task`, polling the client connection every `poll_s`. A client that
+    disconnected gets its backend work cancelled; cancelling the task closes the
+    in-flight model call, which OpenAI-compatible servers treat as an abort.
+    Only for paths that wait for a complete answer; real token streaming keeps
+    its drain-on-disconnect accounting."""
+    while True:
+        done, _ = await asyncio.wait({task}, timeout=poll_s)
+        if done:
+            return task.result()
+        if await is_disconnected():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+            raise ClientDisconnected()
+
+
+async def _record_cancelled(request: Request, *, tenant: str, request_id: str,
+                            started: float) -> None:
+    """Meter a request the client abandoned. Distinct from `ok` so dashboards
+    and budgets don't count work nobody received as served."""
+    metrics.observe_request("-", "cancelled")
+    logging.getLogger("serving.api").info(
+        "client disconnected; cancelled %s after %.1fs", request_id,
+        time.monotonic() - started)
+    try:
+        async with request.app.state.db.session() as session:
+            await store.record_usage(
+                session, application_id=tenant, request_id=request_id,
+                model="-", provider="-", tier="-", prompt_tokens=0,
+                completion_tokens=0, total_tokens=0, cost_usd=0.0,
+                baseline_usd=0.0,
+                latency_ms=(time.monotonic() - started) * 1000,
+                sensitivity="-", onprem_only=False, status="cancelled")
+            await session.commit()
+    except Exception:
+        logging.getLogger("serving.obs").exception(
+            "cancelled-usage record failed (swallowed)")
+
+
 @router.post("/v1/chat/completions", response_model=None)
 async def chat_completions(body: ChatRequest, request: Request) -> dict | StreamingResponse:
     s = request.app.state.settings
     request_id = f"req-{uuid.uuid4().hex[:8]}"
+    started = time.monotonic()
     auth = await _authenticate(request)
     if auth is None:
         # Fail closed: no valid token -> reject. Never fall through to a
@@ -277,14 +325,20 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
                     request, task=task, keepalive_s=keepalive, request_id=request_id,
                     body=body, tenant=tenant, app_policy=app_policy,
                     app_langfuse=app_langfuse, profile=profile,
-                    session_id=session_id, s=s))
+                    session_id=session_id, s=s, started=started))
             resp = task.result()   # raises -> the except clauses below map it
         else:
-            resp = await request.app.state.pipeline.run(
+            task = asyncio.create_task(request.app.state.pipeline.run(
                 request_id, tenant, body, app_policy=app_policy, profile=profile,
-                session_id=session_id)
+                session_id=session_id))
+            resp = await _await_unless_disconnected(
+                task, request.is_disconnected, s.serving.stream_keepalive_s)
     except HTTPException:
         raise
+    except ClientDisconnected:
+        await _record_cancelled(request, tenant=tenant, request_id=request_id,
+                                started=started)
+        return Response(status_code=499)
     except Exception as e:
         mapped = _error_status_detail(e)
         if mapped is None:
@@ -555,43 +609,71 @@ async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
                             keepalive_s: float, request_id: str, body: ChatRequest,
                             tenant: str, app_policy: AppPolicyView,
                             app_langfuse: object | None, profile: AppPrivacyProfile,
-                            session_id: str | None, s) -> AsyncIterator[str]:
+                            session_id: str | None, s, started: float) -> AsyncIterator[str]:
     """SSE for a streamed request whose complete, verified answer is not ready
     within one keepalive interval. Sends a keepalive comment each interval until
     the pipeline task finishes, then the same frames `verified_then_stream`
     sends. A failure after the headers are out cannot change the HTTP status,
     so it goes out as one error frame (same status and detail as the HTTP path)
-    followed by [DONE]."""
-    yield SSE_KEEPALIVE  # one immediately: the route already waited one full
-                         # interval before opening this stream, so waiting a
-                         # second interval here would delay the first byte to
-                         # ~2x keepalive_s
-    while True:
-        done, _ = await asyncio.wait({task}, timeout=keepalive_s)
-        if done:
-            break
-        yield SSE_KEEPALIVE
+    followed by [DONE].
+
+    Wrapped in try/finally: Starlette cancels this generator (throws
+    GeneratorExit / cancels the driving task) when the client disconnects
+    mid-stream. The `finally` retrieves the task's outcome on every exit path
+    -- normal completion, an error frame, or a disconnect -- so a still-running
+    task is always cancelled and awaited (never leaving a dangling "Task
+    exception was never retrieved" task), and a disconnect that happened
+    before the answer was delivered is metered as `cancelled`, never `ok`."""
     try:
-        resp = task.result()
-    except Exception as e:
-        mapped = _error_status_detail(e)
-        if mapped is None:
-            logging.getLogger("serving.api").exception(
-                "unhandled error for %s after stream opened", request_id)
-            metrics.observe_request("-", "error")
-            mapped = (500, "internal error")
-        else:
-            metrics.observe_request("-", "rejected")
-        yield sse_error_frame(*mapped)
-        yield SSE_DONE
-        return
-    await _finalize(request, resp, body=body, tenant=tenant, app_policy=app_policy,
-                    app_langfuse=app_langfuse, profile=profile,
-                    session_id=session_id, s=s, request_id=request_id)
-    message = resp["choices"][0]["message"]
-    async for frame in chunk_text(request_id, resp["model"], message["content"] or "",
-                                  tool_calls=message.get("tool_calls")):
-        yield frame
+        yield SSE_KEEPALIVE  # one immediately: the route already waited one
+                             # full interval before opening this stream, so
+                             # waiting a second interval here would delay the
+                             # first byte to ~2x keepalive_s
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=keepalive_s)
+            if done:
+                break
+            yield SSE_KEEPALIVE
+        try:
+            resp = task.result()
+        except Exception as e:
+            mapped = _error_status_detail(e)
+            if mapped is None:
+                logging.getLogger("serving.api").exception(
+                    "unhandled error for %s after stream opened", request_id)
+                metrics.observe_request("-", "error")
+                mapped = (500, "internal error")
+            else:
+                metrics.observe_request("-", "rejected")
+            yield sse_error_frame(*mapped)
+            yield SSE_DONE
+            return
+        await _finalize(request, resp, body=body, tenant=tenant, app_policy=app_policy,
+                        app_langfuse=app_langfuse, profile=profile,
+                        session_id=session_id, s=s, request_id=request_id)
+        message = resp["choices"][0]["message"]
+        async for frame in chunk_text(request_id, resp["model"], message["content"] or "",
+                                      tool_calls=message.get("tool_calls")):
+            yield frame
+    finally:
+        # Snapshot before cancel: task.cancel() doesn't flip done() right
+        # away, so this is the one true read of "did the backend finish
+        # before the client left". Not done -> the client left while the
+        # pipeline was still working: cancel it and meter `cancelled`. Done
+        # (success, error frame already sent, or a disconnect mid-answer-send
+        # after `_finalize` already recorded `ok`) -> nothing to cancel and
+        # nothing to re-meter.
+        was_done = task.done()
+        if not was_done:
+            task.cancel()
+        # Retrieve the outcome on every exit path -- a task that finished
+        # (successfully or with an exception) between the last check and
+        # generator close must still have its result/exception consumed, or
+        # asyncio logs "Task exception was never retrieved".
+        await asyncio.gather(task, return_exceptions=True)
+        if not was_done:
+            await _record_cancelled(request, tenant=tenant, request_id=request_id,
+                                    started=started)
 
 
 def _stream_unverified_response(
