@@ -27,7 +27,7 @@ Body:
 | `stream` | bool | no | `false` | Per-app capability via `stream_mode`; default (unset) still **rejected** (`400`). See [Streaming](#streaming). |
 | `tools` | array of tool definitions | no | `null` | Standard OpenAI tool/function definitions, passed through to the backend. See [Tool calling](#tool-calling). |
 | `tool_choice` | string \| object | no | `null` | Standard OpenAI tool-choice control, passed through with `tools`. |
-| `max_tokens` | integer ≥ 1 | no | — | Output length cap — forwarded to the backend. Priced at this cap if set, else the default estimated output tokens. A non-integer or value < 1 is rejected `422`. Because it is forwarded, a value larger than the backend's context window fails upstream (`502`) rather than being silently dropped. |
+| `max_tokens` | integer ≥ 1 | no | — | Output length cap — forwarded to the backend. Priced at this cap if set, else the default estimated output tokens. A non-integer or value < 1 is rejected `422`. Because it is forwarded, a prompt plus `max_tokens` larger than the backend's context window is refused upstream and returned as `400 request exceeds the model's context window` rather than being silently dropped. |
 | `max_completion_tokens` | integer ≥ 1 | no | — | OpenAI-compatible alias for `max_tokens` — forwarded to the backend, validated the same way. |
 | `temperature` | float | no | — | Forwarded to the backend. |
 | `top_p` | float | no | — | Forwarded to the backend. |
@@ -292,6 +292,7 @@ Every error the inference endpoint can return:
 | `401` | `invalid or missing API token` | Missing/unknown/revoked token, or the application is disabled. **Fail closed.** |
 | `422` | *(FastAPI validation error)* | Malformed body — e.g. missing `messages`. Extra unknown fields do **not** cause this. |
 | `422` | `no model is available for this request's policy: no candidates after residency filter: <counts and fixes>` | Nothing survived placement or app scope; the detail lists each reason and the field to change. |
+| `400` | `request exceeds the model's context window: <model>: This model's maximum context length is … -- shorten the conversation …` | Prompt + `max_tokens` is larger than every tried model's context window. Compact or summarise the history, or lower `max_tokens`. Returned only when **every** candidate refused for this reason; retrying the same request will fail the same way. |
 | `422` | `no model is available for this request's policy: no candidates after budget filter: cheapest candidate … estimated at $X … over the per-request cap $Y …` | Raise the app's `max_cost_usd_per_request`, lower `max_tokens`, or lower the model's price. The router has already tried cheaper allowed tiers. |
 | `422` | `model request rejected: requested model '<model>' is not permitted or unavailable: <gate>` | The pinned `model` failed the named gate; `GET /v1/models` lists what this app can pin. |
 | `422` | `response failed verification: <detail>` | Output leakage / verification failed. |
@@ -299,7 +300,7 @@ Every error the inference endpoint can return:
 | `429` | `daily budget exceeded for this application` | Over your `max_spend_usd_per_day`. |
 | `500` | `agent did not converge within its step limit` | A multi-step workflow exceeded `agent_budgets.max_steps`. |
 | `500` | `internal error` | Unexpected server-side failure. |
-| `502` | `no backend could serve this request: … (last error: <model>: <ErrorType>: <message>)` | Every candidate failed upstream; the last upstream error is included. |
+| `502` | `no backend could serve this request: … (last error: <model>: <ErrorType>: <message>)` | Every candidate failed upstream; the last upstream error is included. A context-window refusal mixed with any other failure stays `502`. |
 | `503` | `policy evaluation unavailable` | **Fail-closed:** the privacy gate itself errored. |
 
 Things that surprise people:
@@ -308,7 +309,7 @@ Things that surprise people:
 - `onprem_only` + no healthy on-prem model → **`422 no model is available…`**,
   never a silent cloud call.
 - The `503` is now narrow: **only** a privacy-gate error. "No candidates" is
-  `422`, backend exhaustion is `502`, and an agent step-cap is `500` — each maps
+  `422`, a request too large for the context window is `400`, backend exhaustion is `502`, and an agent step-cap is `500` — each maps
   to its own honest status rather than a catch-all `503`.
 
 Handle `429` with backoff; treat a `422`/`503` rejection as "routeForge declined

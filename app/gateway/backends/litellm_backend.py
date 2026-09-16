@@ -7,16 +7,33 @@ from __future__ import annotations
 
 import math
 import os
+import re
 import time
 from typing import AsyncIterator
 
-from litellm import acompletion
+from litellm import ContextWindowExceededError, acompletion
 
 from app.config.schema import PriceCfg, Settings
+from app.errors import ContextWindowExceeded
 from app.gateway.backends.base import BackendHealth, StreamChunk
 from app.models import GenerationResult, Message
 
 DEFAULT_CONFIDENCE = 0.9
+
+# litellm wraps the provider's text as "litellm.XError: litellm.YError:
+# OpenAIException - <provider message>"; keep only the provider message.
+_LITELLM_PREFIX = re.compile(r"^(?:litellm\.\w+: )*(?:\w+Exception - )?")
+
+
+async def _acompletion(model: str, call: dict):
+    """`acompletion`, with a context-window refusal translated into the
+    backend-neutral `ContextWindowExceeded` so the gateway and API can tell
+    "request too large" (client's error, 400) from an outage (502)."""
+    try:
+        return await acompletion(**call)
+    except ContextWindowExceededError as exc:
+        raise ContextWindowExceeded(
+            f"{model}: {_LITELLM_PREFIX.sub('', str(exc))}") from exc
 
 
 def _usage_dict(u) -> dict:
@@ -108,7 +125,7 @@ class LiteLLMBackend:
         for k, v in (params or {}).items():
             call.setdefault(k, v)   # never overrides model/messages/stream/tools
         start = time.monotonic()
-        resp = await acompletion(**call)
+        resp = await _acompletion(model, call)
         latency_ms = (time.monotonic() - start) * 1000
         data = resp.model_dump()
 
@@ -166,7 +183,7 @@ class LiteLLMBackend:
         start = time.monotonic()
         parts: list[str] = []
         usage: dict = {}
-        async for chunk in await acompletion(**call):
+        async for chunk in await _acompletion(model, call):
             choices = getattr(chunk, "choices", None)
             content = None
             if choices:

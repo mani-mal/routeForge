@@ -25,7 +25,9 @@ from app.apps import store
 from app.apps.langfuse_provision import load_app_langfuse
 from app.apps.policy import AppPolicyView, day_spend_usd, policy_view_from
 from app.apps.privacy import AppPrivacyProfile
-from app.errors import BackendUnavailable, NoEligibleCandidate, PolicyGateError
+from app.errors import (
+    BackendUnavailable, ContextWindowExceeded, NoEligibleCandidate, PolicyGateError,
+)
 from app.models import ChatRequest
 from app.obs import metrics
 from app.obs.export import export_trace
@@ -211,6 +213,10 @@ def _error_status_detail(exc: BaseException) -> tuple[int, str] | None:
         prefix = ("model request rejected: " if message.startswith("requested model")
                   else "response failed verification: ")
         return 422, f"{prefix}{message}"
+    if isinstance(exc, ContextWindowExceeded):
+        return 400, (f"request exceeds the model's context window: {exc} -- "
+                     "shorten the conversation (compact or summarise the history) "
+                     "or lower max_tokens")
     if isinstance(exc, NoEligibleCandidate):
         return 422, f"no model is available for this request's policy: {exc}"
     if isinstance(exc, AgentCapExceeded):
