@@ -176,3 +176,19 @@ def test_derive_session_id_default_and_older_serving_yaml(tmp_path):
         (tmp_path / f).write_text(pathlib.Path("config", f).read_text())
     s = load_settings(config_dir=str(tmp_path))  # must not raise
     assert s.serving.derive_session_id is True
+
+
+def test_stream_keepalive_s_rejects_zero():
+    """M2 (final-review fix wave): a zero-or-negative keepalive interval
+    means `_keepalive_stream` never actually delays -- it would busy-loop
+    `asyncio.wait(timeout=0)` and (once opened) fire a real per-request SSE
+    keepalive storm, so this must fail config validation, not just boot."""
+    from pydantic import ValidationError
+
+    from app.config.loader import load_settings
+    from app.config.schema import ServingCfg
+
+    data = load_settings().serving.model_dump()
+    data["stream_keepalive_s"] = 0
+    with pytest.raises(ValidationError):
+        ServingCfg.model_validate(data)

@@ -253,7 +253,7 @@ class ServingCfg(BaseModel):
     # above. Defaulted (true) for the upgrade-safety reason given above.
     allow_app_passthrough: bool = True
     reject_stream_requests: bool
-    stream_keepalive_s: float = 5.0
+    stream_keepalive_s: float = Field(5.0, gt=0)
     # Derive a stable per-conversation session id (auto-<24 hex>) when the
     # client sends no x-routeforge-session header. Defaulted (true) for the
     # same upgrade-safety reason as stream_keepalive_s above: a mounted
