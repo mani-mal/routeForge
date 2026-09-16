@@ -109,6 +109,49 @@ def test_openai_sdk_raises_on_the_late_error_frame(monkeypatch):
                 pass
 
 
-def test_config_default_and_older_serving_yaml():
+def test_late_agent_cap_exceeded_is_rejected_not_error(monkeypatch):
+    """AgentCapExceeded maps to (500, ...) but is still a KNOWN/mapped serving
+    exception -- the metrics label must follow whether _error_status_detail
+    matched, not the numeric status, so it is recorded "rejected" here and
+    "error" is reserved for a genuinely unmapped exception."""
+    from app.agent.runtime import AgentCapExceeded
+    from app.obs import metrics
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(metrics, "observe_request",
+                        lambda model, status: calls.append((model, status)))
+    with conformance_client() as c:
+        app = onboard(c, "ka-agent-cap", stream_mode="verified_then_stream")
+        _fast_keepalive(c)
+        _slow_run(monkeypatch, c, delay=0.3, exc=AgentCapExceeded())
+        with c.stream("POST", "/v1/chat/completions", headers=app.headers, json=_TURN) as r:
+            assert r.status_code == 200
+            body = "".join(r.iter_text())
+    data = [e for e in _events(body) if e.startswith("data: ")]
+    err = json.loads(data[-2][6:])
+    assert data[-1] == "data: [DONE]"
+    assert err["error"]["code"] == 500
+    assert err["error"]["message"] == "agent did not converge within its step limit"
+    assert ("-", "rejected") in calls
+
+
+def test_config_default_and_older_serving_yaml(tmp_path):
     from app.config.loader import load_settings
+    # Shipped config carries the key and loads 5.0.
     assert load_settings().serving.stream_keepalive_s == 5.0
+
+    # Upgrade safety: a mounted serving.yaml that predates this feature (DGX
+    # ConfigMap, Helm/HPE serving-config) has no `stream_keepalive_s` key at
+    # all -- the .get()-with-default in the loader must still boot it at the
+    # same default, not KeyError. Same pattern as
+    # test_config_loader.py::test_boot_survives_serving_yaml_without_policy_mode_keys.
+    import pathlib
+
+    import yaml
+
+    raw = yaml.safe_load(pathlib.Path("config/serving.yaml").read_text())
+    raw["server"].pop("stream_keepalive_s", None)
+    (tmp_path / "serving.yaml").write_text(yaml.safe_dump(raw))
+    for f in ("policy.yaml", "routing.yaml", "pricing.yaml"):
+        (tmp_path / f).write_text(pathlib.Path("config", f).read_text())
+    s = load_settings(config_dir=str(tmp_path))  # must not raise
+    assert s.serving.stream_keepalive_s == 5.0

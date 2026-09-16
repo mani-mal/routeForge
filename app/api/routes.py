@@ -562,6 +562,10 @@ async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
     sends. A failure after the headers are out cannot change the HTTP status,
     so it goes out as one error frame (same status and detail as the HTTP path)
     followed by [DONE]."""
+    yield SSE_KEEPALIVE  # one immediately: the route already waited one full
+                         # interval before opening this stream, so waiting a
+                         # second interval here would delay the first byte to
+                         # ~2x keepalive_s
     while True:
         done, _ = await asyncio.wait({task}, timeout=keepalive_s)
         if done:
@@ -574,8 +578,10 @@ async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
         if mapped is None:
             logging.getLogger("serving.api").exception(
                 "unhandled error for %s after stream opened", request_id)
+            metrics.observe_request("-", "error")
             mapped = (500, "internal error")
-        metrics.observe_request("-", "rejected" if mapped[0] != 500 else "error")
+        else:
+            metrics.observe_request("-", "rejected")
         yield sse_error_frame(*mapped)
         yield SSE_DONE
         return
