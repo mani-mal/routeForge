@@ -46,6 +46,10 @@ services:
       # Admin dashboard login (demo defaults — change for anything real).
       ADMIN_EMAIL: admin@routeforge.local
       ADMIN_PASSWORD: changeme
+      # HMAC key for derived session ids (server.derive_session_id). Optional,
+      # no default secret: unset -> a random per-process key (ids reset on
+      # restart). A single-replica local demo doesn't need this set.
+      SP_SESSION_ID_KEY: ${SP_SESSION_ID_KEY:-}
     depends_on:
       langfuse-web: {condition: service_started}
     healthcheck:

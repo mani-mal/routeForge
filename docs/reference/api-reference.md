@@ -273,7 +273,7 @@ Without an `x-routeforge-session` header, the session id is derived from a hash 
 - The first system message (if any)
 - The first user message
 
-The derived id is formatted as `auto-` followed by 24 hex characters (a one-way hash, no content stored). Derivation is controlled by `server.derive_session_id` (default `true`) and can be disabled by setting it to `false`.
+The derived id is formatted as `auto-` followed by 24 hex characters: a keyed HMAC-SHA256 (no content stored), not a raw unkeyed hash — an unkeyed hash over raw pre-gate text would let a telemetry viewer who sees the redacted prompt brute-force a low-entropy redacted value (e.g. an SSN) against the exported id. The HMAC key is `SP_SESSION_ID_KEY` when set (any non-empty string); otherwise a random 32-byte key generated once per process, which means derived ids reset on restart and differ across replicas unless `SP_SESSION_ID_KEY` is set to the same value on every replica. Derivation itself is controlled by `server.derive_session_id` (default `true`) and can be disabled by setting it to `false`.
 
 The session id is used for **trace and console grouping only**. Persistent memory (agent long-term context) is partitioned by the client-supplied `x-routeforge-session` header only; a derived session id does not change memory partitioning or affect memory semantics. An agent conversation with no header still groups into one session in Langfuse and the console as its history grows, without touching the memory partition it reads and writes.
 

@@ -1,8 +1,11 @@
 import asyncio
 import hashlib
+import hmac
 import json
 import logging
+import os
 import re
+import secrets
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable
@@ -65,18 +68,62 @@ def _read_session_id(request: Request) -> str | None:
     return _sanitize_session_id(request.headers.get("x-routeforge-session"))
 
 
+_session_id_key_cache: bytes | None = None
+_session_id_key_logged = False
+
+
+def _reset_session_id_key_cache() -> None:
+    """Test-only: clear the cached process-random key (and the "logged
+    already" flag) so tests can exercise both the SP_SESSION_ID_KEY and the
+    random-key path cleanly, and re-resolve SP_SESSION_ID_KEY after changing
+    it via monkeypatch."""
+    global _session_id_key_cache, _session_id_key_logged
+    _session_id_key_cache = None
+    _session_id_key_logged = False
+
+
+def _session_id_key() -> bytes:
+    """The HMAC key `_derive_session_id` signs with. `SP_SESSION_ID_KEY` (any
+    non-empty string, UTF-8 encoded) when set -- the same value on every
+    replica keeps derived ids stable across the deployment and across
+    restarts. Otherwise a random 32-byte key generated once per process: ids
+    stay stable for the life of this process but reset on restart and differ
+    across replicas, which the one-time INFO log below calls out. The key
+    itself is never logged."""
+    global _session_id_key_cache, _session_id_key_logged
+    env = os.environ.get("SP_SESSION_ID_KEY", "")
+    if env:
+        return env.encode()
+    if _session_id_key_cache is None:
+        _session_id_key_cache = secrets.token_bytes(32)
+    if not _session_id_key_logged:
+        logging.getLogger("serving.api").info(
+            "SP_SESSION_ID_KEY is not set: derived session ids (auto-...) are "
+            "signed with a random per-process key. They reset on restart and "
+            "differ across replicas. Set SP_SESSION_ID_KEY to the same value "
+            "on every replica for stable session grouping across restarts.")
+        _session_id_key_logged = True
+    return _session_id_key_cache
+
+
 def _derive_session_id(body: ChatRequest, tenant: str) -> str | None:
-    """A stable session id for a conversation whose client sent none: a one-way
-    hash of the app id plus the conversation's opening turns (first system
-    message, first user message). Later turns append history but keep those
-    opening turns, so every request in one conversation shares the id."""
+    """A stable session id for a conversation whose client sent none: a keyed
+    HMAC-SHA256 of the app id plus the conversation's opening turns (first
+    system message, first user message). Later turns append history but keep
+    those opening turns, so every request in one conversation shares the id.
+
+    Keyed (not a raw unkeyed hash), per SP_SESSION_ID_KEY / `_session_id_key`
+    above: this id is exported to Langfuse as `langfuse.session.id`, and an
+    unkeyed hash over raw pre-gate text would let a telemetry viewer who sees
+    the redacted prompt brute-force a low-entropy redacted value (e.g. an
+    SSN) against it."""
     first_user = next((m.content for m in body.messages
                        if m.role == "user" and m.content), None)
     if not first_user:
         return None
     system = next((m.content or "" for m in body.messages if m.role == "system"), "")
-    digest = hashlib.sha256(
-        f"{tenant}\x00{system}\x00{first_user}".encode()).hexdigest()[:24]
+    msg = f"{tenant}\x00{system}\x00{first_user}".encode()
+    digest = hmac.new(_session_id_key(), msg, hashlib.sha256).hexdigest()[:24]
     return f"auto-{digest}"
 
 

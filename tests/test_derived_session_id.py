@@ -1,6 +1,9 @@
 """Contract: an agent client that sends no session header still gets one
 session per conversation, derived from the conversation's opening turns
 (stable as the history grows), and an explicit header always wins."""
+import hashlib
+
+from app.api import routes
 from app.api.routes import _derive_session_id
 from app.models import ChatRequest
 
@@ -88,3 +91,51 @@ def test_derived_session_id_never_becomes_the_memory_partition_key(client, monke
     assert r2.status_code == 200
     assert calls[-1] == "wf-999"                # memory partition key: the header value
     assert r2.json()["session_id"] == "wf-999"  # response/trace: same, explicit wins
+
+
+# --- C1: the derivation hash must be keyed (HMAC), not a raw unkeyed sha256 --
+# A telemetry viewer who sees the redacted prompt could otherwise brute-force
+# low-entropy redacted values (e.g. SSNs) against the exported session id.
+
+def _unkeyed_sha256_id(tenant: str, system: str, first_user: str) -> str:
+    digest = hashlib.sha256(
+        f"{tenant}\x00{system}\x00{first_user}".encode()).hexdigest()[:24]
+    return f"auto-{digest}"
+
+
+def test_derived_id_is_not_the_old_unkeyed_hash(monkeypatch):
+    monkeypatch.setenv("SP_SESSION_ID_KEY", "a-fixed-test-key")
+    routes._reset_session_id_key_cache()
+    got = _derive_session_id(_req(SYS, U1), "app-a")
+    old = _unkeyed_sha256_id("app-a", SYS["content"], U1["content"])
+    assert got != old
+    assert got.startswith("auto-") and len(got) == 5 + 24
+
+
+def test_same_key_gives_a_stable_id(monkeypatch):
+    monkeypatch.setenv("SP_SESSION_ID_KEY", "shared-key-1")
+    routes._reset_session_id_key_cache()
+    a = _derive_session_id(_req(SYS, U1), "app-a")
+    routes._reset_session_id_key_cache()  # simulate a fresh resolution of the same env key
+    b = _derive_session_id(_req(SYS, U1), "app-a")
+    assert a == b
+
+
+def test_different_key_gives_a_different_id(monkeypatch):
+    monkeypatch.setenv("SP_SESSION_ID_KEY", "key-one")
+    routes._reset_session_id_key_cache()
+    a = _derive_session_id(_req(SYS, U1), "app-a")
+    monkeypatch.setenv("SP_SESSION_ID_KEY", "key-two")
+    routes._reset_session_id_key_cache()
+    b = _derive_session_id(_req(SYS, U1), "app-a")
+    assert a != b
+
+
+def test_unset_key_env_still_derives_and_is_stable_within_the_process(monkeypatch):
+    monkeypatch.delenv("SP_SESSION_ID_KEY", raising=False)
+    routes._reset_session_id_key_cache()
+    a = _derive_session_id(_req(SYS, U1), "app-a")
+    b = _derive_session_id(_req(SYS, U1), "app-a")
+    assert a is not None
+    assert a == b
+    routes._reset_session_id_key_cache()

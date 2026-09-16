@@ -124,7 +124,10 @@ server:
   # unaffected (they finish inside the first interval and keep their HTTP status).
   stream_keepalive_s: 5
   # When a request has no x-routeforge-session header, derive a session id from
-  # a hash of the app id, the first system message and the first user message, so
-  # an agent conversation groups into one session in Langfuse and the console as
-  # its history grows. The hash is one-way; no content is stored in the id.
+  # a keyed HMAC-SHA256 of the app id, the first system message and the first
+  # user message, so an agent conversation groups into one session in Langfuse
+  # and the console as its history grows. No content is stored in the id. The
+  # HMAC key is the SP_SESSION_ID_KEY env var when set (same value on every
+  # replica keeps ids stable across restarts/replicas); otherwise a random
+  # per-process key, so ids reset on restart and differ across replicas.
   derive_session_id: true

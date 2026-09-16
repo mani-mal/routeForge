@@ -70,6 +70,11 @@ services:
       # Bearer token sent to onboarded on-prem endpoints. vLLM/ollama started
       # without --api-key ignore it; a dummy value keeps LiteLLM happy.
       SP_ONPREM_API_KEY: ${SP_ONPREM_API_KEY:-sk-noauth}
+      # HMAC key for derived session ids (auto-<24 hex>, server.derive_session_id).
+      # Optional: unset -> a random per-process key (ids reset on restart, differ
+      # across replicas). Set the SAME value in deploy/spark/.env on every replica
+      # for stable session grouping.
+      SP_SESSION_ID_KEY: ${SP_SESSION_ID_KEY:-}
       # Admin console login. No default password on purpose — .env must set it.
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@routeforge.local}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in deploy/spark/.env}
