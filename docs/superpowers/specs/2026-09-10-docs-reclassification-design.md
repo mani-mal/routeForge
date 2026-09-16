@@ -299,8 +299,7 @@ at the end. Per the global CLAUDE.md, tasks run subagent-driven with review betw
   `semantic-cache`) with matching `.git/worktrees/` entries. Every one holds a full
   stale copy of `docs/` and `CLAUDE.md`, which corrupts any repo-wide grep. Worth a
   `git worktree prune` pass on its own.
-- **B24** remains open and is a real 500. Unrelated to this work, but the sweep will
-  keep surfacing it.
+- **B24** was a real 500; it is resolved (2026-09-15).
 
 ## 11. Acceptance criteria
 

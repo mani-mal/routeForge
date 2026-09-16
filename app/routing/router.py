@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -13,6 +14,34 @@ if TYPE_CHECKING:
     from app.apps.registry import ModelRegistry
 
 _ORDER = {"cheap": 0, "mid": 1, "frontier": 2}
+
+# What an operator changes for each per-candidate rejection reason.
+_FIX_HINTS = {
+    "excluded · residency": "request or application is onprem_only: onboard and enable an on-prem model",
+    "not permitted for application": "check the application's allowed_providers / allowed_tiers / allowed_models and the model's allowed_app_ids",
+    "not requested model": "the request pinned a different model (see GET /v1/models)",
+    "disabled by admin": "the model is disabled: re-enable it under Infrastructure",
+    # Not an operator fix hint. Safe only because app/gateway/gateway.py rewraps
+    # an exclude-driven NoEligibleCandidate into BackendUnavailable (502 with
+    # the upstream error), so this text never reaches a client as a policy 422.
+    "excluded · prior failure": "the model already failed on this request",
+}
+
+
+def _explain(rejected) -> str:
+    counts = Counter(r.reason for r in rejected)
+    return "; ".join(f"{n} {reason} ({_FIX_HINTS.get(reason, reason)})"
+                     for reason, n in counts.most_common())
+
+
+def expected_output_tokens(settings: Settings, params: dict | None) -> int:
+    """Output tokens to price a request at: the client's own cap, else the
+    deployment's `budgets.default_estimated_output_tokens`."""
+    p = params or {}
+    for key in ("max_completion_tokens", "max_tokens"):
+        if p.get(key):
+            return int(p[key])
+    return int(settings.policy.budgets["default_estimated_output_tokens"])
 
 
 @dataclass
@@ -48,14 +77,17 @@ class Router:
             return "mid"
         return "frontier"
 
-    def _est_cost(self, cand: PoolCandidate, tokens_after: int) -> float:
+    def _est_cost(self, cand: PoolCandidate, tokens_after: int, output_tokens: int) -> float:
         p = (self._reg.price_for(cand.name) if self._reg
              else self._s.pricing.models[cand.name])
-        return tokens_after / 1_000_000 * (p.input + p.output)
+        return (tokens_after * p.input + output_tokens * p.output) / 1_000_000
 
     def select(self, ctx: ExecutionPolicyContext, tokens_after: int,
                complexity: float, min_tier: str | None = None,
-               exclude: frozenset[str] = frozenset()) -> RoutingDecision:
+               exclude: frozenset[str] = frozenset(),
+               output_tokens: int | None = None) -> RoutingDecision:
+        out_tokens = (output_tokens if output_tokens is not None
+                      else expected_output_tokens(self._s, None))
         rejected: list[RejectedCandidate] = []
         pool = self._reg.effective_pool() if self._reg else self._s.routing.model_pool
 
@@ -107,7 +139,12 @@ class Router:
                 continue
             allowed.append(c)
         if not allowed:
-            raise NoEligibleCandidate("no candidates after residency filter")
+            if not pool:
+                raise NoEligibleCandidate(
+                    "no candidates after residency filter: the model pool is empty; "
+                    "onboard a model (residency cannot be satisfied by an empty pool)")
+            raise NoEligibleCandidate(
+                f"no candidates after residency filter: {_explain(rejected)}")
 
         # 2. target tier from complexity + risk floor + escalation, clamped to
         #    the best residency-permitted tier
@@ -123,8 +160,10 @@ class Router:
         # the clamp above guarantees a match exists; avail[-1] is a defensive fallback
         tier_pick = next((t for t in avail if _ORDER[t] >= _ORDER[target]), avail[-1])
 
+        fallback_from: str | None = None
         # 3. keep only the target tier; 4. drop over-budget
         eligible: list[tuple[PoolCandidate, float]] = []
+        over: list[tuple[PoolCandidate, float]] = []
         for c in allowed:
             if c.tier != tier_pick:
                 reason = ("below target tier" if _ORDER[c.tier] < _ORDER[tier_pick]
@@ -133,15 +172,54 @@ class Router:
                     name=c.name, provider=c.provider, tier=c.tier,
                     display_name=c.display_name, reason=reason))
                 continue
-            est = self._est_cost(c, tokens_after)
+            est = self._est_cost(c, tokens_after, out_tokens)
             if est > ctx.max_cost_usd:
                 rejected.append(RejectedCandidate(
                     name=c.name, provider=c.provider, tier=c.tier,
                     display_name=c.display_name, reason="over budget"))
+                over.append((c, est))
             else:
                 eligible.append((c, est))
         if not eligible:
-            raise NoEligibleCandidate("no candidates after budget filter")
+            # Budget fallback: step DOWN to the most capable cheaper allowed
+            # tier that fits the cap. Floor = risk floor / escalation min_tier
+            # (never undercut; complexity is the only thing budget may
+            # override). Only `allowed` candidates are considered, so
+            # residency and app scope are untouched (rules 3/8).
+            floor_tiers = [self._s.routing.risk_floors[ctx.risk_class]]
+            if min_tier:
+                floor_tiers.append(min_tier)
+            floor = max(floor_tiers, key=lambda t: _ORDER[t])
+            lower = sorted((t for t in avail
+                            if _ORDER[floor] <= _ORDER[t] < _ORDER[tier_pick]),
+                           key=lambda t: -_ORDER[t])
+            skipped: list[str] = []   # lower tiers passed over: every member over budget
+            for t in lower:
+                fits = [(c, e) for c, e in
+                        ((c, self._est_cost(c, tokens_after, out_tokens))
+                         for c in allowed if c.tier == t)
+                        if e <= ctx.max_cost_usd]
+                if fits:
+                    fits_names = {c.name for c, _ in fits}
+                    relabel = {t, *skipped}
+                    rejected = [r for r in rejected
+                                if not (r.tier in relabel and r.reason == "below target tier")]
+                    rejected.extend(
+                        RejectedCandidate(name=c.name, provider=c.provider, tier=c.tier,
+                                          display_name=c.display_name, reason="over budget")
+                        for c in allowed
+                        if c.tier in relabel and c.name not in fits_names)
+                    fallback_from, tier_pick, eligible = tier_pick, t, fits
+                    break
+                skipped.append(t)
+        if not eligible:
+            cheapest, cheapest_est = min(over, key=lambda ce: ce[1])
+            raise NoEligibleCandidate(
+                f"no candidates after budget filter: cheapest candidate {cheapest.name} "
+                f"(tier {cheapest.tier}) is estimated at ${cheapest_est:.4f} "
+                f"({tokens_after} prompt + {out_tokens} output tokens), over the per-request "
+                f"cap ${ctx.max_cost_usd:.4f}. Raise the application's "
+                "max_cost_usd_per_request, lower max_tokens, or lower the model's price.")
 
         # 5. score within the tier (chooses provider/model — cheaper on-prem
         #    wins). Delegated to the pluggable strategy (app/routing/strategy.py)
@@ -158,5 +236,7 @@ class Router:
         chosen_q = self._quality.resolve(chosen.name)
         return RoutingDecision(
             chosen=chosen, est_cost_usd=est,
-            reason=f"tier {chosen.tier} (target {target})", rejected=rejected,
+            reason=(f"tier {chosen.tier} (target {target}, budget fallback from {fallback_from})"
+                    if fallback_from else f"tier {chosen.tier} (target {target})"),
+            rejected=rejected,
             quality_score=chosen_q.score, quality_source=chosen_q.source)

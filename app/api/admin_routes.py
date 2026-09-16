@@ -7,6 +7,7 @@ audience. The dashboard (Phase 4) is the only intended client.
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -15,6 +16,7 @@ from pydantic import BaseModel, Field, field_validator
 from app.apps import store
 from app.apps.admin_auth import SESSION_COOKIE, require_admin
 from app.apps.langfuse_provision import LangfuseProvisioner, encrypt_secret
+from app.apps.policy_lint import price_warnings
 from app.apps.probe import probe_endpoint
 from app.apps.tokens import new_token
 from app.policy.effective import PROTECTED_ENTITIES
@@ -48,7 +50,8 @@ def _policy_dict(p) -> dict | None:
         return None
     return {"allowed_tiers": p.allowed_tiers, "allowed_providers": p.allowed_providers,
             "allowed_models": p.allowed_models, "residency": p.residency,
-            "max_spend_usd_per_day": p.max_spend_usd_per_day, "max_rpm": p.max_rpm,
+            "max_spend_usd_per_day": p.max_spend_usd_per_day,
+            "max_cost_usd_per_request": p.max_cost_usd_per_request, "max_rpm": p.max_rpm,
             "compression_enabled": p.compression_enabled, "capture_io": p.capture_io,
             "pii_detection": p.pii_detection, "stream_mode": p.stream_mode,
             "policy_mode": p.policy_mode,
@@ -113,6 +116,7 @@ class PolicyIn(BaseModel):
     allowed_models: list[str] | None = None
     residency: str | None = None
     max_spend_usd_per_day: float | None = None
+    max_cost_usd_per_request: float | None = None  # None = inherit budgets.default_max_spend_usd
     max_rpm: int | None = None
     compression_enabled: bool | None = None   # None = inherit global Headroom toggle
     capture_io: str | None = None   # None = inherit global; off|redacted|full
@@ -438,6 +442,10 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
                 0.0 <= body.pii_score_threshold <= 1.0):
             raise HTTPException(
                 422, f"pii_score_threshold {body.pii_score_threshold!r} out of range [0.0, 1.0]")
+        if body.max_cost_usd_per_request is not None and not body.max_cost_usd_per_request > 0:
+            raise HTTPException(
+                422, "max_cost_usd_per_request must be > 0. Omit it, or name it in "
+                "`reset`, to inherit the deployment's budgets.default_max_spend_usd.")
         if body.pii_exempt_patterns is not None:
             if len(body.pii_exempt_patterns) > MAX_EXEMPT_PATTERNS:
                 raise HTTPException(
@@ -467,6 +475,7 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
         # all, silently skipping the whole downgrade branch).
         settings = request.app.state.settings
         stored = app.policy
+        await _validate_policy_values(body, settings, session, stored)
 
         def _stored(field: str):
             """The stored value this write will leave behind, BEFORE the body's
@@ -680,7 +689,25 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
         # (expire_on_commit=False on this sessionmaker).
         session.expire(app)
         full = await store.get_application_with_policy(session, app_id)
-        return _app_dict(full)
+        app_dict = _app_dict(full)
+        from app.apps.policy import policy_view_from
+        view = policy_view_from(full)
+    # Outside the session block: registry.ensure_loaded() opens its own
+    # db.session(), which would deadlock on the non-reentrant SQLite
+    # write-lock (app/apps/db.py) if called while the outer session above is
+    # still open.
+    # The policy is already committed: a failure computing advisory warnings
+    # must never turn a successful save into a 500.
+    try:
+        registry = request.app.state.registry
+        await registry.ensure_loaded(request.app.state.db)
+        from app.apps import policy_lint
+        warnings = policy_lint.policy_warnings(settings, registry, app_id, view)
+    except Exception:
+        logging.getLogger("serving.admin").exception(
+            "policy saved for %s but computing warnings failed", app_id)
+        warnings = []
+    return {**app_dict, "warnings": warnings}
 
 
 # --- tokens -----------------------------------------------------------------
@@ -784,6 +811,55 @@ async def put_privacy(app_id: str, body: PrivacyProfileIn, request: Request,
 # routing. `provider` is always forced to "onprem" — never taken from the
 # request body.
 
+async def _validate_policy_values(body: "PolicyIn", settings, session,
+                                  stored=None) -> None:
+    """Refuse values that can never route. Empty allowlists are refused because
+    the store reads [] as 'no restriction', the opposite of what an operator
+    who clears a list means.
+
+    Only values this write CHANGES are checked. The console always sends the
+    whole policy, so a value stored before these checks existed (max_rpm=0, a
+    since-retired model slug) must not block an unrelated edit; changing it,
+    or setting a new illegal value, is still refused."""
+    def changed(field: str) -> bool:
+        v = getattr(body, field)
+        return v is not None and v != (getattr(stored, field) if stored else None)
+
+    for field in ("allowed_tiers", "allowed_providers", "allowed_models"):
+        v = getattr(body, field)
+        if changed(field) and len(v) == 0:
+            raise HTTPException(
+                422, f"{field} is an empty list, which RouteForge reads as 'no "
+                "restriction'. Omit the field to leave it unchanged, or name it in "
+                "`reset` to clear it.")
+    if changed("allowed_tiers"):
+        bad = sorted(set(body.allowed_tiers) - set(settings.routing.tiers))
+        if bad:
+            raise HTTPException(
+                422, f"unknown tier(s) {bad}; legal tiers: {list(settings.routing.tiers)}")
+    if changed("allowed_providers"):
+        bad = sorted(set(body.allowed_providers) - set(settings.serving.providers))
+        if bad:
+            raise HTTPException(
+                422, f"unknown provider(s) {bad}; legal providers: "
+                f"{sorted(settings.serving.providers)}")
+    if changed("allowed_models"):
+        known = ({c.name for c in settings.routing.model_pool}
+                 | {m.slug for m in await store.list_onboarded(session)})
+        bad = sorted(set(body.allowed_models) - known)
+        if bad:
+            raise HTTPException(
+                422, f"unknown model(s) {bad}: not in the YAML pool and not onboarded")
+    if changed("max_rpm") and body.max_rpm < 1:
+        raise HTTPException(
+            422, "max_rpm must be >= 1 (0 rejects every request). Omit it, or reset it, "
+            "for no rate limit.")
+    if changed("max_spend_usd_per_day") and not body.max_spend_usd_per_day > 0:
+        raise HTTPException(
+            422, "max_spend_usd_per_day must be > 0 (0 rejects every request). Omit it, "
+            "or reset it, for no daily cap.")
+
+
 def _static_validate_onboard(body: OnboardIn, s) -> None:
     tiers = set(s.routing.tiers)
     if body.tier not in tiers:
@@ -833,7 +909,8 @@ async def onboard_model(body: OnboardIn, request: Request,
     await reg.refresh(request.app.state.db)
     return {"slug": body.slug, "enabled": final_enabled,
             "probe_status": "healthy" if ok else "unreachable",
-            "probe_error": None if ok else detail}
+            "probe_error": None if ok else detail,
+            "warnings": price_warnings(s, body.price_input, body.price_output)}
 
 
 # {slug:path} (not {slug}) so real OpenAI-compatible ids that contain a slash
@@ -869,7 +946,8 @@ async def edit_onboarded_model(slug: str, body: OnboardIn, request: Request,
     await reg.refresh(request.app.state.db)
     return {"slug": slug, "enabled": final_enabled,
             "probe_status": "healthy" if ok else "unreachable",
-            "probe_error": None if ok else detail}
+            "probe_error": None if ok else detail,
+            "warnings": price_warnings(s, body.price_input, body.price_output)}
 
 
 @admin_router.delete("/infra/models/{slug:path}")  # {slug:path} for slashed ids — see PUT above (B19)

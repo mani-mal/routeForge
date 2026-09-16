@@ -187,7 +187,7 @@ class _DeterministicLiteLLM(LiteLLMBackend):
     name = "mock"  # cosmetic; nothing in the pipeline branches on backend.name
 
     async def generate(self, model, messages, price, tier, hint, tools=None,
-                       tool_choice=None):
+                       tool_choice=None, params=None):
         if hint.get("mock_fail"):
             raise RuntimeError("mock backend forced failure")
         prompt = "\n".join(m.content or "" for m in messages)

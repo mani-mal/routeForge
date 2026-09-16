@@ -58,12 +58,14 @@ class InferenceBackend(Protocol):
     async def generate(self, model: str, messages: list[Message], price: PriceCfg,
                         tier: str, hint: dict,
                         tools: list[dict] | None = None,
-                        tool_choice: str | dict | None = None) -> GenerationResult: ...
+                        tool_choice: str | dict | None = None,
+                        params: dict | None = None) -> GenerationResult: ...
 
     def generate_stream(self, model: str, messages: list[Message], price: PriceCfg,
                         tier: str, hint: dict,
                         tools: list[dict] | None = None,
-                        tool_choice: str | dict | None = None) -> AsyncIterator[StreamChunk]:
+                        tool_choice: str | dict | None = None,
+                        params: dict | None = None) -> AsyncIterator[StreamChunk]:
         """Real token streaming (step 8). Yields token-delta ``StreamChunk``s in
         order, then exactly one terminal ``StreamChunk`` carrying ``final``.
         Mirrors ``generate()``'s call construction but with ``stream=True`` and

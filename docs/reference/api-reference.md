@@ -27,6 +27,16 @@ Body:
 | `stream` | bool | no | `false` | Per-app capability via `stream_mode`; default (unset) still **rejected** (`400`). See [Streaming](#streaming). |
 | `tools` | array of tool definitions | no | `null` | Standard OpenAI tool/function definitions, passed through to the backend. See [Tool calling](#tool-calling). |
 | `tool_choice` | string \| object | no | `null` | Standard OpenAI tool-choice control, passed through with `tools`. |
+| `max_tokens` | integer ≥ 1 | no | — | Output length cap — forwarded to the backend. Priced at this cap if set, else the default estimated output tokens. A non-integer or value < 1 is rejected `422`. Because it is forwarded, a value larger than the backend's context window fails upstream (`502`) rather than being silently dropped. |
+| `max_completion_tokens` | integer ≥ 1 | no | — | OpenAI-compatible alias for `max_tokens` — forwarded to the backend, validated the same way. |
+| `temperature` | float | no | — | Forwarded to the backend. |
+| `top_p` | float | no | — | Forwarded to the backend. |
+| `stop` | string \| array | no | — | Stop sequences — forwarded to the backend. |
+| `seed` | integer | no | — | Forwarded to the backend. |
+| `presence_penalty` | float | no | — | Forwarded to the backend. |
+| `frequency_penalty` | float | no | — | Forwarded to the backend. |
+| `response_format` | object | no | — | Forwarded to the backend (e.g. `{"type": "json_object"}`). |
+| `parallel_tool_calls` | boolean | no | — | Forwarded to the backend. |
 
 Unknown fields are **accepted, not rejected** (the model allows extras). Two
 demo-only hint fields are read if present: `mock_multistep` (force the agent
@@ -41,7 +51,8 @@ path) and `mock_confidence` / `mock_fail` (mock-backend generation hints). See
 > doesn't match — routing is pinned to that one model, and the semantic cache
 > honors the pin too. If the pinned slug isn't in your app's permitted/available
 > pool the request is **rejected `422`** with
-> `model request rejected: requested model '<slug>' is not permitted or unavailable`.
+> `model request rejected: requested model '<model>' is not permitted or unavailable: <gate>`,
+> where `<gate>` names what refused it (see the error table below).
 > The pin can only narrow within your policy; it can't reach a model your admin
 > hasn't allowed.
 >
@@ -229,17 +240,18 @@ Every error the inference endpoint can return:
 
 | Status | `detail` message | Cause |
 |---|---|---|
-| `400` | `streaming is not supported for this application` | You sent `stream: true` and your app has no stream mode (see [Streaming](#streaming)). |
+| `400` | `streaming is not supported for this application: set the application's stream_mode (verified_then_stream, stream_unverified or incremental_verify)` | You sent `stream: true` and your app has no `stream_mode`; set one, or send `stream: false`. |
 | `401` | `invalid or missing API token` | Missing/unknown/revoked token, or the application is disabled. **Fail closed.** |
 | `422` | *(FastAPI validation error)* | Malformed body — e.g. missing `messages`. Extra unknown fields do **not** cause this. |
-| `422` | `model request rejected: requested model '<slug>' is not permitted or unavailable` | You pinned a `model` slug that isn't in your app's permitted/available pool. |
-| `422` | `no model is available for this request's policy: <detail>` | No eligible candidate — e.g. `onprem_only` with no healthy on-prem model. That rejection is the privacy guarantee working as designed. |
+| `422` | `no model is available for this request's policy: no candidates after residency filter: <counts and fixes>` | Nothing survived placement or app scope; the detail lists each reason and the field to change. |
+| `422` | `no model is available for this request's policy: no candidates after budget filter: cheapest candidate … estimated at $X … over the per-request cap $Y …` | Raise the app's `max_cost_usd_per_request`, lower `max_tokens`, or lower the model's price. The router has already tried cheaper allowed tiers. |
+| `422` | `model request rejected: requested model '<model>' is not permitted or unavailable: <gate>` | The pinned `model` failed the named gate; `GET /v1/models` lists what this app can pin. |
 | `422` | `response failed verification: <detail>` | Output leakage / verification failed. |
 | `429` | `rate limit exceeded for this application` | Over your `max_rpm`. |
 | `429` | `daily budget exceeded for this application` | Over your `max_spend_usd_per_day`. |
 | `500` | `agent did not converge within its step limit` | A multi-step workflow exceeded `agent_budgets.max_steps`. |
 | `500` | `internal error` | Unexpected server-side failure. |
-| `502` | `no backend could serve this request` | Every reachable backend/tier failed. |
+| `502` | `no backend could serve this request: … (last error: <model>: <ErrorType>: <message>)` | Every candidate failed upstream; the last upstream error is included. |
 | `503` | `policy evaluation unavailable` | **Fail-closed:** the privacy gate itself errored. |
 
 Things that surprise people:

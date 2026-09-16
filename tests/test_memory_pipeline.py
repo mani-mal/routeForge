@@ -51,7 +51,7 @@ class _SpyBackend(_DeterministicLiteLLM):
         self.calls: list[list[Message]] = []
 
     async def generate(self, model, messages, price, tier, hint, tools=None,
-                       tool_choice=None):
+                       tool_choice=None, params=None):
         self.calls.append(list(messages))
         return await super().generate(model, messages, price, tier, hint, tools=tools)
 

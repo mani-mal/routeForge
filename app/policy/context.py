@@ -79,6 +79,25 @@ def registry_permits(registry: "ModelRegistry | None", c, tenant_id: str) -> boo
             and (c.provider != "onprem" or registry.is_enabled(c.name)))
 
 
+def pinned_model_reason(pool, ctx: ExecutionPolicyContext, registry: "ModelRegistry | None",
+                        tenant_id: str, name: str) -> str:
+    """Which gate refused a pinned `model`, phrased as what to change."""
+    c = next((c for c in pool if c.name == name), None)
+    not_found = "it is not onboarded, or is disabled (see GET /v1/models)"
+    if c is None:
+        return not_found
+    if c.provider not in ctx.allowed_providers:
+        return (f"provider {c.provider!r} is excluded by residency or the "
+                "application's allowed_providers")
+    if ctx.model_scope_active and name not in ctx.allowed_models:
+        return "it is outside the application's allowed_tiers / allowed_models"
+    if registry is not None and not registry.is_allowed_for_app(name, tenant_id):
+        # Same text as an unknown slug: naming allowed_app_ids would disclose
+        # that a model scoped to another application exists (cross-tenant).
+        return not_found
+    return "it is disabled"
+
+
 def requestable_models(settings: Settings, registry: "ModelRegistry | None",
                        tenant_id: str, app_policy: "AppPolicyView") -> list:
     """The pool candidates this application may pin as `model` on a request
@@ -139,7 +158,10 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
         allowed_providers=frozenset(allowed),
         allowed_models=allowed_models,
         model_scope_active=model_scope_active,
-        max_cost_usd=settings.policy.budgets["default_max_spend_usd"],
+        max_cost_usd=(app_policy.max_cost_usd_per_request
+                      if app_policy is not None
+                      and app_policy.max_cost_usd_per_request is not None
+                      else settings.policy.budgets["default_max_spend_usd"]),
         max_latency_ms=int(settings.policy.budgets["default_max_latency_ms"]),
         risk_class=rule.risk_class,
         require_verification=rule.require_verification,

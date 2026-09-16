@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 from typing import AsyncIterator
@@ -9,12 +10,21 @@ from app.errors import BackendUnavailable, NoEligibleCandidate
 from app.gateway.backends.base import InferenceBackend, StreamChunk
 from app.models import DecisionRecord, ExecutionPolicyContext, GenerationResult, Message
 from app.obs import metrics
-from app.routing.router import Router
+from app.routing.router import Router, expected_output_tokens
 
 if TYPE_CHECKING:
     from app.apps.registry import ModelRegistry
 
 _NEXT = {"cheap": "mid", "mid": "frontier", "frontier": None}
+
+# Upstream error text reaches the client in the 502 detail. Endpoints (URLs,
+# IPv4 addresses) are internal topology, so they are scrubbed first.
+_URL = re.compile(r"https?://[^\s'\"<>()]+")
+_IPV4 = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b")
+
+
+def _scrub_endpoints(text: str) -> str:
+    return _IPV4.sub("<endpoint>", _URL.sub("<endpoint>", text))
 
 
 class Gateway:
@@ -44,7 +54,8 @@ class Gateway:
     async def run(self, ctx: ExecutionPolicyContext, messages: list[Message],
                   tokens_after: int, complexity: float, hint: dict,
                   tools: list[dict] | None = None,
-                  tool_choice: str | dict | None = None
+                  tool_choice: str | dict | None = None,
+                  params: dict | None = None
                   ) -> tuple[GenerationResult, list[DecisionRecord]]:
         records: list[DecisionRecord] = []
         threshold = self._s.routing.confidence_escalation_threshold
@@ -59,21 +70,34 @@ class Gateway:
         # max_failover_attempts; residency is preserved because exclude only ever
         # removes candidates (see Router.select).
         failed_models: set[str] = set()
+        last_error = ""
         failover_attempts = 0
         result: GenerationResult | None = None
+        out_tokens = expected_output_tokens(self._s, params)
 
         while True:
             try:
                 with metrics.time_routing():
                     decision = self._router.select(
                         ctx, tokens_after, complexity, min_tier,
-                        exclude=frozenset(failed_models))
-            except NoEligibleCandidate:
+                        exclude=frozenset(failed_models), output_tokens=out_tokens)
+            except NoEligibleCandidate as exc:
+                # A confidence escalation found nothing eligible at the higher
+                # tier (e.g. it is over the per-request budget the served answer
+                # fell back under). Keep the answer already served -- and its
+                # cost, which is metered from `records` -- and say why.
+                if result is not None and escalations > 0 and min_tier is not None:
+                    records.append(DecisionRecord(
+                        step="gateway", chosen=None,
+                        reason=f"escalation skipped: no eligible candidate at {min_tier} ({exc})",
+                        latency_ms=0.0, hop_index=len(records)))
+                    break
                 # Every reachable candidate has now been excluded by prior
                 # failures -> exhausted, not a genuine no-candidate reject.
                 if failed_models:
                     raise BackendUnavailable(
-                        "backend failed on all reachable candidates for this request")
+                        "backend failed on all reachable candidates for this request "
+                        f"(last error: {last_error})")
                 raise
             cand = decision.chosen
             price = (self._reg.price_for(cand.name) if self._reg
@@ -81,8 +105,10 @@ class Gateway:
             try:
                 result = await self._backend.generate(
                     cand.name, messages, price, cand.tier, hint,
-                    tools=tools, tool_choice=tool_choice)
+                    tools=tools, tool_choice=tool_choice, params=params)
             except Exception as exc:
+                last_error = (f"{cand.name}: {type(exc).__name__}: "
+                              f"{_scrub_endpoints(str(exc))[:200]}")
                 records.append(DecisionRecord(
                     step="gateway", chosen=None,
                     reason=f"{cand.name} failed; retrying peer/escalating",
@@ -92,7 +118,8 @@ class Gateway:
                 failover_attempts += 1
                 if failover_attempts > max_failover:
                     raise BackendUnavailable(
-                        "backend failed on all reachable candidates for this request"
+                        "backend failed on all reachable candidates for this request "
+                        f"(last error: {last_error})"
                     ) from exc
                 continue
 
@@ -124,7 +151,8 @@ class Gateway:
     async def run_stream(self, ctx: ExecutionPolicyContext, messages: list[Message],
                          tokens_after: int, complexity: float, hint: dict,
                          tools: list[dict] | None = None,
-                         tool_choice: str | dict | None = None
+                         tool_choice: str | dict | None = None,
+                         params: dict | None = None
                          ) -> tuple[AsyncIterator[StreamChunk], list[DecisionRecord]]:
         """Real streaming counterpart of `run()` for the direct (single-shot)
         path. Performs the SAME residency-clamped router selection and emits the
@@ -140,7 +168,9 @@ class Gateway:
         arrives, so the iterator patches the record in place when it sees `final`.
         """
         with metrics.time_routing():
-            decision = self._router.select(ctx, tokens_after, complexity, None)
+            decision = self._router.select(
+                ctx, tokens_after, complexity, None,
+                output_tokens=expected_output_tokens(self._s, params))
         cand = decision.chosen
         price = (self._reg.price_for(cand.name) if self._reg
                  else self._s.pricing.models[cand.name])
@@ -159,7 +189,7 @@ class Gateway:
         async def _agen() -> AsyncIterator[StreamChunk]:
             async for chunk in self._backend.generate_stream(
                     cand.name, messages, price, cand.tier, hint,
-                    tools=tools, tool_choice=tool_choice):
+                    tools=tools, tool_choice=tool_choice, params=params):
                 if chunk.final is not None:
                     record.actual_cost_usd = chunk.final.cost_usd
                     record.latency_ms = chunk.final.latency_ms

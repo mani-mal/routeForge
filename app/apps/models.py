@@ -100,6 +100,10 @@ class AppPolicy(Base):
     allowed_models: Mapped[list | None] = mapped_column(JSON, nullable=True)
     residency: Mapped[str | None] = mapped_column(String(32), nullable=True)
     max_spend_usd_per_day: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Per-request cost cap (USD) for this app. null = inherit
+    # policy.yaml budgets.default_max_spend_usd. Agent clients send 25K-token
+    # turns, which a deployment-wide $0.05 cap rejects on any priced model.
+    max_cost_usd_per_request: Mapped[float | None] = mapped_column(Float, nullable=True)
     max_rpm: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Per-app Headroom (step 5) override. null = inherit the live global toggle
     # (app.state.co_cfg.enabled); True/False = force on/off for this app. Only

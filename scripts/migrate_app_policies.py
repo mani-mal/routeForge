@@ -44,6 +44,10 @@ COLUMNS: list[tuple[str, str, str]] = [
     # §4.2b — the narrow PII lever.
     ("pii_entity_denylist", "JSON", "JSON"),
     ("pii_score_threshold", "DOUBLE PRECISION", "FLOAT"),
+    ("policy_mode", "VARCHAR(16)", "VARCHAR(16)"),
+    ("pii_exempt_patterns", "JSON", "JSON"),
+    # 2026-09-15 onboarding conformance — per-app per-request cost cap.
+    ("max_cost_usd_per_request", "DOUBLE PRECISION", "FLOAT"),
 ]
 
 

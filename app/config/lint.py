@@ -63,6 +63,12 @@ def lint_settings(s: Settings) -> list[str]:
         if c.quality is not None and not (0.0 <= c.quality <= 1.0):
             errs.append(f"POOL_QUALITY_OUT_OF_RANGE {c.name}={c.quality}")
 
+    # The router prices every request's output at this when the client sends
+    # no max_tokens; a policy.yaml without it would KeyError (500) per request.
+    if "default_estimated_output_tokens" not in s.policy.budgets:
+        errs.append("BUDGET_KEY_MISSING budgets.default_estimated_output_tokens "
+                    "(policy.yaml)")
+
     scale = set(s.policy.sensitivity_scale)
     if s.policy.default_sensitivity not in scale:
         errs.append(f"DEFAULT_SENSITIVITY_UNKNOWN {s.policy.default_sensitivity}")

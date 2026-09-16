@@ -5,6 +5,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 RISK_CLASSES = ("low", "medium", "high")
 RESIDENCIES = ("any", "private_cloud_ok", "onprem_only")
 
+# OpenAI sampling/length knobs a client sets and expects the model to honour.
+# Structural keys (model, messages, stream, tools, n) are deliberately absent:
+# RouteForge owns those.
+FORWARDED_PARAMS = (
+    "max_tokens", "max_completion_tokens", "temperature", "top_p", "stop", "seed",
+    "presence_penalty", "frequency_penalty", "response_format", "parallel_tool_calls",
+)
+
 
 class Message(BaseModel):
     role: str
@@ -50,6 +58,22 @@ class ChatRequest(BaseModel):
     # a tools request to its internal NAT agent — see Pipeline.run).
     tools: list[dict] | None = None
     tool_choice: str | dict | None = None
+    # Output length caps. Declared (not left to extra="allow") because the
+    # router prices a request at this cap: a string/list would 500 there and a
+    # negative value would drive the cost estimate below the per-request cap.
+    # `ge=1` makes every bad value a clean request-validation 4xx.
+    max_tokens: int | None = Field(None, ge=1)
+    max_completion_tokens: int | None = Field(None, ge=1)
+
+    def generation_params(self) -> dict:
+        """The client's sampling/length parameters, to pass to the model."""
+        extra = self.model_extra or {}
+        out: dict = {}
+        for k in FORWARDED_PARAMS:
+            v = getattr(self, k) if k in type(self).model_fields else extra.get(k)
+            if v is not None:
+                out[k] = v
+        return out
 
 
 class Usage(BaseModel):

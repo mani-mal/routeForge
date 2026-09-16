@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import time
 from typing import AsyncIterator, Callable, TYPE_CHECKING
@@ -15,7 +16,7 @@ from app.models import (
     Message, Usage, VerificationRecord,
 )
 from app.output.verify import verify
-from app.policy.context import registry_permits
+from app.policy.context import pinned_model_reason, registry_permits
 from app.policy.detectors import Detector, make_detector
 from app.policy.effective import EffectiveDetector, FilteredDetector
 from app.policy.gate import Gate
@@ -411,7 +412,8 @@ class Pipeline:
             }
             if ctx.requested_model not in permitted:
                 raise PipelineRejected(
-                    f"requested model {ctx.requested_model!r} is not permitted or unavailable")
+                    f"requested model {ctx.requested_model!r} is not permitted or "
+                    f"unavailable: {pinned_model_reason(pool, ctx, self._reg, tenant_id, ctx.requested_model)}")
         mem_cfg = self._s.serving.memory
         # A client that supplies `tools` (or replays assistant/tool turns) is
         # driving its OWN agent loop: RouteForge serves a SINGLE completion that
@@ -527,7 +529,12 @@ class Pipeline:
             # No compression on a tool conversation: Headroom rewrites text and
             # would corrupt tool_call/tool_result structure. Build a bypassed
             # CompressionResult so the cost/trace accounting below is identical.
-            tb = sum(count_tokens(m.content) for m in san_messages)
+            # Tool schemas and replayed tool_call arguments are billed prompt
+            # tokens too; leaving them out under-priced every agent turn.
+            tb = (sum(count_tokens(m.content) for m in san_messages)
+                  + sum(count_tokens(json.dumps(m.tool_calls))
+                        for m in san_messages if m.tool_calls)
+                  + (count_tokens(json.dumps(tools)) if tools else 0))
             comp = CompressionResult(
                 san_messages, tb, tb,
                 CompressionRecord(
@@ -541,7 +548,7 @@ class Pipeline:
                 if hasattr(request, k)}
         result, records = await self._gateway.run(
             ctx, comp.messages, comp.tokens_after, complexity, hint,
-            tools=tools, tool_choice=tool_choice)
+            tools=tools, tool_choice=tool_choice, params=request.generation_params())
         if crec is not None:
             # Fold the classifier's own DecisionRecord into the SAME trace/
             # cost accumulation as the router's -- its cost must not be
@@ -766,7 +773,8 @@ class Pipeline:
         hint = {k: getattr(request, k) for k in ("mock_confidence", "mock_fail")
                 if hasattr(request, k)}
         stream, records = await self._gateway.run_stream(
-            ctx, comp.messages, comp.tokens_after, complexity, hint)
+            ctx, comp.messages, comp.tokens_after, complexity, hint,
+            params=request.generation_params())
         if crec is not None:
             # Same fold as run() -- the classifier's cost/reason reach the
             # SAME trace `_assemble_stream_meta` builds below.

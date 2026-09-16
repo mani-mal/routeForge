@@ -107,7 +107,7 @@ implementation cost without the mechanism:
 
 ### Tier 3 — reality check
 
-- [`../backlog/bugs.md`](../backlog/bugs.md) — current defects, including **B24 (open)**.
+- [`../backlog/bugs.md`](../backlog/bugs.md) — current defects (**B24** resolved 2026-09-15).
 - [`rlhf-readiness.md`](./rlhf-readiness.md), [`../archive/eval-logging-backlog.md`](../archive/eval-logging-backlog.md) — the capture substrate feeding Target A/B datasets.
 
 **Do not skip this tier.** IP §4 lists three correctness items that must land *regardless
