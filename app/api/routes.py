@@ -214,6 +214,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
     s = request.app.state.settings
     request_id = f"req-{uuid.uuid4().hex[:8]}"
     started = time.monotonic()
+    started_ns = time.time_ns()
     auth = await _authenticate(request)
     if auth is None:
         # Fail closed: no valid token -> reject. Never fall through to a
@@ -307,7 +308,8 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
                         request, request_id=request_id, deltas=deltas,
                         get_meta=get_meta, body=body, tenant=tenant,
                         app_policy=app_policy, app_langfuse=app_langfuse,
-                        profile=profile, session_id=session_id, s=s)
+                        profile=profile, session_id=session_id, s=s,
+                        started_ns=started_ns)
                 # incremental_verify (Task 7): stream real tokens, but pipe each
                 # delta through a hold-back StreamingVerifier so no un-redacted
                 # text is ever released. Build the verifier on the request's
@@ -317,7 +319,8 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
                     request, request_id=request_id, deltas=deltas,
                     get_meta=get_meta, body=body, tenant=tenant,
                     app_policy=app_policy, app_langfuse=app_langfuse,
-                    profile=profile, session_id=session_id, s=s)
+                    profile=profile, session_id=session_id, s=s,
+                    started_ns=started_ns)
         if stream_mode is not None:
             task = asyncio.create_task(request.app.state.pipeline.run(
                 request_id, tenant, body, app_policy=app_policy, profile=profile,
@@ -329,7 +332,8 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
                     request, task=task, keepalive_s=keepalive, request_id=request_id,
                     body=body, tenant=tenant, app_policy=app_policy,
                     app_langfuse=app_langfuse, profile=profile,
-                    session_id=session_id, s=s, started=started))
+                    session_id=session_id, s=s, started=started,
+                    started_ns=started_ns))
             resp = task.result()   # raises -> the except clauses below map it
         else:
             task = asyncio.create_task(request.app.state.pipeline.run(
@@ -352,7 +356,8 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
         raise HTTPException(mapped[0], mapped[1])
     await _finalize(request, resp, body=body, tenant=tenant, app_policy=app_policy,
                     app_langfuse=app_langfuse, profile=profile,
-                    session_id=session_id, s=s, request_id=request_id)
+                    session_id=session_id, s=s, request_id=request_id,
+                    started_ns=started_ns)
     if stream_mode is None:
         return resp
     # verified_then_stream: the pipeline already ran the FULL request above
@@ -404,7 +409,8 @@ def _full_capture_io(body: ChatRequest, resp: dict, prompt: str, completion: str
 async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
                     tenant: str, app_policy: AppPolicyView,
                     app_langfuse: object | None, profile: AppPrivacyProfile,
-                    session_id: str | None, s, request_id: str) -> None:
+                    session_id: str | None, s, request_id: str,
+                    started_ns: int | None = None) -> None:
     """Post-model-call processing shared by every response shape (non-stream
     and every streaming mode): telemetry export, the first-party console
     snapshot, the durable per-app usage row, and the live decision-stream
@@ -499,7 +505,8 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
             recognizers=profile.recognizers,
             session_id=session_id,
             routing_policy_version=s.routing_policy_version,
-            prompt_version=s.prompt_version)
+            prompt_version=s.prompt_version,
+            started_ns=started_ns, usage=resp.get("usage"))
         # Live deep-link for the UI's "Langfuse trace" button, and the raw hex
         # trace id for an external eval/RLHF consumer (F1 Phase D task 2).
         # Both None when telemetry is off → the UI hides the link. Set before
@@ -613,7 +620,8 @@ async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
                             keepalive_s: float, request_id: str, body: ChatRequest,
                             tenant: str, app_policy: AppPolicyView,
                             app_langfuse: object | None, profile: AppPrivacyProfile,
-                            session_id: str | None, s, started: float) -> AsyncIterator[str]:
+                            session_id: str | None, s, started: float,
+                            started_ns: int | None = None) -> AsyncIterator[str]:
     """SSE for a streamed request whose complete, verified answer is not ready
     within one keepalive interval. Sends a keepalive comment each interval until
     the pipeline task finishes, then the same frames `verified_then_stream`
@@ -677,7 +685,8 @@ async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
             return
         await _finalize(request, resp, body=body, tenant=tenant, app_policy=app_policy,
                         app_langfuse=app_langfuse, profile=profile,
-                        session_id=session_id, s=s, request_id=request_id)
+                        session_id=session_id, s=s, request_id=request_id,
+                        started_ns=started_ns)
         message = resp["choices"][0]["message"]
         async for frame in chunk_text(request_id, resp["model"], message["content"] or "",
                                       tool_calls=message.get("tool_calls")):
@@ -708,7 +717,8 @@ def _stream_unverified_response(
         deltas: AsyncIterator[str], get_meta: Callable[[], dict],
         body: ChatRequest, tenant: str, app_policy: AppPolicyView,
         app_langfuse: object | None, profile: AppPrivacyProfile,
-        session_id: str | None, s) -> StreamingResponse:
+        session_id: str | None, s,
+        started_ns: int | None = None) -> StreamingResponse:
     """Live token-forwarding SSE for `stream_unverified` (real backend
     streaming). Emits an OpenAI-style role frame, forwards each `deltas` token
     as a `content` frame, then (after the stream drains) a `finish_reason`
@@ -742,7 +752,8 @@ def _stream_unverified_response(
                 request, request_id=request_id, deltas=deltas,
                 get_meta=get_meta, meta=meta, body=body, tenant=tenant,
                 app_policy=app_policy, app_langfuse=app_langfuse,
-                profile=profile, session_id=session_id, s=s)
+                profile=profile, session_id=session_id, s=s,
+                started_ns=started_ns)
 
     return sse_response(_gen())
 
@@ -752,7 +763,8 @@ def _incremental_verify_response(
         deltas: AsyncIterator[str], get_meta: Callable[[], dict],
         body: ChatRequest, tenant: str, app_policy: AppPolicyView,
         app_langfuse: object | None, profile: AppPrivacyProfile,
-        session_id: str | None, s) -> StreamingResponse:
+        session_id: str | None, s,
+        started_ns: int | None = None) -> StreamingResponse:
     """Live token streaming for `incremental_verify` (Task 7). Real backend
     deltas are piped through a hold-back `StreamingVerifier` before egress, so
     an entity split across chunk boundaries never leaks its raw prefix; the
@@ -801,7 +813,8 @@ def _incremental_verify_response(
                 app_policy=app_policy, app_langfuse=app_langfuse,
                 profile=profile, session_id=session_id, s=s,
                 verify_performed=True, verify_reason="incremental",
-                client_text="".join(released))
+                client_text="".join(released),
+                started_ns=started_ns)
 
     return sse_response(_gen())
 
@@ -814,7 +827,8 @@ async def _finalize_stream(
         session_id: str | None, s,
         verify_performed: bool = False,
         verify_reason: str = "waived: stream_unverified",
-        client_text: str | None = None) -> None:
+        client_text: str | None = None,
+        started_ns: int | None = None) -> None:
     """Assemble the `resp` dict from the pipeline's final streaming metadata and
     run the shared `_finalize`. Guarded end to end: a failure here must never
     surface to the (already-streaming) client. Shared by both real-streaming
@@ -866,7 +880,7 @@ async def _finalize_stream(
         await _finalize(request, resp, body=body, tenant=tenant,
                         app_policy=app_policy, app_langfuse=app_langfuse,
                         profile=profile, session_id=session_id, s=s,
-                        request_id=request_id)
+                        request_id=request_id, started_ns=started_ns)
     except Exception:  # finalize must never break the (already sent) stream
         log.exception("streaming finalize failed (swallowed)")
 

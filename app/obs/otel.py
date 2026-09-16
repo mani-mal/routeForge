@@ -164,6 +164,9 @@ class _NoOpSpan:
     def set_attribute(self, *a, **k):
         pass
 
+    def end(self, *a, **k):
+        pass
+
     def __enter__(self):
         return self
 
