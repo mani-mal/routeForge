@@ -87,6 +87,27 @@ the audit trail in that sweep's task report.
 
 ---
 
+## B36 — A conversation that outgrew the model's context window was reported as `502`  ✅ RESOLVED (2026-09-16)
+
+**Observed (DGX Spark, agent client).** A long coding-agent session grew to
+~252K prompt tokens against a vLLM model served with `--max-model-len 262144`.
+From then on every turn got an upstream `400` ("This model's maximum context
+length is 262144 tokens …"), which the gateway treated like any backend failure
+and returned as `502 no backend could serve this request`. The client read it as
+an outage and retried the identical oversized request; the useful part of the
+upstream message (the input-token count) was also cut off by the 200-char
+error truncation.
+
+**Fix.** The LiteLLM backend translates `litellm.ContextWindowExceededError`
+into backend-neutral `app.errors.ContextWindowExceeded`. The gateway still fails
+over (a peer with a larger window may serve it); only when **every** tried
+candidate refused for that reason does it raise `ContextWindowExceeded`, which
+the route maps to `400 request exceeds the model's context window: … -- shorten
+the conversation … or lower max_tokens`, with the upstream reason kept whole
+(scrubbed + redacted). Any other failure in the mix stays `502`. The SSE error
+frame on keepalive streams carries `code: 400`. Regression guard:
+`tests/test_context_window_overflow.py`.
+
 ## B35 — Agent tool turns retried every 120 s; abandoned work metered as served; traces unusable  ✅ RESOLVED (2026-09-16)
 
 **Found by** a data audit of a live agent-client app. 88 of 433 requests were

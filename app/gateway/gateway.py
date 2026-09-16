@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from typing import AsyncIterator
 
 from app.config.schema import Settings
-from app.errors import BackendUnavailable, NoEligibleCandidate
+from app.errors import BackendUnavailable, ContextWindowExceeded, NoEligibleCandidate
 from app.gateway.backends.base import InferenceBackend, StreamChunk
 from app.models import DecisionRecord, ExecutionPolicyContext, GenerationResult, Message
 from app.obs import metrics
@@ -38,6 +38,20 @@ def _format_upstream_error(model: str, exc: Exception) -> str:
     like any other, not just an internal-topology one."""
     return (f"{model}: {type(exc).__name__}: "
             f"{redact_value(_scrub_endpoints(str(exc)))[:200]}")
+
+
+def _exhausted(last_error: str, overflow_errors: list[str], failures: int) -> Exception:
+    """The error for a request every reachable candidate failed. When EVERY
+    failure was a context-window refusal, the request itself is too large --
+    the client's error, so it surfaces as `ContextWindowExceeded` (400) with
+    the upstream reason kept whole (its token counts are the actionable part,
+    so it is not cut to the 200-char log form). Any other failure in the mix
+    keeps it an outage (502)."""
+    if overflow_errors and len(overflow_errors) == failures:
+        return ContextWindowExceeded(overflow_errors[-1])
+    return BackendUnavailable(
+        "backend failed on all reachable candidates for this request "
+        f"(last error: {last_error})")
 
 
 log = logging.getLogger("serving.gateway")
@@ -87,6 +101,7 @@ class Gateway:
         # removes candidates (see Router.select).
         failed_models: set[str] = set()
         last_error = ""
+        overflow_errors: list[str] = []
         failover_attempts = 0
         result: GenerationResult | None = None
         out_tokens = expected_output_tokens(self._s, params)
@@ -111,9 +126,7 @@ class Gateway:
                 # Every reachable candidate has now been excluded by prior
                 # failures -> exhausted, not a genuine no-candidate reject.
                 if failed_models:
-                    raise BackendUnavailable(
-                        "backend failed on all reachable candidates for this request "
-                        f"(last error: {last_error})")
+                    raise _exhausted(last_error, overflow_errors, failover_attempts) from exc
                 raise
             cand = decision.chosen
             price = (self._reg.price_for(cand.name) if self._reg
@@ -124,6 +137,9 @@ class Gateway:
                     tools=tools, tool_choice=tool_choice, params=params)
             except Exception as exc:
                 last_error = _format_upstream_error(cand.name, exc)
+                if isinstance(exc, ContextWindowExceeded):
+                    overflow_errors.append(
+                        redact_value(_scrub_endpoints(str(exc)))[:1000])
                 log.warning("backend call failed request=%s model=%s attempt=%d: %s",
                             ctx.request_id, cand.name, failover_attempts + 1, last_error)
                 records.append(DecisionRecord(
@@ -134,10 +150,8 @@ class Gateway:
                 failed_models.add(cand.name)
                 failover_attempts += 1
                 if failover_attempts > max_failover:
-                    raise BackendUnavailable(
-                        "backend failed on all reachable candidates for this request "
-                        f"(last error: {last_error})"
-                    ) from exc
+                    raise _exhausted(
+                        last_error, overflow_errors, failover_attempts) from exc
                 continue
 
             records.append(DecisionRecord(

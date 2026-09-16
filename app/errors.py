@@ -21,3 +21,12 @@ class BackendUnavailable(RuntimeError):
     """Every reachable tier's backend failed (timeout/connection/provider
     unreachable). Route maps -> 502. Subclasses RuntimeError for back-compat
     with existing pytest.raises(RuntimeError) gateway callers."""
+
+
+class ContextWindowExceeded(ValueError):
+    """The request (prompt + requested output tokens) is larger than the model's
+    context window, so the upstream refused it as a bad request. This is the
+    client's error, not an outage: route maps -> 400 with the upstream reason,
+    so the client compacts its history instead of retrying a 502. The gateway
+    only surfaces it when EVERY model it tried refused for this reason; any
+    other failure in the mix keeps the request a 502 (BackendUnavailable)."""
