@@ -232,6 +232,51 @@ the fully-verified path regardless of `stream_mode`. (The dashboard's live
 decision stream is a *separate*, admin-only channel — see
 [Decision stream](#the-decision-stream-admin-only).)
 
+### Keepalive comments for long-running requests
+
+When a request waits for a complete, verified answer — such as a tool turn, `verified_then_stream` streaming, or a request floored to the fully-verified path — RouteForge sends SSE keepalive comment lines every `server.stream_keepalive_s` seconds (default 5) once the answer takes longer than one interval. The format is `: keepalive` on a line by itself. OpenAI-compatible clients ignore comment lines, so keepalive frames do not affect request/response semantics. They are transparent to tool calling and standard streaming clients.
+
+**Why keepalives matter:** Some OpenAI-SDK-based agent clients apply a separate request timeout (often 120 s) to connect and first response bytes. Without keepalives, a request that produces its first byte after 120 s abandons the backend work and retries, leading to overlapped computation and multiple identical usage rows. Keepalives are a few bytes each and hold the connection open.
+
+### Late failures as SSE error frames
+
+If an error occurs after the SSE stream has opened (status 200 is on the wire), the error is conveyed as an SSE frame:
+
+```
+data: {"error": {"message": "<detail>", "type": "routeforge_error", "code": <http-status>}}
+data: [DONE]
+```
+
+The message text is identical to what the HTTP error response would contain. Clients that parse SSE will raise an `APIError` on the error frame.
+
+**Fast responses and rejections** — errors that occur before streaming starts (validation, policy gate, no-eligible-model checks) — still return their normal HTTP status code and do not use SSE frames.
+
+### Client disconnect handling
+
+When a client disconnects while waiting for a complete answer, the backend work is cancelled and the usage row is recorded with `status: cancelled`.
+
+For non-streamed requests (`stream: false`), a disconnected client receives:
+
+```
+499  (empty body)
+```
+
+The `499 Client Closed Request` status indicates the request was abandoned by the client, not a server error.
+
+**Streamed requests** that use real backend streaming (`stream_unverified`, `incremental_verify`) drain the backend to keep cost and token accounting accurate, even if the client has disconnected.
+
+### Sessions and tracing
+
+Without an `x-routeforge-session` header, the session id is derived from a hash of:
+
+- The application id
+- The first system message (if any)
+- The first user message
+
+The derived id is formatted as `auto-` followed by 24 hex characters: a keyed HMAC-SHA256 (no content stored), not a raw unkeyed hash — an unkeyed hash over raw pre-gate text would let a telemetry viewer who sees the redacted prompt brute-force a low-entropy redacted value (e.g. an SSN) against the exported id. The HMAC key is `SP_SESSION_ID_KEY` when set (any non-empty string); otherwise a random 32-byte key generated once per process, which means derived ids reset on restart and differ across replicas unless `SP_SESSION_ID_KEY` is set to the same value on every replica. Derivation itself is controlled by `server.derive_session_id` (default `true`) and can be disabled by setting it to `false`.
+
+The session id is used for **trace and console grouping only**. Persistent memory (agent long-term context) is partitioned by the client-supplied `x-routeforge-session` header only; a derived session id does not change memory partitioning or affect memory semantics. An agent conversation with no header still groups into one session in Langfuse and the console as its history grows, without touching the memory partition it reads and writes.
+
 ---
 
 ## Errors

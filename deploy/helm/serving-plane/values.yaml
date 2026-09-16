@@ -153,10 +153,19 @@ vllmStub:
 
 # Extra raw env vars on the api container (e.g. HF_HUB_OFFLINE=1 or
 # HEADROOM_TLS_STRICT=0 for air-gapped/MITM-proxied GreenLake installs — see
-# values-greenlake.yaml and the greenlake-deploy skill).
+# values-greenlake.yaml and the greenlake-deploy skill). Also where to set
+# SP_SESSION_ID_KEY (HMAC key for derived session ids, server.derive_session_id):
+# optional, no default -- set the SAME value here on every replica (replicaCount.api
+# > 1) via a Secret-backed env (valueFrom.secretKeyRef), not a plaintext value here,
+# so derived session ids stay stable across replicas/restarts.
 extraEnv: []
 # - name: HF_HUB_OFFLINE
 #   value: "1"
+# - name: SP_SESSION_ID_KEY
+#   valueFrom:
+#     secretKeyRef:
+#       name: routeforge-session-id-key
+#       key: SP_SESSION_ID_KEY
 
 resources:
   api:

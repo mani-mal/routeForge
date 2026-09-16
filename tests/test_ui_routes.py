@@ -121,8 +121,19 @@ def test_session_id_captured_and_exposed(client):
     assert detail.json()["session_id"] == "inv-tck-1001-ab12cd34"
 
 
+def _no_derived_session(client):
+    # These two tests are about HEADER PARSING (absent / malformed), not about
+    # session derivation -- that behavior has its own coverage in
+    # tests/test_derived_session_id.py. Switch derivation off so a missing or
+    # bad header still resolves to no session here, as it always did.
+    s = client.app.state.settings
+    client.app.state.settings = s.model_copy(update={
+        "serving": s.serving.model_copy(update={"derive_session_id": False})})
+
+
 def test_missing_session_header_yields_null(client):
     _login(client)
+    _no_derived_session(client)
     r = client.post(
         "/v1/chat/completions",
         headers={"Authorization": "Bearer demo-key"},
@@ -136,6 +147,7 @@ def test_missing_session_header_yields_null(client):
 
 def test_malformed_session_header_dropped_not_rejected(client):
     _login(client)
+    _no_derived_session(client)
     r = client.post(
         "/v1/chat/completions",
         headers={"Authorization": "Bearer demo-key",

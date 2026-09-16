@@ -1,10 +1,16 @@
+import asyncio
+import hashlib
+import hmac
 import json
 import logging
+import os
 import re
+import secrets
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable
 
+import anyio
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -12,7 +18,8 @@ from pydantic import BaseModel
 from app.agent.runtime import AgentCapExceeded
 from app.api.history import summarize
 from app.api.streaming import (
-    SSE_DONE, chunk_text, openai_chunk, sse_frame, sse_response,
+    SSE_DONE, SSE_KEEPALIVE, chunk_text, openai_chunk, sse_error_frame, sse_frame,
+    sse_response,
 )
 from app.apps import store
 from app.apps.langfuse_provision import load_app_langfuse
@@ -60,6 +67,65 @@ def _sanitize_session_id(raw: str | None) -> str | None:
 
 def _read_session_id(request: Request) -> str | None:
     return _sanitize_session_id(request.headers.get("x-routeforge-session"))
+
+
+_session_id_key_cache: bytes | None = None
+_session_id_key_logged = False
+
+
+def _reset_session_id_key_cache() -> None:
+    """Test-only: clear the cached process-random key (and the "logged
+    already" flag) so tests can exercise both the SP_SESSION_ID_KEY and the
+    random-key path cleanly, and re-resolve SP_SESSION_ID_KEY after changing
+    it via monkeypatch."""
+    global _session_id_key_cache, _session_id_key_logged
+    _session_id_key_cache = None
+    _session_id_key_logged = False
+
+
+def _session_id_key() -> bytes:
+    """The HMAC key `_derive_session_id` signs with. `SP_SESSION_ID_KEY` (any
+    non-empty string, UTF-8 encoded) when set -- the same value on every
+    replica keeps derived ids stable across the deployment and across
+    restarts. Otherwise a random 32-byte key generated once per process: ids
+    stay stable for the life of this process but reset on restart and differ
+    across replicas, which the one-time INFO log below calls out. The key
+    itself is never logged."""
+    global _session_id_key_cache, _session_id_key_logged
+    env = os.environ.get("SP_SESSION_ID_KEY", "")
+    if env:
+        return env.encode()
+    if _session_id_key_cache is None:
+        _session_id_key_cache = secrets.token_bytes(32)
+    if not _session_id_key_logged:
+        logging.getLogger("serving.api").info(
+            "SP_SESSION_ID_KEY is not set: derived session ids (auto-...) are "
+            "signed with a random per-process key. They reset on restart and "
+            "differ across replicas. Set SP_SESSION_ID_KEY to the same value "
+            "on every replica for stable session grouping across restarts.")
+        _session_id_key_logged = True
+    return _session_id_key_cache
+
+
+def _derive_session_id(body: ChatRequest, tenant: str) -> str | None:
+    """A stable session id for a conversation whose client sent none: a keyed
+    HMAC-SHA256 of the app id plus the conversation's opening turns (first
+    system message, first user message). Later turns append history but keep
+    those opening turns, so every request in one conversation shares the id.
+
+    Keyed (not a raw unkeyed hash), per SP_SESSION_ID_KEY / `_session_id_key`
+    above: this id is exported to Langfuse as `langfuse.session.id`, and an
+    unkeyed hash over raw pre-gate text would let a telemetry viewer who sees
+    the redacted prompt brute-force a low-entropy redacted value (e.g. an
+    SSN) against it."""
+    first_user = next((m.content for m in body.messages
+                       if m.role == "user" and m.content), None)
+    if not first_user:
+        return None
+    system = next((m.content or "" for m in body.messages if m.role == "system"), "")
+    msg = f"{tenant}\x00{system}\x00{first_user}".encode()
+    digest = hmac.new(_session_id_key(), msg, hashlib.sha256).hexdigest()[:24]
+    return f"auto-{digest}"
 
 
 async def _authenticate(request: Request
@@ -136,10 +202,98 @@ def _resolve_stream_mode(body: ChatRequest, app_policy: AppPolicyView, s) -> str
     return None if mode in (None, STREAM_MODES[0]) else mode
 
 
+def _error_status_detail(exc: BaseException) -> tuple[int, str] | None:
+    """The (status, detail) the HTTP path returns for a serving exception. One
+    mapping, used by the plain HTTP path and by the keepalive stream's error
+    frame, so the two can never drift."""
+    if isinstance(exc, PipelineRejected):
+        message = str(exc)
+        prefix = ("model request rejected: " if message.startswith("requested model")
+                  else "response failed verification: ")
+        return 422, f"{prefix}{message}"
+    if isinstance(exc, NoEligibleCandidate):
+        return 422, f"no model is available for this request's policy: {exc}"
+    if isinstance(exc, AgentCapExceeded):
+        return 500, "agent did not converge within its step limit"
+    if isinstance(exc, BackendUnavailable):
+        return 502, f"no backend could serve this request: {exc}"
+    if isinstance(exc, PolicyGateError):
+        return 503, "policy evaluation unavailable"
+    return None
+
+
+class ClientDisconnected(Exception):
+    """The client went away before a complete answer was ready."""
+
+
+async def _wait_or_cancel_on_shutdown(task: "asyncio.Task", timeout: float):
+    """`asyncio.wait` for `task`, but if THIS coroutine itself is cancelled
+    before the wait completes (e.g. the request handler is torn down on
+    server shutdown, not a client disconnect), cancel `task` too instead of
+    re-raising and leaving it orphaned -- still running, unawaited, with no
+    caller left to record or await its outcome. Re-raises either way; the
+    caller's own cleanup (or lack of one, on shutdown) is unaffected."""
+    try:
+        return await asyncio.wait({task}, timeout=timeout)
+    except asyncio.CancelledError:
+        if not task.done():
+            task.cancel()
+        raise
+
+
+async def _await_unless_disconnected(task: "asyncio.Task", is_disconnected,
+                                     poll_s: float):
+    """Await `task`, polling the client connection every `poll_s`. A client that
+    disconnected gets its backend work cancelled; cancelling the task closes the
+    in-flight model call, which OpenAI-compatible servers treat as an abort.
+    Only for paths that wait for a complete answer; real token streaming keeps
+    its drain-on-disconnect accounting."""
+    while True:
+        done, _ = await _wait_or_cancel_on_shutdown(task, poll_s)
+        if done:
+            return task.result()
+        if await is_disconnected():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                # Swallow whatever `task` raises here -- its own cancellation,
+                # or a real pipeline exception that happened to land while we
+                # were awaiting `is_disconnected()`. Either way the client is
+                # already gone, so no status is ever read for this request.
+                pass
+            raise ClientDisconnected()
+
+
+async def _record_cancelled(request: Request, *, tenant: str, request_id: str,
+                            started: float) -> None:
+    """Meter a request the client abandoned. Distinct from `ok` so dashboards
+    and budgets don't count work nobody received as served."""
+    metrics.observe_request("-", "cancelled")
+    logging.getLogger("serving.api").info(
+        "client disconnected; cancelled %s after %.1fs", request_id,
+        time.monotonic() - started)
+    try:
+        async with request.app.state.db.session() as session:
+            await store.record_usage(
+                session, application_id=tenant, request_id=request_id,
+                model="-", provider="-", tier="-", prompt_tokens=0,
+                completion_tokens=0, total_tokens=0, cost_usd=0.0,
+                baseline_usd=0.0,
+                latency_ms=(time.monotonic() - started) * 1000,
+                sensitivity="-", onprem_only=False, status="cancelled")
+            await session.commit()
+    except Exception:
+        logging.getLogger("serving.obs").exception(
+            "cancelled-usage record failed (swallowed)")
+
+
 @router.post("/v1/chat/completions", response_model=None)
 async def chat_completions(body: ChatRequest, request: Request) -> dict | StreamingResponse:
     s = request.app.state.settings
     request_id = f"req-{uuid.uuid4().hex[:8]}"
+    started = time.monotonic()
+    started_ns = time.time_ns()
     auth = await _authenticate(request)
     if auth is None:
         # Fail closed: no valid token -> reject. Never fall through to a
@@ -184,8 +338,20 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
 
     # Read the opaque workflow-correlation id once, up front: the streaming
     # branch below returns before the old (post-pipeline) read site, and every
-    # response shape's _finalize needs it.
-    session_id = _read_session_id(request)
+    # response shape's _finalize needs it. `client_session_id` is the raw
+    # client-supplied header value ONLY -- it is the memory PARTITION key
+    # (threaded into every `pipeline.run`/`run_stream` call below), so memory
+    # semantics must never change based on derivation. `session_id` may be
+    # server-derived from the app id + opening turns when the client sent none
+    # (unless the operator has switched that off): it is for TRACE/CONSOLE
+    # grouping only (_finalize/_finalize_stream/_keepalive_stream/
+    # _stream_unverified_response/_incremental_verify_response), so an agent
+    # conversation with no header still groups into one session there as its
+    # history grows -- without touching what memory partition it reads/writes.
+    client_session_id = _read_session_id(request)
+    session_id = client_session_id
+    if session_id is None and s.serving.derive_session_id:
+        session_id = _derive_session_id(body, tenant)
 
     try:
         # Per-app privacy profile (custom recognizers + sensitivity rules,
@@ -224,7 +390,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
             try:
                 deltas, get_meta = await request.app.state.pipeline.run_stream(
                     request_id, tenant, body, app_policy=app_policy, profile=profile,
-                    session_id=session_id)
+                    session_id=client_session_id)
             except StreamFallback:
                 pass  # fall through: run the FULL verified pipeline, then chunk it
             else:
@@ -233,7 +399,8 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
                         request, request_id=request_id, deltas=deltas,
                         get_meta=get_meta, body=body, tenant=tenant,
                         app_policy=app_policy, app_langfuse=app_langfuse,
-                        profile=profile, session_id=session_id, s=s)
+                        profile=profile, session_id=session_id, s=s,
+                        started_ns=started_ns)
                 # incremental_verify (Task 7): stream real tokens, but pipe each
                 # delta through a hold-back StreamingVerifier so no un-redacted
                 # text is ever released. Build the verifier on the request's
@@ -243,37 +410,50 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
                     request, request_id=request_id, deltas=deltas,
                     get_meta=get_meta, body=body, tenant=tenant,
                     app_policy=app_policy, app_langfuse=app_langfuse,
-                    profile=profile, session_id=session_id, s=s)
-        resp = await request.app.state.pipeline.run(
-            request_id, tenant, body, app_policy=app_policy, profile=profile,
-            session_id=session_id)
-    except PipelineRejected as e:
-        metrics.observe_request("-", "rejected")
-        message = str(e)
-        prefix = ("model request rejected: "
-                  if message.startswith("requested model")
-                  else "response failed verification: ")
-        raise HTTPException(422, f"{prefix}{message}")
-    except NoEligibleCandidate as e:
-        metrics.observe_request("-", "rejected")
-        raise HTTPException(422, f"no model is available for this request's policy: {e}")
-    except AgentCapExceeded:
-        metrics.observe_request("-", "rejected")
-        raise HTTPException(500, "agent did not converge within its step limit")
-    except BackendUnavailable as e:
-        metrics.observe_request("-", "rejected")
-        raise HTTPException(502, f"no backend could serve this request: {e}")
-    except PolicyGateError:
-        metrics.observe_request("-", "rejected")
-        raise HTTPException(503, "policy evaluation unavailable")
+                    profile=profile, session_id=session_id, s=s,
+                    started_ns=started_ns)
+        if stream_mode is not None:
+            task = asyncio.create_task(request.app.state.pipeline.run(
+                request_id, tenant, body, app_policy=app_policy, profile=profile,
+                session_id=client_session_id))
+            keepalive = s.serving.stream_keepalive_s
+            done, _ = await _wait_or_cancel_on_shutdown(task, keepalive)
+            if not done:
+                return sse_response(_keepalive_stream(
+                    request, task=task, keepalive_s=keepalive, request_id=request_id,
+                    body=body, tenant=tenant, app_policy=app_policy,
+                    app_langfuse=app_langfuse, profile=profile,
+                    session_id=session_id, s=s, started=started,
+                    started_ns=started_ns))
+            resp = task.result()   # raises -> the except clauses below map it
+        else:
+            task = asyncio.create_task(request.app.state.pipeline.run(
+                request_id, tenant, body, app_policy=app_policy, profile=profile,
+                session_id=client_session_id))
+            resp = await _await_unless_disconnected(
+                task, request.is_disconnected, s.serving.stream_keepalive_s)
     except HTTPException:
         raise
-    except Exception:
-        metrics.observe_request("-", "error")
-        raise HTTPException(500, "internal error")
+    except ClientDisconnected:
+        await _record_cancelled(request, tenant=tenant, request_id=request_id,
+                                started=started)
+        return Response(status_code=499)
+    except Exception as e:
+        mapped = _error_status_detail(e)
+        if mapped is None:
+            logging.getLogger("serving.api").exception(
+                "unhandled error for %s", request_id)
+            metrics.observe_request("-", "error")
+            raise HTTPException(500, "internal error")
+        if mapped[0] >= 500:
+            logging.getLogger("serving.api").warning(
+                "request %s failed with %d: %s", request_id, mapped[0], mapped[1])
+        metrics.observe_request("-", "rejected")
+        raise HTTPException(mapped[0], mapped[1])
     await _finalize(request, resp, body=body, tenant=tenant, app_policy=app_policy,
                     app_langfuse=app_langfuse, profile=profile,
-                    session_id=session_id, s=s, request_id=request_id)
+                    session_id=session_id, s=s, request_id=request_id,
+                    started_ns=started_ns)
     if stream_mode is None:
         return resp
     # verified_then_stream: the pipeline already ran the FULL request above
@@ -325,7 +505,8 @@ def _full_capture_io(body: ChatRequest, resp: dict, prompt: str, completion: str
 async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
                     tenant: str, app_policy: AppPolicyView,
                     app_langfuse: object | None, profile: AppPrivacyProfile,
-                    session_id: str | None, s, request_id: str) -> None:
+                    session_id: str | None, s, request_id: str,
+                    started_ns: int | None = None) -> None:
     """Post-model-call processing shared by every response shape (non-stream
     and every streaming mode): telemetry export, the first-party console
     snapshot, the durable per-app usage row, and the live decision-stream
@@ -420,7 +601,8 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
             recognizers=profile.recognizers,
             session_id=session_id,
             routing_policy_version=s.routing_policy_version,
-            prompt_version=s.prompt_version)
+            prompt_version=s.prompt_version,
+            started_ns=started_ns, usage=resp.get("usage"))
         # Live deep-link for the UI's "Langfuse trace" button, and the raw hex
         # trace id for an external eval/RLHF consumer (F1 Phase D task 2).
         # Both None when telemetry is off → the UI hides the link. Set before
@@ -530,12 +712,136 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
             "bus.publish failed (swallowed)")
 
 
+async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
+                            keepalive_s: float, request_id: str, body: ChatRequest,
+                            tenant: str, app_policy: AppPolicyView,
+                            app_langfuse: object | None, profile: AppPrivacyProfile,
+                            session_id: str | None, s, started: float,
+                            started_ns: int | None = None) -> AsyncIterator[str]:
+    """SSE for a streamed request whose complete, verified answer is not ready
+    within one keepalive interval. Sends a keepalive comment each interval until
+    the pipeline task finishes, then the same frames `verified_then_stream`
+    sends. A failure after the headers are out cannot change the HTTP status,
+    so it goes out as one error frame (same status and detail as the HTTP path)
+    followed by [DONE].
+
+    Primary disconnect detection is an explicit `request.is_disconnected()`
+    poll once per keepalive interval (the same pattern
+    `_await_unless_disconnected` uses for the non-stream path): relying only
+    on Starlette to cancel this generator is not safe across ASGI server
+    versions. Starlette cancels a streaming response via a concurrent
+    disconnect-listener task on ASGI spec_version < 2.4, or by letting
+    `send()` raise OSError on spec_version >= 2.4. uvicorn 0.51.0 advertises
+    2.3 today, so the listener path runs -- but uvicorn's h11 `send()`
+    silently returns instead of raising once the connection is already
+    closed (h11_impl.py:464), so a future uvicorn that advertises >= 2.4
+    would leave this generator with no cancellation signal at all: it would
+    stream into the void until the task finished and get recorded `ok`.
+    Polling `is_disconnected()` directly doesn't depend on any of that.
+
+    Wrapped in try/finally as a second line of defence (e.g. if Starlette's
+    own cancellation lands first): the `finally` retrieves the task's outcome
+    on every exit path -- normal completion, an error frame, or a disconnect
+    -- so a still-running task is always cancelled and awaited (never leaving
+    a dangling "Task exception was never retrieved" task), and a disconnect
+    that happened before the answer was delivered is metered as `cancelled`,
+    never `ok`. `cancelled_recorded` keeps the two paths from double-recording
+    the same disconnect."""
+    cancelled_recorded = False
+    try:
+        yield SSE_KEEPALIVE  # one immediately: the route already waited one
+                             # full interval before opening this stream, so
+                             # waiting a second interval here would delay the
+                             # first byte to ~2x keepalive_s
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=keepalive_s)
+            if done:
+                break
+            if await request.is_disconnected():
+                task.cancel()
+                # Shielded: on a real ASGI disconnect Starlette's own
+                # disconnect-listener cancel scope keeps re-cancelling this
+                # generator (see the `finally` below), so an unshielded await
+                # here would raise CancelledError before `_record_cancelled`
+                # ever ran. Only retrieving the just-cancelled task and
+                # writing the cancelled row are shielded -- no long backend
+                # wait happens here.
+                with anyio.CancelScope(shield=True):
+                    await asyncio.gather(task, return_exceptions=True)
+                    await _record_cancelled(request, tenant=tenant, request_id=request_id,
+                                            started=started)
+                cancelled_recorded = True
+                return  # client is gone -- no keepalive/answer/error frame follows
+            yield SSE_KEEPALIVE
+        try:
+            resp = task.result()
+        except Exception as e:
+            mapped = _error_status_detail(e)
+            if mapped is None:
+                logging.getLogger("serving.api").exception(
+                    "unhandled error for %s after stream opened", request_id)
+                metrics.observe_request("-", "error")
+                mapped = (500, "internal error")
+            else:
+                if mapped[0] >= 500:
+                    logging.getLogger("serving.api").warning(
+                        "request %s failed with %d: %s", request_id, mapped[0], mapped[1])
+                metrics.observe_request("-", "rejected")
+            yield sse_error_frame(*mapped)
+            yield SSE_DONE
+            return
+        # Shielded (ledger T2, deferred minor): `_finalize` writes the `ok`
+        # usage row and snapshot. A disconnect landing mid-`_finalize` would
+        # otherwise deliver Starlette's re-cancelling cancel scope into one of
+        # its awaited DB writes -- caught by `except Exception` there for a
+        # normal error, but CancelledError is a BaseException and would skip
+        # right past it, silently losing the row.
+        with anyio.CancelScope(shield=True):
+            await _finalize(request, resp, body=body, tenant=tenant, app_policy=app_policy,
+                            app_langfuse=app_langfuse, profile=profile,
+                            session_id=session_id, s=s, request_id=request_id,
+                            started_ns=started_ns)
+        message = resp["choices"][0]["message"]
+        async for frame in chunk_text(request_id, resp["model"], message["content"] or "",
+                                      tool_calls=message.get("tool_calls")):
+            yield frame
+    finally:
+        # Snapshot before cancel: task.cancel() doesn't flip done() right
+        # away, so this is the one true read of "did the backend finish
+        # before the client left". Not done -> the client left while the
+        # pipeline was still working: cancel it and meter `cancelled`. Done
+        # (success, error frame already sent, or a disconnect mid-answer-send
+        # after `_finalize` already recorded `ok`) -> nothing to cancel and
+        # nothing to re-meter.
+        was_done = task.done()
+        if not was_done:
+            task.cancel()
+        # Shielded: on a real ASGI disconnect (uvicorn ASGI spec 2.3 +
+        # Starlette 1.3.1), `StreamingResponse` runs `listen_for_disconnect`
+        # in an anyio task group whose cancel scope cancels this generator
+        # AND KEEPS RE-CANCELLING it -- so the first unshielded await below
+        # would raise CancelledError again immediately, and `_record_cancelled`
+        # would never run. `task.cancel()` above stays unshielded (no await);
+        # only retrieving the already-cancelled/already-done task and writing
+        # the cancelled row are shielded -- never a long wait on the backend.
+        with anyio.CancelScope(shield=True):
+            # Retrieve the outcome on every exit path -- a task that finished
+            # (successfully or with an exception) between the last check and
+            # generator close must still have its result/exception consumed, or
+            # asyncio logs "Task exception was never retrieved".
+            await asyncio.gather(task, return_exceptions=True)
+            if not was_done and not cancelled_recorded:
+                await _record_cancelled(request, tenant=tenant, request_id=request_id,
+                                        started=started)
+
+
 def _stream_unverified_response(
         request: Request, *, request_id: str,
         deltas: AsyncIterator[str], get_meta: Callable[[], dict],
         body: ChatRequest, tenant: str, app_policy: AppPolicyView,
         app_langfuse: object | None, profile: AppPrivacyProfile,
-        session_id: str | None, s) -> StreamingResponse:
+        session_id: str | None, s,
+        started_ns: int | None = None) -> StreamingResponse:
     """Live token-forwarding SSE for `stream_unverified` (real backend
     streaming). Emits an OpenAI-style role frame, forwards each `deltas` token
     as a `content` frame, then (after the stream drains) a `finish_reason`
@@ -569,7 +875,8 @@ def _stream_unverified_response(
                 request, request_id=request_id, deltas=deltas,
                 get_meta=get_meta, meta=meta, body=body, tenant=tenant,
                 app_policy=app_policy, app_langfuse=app_langfuse,
-                profile=profile, session_id=session_id, s=s)
+                profile=profile, session_id=session_id, s=s,
+                started_ns=started_ns)
 
     return sse_response(_gen())
 
@@ -579,7 +886,8 @@ def _incremental_verify_response(
         deltas: AsyncIterator[str], get_meta: Callable[[], dict],
         body: ChatRequest, tenant: str, app_policy: AppPolicyView,
         app_langfuse: object | None, profile: AppPrivacyProfile,
-        session_id: str | None, s) -> StreamingResponse:
+        session_id: str | None, s,
+        started_ns: int | None = None) -> StreamingResponse:
     """Live token streaming for `incremental_verify` (Task 7). Real backend
     deltas are piped through a hold-back `StreamingVerifier` before egress, so
     an entity split across chunk boundaries never leaks its raw prefix; the
@@ -628,7 +936,8 @@ def _incremental_verify_response(
                 app_policy=app_policy, app_langfuse=app_langfuse,
                 profile=profile, session_id=session_id, s=s,
                 verify_performed=True, verify_reason="incremental",
-                client_text="".join(released))
+                client_text="".join(released),
+                started_ns=started_ns)
 
     return sse_response(_gen())
 
@@ -641,7 +950,8 @@ async def _finalize_stream(
         session_id: str | None, s,
         verify_performed: bool = False,
         verify_reason: str = "waived: stream_unverified",
-        client_text: str | None = None) -> None:
+        client_text: str | None = None,
+        started_ns: int | None = None) -> None:
     """Assemble the `resp` dict from the pipeline's final streaming metadata and
     run the shared `_finalize`. Guarded end to end: a failure here must never
     surface to the (already-streaming) client. Shared by both real-streaming
@@ -693,7 +1003,7 @@ async def _finalize_stream(
         await _finalize(request, resp, body=body, tenant=tenant,
                         app_policy=app_policy, app_langfuse=app_langfuse,
                         profile=profile, session_id=session_id, s=s,
-                        request_id=request_id)
+                        request_id=request_id, started_ns=started_ns)
     except Exception:  # finalize must never break the (already sent) stream
         log.exception("streaming finalize failed (swallowed)")
 

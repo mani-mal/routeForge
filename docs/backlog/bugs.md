@@ -85,6 +85,33 @@ the audit trail in that sweep's task report.
 > tier fallback when over budget, and actionable rejection messages — recorded
 > below as **B34**.
 
+---
+
+## B35 — Agent tool turns retried every 120 s; abandoned work metered as served; traces unusable  ✅ RESOLVED (2026-09-16)
+
+**Found by** a data audit of a live agent-client app. 88 of 433 requests were
+retries whose starts were exactly 120–122 s apart. The client's transport
+timeout covers connect plus first response bytes, and RouteForge sent nothing
+until a 5–10 minute tool turn finished. Each abandoned attempt kept generating
+on the backend, overlapped the retry, and was written as a `status=ok` usage
+row, snapshot and Langfuse trace. In Langfuse every span was 0 s long, there was
+no generation or token usage, and `sessionId` was empty. One 502 had no logged
+cause.
+
+**Fixed.**
+- Streamed turns that wait for a complete answer get SSE keepalives after
+  `server.stream_keepalive_s`. Late failures become SSE error frames.
+- A client disconnect cancels the backend work and meters it as `cancelled`.
+- Trace spans carry real timings, and every router hop that chose a model is a
+  Langfuse generation with its model, tokens and cost.
+- A session id is derived when the client sends none.
+- Upstream backend failures and unhandled errors are logged.
+
+**Unchanged by design.** Real token streaming (`stream_unverified`,
+`incremental_verify`) still drains on disconnect to keep accounting.
+
+---
+
 ## B34 — Every new app onboarding hit a different policy failure  ✅ RESOLVED (2026-09-15)
 
 **Root cause.** Tests sent tiny synthetic requests, one policy field at a time; real clients (Qwen Code, openai SDK, LangChain) send content parts, `stream:true` on every turn, 20+ tool schemas, replayed tool turns, `content:null` and 25K-token prompts. The admin API also accepted configurations that could never route, and rejections did not name the field to change, so each incident took several rounds (16 incidents across millwise, demo, kit-gtm).

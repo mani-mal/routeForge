@@ -453,12 +453,17 @@ class Pipeline:
             # Partition key note: `run()` is never handed a distinct
             # application_id -- "the application id equals the tenant slug"
             # (CLAUDE.md/routes.py._authenticate), so `tenant_id` doubles as
-            # `application_id` here. `session_id` is the per-session partition key
-            # (`x-routeforge-session`, app/api/routes.py::_read_session_id),
-            # threaded in by the caller; a request with no session header (or an
-            # unsanitizable one) falls back to `session_id or ""`, the shared
-            # partition -- so distinct end-user sessions of one app no longer
-            # collide, and no session header keeps the old (pre-session) behavior.
+            # `application_id` here. `session_id` is the per-session partition key,
+            # and it is the CLIENT-SUPPLIED id ONLY (`x-routeforge-session`,
+            # app/api/routes.py::_read_session_id) -- routes.py separately derives
+            # a session id for TRACE/CONSOLE grouping when the header is absent
+            # (`_derive_session_id`, `server.derive_session_id`), but that derived
+            # id is deliberately never threaded in here: memory partitioning must
+            # not silently change semantics when derivation is toggled (fix
+            # round 1). A request with no session header (or an unsanitizable
+            # one) falls back to `session_id or ""`, the shared partition -- so
+            # distinct end-user sessions of one app no longer collide, and no
+            # session header keeps the old (pre-session) behavior.
             recall = recall_memory(self._memory, mem_cfg, ctx, san_messages,
                                    tenant_id=tenant_id, application_id=tenant_id,
                                    session_id=session_id or "")

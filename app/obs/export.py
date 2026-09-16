@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from collections import namedtuple
 
 from app.obs.otel import app_trace_url, get_app_tracer, get_tracer, trace_url
@@ -81,6 +82,51 @@ def _set_io(root, capture_io: str, prompt: str, completion: str,
         root.set_attribute("output.value", completion)
 
 
+def _mark_generation(span, rec: dict, usage: dict | None) -> None:
+    """Make a router hop that chose a model a Langfuse generation: model, token
+    usage and cost, which Langfuse reads from these OTel attributes. Values are
+    a model id and numbers (no free text), so no redaction applies. `usage`
+    (prompt_tokens/completion_tokens) is caller-resolved per hop -- see
+    `_hop_usage` -- so this function itself has no opinion on WHICH tokens a
+    hop gets, only how to stamp them once decided."""
+    model = str(rec.get("chosen"))
+    span.set_attribute("langfuse.observation.type", "generation")
+    span.set_attribute("langfuse.observation.model.name", model)
+    span.set_attribute("gen_ai.request.model", model)
+    if usage:
+        tin = int(usage.get("prompt_tokens") or 0)
+        tout = int(usage.get("completion_tokens") or 0)
+        span.set_attribute("gen_ai.usage.input_tokens", tin)
+        span.set_attribute("gen_ai.usage.output_tokens", tout)
+        span.set_attribute("langfuse.observation.usage_details",
+                           json.dumps({"input": tin, "output": tout}))
+    if rec.get("actual_cost_usd") is not None:
+        span.set_attribute("langfuse.observation.cost_details",
+                           json.dumps({"total": float(rec["actual_cost_usd"])}))
+
+
+def _hop_usage(rec: dict, request_usage: dict | None, *, is_served: bool) -> dict | None:
+    """Token usage for ONE router generation hop -- never just stamp the
+    request-wide aggregate onto every hop, or a multi-step trace massively
+    over-reports tokens (every earlier hop double-counts the whole request).
+
+    - Multi-step: each router call re-enters the router for its own LLM call,
+      and the DecisionRecord carries that call's own token counts
+      (`tokens_priced` in, `tokens_out` out). Use those whenever either is
+      present and > 0 -- this hop's usage is fully self-describing.
+    - Direct / escalation (no per-hop tokens on the record): only the hop that
+      actually served the final answer (the LAST router record with a
+      `chosen` model) gets the request-level `usage` aggregate. An escalated-
+      past hop (tried, rejected, superseded) gets no usage attribute at all --
+      it has no tokens of its own to report and must not borrow the final
+      hop's."""
+    tin = rec.get("tokens_priced") or 0
+    tout = rec.get("tokens_out") or 0
+    if tin > 0 or tout > 0:
+        return {"prompt_tokens": tin, "completion_tokens": tout}
+    return request_usage if is_served else None
+
+
 def export_trace(*, request_id: str, tenant_id: str, model: str,
                  cost: dict, policy: dict, trace: list[dict],
                  application_id: str = "", app_langfuse=None,
@@ -89,7 +135,9 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                  session_id: str | None = None,
                  routing_policy_version: str = "",
                  prompt_version: str = "",
-                 raw_completion: str = "") -> TraceExport:
+                 raw_completion: str = "",
+                 started_ns: int | None = None,
+                 usage: dict | None = None) -> TraceExport:
     """Export the request's decision trace as spans and return a `TraceExport`
     (url, trace_id) for the resulting trace — `url` the Langfuse UI deep-link,
     `trace_id` the same trace's 32-hex id — or `TraceExport(None, None)` when
@@ -161,7 +209,8 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                     tenant_id)
                 capture_io = "redacted"
         tracer = per_app if per_app is not None else get_tracer()
-        with tracer.start_as_current_span("serving.request") as root:
+        root_kwargs = {"start_time": started_ns} if started_ns else {}
+        with tracer.start_as_current_span("serving.request", **root_kwargs) as root:
             root.set_attribute("sp.request_id", request_id)
             root.set_attribute("sp.tenant_id", tenant_id)
             root.set_attribute("sp.application_id", application_id or tenant_id)
@@ -203,23 +252,60 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
             _set_io(root, capture_io, prompt, completion,
                     recognizers=recognizers, sanitized_prompt=sanitized_prompt,
                     raw_completion=raw_completion)
+            # Lay each step out on the real clock: back to back from the request
+            # start, each as long as its recorded latency, never past "now".
+            # Without explicit times every span is created after the fact and
+            # shows as 0 s in Langfuse.
+            now_ns = time.time_ns()
+            cursor = started_ns or now_ns
+            router_hop_idxs = [i for i, r in enumerate(trace)
+                               if r.get("step") == "router" and r.get("chosen")]
+            served_idx = router_hop_idxs[-1] if router_hop_idxs else None
             for i, rec in enumerate(trace):
                 step = str(rec.get("step", f"step-{i}"))
-                with tracer.start_as_current_span(f"serving.{step}") as sp:
-                    sp.set_attribute("sp.step", step)
-                    if rec.get("chosen") is not None:
-                        # chosen is a model id / enum, never free text — redact
-                        # defensively anyway (idempotent on clean text) so this
-                        # attribute can't leak if a future record widens it.
-                        sp.set_attribute("sp.chosen", redact_value(str(rec["chosen"])))
-                    if "reason" in rec:
-                        sp.set_attribute("sp.reason", redact_value(str(rec["reason"])))
-                    cands = _candidates_json(rec)
-                    if cands is not None:
-                        sp.set_attribute("sp.candidates", redact_value(cands))
-                    for k in ("hop_index", "actual_cost_usd", "est_cost_usd", "latency_ms"):
-                        if rec.get(k) is not None:
-                            sp.set_attribute(f"sp.{k}", float(rec[k]))
+                dur_ns = int(float(rec.get("latency_ms") or 0.0) * 1_000_000)
+                span_start = min(cursor, now_ns)
+                span_end = min(span_start + dur_ns, now_ns)
+                cursor = span_end
+                timed = {"start_time": span_start, "end_on_exit": False} if started_ns else {}
+                with tracer.start_as_current_span(f"serving.{step}", **timed) as sp:
+                    # Attribute-setting can raise (e.g. a malformed cost value
+                    # hitting float()). With end_on_exit=False the SDK does NOT
+                    # end a span whose body raised -- it would be orphaned
+                    # (never exported, never in Langfuse) even though the outer
+                    # try/except still swallows the exception and returns
+                    # TraceExport(None, None). `finally` guarantees end() runs
+                    # exactly once on every path, success or exception.
+                    try:
+                        sp.set_attribute("sp.step", step)
+                        if rec.get("chosen") is not None:
+                            # chosen is a model id / enum, never free text —
+                            # redact defensively anyway (idempotent on clean
+                            # text) so this attribute can't leak if a future
+                            # record widens it.
+                            sp.set_attribute("sp.chosen", redact_value(str(rec["chosen"])))
+                        if "reason" in rec:
+                            sp.set_attribute("sp.reason", redact_value(str(rec["reason"])))
+                        cands = _candidates_json(rec)
+                        if cands is not None:
+                            sp.set_attribute("sp.candidates", redact_value(cands))
+                        for k in ("hop_index", "actual_cost_usd", "est_cost_usd", "latency_ms"):
+                            if rec.get(k) is not None:
+                                sp.set_attribute(f"sp.{k}", float(rec[k]))
+                        if i in router_hop_idxs:
+                            # EVERY router hop that chose a model is a
+                            # generation, not just the one that served the
+                            # final answer -- an escalated-past hop still
+                            # called a model and spent money. Token usage is
+                            # resolved per hop (see `_hop_usage`): a
+                            # multi-step hop's own tokens, or the request
+                            # aggregate ONLY on the hop that served the
+                            # answer, or nothing.
+                            _mark_generation(sp, rec, _hop_usage(
+                                rec, usage, is_served=(i == served_idx)))
+                    finally:
+                        if started_ns:
+                            sp.end(end_time=span_end)
             # Capture the trace id for the UI deep-link. The NoOp span (telemetry
             # off) has no get_span_context, so this stays None and the UI hides
             # the link.
