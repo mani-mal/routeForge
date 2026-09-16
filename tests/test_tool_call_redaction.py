@@ -111,9 +111,13 @@ def test_model_generated_tool_call_arguments_are_verified_on_egress(client, monk
     assert tool_calls[0]["id"] == "c1"
     assert tool_calls[0]["type"] == "function"
     assert tool_calls[0]["function"]["name"] == "find_support_ticket"
+    # Whole-body check (fix round 1): the SSN must not leak through ANY key of
+    # the response, not just `choices` -- `display.output` fed the same raw
+    # tool_calls JSON before that fix.
+    raw_body = json.dumps(body)
+    assert SSN not in raw_body
     # The internal pre-redaction keys must never reach the client, on any
     # response shape.
-    raw_body = json.dumps(body)
     assert "raw_completion" not in raw_body
     assert "raw_tool_calls" not in raw_body
     assert "raw_completion" not in body

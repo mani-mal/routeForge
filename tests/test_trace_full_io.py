@@ -99,8 +99,13 @@ def test_full_trace_stores_raw_tool_call_arguments_despite_egress_redaction(
     """Task 2: `capture_io: full` must still see the RAW model-generated
     tool_calls even though the client-facing response now has them
     egress-redacted (step 9, this task) -- `full` = raw, own project only
-    (CLAUDE.md rule 2's exception). The client's own copy must stay
-    redacted regardless of capture_io."""
+    (CLAUDE.md rule 2's exception). The client's own copy -- the ENTIRE JSON
+    body, including `resp["display"]["output"]` -- must stay redacted
+    regardless of capture_io (fix round 1: `_full_capture_io` used to feed the
+    RAW tool_calls into `display.output` too, which is not a telemetry egress
+    and reaches both the calling client's own response body and the admin
+    console's `/api/requests/{id}` drilldown -- neither is the app's own
+    Langfuse project)."""
     ssn = "482-73-1946"
     tc = {"id": "call-1", "type": "function",
           "function": {"name": "get_weather",
@@ -116,10 +121,19 @@ def test_full_trace_stores_raw_tool_call_arguments_despite_egress_redaction(
                           "messages": [{"role": "user", "content": "weather in Paris?"}]})
     assert r.status_code == 200, r.text
     body = r.json()
-    # Client-facing copy: redacted.
-    assert ssn not in json.dumps(body["choices"])
+    # Client-facing copy: redacted EVERYWHERE in the body, not just choices --
+    # `display.output` (fix round 1) is part of this same JSON response.
+    assert ssn not in json.dumps(body)
     assert "raw_completion" not in body
     assert "raw_tool_calls" not in body
+    assert ssn not in (body.get("display", {}).get("output") or "")
+
+    # The admin console's own drilldown (`request_snapshots.full_json=resp`,
+    # same `resp` object) must not carry it either -- it is not the app's own
+    # Langfuse project.
+    snap = client.get(f"/api/requests/{body['id']}")
+    assert snap.status_code == 200, snap.text
+    assert ssn not in json.dumps(snap.json())
 
     # The app's OWN Langfuse export: raw.
     attrs = _root_attrs(mem, provider, body["id"])
