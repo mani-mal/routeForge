@@ -106,11 +106,12 @@ def test_model_generated_tool_call_arguments_are_verified_on_egress(client, monk
     body = r.json()
     assert SSN not in json.dumps(body["choices"])
     # Structure preserved: `id`/`type`/`function.name` untouched, only the
-    # argument STRING is redacted (no JSON re-parse per the plan's constraint).
+    # arguments are redacted -- and they must still parse as JSON.
     tool_calls = body["choices"][0]["message"]["tool_calls"]
     assert tool_calls[0]["id"] == "c1"
     assert tool_calls[0]["type"] == "function"
     assert tool_calls[0]["function"]["name"] == "find_support_ticket"
+    assert json.loads(tool_calls[0]["function"]["arguments"]) == {"ssn": "<US_SSN_1>"}
     # Whole-body check (fix round 1): the SSN must not leak through ANY key of
     # the response, not just `choices` -- `display.output` fed the same raw
     # tool_calls JSON before that fix.
@@ -122,6 +123,10 @@ def test_model_generated_tool_call_arguments_are_verified_on_egress(client, monk
     assert "raw_tool_calls" not in raw_body
     assert "raw_completion" not in body
     assert "raw_tool_calls" not in body
+    # The step-9 verification record in the response trace must be honest
+    # about what the tool-call arguments carried (types only, never values).
+    vrec = next(t for t in body["trace"] if t.get("step") == "verify")
+    assert "US_SSN" in vrec["entities_found"]
 
 def test_model_generated_tool_call_arguments_stream_ssn_absent_from_sse(client, monkeypatch):
     """A client-driven tool conversation with `stream: true` is served as one
@@ -149,12 +154,22 @@ def test_model_generated_tool_call_arguments_stream_ssn_absent_from_sse(client, 
     assert r.status_code == 200, r.text
     assert r.headers["content-type"].startswith("text/event-stream")
     assert SSN not in r.text
+    redacted_tool_call_frames = 0
     for block in r.text.strip("\n").split("\n\n"):
         payload = block.strip()[len("data: "):]
         assert SSN not in payload
         if payload != "[DONE]":
             assert "raw_completion" not in payload
             assert "raw_tool_calls" not in payload
+            frame = json.loads(payload)
+            for choice in frame.get("choices") or []:
+                for tcd in (choice.get("delta") or {}).get("tool_calls") or []:
+                    fn = tcd.get("function") or {}
+                    if (fn.get("name") == "find_support_ticket"
+                            and "<US_SSN" in (fn.get("arguments") or "")):
+                        redacted_tool_call_frames += 1
+    # Non-vacuous: the tool call must actually have been streamed, redacted.
+    assert redacted_tool_call_frames >= 1
 
 def test_passthrough_app_model_generated_tool_call_arguments_reach_client_unchanged(
         client, monkeypatch):
@@ -183,3 +198,56 @@ def test_passthrough_app_model_generated_tool_call_arguments_reach_client_unchan
     body = r.json()
     assert body["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"] == args
     assert SSN in json.dumps(body["choices"])  # untouched, not redacted
+
+
+_MIXED_ARGS = json.dumps({"ts": 1757980800, "ssn": SSN})
+
+
+def test_egress_tool_call_arguments_with_numeric_leaf_stay_valid_json(client, monkeypatch):
+    """Final review CRITICAL 1: a detector match on a bare JSON number (a
+    timestamp matching US_BANK_NUMBER/PHONE_NUMBER) used to splice an
+    unquoted placeholder into `arguments`, so every OpenAI client's
+    `json.loads(tool_call.function.arguments)` raised."""
+    CALLS.clear()
+    tc = {"id": "c1", "type": "function",
+          "function": {"name": "find_support_ticket", "arguments": _MIXED_ARGS}}
+    monkeypatch.setattr(litellm_backend, "acompletion",
+                        make_recording_acompletion(make_response(content=None, tool_calls=[tc])))
+    r = client.post("/v1/chat/completions", headers=_AUTH, json={
+        "messages": [{"role": "user", "content": "find the ticket"}], "tools": _TOOLS})
+    assert r.status_code == 200, r.text
+    out = r.json()["choices"][0]["message"]["tool_calls"][0]
+    assert out["id"] == "c1"
+    assert out["function"]["name"] == "find_support_ticket"
+    parsed = json.loads(out["function"]["arguments"])
+    assert set(parsed) == {"ts", "ssn"}
+    assert SSN not in out["function"]["arguments"]
+    assert SSN not in r.text
+
+
+def test_ingress_replayed_tool_call_arguments_with_numeric_leaf_stay_valid_json(
+        client, monkeypatch):
+    """Ingress analogue: the redacted replayed arguments forwarded to the
+    backend must still parse (chat templates may `json.loads` them)."""
+    CALLS.clear()
+    monkeypatch.setattr(litellm_backend, "acompletion",
+                        make_recording_acompletion(make_response(content="found it")))
+    r = client.post("/v1/chat/completions", headers=_AUTH, json={
+        "messages": [
+            {"role": "user", "content": "find the ticket"},
+            {"role": "assistant", "content": None, "tool_calls": [{
+                "id": "c1", "type": "function",
+                "function": {"name": "find_support_ticket", "arguments": _MIXED_ARGS}}]},
+            {"role": "tool", "tool_call_id": "c1", "content": "ticket 42"},
+        ],
+        "tools": _TOOLS,
+    })
+    assert r.status_code == 200, r.text
+    sent = CALLS[-1]["messages"]
+    assistant_msg = next(m for m in sent if m.get("role") == "assistant")
+    sent_tc = assistant_msg["tool_calls"][0]
+    assert sent_tc["id"] == "c1"
+    assert sent_tc["function"]["name"] == "find_support_ticket"
+    parsed = json.loads(sent_tc["function"]["arguments"])
+    assert set(parsed) == {"ts", "ssn"}
+    assert SSN not in json.dumps(sent)
