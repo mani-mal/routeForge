@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import re
@@ -12,7 +13,8 @@ from pydantic import BaseModel
 from app.agent.runtime import AgentCapExceeded
 from app.api.history import summarize
 from app.api.streaming import (
-    SSE_DONE, chunk_text, openai_chunk, sse_frame, sse_response,
+    SSE_DONE, SSE_KEEPALIVE, chunk_text, openai_chunk, sse_error_frame, sse_frame,
+    sse_response,
 )
 from app.apps import store
 from app.apps.langfuse_provision import load_app_langfuse
@@ -136,6 +138,26 @@ def _resolve_stream_mode(body: ChatRequest, app_policy: AppPolicyView, s) -> str
     return None if mode in (None, STREAM_MODES[0]) else mode
 
 
+def _error_status_detail(exc: BaseException) -> tuple[int, str] | None:
+    """The (status, detail) the HTTP path returns for a serving exception. One
+    mapping, used by the plain HTTP path and by the keepalive stream's error
+    frame, so the two can never drift."""
+    if isinstance(exc, PipelineRejected):
+        message = str(exc)
+        prefix = ("model request rejected: " if message.startswith("requested model")
+                  else "response failed verification: ")
+        return 422, f"{prefix}{message}"
+    if isinstance(exc, NoEligibleCandidate):
+        return 422, f"no model is available for this request's policy: {exc}"
+    if isinstance(exc, AgentCapExceeded):
+        return 500, "agent did not converge within its step limit"
+    if isinstance(exc, BackendUnavailable):
+        return 502, f"no backend could serve this request: {exc}"
+    if isinstance(exc, PolicyGateError):
+        return 503, "policy evaluation unavailable"
+    return None
+
+
 @router.post("/v1/chat/completions", response_model=None)
 async def chat_completions(body: ChatRequest, request: Request) -> dict | StreamingResponse:
     s = request.app.state.settings
@@ -244,33 +266,32 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
                     get_meta=get_meta, body=body, tenant=tenant,
                     app_policy=app_policy, app_langfuse=app_langfuse,
                     profile=profile, session_id=session_id, s=s)
-        resp = await request.app.state.pipeline.run(
-            request_id, tenant, body, app_policy=app_policy, profile=profile,
-            session_id=session_id)
-    except PipelineRejected as e:
-        metrics.observe_request("-", "rejected")
-        message = str(e)
-        prefix = ("model request rejected: "
-                  if message.startswith("requested model")
-                  else "response failed verification: ")
-        raise HTTPException(422, f"{prefix}{message}")
-    except NoEligibleCandidate as e:
-        metrics.observe_request("-", "rejected")
-        raise HTTPException(422, f"no model is available for this request's policy: {e}")
-    except AgentCapExceeded:
-        metrics.observe_request("-", "rejected")
-        raise HTTPException(500, "agent did not converge within its step limit")
-    except BackendUnavailable as e:
-        metrics.observe_request("-", "rejected")
-        raise HTTPException(502, f"no backend could serve this request: {e}")
-    except PolicyGateError:
-        metrics.observe_request("-", "rejected")
-        raise HTTPException(503, "policy evaluation unavailable")
+        if stream_mode is not None:
+            task = asyncio.create_task(request.app.state.pipeline.run(
+                request_id, tenant, body, app_policy=app_policy, profile=profile,
+                session_id=session_id))
+            keepalive = s.serving.stream_keepalive_s
+            done, _ = await asyncio.wait({task}, timeout=keepalive)
+            if not done:
+                return sse_response(_keepalive_stream(
+                    request, task=task, keepalive_s=keepalive, request_id=request_id,
+                    body=body, tenant=tenant, app_policy=app_policy,
+                    app_langfuse=app_langfuse, profile=profile,
+                    session_id=session_id, s=s))
+            resp = task.result()   # raises -> the except clauses below map it
+        else:
+            resp = await request.app.state.pipeline.run(
+                request_id, tenant, body, app_policy=app_policy, profile=profile,
+                session_id=session_id)
     except HTTPException:
         raise
-    except Exception:
-        metrics.observe_request("-", "error")
-        raise HTTPException(500, "internal error")
+    except Exception as e:
+        mapped = _error_status_detail(e)
+        if mapped is None:
+            metrics.observe_request("-", "error")
+            raise HTTPException(500, "internal error")
+        metrics.observe_request("-", "rejected")
+        raise HTTPException(mapped[0], mapped[1])
     await _finalize(request, resp, body=body, tenant=tenant, app_policy=app_policy,
                     app_langfuse=app_langfuse, profile=profile,
                     session_id=session_id, s=s, request_id=request_id)
@@ -528,6 +549,43 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
     except Exception:  # streaming must never break serving
         logging.getLogger("serving.obs").exception(
             "bus.publish failed (swallowed)")
+
+
+async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
+                            keepalive_s: float, request_id: str, body: ChatRequest,
+                            tenant: str, app_policy: AppPolicyView,
+                            app_langfuse: object | None, profile: AppPrivacyProfile,
+                            session_id: str | None, s) -> AsyncIterator[str]:
+    """SSE for a streamed request whose complete, verified answer is not ready
+    within one keepalive interval. Sends a keepalive comment each interval until
+    the pipeline task finishes, then the same frames `verified_then_stream`
+    sends. A failure after the headers are out cannot change the HTTP status,
+    so it goes out as one error frame (same status and detail as the HTTP path)
+    followed by [DONE]."""
+    while True:
+        done, _ = await asyncio.wait({task}, timeout=keepalive_s)
+        if done:
+            break
+        yield SSE_KEEPALIVE
+    try:
+        resp = task.result()
+    except Exception as e:
+        mapped = _error_status_detail(e)
+        if mapped is None:
+            logging.getLogger("serving.api").exception(
+                "unhandled error for %s after stream opened", request_id)
+            mapped = (500, "internal error")
+        metrics.observe_request("-", "rejected" if mapped[0] != 500 else "error")
+        yield sse_error_frame(*mapped)
+        yield SSE_DONE
+        return
+    await _finalize(request, resp, body=body, tenant=tenant, app_policy=app_policy,
+                    app_langfuse=app_langfuse, profile=profile,
+                    session_id=session_id, s=s, request_id=request_id)
+    message = resp["choices"][0]["message"]
+    async for frame in chunk_text(request_id, resp["model"], message["content"] or "",
+                                  tool_calls=message.get("tool_calls")):
+        yield frame
 
 
 def _stream_unverified_response(

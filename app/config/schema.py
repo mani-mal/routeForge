@@ -253,6 +253,7 @@ class ServingCfg(BaseModel):
     # above. Defaulted (true) for the upgrade-safety reason given above.
     allow_app_passthrough: bool = True
     reject_stream_requests: bool
+    stream_keepalive_s: float = 5.0
     context_optimization: ContextOptimizationCfg
     memory: MemoryCfg = MemoryCfg()
     # Optional/defaulted like `memory` and `context_optimization`: a mounted

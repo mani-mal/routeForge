@@ -116,3 +116,10 @@ server:
   reject_stream_requests: true   # reject inbound `stream: true` in the demo (see
                                  # output-controls skill); decision streaming above
                                  # is a separate channel
+  # Streamed requests that must wait for a complete, verified answer (tool
+  # turns, verified_then_stream, runtime-floored requests) open the SSE response
+  # after this many seconds and send a keepalive comment at the same interval, so
+  # a client whose transport timeout covers only the first response bytes does
+  # not abort a long generation. Fast responses and fast rejections are
+  # unaffected (they finish inside the first interval and keep their HTTP status).
+  stream_keepalive_s: 5

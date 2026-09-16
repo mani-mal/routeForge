@@ -143,6 +143,7 @@ def load_settings(config_dir: str = "config") -> Settings:
             serving_raw["policy"].get("default_policy_mode", "enforced")),
         allow_app_passthrough=allow_app_passthrough,
         reject_stream_requests=serving_raw["server"]["reject_stream_requests"],
+        stream_keepalive_s=float(serving_raw["server"].get("stream_keepalive_s", 5.0)),
         context_optimization=ContextOptimizationCfg(
             enabled=co_enabled,
             mode=co_raw["mode"],
