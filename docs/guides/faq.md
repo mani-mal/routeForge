@@ -232,8 +232,12 @@ So the precise statement for customers: *routeForge adds the trace and never edi
 answer for style or content — but it does enforce output controls, which can redact PII
 the model emitted or block an unverifiable response.* The `VerificationRecord` in the
 `trace` (`step:"verify"`, fields `performed / passed / entities_found / escalated`) tells
-you exactly what step 9 did on any given request. (Note: `raw_completion`,
-`raw_tool_calls` and `sanitized_prompt` are internal-only — popped before serialization,
-never in the public response, `display.output`, or console snapshots. They reach
-Langfuse only in the app's own provisioned project, and only under `capture_io: "full"`
-— see the residency/PII entries above.)
+you exactly what step 9 did on any given request. (Note: `raw_completion` and
+`raw_tool_calls` are internal-only — popped before serialization, never in the public
+response, `display.output`, or any console snapshot. They reach Langfuse only in the
+app's own provisioned project, and only under `capture_io: "full"` — see the
+residency/PII entries above. `sanitized_prompt` is different: it's the gate's
+already-*redacted* prompt, not raw, so it isn't covered by that restriction — it's also
+popped before the public response, but it *is* what `capture_io: "redacted"` telemetry
+and the console's `display.input` show, in whichever project that app's traces normally
+go to, not gated to the app's own.)

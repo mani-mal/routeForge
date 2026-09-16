@@ -220,11 +220,14 @@ not *where the request may go*.
   genuinely redacted, just at regex quality: it misses entities that need language
   understanding (e.g. a bare name).
 - **`onprem_only` apps *may* downgrade detection** — detection and residency are independent
-  axes, so this buys nothing to refuse. In the `enforced` posture that pairing needs
-  `capture_io: "off"`: with no telemetry I/O captured there is no egress path for the
-  unsanitized prompt. Do **not** flip residency to `any` + an `allowed_providers` pin to
-  work around a detection or telemetry rule — that swaps a hard residency floor for a
-  mutable allowlist and is strictly weaker.
+  axes, so this buys nothing to refuse. In the `enforced` posture, `pii_detection: "off"`
+  needs `capture_io: "off"`: with no telemetry I/O captured there is no egress path for
+  the unsanitized prompt. (`pii_detection: "regex"` is not `off` — it still sanitizes —
+  so an `onprem_only` app running `regex` may also use `capture_io: "redacted"`; only
+  `capture_io: "full"` needs `policy_mode: "passthrough"`, regardless of `pii_detection`.)
+  Do **not** flip residency to `any` + an `allowed_providers` pin to work around a
+  detection or telemetry rule — that swaps a hard residency floor for a mutable allowlist
+  and is strictly weaker.
 - An unrecognized value is a `422`, never a silent fallback to `off`.
 
 **Prefer the narrow levers.** `off` blinds the gate to *everything*, a real SSN included.
@@ -382,8 +385,9 @@ entities without a pattern, e.g. names). See the `capture_io` section below.)*
 ```
 *(For an `onprem_only` app in the default `enforced` posture, `capture_io: full` and
 `stream_unverified` are both refused — those guarantees can't be waived. `pii_detection` is
-free to downgrade even here, but then needs `capture_io: "off"`; for a hospital app you want
-it left at `presidio` anyway.)*
+free to downgrade even here: `off` then needs `capture_io: "off"`, while `regex` may also
+use `capture_io: "redacted"` (it still sanitizes); for a hospital app you want detection
+left at `presidio` anyway.)*
 
 **Eval / prompt-tuning app** — cloud, raw capture for analysis (its own Langfuse project):
 ```jsonc
