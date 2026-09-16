@@ -19,7 +19,7 @@ from app.output.verify import verify
 from app.policy.context import pinned_model_reason, registry_permits
 from app.policy.detectors import Detector, make_detector
 from app.policy.effective import EffectiveDetector, FilteredDetector
-from app.policy.gate import Gate
+from app.policy.gate import Gate, redact_tool_calls
 from app.apps.privacy import AppPrivacyProfile, effective_rules
 from app.compression import CompressionResult, compress
 from app.compression.ccr import CCRStore
@@ -235,11 +235,15 @@ class Pipeline:
         path so the full structured conversation reaches the model with every
         message's PII masked (CLAUDE.md rule 1) -- the per-message analogue of
         the flattened path's single sanitized blob. A None content (an
-        assistant turn that only carries tool_calls) passes through untouched."""
+        assistant turn that only carries tool_calls) passes through untouched.
+        `tool_calls` arguments are redacted the same way via `redact_tool_calls`
+        (app/policy/gate.py) -- a replayed assistant tool call whose arguments
+        carry an SSN must not forward it to the model untouched."""
         content = m.content
         if content:
             content, _ = det.anonymize(content, det.analyze(content))
-        return Message(role=m.role, content=content, tool_calls=m.tool_calls,
+        return Message(role=m.role, content=content,
+                       tool_calls=redact_tool_calls(m.tool_calls, det),
                        tool_call_id=m.tool_call_id, name=m.name)
 
     def _classifier_enabled(self) -> bool:
