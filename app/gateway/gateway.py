@@ -11,6 +11,7 @@ from app.errors import BackendUnavailable, NoEligibleCandidate
 from app.gateway.backends.base import InferenceBackend, StreamChunk
 from app.models import DecisionRecord, ExecutionPolicyContext, GenerationResult, Message
 from app.obs import metrics
+from app.obs.redact import redact_value
 from app.routing.router import Router, expected_output_tokens
 
 if TYPE_CHECKING:
@@ -26,6 +27,17 @@ _IPV4 = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b")
 
 def _scrub_endpoints(text: str) -> str:
     return _IPV4.sub("<endpoint>", _URL.sub("<endpoint>", text))
+
+
+def _format_upstream_error(model: str, exc: Exception) -> str:
+    """The `<model>: <ErrorType>: <message>` string used in both the gateway
+    log line and (via `BackendUnavailable`) the client-facing 502 detail.
+    Endpoints are scrubbed first (internal topology), then the remaining text
+    is redacted for PII (CLAUDE.md rule 2) -- an upstream error can echo back
+    request content (e.g. a bad-request body), so it is an egress surface
+    like any other, not just an internal-topology one."""
+    return (f"{model}: {type(exc).__name__}: "
+            f"{redact_value(_scrub_endpoints(str(exc)))[:200]}")
 
 
 log = logging.getLogger("serving.gateway")
@@ -111,8 +123,7 @@ class Gateway:
                     cand.name, messages, price, cand.tier, hint,
                     tools=tools, tool_choice=tool_choice, params=params)
             except Exception as exc:
-                last_error = (f"{cand.name}: {type(exc).__name__}: "
-                              f"{_scrub_endpoints(str(exc))[:200]}")
+                last_error = _format_upstream_error(cand.name, exc)
                 log.warning("backend call failed request=%s model=%s attempt=%d: %s",
                             ctx.request_id, cand.name, failover_attempts + 1, last_error)
                 records.append(DecisionRecord(
@@ -202,7 +213,7 @@ class Gateway:
                         record.latency_ms = chunk.final.latency_ms
                     yield chunk
             except Exception as exc:
-                error = f"{cand.name}: {type(exc).__name__}: {_scrub_endpoints(str(exc))[:200]}"
+                error = _format_upstream_error(cand.name, exc)
                 log.warning("backend stream failed request=%s model=%s: %s",
                             ctx.request_id, cand.name, error)
                 raise
