@@ -575,7 +575,8 @@ class Pipeline:
         # `function.arguments` untouched (CLAUDE.md rule 2). Reuse the SAME
         # `redact_tool_calls_with_entities` helper ingress uses
         # (app/policy/gate.py) -- one JSON-safe redaction implementation, both
-        # directions, and one detection pass: the entity TYPES it found are
+        # directions, and no separate detection pass here (the helper runs at
+        # most two `analyze` calls in total): the entity TYPES it found are
         # folded into `vrec.entities_found` (merged, sorted, de-duplicated) so
         # the trace stays honest about what egress carried, not just the text
         # half of it -- values never enter the record. `raw_tool_calls`

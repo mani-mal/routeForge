@@ -8,6 +8,7 @@ import json
 import pytest
 
 from app.policy.detectors import NullDetector, RegexDetector, make_detector
+from app.policy.effective import FilteredDetector
 from app.policy.gate import redact_tool_calls, redact_tool_calls_with_entities
 
 SSN = "482-73-1946"
@@ -156,3 +157,75 @@ def test_presidio_numeric_and_url_leaves_yield_valid_json(presidio, value):
     parsed = json.loads(out)  # must never raise
     assert set(parsed) == set(value)
     assert SSN not in out
+
+
+class _CountingDetector(RegexDetector):
+    def __init__(self):
+        self.calls = 0
+
+    def analyze(self, text):
+        self.calls += 1
+        return super().analyze(text)
+
+
+def test_detection_runs_at_most_twice_regardless_of_calls_and_values():
+    det = _CountingDetector()
+    tcs = [_call(json.dumps({"a": SSN, "b": [1, 2, 3], "c": {"d": "x", "e": "y"}})),
+           _call(json.dumps({"f": "123-45-6789", "g": "z"})), _call("not json 482-73-1946")]
+    res = redact_tool_calls_with_entities(tcs, det)
+    assert det.calls == 2
+    for tc in res.tool_calls[:2]:
+        json.loads(tc["function"]["arguments"])
+    assert SSN not in json.dumps(res.tool_calls)
+
+
+class _KeyContextDetector(RegexDetector):
+    """Stands in for Presidio's context boost: a bare 9-digit number is only
+    an SSN when the word "ssn" is right before it -- which is true in the raw
+    JSON (`"ssn": "482731946"`) but not in a value on its own."""
+
+    def analyze(self, text):
+        import re
+        from app.models import Entity
+        return [Entity(type="US_SSN", start=m.start(1), end=m.end(1), value=m.group(1))
+                for m in re.finditer(r'ssn": "(\d{9})"', text)]
+
+
+def test_raw_pass_redacts_value_only_detected_with_json_context():
+    args = json.dumps({"ssn": "482731946", "n": 482731946, "other": "keep"})
+    res = redact_tool_calls_with_entities([_call(args)], _KeyContextDetector())
+    out = _args(res.tool_calls)
+    assert json.loads(out) == {"ssn": "<US_SSN_1>", "n": "<US_SSN_1>", "other": "keep"}
+    assert "482731946" not in out
+    assert res.entity_types == frozenset({"US_SSN"})
+
+
+def test_raw_pass_value_embedded_in_longer_word_is_not_redacted():
+    class _Det(RegexDetector):
+        def analyze(self, text):
+            from app.models import Entity
+            i = text.find('"Al"')
+            return [Entity(type="PERSON", start=i, end=i + 4, value='"Al"')] if i >= 0 else []
+    args = json.dumps({"who": "Al", "note": "Also fine"})
+    out = _args(redact_tool_calls([_call(args)], _Det()))
+    assert json.loads(out) == {"who": "<PERSON_1>", "note": "Also fine"}
+
+
+_BARE_SSN_ARGS = json.dumps({"ssn": "482731946"})
+
+
+@pytest.mark.parametrize("make", [
+    lambda base: base,
+    lambda base: FilteredDetector(base, score_threshold=0.3),
+    lambda base: FilteredDetector(base, denylist=["US_PASSPORT"]),
+], ids=["default", "score_threshold_0.3", "denylist_US_PASSPORT"])
+def test_presidio_hyphenless_ssn_under_ssn_key_is_always_redacted(presidio, make):
+    # Re-review finding: per-value detection lost the "ssn" key context, so
+    # Presidio saw only a low-score US_PASSPORT and a per-app threshold or
+    # denylist let the RAW SSN through -- although US_SSN can never be
+    # exempted and the gate's whole-text classification saw it.
+    res = redact_tool_calls_with_entities([_call(_BARE_SSN_ARGS)], make(presidio))
+    out = _args(res.tool_calls)
+    json.loads(out)
+    assert "482731946" not in out
+    assert "US_SSN" in res.entity_types

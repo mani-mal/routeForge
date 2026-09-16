@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from app.config.schema import Settings
-from app.models import ChatRequest, ExecutionPolicyContext, Message
+from app.models import ChatRequest, Entity, ExecutionPolicyContext, Message
 from app.policy.context import build_context
 from app.policy.detectors import Detector
+from app.policy.merge import dedupe
 
 if TYPE_CHECKING:
     from app.apps.policy import AppPolicyView
@@ -44,91 +45,179 @@ class ToolCallRedaction:
     entity_types: frozenset[str]
 
 
-def _redact_text(text: str, det: Detector, found: set[str]) -> str:
-    entities = det.analyze(text)
-    if not entities:
-        return text
-    found.update(e.type for e in entities)
-    redacted, _ = det.anonymize(text, entities)
-    # Same object when anonymize changed nothing, so callers can test "no
-    # change" by identity and keep the original bytes.
-    return text if redacted == text else redacted
+# Characters a detector span over RAW JSON can swallow around a value (e.g.
+# Presidio's URL recognizer includes the closing quote); stripped before the
+# raw-pass value is looked up inside the decoded leaves.
+_JSON_EDGE = ' \t\r\n"{}[],:'
 
 
-def _redact_json_value(value: Any, det: Detector, found: set[str]) -> Any:
-    """Redact one parsed JSON value, leaf by leaf. String leaves are redacted
-    in place; a number leaf the detector matches (e.g. a timestamp read as
-    US_BANK_NUMBER/PHONE_NUMBER) becomes the redacted STRING -- a bare
-    placeholder where a number was is not valid JSON. Dict keys, bools and
-    nulls are left alone. Returns the SAME object when nothing changed, so the
-    caller can detect "no change" by identity."""
-    if isinstance(value, str):
-        return _redact_text(value, det, found)
+@dataclass
+class _Leaf:
+    """One redactable value inside one call's `arguments`: a JSON string or
+    number leaf (written back into `parent[key]`), or -- `parent is None` --
+    the whole root (a top-level JSON scalar, or non-JSON arguments text).
+    `start`/`end` locate `text` inside the pass-1 scan text."""
+    parent: dict | list | None
+    key: str | int | None
+    text: str
+    label: str = ""
+    start: int = 0
+    end: int = 0
+    spans: list[Entity] = field(default_factory=list)
+
+
+@dataclass
+class _Target:
+    """One tool call whose `function.arguments` is a string."""
+    index: int
+    args: str
+    is_json: bool
+    root: Any = None
+    leaves: list[_Leaf] = field(default_factory=list)
+
+
+def _collect_leaves(value: Any, parent: dict | list | None, key: str | int | None,
+                    label: str, out: list[_Leaf]) -> None:
+    """Append a `_Leaf` for every string/number leaf. Bools, nulls and dict
+    keys are never redacted. `label` is the nearest enclosing dict key -- it
+    is rendered next to the value in the pass-1 scan text so a recognizer that
+    needs context (Presidio boosts a bare 9-digit number to US_SSN when "ssn"
+    is nearby) still gets it."""
     if isinstance(value, bool) or value is None:
-        return value
-    if isinstance(value, (int, float)):
-        as_text = str(value)
-        redacted = _redact_text(as_text, det, found)
-        return value if redacted == as_text else redacted
-    if isinstance(value, dict):
-        items = {k: _redact_json_value(v, det, found) for k, v in value.items()}
-        if all(items[k] is value[k] for k in value):
-            return value
-        return items
-    if isinstance(value, list):
-        elems = [_redact_json_value(v, det, found) for v in value]
-        if all(a is b for a, b in zip(elems, value)):
-            return value
-        return elems
-    return value
+        return
+    if isinstance(value, str):
+        out.append(_Leaf(parent, key, value, label))
+    elif isinstance(value, (int, float)):
+        out.append(_Leaf(parent, key, str(value), label))
+    elif isinstance(value, dict):
+        for k, v in value.items():
+            _collect_leaves(v, value, k, k, out)
+    elif isinstance(value, list):
+        for i, v in enumerate(value):
+            _collect_leaves(v, value, i, label, out)
 
 
-def _redact_arguments(args: str, det: Detector, found: set[str]) -> str:
-    """Redact one `function.arguments` string without ever breaking its JSON.
-    Valid JSON is walked leaf by leaf (`_redact_json_value`) and re-serialized
-    only if a leaf changed -- clean arguments (and every NullDetector/
-    passthrough call) come back as the ORIGINAL string, byte for byte. Text
-    that is not valid JSON falls back to a whole-string splice, exactly as
-    message `content` is redacted. Placeholders are numbered per leaf (each
-    leaf is its own `anonymize` call), so two SSNs in different leaves both
-    read `<US_SSN_1>`; the redaction map is not kept for tool calls, so the
-    numbering carries no meaning beyond "an entity was here"."""
-    try:
-        parsed = json.loads(args)
-    except (ValueError, RecursionError):
-        return _redact_text(args, det, found)
-    try:
-        redacted = _redact_json_value(parsed, det, found)
-    except RecursionError:
-        return _redact_text(args, det, found)
-    if redacted is parsed:
-        return args
-    return json.dumps(redacted, ensure_ascii=False)
+def _occurrences(needle: str, haystack: str) -> list[tuple[int, int]]:
+    """Every occurrence of `needle` in `haystack` not embedded inside a longer
+    alphanumeric run (so a short raw-pass value like a two-letter name does
+    not mangle unrelated words)."""
+    found: list[tuple[int, int]] = []
+    i = haystack.find(needle)
+    while i != -1:
+        j = i + len(needle)
+        if ((i == 0 or not haystack[i - 1].isalnum())
+                and (j == len(haystack) or not haystack[j].isalnum())):
+            found.append((i, j))
+        i = haystack.find(needle, i + 1)
+    return found
 
 
 def redact_tool_calls_with_entities(tool_calls: list[dict] | None,
                                     det: Detector) -> ToolCallRedaction:
     """Return a COPY of `tool_calls` with each `function.arguments` STRING
-    redacted by `det` (see `_redact_arguments`: JSON-aware, output always
-    parses when the input did), plus the entity types detected. `id`, `type`,
+    redacted by `det`, plus the entity types detected. `id`, `type`,
     `function.name`, and every other key are preserved exactly; a non-dict
     call, a missing `function`, or a non-string `arguments` passes through
     untouched. Never mutates the caller's dicts. Shared by ingress
     (`Pipeline._sanitize_msg`) and egress (output verification) so both
     directions redact tool-call arguments the same way, and egress takes the
-    entity types from here instead of running detection a second time."""
-    found: set[str] = set()
+    entity types from here instead of running detection again.
+
+    Arguments are machine-consumed JSON, so redaction must never break the
+    JSON: valid JSON is redacted value by value (a matched number becomes the
+    redacted STRING; keys, bools and nulls untouched) and re-serialized only
+    if a value changed -- otherwise the ORIGINAL string is returned byte for
+    byte (so NullDetector/passthrough is a no-op). Non-JSON arguments are
+    redacted as one plain string.
+
+    At most TWO `det.analyze` calls per invocation, whatever the number of
+    calls or values (pass 1 is skipped when there is no string/number value):
+      1. Context pass -- every value rendered as `key: value` lines in one
+         scan text; entities overlapping a value are clipped to it.
+      2. Raw pass -- the raw argument strings joined, i.e. the same text the
+         gate classifies (`tool_call_arg_text`). Its types are always
+         reported, and any entity value still present verbatim in a value is
+         redacted there too. This is the guarantee that redaction never lets
+         through what classification saw -- e.g. `{"ssn": "482731946"}`,
+         which Presidio only scores as US_SSN with the key in view, so a
+         per-app `pii_score_threshold`/denylist (which can never exempt
+         US_SSN) cannot un-redact it.
+    Placeholders are numbered per value (`<US_SSN_1>` may repeat across
+    values); the redaction map is not kept for tool calls."""
     if not tool_calls:
         return ToolCallRedaction(tool_calls, frozenset())
-    out: list[dict] = []
-    for tc in tool_calls:
+
+    targets: list[_Target] = []
+    for i, tc in enumerate(tool_calls):
         fn = tc.get("function") if isinstance(tc, dict) else None
         args = fn.get("arguments") if isinstance(fn, dict) else None
-        if isinstance(fn, dict) and isinstance(args, str):
-            redacted = _redact_arguments(args, det, found)
-            if redacted is not args:
-                tc = {**tc, "function": {**fn, "arguments": redacted}}
-        out.append(tc)
+        if not (isinstance(fn, dict) and isinstance(args, str)):
+            continue
+        target = _Target(index=i, args=args, is_json=False)
+        try:
+            target.root = json.loads(args)
+            _collect_leaves(target.root, None, None, "", target.leaves)
+            target.is_json = True
+        except (ValueError, RecursionError):
+            target.leaves = [_Leaf(None, None, args)]
+        targets.append(target)
+
+    if not targets:
+        return ToolCallRedaction(list(tool_calls), frozenset())
+
+    # Pass 1: context scan over decoded values.
+    all_leaves = [leaf for t in targets for leaf in t.leaves]
+    parts: list[str] = []
+    offset = 0
+    for leaf in all_leaves:
+        prefix = f"{leaf.label}: " if leaf.label else ""
+        leaf.start = offset + len(prefix)
+        leaf.end = leaf.start + len(leaf.text)
+        line = prefix + leaf.text
+        parts.append(line)
+        offset += len(line) + 1
+    found: set[str] = set()
+    for e in (det.analyze("\n".join(parts)) if parts else []):
+        for leaf in all_leaves:
+            s, t = max(e.start, leaf.start), min(e.end, leaf.end)
+            if s < t:
+                found.add(e.type)
+                ls, lt = s - leaf.start, t - leaf.start
+                leaf.spans.append(Entity(type=e.type, start=ls, end=lt,
+                                         value=leaf.text[ls:lt], score=e.score))
+
+    # Pass 2: raw scan over the argument strings as the gate classifies them.
+    raw = "\n".join(t.args for t in targets)
+    for e in det.analyze(raw):
+        found.add(e.type)
+        value = raw[e.start:e.end].strip(_JSON_EDGE)
+        if not value:
+            continue
+        for leaf in all_leaves:
+            for s, t in _occurrences(value, leaf.text):
+                leaf.spans.append(Entity(type=e.type, start=s, end=t,
+                                         value=value, score=e.score))
+
+    out = list(tool_calls)
+    for target in targets:
+        changed = False
+        for leaf in target.leaves:
+            if not leaf.spans:
+                continue
+            redacted, _ = det.anonymize(leaf.text, dedupe(leaf.spans))
+            if redacted == leaf.text:
+                continue
+            changed = True
+            if leaf.parent is None:
+                target.root = redacted
+            else:
+                leaf.parent[leaf.key] = redacted  # type: ignore[index]
+        if not changed:
+            continue
+        new_args = (json.dumps(target.root, ensure_ascii=False) if target.is_json
+                    else target.root)
+        tc = tool_calls[target.index]
+        out[target.index] = {**tc, "function": {**tc["function"], "arguments": new_args}}
     return ToolCallRedaction(out, frozenset(found))
 
 
