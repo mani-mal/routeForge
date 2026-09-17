@@ -42,11 +42,11 @@ The internal NeMo Agent Toolkit (NAT) path contradicts that:
 ### 2.2 Kept
 
 - **Step 4 remains, as an explicit constant decision.** `task_mode.decide()` returns
-  `"direct"` unconditionally and step 4 still emits a `DecisionRecord`
-  (`step: "task_mode"`, `branch: "direct"`, reason:
-  `"agent loops are client-driven; each call is routed independently"`). The
-  "steps 1–10" numbering, the console drill-down step, and the Langfuse span keep
-  their names. The console caption changes from "Direct answer vs. multi-step agent"
+  `"direct"` unconditionally. The "steps 1–10" numbering and the console drill-down
+  step keep their names. **Note:** step 4 emits no `DecisionRecord` today (verified
+  2026-09-17: nothing in `app/` constructs one with `step="task_mode"`, and the console
+  derives the step body from the router/hop records). This change does not add one —
+  recording the compiled task mode belongs to P1a's decision certificate. The console caption changes from "Direct answer vs. multi-step agent"
   to "Direct — agent loops run in the client" (`ui/src/api.ts`).
 - **`mock_multistep` is silently ignored.** `ChatRequest` uses `extra="allow"` and
   never declared the field (`task_mode.py` read it via `getattr`), so removing the
