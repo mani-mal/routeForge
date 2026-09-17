@@ -25,17 +25,19 @@ def test_task_mode_is_direct():
     req = ChatRequest(messages=[Message(role="user", content="hi")])
     assert decide(CTX, req) == "direct"
 
-def test_task_mode_multi_step_on_mock_multistep_flag():
+
+def test_task_mode_direct_on_former_trigger_phrases():
+    """"step by step" / "look up" used to divert to the internal NAT agent.
+    Agent loops are client-driven now: every call routes direct."""
+    for content in ("Solve this step by step: 2+2",
+                    "Look up account 42 please"):
+        req = ChatRequest(messages=[Message(role="user", content=content)])
+        assert decide(CTX, req) == "direct"
+
+
+def test_task_mode_direct_ignores_mock_multistep_flag():
+    """`mock_multistep` was a demo-only hint; ChatRequest has extra="allow",
+    so a client that still sends it is simply ignored."""
     req = ChatRequest(messages=[Message(role="user", content="hi")],
                       mock_multistep=True)
-    assert decide(CTX, req) == "multi_step"
-
-def test_task_mode_multi_step_on_trigger_phrase():
-    req = ChatRequest(messages=[Message(role="user",
-                                        content="Look up account 42 please")])
-    assert decide(CTX, req) == "multi_step"
-
-def test_task_mode_multi_step_on_step_by_step_phrase():
-    req = ChatRequest(messages=[Message(
-        role="user", content="Solve this step by step: 2+2")])
-    assert decide(CTX, req) == "multi_step"
+    assert decide(CTX, req) == "direct"

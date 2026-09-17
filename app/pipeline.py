@@ -26,7 +26,6 @@ from app.compression.ccr import CCRStore
 from app.memory import RecallResult, recall_memory, write_memory
 from app.memory.store import MemoryStore
 from app.routing.task_mode import decide as decide_mode
-from app.routing.task_mode_llm import classify_task_mode
 
 if TYPE_CHECKING:
     from app.apps.registry import ModelRegistry
@@ -246,35 +245,6 @@ class Pipeline:
                        tool_calls=redact_tool_calls(m.tool_calls, det),
                        tool_call_id=m.tool_call_id, name=m.name)
 
-    def _classifier_enabled(self) -> bool:
-        """The step-4 LLM classifier is OFF unless BOTH the master switch
-        (`routing.prompt_opt.enabled`) is on AND the operator has pinned +
-        verified the `task_mode_classifier` artifact (`active_prompts` is
-        populated by the config loader only for pins that resolved -- see
-        `app/config/loader.py`). The shipped `config/routing.yaml` leaves
-        `prompt_opt.enabled: false`, so this is False by default and the
-        rules `decide()` path below is unchanged."""
-        return (self._s.routing.prompt_opt.enabled
-                and "task_mode_classifier" in self._s.active_prompts)
-
-    async def _decide_task_mode(self, ctx: ExecutionPolicyContext, sanitized: str,
-                                request: ChatRequest) -> tuple[str, DecisionRecord | None]:
-        """Resolve step-4 task mode: the optional LLM classifier when enabled
-        + pinned (routed ONLY via `Router.select` through the gateway's own
-        router/backend -- see `classify_task_mode`'s docstring for the
-        residency argument), else the unchanged rules `decide()` path.
-        Returns `(mode, classifier_record_or_None)` so both call sites can
-        fold the classifier's DecisionRecord (when one was produced) into the
-        SAME trace the pipeline already returns -- its cost must not be
-        invisible (CLAUDE.md pitfall: "don't compute cost only at the end")."""
-        if not self._classifier_enabled():
-            return decide_mode(ctx, request), None
-        artifact = self._s.active_prompts["task_mode_classifier"]
-        mode, crec = await classify_task_mode(
-            ctx, sanitized, artifact, request,
-            self._gateway.router, self._gateway.backend, self._s, self._reg)
-        return mode, crec
-
     def _baseline(self, in_tokens: int, out_tokens: int) -> float:
         """All-frontier baseline: input and output priced at the baseline
         (most-expensive frontier) model's respective rates — the SAME token
@@ -440,11 +410,10 @@ class Pipeline:
             san_messages = [self._sanitize_msg(det, m) for m in request.messages]
             recall = RecallResult([], None)
         else:
-            # Task-mode: the optional LLM classifier (Task 2) when enabled +
-            # pinned, else the unchanged rules `decide()` path. Either way this
-            # receives SANITIZED content only, never the raw request — see
-            # CLAUDE.md rule 1 and `classify_task_mode`'s docstring.
-            mode, crec = await self._decide_task_mode(ctx, sanitized, request)
+            # Task-mode: step 4 always decides "direct" now (no internal agent
+            # to divert to). Runs on SANITIZED content only, never the raw
+            # request — see CLAUDE.md rule 1.
+            mode, crec = decide_mode(ctx, request), None
 
             san_messages = [Message(role=request.messages[-1].role, content=sanitized)]
 
@@ -779,9 +748,9 @@ class Pipeline:
                 "tool-calling conversation: served as one complete completion, "
                 "then streamed")
 
-        # Streaming is the direct/single-shot path only. Same optional-LLM-
-        # classifier-else-rules resolution as run() (Task 2).
-        mode, crec = await self._decide_task_mode(ctx, sanitized, request)
+        # Streaming is the direct/single-shot path only. Same step-4
+        # resolution as run(): always "direct".
+        mode, crec = decide_mode(ctx, request), None
         if mode == "multi_step":
             raise StreamFallback(
                 "multi_step request cannot stream unverified; verify the "
