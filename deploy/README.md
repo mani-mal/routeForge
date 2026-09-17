@@ -31,9 +31,9 @@ docker compose -f deploy/compose/docker-compose.yml --profile gpu up
 # and set SP_INFERENCE_BACKEND=vllm
 ```
 
-> First build compiles the API image with the NAT (`agent`) extra, which is large —
-> the "< 5 minutes" target assumes images are already built/pulled. For a lean
-> mock-only image build with `--build-arg EXTRAS=""`.
+> First build compiles the API image with the `observability` extra (Langfuse
+> export) — the "< 5 minutes" target assumes images are already built/pulled.
+> For a lean mock-only image build with `--build-arg EXTRAS=""`.
 
 ## Single workstation — NVIDIA DGX Spark
 

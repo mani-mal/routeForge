@@ -596,9 +596,7 @@ class Pipeline:
         # summing quality across attempts would inflate Token Intelligence
         # Density against a denominator that never grew. Retried low-confidence
         # attempts delivered nothing to the user; their quality isn't "quality
-        # delivered". (Contrast with the multi-step path below, where each hop
-        # IS a served call and both numerator and token denominator legitimately
-        # sum over all hops — do not apply this change there.)
+        # delivered".
         qrecs = [r for r in records if r.quality_score is not None]
         chosen_q = qrecs[-1] if qrecs else None
         quality_sum = chosen_q.quality_score if chosen_q else 0.0

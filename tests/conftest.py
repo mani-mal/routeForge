@@ -84,7 +84,8 @@ def compression_on_pipeline() -> Pipeline:
     model_router = Router(settings, registry=registry)
     gateway = Gateway(settings, backend, model_router, registry)
     ccr = CCRStore(ttl_seconds=co.ccr.ttl_hours * 3600)
-    return Pipeline(settings, gate, detector, gateway, co_cfg_provider=lambda: co, ccr=ccr, registry=registry)
+    return Pipeline(settings, gate, detector, gateway,
+                     co_cfg_provider=lambda: co, ccr=ccr, registry=registry)
 
 
 def admin_cookie(port: int) -> str:

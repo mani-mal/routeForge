@@ -554,7 +554,7 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
     # ChatCompletion model rejects a response missing `created`, which killed
     # every turn before it reached a tool. Setting them here, the single
     # post-model chokepoint every shape passes through (direct, cache hit,
-    # multi-step, and the streaming console record), keeps them consistent.
+    # and the streaming console record), keeps them consistent.
     # `setdefault` so a shape that ever sets its own value wins.
     resp.setdefault("object", "chat.completion")
     resp.setdefault("created", int(time.time()))
