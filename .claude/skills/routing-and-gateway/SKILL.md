@@ -173,4 +173,5 @@ all-frontier. The dashboard's headline number is the delta.
 - High risk + `onprem_only` → best on-prem tier + `require_verification`, **never** cloud
 - Low confidence → exactly one escalation, then stop
 - Circuit breaker opens after N failures, falls back within policy
-- 4-hop agent task → 4 DecisionRecords with distinct `hop_index`
+- Task mode always resolves `direct` (agent loops are client-driven); each call
+  is its own request and emits its own DecisionRecord

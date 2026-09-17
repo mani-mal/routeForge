@@ -51,7 +51,8 @@ count kept on-prem, p50/p95 latency. These are the numbers you'll read aloud.
 - `test_output_controls.py` — step 9: leakage check on completions, `require_verification`
   flow, escalation-then-fail-closed, `stream: true` rejected (see `output-controls` skill)
 - `test_observability.py` — traces exported; **assert no raw PII and no CCR contents in spans**
-- `test_agent_runtime.py` — hop count, per-hop routing, step/spend caps
+- `test_no_agent_imports.py` — guards against the removed NAT agent creeping back
+  in (no `app/agent` package, no `nat` import, no `nvidia-nat` dependency)
 - `test_e2e.py` — each persona end-to-end through the real pipeline
 
 ## Assertions that matter most
