@@ -15,7 +15,7 @@ def test_boot_survives_serving_yaml_without_semantic_cache_block(tmp_path):
     # context_optimization; a required key would KeyError every existing
     # deployment on upgrade.
     raw = yaml.safe_load(pathlib.Path("config/serving.yaml").read_text())
-    for k in ("semantic_cache", "memory", "stage_signals"):
+    for k in ("semantic_cache", "memory"):
         raw.pop(k, None)
     (tmp_path / "serving.yaml").write_text(yaml.safe_dump(raw))
     for f in ("policy.yaml", "routing.yaml", "pricing.yaml"):

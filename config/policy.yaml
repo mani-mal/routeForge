@@ -37,13 +37,6 @@ budgets:
   # no max_tokens / max_completion_tokens.
   default_estimated_output_tokens: 512
 
-# Multi-step agent caps (NeMo Agent Toolkit). Owned here as a budget concern; not
-# duplicated in serving.yaml or routing.yaml.
-agent_budgets:
-  max_steps: 5
-  max_spend_usd: 0.05
-  per_call_timeout_s: 10
-
 tenants:
   acme:     {display_name: "Acme Corp",      default_residency: private_cloud_ok}
   hospital: {display_name: "General Health", default_residency: onprem_only}

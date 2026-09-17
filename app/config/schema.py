@@ -22,25 +22,6 @@ class PoolCandidate(BaseModel):
     quality: float | None = None
 
 
-class StageSignalsCfg(BaseModel):
-    # Feature 2: agent-loop-derived, RAISE-ONLY tier bias. Default OFF so the
-    # baseline/demo numbers are unchanged; an operator toggles it on to show
-    # the lever. The signal only ever joins the max() in Router.select as a
-    # min_tier -- the residency clamp still caps it, so it can never lift an
-    # onprem_only request to cloud (CLAUDE.md rules 3 & 8).
-    enabled: bool = False
-    tool_error_raise: bool = True      # a tool error in the latest result -> raise one tier
-    exploration_repeat: int = 3        # same tool called >= N times -> raise one tier
-    planner_role_raise: bool = True    # gates the "plan" role specifically (see role_tiers)
-    # Role -> min_tier raise map (Task 1: full role tagging -- plan/verify/
-    # execute/format). Config-driven so operators can tune it; a role absent
-    # from this map never raises. "plan" only raises when planner_role_raise
-    # is also True. "execute"/"format" are intentionally absent by default --
-    # they leave the cost/quality router free to pick the cheap tier.
-    role_tiers: dict[str, str] = Field(
-        default_factory=lambda: {"plan": "frontier", "verify": "mid"})
-
-
 class PromptOptCfg(BaseModel):
     """Feature 3 (DSPy prompt-optimization) Task 1: managed-prompt substrate.
     Home for the step-4 router's classifier pin today, and for any future
@@ -82,7 +63,6 @@ class RoutingCfg(BaseModel):
     risk_floors: dict[str, str]
     model_pool: list[PoolCandidate]
     fallback: dict[str, int]
-    stage_signals: StageSignalsCfg = StageSignalsCfg()
     prompt_opt: PromptOptCfg = PromptOptCfg()
     # Step-6 scoring strategy name (app/routing/strategy.py's `_STRATEGIES`
     # registry). Owned here only -- the config lint rejects an unknown name at
@@ -108,7 +88,6 @@ class PolicyCfg(BaseModel):
     default_sensitivity: str
     sensitivity_rules: list[SensitivityRule]
     budgets: dict[str, float]
-    agent_budgets: dict[str, float]
     tenants: dict[str, TenantCfg]
 
 
