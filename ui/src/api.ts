@@ -471,7 +471,7 @@ export const STEPS: StepMeta[] = [
   { key: "request", label: "Request", caption: "Incoming OpenAI-compatible call" },
   { key: "gate", label: "Policy Gate", caption: "Detect & redact PII/PHI, set residency" },
   { key: "context", label: "Policy Context", caption: "Immutable policy travels with the request" },
-  { key: "task_mode", label: "Task Mode", caption: "Direct answer vs. multi-step agent" },
+  { key: "task_mode", label: "Task Mode", caption: "Direct — agent loops run in the client" },
   { key: "compression", label: "Compression", caption: "Headroom shrinks tool output & history" },
   { key: "router", label: "Model Router", caption: "Picks model + tier per call, by cost & risk" },
   { key: "gateway", label: "Gateway", caption: "Quotas, breakers, fallback on failure" },
