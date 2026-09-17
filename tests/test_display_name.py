@@ -25,7 +25,7 @@ def _pipeline(settings):
     return Pipeline(settings, Gate(settings, det, registry=registry), det,
                     Gateway(settings, _DeterministicLiteLLM(settings),
                             Router(settings, registry=registry), registry),
-                    self_port=8080, co_cfg_provider=lambda: co,
+                    co_cfg_provider=lambda: co,
                     ccr=CCRStore(3600), registry=registry)
 
 
@@ -101,7 +101,7 @@ def test_display_name_falls_back_to_slug_when_unset():
     pipe = Pipeline(
         s, Gate(s, det, registry=registry), det,
         Gateway(s, _DeterministicLiteLLM(s), Router(s, registry=registry), registry),
-        self_port=8080, co_cfg_provider=lambda: co, ccr=CCRStore(3600), registry=registry)
+        co_cfg_provider=lambda: co, ccr=CCRStore(3600), registry=registry)
 
     out = asyncio.run(pipe.run(
         "req-dn3", "acme",

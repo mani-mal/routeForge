@@ -46,7 +46,7 @@ def test_escalation_to_baseline_model_yields_zero_routing_saved_identity_holds()
     co = s.serving.context_optimization
     pipe = Pipeline(s, Gate(s, det), det,
                     Gateway(s, _DeterministicLiteLLM(s), Router(s)),
-                    self_port=8080, co_cfg_provider=lambda: co, ccr=CCRStore(3600))
+                    co_cfg_provider=lambda: co, ccr=CCRStore(3600))
     req = ChatRequest(messages=[Message(role="user", content="Email john.doe@example.com re: Q3")])
     object.__setattr__(req, "mock_confidence", 0.1)  # routes directly to the frontier (baseline) model — chosen == baseline_model
     out = asyncio.run(pipe.run("rid", "acme", req))
@@ -83,7 +83,7 @@ def test_cheaper_tier_request_has_positive_routing_saved():
     registry = make_test_registry(s)
     pipe = Pipeline(s, Gate(s, det, registry=registry), det,
                     Gateway(s, _DeterministicLiteLLM(s), Router(s, registry=registry), registry),
-                    self_port=8080, co_cfg_provider=lambda: co, ccr=CCRStore(3600),
+                    co_cfg_provider=lambda: co, ccr=CCRStore(3600),
                     registry=registry)
     req = ChatRequest(messages=[Message(role="user", content="What is the capital of France?")])
     out = asyncio.run(pipe.run("rid", "acme", req))

@@ -11,7 +11,7 @@ from app.errors import PolicyGateError
 from app.gateway.backends.base import count_tokens
 from app.gateway.gateway import Gateway
 from app.models import (
-    CacheRecord, ChatRequest, Choice, CompressionRecord, DecisionRecord,
+    CacheRecord, ChatRequest, Choice, CompressionRecord,
     ExecutionPolicyContext, GenerationResult, MemoryRecord,
     Message, Usage, VerificationRecord,
 )
@@ -25,7 +25,6 @@ from app.compression import CompressionResult, compress
 from app.compression.ccr import CCRStore
 from app.memory import RecallResult, recall_memory, write_memory
 from app.memory.store import MemoryStore
-from app.routing.task_mode import decide as decide_mode
 
 if TYPE_CHECKING:
     from app.apps.registry import ModelRegistry
@@ -44,14 +43,13 @@ class StreamFallback(Exception):
     `verified_then_stream` (buffer the full answer, run step-9 verification,
     then chunk the finished text).
 
-    Raised in exactly ONE place -- `run_stream` -- for three reasons. Two are
-    the privacy backstop from Global Constraint 1:
-      * the request routes `multi_step` (streaming is direct-path only), or
-      * `ctx.onprem_only` or `ctx.require_verification` is set (a residency- or
-        risk-floored request is never streamed without a complete-response
-        verification).
-    The third is structural: a client-driven tool conversation, which only
-    `run()` can serve (tools forwarded, per-message structure kept).
+    Raised in exactly ONE place -- `run_stream` -- for exactly two reasons:
+      * `ctx.onprem_only` or `ctx.require_verification` is set (the privacy
+        backstop from Global Constraint 1: a residency- or risk-floored
+        request is never streamed without a complete-response verification),
+        or
+      * the request is a client-driven tool conversation, which only `run()`
+        can serve (tools forwarded, per-message structure kept).
     """
     pass
 
@@ -65,7 +63,7 @@ def _is_tool_conversation(request: ChatRequest) -> bool:
 
 class Pipeline:
     def __init__(self, settings: Settings, gate: Gate, detector: Detector,
-                 gateway: Gateway, self_port: int,
+                 gateway: Gateway,
                  co_cfg_provider: Callable[[], ContextOptimizationCfg],
                  ccr: CCRStore, registry: "ModelRegistry | None" = None,
                  memory: MemoryStore | None = None,
@@ -79,19 +77,13 @@ class Pipeline:
         # consult it too, or their human-facing name silently falls back to
         # the raw slug (see model-registry-onboarding plan Task 4).
         self._reg = registry
-        # Port THIS app is listening on. The agent runtime (multi_step path)
-        # drives a real NAT agent whose LLM calls self-call our own internal
-        # endpoint at 127.0.0.1:{self._self_port} — see app/agent/runtime.py.
-        self._self_port = self_port
         # Step 5 (compression) config, read dynamically on every call instead
         # of a frozen value captured at construction — so a runtime toggle
         # via POST /api/controls (which mutates app.state.co_cfg) takes
-        # effect on the NEXT direct-path request without a restart. The
-        # internal per-hop endpoint (app/agent/internal_endpoint.py) already
-        # reads request.app.state.co_cfg directly; main.py wires this
-        # provider to the SAME mutable app.state.co_cfg so both paths share
-        # one source of truth. The local, TTL-bounded CCR store used by the
-        # direct path — see app/compression/__init__.py, ccr.py.
+        # effect on the NEXT request without a restart. main.py wires this
+        # provider to app.state.co_cfg so a runtime toggle applies process-
+        # wide. The local, TTL-bounded CCR store used by the direct path —
+        # see app/compression/__init__.py, ccr.py.
         self._co_cfg_provider = co_cfg_provider
         self._ccr = ccr
         # Persistent memory (Feature 5, Task 2): parallels self._ccr above --
@@ -117,8 +109,8 @@ class Pipeline:
         # .enabled is true (read live off self._s on every call, same pattern
         # as self._co_cfg_provider() -- there is no separate cfg param to
         # thread since Settings already carries it). Direct path only (see
-        # run()); never touched by run_stream/_run_multi_step -- see the
-        # comments at each of those call sites for why.
+        # run()); never touched by run_stream -- see the comment at that call
+        # site for why.
         self._cache = cache
 
     def _detector_for(self, mode: str | None) -> Detector:
@@ -255,8 +247,8 @@ class Pipeline:
     def _display_name(self, model_slug: str) -> str:
         """Resolve a routing-pool slug (e.g. `local-8b`) to its human-facing
         model name (e.g. `Qwen2.5-7B-Instruct (local)`) for the UI. Falls back
-        to the slug when no display name is configured or the slug is unknown
-        (e.g. the multi-step `"auto"` sentinel). Reads the registry's merged
+        to the slug when no display name is configured or the slug is
+        unknown. Reads the registry's merged
         pool (static YAML + enabled onboarded rows) when available, since
         onboarded on-prem models never appear in the static
         `settings.routing.model_pool`."""
@@ -394,34 +386,29 @@ class Pipeline:
         # may return tool_calls, forwarding the full structured, PER-MESSAGE-
         # redacted conversation to the model. This path is deliberately distinct
         # from the ordinary single-prompt path (which flattens the whole request
-        # into one sanitized blob) and from the internal NAT agent (`multi_step`)
-        # -- a client's tool loop must never be hijacked by our own agent. It
-        # forces `direct` and skips task-mode, the semantic cache, and memory,
-        # all of which assume that single flattened prompt.
+        # into one sanitized blob) -- a client's tool loop must never be
+        # hijacked. It skips the semantic cache and memory, both of which
+        # assume that single flattened prompt.
         tools = request.tools
         tool_choice = request.tool_choice
         tool_mode = _is_tool_conversation(request)
 
         if tool_mode:
-            mode, crec = "direct", None
             # Preserve roles + tool structure, but redact EACH message's text so
             # no raw PII reaches the model (CLAUDE.md rule 1) -- the same
             # guarantee the flattened path gives, applied message-by-message.
             san_messages = [self._sanitize_msg(det, m) for m in request.messages]
             recall = RecallResult([], None)
         else:
-            # Task-mode: step 4 always decides "direct" now (no internal agent
-            # to divert to). Runs on SANITIZED content only, never the raw
-            # request — see CLAUDE.md rule 1.
-            mode, crec = decide_mode(ctx, request), None
-
+            # Step 4 (task mode) always decides "direct" -- agent loops are
+            # client-driven, so there is no internal multi-step mode to divert
+            # to (see app/routing/task_mode.py).
             san_messages = [Message(role=request.messages[-1].role, content=sanitized)]
 
             # Memory READ (Feature 5, Task 2): after san_messages (post-gate,
             # sanitized) and before compress() -- recalled context is prepended
             # so it gets compressed + priced like any other request tokens, no
-            # separate untracked token path. Runs for BOTH the direct and
-            # multi_step branches below, since both consume `san_messages`.
+            # separate untracked token path.
             #
             # Partition key note: `run()` is never handed a distinct
             # application_id -- "the application id equals the tenant slug"
@@ -443,20 +430,9 @@ class Pipeline:
             if recall.messages:
                 san_messages = recall.messages + san_messages
 
-        if mode == "multi_step":
-            # No outer compress() here: the agent runtime re-enters
-            # compression per hop (app/agent/internal_endpoint.py, Task 7 /
-            # M3), so an outer pass on san_messages alone would be wasted
-            # work and its tokens_after would not reflect the real per-hop
-            # pricing basis. san_messages (sanitized, not yet compressed)
-            # still goes to the agent — each hop compresses its own view.
-            return await self._run_multi_step(
-                request_id, ctx, request, san_messages, det, policy_mode,
-                recall.record, classifier_record=crec)
-
         # Feature #6 — semantic cache CHECK (direct path only; see the
-        # constructor comment and _run_multi_step/run_stream for why they
-        # never touch this). Runs after san_messages, before compress: a hit
+        # constructor comment and run_stream for why it never touches this).
+        # Runs after san_messages, before compress: a hit
         # skips compress/gateway/verify entirely and short-circuits below.
         # `cache_active` mirrors C7 — with the feature off (or main.py never
         # constructing a cache) nothing here runs and nothing is added to the
@@ -527,12 +503,6 @@ class Pipeline:
         result, records = await self._gateway.run(
             ctx, comp.messages, comp.tokens_after, complexity, hint,
             tools=tools, tool_choice=tool_choice, params=request.generation_params())
-        if crec is not None:
-            # Fold the classifier's own DecisionRecord into the SAME trace/
-            # cost accumulation as the router's -- its cost must not be
-            # invisible (CLAUDE.md pitfall). `quality_score` is unset on
-            # `crec`, so it never displaces the served hop's quality below.
-            records = [crec, *records]
 
         text, vrec = verify(det, ctx, result.text)
         if not vrec.passed:
@@ -703,8 +673,8 @@ class Pipeline:
         path the cache checks/stores against.
 
         Interface (documented design choice): `run_stream` is a coroutine that
-        eagerly runs the gate, task-mode decision, and the runtime floor, then
-        returns `(deltas, get_meta)`:
+        eagerly runs the gate and the runtime floor, then returns
+        `(deltas, get_meta)`:
           * `deltas` -- an async generator yielding ordered token-delta `str`s.
           * `get_meta` -- a zero-arg callable returning the final metadata dict
             (records/trace, two-lever cost, tokens, model, ctx-derived policy,
@@ -714,11 +684,11 @@ class Pipeline:
 
         Why a coroutine returning a pair (not a bare async generator): the gate
         and the runtime floor MUST run BEFORE any token is emitted, so that a
-        `StreamFallback` (multi_step, onprem_only, or require_verification) is
-        raised eagerly -- before the caller has committed to a StreamingResponse
-        -- letting the route fall back to `verified_then_stream` cleanly. A bare
-        async generator would defer those checks to first-iteration, after the
-        response has started.
+        `StreamFallback` (onprem_only / require_verification, or a client-
+        driven tool conversation) is raised eagerly -- before the caller has
+        committed to a StreamingResponse -- letting the route fall back to
+        `verified_then_stream` cleanly. A bare async generator would defer
+        those checks to first-iteration, after the response has started.
 
         Nothing external sees the raw request before the gate: the gate (with
         the per-app detector `_gate_inputs` composes, mirroring `run()`) runs
@@ -748,13 +718,6 @@ class Pipeline:
                 "tool-calling conversation: served as one complete completion, "
                 "then streamed")
 
-        # Streaming is the direct/single-shot path only. Same step-4
-        # resolution as run(): always "direct".
-        mode, crec = decide_mode(ctx, request), None
-        if mode == "multi_step":
-            raise StreamFallback(
-                "multi_step request cannot stream unverified; verify the "
-                "complete agent response")
         # Runtime floor (Global Constraint 1) -- the privacy backstop, in ONE
         # place: an onprem_only or verification-required request must be verified
         # as a COMPLETE response, never streamed unverified.
@@ -783,10 +746,6 @@ class Pipeline:
         stream, records = await self._gateway.run_stream(
             ctx, comp.messages, comp.tokens_after, complexity, hint,
             params=request.generation_params())
-        if crec is not None:
-            # Same fold as run() -- the classifier's cost/reason reach the
-            # SAME trace `_assemble_stream_meta` builds below.
-            records = [crec, *records]
 
         meta: dict = {}
 
@@ -882,135 +841,4 @@ class Pipeline:
             # Step-9 verification marker: "waived" this task. Tasks 6/7 refine to
             # "waived" (stream_unverified) / "incremental" (incremental_verify).
             "verification": "waived",
-        }
-
-    async def _run_multi_step(self, request_id: str, ctx: ExecutionPolicyContext,
-                              request: ChatRequest, san_messages: list[Message],
-                              det: Detector, policy_mode: str,
-                              mem_record: MemoryRecord | None = None,
-                              classifier_record: DecisionRecord | None = None) -> dict:
-        # NOT wired to the semantic cache (feature #6, Task 2), deliberately:
-        # a multi-step run is non-deterministic and tool-driven (its final
-        # text is not a pure function of the initial query), so neither a
-        # cache check nor a cache store make sense here. See `run()` for the
-        # only path the cache checks/stores against.
-        #
-        # Lazy import: nat is an optional extra; importing app.pipeline must not
-        # require it to be installed (mirrors app/agent/runtime.py's own lazy
-        # import of the nat package itself).
-        from app.agent.runtime import run as agent_run
-
-        # The agent gets SANITIZED content only, never the raw request — the
-        # gate has already redacted it above; this mirrors the direct path's
-        # san_messages and keeps CLAUDE.md rule 1/2 (nothing downstream of the
-        # gate sees raw PII) true for multi-step too.
-        sanitized_request = request.model_copy(update={"messages": san_messages})
-        # AgentCapExceeded (fail closed on cap-exceed) is intentionally not
-        # caught here: it propagates to the route, which maps any
-        # non-PipelineRejected exception to a handled error response.
-        result = await agent_run(ctx, sanitized_request, port=self._self_port)
-
-        text, vrec = verify(det, ctx, result.text)
-        if not vrec.passed:
-            raise PipelineRejected(vrec.reason)
-
-        # Memory WRITE is intentionally NOT wired for multi-step (Task 2 scope
-        # decision -- see task-2-report.md): unlike the direct path, there is
-        # no single (sanitized, verified) exchange here to summarize -- the
-        # agent may run several hops, each with its own tool I/O, and
-        # `sanitized`/`text` are not threaded into this method. READ still
-        # runs (san_messages, above, was already prepended with recalled
-        # context in run() before this method was called) -- only WRITE is
-        # deferred. Never writes raw/un-verified content on this path.
-        total = sum(
-            h.actual_cost_usd if h.actual_cost_usd is not None else (h.est_cost_usd or 0.0)
-            for h in result.hops)
-        if classifier_record is not None:
-            # Additive, not zipped with result.compressions -- deliberately
-            # kept OUT of result.hops so the hops<->compressions 1:1 zip
-            # below stays aligned (Task 2; classifier_record has no
-            # matching per-hop CompressionRecord of its own).
-            total += (classifier_record.actual_cost_usd
-                     if classifier_record.actual_cost_usd is not None
-                     else (classifier_record.est_cost_usd or 0.0))
-        # Two-lever accounting for multi-step (M3 / Task 7): each hop now
-        # re-enters compression itself (app/agent/internal_endpoint.py), so
-        # `result.compressions` is 1:1 with `result.hops` instead of a single
-        # outer compression of the initial request.
-        #
-        # baseline_after prices the SAME (post-compression) token basis as
-        # `total` above, via each hop's `tokens_priced` — consistent with the
-        # direct path's self._baseline(comp.tokens_after, result.tokens_out).
-        baseline_after = sum(self._baseline(h.tokens_priced, h.tokens_out)
-                             for h in result.hops)
-        # baseline_before prices each hop's PRE-compression token count — the
-        # true all-frontier baseline before either lever runs. Falls back to
-        # baseline_after (so compression_saved_usd == 0) only when there are NO
-        # compression records at all, i.e. zero hops. (A hop that *bypassed*
-        # compression still emits a record with tokens_before == tokens_after,
-        # so it contributes equally to both sums and needs no special-casing.)
-        # baseline_before pairs each compression's pre-compression input with its
-        # hop's output (compressions are 1:1 with hops; see comment above).
-        if result.compressions:
-            baseline_before = sum(
-                self._baseline(cr.tokens_before, h.tokens_out)
-                for cr, h in zip(result.compressions, result.hops))
-        else:
-            baseline_before = baseline_after
-        compression_saved_usd = max(0.0, baseline_before - baseline_after)
-        # NOT clamped to 0 — see the direct path's identical rationale above:
-        # under escalation `total` can exceed `baseline_after`, and clamping
-        # here while compression_saved_usd stays positive would break the
-        # additive identity compression_saved_usd + routing_saved_usd ==
-        # baseline_usd - total_usd.
-        routing_saved_usd = baseline_after - total
-
-        trace = ([classifier_record.model_dump()] if classifier_record is not None else [])
-        trace += [h.model_dump() for h in result.hops]
-        trace += [cr.model_dump() for cr in result.compressions]
-        trace.append(vrec.model_dump())
-        if mem_record is not None:
-            trace.append(mem_record.model_dump())
-
-        qhops = [h for h in result.hops if h.quality_score is not None]
-        quality_sum = sum(h.quality_score for h in qhops)
-        chosen_q = qhops[-1] if qhops else None
-
-        model = result.hops[-1].chosen if result.hops else "auto"
-        completion_tokens = count_tokens(result.text)
-        # Prompt tokens actually priced across all hops (post-compression) —
-        # there is no longer a single outer comp.tokens_after now that each
-        # hop compresses its own view.
-        prompt_tokens = sum(h.tokens_priced for h in result.hops)
-
-        return {
-            "id": request_id,
-            "model": model,
-            "model_display": self._display_name(model),
-            "choices": [Choice(index=0,
-                               message=Message(role="assistant", content=text)
-                               ).model_dump()],
-            "usage": Usage(prompt_tokens=prompt_tokens,
-                           completion_tokens=completion_tokens,
-                           total_tokens=prompt_tokens + completion_tokens
-                           ).model_dump(),
-            "trace": trace,
-            # baseline_usd is reported pre-both-levers (baseline_before), so
-            # the headline baseline is consistent with the direct path's
-            # baseline_usd (self._baseline(comp.tokens_before, result.tokens_out)).
-            "cost": {"total_usd": total, "baseline_usd": baseline_before,
-                     "routing_saved_usd": routing_saved_usd,
-                     "compression_saved_usd": compression_saved_usd},
-            "quality": {"sum": quality_sum,
-                        "chosen": chosen_q.quality_score if chosen_q else None,
-                        "source": chosen_q.quality_source if chosen_q else None},
-            "policy": {"sensitivity": ctx.sensitivity, "onprem_only": ctx.onprem_only,
-                       "allowed_providers": sorted(ctx.allowed_providers),
-                       "detected_entities": list(ctx.detected_entities),
-                       "app_policy_version": ctx.app_policy_version,
-                       # EFFECTIVE posture (post-inherit, post-ceiling), never
-                       # the raw nullable column -- see `_policy_mode_for`.
-                       "policy_mode": policy_mode},
-            "sanitized_prompt": san_messages[-1].content if san_messages else "",
-            "raw_completion": result.text,
         }

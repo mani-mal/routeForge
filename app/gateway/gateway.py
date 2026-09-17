@@ -67,18 +67,19 @@ class Gateway:
 
     @property
     def router(self) -> Router:
-        """Exposes the SAME `Router` instance `run`/`run_stream` use, so
-        Task 2's optional step-4 LLM classifier (`app/routing/task_mode_llm.
-        py::classify_task_mode`) routes through the identical
-        residency-filtered entry point instead of the pipeline constructing
-        (or the classifier being handed) a second one."""
+        """Exposes the SAME `Router` instance `run`/`run_stream` use. If
+        step 4's rules-first task-mode decision (`app/routing/task_mode.py`)
+        is ever replaced by a routed LLM call, that call must go through this
+        identical, residency-filtered entry point instead of the pipeline
+        constructing a second one -- see CLAUDE.md's "the step-4 classifier
+        is a routed call"."""
         return self._router
 
     @property
     def backend(self) -> InferenceBackend:
         """Exposes the SAME `InferenceBackend` instance `run`/`run_stream`
-        call, for the same reason as `router` above -- the classifier makes
-        its (post-selection) call on this instance, never a new one."""
+        call, for the same reason as `router` above -- any future step-4
+        classifier call must be made on this instance, never a new one."""
         return self._backend
 
     async def run(self, ctx: ExecutionPolicyContext, messages: list[Message],

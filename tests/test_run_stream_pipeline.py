@@ -9,7 +9,7 @@ The load-bearing guarantees under test:
   * benign request -> ordered token deltas, step-9 verify NEVER called, final
     metadata carries a non-zero cost and a "waived" verification marker;
   * the runtime floor (Global Constraint 1) raises `StreamFallback` for an
-    onprem_only OR require_verification request, and for a multi_step request.
+    onprem_only OR require_verification request.
 """
 from __future__ import annotations
 
@@ -50,8 +50,7 @@ def _pipeline(settings) -> Pipeline:
     gate = Gate(settings, det, registry=registry)
     gateway = Gateway(settings, LiteLLMBackend(settings, registry=registry),
                       Router(settings, registry=registry), registry)
-    return Pipeline(settings, gate, det, gateway, self_port=8080,
-                    co_cfg_provider=lambda: co, ccr=CCRStore(3600),
+    return Pipeline(settings, gate, det, gateway, co_cfg_provider=lambda: co, ccr=CCRStore(3600),
                     registry=registry)
 
 
@@ -136,7 +135,9 @@ def test_get_meta_before_stream_consumed_raises(monkeypatch):
 # --- runtime floor: StreamFallback (Global Constraint 1) --------------------
 
 
-def test_stream_fallback_on_multi_step(monkeypatch):
+def test_former_trigger_phrase_streams_instead_of_falling_back(monkeypatch):
+    """"step by step" used to divert to the internal agent and raise
+    StreamFallback. With the agent gone it is an ordinary direct request."""
     from app.gateway.backends import litellm_backend
 
     monkeypatch.setattr(
@@ -147,11 +148,14 @@ def test_stream_fallback_on_multi_step(monkeypatch):
     async def _run():
         req = ChatRequest(messages=[Message(
             role="user", content="Explain step by step how to bake bread.")])
-        await pipe.run_stream("req-1", "demo", req,
-                              app_policy=AppPolicyView(residency="any"))
+        deltas, get_meta = await pipe.run_stream(
+            "req-1", "demo", req, app_policy=AppPolicyView(residency="any"))
+        async for _ in deltas:
+            pass
+        return get_meta()
 
-    with pytest.raises(StreamFallback):
-        asyncio.run(_run())
+    meta = asyncio.run(_run())
+    assert meta["verification"] == "waived"
 
 
 def test_stream_fallback_on_onprem_only(monkeypatch):

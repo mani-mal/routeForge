@@ -42,8 +42,7 @@ def _pipeline(settings) -> Pipeline:
     gate = Gate(settings, det, registry=registry)
     gateway = Gateway(settings, _DeterministicLiteLLM(settings),
                       Router(settings, registry=registry), registry)
-    return Pipeline(settings, gate, det, gateway, self_port=8080,
-                    co_cfg_provider=lambda: co, ccr=CCRStore(3600),
+    return Pipeline(settings, gate, det, gateway, co_cfg_provider=lambda: co, ccr=CCRStore(3600),
                     registry=registry)
 
 

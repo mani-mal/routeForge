@@ -109,28 +109,29 @@ def test_openai_sdk_raises_on_the_late_error_frame(monkeypatch):
                 pass
 
 
-def test_late_agent_cap_exceeded_is_rejected_not_error(monkeypatch):
-    """AgentCapExceeded maps to (500, ...) but is still a KNOWN/mapped serving
-    exception -- the metrics label must follow whether _error_status_detail
-    matched, not the numeric status, so it is recorded "rejected" here and
-    "error" is reserved for a genuinely unmapped exception."""
-    from app.agent.runtime import AgentCapExceeded
+def test_late_mapped_error_is_rejected_not_error(monkeypatch):
+    """A mapped serving exception (e.g. BackendUnavailable) raised AFTER the
+    stream has already started is still a KNOWN/mapped serving exception --
+    the metrics label must follow whether _error_status_detail matched, not
+    the numeric status, so it is recorded "rejected" here and "error" is
+    reserved for a genuinely unmapped exception."""
+    from app.errors import BackendUnavailable
     from app.obs import metrics
     calls: list[tuple[str, str]] = []
     monkeypatch.setattr(metrics, "observe_request",
                         lambda model, status: calls.append((model, status)))
     with conformance_client() as c:
-        app = onboard(c, "ka-agent-cap", stream_mode="verified_then_stream")
+        app = onboard(c, "ka-mapped-error", stream_mode="verified_then_stream")
         _fast_keepalive(c)
-        _slow_run(monkeypatch, c, delay=0.3, exc=AgentCapExceeded())
+        _slow_run(monkeypatch, c, delay=0.3, exc=BackendUnavailable("boom"))
         with c.stream("POST", "/v1/chat/completions", headers=app.headers, json=_TURN) as r:
             assert r.status_code == 200
             body = "".join(r.iter_text())
     data = [e for e in _events(body) if e.startswith("data: ")]
     err = json.loads(data[-2][6:])
     assert data[-1] == "data: [DONE]"
-    assert err["error"]["code"] == 500
-    assert err["error"]["message"] == "agent did not converge within its step limit"
+    assert err["error"]["code"] == 502
+    assert err["error"]["message"].startswith("no backend could serve this request")
     assert ("-", "rejected") in calls
 
 

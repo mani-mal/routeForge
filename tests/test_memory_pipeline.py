@@ -66,8 +66,7 @@ def _pipeline(settings, memory=None, backend=None) -> Pipeline:
     gate = Gate(settings, det, registry=registry)
     be = backend if backend is not None else _DeterministicLiteLLM(settings)
     gateway = Gateway(settings, be, Router(settings, registry=registry), registry)
-    return Pipeline(settings, gate, det, gateway, self_port=8080,
-                    co_cfg_provider=lambda: co, ccr=CCRStore(3600),
+    return Pipeline(settings, gate, det, gateway, co_cfg_provider=lambda: co, ccr=CCRStore(3600),
                     registry=registry, memory=memory)
 
 

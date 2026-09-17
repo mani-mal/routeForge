@@ -8,7 +8,6 @@ import yaml
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.agent.internal_endpoint import internal_router
 from app.api.admin_routes import admin_router
 from app.api.bus import DecisionBus
 from app.api.pg_bridge import PgDecisionBridge
@@ -34,8 +33,8 @@ _DEFAULT_SERVER_PORT = 8080
 
 
 def _self_port() -> int:
-    """Port THIS app is listening on — the agent runtime's internal endpoint
-    self-call target (see app/agent/runtime.py, app/pipeline.py).
+    """Port THIS app is listening on — the /api/traffic control's self-call
+    target (see app/api/ui_routes.py).
 
     `SP_SERVER_PORT` wins when set (e.g. by tests/conftest.py's
     `live_internal_server` fixture, which boots on an ephemeral port and
@@ -114,11 +113,6 @@ def create_app() -> FastAPI:
     # app/compression/ccr.py and CLAUDE.md rule 6.
     ccr = CCRStore(
         ttl_seconds=settings.serving.context_optimization.ccr.ttl_hours * 3600)
-    # Stashed so the internal per-hop endpoint (app/agent/internal_endpoint.py)
-    # can compress each agent hop's messages too — every LLM call the agent
-    # makes must re-enter compression (5) and the router (6), not just the
-    # outer request (CLAUDE.md). Reuses this same CCRStore instance, not a
-    # second one, so CCR TTL/retrieval accounting is process-wide-consistent.
     app.state.co_cfg = settings.serving.context_optimization
     app.state.ccr = ccr
     # Feature 5 (Task 2): single shared, local, TTL-bounded memory store --
@@ -140,13 +134,12 @@ def create_app() -> FastAPI:
     cache = DeterministicSemanticCache(
         ttl_seconds=settings.serving.semantic_cache.ttl_hours * 3600)
     app.state.cache = cache
-    # Computed once and reused for both the agent runtime's self-call
-    # (Pipeline below) and the /api/traffic control's self-call (Phase 7
-    # Task 4, app/api/ui_routes.py) — same own-port, single source.
+    # Reused by the /api/traffic control's self-call (Phase 7 Task 4,
+    # app/api/ui_routes.py) — own-port, single source.
     self_port = _self_port()
     app.state.self_port = self_port
     app.state.pipeline = Pipeline(
-        settings, gate, detector, gateway, self_port=self_port,
+        settings, gate, detector, gateway,
         co_cfg_provider=lambda: app.state.co_cfg, ccr=ccr, registry=registry,
         memory=memory,
         cache=cache)
@@ -172,7 +165,6 @@ def create_app() -> FastAPI:
     app.state.traffic_running = False
     app.state.traffic_last_summary: dict | None = None
     app.include_router(router)
-    app.include_router(internal_router)
     app.include_router(ui_router)
     app.include_router(admin_router)
     # Dev convenience: allow the Vite dev server to call the API directly.
