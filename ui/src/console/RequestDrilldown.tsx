@@ -71,7 +71,7 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-// The junction: one router/agent-hop decision rendered as a track switch —
+// The junction: one router decision rendered as a track switch —
 // the chosen candidate is the LIT path (tier-coloured left rail + a glowing
 // switch dot), each rejected candidate is a DIMMED spur labelled with why it
 // lost. This is the demo's "legible on a projector" moment (demo-ui skill) —

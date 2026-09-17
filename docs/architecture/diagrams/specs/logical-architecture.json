@@ -14,9 +14,8 @@
       {"id": "authz", "label": "Auth + tokens\nargon2-cffi", "color": "purple"},
       {"id": "appstore", "label": "App / usage store\nSQLAlchemy (async)", "color": "purple"}
     ]},
-    {"title": "4 · Task-Mode Router + Agent Runtime", "nodes": [
-      {"id": "taskmode", "label": "Task-mode router\nrules-first", "color": "blue"},
-      {"id": "nat", "label": "Agent runtime\nNeMo Agent Toolkit\n(nvidia-nat + LangChain)", "color": "blue"}
+    {"title": "4 · Task-Mode Router", "nodes": [
+      {"id": "taskmode", "label": "Task-mode router\nalways direct\n(agent loops are client-driven)", "color": "blue"}
     ]},
     {"title": "5 · Conditional Context Optimization  (per call)", "nodes": [
       {"id": "headroom", "label": "Compression\nHeadroom (headroom-ai)", "color": "purple"},
@@ -46,8 +45,6 @@
     {"from": "api", "to": "presidio", "label": "gate first", "color": "#B85450"},
     {"from": "presidio", "to": "taskmode", "label": "sanitized"},
     {"from": "taskmode", "to": "headroom", "label": "direct"},
-    {"from": "nat", "to": "headroom", "label": "per hop", "dashed": true},
-    {"from": "taskmode", "to": "nat", "label": "multi-step", "dashed": true},
     {"from": "headroom", "to": "router", "label": "post-compress", "color": "#9673A6"},
     {"from": "router", "to": "gateway", "label": "select"},
     {"from": "gateway", "to": "onprem", "label": "dispatch", "color": "#D79B00"},

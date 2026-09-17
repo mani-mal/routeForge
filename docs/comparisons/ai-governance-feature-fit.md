@@ -1,5 +1,11 @@
 # AI Governance Feature Fit — the "AI Control Tower" checklist vs. RouteForge
 
+> **Superseded 2026-09-17:** the internal NAT agent and the multi-step path were
+> removed; agent loops are client-driven. Anything below that reasons about an
+> in-process agent hop, `agent_budgets`, or `routing.stage_signals`
+> (`app/routing/signals.py`, also removed) describes a path that no longer exists.
+> The equivalent setting is a client-driven loop where each hop is its own request.
+
 **Date:** 2026-08-29
 **Status:** Analysis / positioning + buildable-feature backlog (no code changes yet)
 **Scope:** Map a widely-circulated *Agentic AI Governance* checklist ("The Real Agentic AI

@@ -5,9 +5,9 @@ Editable draw.io / diagrams.net files. Open any `.drawio` directly in
 
 | File | What it shows |
 |------|---------------|
-| `routeforge-logical-architecture.drawio` | The ten Serving-Plane steps as layers, each box labelled with the **open-source library / component** that implements it (FastAPI, Presidio, NeMo Agent Toolkit, Headroom, LiteLLM, OpenTelemetry → Langfuse, …). |
+| `routeforge-logical-architecture.drawio` | The ten Serving-Plane steps as layers, each box labelled with the **open-source library / component** that implements it (FastAPI, Presidio, Headroom, LiteLLM, OpenTelemetry → Langfuse, …). |
 | `routeforge-physical-architecture.drawio` | The **Kubernetes pods, services and PVCs** actually deployed — RouteForge `api`/`ui`, the full Langfuse stack (web, worker, postgres, clickhouse, redis, minio) and the shared datastores. On-prem/cloud inference is drawn dashed: it is operator-run, **not** a RouteForge pod. |
-| `routeforge-request-flow.drawio` | End-to-end **request/response flow** with numbered arrows (1–15) through the gate, agent runtime, optimization, router/gateway, backends, verification, and the Langfuse telemetry tap. |
+| `routeforge-request-flow.drawio` | End-to-end **request/response flow** with numbered arrows (1–14) through the gate, task mode, optimization, router/gateway, backends, verification, and the Langfuse telemetry tap. |
 
 ## Regenerating
 

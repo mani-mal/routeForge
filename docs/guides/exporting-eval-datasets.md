@@ -17,8 +17,10 @@ Two Langfuse surfaces, both scoped to the project(s) your application(s) were ex
 to (see `docs/guides/integrating-an-app.md` §5 for how an app gets its own project):
 
 - **Traces** — via the Langfuse UI, its export/blob features, or its API. Each request
-  routeForge serves emits one `serving.request` trace, plus per-hop `serving.step-N`
-  child spans on the multi-step path.
+  routeForge serves emits one `serving.request` trace, plus one `serving.<step>` child
+  span per pipeline step (`serving.router`, `serving.compression`, `serving.verify`, …).
+  An agent trajectory is N traces, one per call your loop made — routeForge runs no
+  loop of its own.
 - **Scores** — feedback attached to a trace, via `GET` on Langfuse's public scores API
   (the same `/api/public/scores` surface routeForge's `POST /v1/feedback` writes to;
   see `app/obs/scores.py`).
@@ -40,11 +42,11 @@ Set in `app/obs/export.py` (`_set_io`, `export_trace`). All of these except
 | `output.value` | The model completion | `capture_io` ≠ `off`. For `full`, this is the **pre-verify raw model completion** (`raw_completion or completion`) — what the model actually said, not the step-9 client-facing masked reply. For `redacted`, it's the egress-redacted completion |
 | `sp.candidates` | Chosen model + full rejected-candidate set, each with a reason | always |
 | `sp.routing_policy_version` | Content hash of the routing + pricing config in effect at decision time | always |
-| `sp.chosen`, `sp.reason` | Per-step chosen model / selection reason (child spans, multi-step) | always |
+| `sp.chosen`, `sp.reason` | Per-step chosen model / selection reason (on the child spans) | always |
 | `sp.request_id`, `sp.application_id`, `sp.model`, `sp.cost_total_usd`, `sp.cost_baseline_usd`, `sp.sensitivity`, `sp.onprem_only`, `sp.detected_entities` | Request/decision metadata | always |
 | `langfuse.session.id` | Groups turns from one multi-call trajectory into a Langfuse Session | when the app sent `x-routeforge-session` |
 
-The full attribute reference, including the multi-step child-span fields, lives in
+The full attribute reference, including the child-span fields, lives in
 `docs/guides/integrating-an-app.md` §7 — read it before writing an export script; this
 guide only adds the dataset-column mapping on top.
 

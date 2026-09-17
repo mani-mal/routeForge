@@ -38,9 +38,9 @@ Body:
 | `response_format` | object | no | — | Forwarded to the backend (e.g. `{"type": "json_object"}`). |
 | `parallel_tool_calls` | boolean | no | — | Forwarded to the backend. |
 
-Unknown fields are **accepted, not rejected** (the model allows extras). Two
-demo-only hint fields are read if present: `mock_multistep` (force the agent
-path) and `mock_confidence` / `mock_fail` (mock-backend generation hints). See
+Unknown fields are **accepted, not rejected** (the model allows extras). The
+demo-only hint fields `mock_confidence` / `mock_fail` (mock-backend generation
+hints) are read if present. See
 [`agentic-app-guide.md`](../guides/agentic-app-guide.md).
 
 > **`model: "auto"` lets the router choose; any other value pins routing to that
@@ -111,7 +111,7 @@ Notes:
   `capture_io: "full"`, and only into that app's own Langfuse project.
 - `model` is the slug; `model_display` is the human-readable name.
 - `object` and `created` are **always** emitted, on every response shape (direct,
-  cache hit, multi-step and streaming). The `openai` SDK's `ChatCompletion` model
+  cache hit and streaming). The `openai` SDK's `ChatCompletion` model
   rejects a response missing `created`, so both are set at the single post-model
   chokepoint every shape passes through (`app/api/routes.py:_finalize`).
 - `policy.detected_entities` lists entity **types** (`US_SSN`, `EMAIL_ADDRESS`),
@@ -132,20 +132,23 @@ Notes:
 
 The trace is the "why." Each element is one of:
 
-**`DecisionRecord`** — one per routing decision (one for a direct request; one
-per hop, `step:"agent_hop"`, for a multi-step request):
+**`DecisionRecord`** — one per routing decision. RouteForge answers every
+request with a single model call, so a request's trace carries one `router`
+record (plus a `gateway` record when a candidate failed and the gateway fell
+back). An application's agent loop produces one request, and therefore one
+trace, per hop:
 
 | Field | Meaning |
 |---|---|
-| `step` | `router` \| `agent_hop` |
+| `step` | `router` \| `gateway` |
 | `chosen` / `chosen_display_name` | Model slug / human name selected |
 | `chosen_tier` / `chosen_provider` | Tier and provider of the chosen candidate |
 | `reason` | Human-readable rationale (the demo line) |
 | `rejected[]` | Candidates not chosen — each `{name, provider, tier, reason, display_name}`, including "excluded by policy" |
 | `est_cost_usd` / `actual_cost_usd` | Estimated vs actual USD for this call |
 | `latency_ms` | This call's latency |
-| `hop_index` | Which agent hop (0 for direct) |
-| `tokens_priced` / `tokens_out` | Post-compression prompt tokens the cost was computed on / completion tokens for this hop |
+| `hop_index` | Index of this record within the request's trace (0 for the first) |
+| `tokens_priced` / `tokens_out` | Post-compression prompt tokens the cost was computed on / completion tokens for this call |
 | `quality_score` / `quality_source` | Expected quality and where it came from (`customer` \| `calibrated` \| `published` \| `tier_default`) |
 
 **`VerificationRecord`** (`step:"verify"`) — `required, performed, passed,
@@ -197,9 +200,8 @@ the whole list back as a new request.
 Three things specific to routeForge:
 
 - **Your loop, not routeForge's.** A request carrying `tools` is served as a
-  single completion; it is never handed to routeForge's own internal agent
-  runtime. The client drives the loop (this is Pattern A in
-  [`agentic-app-guide.md`](../guides/agentic-app-guide.md)).
+  single completion. routeForge runs no agent loop of its own — the client drives
+  the loop (see [`agentic-app-guide.md`](../guides/agentic-app-guide.md)).
 - **Every turn is a fresh, independently-gated request, redacted per message.** A
   tool conversation keeps its roles and `tool_calls` / `tool_call_id` structure
   intact and the gate redacts **each message's text individually**, rather than
@@ -298,7 +300,6 @@ Every error the inference endpoint can return:
 | `422` | `response failed verification: <detail>` | Output leakage / verification failed. |
 | `429` | `rate limit exceeded for this application` | Over your `max_rpm`. |
 | `429` | `daily budget exceeded for this application` | Over your `max_spend_usd_per_day`. |
-| `500` | `agent did not converge within its step limit` | A multi-step workflow exceeded `agent_budgets.max_steps`. |
 | `500` | `internal error` | Unexpected server-side failure. |
 | `502` | `no backend could serve this request: … (last error: <model>: <ErrorType>: <message>)` | Every candidate failed upstream; the last upstream error is included. A context-window refusal mixed with any other failure stays `502`. |
 | `503` | `policy evaluation unavailable` | **Fail-closed:** the privacy gate itself errored. |

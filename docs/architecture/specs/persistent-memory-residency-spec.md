@@ -1,5 +1,8 @@
 # Persistent memory — residency spec (Feature 5, Task 1)
 
+> **Superseded 2026-09-17:** the internal NAT agent and the multi-step path were
+> removed; agent loops are client-driven.
+
 **Status:** design-gate doc, 2026-08-22. Authored as part of Task 1 (substrate + config + lint
 guards, default OFF). **Task 2 has since shipped** (commit `e778c97`): read/write is now wired
 into the serving pipeline (`app/main.py` constructs `DeterministicMemoryStore`; `app/pipeline.py`

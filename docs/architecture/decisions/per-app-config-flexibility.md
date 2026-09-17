@@ -1,5 +1,8 @@
 # Per-application configuration flexibility
 
+> **Superseded 2026-09-17:** the internal NAT agent and the multi-step path were
+> removed; agent loops are client-driven.
+
 **Status:** implemented (2026-08-20) — both decisions below shipped on
 `feat/per-app-flexibility` (see `docs/superpowers/plans/2026-08-20-per-app-flexibility-plan.md`
 for the task-by-task build). See `docs/reference/per-app-config.md` for the operator how-to

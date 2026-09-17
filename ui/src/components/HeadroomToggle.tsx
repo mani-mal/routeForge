@@ -6,8 +6,8 @@
 // "(global default)" follow this switch. Safety bypasses (high-risk / restricted /
 // below min-tokens) still apply on top regardless — see app/compression.
 //
-// The backend mutates app.state.co_cfg, the single source both the direct path and
-// the per-hop agent path read, so the next request on either path picks up the flip.
+// The backend mutates app.state.co_cfg, the single source the serving path reads on
+// every request, so the next request picks up the flip.
 import { useEffect, useState } from "react";
 import { api } from "../api";
 

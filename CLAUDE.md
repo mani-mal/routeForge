@@ -17,7 +17,8 @@ because the seams are the product's value. RouteForge delivers three guarantees:
 
 1. **Privacy-first** — sensitive requests never leave the customer's infrastructure.
 2. **Cost reduction** — per-call routing sends most traffic to cheap/local models.
-3. **Observable** — every decision is captured in Langfuse via NeMo Agent Toolkit.
+3. **Observable** — every decision is captured in Langfuse via RouteForge's own
+   OpenTelemetry exporter.
 
 **Two product boundaries — by design, not by immaturity:**
 
@@ -123,8 +124,7 @@ value is showing the seams.
 | 1 | Incoming Request | `app/api/routes.py` | FastAPI; OpenAI-compatible `/v1/chat/completions` |
 | 2 | Identity, Privacy & Policy Gate | `app/policy/gate.py` | Presidio + NeMo Guardrails + OPA-style rules. **Runs first.** |
 | 3 | Execution Policy Context | `app/policy/context.py` | Immutable; travels with request |
-| 4 | Task Mode Router | `app/routing/task_mode.py` | direct vs multi-step. NAT Router Agent; **rules-first, classifier off** by default |
-| — | Agent Runtime / Orchestrator | `app/agent/runtime.py` | NAT: state, tools, caps, checkpoint/resume |
+| 4 | Task Mode Router | `app/routing/task_mode.py` | always **direct**; agent loops are client-driven |
 | 5 | Conditional Context Optimization | `app/compression/` | **Headroom.** Compress tool outputs/history. Conditional. |
 | 6 | Adaptive Model & Backend Router | `app/routing/router.py` | Every LLM call. Scores **post-compression** cost |
 | 7 | Model Gateway & Provider Controls | `app/gateway/` | Adapters, quotas, breakers, fallback |
@@ -132,14 +132,10 @@ value is showing the seams.
 | 9 | Output Controls & Verification | `app/output/verify.py` | Leakage checks, escalation, sampling |
 | 10 | Governed Response / Action | `app/api/routes.py` | Response + full decision trace |
 
-Multi-step (step 4 → agent runtime) uses **NeMo Agent Toolkit**. Every LLM call the
-agent makes re-enters compression (5) and the router (6) — both are **per-call**, not
-per-request. This is the single most important behaviour to get visibly right in the UI.
-
-**The step-4 classifier is a routed call.** If the rules-first classifier is ever
-replaced by an LLM classifier, that call goes through steps 5–7 like any other:
-sanitized input, respects `allowed_providers` (so it can't break `onprem_only`), and
-emits a DecisionRecord so its cost isn't invisible. Keep it off by default.
+Agent loops belong to the calling application. Every model call an application's loop
+makes arrives as its own request and re-enters steps 2–9, so compression (5) and the
+router (6) stay **per-call**. This is the single most important behaviour to get
+visibly right in the UI.
 
 **Inbound streaming is per-app, floored by step 9.** Step 9 verifies the *complete*
 response, which token streaming can't satisfy without a partial-leak window — so
@@ -156,8 +152,7 @@ step-9 verification — those requests fall back to `verified_then_stream` regar
 `stream_mode`. The UI's decision stream (SSE of DecisionRecords) is a separate channel
 and stays on. See `docs/reference/per-app-config.md`.
 
-**Routing scopes** — four distinct routers; don't conflate them:
-- **NAT Router Agent** (step 4) selects workflow mode
+**Routing scopes** — three distinct routers; don't conflate them:
 - **Switchyard** (step 6) selects model + backend
 - **vLLM Semantic Router** (step 8) selects a model path within a vLLM pool
 - **Dynamo** (step 8) selects/scales inference workers and KV placement
@@ -166,11 +161,9 @@ and stays on. See `docs/reference/per-app-config.md`.
 `docs/reference/routing-observability.md`): (1) `GET /metrics` is an in-process Prometheus
 exporter — four `routeforge_*` families, bounded labels only, **no
 tenant/PII**, opt-in `observability` extra (503 without it), no bundled server;
-(2) `routing.stage_signals` (default **OFF**) feeds a **raise-only** `min_tier`
-bias from agent-loop state on the multi-step path — the residency clamp still
-caps it, so it can never lift `onprem_only` to cloud; (3) every trace carries
-`sp.candidates` (chosen + rejected set) and `sp.routing_policy_version`
-(routing+pricing content hash), emitted regardless of `capture_io`.
+(2) every trace carries `sp.candidates` (chosen + rejected set) and
+`sp.routing_policy_version` (routing+pricing content hash), emitted regardless
+of `capture_io`.
 
 ## Configuration — everything switchable at startup
 
@@ -181,7 +174,7 @@ if you do:
 | File | Owns |
 |---|---|
 | `config/serving.yaml` | Infrastructure switches only: compression infra, observability, provider on/off, server |
-| `config/policy.yaml` | Budgets (default + `agent_budgets`), the sensitivity enum + default, residency, tenants |
+| `config/policy.yaml` | Budgets, the sensitivity enum + default, residency, tenants |
 | `config/routing.yaml` | Scoring weights, thresholds, the canonical `tiers` list, `model_pool`, escalation |
 | `config/pricing.yaml` | Per-model USD/1M and the savings baseline |
 
@@ -241,10 +234,10 @@ config flag. See `docs/guides/onboarding-models.md` and the `inference-backends`
 ## Tech stack — use these, don't substitute
 
 - **Python 3.12**, FastAPI, Pydantic v2, `uv` for deps
-- **NeMo Agent Toolkit** (`nvidia-nat`) — agent runtime + Langfuse telemetry export
 - **Headroom** (`headroom-ai`) — conditional context compression, step 5
 - **Presidio** — PII detection
-- **Langfuse** — self-hosted via compose
+- **Langfuse** — self-hosted via compose; RouteForge exports traces to it through its
+  own OpenTelemetry exporter (`app/obs/export.py`)
 - **React + Vite + Tailwind + Recharts** — UI
 - **Docker Compose** (single-node) and **Helm** (Kubernetes / GreenLake)
 
@@ -257,7 +250,6 @@ repeated here:
 - `.claude/skills/headroom-compression/` — step 5, Headroom, CCR, bypass rules
 - `.claude/skills/routing-and-gateway/` — steps 6/7/8 (+ step-4 task mode), scoring, adapters, confidence
 - `.claude/skills/output-controls/` — step 9, leakage checks, `require_verification`, streaming policy
-- `.claude/skills/nemo-agent-toolkit/` — agent runtime, Langfuse wiring, NAT config
 - `.claude/skills/inference-backends/` — what an operator runs behind an onboarded on-prem endpoint (vLLM/Dynamo/TensorRT-LLM); owns the full Dynamo skills list
 - `.claude/skills/demo-ui/` — flow visualizer + cost dashboard
 - `.claude/skills/traffic-and-tests/` — personas, traffic generator, test suite
@@ -277,8 +269,8 @@ when extending it. Each layer rests on the ones above.
    ten module stubs, `/health`. Verify boot.
 2. **Policy gate** — Presidio, policy context, fail-closed. **Test before routing.**
 3. **Router + mock gateway** — scoring, model pool, decision trace.
-4. **Observability** — NAT + Langfuse; confirm redaction actually happened.
-5. **Agent runtime** — multi-step path; confirm each hop re-enters the router.
+4. **Observability** — OpenTelemetry + Langfuse; confirm redaction actually happened.
+5. **Agent runtime** — **removed 2026-09-17 (agent loops are client-driven)**.
 5b. **Compression** — Headroom behind the flag; verify router prices post-compression
     tokens and CCR stays local.
 6. **UI** — flow visualizer, then cost dashboard.
@@ -302,18 +294,19 @@ cheap tier to land on.
 2. Question with an SSN → gate detects PII → `onprem_only` → **UI shows cloud
    providers greyed out as ineligible** → served locally → Langfuse trace shows
    redaction.
-3. Complex multi-step task → agent runtime → several hops, each re-entering the
-   router → mixed cheap/expensive tiers.
-4. **Toggle Headroom on** → re-run the same multi-step task → tool outputs compress,
-   token count drops sharply, same answer. Two savings levers, shown separately.
-5. Run 500-request traffic burst → dashboard shows ~70% to cheap tier, and cost saving
+3. **Toggle Headroom on** → re-run a long-context request (the `large_context`
+   persona) → the pasted context compresses, token count drops sharply, same answer.
+   Two savings levers, shown separately.
+4. Run 500-request traffic burst → dashboard shows ~70% to cheap tier, and cost saving
    vs all-frontier baseline split into **routing savings** and **compression savings**.
-6. Open Langfuse → full trajectory, cost, latency, zero raw PII, no CCR contents.
+5. Open Langfuse → full trajectory, cost, latency, zero raw PII, no CCR contents.
 
 ## Coding conventions
 
-- Every step emits a `DecisionRecord` (what was decided, why, alternatives rejected,
-  cost, latency). The UI and Langfuse both consume it. **The "why" is the whole point.**
+- Every step that makes a decision emits a `DecisionRecord` (what was decided, why,
+  alternatives rejected, cost, latency). The UI and Langfuse both consume it. **The "why"
+  is the whole point.** (Step 4 is the exception: it is a constant `direct` and emits
+  none.)
 - Type-hint everything; Pydantic models at boundaries.
 - No secrets in code or compose. `.env` only, `.env.example` committed.
 - Structured JSON logs with a `request_id` correlating to the Langfuse trace.
@@ -324,7 +317,7 @@ cheap tier to land on.
 
 - Don't let the router see a request the gate hasn't cleared — easy to break when
   refactoring, and it silently invalidates the whole privacy claim.
-- Don't compute cost only at the end; accumulate per hop or multi-step totals lie.
+- Don't compute cost only at the end; accumulate per call or the totals lie.
 - Don't make the UI poll for state; stream decisions over WebSocket/SSE or the flow
   visualizer feels dead.
 - Don't hard-code provider names in the router; read the pool from the

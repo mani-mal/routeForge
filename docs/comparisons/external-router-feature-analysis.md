@@ -1,5 +1,11 @@
 # External Router Feature Analysis — Plano, Devin Fusion, and the Multi-Model Report
 
+> **Superseded 2026-09-17:** the internal NAT agent and the multi-step path were
+> removed; agent loops are client-driven. Anything below that reasons about an
+> in-process agent hop, `agent_budgets`, or `routing.stage_signals`
+> (`app/routing/signals.py`, also removed) describes a path that no longer exists.
+> The equivalent setting is a client-driven loop where each hop is its own request.
+
 **Date:** 2026-08-28
 **Status:** Analysis / recommendation (no code changes yet)
 **Scope:** Compare RouteForge's routing + gateway layer against three external sources, decide

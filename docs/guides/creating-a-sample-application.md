@@ -126,4 +126,4 @@ application`, `above target tier`, `lower score`…), cost, and latency.
 request's complexity** (plus any risk floor). A trivial prompt targets `cheap`, so a
 `mid` model is dropped as *above target tier* and the cheap model serves. To exercise
 the Nemotron, send a request whose complexity lands in the mid band (a
-reasoning/multi-step prompt), or temporarily set its tier to `cheap`.
+longer reasoning prompt), or temporarily set its tier to `cheap`.

@@ -424,7 +424,7 @@ What is left protecting a `passthrough` app is only:
 |---|---|
 | Plain single-prompt request | **No, in practice.** The request is flattened into one message, which `user_prompt: true` protects. Only memory-recalled context prepended ahead of it is eligible. |
 | Client-driven tool calling (`tools` in the request, or replayed tool turns) | **No.** Bypassed outright with `bypass_reason: "tool_calling"` — Headroom would corrupt tool_call/tool_result structure. |
-| Multi-step agent path | **Yes.** Every hop re-enters compression (`app/agent/internal_endpoint.py`) and compresses every message but the last — including tool outputs and history carrying the customer's tables. |
+| A client agent loop's calls | **Each call is judged on its own.** RouteForge runs no loop of its own; every call your agent makes is a fresh request that re-enters step 5 under the two rows above. A call carrying `tools` is bypassed; a call that is only a long pasted context is eligible. |
 
 **The recommendation for a load-bearing-data customer: leave Headroom inheriting the
 global** (`compression_enabled: null`, step 5 Delivery and limits → Headroom = "(global

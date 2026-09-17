@@ -13,7 +13,7 @@ cluster deploy.
 
 Must reach a working demo in under 5 minutes on a laptop, no GPU.
 
-Services: `api` (FastAPI + NAT + Headroom library), `ui` (nginx-served React),
+Services: `api` (FastAPI + Headroom library), `ui` (nginx-served React),
 `langfuse` + `postgres` + `clickhouse` (Langfuse self-hosted needs both), optional
 `headroom` proxy sidecar when `context_optimization.mode: proxy`. There is no `vllm`
 service in compose any more — routeForge deploys nothing; `docker compose up` boots

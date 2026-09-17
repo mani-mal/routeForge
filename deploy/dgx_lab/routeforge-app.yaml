@@ -81,9 +81,6 @@ items:
         azure:   {enabled: false, litellm_prefix: azure,   api_base_env: AZURE_API_BASE, api_key_env: AZURE_API_KEY, api_version_env: AZURE_API_VERSION}
         bedrock: {enabled: false, litellm_prefix: bedrock}
 
-      agent:
-        runtime: nat
-
       server:
         host: 0.0.0.0
         port: 8080

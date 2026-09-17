@@ -1,6 +1,6 @@
 // Traffic section — the per-application "answer desk" for the owner question
 // "what's actually running, and how fast?" Tier mix, latency percentiles,
-// and how much traffic went through the multi-step agent path.
+// and request volume.
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import type { RequestSummary } from "../../api";
 import { TIER_COLOR } from "../../api";
