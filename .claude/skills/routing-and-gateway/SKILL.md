@@ -1,12 +1,13 @@
 ---
 name: routing-and-gateway
-description: Use when implementing steps 6-8 of the Serving Plane - the adaptive per-call model router, scoring logic, model gateway, provider adapters, the approved model pool, and the task-mode classifier (step 4). Trigger on mentions of routing, model selection, scoring, tiers, gateway, provider adapter, fallback, escalation, task mode, or confidence.
+description: Use when implementing steps 6-8 of the Serving Plane - the adaptive per-call model router, scoring logic, model gateway, provider adapters, the approved model pool, and step-4 task mode (a constant direct decision - there is no classifier and no multi-step branch). Trigger on mentions of routing, model selection, scoring, tiers, gateway, provider adapter, fallback, escalation, task mode, or confidence.
 ---
 
 # Adaptive Router & Gateway (Steps 6–8)
 
 Covers step 6 (adaptive router), step 7 (gateway), step 8 (serving-path selection),
-and the step-4 task-mode classifier. Compression is **step 5** — it owns pricing
+and step-4 task mode — which is a **constant `direct` decision**, not a classifier
+(see "Task mode (step 4) is a constant" below). Compression is **step 5** — it owns pricing
 inputs; see the `headroom-compression` skill. Router scores on the token counts
 compression produces (below).
 
