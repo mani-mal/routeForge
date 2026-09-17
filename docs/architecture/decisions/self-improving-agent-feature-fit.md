@@ -1,5 +1,8 @@
 # Self-improving-agent research → RouteForge feature-fit assessment
 
+> **Superseded 2026-09-17:** the internal NAT agent and the multi-step path were
+> removed; agent loops are client-driven.
+
 **Status:** decision doc, 2026-08-17. Evaluates the owner's research bundle (agent memory /
 mem0, prompt optimization / DSPy, harness self-improvement, RLHF weight-training libs) against
 RouteForge's product boundaries, and records the **owner's scope decisions** (2026-08-17) that

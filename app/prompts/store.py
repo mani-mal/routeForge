@@ -1,7 +1,10 @@
 """Managed-prompt substrate (Feature 3 / DSPy prompt-optimization, Task 1).
 
-A "managed prompt" is one of RouteForge's OWN internal prompts (the step-4
-task-mode classifier is the first; verify/judge is future). Artifacts are
+A "managed prompt" is one of RouteForge's OWN internal prompts. **No managed
+prompt ships today** -- the step-4 task-mode classifier that was the first one
+was removed with the internal agent (2026-09-17) and no artifact exists on
+disk, so this is the substrate a future internal prompt (verify/judge, say)
+would use, not a live feature. Artifacts are
 versioned YAML files on disk under `<artifacts_dir>/<prompt_id>/<label>.yaml`,
 human-gated (an operator must set `verified: true` AND pin a `label` active in
 `routing.yaml`'s `prompt_opt.active`), and attributed in telemetry via a

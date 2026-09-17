@@ -71,7 +71,7 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-// The junction: one router/agent-hop decision rendered as a track switch —
+// The junction: one router decision rendered as a track switch —
 // the chosen candidate is the LIT path (tier-coloured left rail + a glowing
 // switch dot), each rejected candidate is a DIMMED spur labelled with why it
 // lost. This is the demo's "legible on a projector" moment (demo-ui skill) —
@@ -136,7 +136,7 @@ function Chosen({ r, cumulative }: { r: TraceRecord; cumulative?: number }) {
 // policy/usage/cost) plus CompressionView's fuller tokens/CCR rendering.
 // Rendered non-interactively here — the drill-down shows every step at once,
 // there's no click-to-focus state.
-function StepBody({ stepKey, detail, hops }: { stepKey: string; detail: ChatResponse; hops: number }) {
+function StepBody({ stepKey, detail }: { stepKey: string; detail: ChatResponse }) {
   const t = detail.trace;
   const routerRecs = t.filter((r) => r.step === "router" || r.step === "agent_hop");
   const compRecs = t.filter((r) => r.step === "compression");
@@ -205,11 +205,11 @@ function StepBody({ stepKey, detail, hops }: { stepKey: string; detail: ChatResp
     case "task_mode":
       return (
         <>
-          <Row label="mode">{hops > 1 ? `multi-step agent (${hops} hops)` : "direct answer"}</Row>
+          <Row label="mode">direct answer</Row>
           <p className="text-xs text-gray-500 pt-2">
-            {hops > 1
-              ? "Each agent hop re-enters compression and the router — routing is per call, not per request."
-              : "A single model call answers directly; no agent hops."}
+            A single model call answers directly. RouteForge runs no agent of its own —
+            an application's agent loop sends each call as its own request, and every one
+            is gated, compressed, routed and verified independently.
           </p>
         </>
       );
@@ -497,7 +497,7 @@ function PlainSummary({ detail, summary }: { detail: ChatResponse; summary: Requ
   const tier = summary?.tier ?? "?";
   const hops =
     summary?.hops ??
-    Math.max(detail.trace.filter((r) => r.step === "router" || r.step === "agent_hop").length, 1);
+    Math.max(detail.trace.filter((r) => r.step === "router").length, 1);
   const totalLatencyMs =
     summary?.latency_ms ?? detail.trace.reduce((sum, r) => sum + (r.latency_ms ?? 0), 0);
 
@@ -722,7 +722,7 @@ function TechnicalTrace({ detail }: { detail: ChatResponse }) {
               <div className="text-sm font-semibold text-gray-100">{stepTitle(s.key)}</div>
               <div className="text-xs text-gray-500">{s.caption}</div>
             </div>
-            <StepBody stepKey={s.key} detail={detail} hops={hops} />
+            <StepBody stepKey={s.key} detail={detail} />
           </div>
         ))}
       </div>

@@ -15,7 +15,6 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.agent.runtime import AgentCapExceeded
 from app.api.history import summarize
 from app.api.streaming import (
     SSE_DONE, SSE_KEEPALIVE, chunk_text, openai_chunk, sse_error_frame, sse_frame,
@@ -219,8 +218,6 @@ def _error_status_detail(exc: BaseException) -> tuple[int, str] | None:
                      "or lower max_tokens")
     if isinstance(exc, NoEligibleCandidate):
         return 422, f"no model is available for this request's policy: {exc}"
-    if isinstance(exc, AgentCapExceeded):
-        return 500, "agent did not converge within its step limit"
     if isinstance(exc, BackendUnavailable):
         return 502, f"no backend could serve this request: {exc}"
     if isinstance(exc, PolicyGateError):
@@ -387,12 +384,12 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
             raise PolicyGateError("policy setup failed") from e
         if stream_mode in ("stream_unverified", "incremental_verify"):
             # Real backend token streaming (Tasks 6-7). run_stream EAGERLY runs
-            # the gate, task-mode decision, and the runtime floor before
-            # returning, so a floored request (multi_step / onprem_only /
-            # require_verification) raises StreamFallback here -- before any
-            # token is emitted -- and we transparently fall through to the
-            # verified_then_stream path below. The floor is enforced ONLY in the
-            # pipeline (Global Constraint 1); the route never re-implements it.
+            # the gate and the runtime floor before returning, so a floored
+            # request (onprem_only / require_verification) raises
+            # StreamFallback here -- before any token is emitted -- and we
+            # transparently fall through to the verified_then_stream path
+            # below. The floor is enforced ONLY in the pipeline (Global
+            # Constraint 1); the route never re-implements it.
             try:
                 deltas, get_meta = await request.app.state.pipeline.run_stream(
                     request_id, tenant, body, app_policy=app_policy, profile=profile,
@@ -557,7 +554,7 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
     # ChatCompletion model rejects a response missing `created`, which killed
     # every turn before it reached a tool. Setting them here, the single
     # post-model chokepoint every shape passes through (direct, cache hit,
-    # multi-step, and the streaming console record), keeps them consistent.
+    # and the streaming console record), keeps them consistent.
     # `setdefault` so a shape that ever sets its own value wins.
     resp.setdefault("object", "chat.completion")
     resp.setdefault("created", int(time.time()))
@@ -1015,8 +1012,9 @@ async def _finalize_stream(
     `get_meta`); we best-effort drain the remaining backend deltas so the final
     accounting (cost, tokens, decision) is recovered rather than silently lost.
     run_stream only returns normally when the request is NOT onprem_only, NOT
-    require_verification, and NOT multi_step, so recording step 9 as
-    waived/incremental (rather than a complete-response verdict) is sound."""
+    require_verification, and not a client-driven tool conversation, so
+    recording step 9 as waived/incremental (rather than a complete-response
+    verdict) is sound."""
     log = logging.getLogger("serving.obs")
     try:
         if meta is None:

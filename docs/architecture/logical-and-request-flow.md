@@ -46,12 +46,16 @@ Companion notes for the draw.io diagrams in
 | Auth + API tokens | **argon2-cffi** | ✅ Used | Admin password + API-token hashing. |
 | App / usage store | **SQLAlchemy** (async) | ✅ Used | `aiosqlite` (dev) core; `asyncpg` (prod Postgres) via `--extra postgres`. |
 
-### Step 4 · Task-mode router + agent runtime — `app/routing/`, `app/agent/`
+### Step 4 · Task-mode router — `app/routing/task_mode.py`
 | Component | Library | Status | Notes |
 |-----------|---------|--------|-------|
-| Task-mode router | rules-first (in-house) | ✅ Used | direct vs multi-step; classifier **off** by default. |
-| Optional LLM classifier | in-house routed call | 🔶 Optional | `app/routing/task_mode_llm.py`, default-off (`PromptOptCfg.enabled`). A routed LLM call using a managed prompt. |
-| Agent runtime | **NeMo Agent Toolkit** (`nvidia-nat[langchain]`) | 🔶 Optional | `uv sync --extra agent`, lazy-imported in `agent/runtime.py`. **Required for the multi-step path**; each hop re-enters steps 5–8. Brings LangChain transitively. |
+| Task-mode router | in-house constant | ✅ Used | Always returns `direct`. RouteForge runs no agent of its own; agent loops belong to the calling application, which sends each model call as its own request. The step stays in the architecture and the console step list, and emits **no** `DecisionRecord`. |
+
+> **Removed 2026-09-17.** This step used to choose `direct` vs `multi_step`, and a
+> `multi_step` verdict handed off to an internal **NeMo Agent Toolkit** runtime
+> (`app/agent/`, the `agent` extra, `nvidia-nat[langchain]`). Both the runtime and the
+> optional LLM task classifier (`app/routing/task_mode_llm.py`) are gone, along with the
+> `nvidia-nat` dependency.
 
 ### Step 5 · Conditional context optimization — `app/compression/`, `app/cache/`, `app/memory/` (per call)
 | Component | Library | Status | Notes |
@@ -96,25 +100,24 @@ Companion notes for the draw.io diagrams in
 
 ## Request / response flow (numbered)
 
-Matches `diagrams/routeforge-request-flow.drawio`. Steps 1–13 are the request/response
-spine; 14–15 are the telemetry tap. **Every step emits a `DecisionRecord`.**
+Matches `diagrams/routeforge-request-flow.drawio`. Arrows 1–12 are the request/response
+spine; 13–14 are the telemetry tap.
 
 | # | Hop | What happens |
 |---|-----|--------------|
 | 1 | app → API | `POST /v1/chat/completions` with the app's API token. |
 | 2 | API → policy gate | Authenticate; **PII scan runs first** (Presidio if enabled, else regex). Nothing external sees the raw request before this completes. |
 | 3 | gate → policy context | Build the immutable `ExecutionPolicyContext`: residency (`onprem_only`), `allowed_providers`, budget. Gate errors → **reject** (fail closed). |
-| 4 | context → task-mode router | Classify **direct** vs **multi-step** (rules-first). |
-| 5 | → agent runtime (NAT) | *Multi-step only.* NeMo Agent Toolkit drives hops; **each hop re-enters steps 5–8**. |
-| 6 | → context optimization | Direct path (or per hop): memory recall (prepend) → semantic-cache lookup → Headroom compression. *All default-OFF.* See [`sample-request-flows.md`](./sample-request-flows.md) for the exact per-call order, including the memory-write step on the success path. |
-| 7 | optimization → adaptive router | Score candidates on **post-compression** token cost; apply residency clamp. |
-| 8 | router → model gateway | Select model + backend (LiteLLM); quotas, breakers, fallback. |
-| 9 | gateway → backend | Dispatch to an on-prem endpoint, **or** managed cloud *only if allowed* (never for `onprem_only`). |
-| 10 | backend → verify | Completion returns to step-9 output controls. |
-| 11 | verify → governed response | Leakage checks; assemble the response + full `DecisionRecord`. |
-| 12–13 | response → API → app | Return `200` (or `422`/`502`/`503` on reject — see `dev-references/api-reference.md`). |
-| 14 | (response) → OTel exporter | Emit the trace, **redacted on egress**. |
-| 15 | OTel → Langfuse | Store trace, cost, latency (no raw PII, no CCR/cache contents). |
+| 4 | context → task-mode router | Always **direct**. An application's agent loop sends each of its model calls as a separate request, so each one re-enters steps 2–9 on its own. Step 4 emits no `DecisionRecord`. |
+| 5 | → context optimization | memory recall (prepend) → semantic-cache lookup → Headroom compression. *All default-OFF.* See [`sample-request-flows.md`](./sample-request-flows.md) for the exact per-call order, including the memory-write step on the success path. |
+| 6 | optimization → adaptive router | Score candidates on **post-compression** token cost; apply residency clamp. |
+| 7 | router → model gateway | Select model + backend (LiteLLM); quotas, breakers, fallback. |
+| 8 | gateway → backend | Dispatch to an on-prem endpoint, **or** managed cloud *only if allowed* (never for `onprem_only`). |
+| 9 | backend → verify | Completion returns to step-9 output controls. |
+| 10 | verify → governed response | Leakage checks; assemble the response + full `DecisionRecord`. |
+| 11–12 | response → API → app | Return `200` (or `422`/`502`/`503` on reject — see `dev-references/api-reference.md`). |
+| 13 | (response) → OTel exporter | Emit the trace, **redacted on egress**. |
+| 14 | OTel → Langfuse | Store trace, cost, latency (no raw PII, no CCR/cache contents). |
 
 ---
 

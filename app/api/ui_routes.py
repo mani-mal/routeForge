@@ -1,8 +1,7 @@
 """Customer-facing `/api/*` read surface for the Phase-6 UI.
 
-Unlike `/internal/*` (loopback-only agent-hop endpoint), these routes are
-meant to be reachable by the browser dev server and are included in
-OpenAPI. Task 1 added read-only list/detail/stats, originally over the
+These routes are meant to be reachable by the browser dev server and are
+included in OpenAPI. Task 1 added read-only list/detail/stats, originally over the
 in-memory `HistoryStore`; B3 moved that backing store to the durable, shared
 `request_snapshots` table (`app.state.db`, see `app/apps/store.py`) so every
 API replica's console reads see every replica's writes. Task 2 adds
@@ -150,9 +149,9 @@ async def fleet(request: Request) -> list:
 def get_controls(request: Request) -> dict:
     """Current runtime-mutable controls state. Only `headroom_enabled` is
     mutable this phase (see `_DEFERRED_CONTROLS`). Reflects
-    `app.state.co_cfg` — the single mutable source shared by both the
-    direct pipeline path (via `Pipeline`'s `co_cfg_provider` callback) and
-    the internal per-hop endpoint (which reads `app.state.co_cfg` directly)."""
+    `app.state.co_cfg` — the single mutable source `Pipeline` reads via its
+    `co_cfg_provider` callback, so a toggle here takes effect on the next
+    request without a restart."""
     return _controls_state(request)
 
 
@@ -180,9 +179,9 @@ _TRAFFIC_SEED = 42
 @router.post("/traffic")
 async def start_traffic(body: TrafficStart, request: Request) -> dict:
     """Launch the traffic-generator burst in-process, self-calling this same
-    server over real HTTP (like the agent runtime's internal hops) so the
-    live dashboard fills exactly as it would from an operator running the
-    CLI. Refuses (409) if a run is already in progress."""
+    server over real HTTP so the live dashboard fills exactly as it would
+    from an operator running the CLI. Refuses (409) if a run is already in
+    progress."""
     state = request.app.state
     if getattr(state, "traffic_running", False):
         raise HTTPException(409, "a traffic run is already in progress")

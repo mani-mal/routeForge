@@ -2,28 +2,14 @@ from __future__ import annotations
 
 from app.models import ChatRequest, ExecutionPolicyContext
 
-# Multi-step trigger phrases (rules-only; classifier is OFF this pass — §10.3).
-_TRIGGER_PHRASES = ("step by step", "look up")
-
 
 def decide(ctx: ExecutionPolicyContext, request: ChatRequest) -> str:
-    """Rules-first task mode. Classifier is OFF this pass (design §10.3).
+    """Step 4 (Task Mode Router) — always "direct".
 
-    Returns "multi_step" when the request opts in explicitly
-    (`mock_multistep: true`, a demo-only hint) or the last user message
-    contains a multi-step trigger phrase; else "direct".
+    RouteForge runs no agent of its own: tools belong to the calling
+    application, which drives its own loop and sends each model call as a
+    separate request (every one of them re-enters steps 2-9). The step stays
+    in the architecture and in the console step list; as before, it emits no
+    DecisionRecord of its own.
     """
-    if getattr(request, "mock_multistep", False):
-        return "multi_step"
-
-    last_user = ""
-    for m in reversed(request.messages):
-        if m.role == "user":
-            last_user = m.content or ""
-            break
-
-    lowered = last_user.lower()
-    if any(phrase in lowered for phrase in _TRIGGER_PHRASES):
-        return "multi_step"
-
     return "direct"

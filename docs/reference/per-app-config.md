@@ -474,8 +474,8 @@ independently:
    app's effective residency is `onprem_only` (`app/api/admin_routes.py:set_policy`) — the
    unsafe combination can't even be configured.
 2. **Runtime backstop:** `app/pipeline.py:run_stream` raises `StreamFallback` whenever
-   the request routes `multi_step`, or `ctx.onprem_only`/`ctx.require_verification` is
-   true for *this specific request* (e.g. a per-app `stream_unverified` app that happens
+   the request is a tool-calling conversation, or `ctx.onprem_only`/`ctx.require_verification`
+   is true for *this specific request* (e.g. a per-app `stream_unverified` app that happens
    to submit a high-risk restricted-sensitivity prompt this one time). `app/api/routes.py`
    catches `StreamFallback` and transparently falls back to `verified_then_stream` — the
    client still gets a streamed response, but it is the complete, fully-verified one.

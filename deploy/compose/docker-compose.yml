@@ -23,7 +23,7 @@ services:
       context: ../..
       dockerfile: Dockerfile
       args:
-        EXTRAS: "agent,observability"   # NAT multi-step + Langfuse export
+        EXTRAS: "observability"   # Langfuse export
     ports: ["8080:8080"]
     environment:
       SP_PII_DETECTION: regex           # offline-safe; presidio needs a model download

@@ -89,6 +89,14 @@ against the prior art above, and the risk.
 
 #### IP-1. Monotone privacy-context ratchet across agent hops
 
+> **2026-09-17 — re-targeted.** The internal NAT agent was removed, so the "hop" this
+> mechanism ratchets over is no longer an in-process agent step. The equivalent setting
+> is a client-driven agent loop, where each hop arrives as a separate request: the
+> ratchet becomes per-conversation, which needs a conversation/session identifier
+> (`x-routeforge-session` today, or the derived id). `app/routing/signals.py`'s stage
+> heuristics were removed with the agent and are recoverable from git history if that
+> work revives them.
+
 **The single strongest idea in this document.**
 
 **Mechanism.** The `ExecutionPolicyContext` is computed once at request entry and is immutable
@@ -272,9 +280,11 @@ reported numbers.
 
 #### IP-6. Unified policy context as the single source for both model eligibility and tool capability
 
-**Mechanism.** Today tools are forwarded to the backend untouched, the agent runs on a hardcoded
-`sk-internal` loopback credential, and `agent_budgets.max_spend_usd` / `per_call_timeout_s` are
-declared but dormant. Fix all of it from one place: mint a **per-run agent identity** whose
+**Mechanism.** Today tools are forwarded to the backend untouched and RouteForge has no
+per-run identity of its own. (Until 2026-09-17 the internal agent also ran on a hardcoded
+`sk-internal` loopback credential with dormant `agent_budgets`; both went with it — the
+gap is now about the *calling application's* loop, not RouteForge's.) Fix it from one
+place: mint a **per-run agent identity** whose
 capability scope is *derived from the same `ExecutionPolicyContext` that constrains routing*. One
 policy object, two enforcement surfaces — which models may be called, and which tools may be
 invoked with what scope. An `onprem_only` request cannot call an egress tool, and that falls out
@@ -290,17 +300,19 @@ striking absence given the volume of jailbreak/guardrail work. Governance by Con
 authorization, but neither derives tool scope from the same object that constrains model
 selection. The unification is the claim.
 
-**Risk.** Medium-high; touches the agent runtime and credential handling. Sequence after IP-1,
-since the ratchet is what makes per-hop tool scope meaningful.
+**Risk.** Medium-high; touches identity and credential handling, and now spans the boundary
+to the calling application's loop. Sequence after IP-1, since the ratchet is what makes
+per-hop tool scope meaningful.
 
 ---
 
 #### IP-7. TOCTOU-safe policy revocation — a kill switch that lands mid-flight
 
 **Mechanism.** Every switch in RouteForge today takes effect on the *next* request. A policy
-change during a long multi-step run does not touch the run in flight. Re-validate the
-`app_policy_version` / `routing_policy_version` hash at each hop boundary; on mismatch, either
-re-gate under the new policy or abort cleanly with a recorded reason.
+change mid-way through a client-driven agent run does not touch the calls already in flight.
+Re-validate the `app_policy_version` / `routing_policy_version` hash at each request boundary
+of a session; on mismatch, either re-gate under the new policy or abort cleanly with a
+recorded reason.
 
 **Already in the repo.** The version stamps and the stale-probe detection they were built for —
 this is the same mechanism pointed inward at ourselves.
@@ -427,6 +439,14 @@ over-redaction incidents from a real deployment.
 **R3. "Monotone Privacy Contexts for Multi-Hop Agents"**
 *Venue: IEEE S&P, USENIX Security, or an OSDI/SOSP workshop.*
 
+> **2026-09-17 — re-targeted.** The internal NAT agent was removed, so the "hop" this
+> mechanism ratchets over is no longer an in-process agent step. The equivalent setting
+> is a client-driven agent loop, where each hop arrives as a separate request: the
+> ratchet becomes per-conversation, which needs a conversation/session identifier
+> (`x-routeforge-session` today, or the derived id). `app/routing/signals.py`'s stage
+> heuristics were removed with the agent and are recoverable from git history if that
+> work revives them.
+
 The IP-1 mechanism as a paper. Lattice formalization, the meet operation, the non-increasing
 eligibility proof, and an empirical demonstration that single-entry gating is unsound: construct
 agent tasks where hop 1 is clean and a tool output introduces PHI, then show that every surveyed
@@ -518,7 +538,7 @@ non-obvious failures worth writing down: the SSN-vs-spaCy dedupe bug where nonde
 `score=None→0.0`, fixed by seeding `score=1.0`; the delimiter-joined partition key proven
 non-injective by a concrete collision (`("a\x1fx","b","c")` and `("a","x","b\x1fc")` join
 identically), fixed with tuple keys; a fabricated per-tier latency constant that no one noticed
-was never measured; multi-step latency summing to zero. The theme — *privacy invariants fail
+was never measured; multi-hop latency summing to zero. The theme — *privacy invariants fail
 through mundane engineering defects, not through clever attacks* — is a real contribution to a
 field obsessed with adversarial robustness.
 

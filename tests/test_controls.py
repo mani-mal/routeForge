@@ -93,7 +93,7 @@ def test_pipeline_honors_runtime_cfg_toggle_between_calls():
     gateway = Gateway(settings, backend, model_router, registry)
     ccr = CCRStore(ttl_seconds=co_off.ccr.ttl_hours * 3600)
 
-    pipe = Pipeline(settings, gate, detector, gateway, self_port=8080,
+    pipe = Pipeline(settings, gate, detector, gateway,
                      co_cfg_provider=lambda: holder["cfg"], ccr=ccr, registry=registry)
 
     long_body = "INFO log line\n" * 800

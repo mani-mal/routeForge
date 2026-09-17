@@ -43,15 +43,14 @@ rate, reject inbound `stream: true`. `VerificationRecord` in the decision trace.
 request that can't be verified fails closed (never returns the unverified completion);
 `onprem_only` verification escalation stays on-prem; `stream: true` → clear rejection.
 
-## Phase 4 — Observability (3h) — *skill: nemo-agent-toolkit*
-NAT install and config, Langfuse via compose, OTel export, **redacting span
-processor**.
+## Phase 4 — Observability (3h)
+OpenTelemetry SDK + OTLP exporter, Langfuse via compose, **redacting span processor**.
 **Verify:** traces in Langfuse; known SSN absent from every span.
 
-## Phase 5 — Agent runtime (4h) — *skill: nemo-agent-toolkit*
-NAT tool-calling agent, gateway registered as its model endpoint, 2–3 fake tools,
-step and spend caps.
-**Verify:** 4-hop task → 4 DecisionRecords with distinct `hop_index`; caps enforced.
+## Phase 5 — Agent runtime — **removed 2026-09-17**
+This phase built an internal NeMo Agent Toolkit runtime behind a step-4 `multi_step`
+branch. Both were deleted: agent loops belong to the calling application, and every
+call its loop makes arrives as its own request. Step 4 always decides `direct`.
 
 ## Phase 5b — Conditional Context Optimization (4h) — *skill: headroom-compression*
 Headroom behind `context_optimization.enabled`, ContentRouter/compressor selection,
@@ -68,7 +67,7 @@ Flow visualizer with SSE/WebSocket streaming, decision inspector, cost dashboard
 is complexity/risk-tiered, not cost-tiered, so a cost slider wouldn't honestly shift
 tiers, and per-request `rejected[]` already greys excluded providers. See
 `_DEFERRED_CONTROLS` in `app/api/ui_routes.py` and the demo-ui skill's Control panel.)
-**Verify:** PII request visibly greys out cloud providers; multi-step visibly loops;
+**Verify:** PII request visibly greys out cloud providers; step 4 reads `direct answer`;
 compression A/B is one click.
 
 ## Phase 7 — Traffic + tests (4h) — *skill: traffic-and-tests*

@@ -32,8 +32,8 @@ OpenAI-compatible API:
    `/v1/chat/completions` from your application.
 2. [`../reference/api-reference.md`](../reference/api-reference.md) — full
    endpoint and wire-field reference.
-3. [`agentic-app-guide.md`](agentic-app-guide.md) — build a multi-step agentic
-   application on top of RouteForge.
+3. [`agentic-app-guide.md`](agentic-app-guide.md) — build an agentic
+   application on top of RouteForge (your loop, RouteForge routes each call).
 4. [`exporting-eval-datasets.md`](exporting-eval-datasets.md) — pull eval /
    RLHF-ready datasets out of Langfuse traces.
 

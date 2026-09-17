@@ -414,7 +414,7 @@ recipes, and what each one costs you.
 
 Now read [`architecture/sample-request-flows.md`](../architecture/sample-request-flows.md)
 — it takes these same three apps and traces real requests through all ten steps, showing exactly
-where each open-source library (Presidio, LiteLLM, NeMo Agent Toolkit, Headroom) does its work.
+where each open-source library (Presidio, LiteLLM, Headroom) does its work.
 
 **See also:** [`admin-setup.md`](./admin-setup.md) (exact HTTP) ·
 [`per-app-config.md`](../reference/per-app-config.md) (`pii_detection`/`capture_io`/`stream_mode` floors) ·

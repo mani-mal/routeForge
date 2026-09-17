@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import asyncio
 
-import httpx
 import pytest
 
 from app.compression.ccr import CCRStore
@@ -69,7 +68,7 @@ def _pipeline(rec: RecordingBackend, settings: Settings, registry=None) -> Pipel
     registry = registry or make_test_registry(settings)
     gateway = Gateway(settings, rec, Router(settings, registry=registry), registry)
     return Pipeline(settings, Gate(settings, det, registry=registry), det, gateway,
-                    self_port=8080, co_cfg_provider=lambda: co, ccr=CCRStore(3600))
+                    co_cfg_provider=lambda: co, ccr=CCRStore(3600))
 
 
 def _provider_of(model: str, settings: Settings, registry=None) -> str:
@@ -197,8 +196,7 @@ def test_residency_filter_is_what_keeps_pii_onprem_not_provider_availability():
     # gate.py does `from app.policy.context import build_context`, binding the
     # name into its own module namespace -- patching context_module.build_context
     # alone would not affect the call site inside Gate.evaluate(), so patch it
-    # where it's actually looked up (same pitfall documented in
-    # test_agent_runtime.py for app.agent.mock_agent.decide_agent_step).
+    # where it's actually looked up.
     original_build_context = gate_module.build_context
 
     def _leaky_build_context(settings, request_id, tenant_id, entities,
@@ -248,50 +246,3 @@ def test_residency_filter_is_what_keeps_pii_onprem_not_provider_availability():
             "cloud model, proving the real (unbroken) guard above is meaningful")
     finally:
         gate_module.build_context = original_build_context
-
-
-@pytest.mark.usefixtures("live_internal_server")
-def test_multistep_pii_request_stays_onprem_at_decision_level(live_internal_server):
-    """multi_step + PII: drives mock_multistep with an SSN in the content
-    against a live server (the agent runtime's NAT tool_calling_agent makes
-    real HTTP self-calls to the internal per-hop endpoint, so wiring a
-    RecordingBackend into that path would require intercepting the agent's
-    own HTTP client -- too invasive for this task; see the plan's Task 3
-    note). Instead this asserts at the DecisionRecord level: every
-    `agent_hop` DecisionRecord's `chosen` model maps to an onprem provider.
-    This is a weaker guarantee than the direct-path RecordingBackend
-    assertions above (which observe the actual backend call), but it is the
-    same style of check already used by test_e2e_slice.py's
-    `test_pii_request_excludes_cloud_in_trace` for the direct path, now
-    exercised in the multi-step Router-per-hop path. The direct-path
-    RecordingBackend test remains the primary #1 guard.
-    """
-    pytest.importorskip("nat")
-    settings = load_settings()
-    # live_internal_server boots a real create_app(), which seeds the same
-    # SP_SEED_TEST_MODELS onboarded rows (its own isolated in-memory DB) --
-    # build an independent registry with the identical seed here just to
-    # resolve model->provider for the assertion below.
-    registry = make_test_registry(settings)
-
-    r = httpx.post(
-        f"http://127.0.0.1:{live_internal_server.port}/v1/chat/completions",
-        headers={"authorization": "Bearer hospital-key"},
-        json={
-            "model": "auto",
-            "mock_multistep": True,
-            "messages": [
-                {"role": "user",
-                 "content": "My SSN is 482-73-1946. Look up account 42 then summarize."},
-            ],
-        },
-        timeout=30.0,
-    )
-    assert r.status_code == 200, r.text
-    body = r.json()
-
-    assert body["policy"]["onprem_only"] is True
-    hops = [t for t in body["trace"] if t.get("step") == "agent_hop"]
-    assert hops, "expected at least one agent_hop DecisionRecord"
-    assert all(_provider_of(h["chosen"], settings, registry) == "onprem"
-               for h in hops if h["chosen"]), (hops)

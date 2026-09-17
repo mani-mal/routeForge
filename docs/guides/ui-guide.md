@@ -263,12 +263,13 @@ fast?*
 | **Tier mix** (donut) | Requests per tier, coloured cheap mint / mid blue / frontier amber (§9a). A legend beneath lists `tier count`. Hover a slice for the count. |
 | **p50 latency** | Median request latency (ms). |
 | **p95 latency** | 95th-percentile request latency (ms). |
-| **% multi-step** | Share of requests that took the **agent path** (`hops > 1`) — i.e. made more than one routed LLM call. |
+| **% multi-step** | Share of requests whose trace holds more than one routing decision (`hops > 1`). |
 
-> **Multi-step latency now sums per-hop.** Agent-path requests report the total of every
-> hop's real latency (fixed 2026-08-06; earlier builds reported 0 ms because per-hop
-> latency wasn't summed into the request total). Both single-shot and multi-step latency
-> are correct.
+> **routeForge runs no agent loop of its own** (the internal agent runtime was removed
+> 2026-09-17), so a request is normally one routed call and this tile reads 0%. It only
+> moves when the **gateway escalates** — the first-choice candidate failed or came back
+> low-confidence and a second model was routed for the same request. Request latency is
+> the total of every such attempt's real latency.
 
 ---
 
@@ -286,7 +287,8 @@ fast?*
 - **Model** — human-facing name (e.g. `Qwen2.5-7B-Instruct (local)`); hover shows the
   routing slug. From `display_name` — on the cloud pool that comes from
   `config/routing.yaml`, on an on-prem model from its onboarded row.
-- **`N hops`** badge — multi-step requests (agent path).
+- **`N hops`** badge — a request that took more than one routing decision (a gateway
+  escalation, or a pre-2026-09-17 request stored while the internal agent still ran).
 - **Cost** (right, USD 4dp).
 - **Sensitivity** (`public` / `confidential` / `restricted`) and **latency** beneath.
 
@@ -304,7 +306,7 @@ sentence this replaced was retired in `:0.5.0`, `docs/archive/ui-open-items.md` 
 | Card | Verdict | The *why* line beneath it |
 |---|---|---|
 | **Privacy** (shield) | **Kept on-prem** / **On-prem only** / **Cloud-eligible** | Derived from the *effective candidate pool* (`policy.allowed_providers`), **not** `onprem_only` alone — so a request whose cloud providers are simply disabled reads "On-prem only", not "Cloud-eligible". Detected entity **types** render as chips below. |
-| **Model** (chip) | tier dot + model display name + `<tier> tier` | States why this model won — "cheapest model in the *N* tier, the lowest tier that met this task's risk bar", or the hop count for a multi-step request. |
+| **Model** (chip) | tier dot + model display name + `<tier> tier` | States why this model won — "cheapest model in the *N* tier, the lowest tier that met this task's risk bar", or the hop count when the request took more than one routing decision. |
 
 Under the two cards, a row of three metric chips — **Verified** (`Clean` / `Flagged` /
 `Not checked`), **Cost** (precise USD, vs the all-frontier baseline) and **Latency**
@@ -330,8 +332,10 @@ Bedrock**:
 The full ten-step Serving Plane for this one request, each step as a card with its
 one-line caption. Top-right is the **live Langfuse deep-link** ("Langfuse trace ↗",
 opens this request's trace; "Langfuse off" when telemetry keys aren't set — see FAQ).
-A multi-step request shows a note: *"Multi-step request — N agent hops, each re-entering
-compression and the router."*
+A request whose trace holds more than one routing decision shows a note: *"Multi-step
+request — N agent hops, each re-entering compression and the router."* This is now only
+reachable for stored requests served before 2026-09-17, while routeForge still ran an
+internal agent; the durable `request_snapshots` table keeps them, so the renderer stays.
 
 The ten step cards and the values each shows:
 
@@ -340,11 +344,11 @@ The ten step cards and the values each shows:
 | **1 Request** | Incoming OpenAI-compatible call | request id; served model. **Not the prompt** — "raw prompt is never stored or shown". |
 | **2 Policy Gate** | Detect & redact PII/PHI, set residency | sensitivity; `onprem_only`; **detected (types)** as red chips (never values). |
 | **3 Policy Context** | Immutable policy travels with the request | **allowed providers** (the pool the router is locked to); `onprem_only`; sensitivity. |
-| **4 Task Mode** | Direct answer vs. multi-step agent | mode: `direct answer` or `multi-step agent (N hops)`. |
-| **5 Compression** | Headroom shrinks tool output & history | per hop: `tokens_before → tokens_after` + **reduction %** *via &lt;compressor&gt;*, or **"bypassed — reason"**; plus **CCR stored / CCR retrievals / → cloud** (counts only, never cache contents). "off / not applicable" when it didn't run. |
-| **6 Model Router** | Picks model + tier per call, by cost & risk | **one card per hop.** chosen model (green) + reason; **rejected** candidates each with tier dot, name, `(provider)`, and **reason**. Most reasons are literal `app/routing/router.py` strings shown as-is — e.g. "excluded · residency" (`onprem_only` requests only, `router.py:68`), "below target tier" / "above target tier" (`router.py:130-131`) — but one is a **UI display translation, not a router string**: the router's raw `"not permitted for application"` reason (`router.py:88,100`) renders as **"excluded · app policy"** via the `REASON_LABEL` map (`RequestDrilldown.tsx:51-58`) / `compactReason()` (`:60-62`); est/actual cost, tokens priced, and **cumulative** spend across hops. |
+| **4 Task Mode** | Direct — agent loops run in the client | mode: always `direct answer`. routeForge runs no agent of its own; an application's loop sends each call as its own request. |
+| **5 Compression** | Headroom shrinks tool output & history | `tokens_before → tokens_after` + **reduction %** *via &lt;compressor&gt;*, or **"bypassed — reason"**; plus **CCR stored / CCR retrievals / → cloud** (counts only, never cache contents). "off / not applicable" when it didn't run. |
+| **6 Model Router** | Picks model + tier per call, by cost & risk | **one card per routing decision.** chosen model (green) + reason; **rejected** candidates each with tier dot, name, `(provider)`, and **reason**. Most reasons are literal `app/routing/router.py` strings shown as-is — e.g. "excluded · residency" (`onprem_only` requests only, `router.py:68`), "below target tier" / "above target tier" (`router.py:130-131`) — but one is a **UI display translation, not a router string**: the router's raw `"not permitted for application"` reason (`router.py:88,100`) renders as **"excluded · app policy"** via the `REASON_LABEL` map (`RequestDrilldown.tsx:51-58`) / `compactReason()` (`:60-62`); est/actual cost, tokens priced, and **cumulative** spend when a request made more than one attempt. |
 | **7 Gateway** | Quotas, breakers, fallback on failure | "No fallback — the first chosen backend succeeded", or the fallback reason if a backend failed. |
-| **8 Backend** | Runs on the chosen serving path | served model; latency (first hop); **tokens** `in / out`. The real serving path (mock / vLLM / Dynamo). |
+| **8 Backend** | Runs on the chosen serving path | served model; latency (first attempt); **tokens** `in / out`. The real serving path (mock / vLLM / Dynamo). |
 | **9 Verify** | Leakage check on the completion | required; performed; passed; escalated; **found (types)**; note. Egress leakage check — redaction on the way out, not just intake. |
 | **10 Response** | Governed answer + full decision trace | **tokens total**; **actual spend**; **all-frontier baseline**; **routing saved**; **compression saved**; then the model's **answer text** (scrollable). |
 
@@ -648,12 +652,14 @@ Every panel is driven by the `RequestSummary` / `TraceRecord` contract in `ui/sr
 
 ### "What does '2 hops' mean?"
 
-A **hop = one routed LLM call.** Most requests are single-shot: gate → route → one call.
-A **multi-step** request goes to the **agent runtime**, which splits the task into
-several sub-calls, and **each hop independently re-enters compression (step 5) and the
-router (step 6)** — so a 2-hop request made two separate routing decisions and could
-have landed on different tiers. The `N hops` badge is the visible proof that **routing
-is per-call, not per-request** — the single most important behaviour this product shows.
+A **hop = one routed LLM call.** routeForge answers a request with a single model call:
+gate → route → one call. A second hop appears only when the **gateway escalates** — the
+first candidate failed or came back low-confidence, so a second model was routed for the
+same request, independently re-entering compression (step 5) and the router (step 6).
+(Requests stored before 2026-09-17, while routeForge still ran an internal agent, can
+show more.) The point the badge makes is that **routing is per-call, not per-request** —
+which is also why an application's agent loop sends each of its calls as its own
+request: every one is gated, compressed, routed and verified on its own.
 
 ### "The rejected list shows several models — are they all real?"
 
@@ -688,7 +694,7 @@ with the server), reading `GET /api/controls` and writing `POST /api/controls`.
 
 | Layer | Toggle present? |
 |---|---|
-| Backend `POST /api/controls` | ✅ Mutates `app.state.co_cfg` in place — next request on either the direct or per-hop agent path picks it up, **no restart**. Admin-gated. |
+| Backend `POST /api/controls` | ✅ Mutates `app.state.co_cfg` in place — the next request picks it up, **no restart**. Admin-gated. |
 | API client `api.controls()` / `api.setControls()` | ✅ Present (`ui/src/api.ts`). |
 | Console UI | ✅ **HeadroomToggle** in the header chrome (`App.tsx:64`). |
 
@@ -713,7 +719,7 @@ curl -X POST http://<api-host>:30808/api/controls \
 ### "What's in Langfuse vs. this console?"
 
 Different jobs, same source. **Langfuse** is the operator's system of record — every
-trace, per-hop spans, tool I/O, cost, latency, **PII-redacted** (prompts/answers are
+trace, per-step spans, tool I/O, cost, latency, **PII-redacted** (prompts/answers are
 `null`; only `sp.*` decision attributes are exported). The **console** is the customer's
 decision story — which branch, why, what was excluded — in plain language. The Langfuse
 link deep-links to *this* request's trace, but the console never needs Langfuse to tell
@@ -734,7 +740,7 @@ renders raw input**. The **answer** is shown at the Response step; the prompts l
 ---
 
 **Known gaps & deferred UI work:** see `docs/archive/ui-open-items.md` — **all seven items are now
-closed.** The "What happened" redesign, the Headroom toggle, the 0 ms multi-step latency
+closed.** The "What happened" redesign, the Headroom toggle, the 0 ms multi-hop latency
 bug, per-request `$0.0000` precision, the two-blues recolour, the over-eager fleet ⚠, and
 the labelled/copyable Application ID (#7, shipped `ui:0.17.0`) have all shipped.
 

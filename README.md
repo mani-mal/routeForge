@@ -14,7 +14,8 @@ Plane** — and delivers three guarantees:
 1. **Privacy-first** — sensitive requests never leave the customer's infrastructure.
 2. **Cost reduction** — two independent levers: per-call routing to cheap/local models,
    and Headroom context compression (60–95% fewer tokens on tool outputs).
-3. **Observable** — every decision is captured in Langfuse via NeMo Agent Toolkit.
+3. **Observable** — every decision is captured in Langfuse via RouteForge's own
+   OpenTelemetry exporter.
 
 **RouteForge is a pure router.** It points at OpenAI-compatible endpoints and deploys,
 scales, or load-balances **no** inference itself — operators stand up their own serving
@@ -120,7 +121,6 @@ constraints:
 | `headroom-compression` | Step 5: Headroom, CCR residency, bypass rules |
 | `routing-and-gateway` | Steps 6–8 (+ step-4 task mode): scoring, adapters, confidence |
 | `output-controls` | Step 9: leakage checks, `require_verification`, streaming policy |
-| `nemo-agent-toolkit` | Agent runtime + Langfuse export |
 | `inference-backends` | What an operator runs behind an onboarded on-prem endpoint (vLLM/Dynamo/TensorRT-LLM); owns the full Dynamo skills list |
 | `demo-ui` | Console: flow visualizer, decision inspector, cost dashboard |
 | `traffic-and-tests` | Synthetic personas, generator, test suite (product load tooling) |

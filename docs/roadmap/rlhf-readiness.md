@@ -130,14 +130,14 @@ The RLHF note's recommended fields, mapped to routeForge:
 |---|---|---|
 | Request ID | `sp.request_id` | ✅ |
 | Application | `sp.application_id` | ✅ |
-| Task classification | task-mode step (direct/multi-step; step-4 classifier is OFF in the prototype, so coarse) | ⚠️ coarse |
+| Task classification | none — step 4 is a constant `direct` (the multi-step branch and the classifier were removed 2026-09-17) | ❌ |
 | **Eligible models (candidate snapshot)** | `RouterDecision.rejected[]` + `chosen`, exported as `sp.candidates` | ✅ **shipped 0.11.0** (was ❌ when this table was written) |
 | Selected model | `sp.model` | ✅ |
 | **Selection reason** | `RouterDecision.reason` (lifted as `sp.reason` on the router step) | ⚠️ partial (unchanged) |
 | **Routing-policy version** | `sp.routing_policy_version` (routing+pricing content hash) | ✅ **shipped 0.11.0** (was ❌ when this table was written) |
 | Model response | `output.value`; raw pre-verify completion when `capture_io: full` | ✅ **raw-completion gap closed in F1 Phase D**; still gated by `capture_io != off` |
 | Success / user feedback / human score / preferred model / corrected output | `POST /v1/feedback` → Langfuse scores (`route_correct`, `quality`, `preferred_model`, `failure_type`, `corrected_output`) | ✅ **shipped F1 Phase D** (was ❌ when this table was written) |
-| Latency / TTFT | per-step `latency_ms` | ⚠️ partial (TTFT not captured; multi-step latency bug B5) |
+| Latency / TTFT | per-step `latency_ms` | ⚠️ partial (TTFT not captured) |
 | Tokens & cost | `sp.cost_*`, usage | ✅ |
 | Fallback occurred | gateway step | ✅ (in trace) |
 

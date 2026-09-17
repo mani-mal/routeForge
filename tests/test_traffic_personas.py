@@ -68,5 +68,6 @@ def test_persona_build_shapes():
     for p in load_personas():
         body = p.build(rng)
         assert "messages" in body and body["messages"]
-        if p.name == "multi_step":
-            assert body.get("mock_multistep") is True
+        if p.name == "large_context":
+            assert "mock_multistep" not in body
+            assert len(body["messages"][0]["content"]) > 2000

@@ -1,5 +1,11 @@
 # NeMo Switchyard vs. routeForge's step-6 router — what to borrow, what to refuse
 
+> **Superseded 2026-09-17:** the internal NAT agent and the multi-step path were
+> removed; agent loops are client-driven. Anything below that reasons about an
+> in-process agent hop, `agent_budgets`, or `routing.stage_signals`
+> (`app/routing/signals.py`, also removed) describes a path that no longer exists.
+> The equivalent setting is a client-driven loop where each hop is its own request.
+
 **Audience:** anyone weighing whether routeForge's custom per-call routing logic
 (step 6, `app/routing/router.py`) should adopt ideas from — or be replaced by —
 **NVIDIA NeMo Switchyard**.

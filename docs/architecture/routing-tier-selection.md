@@ -37,10 +37,8 @@ The path, step by step:
 ### The load-bearing line
 
 ```python
-# app/pipeline.py:531  (direct path; also :748 in run_stream())
+# app/pipeline.py:499  (run(); also :741 in run_stream())
 complexity = min(1.0, comp.tokens_after / 2000)
-# app/agent/internal_endpoint.py:153  (per hop, multi-step path)
-complexity = min(1.0, tokens_after / 2000)
 ```
 
 **Complexity is post-compression token count / 2000, clamped to 1.0.** That's it. The

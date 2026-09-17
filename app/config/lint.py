@@ -39,9 +39,6 @@ def lint_settings(s: Settings) -> list[str]:
     for name, p in s.pricing.models.items():
         if p.tier not in tiers:
             errs.append(f"PRICING_TIER_UNKNOWN {name}:{p.tier}")
-    for role, t in s.routing.stage_signals.role_tiers.items():
-        if t not in tiers:
-            errs.append(f"ROLE_TIER_UNKNOWN {role}:{t} not in {sorted(tiers)}")
 
     # Pool-slug <-> pricing-slug cross-check: every cloud built-in in the pool
     # must have a matching pricing row, or LiteLLMBackend.generate's

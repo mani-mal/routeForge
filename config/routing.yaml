@@ -74,20 +74,3 @@ model_pool:
 fallback:
   max_retries_same_provider: 1
   backoff_base_ms: 100
-
-# Feature 2 — stage/role-aware routing signals (raise-only, default OFF).
-# When enabled, the multi-step path derives a min_tier bias from agent-loop
-# state (tool errors, exploration, inferred hop role) and joins it into the
-# router's max(). The residency clamp still caps it: an onprem_only request
-# never reaches cloud. Toggle on to demonstrate the lever.
-stage_signals:
-  enabled: false
-  tool_error_raise: true
-  exploration_repeat: 3
-  planner_role_raise: true
-  # Role (plan/verify/execute/format, inferred from message state) -> min_tier
-  # raise. Absent roles never raise -- execute/format leave the router free
-  # to pick the cheap tier. "plan" also requires planner_role_raise: true.
-  role_tiers:
-    plan: frontier
-    verify: mid

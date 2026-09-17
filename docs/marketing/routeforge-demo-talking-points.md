@@ -158,7 +158,7 @@ Scroll the trace. You don't have to read every card; hit these beats:
 
 - **Policy Gate** — *runs first.* Detected `LOCATION`, set sensitivity `confidential`. "PII is detected and redacted **here**, before any model, tool, or telemetry sees it."
 - **Policy Context** — `allowed providers: onprem`. "This immutable policy travels *with* the request — the router can only ever pick from the allowed set. It physically can't break residency downstream."
-- **Task Mode** — `direct answer`. "Simple question, single call. A complex task would split into multiple hops, and — this is the key behaviour — **each hop re-runs the router independently**, so a multi-step job can mix cheap and expensive models call by call."
+- **Task Mode** — `direct answer`. "Always direct: RouteForge runs no agent of its own. When a customer's agent framework works a task, each of its calls arrives here as its own request — and **each one re-runs the router independently**, so one agent job can mix cheap and expensive models call by call. That is the key behaviour."
 - Call out the honesty rule: **"Notice the raw prompt is never shown."** The console renders entity *types*, never values — a request can literally contain an SSN, and this UI will never display it.
 
 > "So the trace proves three things at once: the gate ran first, the residency lock
@@ -247,7 +247,6 @@ any backend.
 | Tool | License | What it does in RouteForge |
 |---|---|---|
 | **Microsoft Presidio** (+ **spaCy**) | MIT | **Step 2 — the policy gate.** Detects PII/PHI entities (SSN, name, location, medical IDs…) and drives redaction. This is what runs *first*, before any model sees the request. *(Policy/residency rules on top of it are RouteForge's own logic.)* |
-| **NVIDIA NeMo Agent Toolkit** (`nvidia-nat`) | Apache 2.0 | **The agent runtime** for multi-step tasks — state, tools, checkpointing — and the bridge that exports every hop's telemetry to Langfuse. Each agent hop independently re-enters the router. |
 | **Headroom** (`headroom-ai`) | open-source | **Step 5 — conditional context compression.** Shrinks tool outputs and history *after* the gate, so the router prices fewer tokens. The second, independent savings lever alongside routing. |
 
 ### 7c. Observability
@@ -334,7 +333,7 @@ config axis for RouteForge to select among them.
 | "Is this just PII pattern-matching?" | "Detection is one input. Residency is decided by the entity's **risk class** *and* the **tenant's own policy** — low-risk data on a cloud-eligible tenant is redacted and allowed out; high-risk data, or any request on an `onprem_only` tenant, is forced local." |
 | "What about streaming responses?" | "By default we verify the *complete* response before returning it — that's what makes the leakage check trustworthy — so inbound token-streaming is off in this demo config. It's not all-or-nothing, though: a per-app `stream_mode` shipped (e.g. verified-then-stream, or incremental hold-back redaction), and the floor is absolute — an `onprem_only` or verification-required request always falls back to the fully-verified path regardless. The console's own live updates are a separate channel and stay on." |
 | "Does it fail open if the gate breaks?" | "No — it **fails closed**. If the policy gate errors, the request is rejected. There is no 'no policy = allow' path." |
-| "Why does a multi-step request show 0 ms?" | *(No longer expected — resolved 2026-08-06.)* "That was an old display bug where per-hop latency wasn't summed into the request total; it now sums correctly, so a multi-step request shows its real end-to-end time. If you ever see 0 ms, you're on a pre-fix build." |
+| "Does RouteForge run the agent?" | "No — the agent loop, the tools and the control flow stay in your application. RouteForge is the model provider and the policy chokepoint it calls. That is deliberate: every call your loop makes arrives as its own request and is gated, routed, verified and priced on its own." |
 
 ---
 

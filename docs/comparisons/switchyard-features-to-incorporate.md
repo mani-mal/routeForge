@@ -1,5 +1,11 @@
 # NeMo Switchyard — features worth incorporating into routeForge
 
+> **Superseded 2026-09-17:** the internal NAT agent and the multi-step path were
+> removed; agent loops are client-driven. Anything below that reasons about an
+> in-process agent hop, `agent_budgets`, or `routing.stage_signals`
+> (`app/routing/signals.py`, also removed) describes a path that no longer exists.
+> The equivalent setting is a client-driven loop where each hop is its own request.
+
 **Source of record:** `NVIDIA_Nemotron_and_Switchyard_Report.docx` (internal, our own
 write-up of Nemotron 3.5 Lightning + NeMo Switchyard). This doc pulls the *interesting,
 actionable* features out of that report and maps each to a concrete routeForge decision.

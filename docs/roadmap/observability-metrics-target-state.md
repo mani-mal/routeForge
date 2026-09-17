@@ -1,5 +1,12 @@
 # RouteForge observability metrics catalog
 
+> **Amended 2026-09-17:** RouteForge's internal NAT agent and the multi-step path were
+> removed, and `nvidia-nat` is no longer a dependency. The NeMo Agent Toolkit rows below
+> (NAT Eval, NAT Profiler, "NAT Router Agent") name an **external** tool this catalog
+> proposes adopting, not something RouteForge ships — and agent-trajectory metrics now
+> describe the *calling application's* loop, where each hop is a separate RouteForge
+> request. Rows about "task-mode distribution" are moot: step 4 is a constant `direct`.
+
 Reference catalog of the metrics RouteForge should surface, the open-source tools that
 produce them, and corrected definitions. Captured from a collected research note.
 Related: ties to `docs/archive/eval-logging-backlog.md` and `docs/roadmap/rlhf-readiness.md`

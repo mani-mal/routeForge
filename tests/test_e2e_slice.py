@@ -48,7 +48,7 @@ def test_pii_request_excludes_cloud_in_trace():
     co = s.serving.context_optimization
     pipe = Pipeline(s, Gate(s, det, registry=registry), det,
                     Gateway(s, _DeterministicLiteLLM(s), Router(s, registry=registry), registry),
-                    self_port=8080, co_cfg_provider=lambda: co, ccr=CCRStore(3600),
+                    co_cfg_provider=lambda: co, ccr=CCRStore(3600),
                     registry=registry)
 
     req = ChatRequest(messages=[Message(role="user", content="verify SSN 482-73-1946")])
@@ -117,7 +117,7 @@ def test_direct_path_quality_sum_counts_only_served_attempt_not_escalation():
     co = s.serving.context_optimization
     pipe = Pipeline(s, Gate(s, det, registry=registry), det,
                     Gateway(s, _DeterministicLiteLLM(s), Router(s, registry=registry), registry),
-                    self_port=8080, co_cfg_provider=lambda: co, ccr=CCRStore(3600),
+                    co_cfg_provider=lambda: co, ccr=CCRStore(3600),
                     registry=registry)
 
     req = ChatRequest(messages=[Message(role="user", content="capital of France?")])

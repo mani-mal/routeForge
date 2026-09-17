@@ -102,10 +102,9 @@ Four things to get right when the harness lives in your app:
 
 1. **routeForge sees N independent calls, not one trajectory.** Each turn of your agent
    loop is a *separate* `/v1/chat/completions` request — its own privacy gate, routing
-   decision, cost, and trace. routeForge's own multi-step path (step-4 task-mode router,
-   NAT agent runtime, `agent_budgets`) does **not** engage; that only runs when you hand
-   routeForge a single request and let it drive the loop. To reconstruct the trajectory,
-   use the session header (§7).
+   decision, cost, and trace. routeForge runs no agent loop of its own: step 4 always
+   decides `direct`, so there is no path that hands routeForge one request and lets it
+   drive the loop. To reconstruct the trajectory, use the session header (§7).
 2. **Streaming is off unless your app opts in.** By default `stream: true` is rejected
    (output verification needs the complete response), so configure your model client to
    disable streaming or every call fails with `400`. If your workload needs streaming,
@@ -137,13 +136,14 @@ are not PII and are present regardless of the app's `capture_io` mode):
 | `sp.policy_mode` | the app's protection posture (`enforced` \| `passthrough`), emitted whenever it resolves |
 | `langfuse.session.id` | groups turns into one Langfuse **Session** (see below) |
 
-When routeForge runs the **multi-step path**, per-hop **child spans** `serving.step-N`
-carry `sp.chosen`, `sp.reason`, `sp.candidates`, `sp.hop_index`, `sp.actual_cost_usd`,
+Under each trace, one **child span per pipeline step** — `serving.router`,
+`serving.compression`, `serving.verify`, and `serving.gateway` when a candidate failed —
+carries `sp.chosen`, `sp.reason`, `sp.candidates`, `sp.hop_index`, `sp.actual_cost_usd`,
 and `sp.latency_ms`.
 
-**Reconstructing an app-side multi-agent run.** When your app owns the harness, a run is
-N separate top-level traces, not one trace with hop-spans. Tie them together by sending a
-stable session id on every call:
+**Reconstructing an app-side multi-agent run.** Your app always owns the harness, so a
+run is N separate top-level traces, never one trace covering the whole trajectory. Tie
+them together by sending a stable session id on every call:
 
 ```
 x-routeforge-session: <run-id>

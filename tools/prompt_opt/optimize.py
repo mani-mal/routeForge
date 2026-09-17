@@ -45,6 +45,9 @@ from pydantic import BaseModel
 
 from tools.prompt_opt.dataset import Example, load_dataset
 
+# Default prompt id for callers that don't pass one explicitly. No artifact by
+# this name ships today (config/prompts/ was removed with the NAT agent /
+# task-mode-classifier removal) -- callers must pass --prompt-id explicitly.
 _PROMPT_ID = "task_mode_classifier"
 
 

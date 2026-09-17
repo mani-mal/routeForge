@@ -2,30 +2,26 @@
 
 `stream_unverified` streams REAL backend token deltas (litellm `stream=True`)
 and WAIVES step-9 verification -- but only when `pipeline.run_stream` returns
-normally, which it does exactly when the request is NOT onprem_only, NOT
-require_verification, and NOT multi_step. A request that trips the runtime
-floor (Global Constraint 1) raises `StreamFallback` inside the pipeline and the
-route transparently falls back to `verified_then_stream` (the COMPLETE response
-is verified, then chunked) -- indistinguishable to the privacy guarantee.
+normally, which it does exactly when the request is NOT onprem_only and NOT
+require_verification. A request that trips the runtime floor (Global
+Constraint 1) raises `StreamFallback` inside the pipeline and the route
+transparently falls back to `verified_then_stream` (the COMPLETE response is
+verified, then chunked) -- indistinguishable to the privacy guarantee.
 
 Every streamed request still emits a DecisionRecord + durable usage row via
 `_finalize` (Global Constraint 2), including on a mid-stream client disconnect.
 
-Assertions are made against REAL SSE bytes off a real `TestClient` (and a real
-uvicorn server for the multi-step case), never mocks of the route internals.
+Assertions are made against REAL SSE bytes off a real `TestClient`, never
+mocks of the route internals.
 """
 from __future__ import annotations
 
 import json
 
-import httpx
 import pytest
 
 from app.gateway.backends import litellm_backend
-from tests._litellm_fake import (
-    make_scripted_tool_then_final_acompletion, make_streaming_acompletion,
-)
-from tests.conftest import admin_cookie
+from tests._litellm_fake import make_streaming_acompletion
 from tests.test_admin_api import _login
 
 _DELTAS = ["Hello", ", ", "streamed", " ", "world", "!"]
@@ -145,52 +141,6 @@ def test_stream_unverified_falls_back_when_floored(client):
     assert vrec["performed"] is True
     assert vrec["reason"] != "waived: stream_unverified"
     assert snap["policy"]["onprem_only"] is True
-
-
-# --------------------------------------------------------------------------- #
-# (c) multi-step routing -> falls back to verified_then_stream (real server)
-# --------------------------------------------------------------------------- #
-@pytest.mark.usefixtures("live_internal_server")
-def test_stream_unverified_multistep_falls_back(live_internal_server, monkeypatch):
-    pytest.importorskip("nat")
-    monkeypatch.setattr(litellm_backend, "acompletion",
-                        make_scripted_tool_then_final_acompletion(
-                            arguments='{"expression": "12 * 7"}'))
-    base = f"http://127.0.0.1:{live_internal_server.port}"
-    cookie = admin_cookie(live_internal_server.port)
-
-    # Create app + opt into stream_unverified over real HTTP.
-    r = httpx.post(f"{base}/admin/applications",
-                   headers={"Cookie": cookie},
-                   json={"id": "su-multi", "name": "su-multi"}, timeout=10)
-    assert r.status_code == 200, r.text
-    token = r.json()["token"]
-    r = httpx.put(f"{base}/admin/applications/su-multi/policy",
-                  headers={"Cookie": cookie},
-                  json={"stream_mode": "stream_unverified"}, timeout=10)
-    assert r.status_code == 200, r.text
-
-    r = httpx.post(f"{base}/v1/chat/completions",
-                   headers={"authorization": f"Bearer {token}"},
-                   json={"model": "auto", "mock_multistep": True, "stream": True,
-                         "messages": [{"role": "user",
-                                       "content": "Look up account 42 then compute 12 * 7"}]},
-                   timeout=30)
-    assert r.status_code == 200, r.text
-    assert r.headers["content-type"].startswith("text/event-stream")
-
-    frames = _parse_sse(r.text)
-    assert frames[-1] == "[DONE]"
-    assert _content(frames)  # the full agent answer was streamed
-
-    request_id = frames[0]["id"]
-    snap = httpx.get(f"{base}/api/requests/{request_id}",
-                     headers={"Cookie": cookie}, timeout=10).json()
-    # Multi-step ran the FULL agent pipeline (>=1 hop), then chunked -- it did
-    # NOT waive verification as stream_unverified.
-    assert any(t.get("step") == "agent_hop" for t in snap["trace"])
-    vrec = _verify_record(snap["trace"])
-    assert vrec["reason"] != "waived: stream_unverified"
 
 
 # --------------------------------------------------------------------------- #

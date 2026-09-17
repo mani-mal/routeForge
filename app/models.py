@@ -54,8 +54,8 @@ class ChatRequest(BaseModel):
     # OpenAI tool-calling inputs. Declared (rather than left to extra="allow")
     # so the pipeline can read them reliably and thread them to the backend;
     # a client that supplies `tools` drives its OWN agent loop, so RouteForge
-    # serves a single completion that may return `tool_calls` (it never hands
-    # a tools request to its internal NAT agent — see Pipeline.run).
+    # serves a single completion that may return `tool_calls` — see
+    # Pipeline.run's `tool_mode` branch.
     tools: list[dict] | None = None
     tool_choice: str | dict | None = None
     # Output length caps. Declared (not left to extra="allow") because the
@@ -131,9 +131,9 @@ class ExecutionPolicyContext(BaseModel):
     detected_entities: tuple[str, ...]  # TYPES only
     redaction_map_id: str | None
     # Per-app Headroom (step 5) override, resolved at gate time so it travels
-    # with the request into BOTH the direct pipeline and the per-hop agent
-    # endpoint. None = inherit the live global co_cfg toggle; True/False =
-    # force compression on/off for this app. Safety bypasses still apply.
+    # with the request into the pipeline. None = inherit the live global
+    # co_cfg toggle; True/False = force compression on/off for this app.
+    # Safety bypasses still apply.
     compression_override: bool | None = None
     # Short content hash of the per-app AppPolicyView in force for this request
     # (residency, pii_detection, denylist, score floor, tier/model/provider
@@ -165,7 +165,7 @@ class DecisionRecord(BaseModel):
     latency_ms: float = 0.0
     hop_index: int = 0
     tokens_priced: int = 0
-    tokens_out: int = 0   # completion tokens for this hop (multi-step baseline pricing, B12)
+    tokens_out: int = 0   # completion tokens for this attempt (baseline pricing, B12)
     quality_score: float | None = None
     quality_source: str | None = None  # customer|calibrated|published|tier_default
 
@@ -240,7 +240,7 @@ class GenerationResult(BaseModel):
     # single-shot direct-path call that never escalates -- so a None here is
     # never compared against the escalation threshold.
     confidence: float | None = None
-    # Tool calls the model requested this turn (multi-step agent path). None on
-    # the direct path (which never passes tools). Each item is an OpenAI-shape
-    # tool_call dict: {id, type, function:{name, arguments}}.
+    # Tool calls the model requested this turn (client tool-calling path).
+    # None on the direct path (which never passes tools). Each item is an
+    # OpenAI-shape tool_call dict: {id, type, function:{name, arguments}}.
     tool_calls: list[dict] | None = None

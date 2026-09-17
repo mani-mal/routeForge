@@ -18,10 +18,10 @@ most traffic is cheap, so most spend should be too.
 | `simple_qa` | 45% | Trivial → cheap tier. Bulk of the savings. |
 | `moderate` | 20% | Mid tier. |
 | `pii_bearing` | 15% | SSN/email/account numbers → `onprem_only`. **The privacy proof.** |
-| `multi_step` | 12% | Agent workflow, 3–5 hops, per-call routing. |
+| `large_context` | 12% | A long pasted context in one call — drives the frontier tier and gives compression something to chew on. |
 | `high_risk` | 5% | Forces `frontier` tier (best allowed) regardless of cost; `onprem_only` variant stays on best on-prem tier. |
 | `low_confidence` | 3% | Triggers exactly one escalation. |
-| `large_tool_output` | — | Overlay on `multi_step`: big JSON/log payloads so Headroom has something to compress. Without this the compression demo has no material. |
+| `large_tool_output` | — | Overlay on `large_context`: big JSON/log payloads so Headroom has something to compress. Without this the compression demo has no material. |
 
 Synthetic PII only — generate with Faker. **Never** use real customer data in a demo
 corpus, and say so in the README.
@@ -51,7 +51,8 @@ count kept on-prem, p50/p95 latency. These are the numbers you'll read aloud.
 - `test_output_controls.py` — step 9: leakage check on completions, `require_verification`
   flow, escalation-then-fail-closed, `stream: true` rejected (see `output-controls` skill)
 - `test_observability.py` — traces exported; **assert no raw PII and no CCR contents in spans**
-- `test_agent_runtime.py` — hop count, per-hop routing, step/spend caps
+- `test_no_agent_imports.py` — guards against the removed NAT agent creeping back
+  in (no `app/agent` package, no `nat` import, no `nvidia-nat` dependency)
 - `test_e2e.py` — each persona end-to-end through the real pipeline
 
 ## Assertions that matter most

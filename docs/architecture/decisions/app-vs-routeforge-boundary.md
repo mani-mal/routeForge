@@ -1,5 +1,8 @@
 # What belongs in the calling application vs. RouteForge
 
+> **Superseded 2026-09-17:** the internal NAT agent and the multi-step path were
+> removed; agent loops are client-driven.
+
 **Date:** 2026-09-06
 **Status:** Framing / decision doc. No code changes. Describes shipped behaviour as of
 `api:0.24.0`, with the gaps named as backlog.

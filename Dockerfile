@@ -4,12 +4,9 @@
 # SP_INFERENCE_BACKEND=vllm|dynamo; every LLM call egresses via LiteLLM.
 #
 # EXTRAS build-arg controls which optional dependency groups are installed:
-#   "agent,observability"  (default) — NAT multi-step agent + Langfuse export
-#   ""                     — lean mock-only API (smallest image)
-#   "agent,observability,presidio" — + Presidio (needs a spaCy model download)
-# The NAT (`agent`) extra is large (LangChain stack); the default image is
-# therefore well above the skill's 500MB aspiration. Pass EXTRAS="" for a lean
-# build when multi-step/observability aren't needed.
+#   "observability"            (default) — Langfuse export
+#   ""                         — lean mock-only API (smallest image)
+#   "observability,presidio"  — + Presidio (needs a spaCy model download)
 ARG PYTHON_VERSION=3.12
 
 # ---- builder ---------------------------------------------------------------
@@ -26,12 +23,11 @@ WORKDIR /app
 
 # `postgres` (asyncpg) is included by default so the multi-tenant store can use
 # the shared Langfuse Postgres via DATABASE_URL; dev/tests fall back to SQLite.
-ARG EXTRAS="agent,observability,postgres"
+ARG EXTRAS="observability,postgres"
 
 # Copy only what's needed to resolve/install deps first, so the (slow) dep
 # layer caches across source-only changes.
 COPY pyproject.toml uv.lock ./
-COPY nat_tools/ ./nat_tools/
 # Build the extra flags: "a,b" -> "--extra a --extra b"
 RUN EXTRA_FLAGS=""; \
     for e in $(echo "${EXTRAS}" | tr ',' ' '); do EXTRA_FLAGS="$EXTRA_FLAGS --extra $e"; done; \

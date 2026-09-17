@@ -34,14 +34,14 @@ def _write(tmp_path, prompt_id, label, *, verified=True, text="say direct or mul
 # ---------------------------------------------------------------------------
 
 def test_load_artifact_returns_none_for_missing_file(tmp_path):
-    assert load_artifact(str(tmp_path), "task_mode_classifier", "v1") is None
+    assert load_artifact(str(tmp_path), "test_artifact", "v1") is None
 
 
 def test_load_artifact_happy_path(tmp_path):
-    _write(tmp_path, "task_mode_classifier", "v1", verified=True, text="hello")
-    a = load_artifact(str(tmp_path), "task_mode_classifier", "v1")
+    _write(tmp_path, "test_artifact", "v1", verified=True, text="hello")
+    a = load_artifact(str(tmp_path), "test_artifact", "v1")
     assert isinstance(a, PromptArtifact)
-    assert a.id == "task_mode_classifier"
+    assert a.id == "test_artifact"
     assert a.label == "v1"
     assert a.verified is True
     assert a.text == "hello"
@@ -51,12 +51,12 @@ def test_load_artifact_happy_path(tmp_path):
 def test_load_artifact_forces_id_and_label_to_requested_values(tmp_path):
     # The on-disk id must not smuggle in a different prompt_id than the
     # directory it was resolved from; label comes from the filename.
-    d = tmp_path / "task_mode_classifier"
+    d = tmp_path / "test_artifact"
     d.mkdir()
     (d / "v1.yaml").write_text(yaml.safe_dump(
         {"id": "someone_else", "label": "other", "verified": True, "text": "x"}))
-    a = load_artifact(str(tmp_path), "task_mode_classifier", "v1")
-    assert a.id == "task_mode_classifier"
+    a = load_artifact(str(tmp_path), "test_artifact", "v1")
+    assert a.id == "test_artifact"
     assert a.label == "v1"
 
 
@@ -93,18 +93,18 @@ def test_resolve_active_empty_cfg_returns_empty_dict(tmp_path):
 
 
 def test_resolve_active_loads_every_pin(tmp_path):
-    _write(tmp_path, "task_mode_classifier", "v1", text="a")
+    _write(tmp_path, "test_artifact", "v1", text="a")
     _write(tmp_path, "verify_judge", "dspy-run7", text="b")
     cfg = PromptOptCfg(artifacts_dir=str(tmp_path),
-                        active={"task_mode_classifier": "v1", "verify_judge": "dspy-run7"})
+                        active={"test_artifact": "v1", "verify_judge": "dspy-run7"})
     active = resolve_active(cfg)
-    assert set(active) == {"task_mode_classifier", "verify_judge"}
-    assert active["task_mode_classifier"].text == "a"
+    assert set(active) == {"test_artifact", "verify_judge"}
+    assert active["test_artifact"].text == "a"
     assert active["verify_judge"].label == "dspy-run7"
 
 
 def test_resolve_active_raises_filenotfound_on_missing_pin(tmp_path):
-    cfg = PromptOptCfg(artifacts_dir=str(tmp_path), active={"task_mode_classifier": "v1"})
+    cfg = PromptOptCfg(artifacts_dir=str(tmp_path), active={"test_artifact": "v1"})
     with pytest.raises(FileNotFoundError):
         resolve_active(cfg)
 
@@ -112,10 +112,10 @@ def test_resolve_active_raises_filenotfound_on_missing_pin(tmp_path):
 def test_resolve_active_a_well_formed_but_unverified_artifact_is_still_returned(tmp_path):
     # The `verified` gate is enforced in app/config/lint.py::enforce, NOT
     # here -- resolve_active resolves, lint/enforce judges.
-    _write(tmp_path, "task_mode_classifier", "v1", verified=False)
-    cfg = PromptOptCfg(artifacts_dir=str(tmp_path), active={"task_mode_classifier": "v1"})
+    _write(tmp_path, "test_artifact", "v1", verified=False)
+    cfg = PromptOptCfg(artifacts_dir=str(tmp_path), active={"test_artifact": "v1"})
     active = resolve_active(cfg)
-    assert active["task_mode_classifier"].verified is False
+    assert active["test_artifact"].verified is False
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +127,7 @@ def test_prompt_version_empty_for_empty_active():
 
 
 def test_prompt_version_shape_and_stability():
-    active = {"task_mode_classifier": PromptArtifact(id="task_mode_classifier", label="v1",
+    active = {"test_artifact": PromptArtifact(id="test_artifact", label="v1",
                                                        text="hello", verified=True)}
     v1 = prompt_version(active)
     v2 = prompt_version(active)
@@ -161,7 +161,7 @@ def test_default_boot_has_no_active_prompt():
 # Fail-closed lint guards (invariants 4 & 5)
 # ---------------------------------------------------------------------------
 
-def _settings_with_pin(tmp_path, prompt_id="task_mode_classifier", label="v1"):
+def _settings_with_pin(tmp_path, prompt_id="test_artifact", label="v1"):
     s = copy.deepcopy(load_settings())
     prompt_opt = s.routing.prompt_opt.model_copy(
         update={"artifacts_dir": str(tmp_path), "active": {prompt_id: label}})
@@ -172,26 +172,26 @@ def _settings_with_pin(tmp_path, prompt_id="task_mode_classifier", label="v1"):
 def test_missing_pin_yields_named_lint_error_and_exits(tmp_path):
     s = _settings_with_pin(tmp_path)  # nothing written to tmp_path
     errs = lint_settings(s)
-    assert any("PROMPT_ACTIVE_MISSING task_mode_classifier:v1" in e for e in errs)
+    assert any("PROMPT_ACTIVE_MISSING test_artifact:v1" in e for e in errs)
     with pytest.raises(SystemExit):
         enforce(s)
 
 
 def test_malformed_artifact_yields_named_lint_error_and_exits(tmp_path):
-    _write(tmp_path, "task_mode_classifier", "v1", omit=("text",))
+    _write(tmp_path, "test_artifact", "v1", omit=("text",))
     s = _settings_with_pin(tmp_path)
     errs = lint_settings(s)
-    assert any("PROMPT_ARTIFACT_INVALID task_mode_classifier:v1" in e for e in errs)
+    assert any("PROMPT_ARTIFACT_INVALID test_artifact:v1" in e for e in errs)
     with pytest.raises(SystemExit):
         enforce(s)
 
 
 def test_unverified_pin_raises_config_lint_error_naming_the_pin(tmp_path):
-    _write(tmp_path, "task_mode_classifier", "v1", verified=False)
+    _write(tmp_path, "test_artifact", "v1", verified=False)
     s = _settings_with_pin(tmp_path)
     with pytest.raises(ConfigLintError, match="UNVERIFIED"):
         enforce(s)
-    with pytest.raises(ConfigLintError, match=r"task_mode_classifier:v1"):
+    with pytest.raises(ConfigLintError, match=r"test_artifact:v1"):
         enforce(s)
     # Boot must NOT succeed silently -- lint_settings alone does not catch
     # this (the artifact is well-formed); only enforce's human-gate guard does.
@@ -203,7 +203,7 @@ def test_unverified_pin_raises_config_lint_error_naming_the_pin(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_activation_happy_path_computes_expected_version_and_passes_lint(tmp_path):
-    _write(tmp_path, "task_mode_classifier", "v1", verified=True, text="classify this")
+    _write(tmp_path, "test_artifact", "v1", verified=True, text="classify this")
     s = _settings_with_pin(tmp_path)
     active = resolve_active(s.routing.prompt_opt)
     pv = prompt_version(active)
@@ -213,9 +213,9 @@ def test_activation_happy_path_computes_expected_version_and_passes_lint(tmp_pat
     enforce(s)  # must not raise -- verified: true satisfies the human gate
 
     assert len(pv) == 12
-    assert pv == prompt_version({"task_mode_classifier": active["task_mode_classifier"]})
+    assert pv == prompt_version({"test_artifact": active["test_artifact"]})
     assert s.prompt_version == pv
-    assert s.active_prompts["task_mode_classifier"].text == "classify this"
+    assert s.active_prompts["test_artifact"].text == "classify this"
 
 
 # ---------------------------------------------------------------------------
@@ -248,12 +248,8 @@ def test_routes_export_trace_call_threads_prompt_version_from_settings(client, m
     assert "prompt_version" in captured
     assert captured["prompt_version"] == load_settings().prompt_version == ""
 
-
-def test_shipped_sample_artifact_is_well_formed_and_verified_but_not_pinned():
-    # config/prompts/task_mode_classifier/v1.yaml ships verified so an
-    # operator can pin it later, but routing.yaml does NOT pin it -- default
-    # boot stays a no-op (test_default_boot_has_no_active_prompt above).
-    a = load_artifact("config/prompts", "task_mode_classifier", "v1")
-    assert a is not None
-    assert a.verified is True
-    assert a.text.strip() != ""
+# test_shipped_sample_artifact_is_well_formed_and_verified_but_not_pinned
+# deleted (remove-nemo-agent Task 1): it asserted against the real shipped
+# config/prompts/task_mode_classifier/v1.yaml artifact, which Task 1 deletes
+# along with the step-4 LLM classifier. config/prompts/ now ships no sample
+# artifact at all, so there is nothing left for this test to assert against.

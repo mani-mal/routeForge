@@ -1,12 +1,13 @@
 ---
 name: routing-and-gateway
-description: Use when implementing steps 6-8 of the Serving Plane - the adaptive per-call model router, scoring logic, model gateway, provider adapters, the approved model pool, and the task-mode classifier (step 4). Trigger on mentions of routing, model selection, scoring, tiers, gateway, provider adapter, fallback, escalation, task mode, or confidence.
+description: Use when implementing steps 6-8 of the Serving Plane - the adaptive per-call model router, scoring logic, model gateway, provider adapters, the approved model pool, and step-4 task mode (a constant direct decision - there is no classifier and no multi-step branch). Trigger on mentions of routing, model selection, scoring, tiers, gateway, provider adapter, fallback, escalation, task mode, or confidence.
 ---
 
 # Adaptive Router & Gateway (Steps 6–8)
 
 Covers step 6 (adaptive router), step 7 (gateway), step 8 (serving-path selection),
-and the step-4 task-mode classifier. Compression is **step 5** — it owns pricing
+and step-4 task mode — which is a **constant `direct` decision**, not a classifier
+(see "Task mode (step 4) is a constant" below). Compression is **step 5** — it owns pricing
 inputs; see the `headroom-compression` skill. Router scores on the token counts
 compression produces (below).
 
@@ -33,10 +34,11 @@ per-model token accuracy. Per-model recompression is a known, documented approxi
 
 ## Per-call, not per-request
 
-The router runs on **every LLM call**, including each hop inside a multi-step agent
-workflow. A 4-hop agent task hits the router 4 times and may pick a different tier
-each time. Make this visible in the UI — it's what separates this from a
-front-door classifier.
+The router runs on **every LLM call**. RouteForge answers a request with one model
+call and runs no agent loop of its own, so "per-call" means: an application's 4-hop
+agent loop sends 4 separate requests, hits the router 4 times, and may pick a
+different tier each time. Make this visible in the UI — it's what separates this from
+a front-door classifier.
 
 ## Scoring
 
@@ -86,13 +88,17 @@ The escalation signal is **backend-reported**, not a mystery scalar:
   like any other LLM call (steps 5–7), respects `allowed_providers`, and emits its own
   DecisionRecord. Don't add an unrouted, unpriced side-channel call.
 
-## Task mode (step 4) is a routed call, not a side channel
+## Task mode (step 4) is a constant
 
-Step 4 decides direct vs multi-step. Rules-first is enough by default — keep
-the LLM classifier **off**. If it is ever turned on, it is an LLM call like any other:
-it goes through steps 5–7, respects `ctx.allowed_providers` (so it can't silently
-break `onprem_only`), and emits a DecisionRecord so its cost is visible to the
-accumulator the demo depends on.
+`app/routing/task_mode.py::decide()` always returns `"direct"`. There is no
+multi-step branch and no classifier: the internal agent runtime and the optional LLM
+task-mode classifier were removed 2026-09-17, because agent loops belong to the
+calling application. The step stays in the architecture and in the console's step
+list, and it emits **no** `DecisionRecord`.
+
+If step 4 ever becomes a real decision again, it is an LLM call like any other: it
+goes through steps 5–7, respects `ctx.allowed_providers` (so it can't silently break
+`onprem_only`), and emits a DecisionRecord so its cost is visible.
 
 ## Model pool
 
@@ -118,7 +124,7 @@ class DecisionRecord(BaseModel):
     est_cost_usd: float
     actual_cost_usd: float | None
     latency_ms: float
-    hop_index: int                    # which agent hop
+    hop_index: int                    # index within this request's trace
 ```
 
 `rejected` with reasons is what makes the decision legible on a projector. Populate
@@ -126,12 +132,11 @@ it properly, including "excluded by policy" entries.
 
 ## Serving paths (step 8)
 
-The gateway selects a *provider*; the serving path decides *how* inference runs. Four
+The gateway selects a *provider*; the serving path decides *how* inference runs. Three
 routers exist in this system and conflating them causes confusion:
 
 | Router | Scope |
 |---|---|
-| NAT Router Agent (4) | workflow mode: direct vs multi-step |
 | Switchyard / our router (6) | model + backend |
 | vLLM Semantic Router (8) | model path within a vLLM pool |
 | Dynamo (8) | inference workers, scaling, KV placement |
@@ -168,4 +173,5 @@ all-frontier. The dashboard's headline number is the delta.
 - High risk + `onprem_only` → best on-prem tier + `require_verification`, **never** cloud
 - Low confidence → exactly one escalation, then stop
 - Circuit breaker opens after N failures, falls back within policy
-- 4-hop agent task → 4 DecisionRecords with distinct `hop_index`
+- Task mode always resolves `direct` (agent loops are client-driven); each call
+  is its own request and emits its own DecisionRecord

@@ -21,13 +21,15 @@ Non-negotiable details:
   per step as it happens.
 - **Show excluded providers greyed out with the reason.** For a PII request, the
   cloud tiers visibly grey out. This single visual carries the privacy story.
-- **Multi-step tasks loop visibly.** Each agent hop re-enters the router node with an
-  incrementing hop counter. Show it looping, or the per-call routing point is lost.
+- **Per-call routing is the point, and it shows across requests.** RouteForge runs no
+  agent loop of its own — an application's loop sends each model call as its own
+  request. Make consecutive requests from one session legible (the session id groups
+  them), so a viewer sees the same loop landing on different tiers call by call.
 
 ## Panel 2 — Decision inspector
 
 Click any request → full trace: step-by-step, chosen vs. rejected candidates with
-reasons, entity types detected (never values), per-hop cost, cumulative cost,
+reasons, entity types detected (never values), cost, cumulative cost,
 latency, and a deep link to the Langfuse trace.
 
 The rejected-candidates list with reasons is what makes it legible on a projector.
@@ -38,8 +40,9 @@ When Headroom is on, show per request: **tokens before → after** with the redu
 percentage, which compressor fired, and CCR store/retrieve counts. When it's bypassed,
 show the reason ("below min tokens", "high risk") — customers ask why.
 
-The strongest moment: run the same multi-step task with compression off, then on. Same
-answer, dramatically fewer tokens. Make that A/B one click.
+The strongest moment: run the same long-context request (the `large_context` persona)
+with compression off, then on. Same answer, dramatically fewer tokens. Make that A/B
+one click.
 
 ## Panel 3 — Cost dashboard
 
@@ -55,7 +58,7 @@ Fed by the traffic generator, so numbers move while the room watches.
 
 Live controls that visibly change behaviour:
 - **Headroom on/off toggle** → re-run the same request, watch token counts collapse.
-- Fire single scripted requests (clean / PII / multi-step / high-risk).
+- Fire single scripted requests (clean / PII / large-context / high-risk).
 - Start/stop traffic burst.
 
 **Deliberately NOT shipped** (tracked in `app/api/ui_routes.py` `_DEFERRED_CONTROLS`,

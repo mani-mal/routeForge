@@ -115,7 +115,7 @@ The gate redacts the *input*. Model completions and tool outputs can contain PII
 input never had (a model retrieves a record; a tool returns a customer row). Run
 redaction again at the telemetry exporter before anything reaches Langfuse.
 
-See the `nemo-agent-toolkit` skill for exporter wiring.
+Exporter wiring lives in `app/obs/export.py` / `app/obs/otel.py`.
 
 ## What to show in the UI
 

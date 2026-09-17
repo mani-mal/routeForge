@@ -67,8 +67,7 @@ def _pipeline(rec, settings, registry=None, cache=None):
     gate = Gate(settings, det, registry=registry)
     gateway = Gateway(settings, rec, Router(settings, registry=registry), registry)
     cache = cache if cache is not None else DeterministicSemanticCache(ttl_seconds=3600)
-    pipe = Pipeline(settings, gate, det, gateway, self_port=8080,
-                    co_cfg_provider=lambda: co, ccr=CCRStore(3600),
+    pipe = Pipeline(settings, gate, det, gateway, co_cfg_provider=lambda: co, ccr=CCRStore(3600),
                     registry=registry, cache=cache)
     return pipe, cache
 

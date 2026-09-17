@@ -70,10 +70,10 @@ def _write_jsonl(path: Path, lines: list[str]) -> None:
 
 def _write_base_artifact(artifacts_dir: Path, *, label: str = "v1",
                           text: str = "classify direct vs multi_step") -> None:
-    d = artifacts_dir / "task_mode_classifier"
+    d = artifacts_dir / "test_artifact"
     d.mkdir(parents=True, exist_ok=True)
     (d / f"{label}.yaml").write_text(yaml.safe_dump({
-        "id": "task_mode_classifier", "label": label, "verified": True,
+        "id": "test_artifact", "label": label, "verified": True,
         "source": "hand-authored", "notes": "", "text": text,
     }))
 
@@ -145,13 +145,14 @@ def test_optimize_and_emit_writes_unverified_dspy_candidate(tmp_path, monkeypatc
         model_slug="onprem-test-model",
         registry=registry,
         artifacts_dir=str(artifacts_dir),
+        prompt_id="test_artifact",
     )
 
     expected_label = optimize_mod._content_label(canned_text)
-    assert out_path == artifacts_dir / "task_mode_classifier" / f"{expected_label}.yaml"
+    assert out_path == artifacts_dir / "test_artifact" / f"{expected_label}.yaml"
     assert out_path.exists()
 
-    artifact = load_artifact(str(artifacts_dir), "task_mode_classifier", expected_label)
+    artifact = load_artifact(str(artifacts_dir), "test_artifact", expected_label)
     assert artifact is not None
     assert artifact.verified is False
     assert artifact.source == "dspy"
@@ -177,10 +178,11 @@ def test_optimize_and_emit_out_label_override(tmp_path, monkeypatch):
 
     out_path = optimize_and_emit(
         dataset_path=str(dataset_path), model_slug="m", registry=registry,
-        artifacts_dir=str(artifacts_dir), out_label="my-run-7")
+        artifacts_dir=str(artifacts_dir), out_label="my-run-7",
+        prompt_id="test_artifact")
 
     assert out_path.name == "my-run-7.yaml"
-    artifact = load_artifact(str(artifacts_dir), "task_mode_classifier", "my-run-7")
+    artifact = load_artifact(str(artifacts_dir), "test_artifact", "my-run-7")
     assert artifact.verified is False
     assert artifact.source == "dspy"
 
@@ -206,7 +208,7 @@ def test_emit_candidate_rejects_out_label_equal_to_base_label(tmp_path):
             str(tmp_path), "some text", base_label="v1", dataset_path="d.jsonl",
             model_slug="m", example_count=1, out_label="v1")
     # Nothing written at all.
-    assert not (tmp_path / "task_mode_classifier").exists()
+    assert not (tmp_path / "test_artifact").exists()
 
 
 @pytest.mark.parametrize("bad_label", [
@@ -241,44 +243,15 @@ def test_emit_candidate_refuses_to_overwrite_existing_artifact(tmp_path):
     assert out_path.read_text() == original_contents
 
 
-def test_emit_candidate_never_modifies_shipped_v1_artifact(tmp_path):
-    """Prove the refuse-overwrite guard protects the real shipped base
-    artifact: pre-seed a tmp artifacts_dir with a copy of the shipped
-    config/prompts/task_mode_classifier/v1.yaml and assert emit_candidate
-    cannot touch it via either the base-label-clobber guard or the
-    refuse-overwrite guard, and the real repo file is untouched throughout."""
-    real_v1 = REPO_ROOT / "config" / "prompts" / "task_mode_classifier" / "v1.yaml"
-    real_v1_contents_before = real_v1.read_text()
-
-    artifacts_dir = tmp_path / "prompts"
-    _write_base_artifact(artifacts_dir, label="v1", text=real_v1_contents_before)
-
-    # (1) --out-label v1 is rejected outright (clobber guard).
-    with pytest.raises(OptimizerError, match="same as --base-label"):
-        emit_candidate(
-            str(artifacts_dir), "candidate text", base_label="v1",
-            dataset_path="d.jsonl", model_slug="m", example_count=1,
-            out_label="v1")
-
-    # (2) Even a distinct label that happens to already exist on disk is
-    # refused (refuse-overwrite guard) -- simulate a prior candidate file
-    # sitting at the target path.
-    existing = artifacts_dir / "task_mode_classifier" / "already-there.yaml"
-    existing.write_text("sentinel: true\n")
-    with pytest.raises(OptimizerError, match="already exists"):
-        emit_candidate(
-            str(artifacts_dir), "candidate text", base_label="v1",
-            dataset_path="d.jsonl", model_slug="m", example_count=1,
-            out_label="already-there")
-    assert existing.read_text() == "sentinel: true\n"
-
-    # The v1.yaml artifact in the tmp dir (standing in for the shipped file)
-    # was never modified by either attempt.
-    v1_path = artifacts_dir / "task_mode_classifier" / "v1.yaml"
-    assert yaml.safe_load(v1_path.read_text())["verified"] is True
-
-    # And the actual repo-shipped file was never touched by this test.
-    assert real_v1.read_text() == real_v1_contents_before
+# test_emit_candidate_never_modifies_shipped_v1_artifact deleted
+# (remove-nemo-agent Task 1): it read the real shipped
+# config/prompts/task_mode_classifier/v1.yaml as a stand-in for "the shipped
+# base artifact" and asserted the refuse-overwrite guards never touch it.
+# Task 1 deletes that file (and config/prompts/ ships no artifact at all now),
+# so there is no real shipped file left for this test to protect. The guards
+# themselves (base-label-clobber, refuse-overwrite) stay covered by
+# test_emit_candidate_rejects_out_label_equal_to_base_label and
+# test_emit_candidate_refuses_to_overwrite_existing_artifact above.
 
 
 # ---------------------------------------------------------------------------
@@ -298,13 +271,13 @@ def test_emitted_candidate_pinned_fails_boot(tmp_path, monkeypatch):
 
     out_path = optimize_and_emit(
         dataset_path=str(dataset_path), model_slug="m", registry=registry,
-        artifacts_dir=str(artifacts_dir))
+        artifacts_dir=str(artifacts_dir), prompt_id="test_artifact")
     label = out_path.stem
 
     s = copy.deepcopy(load_settings())
     prompt_opt = s.routing.prompt_opt.model_copy(
         update={"artifacts_dir": str(artifacts_dir),
-                "active": {"task_mode_classifier": label}})
+                "active": {"test_artifact": label}})
     s.routing = s.routing.model_copy(update={"prompt_opt": prompt_opt})
 
     with pytest.raises(ConfigLintError, match="UNVERIFIED"):
@@ -348,11 +321,12 @@ def test_optimize_and_emit_rejects_unknown_model_slug(tmp_path):
     with pytest.raises(OptimizerError, match="not in the effective model pool"):
         optimize_and_emit(
             dataset_path=str(dataset_path), model_slug="not-onboarded",
-            registry=registry, artifacts_dir=str(artifacts_dir))
+            registry=registry, artifacts_dir=str(artifacts_dir),
+            prompt_id="test_artifact")
 
     # No candidate written on rejection.
-    assert not (artifacts_dir / "task_mode_classifier").exists() or not any(
-        (artifacts_dir / "task_mode_classifier").glob("dspy-*.yaml"))
+    assert not (artifacts_dir / "test_artifact").exists() or not any(
+        (artifacts_dir / "test_artifact").glob("dspy-*.yaml"))
 
 
 # ---------------------------------------------------------------------------

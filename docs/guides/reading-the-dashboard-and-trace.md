@@ -110,7 +110,7 @@ is an SSN.
 | **TIER MIX** | `mid 6` | All six calls routed to the **mid** tier (the onboarded `nemotron-nano-8b-v1`). The donut is a single colour because there's one tier in play. |
 | **P50 LATENCY** | `3327 ms` | Median end-to-end latency across the 6 calls. |
 | **P95 LATENCY** | `5271 ms` | 95th-percentile latency. |
-| **% MULTI-STEP** | `0.0%` | Fraction of requests routeForge handled as *its own* agent workflow. It's 0% because the multi-step logic is in the **test app** — routeForge received six single-shot `direct answer` calls (§0). If the app instead sent one call and let routeForge's agent runtime do the three hops, this would read ~100%. |
+| **% MULTI-STEP** | `0.0%` | Fraction of requests whose trace holds more than one routing decision. routeForge runs no agent loop of its own (the internal agent runtime was removed 2026-09-17), so every request is one routed call and this tile only moves when the **gateway escalates** — a first-choice candidate failed or came back low-confidence and a second model was routed for the same request. Here it is 0%: six single-shot `direct answer` calls, none escalated, with the planner→synthesis→review orchestration living in the **test app** (§0). |
 
 ---
 
@@ -155,9 +155,10 @@ why" — the part that makes the demo credible.
 - **onprem_only** `false` — carried forward from the gate.
 - **sensitivity** `confidential` — carried forward.
 
-### Task Mode (step 4) — *direct answer vs. multi-step agent*
-- **mode** `direct answer` — a single model call answers; no agent hops. (Confirms §0:
-  the app, not routeForge, is doing the multi-stage work.)
+### Task Mode (step 4) — *always direct*
+- **mode** `direct answer` — a single model call answers. Step 4 always decides
+  `direct`: routeForge runs no agent loop of its own, so the multi-stage work is the
+  app's (confirms §0).
 
 ### Compression (step 5, Headroom) — *shrink tool output & history*
 - **status** `bypassed — below_min_tokens` — the payload was too small to be worth
@@ -271,11 +272,11 @@ that used to leak them has already been closed.** Details, because it's a fair w
   redacted attributes — request id, tenant, model, costs, sensitivity, and entity
   **types**. The "Input" column in Langfuse is blank *by design* (Rule #2, redact on
   egress). Nothing to remove there.
-- **The old leak is fixed.** The NeMo Agent Toolkit's native Langfuse exporter used to
-  emit raw workflow input and per-hop tool I/O, bypassing our redaction. That exporter is
-  no longer wired (`app/agent/runtime.py`), guarded by
-  `tests/test_agent_telemetry_redaction.py`. Multi-step traces now come solely from our
-  own redacted path.
+- **The old leak is gone with the agent.** The internal agent runtime used the NeMo
+  Agent Toolkit's native Langfuse exporter, which emitted raw workflow input and per-hop
+  tool I/O bypassing our redaction. That exporter was unwired, and on 2026-09-17 the
+  agent runtime itself was removed. Every trace now comes solely from our own redacted
+  path (`app/obs/export.py`).
 - **If you want to remove even the redacted metadata**, turn the Langfuse exporter off in
   `config/serving.yaml` (`observability.langfuse.enabled: false`) — but that also drops
   the trace view the demo relies on.

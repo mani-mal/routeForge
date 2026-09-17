@@ -84,45 +84,8 @@ def compression_on_pipeline() -> Pipeline:
     model_router = Router(settings, registry=registry)
     gateway = Gateway(settings, backend, model_router, registry)
     ccr = CCRStore(ttl_seconds=co.ccr.ttl_hours * 3600)
-    return Pipeline(settings, gate, detector, gateway, self_port=8080,
+    return Pipeline(settings, gate, detector, gateway,
                      co_cfg_provider=lambda: co, ccr=ccr, registry=registry)
-
-
-@pytest.fixture
-def internal_client_with_compression_on():
-    """TestClient for the internal per-hop endpoint (Task 7 / M3) with
-    context_optimization forced on (enabled=True, min_tokens=1,
-    bypass_on.user_prompt=False) via app.state.co_cfg — mirrors
-    `compression_on_pipeline` above but exercises
-    `/internal/v1/{run_id}/chat/completions` directly instead of the direct
-    pipeline path, so a hop's compression can be asserted in isolation.
-
-    Starts a HOPS run with a non-onprem ExecutionPolicyContext and yields
-    `(client, run_id)`; the TestClient's ASGI-transport host ("testclient")
-    is on the internal endpoint's loopback allowlist, same as `client`.
-    """
-    from app.agent.internal_endpoint import HOPS
-    from app.models import ExecutionPolicyContext
-
-    app = create_app()
-    bypass_on = app.state.co_cfg.bypass_on.model_copy(update={"user_prompt": False})
-    app.state.co_cfg = app.state.co_cfg.model_copy(
-        update={"enabled": True, "min_tokens": 1, "bypass_on": bypass_on})
-
-    tc = TestClient(app)
-    run_id = "run-compress-hop"
-    ctx = ExecutionPolicyContext(
-        request_id="req-compress", tenant_id="acme", sensitivity="internal",
-        onprem_only=False, allowed_providers=frozenset({"onprem", "azure", "bedrock"}),
-        allowed_models=frozenset(), max_cost_usd=1.0, max_latency_ms=10000,
-        risk_class="low", require_verification=False, detected_entities=(),
-        redaction_map_id=None)
-    HOPS.start(run_id, ctx)
-    try:
-        yield tc, run_id
-    finally:
-        if HOPS.has(run_id):
-            HOPS.pop(run_id)  # avoid leaking run state if a test fails early
 
 
 def admin_cookie(port: int) -> str:
@@ -160,19 +123,20 @@ class LiveServer:
 def live_internal_server():
     """Boot the real app under a real uvicorn server on an ephemeral port.
 
-    NAT's `tool_calling_agent` drives itself via a real OpenAI-SDK HTTP
-    client (LangChain `ChatOpenAI`) that POSTs to our internal endpoint —
-    a bare `TestClient` doesn't accept real socket connections, so the
-    agent runtime tests need an actual listening server.
+    A bare `TestClient` doesn't accept real socket connections, so any test
+    that needs a genuine HTTP round trip -- e.g. the live SSE decision stream
+    (`test_decision_stream.py`, `test_b3_console_shared_state.py`) or the
+    `/api/traffic` control's own self-call to this same server
+    (`test_traffic_endpoint.py`, `app/api/ui_routes.py`) -- needs an actual
+    listening server.
     """
     import uvicorn
 
     os.environ["SP_PII_DETECTION"] = "regex"
     port = _free_port()
-    # The agent runtime (multi-step pipeline path) makes real HTTP self-calls
-    # to this app's own internal endpoint at 127.0.0.1:{port} — SP_SERVER_PORT
-    # must be set BEFORE create_app() so app/main.py wires that exact port
-    # into Pipeline. See app/main.py's _self_port() and app/pipeline.py.
+    # SP_SERVER_PORT must be set BEFORE create_app() so app/main.py's
+    # _self_port() picks up this exact port for app.state.self_port (the
+    # /api/traffic control's self-call target -- see app/api/ui_routes.py).
     os.environ["SP_SERVER_PORT"] = str(port)
     config = uvicorn.Config(create_app(), host="127.0.0.1", port=port, log_level="warning")
     server = uvicorn.Server(config)

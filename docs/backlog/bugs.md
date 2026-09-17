@@ -8,6 +8,13 @@ assumed from its status heading) during the 2026-09-10 docs sweep, and every
 one was confirmed closed; nothing was migrated because nothing was live. See
 the audit trail in that sweep's task report.
 
+> **Agent removal 2026-09-17.** RouteForge's internal NeMo Agent Toolkit runtime and the
+> step-4 `multi_step` branch were removed; step 4 now always decides `direct` and agent
+> loops are client-driven. Entries below that are framed around "the multi-step path", an
+> "agent hop", or `agent_budgets` describe a path that no longer exists — they are kept as
+> written, for history. Where that changes an item's *current* standing it is noted inline
+> on the item.
+
 > **Status sweep 2026-08-22.** Re-verified against the code at `main` (merge `ed64312`,
 > deployed DGX `:0.14.0`). Resolved-but-unmarked items carry a `✅ RESOLVED` / `PARTIAL`
 > marker in their heading with a one-line evidence note; original write-ups kept for history.
@@ -406,6 +413,11 @@ actually computes.
 > demonstration, not a tool runtime, and docs/diagrams should say so. B25 captures the
 > deployment-time design (registry + generic HTTP adapter + per-app allowlist) and the
 > residency/egress/tenancy constraints it must answer, for whenever it is picked up.
+>
+> **Update 2026-09-17.** The internal NAT agent and `nat_tools/` were deleted. The decision
+> above is unchanged and now unconditional: the client-driven loop is the *only* path for
+> real tools. B25's "what's wrong today" section below describes the removed build-time
+> arrangement and is kept for the design constraints it records, not as current state.
 
 ## B25 — FEATURE: application-registered tools must be deployment-time, not a RouteForge source change
 
@@ -779,7 +791,7 @@ vs 21/150 at rps=8, all `multi_step`).
 
 **Levers (pick per goal):**
 - Scale vLLM (2–3 replicas behind the on-prem vLLM service) — real fix, needs GPU + manifest change.
-- Trim the `multi_step` share in `tests/personas.yaml` for the burst demo — cheap, keeps the "500-req burst" moment clean.
+- Trim the long-request share (`large_context`) in `tests/personas.yaml` for the burst demo — cheap, keeps the "500-req burst" moment clean. *(2026-09-17: the `multi_step` persona this originally named was replaced by `large_context` when the internal agent was removed; a burst is now N single calls, so the overlap this item describes is much reduced.)*
 - Raise `vllm.timeout_s` and/or bound agent concurrency — mitigates, doesn't remove.
 - Blocked from scaling the **API** tier by B3.
 
@@ -1284,12 +1296,11 @@ NOT in RouteForge's own step-4 agent runtime. RouteForge therefore has **no link
 between the three calls that make up one investigation.
 
 **Do NOT confuse two mechanisms:**
-- **Server-side multi-step** (step 4 → agent runtime): all hops already land in ONE
-  request's `resp["trace"]` and ONE `RequestSummary` row (`app/api/history.py`, `hops`
-  field). Nesting these in the list is pure UI over existing data. The sample does not
-  exercise this path.
-- **Client-side workflow** (the sample): N independent direct requests. Grouping them
-  needs a correlation id the client sends; RouteForge does not capture one today.
+- **Server-side multi-step** (step 4 → agent runtime): all hops landed in ONE request's
+  `resp["trace"]` and ONE `RequestSummary` row (`app/api/history.py`, `hops` field).
+  *Removed 2026-09-17* — this path no longer exists, and the sample never exercised it.
+- **Client-side workflow** (the sample): N independent direct requests. This is now the
+  only shape. Grouping them needs a correlation id the client sends.
 
 **What:** let a client tag the calls of one workflow with a **correlation/session id**;
 RouteForge captures it, stores it on each request, and the Requests list groups tagged

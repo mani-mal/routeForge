@@ -1,5 +1,8 @@
 # Why context compression (Headroom, step 5) lives in RouteForge, not the calling app
 
+> **Superseded 2026-09-17:** the internal NAT agent and the multi-step path were
+> removed; agent loops are client-driven.
+
 **Status:** decision doc, 2026-08-20. Answers the recurring scope question: *"We
 decided agent-harness self-improvement and RLHF are out of scope because the calling
 application owns its own harness. By the same logic, shouldn't Headroom compression live

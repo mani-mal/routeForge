@@ -60,9 +60,6 @@ data:
       bedrock:
         enabled: {{ .Values.servingPlane.providers.bedrock.enabled }}
 
-    agent:
-      runtime: {{ .Values.servingPlane.agent.runtime | quote }}
-
     server:
       host: {{ .Values.servingPlane.server.host | quote }}
       port: {{ .Values.servingPlane.server.port }}

@@ -5,12 +5,17 @@ and the [`diagrams/routeforge-request-flow.drawio`](diagrams/routeforge-request-
 
 That doc tells you *what* each of the ten steps is. **This doc walks real requests through
 them** — three sample apps, each with a real config, so you can mentally trace how a request
-moves and where each open-source library actually gets touched. It exists to answer three
-questions that the box diagrams don't:
+moves and where each open-source library actually gets touched. It exists to answer the
+questions the box diagrams don't:
 
-1. How is the **NeMo Agent Toolkit (NAT)** used on the multi-step path?
-2. How is the **optional LLM task-mode classifier** used (and why is it "just another routed call")?
-3. How do **`app/compression/`, `app/cache/`, `app/memory/`** work *per call*?
+1. How do **`app/compression/`, `app/cache/`, `app/memory/`** work *per call*?
+2. What does an **application-driven agent loop** look like from RouteForge's side?
+
+> **Changed 2026-09-17.** This doc used to carry a "Flow C" showing RouteForge's own
+> internal NeMo Agent Toolkit runtime fanning one request into several hops, plus an
+> optional LLM task-mode classifier that chose `direct` vs `multi_step`. Both were
+> removed: step 4 always decides `direct`, and agent loops belong to the calling
+> application. Flow C below is rewritten as the client-driven shape that replaced it.
 
 > Cost/latency/token numbers below are **illustrative** — they show the shape of a
 > `DecisionRecord`, not a benchmark. Everything else (field names, config keys, order of
@@ -20,16 +25,19 @@ questions that the box diagrams don't:
 
 ## 0. The mental model — one spine, two branch points
 
-Every request runs the same spine (steps 1→10). There are only **two** places it branches:
+Every request runs the same spine (steps 1→10) and answers with **one** model call.
+There is only **one** place it branches:
 
-- **Branch point A — step 4, task mode.** `direct` (one model call) vs `multi_step` (hand off
-  to the NAT agent runtime, which makes *many* model calls). Decided by
-  `app/routing/task_mode.py`.
-- **Branch point B — step 5, three optional features.** Semantic cache, persistent memory,
+- **Branch point — step 5, three optional features.** Semantic cache, persistent memory,
   and compression. **All three ship OFF** (`config/serving.yaml`). When off, they add nothing
   to the request — it passes through byte-for-byte.
 
-### The exact per-call order on the direct path
+Step 4 (`app/routing/task_mode.py`) always returns `"direct"` and emits no
+`DecisionRecord`. RouteForge runs no agent loop of its own; an application's loop sends
+each of its model calls as a separate request, so every hop of that loop re-enters this
+whole spine independently — which is the point (see Flow C).
+
+### The exact per-call order
 
 This is the order in `Pipeline.run()` (`app/pipeline.py`). Memorize this — it's the thing the
 diagrams flatten into one "Step 5" box:
@@ -38,7 +46,7 @@ diagrams flatten into one "Step 5" box:
 |---|-------|--------|------------------------|
 | 1 | Authenticate + **sanitize** (PII scan) | `app/policy/gate.py` | Rejects on gate error (fail closed) |
 | 2 | Build immutable **policy context** | `app/policy/context.py` | — |
-| 3 | Decide **task mode** (direct/multi-step) | `app/routing/task_mode.py` | — |
+| 3 | Decide **task mode** (constant `direct`) | `app/routing/task_mode.py` | — |
 | 4 | **Memory recall** → *prepend* recalled context | `app/memory/` | No (just adds messages) |
 | 5 | **Semantic cache** lookup | `app/cache/` | **Yes** — a verified hit returns immediately, skipping the model call |
 | 6 | **Compression** (prices post-compression tokens) | `app/compression/` | No (fails *open*) |
@@ -48,8 +56,8 @@ diagrams flatten into one "Step 5" box:
 | 10 | **Cache store** (on a genuine miss only) | `app/cache/` | — |
 
 Note that **memory recall (4) runs *before* the cache check (5)** on purpose: recalled context
-is then priced and compressed like any other tokens. Note also that the **cache is
-direct-path only** — the multi-step path skips it (more below).
+is then priced and compressed like any other tokens. Note also that the cache runs in
+`Pipeline.run()` only — `run_stream()` deliberately skips it.
 
 ---
 
@@ -119,7 +127,7 @@ them; `null` on any field means "inherit / no restriction."
 > **own** Langfuse project while leaving `onprem_only` absolute. See
 > [`../reference/per-app-config.md`](../reference/per-app-config.md).
 
-### App C — `research-agent` (multi-step, cloud + frontier)
+### App C — `research-agent` (a client-driven agent loop, cloud + frontier)
 
 ```jsonc
 // POST /admin/applications
@@ -144,8 +152,10 @@ risk_class `low | medium | high`; `pii_detection` `off | regex | presidio`;
 `stream_mode` `off | verified_then_stream | stream_unverified | incremental_verify`.
 
 There is **no `sensitivity` field on an app** — sensitivity is computed *per request* from the
-entities the gate detects (see Flow B). And multi-step caps (`max_steps: 5`, etc.) are **global**
-in `config/policy.yaml → agent_budgets`, not per-app.
+entities the gate detects (see Flow B). There are no agent-loop caps either: the loop is the
+application's, so its step limit is the application's to enforce. RouteForge's per-app limits
+(`max_rpm`, `max_spend_usd_per_day`, `max_cost_usd_per_request`) apply to each call the loop
+makes.
 
 ---
 
@@ -159,14 +169,14 @@ Authorization: Bearer rf_live_x7Kp…
 { "model": "auto", "messages": [ {"role":"user","content":"What is the capital of France?"} ] }
 ```
 
-This is the baseline: classifier OFF, cache/memory/compression all OFF. Trace:
+This is the baseline: cache/memory/compression all OFF. Trace:
 
 | Step | What happens | DecisionRecord fields (illustrative) |
 |------|--------------|--------------------------------------|
 | 1 · API | `routes.py` receives the call; token → `Application` (+ policy) is resolved fail-closed. | `request_id=req_a1` |
 | 2 · Gate | `pii_detection: regex` runs. No entities found. Text unchanged. | `step=policy_gate, entities=[]` |
 | 3 · Context | No entity rule matched → the `[]` catch-all → **`sensitivity=public, residency=any, risk=low`**. App narrows providers to `{azure}`, tiers to `{cheap, mid}`. | `allowed_providers=[azure], allowed_tiers=[cheap,mid]` |
-| 4 · Task mode | `task_mode.decide()`: last user message has no trigger phrase, `mock_multistep=false` → **`"direct"`**. Classifier OFF → no record. | — |
+| 4 · Task mode | `task_mode.decide()` → **`"direct"`**, always. Emits no record. | — |
 | 4a · Memory recall | `memory.enabled=false` → bypass `"disabled"`. Nothing added. | (no record) |
 | 5a · Cache lookup | `semantic_cache.enabled=false` → skipped entirely. | (no record) |
 | 5b · Compression | `context_optimization.enabled=false` → bypass `"disabled"`. Tokens unchanged. | `bypass_reason=disabled` |
@@ -271,148 +281,70 @@ declared by the app.
 
 ---
 
-## Flow C — a multi-step task (how NeMo Agent Toolkit is used)
+## Flow C — an application's agent loop (several requests, one per hop)
 
-**App:** `research-agent`. **Request:**
+**App:** `research-agent`. Its harness — LangChain, LlamaIndex, an agent framework, or
+its own `while` loop — owns the tools and the control flow. RouteForge is the model
+provider it points at.
 
-```json
-{ "model": "auto", "messages": [
-  {"role":"user","content":"Look up Acme's latest revenue and draft a one-paragraph summary."} ]}
+```python
+rf = OpenAI(base_url="http://<host>:<port>/v1", api_key="rf_live_...")
+history = [{"role": "user",
+            "content": "Look up Acme's latest revenue and draft a one-paragraph summary."}]
+while not done:
+    resp = rf.chat.completions.create(model="auto", messages=history, tools=TOOLS)
+    # ... the app runs its own tools and appends the results to `history` ...
 ```
 
-### Why it goes multi-step
-`task_mode.decide()` finds the trigger phrase **`"look up"`** in the last user message → returns
-`"multi_step"`. (The other triggers are `"step by step"` and the demo-only `mock_multistep: true`.)
-The pipeline calls `_run_multi_step(...)`, which hands off to `agent_run(...)` in
-`app/agent/runtime.py`.
+### What RouteForge sees
 
-### What NAT actually does
-NAT (`nvidia-nat`, the `agent` extra) is **lazy-imported only here** — the direct path never
-imports it. The runtime:
+**Three requests, not one.** Each iteration of the loop is its own
+`POST /v1/chat/completions`, so each one independently runs steps 1→10: its own gate
+pass, its own `ExecutionPolicyContext`, its own compression, its own
+`router.select()`, its own verification, its own `DecisionRecord` and its own trace.
 
-1. `load_config("config/nat_workflow.yaml")` — a `tool_calling_agent` workflow with **one LLM
-   named `sp_router` (`model_name: auto`)** and three tools: `calculator`, `doc_search`,
-   `crm_lookup` (registered in the `nat_tools` package). **These are RouteForge's own
-   built-in demo tools, not `research-agent`'s (or any app's) real tools** — `doc_search`
-   and `crm_lookup` are docstring-labelled `FAKE` and return a canned string with no real
-   call (`nat_tools/src/nat_tools/tools.py:72,110`); only `calculator` computes anything.
-   They exist to demonstrate the per-hop routing mechanism below, not to perform real work.
-   The supported path for an application's *real* tools is the client-driven loop —
-   RouteForge never executes an app's own tools itself (`tools`/`tool_choice` on
-   `/v1/chat/completions` come back as `tool_calls` for the *client* to run and replay; see
-   [`../reference/api-reference.md`](../reference/api-reference.md)).
-2. **Repoints that LLM at RouteForge itself:** `base_url =
-   http://127.0.0.1:{port}/internal/v1/{run_id}`. This is the trick — the agent thinks it's
-   calling one OpenAI endpoint named "auto", but every call loops back **into RouteForge's own
-   router**.
-3. Sets `max_iterations` from `config/policy.yaml → agent_budgets.max_steps` (5).
-4. Runs the agent loop until it produces a final (non-tool-call) answer.
+| Loop turn | What the app sent | What RouteForge did |
+|---|---|---|
+| 1 | the task | gate → route → model returns a `tool_calls` turn (`finish_reason: "tool_calls"`) |
+| 2 | task + assistant tool call + the app's tool results | gate re-scans the **tool output** (data the first gate pass never saw) → route → model returns another turn |
+| 3 | the full history | gate → route → final answer, verified, returned |
 
-### The hop loop — each hop is a full routed + compressed call
+**This is the load-bearing behaviour:** compression (5) and routing (6) are **per-call**,
+so a cheap turn lands on the cheap tier and a hard turn floors higher, and a turn whose
+*tool output* carries PII goes `onprem_only` on its own — even though the original task
+did not. A three-turn loop makes three routing decisions and can land on three tiers.
 
-```mermaid
-sequenceDiagram
-    participant NAT as NAT tool_calling_agent
-    participant EP as /internal/v1/{run_id}
-    participant C as compress() (step 5)
-    participant R as router.select() (step 6)
-    participant B as gateway/backend (step 7/8)
-    Note over NAT: model_name = "auto"
-    loop until final answer (≤ max_steps)
-        NAT->>EP: POST /chat/completions (this hop's messages)
-        EP->>C: compress THIS hop's view (per-hop, not the whole request)
-        C-->>EP: compressed messages, tokens_after
-        EP->>R: select(ctx, tokens_after, complexity)  ← prices post-compression
-        R-->>EP: chosen model (respects ctx.allowed_providers)
-        EP->>B: backend.generate(chosen, compressed messages)
-        B-->>EP: completion (maybe tool_calls)
-        EP-->>NAT: SSE: tool-call → NAT runs a tool & loops, OR final → converge
-        Note over EP: emit one DecisionRecord (step="agent_hop") + one CompressionRecord
-    end
-```
+### Consequences for the app
 
-So for a 3-hop task you get **3 independent** `compress()` + `router.select()` +
-`backend.generate()` cycles — not one big call. That's the single most important thing to see:
-**compression and routing are per-call (per-hop), not per-request.** A typical trace:
+- **Correlation is the app's job.** Three requests means three trace ids. Send
+  `x-routeforge-session: <run-id>` on every call to group them into one Langfuse Session.
+- **Cost accounting is the app's job.** Each response carries its own `cost`; the task
+  total is the sum the app keeps. RouteForge sums within one request, never across them.
+- **Tool calls pass through.** `tools` / `tool_choice` in, `tool_calls` out. A request
+  carrying `tools` is always served as one complete completion and **bypasses step-5
+  compression** (Headroom would corrupt the tool_call/tool_result structure) and the
+  semantic cache.
+- **Never route tool results around RouteForge.** Feeding them back through the next call
+  is what keeps the gate in front of them.
 
-| Hop | Agent's intent | Compressed tokens | Model chosen (tier) | Cost |
-|-----|----------------|-------------------|---------------------|------|
-| 1 | "I need Acme's revenue → call `crm_lookup`" | 120 | `azure-gpt-mid` (mid) | $0.0003 |
-| 2 | Reason over the tool result → call `doc_search` | 340 (compressed from 900) | `azure-gpt-mid` (mid) | $0.0006 |
-| 3 | Draft the summary paragraph | 500 | `bedrock-frontier` (frontier) | $0.004 |
-
-- The **same `ExecutionPolicyContext`** rides every hop, so residency (`onprem_only`) and
-  `allowed_providers` hold on hop 3 exactly as on hop 1 — the agent can't escape policy
-  mid-task.
-- Each hop appends its own `DecisionRecord(step="agent_hop")` with **real** per-hop cost and
-  latency, plus a 1:1 `CompressionRecord`. The pipeline **sums cost across hops** and reports
-  routing-savings vs compression-savings separately.
-- **Cap / fail-closed:** if the agent can't converge within `max_steps`, the runtime raises
-  `AgentCapExceeded` → HTTP 500 "agent did not converge within its step limit." It never
-  loops forever and never returns a half-answer as success.
-- **Cache is skipped on the multi-step path**; memory recall still runs once up front, and
-  compression runs *per hop*.
-- **Telemetry:** NAT's own Langfuse exporter is deliberately left **off** — it would emit raw
-  per-hop I/O and bypass RouteForge's egress redaction. Redacted per-hop spans go through
-  RouteForge's own exporter instead (rule #2).
-
-### After the loop
-The final answer runs through **step 9 verification** once (leakage checks), then the pipeline
-assembles the governed response: summed cost, two-lever savings, and a `trace` = per-hop
-decision records + per-hop compression records + the verify record.
-
----
-
-## The optional LLM task-mode classifier (branch point A, upgraded)
-
-By default, step 4 is the **rules-first** `task_mode.decide()` — a substring match on the last
-user message. An operator can instead turn on an **LLM classifier** to make the direct/multi-step
-call. This is off in two independent ways by default, and *both* must be flipped to enable it:
-
-```yaml
-# config/routing.yaml   (no prompt_opt block ships → all defaults → OFF)
-routing:
-  prompt_opt:
-    enabled: true                       # (1) master switch, default false
-    active: { task_mode_classifier: v1 }  # (2) pin a human-verified prompt artifact
-```
-
-When on, `classify_task_mode()` runs — and the load-bearing design point is that **it is just
-another routed call**:
-
-- It never builds its own backend or provider client. Its *only* path to a model is
-  `router.select(ctx, …)` — the identical seam every other call uses.
-- Because `router.select()` **drops every candidate whose provider ∉ `ctx.allowed_providers`
-  before scoring**, the classifier **cannot break `onprem_only`** — under that residency it can
-  only pick an on-prem model or raise `NoEligibleCandidate`.
-- Its input is the **already-sanitized** text (the raw request is never sent). Its prompt is a
-  pinned, human-verified artifact (`config/prompts/task_mode_classifier/v1.yaml`) that says
-  *"Answer with exactly one word: 'direct' or 'multi_step'."*
-- It **emits its own `DecisionRecord`** (`step="task_mode_classifier"`) whose cost is folded
-  into the request total — so the classifier's cost is never invisible.
-- **Fail-closed:** on *any* trouble (no eligible candidate, backend error, unparseable answer)
-  it falls back to the deterministic `decide()` result and records why. A classifier failure
-  degrades to the safe rules default — never a crash or a residency bypass.
-
-So the classifier changes *how* the direct/multi-step decision is made, but it obeys every
-rule the rest of the pipeline does. That's why it can be swapped in without weakening any
-guarantee.
+See [`../guides/agentic-app-guide.md`](../guides/agentic-app-guide.md) for the full
+integration shape.
 
 ---
 
 ## Recap — which libraries each flow touches
 
-| | Flow A (default) | Flow A′ (step-5 on) | Flow B (SSN) | Flow C (multi-step) |
+| | Flow A (default) | Flow A′ (step-5 on) | Flow B (SSN) | Flow C (client loop) |
 |---|---|---|---|---|
-| Gate | `regex` | `regex` | **Presidio + spaCy** | Presidio |
-| Task mode | rules | rules | rules | rules → **`"look up"`** |
-| Memory (`app/memory`) | off | **recall+write** | bypass (high-risk) | recall once |
-| Cache (`app/cache`) | off | **hit/miss** | bypass (high-risk) | **skipped (multi-step)** |
-| Compression (`app/compression`) | off | **Headroom/deterministic + CCR** | bypass (high-risk) | **per-hop** |
-| Agent runtime | — | — | — | **NeMo Agent Toolkit** |
-| Router + gateway | LiteLLM → Azure | LiteLLM → Azure | LiteLLM → **on-prem only** | LiteLLM, per hop |
-| Verify | basic | basic | **`require_verification`** | once, after loop |
-| Langfuse capture | off (no I/O) | off (no I/O) | **off (no I/O)** | redacted per-hop |
+| Gate | `regex` | `regex` | **Presidio + spaCy** | Presidio, **once per turn** |
+| Task mode | `direct` | `direct` | `direct` | `direct` (every turn) |
+| Memory (`app/memory`) | off | **recall+write** | bypass (high-risk) | per turn |
+| Cache (`app/cache`) | off | **hit/miss** | bypass (high-risk) | bypass (`tools` present) |
+| Compression (`app/compression`) | off | **Headroom/deterministic + CCR** | bypass (high-risk) | bypass (`tools` present) |
+| Agent runtime | — | — | — | **the application's, not RouteForge's** |
+| Router + gateway | LiteLLM → Azure | LiteLLM → Azure | LiteLLM → **on-prem only** | LiteLLM, **per turn** |
+| Verify | basic | basic | **`require_verification`** | per turn |
+| Langfuse capture | off (no I/O) | off (no I/O) | **off (no I/O)** | redacted, one trace per turn |
 
 Every row of every flow emits a `DecisionRecord`. The "why" in those records — which
 candidates were rejected and why — is the product.
