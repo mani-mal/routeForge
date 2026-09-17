@@ -19,8 +19,8 @@ import yaml
 
 DEFAULT_PERSONAS_PATH = "tests/personas.yaml"
 
-# A representative agent tool-output log line. Duplicated (not lengthened) to
-# build the multi_step "large_tool_output" overlay — Headroom's compressor
+# A representative tool-output log line. Duplicated (not lengthened) to
+# build the large_context "large_tool_output" overlay — Headroom's compressor
 # collapses repeated LINES, not merely long single lines, so duplication is
 # what gives it material (see .claude/skills/headroom-compression).
 _LOG_LINE = (
@@ -137,21 +137,16 @@ def _build_pii_bearing(rng: random.Random) -> dict:
     return {"messages": [{"role": "user", "content": content}]}
 
 
-def _build_multi_step(rng: random.Random) -> dict:
-    # large_tool_output overlay: the gate collapses all messages into a
-    # single sanitized message (app/pipeline.py joins message content), so
-    # the duplicated log block lives inside the one user message rather than
-    # a separate tool-role message — keeps the last message role "user" for
-    # the downstream agent runtime while still giving Headroom real
-    # duplicate-line material to compress.
+def _build_large_context(rng: random.Random) -> dict:
+    # large_tool_output overlay: the gate collapses all messages into a single
+    # sanitized message (app/pipeline.py joins message content), so the
+    # duplicated log block lives inside the one user message. It gives Headroom
+    # real duplicate-line material to compress.
     content = (
-        "Look up the latest deployment status step by step using the tool "
-        "log below, then summarize it.\n\n" + _LARGE_LOG_BLOCK
+        "Summarize the deployment status from the log below.\n\n"
+        + _LARGE_LOG_BLOCK
     )
-    return {
-        "messages": [{"role": "user", "content": content}],
-        "mock_multistep": True,
-    }
+    return {"messages": [{"role": "user", "content": content}]}
 
 
 def _build_high_risk(rng: random.Random) -> dict:
@@ -178,7 +173,7 @@ _BUILDERS: dict[str, Callable[[random.Random], dict]] = {
     "simple_qa": _build_simple_qa,
     "moderate": _build_moderate,
     "pii_bearing": _build_pii_bearing,
-    "multi_step": _build_multi_step,
+    "large_context": _build_large_context,
     "high_risk": _build_high_risk,
     "low_confidence": _build_low_confidence,
 }

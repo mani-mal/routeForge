@@ -38,7 +38,7 @@ cheap, so most spend should be too.
 | `simple_qa` | 45 | `acme-key` | acme | false | Trivial question -> cheap tier. Bulk of the savings. |
 | `moderate` | 20 | `acme-key` | acme | false | Somewhat longer question -> mid tier. |
 | `pii_bearing` | 15 | `hospital-key` | hospital | **true** | Synthetic SSN + email in the body -> gate detects `US_SSN`/`EMAIL_ADDRESS` -> `onprem_only`. **The privacy proof.** |
-| `multi_step` | 12 | `acme-key` | acme | false | `mock_multistep: true` -> agent runtime, several hops, per-call routing. Carries the `large_tool_output` overlay: a big newline-*duplicated* log block (duplicate lines compress under Headroom; a single long line does not) so the compression demo has material. |
+| `large_context` | 12 | `acme-key` | acme | false | A single large user message. Carries the `large_tool_output` overlay: a big newline-*duplicated* log block (duplicate lines compress under Headroom; a single long line does not) so the compression demo has material. |
 | `high_risk` | 5 | `hospital-key` | hospital | **true** | Synthetic bank account number -> `US_BANK_NUMBER` -> restricted/high risk -> best-allowed (on-prem) tier, `require_verification`. |
 | `low_confidence` | 3 | `acme-key` | acme | false | `mock_confidence: 0.1` (below the 0.60 escalation threshold in `config/routing.yaml`) -> exactly one escalation. |
 

@@ -27,7 +27,7 @@ personas:
     api_key: hospital-key
     expect_onprem: true
 
-  - name: multi_step
+  - name: large_context
     weight: 12
     api_key: acme-key
     expect_onprem: false
