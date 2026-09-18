@@ -2441,6 +2441,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "aiosqlite" },
     { name = "argon2-cffi" },
+    { name = "cryptography" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "litellm" },
@@ -2486,6 +2487,7 @@ requires-dist = [
     { name = "aiosqlite", specifier = ">=0.20" },
     { name = "argon2-cffi", specifier = ">=23.1" },
     { name = "asyncpg", marker = "extra == 'postgres'", specifier = ">=0.30" },
+    { name = "cryptography", specifier = ">=42" },
     { name = "dspy-ai", marker = "extra == 'dspy'", specifier = ">=2.5" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "headroom-ai", marker = "extra == 'compression'", specifier = ">=0.1" },

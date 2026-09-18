@@ -21,6 +21,14 @@ dependencies = [
   # Egress gateway (steps 7-8): single multi-provider path (onprem/Azure/Bedrock).
   # Used as an SDK behind the policy gate, never as an ingress proxy.
   "litellm>=1.93,<2",
+  # Fernet encryption of each application's provisioned Langfuse SECRET key at
+  # rest (app/apps/langfuse_provision.py). A CORE dependency, not an extra: it
+  # used to arrive only as a transitive of `presidio-anonymizer`, so any install
+  # that skipped the `presidio` extra (a compose/Spark deployment running
+  # `pii_detection: regex`) silently fell through `_fernet()`'s except branch and
+  # stored every per-app Langfuse secret key in CLEARTEXT behind one log line.
+  # Secrets-at-rest must not depend on which detector an operator installed.
+  "cryptography>=42",
 ]
 
 [dependency-groups]

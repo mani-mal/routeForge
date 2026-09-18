@@ -247,6 +247,17 @@ sp.candidates, sp.app_policy_version, sp.routing_policy_version
 sp.checks: {chosen_in_eligible_set, fallback_in_eligible_set}
 ```
 
+`sp.detection_mode` reports the detector that **actually ran on this request**, not the
+configured axis. The gate builds a detector only when some consumer needs one — the model
+(`model_input: redact`), the client (`client_output: redact`), telemetry
+(`capture_io: redacted`) or placement escalation
+(`escalate_residency_on_detection`) — so an app in a raw/raw posture with `capture_io: off`
+and no escalation scans nothing even if it names `pii_detection: presidio`, and the
+certificate says `off`. That matters because `sp.detected_entity_types` is empty in both
+cases: "nobody looked" must not read as "looked and found nothing". The configured value is
+still available from the admin API's `effective.detection`, and it is folded into
+`app_policy_version`.
+
 `sp.checks` is the one per-request proof: the model(s) the gateway actually used were
 drawn from *this request's* own eligible set. Policy-wide invariants are vouched for by
 `app_policy_version`, which passed the save-time check. Raw values never appear — entity

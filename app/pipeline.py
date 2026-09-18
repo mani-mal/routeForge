@@ -18,7 +18,7 @@ from app.models import (
 from app.output.verify import egress_detector, verify
 from app.policy.compile import APP_SOURCE, EffectivePolicy, compile_policy
 from app.policy.context import pinned_model_reason, registry_permits
-from app.policy.detectors import Detector, make_detector
+from app.policy.detectors import Detector, NullDetector, make_detector
 from app.policy.effective import EffectiveDetector, FilteredDetector
 from app.policy.gate import Gate, Representations, redact_tool_calls_with_entities
 from app.apps.privacy import AppPrivacyProfile, effective_rules
@@ -254,7 +254,8 @@ class Pipeline:
                                  and p.client_output == "raw") else "enforced"
 
     @staticmethod
-    def _certificate(eff: EffectivePolicy, ctx: ExecutionPolicyContext) -> dict:
+    def _certificate(eff: EffectivePolicy, ctx: ExecutionPolicyContext,
+                     det: Detector) -> dict:
         """The per-axis fields of the decision certificate (design P1a §6)
         common to every response shape. Reads straight off the already-
         compiled `eff` (placement + protection + the cross-axis rules that
@@ -264,18 +265,43 @@ class Pipeline:
         `Gate.evaluate`), so `placement`/`placement_sources` reflect any
         cross-axis escalation, not just the app's own configured residency.
 
+        `det` is the detector `_gate_inputs` actually composed for THIS
+        request, and it is here for one reason: **"not checked" must not read
+        as "checked and clean."** `detection_mode` used to stamp
+        `eff.protection.detection` unconditionally, but `_gate_inputs` builds
+        the detector only when some consumer needs it (design §2.3), so a
+        legal, reachable app -- `model_input: raw` + `client_output: raw` +
+        `capture_io: off` + `escalate_residency_on_detection: false` +
+        `pii_detection: presidio` -- got the NullDetector and a certificate
+        reading `detection_mode: presidio` with an empty
+        `detected_entity_types`: indistinguishable, to an auditor, from
+        "presidio scanned this request and found nothing". The certificate
+        reports what RAN, so it now stamps `off` there. The configured axis is
+        not lost: it stays in `app_policy_version`, and the admin API's
+        `effective.detection` (`_effective_dict`) is the compiled value.
+
+        Same closure as Task 9's `verify()` reason fix, which stopped
+        `entities_found: ()` under `client_output: raw` reading as "nobody
+        found anything" when it meant "nobody looked".
+
+        The NullDetector predicate is EXACTLY `Gate.evaluate`'s own
+        `detection_ran` -- an app with `pii_detection: off` and custom
+        recognizers layered on top (`EffectiveDetector`) HAS scanned, and the
+        two must never disagree about that.
+
         Merged into the response `policy` block AND handed to `export_trace`
         (which stamps the matching `sp.*` attributes) -- one dict, two
         channels, so they can never disagree (the same pattern
         `policy_mode`/`content_integrity_mode` already use).
         """
+        detection_ran = not isinstance(det, NullDetector)
         return {
             "placement": eff.placement.residency,
             "placement_sources": list(eff.placement.sources),
             "model_input_mode": eff.protection.model_input,
             "client_output_mode": eff.protection.client_output,
             "telemetry_io_mode": eff.protection.telemetry_io,
-            "detection_mode": eff.protection.detection,
+            "detection_mode": eff.protection.detection if detection_ran else "off",
             "stream_mode": eff.protection.stream_mode,
             "cross_axis_rules_fired": list(eff.cross_axis_rules_fired),
             # Certificate-named duplicate of `detected_entities` (design §6's
@@ -487,7 +513,7 @@ class Pipeline:
                        # `ExecutionPolicyContext.content_integrity`.
                        "content_integrity_mode": ctx.content_integrity,
                        # Task 9: the decision certificate (design §6).
-                       **self._certificate(eff, ctx),
+                       **self._certificate(eff, ctx, det),
                        "checks": checks},
             "sanitized_prompt": sanitized,
             # No raw/pre-verify text exists for a cache hit (no model call ran
@@ -856,7 +882,7 @@ class Pipeline:
                        # `ExecutionPolicyContext.content_integrity`.
                        "content_integrity_mode": ctx.content_integrity,
                        # Task 9: the decision certificate (design §6).
-                       **self._certificate(eff, ctx),
+                       **self._certificate(eff, ctx, det),
                        "checks": self._eligibility_checks(ctx, records)},
             "sanitized_prompt": sanitized,
             "raw_completion": result.text,
@@ -1091,7 +1117,7 @@ class Pipeline:
                        # `ExecutionPolicyContext.content_integrity`.
                        "content_integrity_mode": ctx.content_integrity,
                        # Task 9: the decision certificate (design §6).
-                       **self._certificate(eff, ctx),
+                       **self._certificate(eff, ctx, det),
                        "checks": self._eligibility_checks(ctx, records)},
             "sanitized_prompt": sanitized,
             "raw_completion": result.text,

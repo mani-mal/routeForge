@@ -1030,20 +1030,36 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
   // server does NOT fold that into its downgrade clamp. Named here only for the
   // summary line; the clamp below still keys on the per-app override alone.
   const effPii = p.pii_detection ?? deployment?.default_pii_detection ?? null;
-  // `full` is refused for an onprem_only app only while it is still in the
-  // `enforced` posture (PR #34 — residency is placement, policy_mode is
-  // protection; onprem_only + passthrough + full is valid).
+  // `full` is refused for an onprem_only app that has not declared the
+  // no-protection posture. SERVER-DRIVEN, not a mirror: the rule is
+  // `model_input == "raw" AND client_output == "raw"` (app/policy/compile.py,
+  // CAPTURE_FULL_ONPREM_NEEDS_NO_PROTECTION) — two independent axes, not a
+  // `policy_mode` string. This used to test `effPolicyMode !== "passthrough"`
+  // and had already drifted stricter than the API: an app configured over the
+  // admin API as onprem_only + model_input: raw + client_output: raw +
+  // capture_io: full with NO policy_mode set is legal server-side, yet the
+  // console showed `full` blocked and told the operator to set a field it
+  // does not need. `app.effective` is `_effective_dict`'s compiled answer for
+  // this app's CURRENTLY SAVED policy (ceilings and all) — read it, exactly as
+  // `redactedBlocked` below reads `app.effective.detection`; never re-derive
+  // the precedence here.
   //
-  // Both capture clamps take the posture as a PARAMETER rather than reading
-  // `passthrough` directly. One copy of each rule, still — but a recipe sets
-  // policy_mode itself, so it must ask "would this be refused AFTER the recipe
-  // lands?" and not be told the answer for the posture the app is leaving.
-  const fullBlockedFor = (mode: string) => !hasOwnProject
+  // Absent `effective` (no deployment context — no such caller exists today)
+  // reads as "unknown, don't block", same as `redactedBlocked`: the server
+  // refuses the write and its 422 renders under Save.
+  const effNoProtection = app.effective
+    ? app.effective.model_input === "raw" && app.effective.client_output === "raw"
+    : true;
+  // The posture is a PARAMETER rather than read directly, because a recipe
+  // sets it itself: the preview must ask "would this be refused AFTER the
+  // recipe lands?" and not be told the answer for the posture the app is
+  // leaving.
+  const fullBlockedForPosture = (noProtection: boolean) => !hasOwnProject
     ? "needs this app's own Langfuse project"
-    : effResidency === "onprem_only" && mode !== "passthrough"
-      ? "onprem_only + enforced — set policy_mode = passthrough"
+    : effResidency === "onprem_only" && !noProtection
+      ? "onprem_only without a declared no-protection posture — set model_input and client_output to raw (policy_mode = passthrough is the preset for both)"
       : null;
-  const fullBlocked = fullBlockedFor(effPolicyMode);
+  const fullBlocked = fullBlockedForPosture(effNoProtection);
   // `redacted` needs a detector to redact WITH. THIS control is now
   // server-driven, not a mirror (Task 9 review round 1 — a Fix-round-1
   // Important finding): it used to re-derive `compile_policy`'s `detection`
@@ -1122,7 +1138,16 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
       );
     }
     if (r.sets.capture_io === "full") {
-      const blocked = fullBlockedFor(mode);
+      // PREDICTIVE, like `predictedDetectionFor` above: `passthrough` is the
+      // preset that resolves BOTH data-handling axes to `raw`, so a recipe
+      // setting it lands in the no-protection posture and `enforced` does not.
+      // An explicit per-app `model_input`/`client_output` outranks the preset
+      // server-side, but neither axis is editable (or returned) on this form
+      // today, so the preset is the whole of what the console can predict; the
+      // authoritative answer for any SAVED state is `app.effective` above, and
+      // for an unsaved one, Save's own 422.
+      const blocked = fullBlockedForPosture(
+        mode === "passthrough" ? true : effNoProtection);
       if (blocked) {
         out.push(
           <>
@@ -1593,10 +1618,14 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
               What this app's traces carry. Raw I/O only ever reaches this app's own Langfuse
               project — never the shared one, which fails closed to{" "}
               <code className="font-mono">redacted</code> if the project is missing. An onprem_only
-              app must first declare <code className="font-mono">policy_mode = passthrough</code>{" "}
-              (step 3) before <code className="font-mono">full</code> is permitted: residency is
-              placement, policy_mode is protection, and it is the protection posture the capture
-              ceiling keys on.
+              app must first declare a no-protection posture before{" "}
+              <code className="font-mono">full</code> is permitted — that is{" "}
+              <code className="font-mono">model_input = raw</code> AND{" "}
+              <code className="font-mono">client_output = raw</code>, the two axes the server
+              actually checks. <code className="font-mono">policy_mode = passthrough</code> (step 3)
+              is the preset that resolves both, and setting the axes directly over the admin API
+              does the same. Residency is placement; these are protection, and it is the protection
+              posture the capture ceiling keys on.
             </>
           }>
           <select id={`${uid}-capture`} value={p.capture_io ?? ""}

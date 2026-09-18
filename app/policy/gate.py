@@ -381,7 +381,8 @@ class Gate:
         ctx = build_context(self._settings, request_id, tenant_id, entities, map_id,
                             app_policy=app_policy, app_rules=rules,
                             registry=self._registry,
-                            escalate_residency=eff.escalate_residency_on_detection)
+                            escalate_residency=eff.escalate_residency_on_detection,
+                            content_integrity=eff.protection.content_integrity)
         ctx = ctx.model_copy(update={
             "requested_model": None if request.model == "auto" else request.model,
         })

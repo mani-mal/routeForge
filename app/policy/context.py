@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 
 from app.config.schema import Settings
 from app.models import Entity, ExecutionPolicyContext
-from app.policy.compile import resolve_residency
+from app.policy.compile import compile_policy, resolve_residency
 
 if TYPE_CHECKING:  # avoid importing the apps layer at module load
     from app.apps.policy import AppPolicyView
@@ -142,8 +142,20 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
                   app_rules: list | None = None,
                   registry: "ModelRegistry | None" = None,
                   escalate_residency: bool = True,
+                  content_integrity: str | None = None,
                   ) -> ExecutionPolicyContext:
     """Step 3: the immutable ExecutionPolicyContext.
+
+    `content_integrity` is the app's COMPILED
+    `eff.protection.content_integrity` (design §2.2), threaded in by
+    `app/policy/gate.py` from the same `EffectivePolicy` every other consumer
+    reads. It used to be read straight off `app_policy.content_integrity`
+    here — a second resolution path for one axis, agreeing with the compiler
+    only by coincidence (same shape as the residency fail-open the Hypothesis
+    harness found: `_get(...) or default` in one place, a raw column read in
+    another). `None` means "no caller supplied one", and the compiler is then
+    run here rather than the precedence being re-implemented — so this
+    function has no way to answer differently from `compile_policy`.
 
     `escalate_residency` is the app's compiled
     `escalate_residency_on_detection` (design §5) — whether the declared
@@ -158,6 +170,9 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
     """
     etypes = {e.type for e in entities}
     rule = match_sensitivity_rule(settings, app_rules, etypes)
+    if content_integrity is None:
+        content_integrity = compile_policy(
+            app_policy, settings).protection.content_integrity
 
     # Residency: stricter of the entity rule and the application's own residency.
     # With a per-app policy we take residency from it (seeded to match
@@ -212,15 +227,10 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
         redaction_map_id=redaction_map_id,
         compression_override=(app_policy.compression_enabled
                               if app_policy is not None else None),
-        # Mirrors compression_override's travel pattern: read straight off the
-        # AppPolicyView (already validated to CONTENT_INTEGRITY at write time —
-        # app/policy/compile.py's `_resolve`), defaulting to
-        # "transformations_allowed" when absent or the app has no policy. A
-        # DATA axis only -- computed independently of `residency`/`rule` above,
-        # never folded into the placement decision.
-        content_integrity=(app_policy.content_integrity
-                           if app_policy is not None
-                           and app_policy.content_integrity is not None
-                           else "transformations_allowed"),
+        # The COMPILED axis, never the raw nullable column: one authority
+        # (`compile_policy`), threaded in by the gate or resolved above when a
+        # caller supplies none. A DATA axis only -- computed independently of
+        # `residency`/`rule` above, never folded into the placement decision.
+        content_integrity=content_integrity,
         app_policy_version=(app_policy.version() if app_policy is not None else ""),
     )

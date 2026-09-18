@@ -127,6 +127,48 @@ def test_no_raw_value_in_certificate():
     assert "US_SSN" in blob
 
 
+# --- 4. `detection_mode` reports what RAN, not what was configured ----------
+# "Not checked" must never read as "checked and clean" -- the same honesty gap
+# Task 9 closed for verify()'s reason string under `client_output: raw`.
+
+_NOBODY_LOOKED = AppPolicyView(
+    # No consumer needs a redacted view: the model sees raw, the client gets
+    # raw, telemetry stores nothing, and the declared cross-axis rule may not
+    # move placement. `_gate_inputs` therefore builds the NullDetector...
+    model_input="raw", client_output="raw", capture_io="off",
+    escalate_residency_on_detection=False,
+    # ...even though the app names the most expensive detector there is.
+    pii_detection="presidio",
+)
+
+
+def test_certificate_detection_mode_is_off_when_nothing_scanned():
+    """The configuration is legal and reachable, and the certificate used to
+    stamp `detection_mode: presidio` with an empty `detected_entity_types` --
+    indistinguishable from "presidio scanned this and found nothing". It must
+    say `off`: nothing scanned."""
+    settings = _settings()
+    pipe = _pipeline(settings)
+    out = _run(pipe, _PROMPT, app_policy=_NOBODY_LOOKED)   # a real SSN, unseen
+    p = out["policy"]
+    assert p["detection_mode"] == "off"
+    assert p["detected_entity_types"] == []
+    # The COMPILED axis still says presidio -- this is the certificate telling
+    # the truth about the request, not the compiler changing its answer.
+    from app.policy.compile import compile_policy
+    assert compile_policy(_NOBODY_LOOKED, settings).protection.detection == "presidio"
+
+
+def test_certificate_detection_mode_names_the_detector_that_did_run():
+    """The other half, so the fix can't be "always say off": in the default
+    posture a detector really does run, and the certificate names it."""
+    settings = _settings()
+    pipe = _pipeline(settings)
+    out = _run(pipe, _PROMPT)
+    assert out["policy"]["detection_mode"] == settings.serving.pii_detection
+    assert out["policy"]["detected_entity_types"] == ["US_SSN"]
+
+
 # --- eligibility checks: direct unit coverage of the fallback semantics -----
 
 def _ctx(**overrides) -> ExecutionPolicyContext:
