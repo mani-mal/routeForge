@@ -168,3 +168,69 @@ def test_stream_unverified_finalizes_on_disconnect(client, monkeypatch):
     _login(client)
     usage = client.get("/admin/usage?application_id=su-disc").json()
     assert usage["count"] == 1
+
+
+# --------------------------------------------------------------------------- #
+# (d) client_output: redact -- refused at WRITE time, floored at RUNTIME
+#
+# Design P1a §2.5: egress redaction is `client_output`'s call, and
+# `stream_unverified` emits backend tokens as they arrive, so no redaction can
+# run over the complete response. An app that NAMED `client_output: redact` has
+# asked for a guarantee this mode cannot keep. The admin API refuses the write
+# (`STREAM_UNVERIFIED_FORBIDDEN_REDACTED_OUTPUT`); the runtime floor is the
+# backstop for a row that exists anyway (written before the rule shipped, or
+# straight into the DB).
+# --------------------------------------------------------------------------- #
+def test_stream_unverified_write_refused_when_client_output_is_redact(client):
+    _login(client)
+    created = client.post("/admin/applications",
+                          json={"id": "su-conflict", "name": "su-conflict"})
+    assert created.status_code == 200, created.text
+    r = client.put("/admin/applications/su-conflict/policy",
+                   json={"stream_mode": "stream_unverified",
+                         "client_output": "redact"})
+    assert r.status_code == 422, r.text
+    assert "client_output" in r.json()["detail"]
+
+
+def test_stream_unverified_floors_when_client_output_is_redact(client, monkeypatch):
+    """The runtime backstop, on a request nothing ELSE would floor: residency
+    `any`, no PII in the prompt, so neither `onprem_only` nor
+    `require_verification` is set. The only reason this must not stream raw
+    backend tokens is the app's explicit `client_output: redact`.
+
+    The policy is written past the admin API's refusal on purpose -- the point
+    is that even a row that should not exist cannot leak."""
+    from app.api import admin_routes
+
+    _login(client)
+    created = client.post("/admin/applications",
+                          json={"id": "su-redact-out", "name": "su-redact-out"})
+    assert created.status_code == 200, created.text
+    token = created.json()["token"]
+    with monkeypatch.context() as m:
+        m.setattr(admin_routes, "validate_effective", lambda *a, **k: None)
+        pr = client.put("/admin/applications/su-redact-out/policy",
+                        json={"residency": "any", "stream_mode": "stream_unverified",
+                              "client_output": "redact"})
+        assert pr.status_code == 200, pr.text
+
+    r = client.post("/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={"model": "auto",
+                          "messages": [{"role": "user", "content": "hi there"}],
+                          "stream": True})
+    assert r.status_code == 200, r.text
+    frames = _parse_sse(r.text)
+    assert frames[-1] == "[DONE]"
+    assert _content(frames)
+
+    request_id = frames[0]["id"]
+    _login(client)
+    snap = client.get(f"/api/requests/{request_id}").json()
+    # Nothing but `client_output` could have floored this request...
+    assert snap["policy"]["onprem_only"] is False
+    # ...and step 9 was NOT waived: the full pipeline ran and the finished,
+    # egress-checked text was chunked out (verified_then_stream).
+    vrec = _verify_record(snap["trace"])
+    assert vrec["reason"] != "waived: stream_unverified"

@@ -106,7 +106,17 @@ _LEGAL = {
 assert set(_AXES) == set(_LEGAL), "every axis needs its legal vocabulary"
 
 # Source labels, so every resolved value can name the rung of §2.2 it came from.
-_APP = "app_policy"
+
+#: `Protection.sources[axis]` when the APP ITSELF named the axis (rung 2), as
+#: opposed to a preset, a deployment ceiling or a deployment default. Public
+#: because rules outside this module branch on it: a guardrail that fires only
+#: for an explicitly-declared value — `validate_effective`'s `stream_unverified`
+#: + `client_output: redact` refusal, and the matching runtime floor in
+#: `Pipeline.run_stream` — must compare against the same literal the compiler
+#: writes, or the write-time rule and the runtime backstop drift apart.
+APP_SOURCE = "app_policy"
+
+_APP = APP_SOURCE
 _CEILING = "ceiling"
 _DEFAULT = "deployment_default"
 

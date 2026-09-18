@@ -15,8 +15,8 @@ from app.models import (
     ExecutionPolicyContext, GenerationResult, MemoryRecord,
     Message, Usage, VerificationRecord,
 )
-from app.output.verify import verify
-from app.policy.compile import EffectivePolicy, compile_policy
+from app.output.verify import egress_detector, verify
+from app.policy.compile import APP_SOURCE, EffectivePolicy, compile_policy
 from app.policy.context import pinned_model_reason, registry_permits
 from app.policy.detectors import Detector, make_detector
 from app.policy.effective import EffectiveDetector, FilteredDetector
@@ -44,11 +44,13 @@ class StreamFallback(Exception):
     `verified_then_stream` (buffer the full answer, run step-9 verification,
     then chunk the finished text).
 
-    Raised in exactly ONE place -- `run_stream` -- for exactly two reasons:
+    Raised in exactly ONE place -- `run_stream` -- for exactly three reasons:
       * `ctx.onprem_only` or `ctx.require_verification` is set (the privacy
         backstop from Global Constraint 1: a residency- or risk-floored
         request is never streamed without a complete-response verification),
-        or
+      * the app streams `stream_unverified` but has explicitly declared
+        `client_output: redact` (design §2.5: egress redaction needs the
+        complete response, which this mode cannot provide), or
       * the request is a client-driven tool conversation, which only `run()`
         can serve (tools forwarded, per-message structure kept).
     """
@@ -236,19 +238,6 @@ class Pipeline:
             return EffectiveDetector(base, list(profile.recognizers)), rules, eff
         return base, rules, eff
 
-    def _egress_detector(self, det: Detector, eff: EffectivePolicy) -> Detector:
-        """The detector step 9 / egress tool-call redaction runs with (design
-        §2.5): the request's own detector when `client_output: redact`, and the
-        NullDetector when the client has declared `raw` -- an app whose client
-        response must come back byte-for-byte gets no egress redaction, even
-        though a detector ran at intake for placement or for telemetry.
-
-        Selected at the CALL SITE rather than inside `app/output/verify.py`,
-        which a later task owns. Under both postures that existed before the
-        compiler this is the same object as `det`, so behaviour is unchanged.
-        """
-        return det if eff.protection.client_output == "redact" else self._detector_for("off")
-
     @staticmethod
     def _policy_mode_stamp(eff: EffectivePolicy) -> str:
         """The legacy `policy["policy_mode"]` stamp, derived from the compiled
@@ -311,7 +300,7 @@ class Pipeline:
 
     def _serve_from_cache(self, request_id: str, ctx: ExecutionPolicyContext,
                           sanitized: str, model_text: str, entry: CacheEntry,
-                          det: Detector,
+                          det: Detector, client_output: str,
                           check_latency_ms: float, policy_mode: str) -> dict | None:
         """C4 keystone: re-verify the cached text against the CURRENT
         request's per-app detector + ctx before ever serving it -- this is
@@ -320,8 +309,17 @@ class Pipeline:
         re-verify fails, so the caller treats this as an ordinary MISS and
         falls through to the normal flow -- the cached text is never served
         un-re-verified (see docs/architecture/specs/semantic-cache-residency-spec.md
-        C4)."""
-        text, vrec = verify(det, ctx, entry.response_text)
+        C4).
+
+        `client_output` is threaded through for the same reason the detector
+        is: a cache hit is a SERVED response, so it must obey the egress axis
+        by exactly the rule the live path uses. Hand this the request's real
+        detector and its real `client_output` -- selecting one here would be a
+        second copy of that rule, and a cached answer that bypassed (or
+        gratuitously applied) egress redaction is precisely the drift the
+        single `verify()` decision exists to prevent."""
+        text, vrec = verify(det, ctx, entry.response_text,
+                            client_output=client_output)
         if not vrec.passed:
             return None
         # Priced on what the MODEL would have been sent (`model_text`), not on
@@ -404,7 +402,11 @@ class Pipeline:
         except Exception as e:
             raise PolicyGateError("policy evaluation failed") from e
         policy_mode = self._policy_mode_stamp(eff)
-        egress_det = self._egress_detector(det, eff)
+        # The egress axis, read once and handed to every consumer that returns
+        # bytes to the client (step-9 verify, the tool-call redactor, the cache
+        # re-verify). It is INDEPENDENT of `model_input` below: a trusted model
+        # may be sent the real value while the client response is redacted.
+        client_output = eff.protection.client_output
         # `sanitized` is the REDACTED view when a detector ran, and the raw
         # text otherwise -- exactly the single value the gate used to return.
         # It is what telemetry/console and memory read; it is NOT automatically
@@ -523,8 +525,8 @@ class Pipeline:
                     # re-verify is treated as an ordinary miss below (falls
                     # through to compress/gateway/verify), never served.
                     hit_resp = self._serve_from_cache(
-                        request_id, ctx, sanitized, model_text, entry, egress_det,
-                        check_latency_ms, policy_mode)
+                        request_id, ctx, sanitized, model_text, entry, det,
+                        client_output, check_latency_ms, policy_mode)
                     if hit_resp is not None:
                         return hit_resp
                 cache_record = CacheRecord(
@@ -557,7 +559,7 @@ class Pipeline:
             ctx, comp.messages, comp.tokens_after, complexity, hint,
             tools=tools, tool_choice=tool_choice, params=request.generation_params())
 
-        text, vrec = verify(egress_det, ctx, result.text)
+        text, vrec = verify(det, ctx, result.text, client_output=client_output)
         if not vrec.passed:
             raise PipelineRejected(vrec.reason)
 
@@ -576,8 +578,14 @@ class Pipeline:
         # export (routes.py pops it right alongside `raw_completion`, same
         # never-client-visible contract); it is never returned to the client.
         # A None/empty `result.tool_calls` leaves `vrec` untouched.
+        #
+        # It is the SECOND egress surface, so it reads the SAME axis through the
+        # same `egress_detector()` helper `verify()` itself uses -- a tool-call
+        # argument must not be scrubbed for an app whose completion text is
+        # returned verbatim, nor left raw for one whose text is redacted.
         raw_tool_calls = result.tool_calls
-        tc_redaction = redact_tool_calls_with_entities(raw_tool_calls, egress_det)
+        tc_redaction = redact_tool_calls_with_entities(
+            raw_tool_calls, egress_detector(det, client_output))
         redacted_tool_calls = tc_redaction.tool_calls
         if tc_redaction.entity_types:
             vrec = vrec.model_copy(update={
@@ -766,7 +774,11 @@ class Pipeline:
         except Exception as e:
             raise PolicyGateError("policy evaluation failed") from e
         policy_mode = self._policy_mode_stamp(eff)
-        egress_det = self._egress_detector(det, eff)
+        # Same egress axis run() reads, selecting the detector `incremental_
+        # verify`'s hold-back redactor runs with (attached to `get_meta` below):
+        # an app that has declared `client_output: raw` gets its tokens through
+        # untouched, exactly as its non-streamed completions come back verbatim.
+        egress_det = egress_detector(det, eff.protection.client_output)
         sanitized = (reps.text_redacted if reps.text_redacted is not None
                      else reps.text_raw)
         model_text = reps.text_raw if eff.protection.model_input == "raw" else sanitized
@@ -788,6 +800,30 @@ class Pipeline:
             raise StreamFallback(
                 "residency/verification floor: response must be verified as a "
                 "complete response before egress")
+
+        # Egress floor (design §2.5), in the same ONE place. `stream_unverified`
+        # forwards backend deltas as they arrive, so no egress redaction can run
+        # over the complete response -- which an app that NAMED
+        # `client_output: redact` has asked for. `validate_effective` already
+        # refuses that combination at write time
+        # (STREAM_UNVERIFIED_FORBIDDEN_REDACTED_OUTPUT); this is the backstop for
+        # a row that exists anyway (written before that rule shipped, or straight
+        # into the DB), and it floors to `verified_then_stream` -- the client
+        # still gets SSE, off a completed, verified, redacted answer.
+        #
+        # Scoped to an EXPLICIT `client_output`, deliberately and for exactly the
+        # reason the write-time rule is: `redact` is also what the `enforced`
+        # preset resolves to, so keying on the effective value alone would floor
+        # every `stream_unverified` app in existence -- silently repealing the
+        # mode instead of honouring a contradiction its operator wrote down.
+        # `incremental_verify` is untouched: it DOES redact egress (hold-back),
+        # so it keeps the guarantee this mode cannot.
+        p = eff.protection
+        if (p.stream_mode == "stream_unverified" and p.client_output == "redact"
+                and p.sources.get("client_output") == APP_SOURCE):
+            raise StreamFallback(
+                "client_output=redact: unverified streaming cannot redact egress, "
+                "so the response is verified as a complete response first")
 
         # `model_input` selects the model-facing view here exactly as in run().
         san_messages = [Message(role=request.messages[-1].role, content=model_text)]

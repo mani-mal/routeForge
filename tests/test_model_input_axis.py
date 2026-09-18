@@ -164,3 +164,75 @@ def test_replayed_tool_call_arguments_stay_redacted_under_model_input_redact(
                     })
     assert r.status_code == 200, r.text
     assert SSN not in json.dumps(CALLS[-1]["messages"])
+
+
+# --------------------------------------------------------------------------- #
+# The `client_output` axis (design P1a §2.5): egress is independent of ingress.
+#
+# The two tests below are the ones this whole feature exists for. The first is
+# the headline claim -- a TRUSTED model inside the customer's boundary is handed
+# the real value while the CLIENT response is redacted -- and it is asserted at
+# the HTTP boundary, against what the backend really received and what the
+# response body really contains, because that is the only place the claim is
+# falsifiable.
+# --------------------------------------------------------------------------- #
+
+TICKET_SSN = "123-45-6789"
+TICKET_PROMPT = f"Summarize the ticket for Jane Smith. Her SSN is {TICKET_SSN}."
+
+
+def test_client_output_redact_removes_the_ssn_the_model_saw(client, monkeypatch):
+    """`model_input: raw` + `client_output: redact`, end to end: the backend is
+    handed the real SSN, and the HTTP body carries a placeholder instead.
+
+    Egress redaction here is NOT a by-product of the model having been sent a
+    redacted prompt (it wasn't) -- step 9 re-runs the app's real detector over
+    the completion because `client_output` says so. That is the whole point of
+    splitting the two axes."""
+    token = _app_with_policy(client, "trusted-model-redacted-client", {
+        "residency": "onprem_only", "model_input": "raw",
+        "client_output": "redact", "pii_detection": "regex"})
+    completion = f"The ticket for Jane Smith cites SSN {TICKET_SSN}."
+    monkeypatch.setattr(
+        litellm_backend, "acompletion",
+        make_recording_acompletion(make_response(content=completion)))
+
+    CALLS.clear()
+    r = client.post("/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={"messages": [{"role": "user", "content": TICKET_PROMPT}]})
+    assert r.status_code == 200, r.text
+
+    # (1) the model really saw the real value...
+    sent = json.dumps(CALLS[-1]["messages"])
+    assert TICKET_SSN in sent, "the model must see the real value under model_input: raw"
+    # (2) ...and the client really did not, anywhere in the response.
+    body = r.json()
+    assert TICKET_SSN not in json.dumps(body)
+    assert "<US_SSN_1>" in body["choices"][0]["message"]["content"]
+    assert "US_SSN" in body["policy"]["detected_entities"]
+
+
+def test_client_output_raw_leaves_the_completion_untouched(client, monkeypatch):
+    """The inverse pairing, and the proof the two axes are read separately:
+    `model_input: redact` + `client_output: raw`. A real detector runs (the
+    model is sent a placeholder), yet NOTHING is redacted on egress -- the
+    completion comes back byte-for-byte as the backend produced it."""
+    token = _app_with_policy(client, "redacted-model-raw-client", {
+        "residency": "onprem_only", "model_input": "redact",
+        "client_output": "raw", "pii_detection": "regex"})
+    completion = f"The ticket for Jane Smith cites SSN {TICKET_SSN}."
+    monkeypatch.setattr(
+        litellm_backend, "acompletion",
+        make_recording_acompletion(make_response(content=completion)))
+
+    CALLS.clear()
+    r = client.post("/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={"messages": [{"role": "user", "content": TICKET_PROMPT}]})
+    assert r.status_code == 200, r.text
+
+    sent = json.dumps(CALLS[-1]["messages"])
+    assert TICKET_SSN not in sent
+    assert "<US_SSN_1>" in sent
+    assert r.json()["choices"][0]["message"]["content"] == completion
