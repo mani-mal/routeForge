@@ -22,7 +22,7 @@ from app.config.loader import load_settings
 from app.gateway.gateway import Gateway
 from app.models import ChatRequest, Message
 from app.pipeline import Pipeline, PipelineRejected
-from app.policy.detectors import make_detector
+from app.policy.detectors import NullDetector, make_detector
 from app.policy.gate import Gate
 from app.routing.router import Router
 from tests._litellm_fake import _DeterministicLiteLLM, make_test_registry
@@ -188,6 +188,42 @@ def test_reverify_redacts_with_the_current_apps_detector_never_serves_raw_cached
     assert "<US_SSN_1>" in served
     assert any(r.get("hit") is True for r in _cache_trace_records(out2))
     assert len(rec.models_called) == 1      # served from cache -- no second model call
+
+
+def test_reverify_leaves_a_raw_client_output_apps_cached_text_byte_identical():
+    """The `client_output: raw` direction of the same C4 re-verify (design P1a
+    §2.5). A `passthrough` app that NAMES a detector really gets one at intake,
+    so the cache-hit path has everything it needs to over-redact -- and must
+    not: its cached answer comes back byte-for-byte. A `_serve_from_cache` that
+    verified with the intake detector unconditionally would serve `<US_SSN_1>`
+    and mangle the customer's own load-bearing data, with the rest of this file
+    still green."""
+    settings = _base_settings()
+    registry = make_test_registry(settings)
+    fixed_text = "Your records show SSN 482-73-1946 on file."
+    rec = RecordingBackend(_FixedTextBackend(settings, fixed_text))
+    pipe, cache = _pipeline(rec, settings, registry)
+    ap = AppPolicyView(policy_mode="passthrough", pii_detection="regex")
+    query = "Please check my account status"
+
+    # The over-redaction risk is real, not hypothetical: a live detector, and an
+    # egress axis that says do not use it.
+    det, _rules, eff = pipe._gate_inputs(ap, None)
+    assert not isinstance(det, NullDetector)
+    assert eff.protection.client_output == "raw"
+
+    out1 = asyncio.run(pipe.run(
+        "r1", "acme", ChatRequest(messages=[Message(role="user", content=query)]),
+        app_policy=ap))
+    out2 = asyncio.run(pipe.run(
+        "r2", "acme", ChatRequest(messages=[Message(role="user", content=query)]),
+        app_policy=ap))
+
+    assert any(r.get("hit") is True for r in _cache_trace_records(out2))
+    assert len(rec.models_called) == 1      # genuinely served from the cache
+    assert out2["choices"][0]["message"]["content"] == fixed_text
+    assert out2["choices"][0]["message"]["content"] == \
+        out1["choices"][0]["message"]["content"]
 
 
 def test_reverify_unverifiable_cached_text_is_treated_as_a_miss_never_served():
