@@ -17,6 +17,12 @@ def test_encrypt_decrypt_round_trip(monkeypatch):
     monkeypatch.setenv("ENCRYPTION_KEY", "a" * 64)  # 64 hex -> 32 bytes
     blob = lp.encrypt_secret("sk-lf-supersecret")
     assert blob != b"sk-lf-supersecret"           # actually encrypted
+    # `!=` alone would also pass for base64 or any obfuscation, because
+    # `decrypt_secret` falls back to `bytes(blob).decode()` on any failure —
+    # so pin the actual Fernet token format (real Fernet ciphertext is
+    # base64 and always starts with this version byte) to prove real
+    # encryption happened, not just "the bytes changed".
+    assert blob.startswith(b"gAAAAA")
     assert lp.decrypt_secret(blob) == "sk-lf-supersecret"
 
 

@@ -9,7 +9,7 @@ from app.config.schema import Settings
 from app.models import ChatRequest, Entity, ExecutionPolicyContext, Message
 from app.policy.compile import EffectivePolicy, apply_signals, compile_policy
 from app.policy.context import build_context, match_sensitivity_rule
-from app.policy.detectors import Detector, NullDetector
+from app.policy.detectors import Detector, detection_ran
 from app.policy.merge import dedupe
 
 if TYPE_CHECKING:
@@ -368,10 +368,13 @@ class Gate:
         # "No detector ran" is the NullDetector and nothing else: an app with
         # `pii_detection: off` but custom recognizers layered on top
         # (EffectiveDetector) HAS scanned, and must get a redacted view.
-        detection_ran = not isinstance(det, NullDetector)
+        # Shared with the pipeline's decision-certificate builder via
+        # `detection_ran()` (app/policy/detectors.py) so the two structurally
+        # cannot disagree.
+        ran = detection_ran(det)
         redacted: str | None = None
         mapping: dict[str, str] = {}
-        if detection_ran:
+        if ran:
             redacted, mapping = det.anonymize(text, entities)
         # The redaction map holds the ORIGINAL values -- a second copy of
         # sensitive data. It never leaves this method (only its id does), and
@@ -396,6 +399,6 @@ class Gate:
             text_raw=text,
             text_redacted=redacted,
             detected_entity_types=tuple(sorted(etypes)),
-            detector=det if detection_ran else None,
+            detector=det if ran else None,
         )
         return ctx, reps, eff

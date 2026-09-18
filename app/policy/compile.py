@@ -80,7 +80,7 @@ _DENY = {
     "client_output": "redact",
     "telemetry_io": "off",
     "detection": "presidio",
-    "content_integrity": "transformations_allowed",
+    "content_integrity": "exact",
     "stream_mode": "off",
 }
 

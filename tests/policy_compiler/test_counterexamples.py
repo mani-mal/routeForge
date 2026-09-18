@@ -184,10 +184,13 @@ _AXIS_DENY = (
     ("capture_io", "protection.telemetry_io", "off"),
     ("pii_detection", "protection.detection", "presidio"),
     ("stream_mode", "protection.stream_mode", "off"),
-    # A data control, not a privacy control: its safe end is the one that
-    # promises the LEAST about the bytes, which is `transformations_allowed`.
+    # `exact` is the protective end: it means "do not transform my bytes",
+    # a declared guarantee (a CAD table, a contract, code). Denying to
+    # `transformations_allowed` would silently transform the bytes of an app
+    # that declared `exact` — a broken guarantee. Denying to `exact` only
+    # costs money (skips compression); it never breaks correctness or privacy.
     ("content_integrity", "protection.content_integrity",
-     "transformations_allowed"),
+     "exact"),
 )
 
 

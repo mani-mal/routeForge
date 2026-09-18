@@ -147,7 +147,7 @@ _GARBAGE_AXES = [
     ("client_output", "client_output", "redact"),
     ("pii_detection", "detection", "presidio"),
     ("capture_io", "telemetry_io", "off"),
-    ("content_integrity", "content_integrity", "transformations_allowed"),
+    ("content_integrity", "content_integrity", "exact"),
     ("stream_mode", "stream_mode", "off"),
 ]
 

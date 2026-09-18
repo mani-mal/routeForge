@@ -18,7 +18,7 @@ from app.models import (
 from app.output.verify import egress_detector, verify
 from app.policy.compile import APP_SOURCE, EffectivePolicy, compile_policy
 from app.policy.context import pinned_model_reason, registry_permits
-from app.policy.detectors import Detector, NullDetector, make_detector
+from app.policy.detectors import Detector, detection_ran, make_detector
 from app.policy.effective import EffectiveDetector, FilteredDetector
 from app.policy.gate import Gate, Representations, redact_tool_calls_with_entities
 from app.apps.privacy import AppPrivacyProfile, effective_rules
@@ -284,24 +284,24 @@ class Pipeline:
         `entities_found: ()` under `client_output: raw` reading as "nobody
         found anything" when it meant "nobody looked".
 
-        The NullDetector predicate is EXACTLY `Gate.evaluate`'s own
-        `detection_ran` -- an app with `pii_detection: off` and custom
-        recognizers layered on top (`EffectiveDetector`) HAS scanned, and the
-        two must never disagree about that.
+        Uses the shared `detection_ran()` predicate (`app/policy/detectors.py`)
+        -- the same one `Gate.evaluate` calls -- so the two structurally
+        cannot disagree about whether an app with `pii_detection: off` and
+        custom recognizers layered on top (`EffectiveDetector`) HAS scanned.
 
         Merged into the response `policy` block AND handed to `export_trace`
         (which stamps the matching `sp.*` attributes) -- one dict, two
         channels, so they can never disagree (the same pattern
         `policy_mode`/`content_integrity_mode` already use).
         """
-        detection_ran = not isinstance(det, NullDetector)
+        ran = detection_ran(det)
         return {
             "placement": eff.placement.residency,
             "placement_sources": list(eff.placement.sources),
             "model_input_mode": eff.protection.model_input,
             "client_output_mode": eff.protection.client_output,
             "telemetry_io_mode": eff.protection.telemetry_io,
-            "detection_mode": eff.protection.detection if detection_ran else "off",
+            "detection_mode": eff.protection.detection if ran else "off",
             "stream_mode": eff.protection.stream_mode,
             "cross_axis_rules_fired": list(eff.cross_axis_rules_fired),
             # Certificate-named duplicate of `detected_entities` (design §6's
