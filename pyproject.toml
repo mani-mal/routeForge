@@ -43,6 +43,14 @@ dev = [
   # detected-entity signals and asserts the six noninterference invariants.
   # A test dependency only -- nothing under app/ imports it.
   "hypothesis>=6.100",
+  # `tests/test_metrics.py` HARD-imports prometheus_client (it asserts
+  # `metrics.AVAILABLE is True`, which an importorskip would turn into a
+  # silent skip -- the same failure mode the OTel note above describes, only
+  # worse: a hard import at module scope aborts COLLECTION, so a clean
+  # dev-only `uv sync` fails the whole suite rather than one module.
+  # Declared here for the same reason as the OTel SDK; it also ships in the
+  # `observability` extra, which is what a deployment installs.
+  "prometheus-client>=0.20",
 ]
 
 # Presidio is the real demo detector but heavy (pulls spaCy). Tests use the

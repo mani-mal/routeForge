@@ -41,9 +41,12 @@ Two requirements to know about:
 - **`capture_io: "full"` needs the app's own provisioned Langfuse project.** Raw I/O is
   tenant-isolated — it never lands in the shared project. Attach one with
   `PUT /admin/applications/{app_id}/langfuse` first, or the policy write is a 422.
-- **`capture_io: "redacted"` is rejected** for a `passthrough` app. That exporter path
-  reuses the gate's sanitized prompt, which is raw when nothing was sanitized, and it
-  writes to the *shared* project. Use `full` or `off`.
+- **`capture_io: "redacted"` needs a detector.** It is rejected only when the app's
+  effective `pii_detection` resolves to `off` — which is what a `passthrough` app that
+  names no detector inherits. A `passthrough` app that *does* name
+  `pii_detection: "regex"` or `"presidio"` **may** use `redacted`: telemetry builds its
+  own redacted copy of the raw values rather than reusing whatever the model was shown.
+  Use `full` (own project), `off`, or name a detector.
 
 If the deployment has `policy.allow_app_passthrough: false` in `serving.yaml`, no app can
 take this posture at all — that is the switch a locked-down install flips once.
@@ -73,8 +76,21 @@ the gate open, not the most dangerous.
 
 `capture_io: "off"` is what makes that narrower form airtight: with no telemetry I/O
 captured there is no egress path for the unsanitized prompt. `redacted` stays blocked
-because that exporter path reuses the gate's sanitized prompt, which is raw when
-detection is off.
+alongside `pii_detection: "off"` for a simpler reason than it used to be: redacted
+telemetry needs a detector to build its redacted copy with, and there is none.
+
+> **Careful — `pii_detection: "off"` is not "nothing is scanned".** It switches off the
+> *built-in* detector. If the app has a privacy profile with custom recognizers, those
+> still run, still classify, and (while `model_input` is `redact`) still redact. The only
+> configuration that scans nothing at all is `pii_detection: off` **together with**
+> `model_input: raw` and `client_output: raw` — i.e. `policy_mode: "passthrough"` with no
+> named detector.
+
+> **There is a narrower lever still.** If the problem is only that the *model* must see
+> the real text — and the client response and traces should stay redacted — set
+> `model_input: "raw"` and leave `client_output: "redact"`. That is Recipe D in
+> [`choosing-app-settings.md`](./choosing-app-settings.md), and it did not exist before
+> the two axes were split apart.
 
 > **Don't reach for `residency: "any"` + an `allowed_providers` pin.** That was the old
 > workaround for getting raw capture, and it is strictly weaker: it swaps a hard
@@ -108,14 +124,22 @@ behaviour they needed — so it was replaced by an explicit `policy_mode` (CLAUD
   no-protection posture — still cannot reach `capture_io=full`. Raw capture of a
   protected, on-prem-confined app was never sensible. A non-`onprem_only` app in
   `enforced` posture already can hold `capture_io=full` (own project required) — that
-  is exactly the side effect the next question walks through.
-- `capture_io=redacted` is still rejected whenever nothing is being sanitized
-  (`passthrough`, or `pii_detection: "off"`), because that path reuses the gate's
-  sanitized prompt and writes to the **shared** project. `pii_detection: "regex"` is
-  fine with `redacted` — the regex detector still sanitizes, just at lower fidelity
-  than `presidio` (it misses entities without a pattern, e.g. names).
-- Raw I/O only ever reaches the app's **own** project.
-- `policy.allow_app_passthrough: false` forbids the whole posture install-wide.
+  is exactly the side effect the next question walks through. Spelled on the axes, the
+  `onprem_only` condition is now `model_input: "raw"` **and** `client_output: "raw"`,
+  which is exactly what `policy_mode: "passthrough"` resolves to. See
+  [the full-capture rule](./choosing-app-settings.md#the-full-capture-rule) — one rule,
+  same wording in every guide.
+- `capture_io=redacted` is still rejected when `pii_detection` resolves to `off`:
+  redacted telemetry needs a detector to redact with. It is **no longer** rejected merely
+  for being `passthrough` — telemetry builds its own redacted copy now, so a
+  `passthrough` app that names `regex` or `presidio` may use `redacted`.
+  `pii_detection: "regex"` is fine with `redacted`; know that regex mode covers exactly
+  five patterns (SSN, card, email, phone, US bank number) plus the app's custom
+  recognizers, and nothing else — no names, no addresses, no dates.
+- Raw I/O only ever reaches the app's **own** project. At export time, `full` with no own
+  project steps down to `redacted`, and `redacted` with no detector steps down to `off`.
+- `policy.allow_app_passthrough: false` forbids the whole posture install-wide, and gates
+  `model_input: "raw"` and `client_output: "raw"` independently.
 
 **Decide it deliberately.** The risk redaction defends even on-prem is that raw PII in
 Langfuse is readable by anyone with console access to that project — staying on your own
@@ -209,10 +233,14 @@ telemetry only in the app's own Langfuse project when `capture_io: "full"`.
 
 Three ways the completion can differ from the raw model output:
 
-1. **Egress PII redaction always runs.** If the model emits PII the detector recognizes
-   (an SSN, an email the input never contained), those entity **values are scrubbed** from
-   the answer — because model completions can leak PII the input gate never saw, so egress
-   is redacted by default.
+1. **Egress PII redaction runs whenever `client_output` resolves to `redact`** — which is
+   the default, and what the `enforced` preset gives you. If the model emits PII the
+   detector recognizes (an SSN, an email the input never contained), those entity
+   **values are scrubbed** from the answer, because model completions can leak PII the
+   input gate never saw. It is decided by the `client_output` axis alone and is
+   **independent of what the model was shown**: an app running `model_input: "raw"` with
+   `client_output: "redact"` sends the model the real values and still returns a redacted
+   answer. Set `client_output: "raw"` and no egress redaction runs.
 2. **`require_verification` fails closed.** If policy set `require_verification` and the
    completion is "unverifiable," the request is **rejected** — the caller gets an error,
    not the model's text.
@@ -223,10 +251,12 @@ Three ways the completion can differ from the raw model output:
 
 | App config | Is `content` the raw model output? |
 |---|---|
-| `pii_detection=off` | **Yes** — nothing is scrubbed. |
-| detection on, completion has no detected entities, no `require_verification` | **Yes, in practice** — redacted text == original. |
-| detection on, completion **contains** detected PII | **No** — those values are redacted on egress. |
-| `require_verification` set + completion unverifiable | **No** — request is rejected. |
+| `client_output: "raw"` (what `policy_mode: "passthrough"` gives you) | **Yes** — no egress redaction runs at all, whatever the detector would have found. |
+| `pii_detection` resolving to `off` | **Yes** — a detector runs but finds nothing to scrub (bar the app's custom recognizers, which still run under `off`). |
+| `client_output: "redact"`, completion has no detected entities, no `require_verification` | **Yes, in practice** — redacted text == original. |
+| `client_output: "redact"`, completion **contains** detected PII | **No** — those values are redacted on egress. This holds even when `model_input: "raw"` showed the model the real text. |
+| `require_verification` set + completion unverifiable | **No** — request is rejected. This is identical on both sides of the `client_output` axis: the `UNVERIFIABLE` check reads the completion text, not the detector, and a failed verification returns nothing. |
+| `stream_mode: "stream_unverified"` | **Yes**, for that app's streamed traffic — egress redaction and step 9 are waived, *even under `enforced`*. See [`choosing-app-settings.md` §6.7](./choosing-app-settings.md). |
 
 So the precise statement for customers: *routeForge adds the trace and never edits the
 answer for style or content — but it does enforce output controls, which can redact PII
@@ -238,6 +268,9 @@ response, `display.output`, or any console snapshot. They reach Langfuse only in
 app's own provisioned project, and only under `capture_io: "full"` — see the
 residency/PII entries above. `sanitized_prompt` is different: it's the gate's
 already-*redacted* prompt, not raw, so it isn't covered by that restriction — it's also
-popped before the public response, but it *is* what `capture_io: "redacted"` telemetry
-and the console's `display.input` show, in whichever project that app's traces normally
-go to, not gated to the app's own.)
+popped before the public response, but it *is* what the console's `display.input` shows,
+in whichever project that app's traces normally go to, not gated to the app's own.
+**`capture_io: "redacted"` telemetry no longer reuses it.** The exporter builds its own
+redacted copy of the raw values with the app's detector, so a trace labelled `redacted`
+is genuinely redacted even for an app whose model was shown raw text — and when no
+detector ran, the exporter writes **nothing** rather than falling back to raw.)

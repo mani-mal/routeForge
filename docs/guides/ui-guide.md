@@ -498,12 +498,15 @@ predates the envelope the console falls back to naming nothing rather than guess
 
 **Options the server would refuse are disabled with the reason on the option itself**,
 not silently greyed. `capture_io = full` needs the app's own Langfuse project *and*, for
-an `onprem_only` app, `policy_mode = passthrough`; `capture_io = redacted` is
-unavailable under `passthrough` or an explicit `pii_detection = off`, because that
-export path reuses the gate's sanitized prompt and there is no sanitized prompt to
-reuse — `pii_detection = regex` is not blocked, since the regex detector still produces
-a sanitized (if lower-fidelity) prompt; `stream_unverified` is unavailable for an
-`onprem_only` app, which may never waive step-9 verification. The value an app is
+an `onprem_only` app, a declared no-protection posture (`model_input = raw` **and**
+`client_output = raw`, which is what `policy_mode = passthrough` resolves to);
+`capture_io = redacted` is unavailable only when the app's **effective**
+`pii_detection` resolves to `off`, because redacted telemetry needs a detector to build
+its redacted copy with — that control is server-driven, reading the compiled
+`effective.detection` off the admin response rather than re-deriving the precedence
+client-side, so it no longer blocks a `passthrough` app that names `regex` or
+`presidio`; `stream_unverified` is unavailable for an `onprem_only` app, which may never
+waive step-9 verification, and for an app with an explicit `client_output = redact`. The value an app is
 *currently* set to is never disabled — you can always see what it actually is.
 
 Two honesty notes about what this form does and doesn't guarantee:

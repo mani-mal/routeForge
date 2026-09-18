@@ -51,28 +51,62 @@ full cost on trivially-public traffic. Record whether a given response was verif
 or sampled-out in its DecisionRecord — don't let "not sampled" read as "verified
 clean."
 
-## Detokenization ordering
+## Egress redaction is `client_output`'s call — not the ingress detector's
 
-If the deployment detokenizes (`<SSN_1>` → real value; see `privacy-gate` skill), the
-order is fixed and non-negotiable:
+Whether the completion is redacted on the way out is decided by **one axis**,
+`client_output ∈ {raw, redact}`, and by nothing else. It is independent of what the model
+was shown (`model_input`): an app running `model_input: raw` + `client_output: redact`
+sends the model real values and still returns a redacted answer.
 
-```
-generate → step 9 leakage check + validation → detokenize (inside the gate) → return
-```
+`app/output/verify.py::egress_detector(detector, client_output)` is the single place that
+choice is made, because `verify()` is not the only egress surface — a completion can carry
+PII in `tool_calls.function.arguments`, and the streaming hold-back redactor is a third.
+All three read the same function so they cannot drift.
 
-Detokenize **after** verification, **inside the gate's trust boundary**, never before
-and never outside it. In placeholder mode (default) there is no detokenization at all — the
-placeholder is the deliverable.
+Fail-closed behaviour is **identical on both sides of the axis**: the `UNVERIFIABLE`
+marker check reads the completion *text*, never the detector, so it fires for a `raw`-output
+app exactly as for a `redact` one, and a failed verification returns `""`. Redaction is the
+only thing `client_output: raw` switches off. `verify()` takes `client_output` as a
+keyword-only argument with **no default**, so every caller must state which posture it is
+verifying under.
 
-## Streaming — rejected
+## There is no detokenization — do not document one
 
-Step 9 checks the **complete** response, which is incompatible with token streaming:
-buffering defeats streaming, and incremental scanning leaves a partial-leak window.
-Reject inbound `stream: true` with a clear error
-(`server.reject_stream_requests: true`). Note this is a separate channel from the
-decision stream the UI consumes over SSE (that one carries DecisionRecords, not model
-tokens). Production streaming with incremental verification is an explicit open
-question, not something to improvise here.
+Earlier versions of this skill described a "detokenize on egress" mode. **It does not
+exist.** The redaction map is built during `anonymize()` and discarded; nothing anywhere
+re-inserts an original value, there is no broker, and there is no config switch that turns
+one on. `client_output: "authorized_rehydrate"` and `model_input: "tokenize"` are named in
+the P1a design and are **rejected with a 422** (`AXIS_VALUE_NOT_IMPLEMENTED`) rather than
+faked. Placeholders are the deliverable; an app that needs the real value needs
+`model_input: "raw"`.
+
+## Streaming — rejected by default, opt-in per app, floored absolutely
+
+Step 9 checks the **complete** response, which token streaming cannot satisfy without a
+partial-leak window. So inbound `stream: true` is still **rejected by default**
+(`server.reject_stream_requests: true`) and for any app with no `stream_mode` set. An app
+may opt into one of `verified_then_stream` (full verified pipeline, then chunk the
+finished answer — guarantee intact, no TTFT win), `stream_unverified` (real tokens,
+verification explicitly waived and recorded), or `incremental_verify` (real tokens through
+a hold-back redactor that never releases raw entity text across a chunk boundary, but
+cannot enforce a whole-response verdict).
+
+**The floor is absolute and independent of the app's choice.** `pipeline.run_stream` raises
+`StreamFallback` — eagerly, before any token is emitted — for exactly three reasons, and
+`app/api/routes.py` serves those as `verified_then_stream`:
+
+1. `ctx.onprem_only` or `ctx.require_verification` for *this* request (CLAUDE.md rule 8);
+2. a client-driven tool conversation (needs the structured path — not a privacy matter);
+3. `stream_mode: stream_unverified` **with an explicitly set** `client_output: redact`.
+
+Reason 3 is scoped to an *explicit* `client_output` on purpose: `redact` is also what the
+`enforced` preset resolves to, so keying on the effective value would floor every
+`stream_unverified` app in existence. **The consequence to state out loud: an `enforced`
+app that opts into `stream_unverified` streams unredacted tokens.** `client_output: redact`
+is a guarantee on every path except that opt-in.
+
+The decision stream the UI consumes over SSE is a separate channel (DecisionRecords, not
+model tokens) and is unaffected by any of this.
 
 ## What the DecisionRecord must carry
 
@@ -96,6 +130,9 @@ class VerificationRecord(BaseModel):
   passes or fails closed at the cap
 - High-risk `onprem_only` + verification fail → escalates within on-prem, **never** cloud
 - Verification fail past cap → safe error, unverified completion **never** returned
-- `stream: true` inbound → rejected with a clear error, no model call
+- `stream: true` inbound with no `stream_mode` → rejected with a clear error, no model call
+- `stream_unverified` + an `onprem_only` request → `StreamFallback`, served verified
+- `stream_unverified` + explicit `client_output: redact` → `StreamFallback`
+- `client_output: raw` → completion returned verbatim, `entities_found` empty, and the
+  `UNVERIFIABLE` fail-closed path still fires
 - Sampled-out public request → DecisionRecord shows `performed: false`, not a false clean
-- Detokenization (when enabled) happens after the leakage check, inside the gate

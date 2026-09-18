@@ -4,7 +4,7 @@
 
 The [FAQ](./faq.md) answers specific questions and
 [`per-app-config.md`](../reference/per-app-config.md) is a per-field reference. Neither is what you
-want in front of you while onboarding. This page is: three questions, three recipes, and
+want in front of you while onboarding. This page is: three questions, four recipes, and
 the handful of things that have actually cost us time.
 
 Read it top to bottom the first time. After that, jump to the recipe.
@@ -38,30 +38,60 @@ honest configuration; so is `any` + full protection.
 Do they want to open Langfuse and read the actual text a model was sent and returned —
 to score it, build an eval set, or debug output quality?
 
-- **Yes → Recipe B (Router only).** Raw capture (`capture_io: "full"`) always requires
-  the app's own Langfuse project; it also needs a declared no-protection posture
-  (`policy_mode: "passthrough"`) but **only if** the app is `onprem_only` — a
-  non-`onprem_only` app may use `full` while still `enforced`.
+- **Yes → Recipe B (Router only).** See [the full-capture rule](#the-full-capture-rule)
+  below — it is one rule, stated identically in every guide.
 - **No, and they'd rather no I/O left the serving path at all → Recipe C.**
 - **No, redacted traces are fine → Recipe A.**
+
+There is a fourth case Q1–Q3 do not reach, and it is the one P1a added: **the input holds
+real values the model genuinely needs, but the client response and the traces must not
+carry them.** That is Recipe D.
 
 | | Q1: third-party PII? | Q3: needs raw I/O? | Recipe |
 |---|---|---|---|
 | Hospital, HR tool, anything holding data *about* people | yes | — | **A — Protected** |
 | Customer's own documents, every field load-bearing | no | yes | **B — Router only** |
 | Air-gapped, strictest, or "don't log our text anywhere" | either | no | **C — Protected, no telemetry I/O** |
+| The in-boundary model must see real values; nothing downstream may | yes | no | **D — Trusted compute, safe client response** |
+
+### The full-capture rule
+
+`capture_io: "full"` stores raw prompts and completions. The rule, in full, and the same
+in every guide and in the code (`validate_effective`, `app/policy/compile.py`):
+
+```text
+capture_io: "full" ALWAYS requires the application's own provisioned Langfuse project.
+  (never relaxed by anything — raw I/O is tenant-isolated)
+
+and then, by residency:
+  onprem_only     + full  ->  ALSO requires a declared no-protection posture:
+                              model_input: "raw" AND client_output: "raw"
+                              (which is exactly what policy_mode: "passthrough" resolves to)
+  non-onprem_only + full  ->  allowed in either posture, own project still required
+```
+
+So `onprem_only + enforced + full` is refused
+(`CAPTURE_FULL_ONPREM_NEEDS_NO_PROTECTION`), and `non-onprem_only + enforced + full` is
+allowed. Residency does not gate raw capture on its own; the *posture* does, and only for
+`onprem_only`. Full detail and every error code:
+[`per-app-config.md`](../reference/per-app-config.md#the-validation-rules-with-their-error-codes).
 
 ---
 
-## 2. The three recipes
+## 2. The four recipes
 
 | Recipe | `policy_mode` | `capture_io` | For |
 |---|---|---|---|
 | **A — Protected** (default) | `enforced` | `redacted` | Any app whose input may hold real personal data |
 | **B — Router only — no PII checks** | `passthrough` | `full` | The customer's own data, every field load-bearing |
 | **C — Protected, no telemetry I/O** | `enforced` | `off` | Air-gapped / strictest |
+| **D — Trusted compute, safe client response** | *(no preset — set the two axes)* | `redacted` or `off` | The in-boundary model needs real values; the response and traces must not carry them |
 
-All three are set the same two ways, and they hit the same endpoint and the same
+Recipes A–C are presets over the underlying axes; Recipe D is not expressible as a preset
+and is written out axis by axis. The axes, their precedence and every validation rule are
+in [`per-app-config.md`](../reference/per-app-config.md#the-axes--the-authoritative-model).
+
+All four are set the same two ways, and they hit the same endpoint and the same
 write-time clamps:
 
 - **Console** — *Applications → the app → **Settings** tab.* Every field below has a
@@ -71,7 +101,7 @@ write-time clamps:
 - **API** — `PUT /admin/applications/{app_id}/policy` (admin cookie auth).
 
 > **The console can apply a recipe for you.** A **Start from a recipe** picker sits above
-> step 1 with these same three recipes. It shows what it would change as
+> step 1 with the first three of these recipes (Recipe D is written out by hand). It shows what it would change as
 > `field: current → new` and **fills the form without saving** — you review it and then
 > press Save. It sets `policy_mode` and `capture_io` only, and never touches placement —
 > so the rule below still holds: `residency` is your decision, set it yourself in step 2.
@@ -144,10 +174,15 @@ nothing is redacted, in either direction:
   verbatim.** So does a real name, a real MRN, a real card number. There is no
   entity-level backstop left — `US_SSN` protection is a property of the *detector*, and
   in `passthrough` there is no detector.
-- **The app's own custom recognizers do not run either.** This is deliberately stronger
-  than `pii_detection: "off"`, which still runs a profile's recognizers. An app the
-  operator has declared untouched must not have a leftover custom recognizer quietly
-  rewriting its data.
+- **The app's own custom recognizers do not run either** — *provided the app names no
+  detector.* `passthrough` with `pii_detection` unset resolves detection to `off` **and**
+  puts both data-handling axes at `raw`, and that pair is the one configuration that gets
+  a bare null detector with no recognizer layering at all: an app the operator has
+  declared untouched must not have a leftover custom recognizer quietly rewriting its
+  data. This is deliberately stronger than `pii_detection: "off"` on its own, which
+  **still runs a profile's recognizers**. A `passthrough` app that *names* a detector gets
+  that detector and its recognizers — entities are found, classified and reported (and can
+  raise residency), though still nothing is redacted, because both axes stay `raw`.
 - **Egress verification finds nothing to redact.** Step 9 is handed the same null
   detector, so a completion that leaks PII the input never contained is returned as-is.
 - **Anyone with console access to that Langfuse project can read the raw text.** Staying
@@ -206,6 +241,50 @@ unsanitized prompt.
 decision record, the candidate list, cost, latency, tokens and tier, and lose the
 ability to look at what was actually said. Eval on this app has to happen outside
 RouteForge.
+
+---
+
+### Recipe D — Trusted compute, safe client response
+
+```json
+PUT /admin/applications/{app_id}/policy
+{ "residency": "onprem_only",
+  "model_input": "raw",
+  "client_output": "redact",
+  "capture_io": "redacted",
+  "pii_detection": "presidio" }
+```
+
+**Console:** **API only for now.** The Settings tab has no controls for `model_input` or
+`client_output` yet — step 3 Protection still offers `policy_mode` and the narrowing
+levers, and step 4 offers `capture_io`. Set the two data-handling axes with the `PUT`
+above; the console's **request drill-down** does show the resolved values per request
+(`model input` / `client output` in the policy panel), so you can confirm the write took.
+
+**Who it's for.** The app is doing real work on real personal data — summarising a
+patient record, drafting a letter from a customer file — and the model is inside the
+customer's boundary, so showing it the real values is the point. What must not carry
+those values is everything *downstream*: the HTTP response the client application stores,
+and the trace an operator opens in Langfuse. Recipes A and B both get this wrong for such
+an app: A blinds the model, B exposes everything.
+
+**What you get.** The backend receives the original text. Egress redaction runs over the
+completion and over model-generated tool-call arguments. Telemetry builds its **own**
+redacted copy from the raw values, so the trace is genuinely redacted rather than a copy
+of whatever the model was shown. Detection still runs, so a detected SSN can still raise
+residency and set `require_verification`.
+
+**What it costs you.** The client sees placeholders where real values were, and nothing
+detokenizes them (there is no tokenization in RouteForge — see §6.7). If the *calling
+application* needs the real value back, this recipe is not for it; that app wants
+`client_output: "raw"` and has to be trusted with the data.
+
+**Two things to know.**
+
+- **Set `client_output` explicitly.** Setting it is what makes the guarantee absolute:
+  `stream_unverified` then becomes a 422 the app cannot configure, and an existing row in
+  that shape is floored to `verified_then_stream` at runtime. See §6.7.
+- `capture_io: "off"` works here too, if the customer wants no trace text at all.
 
 ---
 
@@ -291,12 +370,15 @@ Worth being able to say without hedging:
 - **`US_SSN` can never be denylisted, thresholded, or pattern-exempted.** It is in
   `FilteredDetector.PROTECTED_ENTITIES`: naming it in `pii_entity_denylist` is a 422, no
   `pii_score_threshold` can drop it, and no regex — however SSN-shaped — can un-redact
-  one. This holds however an `enforced` app is tuned. (It does not survive `passthrough`,
-  because `passthrough` removes the detector entirely — that is the whole point of making
-  the posture explicit and versioned.)
+  one. This holds however an `enforced` app is tuned. (It is a property of the *detector*,
+  so an app that runs no detector — `pii_detection` resolving to `off`, which is what
+  `passthrough` gives an app that names none — has nothing to enforce it. That is the
+  whole point of making the posture explicit and versioned.)
 - **Raw I/O is tenant-isolated.** `capture_io: "full"` only ever writes to the app's own
-  Langfuse project. The shared project never receives raw I/O, and the exporter fails
-  closed to `redacted` if the app's project is missing at export time.
+  Langfuse project. The shared project never receives raw I/O. At export time the
+  exporter steps `full` down to `redacted` if the app's project is missing, and steps
+  `redacted` down to **`off`** if no detector ran — never raw content under a `redacted`
+  label.
 - **`stream_unverified` is never available to an `onprem_only` app**, in any posture, and
   an `onprem_only` or `require_verification` request can never have step-9 verification
   waived regardless of the app's `stream_mode`.
@@ -326,13 +408,23 @@ posture has to go:
 
 - **`pii_detection: "off"` with `capture_io: "off"`** — the model gets unredacted prompts;
   nothing is traced. Narrower than `passthrough` in what it permits (no raw telemetry) but
-  blunter in what it disables (the detector sees nothing) — and note it still runs the
-  app's custom recognizers, which `passthrough` does not.
+  blunter in what it disables (no built-in detector at all) — and note it **still runs the
+  app's custom recognizers**, so it is not "guaranteed raw passthrough". Only
+  `pii_detection: off` *plus* the raw/raw posture switches those off too.
 - **`pii_detection: "regex"`** — a scoped, deterministic detector instead of statistical
   NER. Worth trying when the false positives are all Presidio's model being creative on
-  structured text, which is exactly the MillWise failure mode.
+  structured text, which is exactly the MillWise failure mode. Know what you are getting:
+  regex mode has **exactly five patterns** — `US_SSN`, `CREDIT_CARD`, `EMAIL_ADDRESS`,
+  `PHONE_NUMBER`, `US_BANK_NUMBER` — plus the app's custom recognizers. No names, no
+  addresses, no dates, no MRNs. It really does redact, which is why `regex` +
+  `capture_io: "redacted"` is allowed; it just redacts far less.
+- **`model_input: "raw"` on its own** — the narrowest lever of all, and the one worth
+  trying before the whole posture goes. The model sees the real text while egress
+  redaction and redacted telemetry keep running. That is Recipe D.
 
-Both are PII downgrades and both are gated by `policy.allow_app_pii_downgrade`.
+The first two are PII downgrades and both are gated by `policy.allow_app_pii_downgrade`.
+`model_input: "raw"` is gated by `policy.allow_app_passthrough` instead — it is a declared
+no-protection posture on that axis.
 
 ---
 
@@ -367,22 +459,27 @@ they unlock, and the dependency was invisible.) Attach the credentials with thei
 ✓"* once they are set — then pick `full` and save the policy. Pick `full` first and the
 save 422s.
 
-### 6.2 `capture_io: "redacted"` is refused whenever nothing is sanitized
+### 6.2 `capture_io: "redacted"` needs a detector — and that is now the whole rule
 
-Two independent 422s, each naming which guardrail fired:
+One 422, `CAPTURE_REDACTED_NEEDS_A_DETECTOR`, and it fires on exactly one condition:
+**the app's effective `pii_detection` resolves to `off`.** `redacted` is a promise about
+the content, and the only way to keep it is for the exporter to build a redacted copy of
+the raw values — which needs a detector that actually ran. With none there is no honest
+redacted copy, and raw text under a `redacted` label is precisely the bug this rule
+exists to prevent.
 
-- `policy_mode: "passthrough"` + `capture_io: "redacted"`
-- `pii_detection: "off"` + `capture_io: "redacted"`
+**What changed.** This used to also fire for `policy_mode: "passthrough"` regardless of
+the detector, because the exporter reused whatever view the gate handed the *model*.
+Telemetry now projects independently — it builds its own redacted copy — so raw model
+input no longer implies raw telemetry. **`passthrough` + `capture_io: "redacted"` is
+legal when the app names a detector.** That is one of the
+[two deliberate unlocks](../reference/per-app-config.md#the-two-deliberate-unlocks).
 
-The reason is the same in both cases and it is not pedantry: the `redacted` exporter path
-**reuses the gate's sanitized prompt**. When the gate sanitized nothing, that "sanitized"
-prompt is the raw one — so `redacted` telemetry would carry raw I/O under a label saying
-it doesn't, into the *shared* project. Use `full` (with the app's own project) or `off`.
+`pii_detection: "regex"` + `capture_io: "redacted"` is allowed for the same reason it
+always was — the regex detector really does redact — but see §5 for exactly how little it
+catches.
 
-`pii_detection: "regex"` + `capture_io: "redacted"` is **allowed** — the regex detector
-still redacts (SSNs, cards, emails, custom recognizers), so the "sanitized" prompt is
-genuinely sanitized, just at lower fidelity than `presidio` (it misses entities that
-need language understanding, e.g. a bare name).
+Use `full` (with the app's own project) or `off` if you do not want a detector at all.
 
 Every clamp is evaluated on the **effective post-write value**, not on what your request
 body happens to name. A partial PUT that touches only `pii_detection` is still judged
@@ -487,6 +584,42 @@ from the console**, which writes through the same endpoint. Run the `ALTER`s lis
 before rolling the new image.
 
 ---
+
+### 6.7 `stream_unverified` waives egress redaction, even under `enforced`
+
+If you set `stream_mode: "stream_unverified"`, that app's streamed traffic is returned
+**unredacted** and step 9 is waived for it — *including* when `client_output` resolves to
+`redact` through the `enforced` preset. The write-time 422 and the runtime floor both key
+on an **explicitly set** `client_output: "redact"`, not on the effective value, so an
+`enforced` app that opts into `stream_unverified` is not floored.
+
+That scoping is deliberate — keying on the effective value would silently floor every
+`stream_unverified` app in existence, repealing the mode instead of honouring a
+contradiction an operator wrote down — but it is invisible unless someone says it out
+loud. So: **`client_output: "redact"` is a guarantee on every path except this one
+opt-in.** To make it absolute, set `client_output` explicitly (then `stream_unverified` is
+a 422 you cannot configure) or pick `incremental_verify` (which *does* redact egress,
+per entity) or `verified_then_stream`.
+
+Two floors that no app setting can lower, whatever its `stream_mode`: an `onprem_only` or
+`require_verification` request is always verified as a complete response, and a
+client-driven tool conversation is always served as one finished answer and then chunked.
+Full table: [`per-app-config.md`](../reference/per-app-config.md#stream_mode).
+
+### 6.8 There is no tokenization, and nothing detokenizes
+
+Worth knowing before a customer designs around it. When the gate redacts, it replaces the
+value with a placeholder (`<US_SSN_1>`) and the map from placeholder back to original is
+**discarded**. Nothing re-inserts it — not on egress, not for a tool, not anywhere.
+
+Practical consequences:
+
+- **A redacted value cannot be a lookup key.** If the app's tool needs to look a customer
+  up by SSN, `<US_SSN_1>` will not do it, and there is no broker that will resolve it.
+  That app needs `model_input: "raw"` (Recipe D or B), or another identifier.
+- `model_input: "tokenize"` and `client_output: "authorized_rehydrate"` are named in the
+  design and **rejected with a 422** saying they are not implemented — deliberately,
+  rather than being accepted and quietly run as plain redaction.
 
 ## 7. Turning protection on later
 

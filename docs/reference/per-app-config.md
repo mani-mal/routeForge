@@ -1,26 +1,261 @@
 # Per-application configuration: the protection and delivery knobs
 
-Operator-facing reference for the per-app override knobs — `policy_mode`,
-`pii_detection`, `pii_entity_denylist`, `pii_score_threshold`, `pii_exempt_patterns`
-and `stream_mode`. For the *why* (which knobs are safe to expose per-app and which
-aren't), read `docs/architecture/decisions/per-app-config-flexibility.md` first — this page is the
-how-to. If the question is *"I have a new app, what should I set?"* rather than *"what
-does this field do?"*, start with
+Operator-facing reference for the per-app override knobs — `residency`, `policy_mode`,
+`model_input`, `client_output`, `capture_io`, `pii_detection`, `content_integrity`,
+`escalate_residency_on_detection`, `pii_entity_denylist`, `pii_score_threshold`,
+`pii_exempt_patterns` and `stream_mode`. For the *why* (which knobs are safe to expose
+per-app and which aren't), read `docs/architecture/decisions/per-app-config-flexibility.md`
+first — this page is the how-to. If the question is *"I have a new app, what should I
+set?"* rather than *"what does this field do?"*, start with
 [`choosing-app-settings.md`](../guides/choosing-app-settings.md) — the decision guide and
 its three recipes — and come back here for the field-level detail.
+
+> **This page is authoritative for the axes, their values, the precedence order, the
+> presets and the validation rules.** [§ The axes](#the-axes--the-authoritative-model)
+> below is the single source; every guide in `docs/guides/` states the same rules and
+> links here. Where a guide and this page disagree, this page is wrong until it is
+> fixed — but the real authority is `app/policy/compile.py`, which is one pure function
+> and is what both the admin API and the request path read.
 
 They all follow the same shape as the existing `capture_io` / `compression_enabled`
 per-app overrides: `null` (unset) inherits the deployment-wide default; a set value
 overrides it for that application only, subject to a write-time clamp that keeps the
 override from ever being able to breach a hard guarantee.
 
+---
+
+## The axes — the authoritative model
+
+There are **two kinds of setting**, and conflating them is the mistake this model exists
+to prevent:
+
+| | Governs | Fields |
+|---|---|---|
+| **Placement** | *Where compute may run.* Nothing else. | `residency` |
+| **Protection** | *How much is done to the data.* Nothing else. | `model_input`, `client_output`, `capture_io`, `pii_detection`, `content_integrity`, `stream_mode` |
+
+**Neither may be inferred from the other.** A protection setting can never move
+placement, and a placement setting can never change a protection value. The one
+exception is declared, named and raise-only: `config/policy.yaml`'s `sensitivity_rules`
+may *tighten* residency when an entity is detected, gated per app by
+`escalate_residency_on_detection`, and every rule that fires is named on the response and
+on the trace. That is the whole cross-axis surface; there is no other path.
+
+All of this is resolved by one pure function, `compile_policy` in `app/policy/compile.py`.
+It takes the stored per-app policy plus the deployment settings and returns an
+`EffectivePolicy`. The admin API validates that compiled result, `app_policy_version`
+hashes it, the gate and the pipeline read it, and the decision certificate reports it.
+Nothing re-derives a posture anywhere else.
+
+### The placement axis
+
+| Field | Values | Meaning |
+|---|---|---|
+| `residency` | `any` \| `private_cloud_ok` \| `onprem_only` | Where compute may run. `onprem_only` filters cloud out of the candidate pool **before** the router scores anything (CLAUDE.md rule 3) — never a post-hoc check. |
+
+`null` inherits the application row's `default_residency`, which itself defaults to `any`.
+**A stored residency that is not one of the three legal values denies to `onprem_only`** —
+the most restrictive placement — and the write that tried to store it is refused. That is
+true in the compiler *and* in `app/policy/context.py`, which calls the same
+`resolve_residency` function, so the two cannot disagree about one app's placement.
+
+### The protection axes
+
+| Field | Values | Meaning |
+|---|---|---|
+| `model_input` | `raw` \| `redact` | What the **model** is shown. `redact` replaces detected entities with placeholders before any backend sees the text; `raw` forwards the original. |
+| `client_output` | `raw` \| `redact` | What the **client** receives. `redact` runs egress redaction over the completion (and over `tool_calls.function.arguments`); `raw` returns the model's text verbatim. Independent of `model_input`. |
+| `capture_io` | `off` \| `redacted` \| `full` | What **telemetry** stores. `off` = no I/O content at all (metadata only); `redacted` = telemetry builds its *own* redacted copy of the raw values; `full` = raw, and only ever into the app's own Langfuse project. |
+| `pii_detection` | `off` \| `regex` \| `presidio` | Which **detector** the above use when one is needed. `null` inherits `serving.policy.pii_detection`. |
+| `content_integrity` | `transformations_allowed` (default) \| `exact` | `exact` disables all lossy compression (Headroom) for the app, so its content survives byte-for-byte. A **data** control, not a privacy control: it never changes placement. |
+| `stream_mode` | `off` \| `verified_then_stream` \| `stream_unverified` \| `incremental_verify` | How `stream: true` is served. No deployment-wide default — `null` means the app never opted in. See [`stream_mode`](#stream_mode) below. |
+| `escalate_residency_on_detection` | `true` (default when `null`) \| `false` | Whether a declared `sensitivity_rules` entry may **raise** this app's residency. It can only ever prevent a tightening; it can never loosen placement, and `false` does not stop the rule from setting `require_verification` or the sensitivity label. |
+
+`policy_mode` is **not a seventh axis.** It is a preset over two of them — see below.
+
+### Precedence — how a value is resolved
+
+For every axis, highest wins:
+
+1. **Deployment ceiling** — `serving.policy.allow_app_passthrough`,
+   `serving.policy.allow_app_pii_downgrade`. An absolute constraint: no app may reach the
+   forbidden value, whatever it or the deployment default says.
+2. **The explicit per-app value** — the column, when it is not `null`.
+3. **The `policy_mode` preset** — for `model_input`, `client_output` and (only when
+   `pii_detection` is `null`) `pii_detection`.
+4. **The deployment default** — `serving.policy.pii_detection`,
+   `observability.langfuse.capture_io`, `serving.policy.default_policy_mode`.
+
+**Anything that cannot be parsed denies.** A ceiling that is not the literal boolean
+`true` reads as closed. An axis value that is not a legal member of its vocabulary
+resolves to that axis's protective end (`residency → onprem_only`, `model_input →
+redact`, `client_output → redact`, `capture_io → off`, `pii_detection → presidio`,
+`stream_mode → off`) **and** the write is refused with a 422 naming the value. A typo is
+never answered `200` and stored as a policy nobody asked for. This holds for a malformed
+*deployment default* too, not only for a per-app value.
+
+### Default versus ceiling — they are different things
+
+The three concepts the guides used to blur:
+
+- A **default** is what an app inherits when it leaves a field `null`. It is a starting
+  point, and an app may explicitly differ from it.
+- A **ceiling** (`allow_app_passthrough`, `allow_app_pii_downgrade`) is an absolute
+  deployment constraint. No app may weaken past it, and clearing a field does not escape
+  it — a `reset` is judged on the value the app will inherit afterwards.
+- An **explicitly permitted per-app downgrade** may legitimately differ from the default
+  without violating any ceiling. "A per-app policy can only narrow the global rules" is
+  *not* the rule and never was: an app may set `pii_detection: off` on a deployment whose
+  default is `presidio`, as long as `allow_app_pii_downgrade` permits it.
+
+### The presets
+
+`policy_mode` sets two axes at once, and nothing else:
+
+```
+policy_mode: enforced     ->  model_input: redact,  client_output: redact
+policy_mode: passthrough  ->  model_input: raw,     client_output: raw
+```
+
+Plus one narrow inheritance rule: an app whose `policy_mode` resolves to `passthrough`
+**and** whose `pii_detection` is `null` resolves `pii_detection` to `off`. An app that
+*names* a detector gets the detector it named, in either posture. (Before the compiler,
+`passthrough` forced the null detector unconditionally — that was counterexample CE-3,
+and there is a [pre-roll audit](#pre-roll-audit-policy_mode-passthrough-rows-that-also-set-pii_detection)
+for rows in that shape.)
+
+`policy_mode` is still reported on every response and trace, but it is now **derived**
+from the compiled axes rather than read from the column: the stamp reads `passthrough`
+exactly when `model_input` and `client_output` are both `raw`, and `enforced` otherwise —
+including when a ceiling refused the app's requested `passthrough`. The stamp always
+names what ran, never what was asked for.
+
+`policy_mode` never touches placement. It does not widen `allowed_providers`, does not
+clear `onprem_only`, and does not appear anywhere in `app/policy/context.py`'s placement
+computation.
+
+### The validation rules, with their error codes
+
+Every rule is checked against the **compiled, post-write** effective policy — never
+against the request body — so a partial `PUT` that never mentions a field is still judged
+on the state the write will actually produce, and a `reset` is judged on what the app
+falls back to. A rejected write applies nothing at all. Codes are from
+`app/policy/compile.py::validate_effective` and are stable API surface.
+
+| Code | Fires when | Fix |
+|---|---|---|
+| `<AXIS>_UNKNOWN_VALUE` (e.g. `CAPTURE_IO_UNKNOWN_VALUE`, `RESIDENCY_UNKNOWN_VALUE`) | a stored value is not a legal member of its axis | use one of the values the message lists |
+| `AXIS_VALUE_NOT_IMPLEMENTED` | the value is named in the design but deliberately not built — `tokenize`, `authorized_rehydrate`, `resolve_tokens`, `trusted_raw`, `inherit_model` | pick an implemented value; see [Not implemented](#not-implemented--rejected-rather-than-faked) |
+| `PASSTHROUGH_FORBIDDEN` | `policy_mode: passthrough`, or `model_input: raw`, or `client_output: raw`, while `allow_app_passthrough` is false | lift the deployment ceiling, or stay protected |
+| `PII_DOWNGRADE_FORBIDDEN` | a per-app `pii_detection` of `off`/`regex` while `allow_app_pii_downgrade` is false | lift the ceiling, or use the narrow levers (`pii_entity_denylist` etc.), which this ceiling does not gate |
+| `CAPTURE_FULL_NEEDS_OWN_PROJECT` | `capture_io: full` with no provisioned per-app Langfuse project | attach the app's own project first, or use `redacted` |
+| `CAPTURE_FULL_ONPREM_NEEDS_NO_PROTECTION` | `capture_io: full` on an `onprem_only` app that has not declared `model_input: raw` **and** `client_output: raw` | declare the posture (`policy_mode: passthrough` resolves both), or use `redacted`/`off` |
+| `CAPTURE_REDACTED_NEEDS_A_DETECTOR` | `capture_io: redacted` with `pii_detection` resolving to `off` | set `pii_detection` to `regex` or `presidio`, or use `off`/`full` |
+| `STREAM_UNVERIFIED_FORBIDDEN_ONPREM` | `stream_mode: stream_unverified` on an `onprem_only` app | use `verified_then_stream` or `incremental_verify` |
+| `STREAM_UNVERIFIED_FORBIDDEN_REDACTED_OUTPUT` | `stream_mode: stream_unverified` with an **explicitly set** `client_output: redact` | use `incremental_verify` or `verified_then_stream`, or set `client_output: raw` |
+| `INVARIANT_*` | the save-time invariant check (below) found that this app's compiled policy would break monotonicity, noninterference, or "placement never weakens protection" | report it — reaching one of these means the compiler misbehaved for this app, not that the operator typed something wrong |
+
+**The save-time invariant check.** After the rules above pass, `set_policy` compiles the
+same app over a fixed 18-point grid — the three residency values, both extremes of each
+protection axis, and three detected-entity signals — and refuses the write if any of
+design §7's first three invariants fails. It is bounded and I/O-free by construction
+(the grid is a module-level constant), so it adds a small, fixed number of pure-function
+calls to the write path and never unbounded work. What it does **not** catch is stated in
+[the research note](../research/policy-compiler-noninterference.md#8-what-is-not-proven).
+
+### The two deliberate unlocks
+
+Two combinations that used to be refused are now legal. Each is a consequence of giving a
+consumer its own view of the data, and each is a deliberate contract change:
+
+1. **`capture_io: redacted` with `model_input: raw`** — including the
+   `passthrough + capture_io: redacted` pair the admin API rejected outright. Telemetry no
+   longer reuses whatever view the gate handed the *model*: `app/obs/export.py::_set_io`
+   builds its **own** redacted copy from the raw values using the app's detector. So raw
+   model input no longer implies raw telemetry. It stays rejected when `pii_detection`
+   resolves to `off` (`CAPTURE_REDACTED_NEEDS_A_DETECTOR`) — with no detector there is
+   nothing to build an honest redacted copy with, and that was all the old rule was ever
+   really protecting against.
+2. **`client_output: redact` with `model_input: raw`** — the configuration that could not
+   previously be expressed at all: *the trusted, in-boundary model sees the real value;
+   the client response is redacted; telemetry stores a redacted copy or nothing.*
+   `app/output/verify.py` runs the real detector on egress whenever `client_output` is
+   `redact`, whatever the model was shown.
+
+Every other combination behaves exactly as it did. In particular these stay **rejected**:
+`onprem_only + enforced + capture_io: full`; `capture_io: full` with no own Langfuse
+project; `capture_io: redacted` with no detector; `stream_unverified + onprem_only`.
+
+### Recipes
+
+Built from the axes. `residency` is always your own decision — set it from the customer's
+contract, never from the recipe.
+
+| Recipe | `model_input` | `client_output` | `capture_io` | `pii_detection` | Shorthand |
+|---|---|---|---|---|---|
+| **Protected** (default) | `redact` | `redact` | `redacted` | `presidio` | `policy_mode: enforced` |
+| **Protected, no telemetry I/O** | `redact` | `redact` | `off` | `presidio` | `policy_mode: enforced` + `capture_io: off` |
+| **Trusted compute, safe client response** | `raw` | `redact` | `redacted` or `off` | `presidio` or `regex` | set both axes explicitly |
+| **Router only** | `raw` | `raw` | `full` or `off` | `off` | `policy_mode: passthrough` |
+| **Router + meter + tracer, redacted traces** | `raw` | `raw` | `redacted` | `regex` or `presidio` | unlock 1 |
+
+The third row is the one P1a exists for. Write it explicitly — no preset produces it:
+
+```jsonc
+PUT /admin/applications/{app_id}/policy
+{ "residency": "onprem_only",
+  "model_input": "raw",          // the in-boundary model sees the real values
+  "client_output": "redact",     // the HTTP response does not
+  "capture_io": "redacted",      // nor does the trace
+  "pii_detection": "presidio" }
+```
+
+### Not implemented — rejected rather than faked
+
+`model_input: tokenize`, `client_output: authorized_rehydrate`, the per-tool axes
+(`tool_arguments`, `tool_results_to_model`), the protected-reference broker, and endpoint
+data-handling metadata (region, retention) are **not built**. A policy naming one gets a
+422 (`AXIS_VALUE_NOT_IMPLEMENTED`) saying so, rather than being accepted and silently run
+as the nearest thing that does exist.
+
+There is **no tokenization and no detokenization anywhere in RouteForge.** The gate
+produces a redaction map while redacting and then discards it; nothing re-inserts original
+values on egress. A redacted value is gone for the rest of that request. The practical
+consequence, worth saying to a customer before they design around it: a redacted SSN
+cannot be used as a lookup key by a tool. `<US_SSN_1>` is a placeholder, not a reference —
+if the tool needs the real value, the app needs `model_input: raw`.
+
+### The decision certificate
+
+Every response's `policy` block and every trace carries what the compiler decided, so an
+auditor never has to infer one axis from another:
+
+```
+sp.placement, sp.placement_sources
+sp.model_input_mode, sp.client_output_mode, sp.telemetry_io_mode
+sp.detection_mode, sp.content_integrity_mode, sp.stream_mode
+sp.cross_axis_rules_fired, sp.detected_entity_types     # types only, never values
+sp.candidates, sp.app_policy_version, sp.routing_policy_version
+sp.checks: {chosen_in_eligible_set, fallback_in_eligible_set}
+```
+
+`sp.checks` is the one per-request proof: the model(s) the gateway actually used were
+drawn from *this request's* own eligible set. Policy-wide invariants are vouched for by
+`app_policy_version`, which passed the save-time check. Raw values never appear — entity
+types and counts are the evidence. The console's request drill-down reads the same fields.
+
+---
+
 ## Two ways to set these
 
-Every field on this page can be set either way; they hit the same endpoint and the same
-clamps.
+Most fields on this page can be set either way; they hit the same endpoint and the same
+clamps. **The four P1a data-handling fields — `model_input`, `client_output`,
+`content_integrity` and `escalate_residency_on_detection` — are API-only for now:** the
+admin API accepts them, `compile_policy` resolves them and the request drill-down displays
+the resolved values, but the Settings tab has no control for them yet.
 
 - **Console** — *Application → Settings tab.* Since `ui:0.17.0` every field `PolicyIn`
-  accepts has a control there. The tab is six numbered, collapsible steps, each showing a
+  accepted at that time has a control there (the four P1a axes above are the exception). The tab is six numbered, collapsible steps, each showing a
   one-line summary of its current values: **1 Access** (API tokens), **2 Placement**
   (residency, providers, tiers, models), **3 Protection** (`policy_mode`, with a
   collapsible *Detection & narrowing* sub-group holding `pii_detection`,
@@ -99,10 +334,12 @@ score is below `0.0`, so it passes everything); `null` means no per-app floor at
 the `enforced` posture.
 
 > **Console:** *Settings → step 3 Protection → policy mode.* Selecting `passthrough` raises an
-> inline banner stating exactly what stops (detection, redaction in both directions,
-> custom recognizers, sensitivity rules), what continues (routing, budgets, metering,
-> the decision trace, Langfuse), and that **placement is untouched** — residency in step
-> 2 still decides where compute may run. The *Detection & narrowing* sub-group below
+> inline banner stating what stops (redaction in both directions, and — for an app that
+> names no detector — detection, custom recognizers and sensitivity escalation with it),
+> what continues (routing, budgets, metering, the decision trace, Langfuse), and that
+> **placement is untouched** — residency in step 2 still decides where compute may run.
+> An app that *does* name a `pii_detection` keeps detection, its recognizers and
+> escalation under `passthrough`; only redaction stops. The *Detection & narrowing* sub-group below
 > collapses to a one-line summary while `passthrough` is selected, because nothing is
 > detected, but it stays openable and editable and its stored values are **kept, not
 > cleared** — the summary names what is being kept — and they apply again the moment the
@@ -124,10 +361,26 @@ switched off") is a valid, honest configuration. Note `passthrough` does not tou
 context compression: if Headroom is enabled deployment-wide, it can still transform
 tool outputs/history for this app — disable compression too for byte-exact content.
 
-| Value | Meaning |
-|---|---|
-| `enforced` (or unset/`null`) | Privacy-first. PII detection, input redaction, egress redaction, sensitivity escalation, custom recognizers, capture ceiling. The hospital persona. |
-| `passthrough` | RouteForge is a **router, meter and tracer only.** No detection, no redaction in either direction, no custom recognizers. Raw capture permitted to the app's own Langfuse project. |
+| Value | Compiles to | Meaning |
+|---|---|---|
+| `enforced` (or unset/`null`) | `model_input: redact`, `client_output: redact` | Privacy-first. Input redaction before any model, egress redaction of the response, sensitivity escalation, custom recognizers, the capture ceiling. The hospital persona. |
+| `passthrough` | `model_input: raw`, `client_output: raw` (and `pii_detection: off` **only if the app names no detector**) | RouteForge is a **router, meter and tracer only.** Nothing is redacted in either direction. Raw capture permitted into the app's own Langfuse project. |
+
+> **`passthrough` is a preset over two axes, not a master switch.** It sets `model_input`
+> and `client_output` to `raw` and — only when `pii_detection` is unset — resolves
+> detection to `off`. An app that *names* a detector in `passthrough` gets it: entities are
+> detected, classified and reported, and a declared cross-axis rule can raise residency;
+> nothing is redacted, because both data-handling axes stay `raw`. That is a change from
+> the pre-compiler behaviour and there is a
+> [pre-roll audit](#pre-roll-audit-policy_mode-passthrough-rows-that-also-set-pii_detection)
+> for rows in that shape.
+>
+> **What "untouched" does and does not cover.** `passthrough` says the **PII gate** does
+> not alter the data. It says nothing about step 5: if Headroom is enabled deployment-wide
+> it can still rewrite message text for token reduction, and its content-based bypasses
+> (`high_risk`, `restricted_sensitivity`) are derived from *detected entities*, so for an
+> app that detects nothing they never fire. An app that needs byte-exact content needs
+> `content_integrity: "exact"` (or `compression_enabled: false`) **as well**.
 
 Unset inherits the deployment-wide `policy.default_policy_mode` in
 `config/serving.yaml` (env `SP_DEFAULT_POLICY_MODE`), so an install where no customer
@@ -171,9 +424,14 @@ off does not turn RouteForge into a proxy — it is still the router and the met
   own provisioned Langfuse project. `passthrough` relaxes the *residency* condition on
   `full`, never the own-project one: one customer's raw data must never land in
   another's traces or in the shared project.
-- **`capture_io: "redacted"` is rejected** for a `passthrough` app — that exporter path
-  reuses the gate's sanitized prompt, which is raw when nothing was sanitized. Use
-  `full` (with the app's own project) or `off`.
+- **`capture_io: "redacted"` needs a detector, not a posture.** A `passthrough` app that
+  names `pii_detection: "regex"` or `"presidio"` **may** use `redacted` — telemetry builds
+  its own redacted copy of the raw values (the first of the [two
+  unlocks](#the-two-deliberate-unlocks)). What is still refused is `redacted` with
+  `pii_detection` resolving to `off`, which is what a `passthrough` app that names no
+  detector inherits: there is then nothing to build an honest redacted copy with
+  (`CAPTURE_REDACTED_NEEDS_A_DETECTOR`). Use `full` (with the app's own project), `off`,
+  or name a detector.
 - **Boot lint.** An unrecognized `default_policy_mode` fails the boot with a named
   violation rather than resolving to something safe-but-silent.
 - **Write-time validation.** An unrecognized per-app `policy_mode` value is a **422**
@@ -194,9 +452,46 @@ Values, from `app/policy/enums.py:PII_MODES`:
 
 | Value | Meaning |
 |---|---|
-| `presidio` (or unset/`null`) | Inherit the deployment's live global detector (`serving.yaml policy.pii_detection`, normally `presidio`). |
-| `regex` | Use the lightweight regex detector for this app only. |
-| `off` | Detect nothing for this app — the gate does not redact PII before the model sees it. |
+| `presidio` (or unset/`null`) | Inherit the deployment's live global detector (`serving.yaml policy.pii_detection`, normally `presidio`). Statistical NER plus Presidio's built-in recognizers. |
+| `regex` | Use the lightweight built-in regex detector for this app only. **Exactly five patterns** (`app/policy/detectors.py:_PATTERNS`): `US_SSN`, `CREDIT_CARD`, `EMAIL_ADDRESS`, `PHONE_NUMBER`, `US_BANK_NUMBER`. Nothing else — no names, no addresses, no MRNs, no dates. |
+| `off` | Run no built-in detector for this app. **The app's own custom recognizers still run** — see below. |
+
+### Exactly what each value detects and redacts
+
+The single most-asked question, and the one the guides used to answer three different ways:
+
+| | built-in recognizers | the app's custom recognizers (privacy profile) | redacts model input? | redacts client output? | can produce `capture_io: redacted`? |
+|---|---|---|---|---|---|
+| `presidio` | yes, full Presidio | yes | when `model_input: redact` | when `client_output: redact` | yes |
+| `regex` | the five patterns above, and only those | yes | when `model_input: redact` | when `client_output: redact` | yes — at regex fidelity |
+| `off` | none | **yes** | nothing is found, so nothing is replaced | nothing is found, so nothing is replaced | no (`CAPTURE_REDACTED_NEEDS_A_DETECTOR`) |
+
+Three consequences worth stating plainly:
+
+- **`regex` really does sanitize** — that is why `regex` + `capture_io: "redacted"` is
+  allowed. But it sanitizes only those five shapes. A bare name, an address, an MRN, a
+  date, a passport number: all pass through untouched. `regex` is a *lower-fidelity*
+  detector, not a partial Presidio.
+- **`pii_detection: "off"` is not "guaranteed raw passthrough."** It switches off the
+  *built-in* detector. If the application has a privacy profile with custom recognizers,
+  those are layered on top (`EffectiveDetector`, `app/policy/effective.py`) and still run
+  — so an app with an `MRN-\d{7}` recognizer still has its MRNs detected, classified and
+  (under `model_input: redact`) replaced. It also still applies the app's
+  `pii_entity_denylist` / `pii_score_threshold` / `pii_exempt_patterns` filtering, which
+  is moot with nothing to filter but is not switched off.
+- **The only configuration that is genuinely "nothing is scanned"** is `pii_detection:
+  off` **together with** the no-protection posture — `model_input: raw` **and**
+  `client_output: raw` (what `policy_mode: passthrough` resolves to). That combination
+  gets a bare `NullDetector` with no recognizer layering at all: an app the operator has
+  declared untouched must not have a leftover custom recognizer quietly rewriting its
+  data. This is a deliberate behaviour difference from `pii_detection: "off"` on its own.
+
+**When is a detector built at all?** Whenever *any* consumer needs one: `model_input:
+redact`, or `client_output: redact`, or `capture_io: redacted`, or
+`escalate_residency_on_detection` is true. Its *kind* then comes from `pii_detection`.
+When no consumer needs one, nothing is scanned. This is why the axes are independent: an
+app whose model sees raw text but whose client response must be redacted still gets a real
+detector, which the old single-switch design could not express.
 
 **Why an app would want this:** the gate redacts every detected entity into a
 placeholder before any model sees the text. For a document-generation app that needs
@@ -237,11 +532,16 @@ content.
 > is customer-owned content whose every field is load-bearing output — there is then
 > nothing to protect and no enumerable set of shapes to exempt.
 
-**Why it's safe:** detection drives *classification*, not residency. Residency is
-enforced independently by `_stricter(rule.residency, app.residency)` in
-`app/policy/context.py` regardless of what — or whether — the gate detected anything. An
-`onprem_only` app with `pii_detection: off` still routes on-prem only; detection being
-off cannot lift it to cloud.
+**Why it's safe:** detection can only ever **raise** residency, never lower it. The app's
+own `residency` is the floor, and `_stricter(rule.residency, app.residency)` in
+`app/policy/context.py` applies the declared cross-axis rule on top of it — a `max`, not
+a replacement. So an `onprem_only` app with `pii_detection: off` still routes on-prem
+only: turning detection off removes an *escalation* it might have earned, never the floor
+it already has, and detection being off cannot lift it to cloud. What downgrading
+detection genuinely costs is the tightening — an SSN that would have forced an
+`any`-residency app on-prem no longer does. That is what `escalate_residency_on_detection`
+is for, and why counterexample CE-3 mattered. Neither loss is silent: `detection: off` is
+in the decision certificate and folded into `app_policy_version`.
 
 That independence is why `onprem_only` apps **may** downgrade detection (with
 `capture_io: "off"` — see the floors). An on-prem-only app is the *safest* place to run
@@ -260,16 +560,19 @@ request body value if provided, else the app's stored policy, else its default):
   *every* app on this deployment from downgrading detection at all — a locked-down
   (e.g. hospital) deployment sets this once instead of relying on per-app discipline.
 - `pii_detection == "off"` is **rejected** when the app's effective `capture_io` is
-  `"redacted"` — the `redacted` exporter path reuses the gate's *sanitized* prompt
-  (`app/obs/export.py:_set_io`); with detection off nothing was sanitized, so
-  `redacted` telemetry would silently carry raw PII. `capture_io="off"` is always safe
-  with detection off, at **any** residency. `capture_io="full"` is allowed, but only
-  under the guardrails below. `pii_detection == "regex"` is **not** rejected by this
-  clamp: the `RegexDetector` still redacts (SSN/card/email/custom recognizers), so the
-  sanitized prompt `redacted` telemetry reuses is genuinely redacted — at regex quality,
-  which misses entities without a pattern (e.g. names) — not raw. `allow_app_pii_downgrade`
-  still gates `regex` the same as `off`; only the `redacted`-specific rejection is
-  narrower.
+  `"redacted"` (`CAPTURE_REDACTED_NEEDS_A_DETECTOR`). `redacted` telemetry is a promise
+  about the content, and the only way to keep it is for the exporter to build a redacted
+  copy of the raw values (`app/obs/export.py:_set_io`) — which needs a detector that
+  actually ran. With none, there is no honest redacted copy to build. `capture_io="off"`
+  is always safe with detection off, at **any** residency. `capture_io="full"` is
+  allowed, but only under the guardrails below. `pii_detection == "regex"` is **not**
+  rejected by this clamp: the `RegexDetector` really does redact, so telemetry's own copy
+  is genuinely redacted — at regex quality (see below for exactly what regex catches),
+  not raw. `allow_app_pii_downgrade` still gates `regex` the same as `off`; only the
+  `redacted`-specific rejection is narrower.
+  *This clamp no longer keys on the posture.* It used to fire for any `passthrough` app
+  because the exporter reused whatever view the gate handed the model; telemetry now
+  projects independently, so the rule is exactly "is there a detector", nothing more.
 - An unrecognized value is a 422, never a silent fallback to `off`.
 
   **Net envelope for an `onprem_only` app:** while the app is in the `enforced`
@@ -313,16 +616,23 @@ independently:
   auto-provisioned at creation or attached manually via
   `PUT /admin/applications/{app_id}/langfuse` — in the console the credential fields sit in
   *Settings → step 4 Telemetry*, directly above `capture_io`, because they gate it (see
-  `docs/guides/onboarding-models.md`-adjacent Langfuse provisioning notes). `app/obs/export.py` fails closed to `redacted` at export
-  time if the per-app tracer build ever fails, as an independent runtime backstop.
-  `app/obs/*` was not changed by this feature — it already had this behavior.
+  `docs/guides/onboarding-models.md`-adjacent Langfuse provisioning notes).
+  **The runtime backstop, in full** (`app/obs/export.py::resolve_capture_io`, the one
+  place the decision is made, so the trace and the console's `display` block can never
+  disagree): `full` with no own project steps down to `redacted`; `redacted` with no
+  detector steps down to **`off`**, not to raw; an unrecognised value is `off`. Never raw
+  content under a `redacted` label — that was counterexample CE-1, and it shipped once.
 - **`allow_app_pii_downgrade` still gates it.** A deployment with the ceiling set
   `false` cannot reach this combination either, same as any other PII downgrade.
-- **Still blocked:** `onprem_only` + `enforced` + `full`; `full` with no own Langfuse
-  project; `passthrough` + `capture_io=redacted`; `pii_detection=off` +
-  `capture_io=redacted` (`regex` + `redacted` is allowed — see above); either
-  deployment ceiling off. Each is a distinct 422 with a message naming which guardrail
-  fired, and the console prints that message verbatim.
+- **Still blocked:** `onprem_only` + `enforced` + `full`
+  (`CAPTURE_FULL_ONPREM_NEEDS_NO_PROTECTION`); `full` with no own Langfuse project
+  (`CAPTURE_FULL_NEEDS_OWN_PROJECT`); `pii_detection` resolving to `off` +
+  `capture_io=redacted` (`CAPTURE_REDACTED_NEEDS_A_DETECTOR` — `regex` and `presidio` +
+  `redacted` are both allowed, in either posture); either deployment ceiling off
+  (`PASSTHROUGH_FORBIDDEN` / `PII_DOWNGRADE_FORBIDDEN`). Each is a distinct 422 with a
+  message naming which guardrail fired, and the console prints that message verbatim.
+  **`passthrough` + `capture_io=redacted` is no longer on this list** when the app names a
+  detector — see [the two unlocks](#the-two-deliberate-unlocks).
 
 **What `full` stores.** The whole exchange, not just the last message. When a request
 has more than one message or offers `tools`, the trace Input is JSON —
@@ -358,6 +668,13 @@ cannot be selected) and **min confidence** (the threshold box).*
 
 These narrow the gate **without disabling it** — the surgical alternative to
 `pii_detection: off`.
+
+> **On the name.** `pii_entity_denylist` reads as "types that are denied" and means the
+> opposite: types the gate **exempts** from redaction. `pii_exempt_entity_types` would be
+> the honest name, and it is not being renamed — the field is live API surface on
+> deployed installs and in operator scripts, and a rename with a deprecated alias is a
+> separate change with its own compatibility cost. Read it as *"the denylist of entity
+> types the redactor may not touch."*
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -432,6 +749,90 @@ console's inline check is an early warning, not the authority.
 `PROTECTED_ENTITIES` entirely, so no regex — however SSN-shaped — can un-redact one.
 Same guarantee as the denylist and the threshold, enforced at the same seam.
 
+## `model_input` and `client_output`
+
+**API only** (no console control yet): the same
+`PUT /admin/applications/{app_id}/policy` endpoint, fields `model_input` and
+`client_output` (each `raw` | `redact` | `null` to inherit). The console's request
+drill-down shows the resolved values per request.
+
+The two data-handling axes `policy_mode` presets. Set either explicitly and it wins over
+the preset; leave both `null` and the preset decides. They are independent of each other
+and of `residency`.
+
+- `model_input: "redact"` — the backend receives the redacted view. `raw` — the backend
+  receives the original text. This is the axis that decides whether a trusted, in-boundary
+  model can do its job on real values.
+- `client_output: "redact"` — egress redaction runs over the completion **and** over
+  model-generated `tool_calls.function.arguments`, with the app's detector
+  (`app/output/verify.py::egress_detector` is the one place that choice is made, so
+  `verify()`, the tool-call redactor and the streaming hold-back redactor cannot drift).
+  `raw` — no egress redaction. The `UNVERIFIABLE` leakage check and `require_verification`
+  fail-closed behaviour are **identical on both sides of the axis**: a failed verification
+  returns nothing, whatever `client_output` says. Redaction is the only thing `raw`
+  switches off.
+
+**Both `raw` values are gated by `allow_app_passthrough`, independently.** Each is a
+declared no-protection posture in its own right.
+
+Under `client_output: "raw"` the response's `detected_entities` on the egress side is
+always empty — not because nothing was there, but because nothing looked. The trace says
+so rather than implying a clean verification.
+
+## `content_integrity`
+
+**API only** (no console control yet): field `content_integrity`
+(`transformations_allowed` | `exact` | `null`).
+
+`exact` disables **all** lossy compression for this application: Headroom never runs, so
+message text, tool outputs and history reach the model byte-for-byte as the app sent them
+(modulo whatever the data-handling axes do, which is a separate question). Recorded on
+the trace as `sp.content_integrity_mode`.
+
+This is a **data** control, not a privacy control. It never changes placement and it never
+changes what is detected or redacted. It exists because the policy gate and the compressor
+are different subsystems with different reasons for rewriting text, and turning protection
+off says nothing about the second one — the trap that has cost the most time on this
+product. An app whose input is a column-aligned table needs `content_integrity: "exact"`
+(or `compression_enabled: false`), not `policy_mode: "passthrough"`.
+
+## `escalate_residency_on_detection`
+
+**API only** (no console control yet): field `escalate_residency_on_detection`
+(boolean, `null` = `true`).
+
+Whether a declared `config/policy.yaml` `sensitivity_rules` entry may **raise** this app's
+residency when an entity is detected. This is the one and only cross-axis path in the
+product, and this field is its switch.
+
+- It is **raise-only**. A rule can tighten placement (`any` → `onprem_only`); it can never
+  loosen it below the app's own configured floor, in either setting of this field.
+- `false` prevents the *placement* tightening only. The rule still applies
+  `require_verification` and the sensitivity label.
+- Every rule that fires is named in `sp.cross_axis_rules_fired`, and a rule that actually
+  *moved* placement is additionally named in `sp.placement_sources`. A rule that fired
+  without moving placement appears only in the first — `placement_sources` never claims an
+  influence that did not happen.
+- It is structurally inert for an app with no detector: `pii_detection` resolving to `off`
+  means nothing is observed, so nothing can escalate. Not a bug — the axes are
+  independent, and this switch governs whether a rule *may* move placement, not whether
+  scanning happens.
+
+## Model eligibility is two-sided
+
+Worth restating here because it is asked as a policy question and answered in two places:
+
+- The **model's** `allowed_app_ids` must permit the application (set at onboarding, see
+  `docs/guides/onboarding-models.md`).
+- The **application's** `allowed_providers` / `allowed_tiers` / `allowed_models` must
+  permit the model.
+
+Both must hold. On top of that, the request's **effective** residency — the app's floor,
+possibly raised by a declared cross-axis rule for *this* request — filters the candidate
+pool before the router scores anything. Neither a protection setting nor a telemetry
+setting can lower the application's residency floor, and an empty eligible set is a clean
+rejection, never a silent widening.
+
 ## `stream_mode`
 
 **Console:** *Settings → step 5 Delivery and limits → streaming.* The unset option names
@@ -443,12 +844,17 @@ an `onprem_only` app, with the reason on the option.
 **API:** the same `PUT /admin/applications/{app_id}/policy` endpoint, body field
 `stream_mode`. Values, from `app/policy/enums.py:STREAM_MODES`:
 
-| Value | What happens | Real backend streaming? |
-|---|---|---|
-| `off` (or unset/`null`) | `stream: true` is rejected 400 when `server.reject_stream_requests` is true (today's default behavior, unchanged). | — |
-| `verified_then_stream` | The full request runs through the normal verified pipeline (including step 9), then the finished answer is chunked out as OpenAI-compatible SSE. | No — post-hoc chunking of an already-verified answer. No time-to-first-token benefit. |
-| `stream_unverified` | Real token-by-token streaming straight from the backend. Step-9 verification is explicitly **waived** for this app's streamed traffic (recorded in the trace as `performed=False, reason="waived: stream_unverified"`). | Yes |
-| `incremental_verify` | Real token-by-token streaming through a hold-back redactor (`app/output/streaming_verify.py`) that never releases raw entity text across a chunk boundary. Recorded as `performed=True, reason="incremental"`. | Yes |
+| Value | What happens | Real backend streaming? | Tokens released before the whole-response verdict? | Egress redaction across chunk boundaries? | Trace records |
+|---|---|---|---|---|---|
+| `off` (or unset/`null`) | `stream: true` is rejected 400 when `server.reject_stream_requests` is true (today's default behavior, unchanged). | — | — | — | — |
+| `verified_then_stream` | The full request runs through the normal verified pipeline (including step 9), then the finished answer is chunked out as OpenAI-compatible SSE. | No — post-hoc chunking of an already-verified answer. No time-to-first-token benefit. | **No.** The verdict is reached first. | Yes — the whole answer was redacted before the first chunk. | the normal `VerificationRecord` |
+| `stream_unverified` | Real token-by-token streaming straight from the backend. Step-9 verification is explicitly **waived** for this app's streamed traffic. | Yes | **Yes** — this is the waiver. | **No.** See the caveat above. | `performed=False, reason="waived: stream_unverified"` |
+| `incremental_verify` | Real token-by-token streaming through a hold-back redactor (`app/output/streaming_verify.py`) that never releases raw entity text across a chunk boundary. | Yes | Yes, but each released token has passed the hold-back redactor. | **Yes**, per entity — but no whole-response verdict. | `performed=True, reason="incremental"` |
+
+**An incompatible selection is refused at write time, not silently changed** —
+`STREAM_UNVERIFIED_FORBIDDEN_ONPREM` and `STREAM_UNVERIFIED_FORBIDDEN_REDACTED_OUTPUT`.
+A row that already exists in an incompatible shape is *visibly* floored at runtime to
+`verified_then_stream` (the three `StreamFallback` reasons below), never served unverified.
 
 An unrecognized `stream_mode` value is a **422** (`bad stream_mode '<value>'`), never a
 silent fallback to `off` — the same guarantee `pii_detection` gives
@@ -473,16 +879,37 @@ independently:
 1. **Admin write-time (422):** `stream_mode == "stream_unverified"` is rejected when the
    app's effective residency is `onprem_only` (`app/api/admin_routes.py:set_policy`) — the
    unsafe combination can't even be configured.
-2. **Runtime backstop:** `app/pipeline.py:run_stream` raises `StreamFallback` whenever
-   the request is a tool-calling conversation, or `ctx.onprem_only`/`ctx.require_verification`
-   is true for *this specific request* (e.g. a per-app `stream_unverified` app that happens
-   to submit a high-risk restricted-sensitivity prompt this one time). `app/api/routes.py`
-   catches `StreamFallback` and transparently falls back to `verified_then_stream` — the
+2. **Runtime backstop:** `app/pipeline.py:run_stream` raises `StreamFallback`, which
+   `app/api/routes.py` catches and transparently serves as `verified_then_stream` — the
    client still gets a streamed response, but it is the complete, fully-verified one.
+   It is raised **before any token is emitted**, for exactly **three** reasons:
 
-Both checks live independently of the app's own configured mode, so no value an app sets
-can lower the floor — the same "free-but-floored" shape as `pii_detection` and
+   | # | Reason | Why |
+   |---|---|---|
+   | 1 | `ctx.onprem_only` or `ctx.require_verification` is true **for this request** | the privacy floor. It fires even for an app whose stored residency is looser, when a `sensitivity_rules` entry raised residency on this one request. |
+   | 2 | the request is a **client-driven tool conversation** (it offers `tools`, or replays assistant `tool_calls` / `role: "tool"` results) | the live token path flattens messages into one prompt and cannot stream a `tool_calls` answer; the structured path can. Nothing to do with privacy. |
+   | 3 | `stream_mode: stream_unverified` **and** an **explicitly set** `client_output: redact` | unverified streaming forwards backend deltas as they arrive, so no egress redaction can run over the complete response. This is the runtime twin of the `STREAM_UNVERIFIED_FORBIDDEN_REDACTED_OUTPUT` write-time rule, for a row written before that rule shipped or straight into the database. |
+
+Reasons 1 and 3 live independently of the app's own configured mode, so no value an app
+sets can lower the floor — the same "free-but-floored" shape as `pii_detection` and
 `capture_io`.
+
+> **`stream_unverified` waives egress redaction even when `client_output` resolves to
+> `redact` through the `enforced` preset.** Say this out loud before enabling it.
+> Reason 3 above, and the matching write-time 422, both key on an **explicitly set**
+> `client_output: redact` — not on the effective value. That is deliberate: `redact` is
+> also what `enforced` resolves to, so keying on the effective value would silently floor
+> every `stream_unverified` app in existence, repealing the mode rather than honouring a
+> contradiction its operator wrote down. The consequence is real: an `enforced` app that
+> opts into `stream_unverified` streams the model's tokens **unredacted**, and step 9 is
+> waived for that traffic (recorded on the trace as `performed=False, reason="waived:
+> stream_unverified"`).
+>
+> **So: `client_output: redact` is a guarantee on every path except that one opt-in.**
+> An app that wants the guarantee to be absolute should either set `client_output:
+> "redact"` explicitly — which makes `stream_unverified` a 422 it cannot configure and a
+> floored fallback if the row already exists — or use `incremental_verify`, which *does*
+> redact egress (hold-back), or `verified_then_stream`.
 
 **Tool-calling conversations stream as a finished answer.** Agentic clients (Qwen Code,
 the `openai` SDK, LangChain) send `stream: true` on every turn, including the turns where

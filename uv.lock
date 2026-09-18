@@ -2477,6 +2477,7 @@ dev = [
     { name = "hypothesis" },
     { name = "opentelemetry-exporter-otlp-proto-http" },
     { name = "opentelemetry-sdk" },
+    { name = "prometheus-client" },
     { name = "pytest" },
 ]
 
@@ -2509,6 +2510,7 @@ dev = [
     { name = "hypothesis", specifier = ">=6.100" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.27" },
     { name = "opentelemetry-sdk", specifier = ">=1.27" },
+    { name = "prometheus-client", specifier = ">=0.20" },
     { name = "pytest", specifier = ">=8.3" },
 ]
 
