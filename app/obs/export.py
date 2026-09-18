@@ -79,6 +79,7 @@ def resolve_capture_io(capture_io: str, *, has_own_project: bool,
 
 def _set_io(root, capture_io: str, prompt: str, completion: str,
             recognizers=None, detector=None, raw_prompt: str = "",
+            redacted_prompt: str | None = None,
             raw_completion: str = "") -> None:
     """Attach request/response I/O to the root span per the RESOLVED capture
     mode (`resolve_capture_io`, above; contract in
@@ -91,9 +92,13 @@ def _set_io(root, capture_io: str, prompt: str, completion: str,
                  the app's detector (`redacted_copy`), then the regex egress
                  pass. `raw_prompt` (the gate's flattened raw scan text) is
                  preferred over `prompt` so telemetry reflects the WHOLE
-                 request, not just its last message. Never authored without a
-                 detector -- `resolve_capture_io` has already turned that case
-                 into `off`; the guard here is the structural backstop.
+                 request, not just its last message -- and comes paired with
+                 `redacted_prompt`, the gate's redaction OF THAT SAME string
+                 with THIS detector, which spares a second Presidio pass. The
+                 COMPLETION never went through the gate, so it always gets its
+                 own. Never authored without a detector --
+                 `resolve_capture_io` has already turned that case into `off`;
+                 the guard here is the structural backstop.
     - full     → set raw text. Reachable only for an app with its own Langfuse
                  project (rule 2), whose exporter is built with skip_io=True so
                  the I/O keys survive egress redaction. Prefers the PRE-VERIFY
@@ -110,7 +115,13 @@ def _set_io(root, capture_io: str, prompt: str, completion: str,
             log.warning("capture_io='redacted' with no detector; exporting no "
                         "I/O rather than unredacted content")
             return
-        prompt = redacted_copy(raw_prompt or prompt, detector, recognizers)
+        # `prepared` is paired with `raw_prompt` and ONLY with it -- the gate
+        # redacted that exact string, not the last-message `prompt` fallback.
+        if raw_prompt:
+            prompt = redacted_copy(raw_prompt, detector, recognizers,
+                                   prepared=redacted_prompt)
+        else:
+            prompt = redacted_copy(prompt, detector, recognizers)
         completion = redacted_copy(completion, detector, recognizers)
     elif capture_io == "full":
         completion = raw_completion or completion
@@ -169,7 +180,8 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                  cost: dict, policy: dict, trace: list[dict],
                  application_id: str = "", app_langfuse=None,
                  capture_io: str = "off", prompt: str = "",
-                 completion: str = "", raw_prompt: str = "", detector=None,
+                 completion: str = "", raw_prompt: str = "",
+                 redacted_prompt: str | None = None, detector=None,
                  recognizers=None,
                  session_id: str | None = None,
                  routing_policy_version: str = "",
@@ -197,6 +209,11 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
     builds its own redacted copy from those raw values rather than reusing the
     gate's model-facing view, and falls closed to `off` when no detector ran.
     Nothing here reads a view another consumer selected.
+
+    `redacted_prompt` is an optimisation, not a view: `detector`'s own
+    redaction of `raw_prompt`, which the gate already computed
+    (`Representations.text_redacted`). It must come from the SAME frozen
+    `Representations` as `raw_prompt` -- see `redacted_copy`.
 
     `recognizers` (an app's AppPrivacyProfile.recognizers) is threaded into the
     `redacted` path too, so a per-app custom entity type is masked in
@@ -298,7 +315,8 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
             root.set_attribute("sp.capture_io", resolved)
             _set_io(root, resolved, prompt, completion,
                     recognizers=recognizers, detector=detector,
-                    raw_prompt=raw_prompt, raw_completion=raw_completion)
+                    raw_prompt=raw_prompt, redacted_prompt=redacted_prompt,
+                    raw_completion=raw_completion)
             # Lay each step out on the real clock: back to back from the request
             # start, each as long as its recorded latency, never past "now".
             # Without explicit times every span is created after the fact and

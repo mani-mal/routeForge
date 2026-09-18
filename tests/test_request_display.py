@@ -109,9 +109,9 @@ def test_display_redacted_threads_app_recognizers_to_redact(client, monkeypatch)
     calls: list = []
     real_copy = routes_mod.redacted_copy
 
-    def _spy(text, detector, recognizers=None):
+    def _spy(text, detector, recognizers=None, **kw):
         calls.append(recognizers)
-        return real_copy(text, detector, recognizers)
+        return real_copy(text, detector, recognizers, **kw)
 
     monkeypatch.setattr(routes_mod, "redacted_copy", _spy)
     _echo_backend(monkeypatch)
@@ -206,9 +206,9 @@ def test_display_full_mode_shows_raw_bodies(monkeypatch, tmp_path):
     calls: list = []
     real_copy = routes_mod.redacted_copy
 
-    def _spy(text, detector, recognizers=None):
+    def _spy(text, detector, recognizers=None, **kw):
         calls.append(text)
-        return real_copy(text, detector, recognizers)
+        return real_copy(text, detector, recognizers, **kw)
 
     monkeypatch.setattr(routes_mod, "redacted_copy", _spy)
     _echo_backend(monkeypatch)

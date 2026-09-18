@@ -226,7 +226,14 @@ def _make_redacting_exporter():
             # redaction for a request whose effective capture is `redacted`.
             # Never the reverse — a span cannot talk this exporter INTO keeping
             # raw I/O, so this is a one-way ratchet towards redaction.
-            if attrs.get("sp.capture_io", "full") != "full":
+            #
+            # A span that does NOT name its capture gets redacted too. Only
+            # export.py authors I/O keys today and it always stamps this, so
+            # the default is unreachable — which is exactly why it should be
+            # the safe one: the unreachable branch is the one that gets reached
+            # later, by instrumentation nobody wrote yet, and "unknown capture"
+            # must never mean "keep the raw value".
+            if attrs.get("sp.capture_io") != "full":
                 skip = frozenset()
             keys_to_redact = [k for k in attrs.keys()
                               if k in REDACT_KEYS and k not in skip]

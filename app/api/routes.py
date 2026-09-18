@@ -613,6 +613,11 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
     internals = internals or {}
     raw_prompt = internals.get("raw_prompt") or ""
     detector = internals.get("detector")
+    # The gate's redaction OF `raw_prompt` with THAT detector -- the three come
+    # off one frozen `Representations`, so the pairing holds. Both surfaces
+    # below pass it as `prepared=` to skip re-running the detector over a
+    # string it has already scanned; the regex egress pass still runs.
+    redacted_prompt = internals.get("redacted_prompt")
     try:
         # Eval-capture (docs/archive/eval-logging-backlog.md; current capture_io
         # contract in docs/reference/per-app-config.md): when capture_io is
@@ -671,8 +676,8 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
             # exporter builds its own redacted copy from them (design §2.6) and
             # never reuses the view the model was given. `detector is None` is
             # its fail-closed signal, not an invitation to export raw.
-            raw_prompt=raw_prompt, detector=detector,
-            raw_completion=raw_completion,
+            raw_prompt=raw_prompt, redacted_prompt=redacted_prompt,
+            detector=detector, raw_completion=raw_completion,
             # Task 8: thread the app's custom recognizers (already resolved
             # above for the pipeline run, Task 7) into egress redaction so a
             # custom entity type (e.g. a hospital's MRN pattern) is masked in
@@ -700,8 +705,13 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
         elif te.capture_io == "redacted":
             resp["display"] = {
                 "mode": "redacted",
-                "input": redacted_copy(raw_prompt or prompt, detector,
-                                       profile.recognizers),
+                # `prepared` pairs with `raw_prompt` and only with it (the
+                # gate redacted that exact string, not the `prompt` fallback).
+                "input": (redacted_copy(raw_prompt, detector,
+                                        profile.recognizers,
+                                        prepared=redacted_prompt)
+                          if raw_prompt else
+                          redacted_copy(prompt, detector, profile.recognizers)),
                 # The CLIENT-facing body (never `completion`, which on the
                 # `full` branch above carries the model's raw tool_calls).
                 "output": redacted_copy(display_completion, detector,

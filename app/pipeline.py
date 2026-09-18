@@ -273,10 +273,20 @@ class Pipeline:
         a redacted label (CE-1). `reps.text_raw` is the gate's flattened raw
         scan text, which the exporter redacts ITSELF -- it never receives a
         view another consumer selected.
+
+        `text_redacted` rides along as an optimisation: it is `reps.detector`'s
+        redaction of `reps.text_raw`, so an exporter that would otherwise run
+        the same detector over the same string can skip that pass (a whole
+        spaCy NER pass, on Presidio). All three come off ONE frozen
+        `Representations`, published here and nowhere else, which is what makes
+        the raw/redacted pairing safe to rely on -- `redacted_copy` cannot
+        check it. This is NOT the model's view: `model_input` selects that
+        separately in `run()`, and under `raw` it is `text_raw` itself.
         """
         if internals is None:
             return
         internals["raw_prompt"] = reps.text_raw
+        internals["redacted_prompt"] = reps.text_redacted
         internals["detector"] = reps.detector
 
     def _baseline(self, in_tokens: int, out_tokens: int) -> float:

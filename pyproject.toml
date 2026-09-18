@@ -24,7 +24,21 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8.3"]
+# The OTel SDK is a TEST dependency, not just the `observability` extra it also
+# appears in. Four whole modules -- test_capture_io, test_raw_completion_capture,
+# test_trace_full_io, test_obs_export -- open with
+# `pytest.importorskip("opentelemetry.sdk.trace")`, so without it they do not
+# fail, they vanish: a clean checkout reports them as 4 skips and a green run.
+# Those modules carry the CE-1 regression tests (the exporter must never author
+# raw content under a `redacted` label) and every other assertion about what
+# actually lands on a span. There is no CI in this repo, so a human running the
+# suite is the only thing standing between a regression and a release -- and a
+# silent skip defeats exactly that. Declared here so `uv sync` installs it.
+dev = [
+  "pytest>=8.3",
+  "opentelemetry-sdk>=1.27",
+  "opentelemetry-exporter-otlp-proto-http>=1.27",
+]
 
 # Presidio is the real demo detector but heavy (pulls spaCy). Tests use the
 # regex detector, so keep it an opt-in extra: `uv sync --extra presidio`.

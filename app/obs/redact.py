@@ -38,7 +38,8 @@ def redact_value(v):
     return redact(v) if isinstance(v, str) else v
 
 
-def redacted_copy(text: str, detector, recognizers=None) -> str:
+def redacted_copy(text: str, detector, recognizers=None, *,
+                  prepared: str | None = None) -> str:
     """A redacted copy of a RAW value, built here and not borrowed (design
     P1a §2.6).
 
@@ -58,13 +59,31 @@ def redacted_copy(text: str, detector, recognizers=None) -> str:
     regardless), but "safe apart from what a regex happens to catch" is
     precisely the guarantee CE-1 shipped and this design refuses.
 
-    The `redact()` regex pass afterwards is defence in depth, and the only
-    thing that applies an app's custom `recognizers` when the detector itself
-    doesn't carry them.
+    `prepared` is `detector`'s own redaction of **this same `text`**, when the
+    caller already has one, and skips the detector pass. The gate makes exactly
+    that for the request prompt (`Representations.text_redacted`), and on a
+    Presidio deployment repeating it here is a second spaCy NER pass over the
+    whole prompt for no new information. This is NOT the reuse CE-1 was about:
+    that was reading the MODEL-FACING view, which under `model_input: raw` is
+    the raw text and under `passthrough` is unredacted. This is a redaction
+    made with this very detector, over this very string.
+
+    The pairing has to hold, and nothing here can check it — so both values
+    must come from one `Representations`, which is frozen and built in one
+    place. Never assemble a `(text, prepared)` pair from two sources.
+
+    The `redact()` regex pass ALWAYS runs, `prepared` or not: it applies an
+    app's custom `recognizers` (which a denylist or score floor may have
+    exempted at intake) and the base regex net a `pii_detection: regex` app
+    relies on. Dropping it would make telemetry weaker than the detector pass
+    alone, which is the opposite of the point.
     """
     if not text:
         return text
-    out = text
-    if detector is not None:
-        out, _ = detector.anonymize(out, detector.analyze(out))
+    if prepared is not None:
+        out = prepared
+    elif detector is not None:
+        out, _ = detector.anonymize(text, detector.analyze(text))
+    else:
+        out = text
     return redact(out, recognizers=recognizers)

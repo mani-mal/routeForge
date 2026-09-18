@@ -2402,6 +2402,8 @@ presidio = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "opentelemetry-exporter-otlp-proto-http" },
+    { name = "opentelemetry-sdk" },
     { name = "pytest" },
 ]
 
@@ -2430,7 +2432,11 @@ requires-dist = [
 provides-extras = ["presidio", "observability", "compression", "postgres", "dspy"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8.3" }]
+dev = [
+    { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.27" },
+    { name = "opentelemetry-sdk", specifier = ">=1.27" },
+    { name = "pytest", specifier = ">=8.3" },
+]
 
 [[package]]
 name = "setuptools"

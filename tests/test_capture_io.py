@@ -326,18 +326,40 @@ def test_redacting_exporter_skip_io_keeps_raw_only_when_armed(monkeypatch):
     # Per-app full exporters are built with skip_io=True so an eligible app's
     # OWN project keeps raw I/O even while the process-global flag is off; the
     # default exporter (skip_io=False) still scrubs (defence in depth).
+    #
+    # The span carries `sp.capture_io` because every span export.py authors
+    # does. Keeping raw now takes BOTH an armed exporter and a span that says
+    # this request resolved to `full` -- see the two tests below for each half.
     def _run(skip_io):
         mem = InMemorySpanExporter()
         prov = TracerProvider()
         prov.add_span_processor(SimpleSpanProcessor(otel.RedactingSpanExporter(mem, skip_io=skip_io)))
         monkeypatch.setattr(otel, "_capture_io_full", False)  # global OFF
         with prov.get_tracer("t").start_as_current_span("serving.request") as s:
+            s.set_attribute("sp.capture_io", "full")
             s.set_attribute("input.value", f"raw {_SSN}")
         prov.force_flush()
         return next(iter(mem.get_finished_spans())).attributes["input.value"]
 
     assert _SSN in _run(skip_io=True)       # per-app full exporter: raw kept
     assert _SSN not in _run(skip_io=False)  # default exporter: raw scrubbed (defence in depth)
+
+
+def test_exporter_redacts_a_span_that_does_not_name_its_capture(monkeypatch):
+    # The fail-closed default for the other half. An unstamped span is
+    # unreachable through export.py, which always stamps -- which is exactly
+    # why the default must be the safe one: the unreachable branch is the one
+    # some future instrumentation reaches, and "capture unknown" can never mean
+    # "keep the raw value".
+    monkeypatch.setattr(otel, "_capture_io_full", True)  # every skip condition armed
+    mem = InMemorySpanExporter()
+    prov = TracerProvider()
+    prov.add_span_processor(
+        SimpleSpanProcessor(otel.RedactingSpanExporter(mem, skip_io=True)))
+    with prov.get_tracer("t").start_as_current_span("serving.request") as s:
+        s.set_attribute("input.value", f"raw {_SSN}")   # no sp.capture_io
+    prov.force_flush()
+    assert _SSN not in next(iter(mem.get_finished_spans())).attributes["input.value"]
 
 
 def test_redacted_capture_reflects_full_model_input(monkeypatch):
