@@ -33,10 +33,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from types import MappingProxyType
-from typing import Callable, Literal, Mapping
+from typing import TYPE_CHECKING, Callable, Literal, Mapping
 
 from app.config.schema import Settings
 from app.policy.enums import PII_MODES, POLICY_MODES, RESIDENCY, STREAM_MODES
+
+if TYPE_CHECKING:
+    from app.apps.policy import AppPolicyView
 
 # --- axis vocabularies -------------------------------------------------------
 
@@ -608,3 +611,251 @@ def validate_effective(eff: EffectivePolicy, deployment: Settings, *,
                 "over the complete response. Use "
                 "stream_mode='incremental_verify' (hold-back redaction) or "
                 "'verified_then_stream', or set client_output='raw'.")
+
+
+# --- save-time invariant check (design §7) ------------------------------------
+#
+# `validate_effective` above judges ONE compiled policy against the
+# compatibility contract. It cannot, by itself, tell whether the *compiler*
+# that produced that one `EffectivePolicy` still respects the properties the
+# whole design rests on -- monotonicity, noninterference, and "placement never
+# weakens protection" (design §7, invariants 1-3). Those are properties of
+# `compile_policy`/`apply_signals` as functions, not of a single output, so
+# checking them means calling the compiler again, several times, over nearby
+# points -- a small, fixed, bounded neighbourhood around the policy an
+# operator is about to save, never the whole input space (that is the
+# Hypothesis harness's job, off the write path).
+#
+# `check_invariants` is deliberately NOT a re-implementation of
+# `compile_policy`/`apply_signals` that would trivially agree with them. Two
+# of its three checks compare the compiler's actual output against an
+# expectation `check_invariants` derives independently:
+#   * the residency/entity check re-derives which `sensitivity_rules` entry
+#     must fire by reading `deployment.policy.sensitivity_rules` directly
+#     (not via `apply_signals`), so a broken `apply_signals` that fails to
+#     raise placement disagrees with it;
+#   * the "unnamed placement change" check inspects `cross_axis_rules_fired`
+#     and `placement.sources`, which a compiler that moves placement without
+#     declaring why would fail regardless of what value it moved to.
+# The one check that does compare two `compile_policy` outputs to each other
+# (protection-axis noninterference, residency-sweep monotonicity) is still
+# meaningful: it fails if two DIFFERENT calls disagree with each other, not
+# just with themselves.
+
+#: Residency values in tightening order -- `any` is the loosest placement,
+#: `onprem_only` the strictest. Reused from `_RESIDENCY_RANK` above.
+_RESIDENCY_BY_RANK: tuple[str, ...] = tuple(
+    sorted(_RESIDENCY_RANK, key=_RESIDENCY_RANK.get))
+
+#: `(AppPolicyView field, loose value, strict value)` for every protection
+#: axis this module resolves. "Loose" is the more-disclosing/less-protective
+#: end; "strict" the more-protective end. Used two ways: (a) to probe that a
+#: protection axis alone can never move placement, and (b) to probe that
+#: asking for the strict end never resolves to something less protective than
+#: asking for the loose end.
+_PROTECTION_EXTREMES: tuple[tuple[str, str, str], ...] = (
+    ("model_input", "raw", "redact"),
+    ("client_output", "raw", "redact"),
+    ("capture_io", "full", "off"),
+    ("pii_detection", "off", "presidio"),
+    ("content_integrity", "transformations_allowed", "exact"),
+    ("stream_mode", "stream_unverified", "off"),
+)
+
+#: `AppPolicyView` field name -> the `Protection` attribute it resolves to.
+#: Needed because the stored column names and the compiler's internal axis
+#: names deliberately differ (see `_OPERATOR_NAME` above).
+_FIELD_TO_PROTECTION_ATTR = {
+    "model_input": "model_input",
+    "client_output": "client_output",
+    "capture_io": "telemetry_io",
+    "pii_detection": "detection",
+    "content_integrity": "content_integrity",
+    "stream_mode": "stream_mode",
+}
+
+#: A fixed, small set of detected-entity signals, ordered from no signal to
+#: the two entities `config/policy.yaml`'s own `sensitivity_rules` name at
+#: increasing severity (`PERSON` -> confidential/private_cloud_ok, `US_SSN`
+#: -> restricted/onprem_only) -- exercising exactly the escalation path
+#: counterexample CE-3 broke.
+_ENTITY_TUPLES: tuple[tuple[str, ...], ...] = ((), ("PERSON",), ("US_SSN",))
+
+#: The fixed, bounded grid the save-time check compiles over for the one app
+#: being saved: the full residency axis (3, "the residency neighbours" of
+#: any point on it), both extremes of every protection axis (12), and the
+#: three detected-entity signals (3) -- 18 points total. A module-level
+#: constant, built once at import time from literals: no I/O, no dependence
+#: on the app or deployment being checked, so the write path's cost is the
+#: same for every app and every write. `test_policy_save_validation.py`
+#: asserts `len(_INVARIANT_GRID) <= 64`.
+_INVARIANT_GRID: tuple[Mapping[str, object], ...] = (
+    tuple({"residency": r} for r in _RESIDENCY_BY_RANK)
+    + tuple({"axis": axis, "value": value}
+            for axis, loose, strict in _PROTECTION_EXTREMES
+            for value in (loose, strict))
+    + tuple({"entities": e} for e in _ENTITY_TUPLES)
+)
+
+
+def _match_rule_for_check(deployment: Settings, entity_types: tuple[str, ...]):
+    """The declared cross-axis rule for a set of detected entity types, read
+    directly off `deployment.policy.sensitivity_rules` -- independent of
+    `apply_signals`. This is what makes the escalation check below able to
+    catch a broken `apply_signals`: if it instead asked `apply_signals` which
+    rule should apply, a compiler bug in `apply_signals` would agree with
+    itself by construction, and the check would prove nothing. Pure: no I/O,
+    only reads the already-loaded config."""
+    rules = deployment.policy.sensitivity_rules
+    if not rules:
+        return None
+    etypes = set(entity_types)
+    for rule in rules:
+        if rule.entities and etypes & set(rule.entities):
+            return rule
+    return rules[-1]  # the public/empty rule
+
+
+def check_invariants(view: "AppPolicyView", deployment: Settings) -> None:
+    """Compile one application's policy over the fixed `_INVARIANT_GRID` and
+    raise `PolicyViolation(code="INVARIANT_...")` the instant a save would
+    persist a policy that breaks monotonicity, noninterference, or "placement
+    never weakens protection" (design §7, invariants 1-3). Called from
+    `set_policy` immediately after `validate_effective`, on the same
+    post-write `AppPolicyView` -- so a policy that is individually legal by
+    the compatibility contract but would make the *compiler* misbehave for
+    this app still cannot be saved.
+
+    Bounded and I/O-free by construction: `_INVARIANT_GRID` is a module-level
+    constant (18 points), and every grid point is one `compile_policy` call
+    (pure, no DB/clock/request) plus, for the three entity points, one
+    `apply_signals` call. The admin write path pays a small, fixed number of
+    extra pure-function calls, never unbounded work.
+    """
+    base = compile_policy(view, deployment)
+    base_rank = _RESIDENCY_RANK.get(base.placement.residency)
+
+    for point in _INVARIANT_GRID:
+        if "residency" in point:
+            requested = point["residency"]
+            variant = compile_policy(replace(view, residency=requested), deployment)
+            # Invariant 1 (monotonicity): a *legal, explicit* residency value
+            # must resolve to itself -- compile_policy only ever denies a
+            # residency it cannot parse, and every grid value is a legal
+            # member of the axis, so a resolved value at a looser rank than
+            # requested would mean a residency request got silently widened.
+            got_rank = _RESIDENCY_RANK.get(variant.placement.residency)
+            if got_rank is None or got_rank < _RESIDENCY_RANK[requested]:
+                raise PolicyViolation(
+                    "INVARIANT_RESIDENCY_NOT_HONORED",
+                    f"requesting residency={requested!r} compiled to "
+                    f"{variant.placement.residency!r}, which is a looser "
+                    "placement than requested -- tightening residency must "
+                    "never enlarge what is permitted (design §7.1).")
+            # Invariant 3: changing residency must leave every protection
+            # axis exactly as it was.
+            if variant.protection != base.protection:
+                raise PolicyViolation(
+                    "INVARIANT_RESIDENCY_ALTERED_PROTECTION",
+                    f"changing residency to {requested!r} changed protection "
+                    f"({base.protection!r} -> {variant.protection!r}); "
+                    "placement must never alter a protection value "
+                    "(design §7.3).")
+            continue
+
+        if "axis" in point:
+            axis, value = point["axis"], point["value"]
+            variant = compile_policy(replace(view, **{axis: value}), deployment)
+            # Invariant 2 (noninterference): a protection axis alone -- no
+            # detected entities in play -- must never move placement.
+            if variant.placement.residency != base.placement.residency:
+                raise PolicyViolation(
+                    "INVARIANT_PROTECTION_MOVED_PLACEMENT",
+                    f"setting {axis}={value!r} changed placement.residency "
+                    f"from {base.placement.residency!r} to "
+                    f"{variant.placement.residency!r}; a protection axis "
+                    "must never move placement (design §7.2).")
+            continue
+
+        # "entities" point: the one declared cross-axis path (design §5).
+        entities = point["entities"]
+        rule = _match_rule_for_check(deployment, entities)
+        if rule is None:
+            continue
+        after = apply_signals(base, entities, rule)
+
+        expected_rank = base_rank
+        if base.escalate_residency_on_detection:
+            rule_rank = _RESIDENCY_RANK.get(getattr(rule, "residency", None))
+            if rule_rank is not None:
+                expected_rank = max(expected_rank, rule_rank)
+        after_rank = _RESIDENCY_RANK.get(after.placement.residency)
+
+        # Invariant 1 (monotonicity), grounded in the DECLARED rule rather
+        # than in `apply_signals`'s own opinion of itself: detecting a more
+        # severe entity must never resolve to a looser placement than the
+        # rule requires. This is the check that catches a compiler bug that
+        # silently drops a tightening rule (a broken `apply_signals` that
+        # returns its input unchanged, for instance) -- such a bug agrees
+        # with itself on every other invariant here, because nothing else in
+        # this function recomputes "what should have happened" without
+        # calling `apply_signals`.
+        if after_rank is None or after_rank < expected_rank:
+            raise PolicyViolation(
+                "INVARIANT_ESCALATION_NOT_APPLIED",
+                f"detected entities {entities!r} must escalate placement to "
+                f"at least {_RESIDENCY_BY_RANK[expected_rank]!r} per the "
+                f"declared sensitivity_rules entry (sensitivity="
+                f"{getattr(rule, 'sensitivity', None)!r}), but the compiled "
+                f"policy resolved to {after.placement.residency!r} "
+                "(design §5, §7.1).")
+
+        # Invariant 2: a placement change must be named -- both in
+        # `cross_axis_rules_fired` and in `placement.sources`, never a
+        # silent side effect of a protection setting or anything else.
+        if after_rank > base_rank:
+            sensitivity = getattr(rule, "sensitivity", None)
+            fired_name = f"rule:{sensitivity}"
+            if (fired_name not in after.cross_axis_rules_fired
+                    or fired_name not in after.placement.sources):
+                raise PolicyViolation(
+                    "INVARIANT_UNNAMED_PLACEMENT_CHANGE",
+                    f"placement moved from {base.placement.residency!r} to "
+                    f"{after.placement.residency!r} for detected entities "
+                    f"{entities!r} without the firing rule named in both "
+                    "cross_axis_rules_fired and placement.sources (design "
+                    "§5, §7.2).")
+
+        # Invariant 3: applying the entity signal must never alter
+        # protection -- the declared cross-axis rule moves placement only.
+        if after.protection != base.protection:
+            raise PolicyViolation(
+                "INVARIANT_PLACEMENT_ALTERED_PROTECTION",
+                f"applying detected entities {entities!r} changed protection "
+                f"({base.protection!r} -> {after.protection!r}); a placement "
+                "change must never alter a protection value (design §7.3).")
+
+    # Invariant 1, protection axes: asking for the strict end of an axis must
+    # never resolve to a less protective value than asking for the loose end.
+    for axis, loose, strict in _PROTECTION_EXTREMES:
+        attr = _FIELD_TO_PROTECTION_ATTR[axis]
+        loose_eff = compile_policy(replace(view, **{axis: loose}), deployment)
+        strict_eff = compile_policy(replace(view, **{axis: strict}), deployment)
+        loose_value = getattr(loose_eff.protection, attr)
+        strict_value = getattr(strict_eff.protection, attr)
+        # Both resolved values must land on the axis's own (loose, strict)
+        # pair for rank to be comparable; a legal, explicit request that a
+        # ceiling clamps still lands on `strict` (ceilings only ever deny
+        # towards the protective end -- see `_resolve`/`_DENY` above), so
+        # this holds even for a deployment whose ceilings are locked down.
+        rank = {loose: 0, strict: 1}
+        if loose_value not in rank or strict_value not in rank:
+            continue
+        if rank[strict_value] < rank[loose_value]:
+            raise PolicyViolation(
+                "INVARIANT_PROTECTION_AXIS_NOT_MONOTONIC",
+                f"requesting {axis}={strict!r} (the strict end) resolved to "
+                f"{attr}={strict_value!r}, less protective than "
+                f"{axis}={loose!r} resolving to {attr}={loose_value!r}; "
+                "tightening an axis must never enlarge what is permitted "
+                "(design §7.1).")

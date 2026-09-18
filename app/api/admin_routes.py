@@ -20,7 +20,8 @@ from app.apps.policy_lint import price_warnings
 from app.apps.probe import probe_endpoint
 from app.apps.policy import AppPolicyView
 from app.apps.tokens import new_token
-from app.policy.compile import PolicyViolation, compile_policy, validate_effective
+from app.policy.compile import (PolicyViolation, check_invariants, compile_policy,
+                                validate_effective)
 from app.policy.effective import PROTECTED_ENTITIES
 from app.policy.enums import (
     PII_MODES,
@@ -550,6 +551,13 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
             validate_effective(
                 compile_policy(post_write, settings), settings,
                 has_own_langfuse_project=lambda: load_app_langfuse(app) is not None)
+            # A policy can pass every rule in `validate_effective` and still
+            # make the COMPILER misbehave for this app -- monotonicity,
+            # noninterference, or "placement never weakens protection"
+            # (design §7, invariants 1-3). `check_invariants` compiles this
+            # one app's post-write policy over a small fixed grid to catch
+            # that before it is persisted, not after.
+            check_invariants(post_write, settings)
         except PolicyViolation as exc:
             # Every refusal reaches the operator as the 422 it always did; the
             # rules, their reasons and their wording now live beside the
