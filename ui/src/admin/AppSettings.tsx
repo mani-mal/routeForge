@@ -1032,19 +1032,28 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
       ? "onprem_only + enforced — set policy_mode = passthrough"
       : null;
   const fullBlocked = fullBlockedFor(effPolicyMode);
-  // `redacted` reuses the gate's sanitized prompt, so it is refused wherever
-  // nothing is sanitized. Note pii_detection = null means "inherit the live
-  // global detector", which the server does NOT treat as a downgrade — only an
-  // explicit `off` trips this. `regex` is NOT blocked: the RegexDetector still
-  // redacts (SSN/card/email/custom recognizers), so the sanitized prompt is
-  // not raw — lower fidelity than presidio (it misses entities without a
-  // pattern, e.g. names), but genuinely redacted, so `redacted` telemetry is
-  // valid under `regex`.
-  const redactedBlockedFor = (mode: string) => mode === "passthrough"
-    ? "policy_mode = passthrough sanitizes nothing"
-    : p.pii_detection === "off"
-      ? `pii_detection = ${p.pii_detection} sanitizes nothing`
-      : null;
+  // `redacted` needs a detector to redact WITH. Mirrors the compiler's own
+  // `detection` axis resolution (app/policy/compile.py `_resolve` +
+  // `validate_effective`'s `telemetry_io == "redacted" and detection ==
+  // "off"` check) exactly: an explicit per-app `pii_detection` always wins,
+  // `passthrough` with nothing set resolves detection to "off", and anything
+  // else falls to the deployment's global default. Note pii_detection = null
+  // means "inherit the live global detector" — only an explicit `off` (or the
+  // passthrough preset falling to it) trips this. `regex` is NOT blocked: the
+  // RegexDetector still redacts (SSN/card/email/custom recognizers), so the
+  // sanitized prompt is not raw — lower fidelity than presidio (it misses
+  // entities without a pattern, e.g. names), but genuinely redacted.
+  //
+  // Design P1a §4's deliberate unlock: `policy_mode = passthrough` no longer
+  // blocks `redacted` by itself — an app that names a real detector under
+  // passthrough gets one (§2.6 gives telemetry its own sanitizer), so only an
+  // app that ends up with NO detection at all blocks this option, whichever
+  // axis put it there.
+  const effDetectionFor = (mode: string) =>
+    p.pii_detection ?? (mode === "passthrough" ? "off" : (effPii ?? undefined));
+  const redactedBlockedFor = (mode: string) => effDetectionFor(mode) === "off"
+    ? "pii_detection resolves to off — nothing to redact telemetry with"
+    : null;
   const redactedBlocked = redactedBlockedFor(effPolicyMode);
   // stream_unverified waives step 9 outright, which onprem_only may never do
   // (set_policy 422s on the pair; app/pipeline.py backstops it at runtime).

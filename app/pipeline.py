@@ -11,7 +11,7 @@ from app.errors import PolicyGateError
 from app.gateway.backends.base import count_tokens
 from app.gateway.gateway import Gateway
 from app.models import (
-    CacheRecord, ChatRequest, Choice, CompressionRecord,
+    CacheRecord, ChatRequest, Choice, CompressionRecord, DecisionRecord,
     ExecutionPolicyContext, GenerationResult, MemoryRecord,
     Message, Usage, VerificationRecord,
 )
@@ -254,6 +254,78 @@ class Pipeline:
                                  and p.client_output == "raw") else "enforced"
 
     @staticmethod
+    def _certificate(eff: EffectivePolicy, ctx: ExecutionPolicyContext) -> dict:
+        """The per-axis fields of the decision certificate (design P1a §6)
+        common to every response shape. Reads straight off the already-
+        compiled `eff` (placement + protection + the cross-axis rules that
+        fired) and `ctx` (the detected entity TYPES) -- nothing here
+        re-derives a policy rule, it only names what the compiler already
+        decided. `eff` is the one `apply_signals` already ran over (see
+        `Gate.evaluate`), so `placement`/`placement_sources` reflect any
+        cross-axis escalation, not just the app's own configured residency.
+
+        Merged into the response `policy` block AND handed to `export_trace`
+        (which stamps the matching `sp.*` attributes) -- one dict, two
+        channels, so they can never disagree (the same pattern
+        `policy_mode`/`content_integrity_mode` already use).
+        """
+        return {
+            "placement": eff.placement.residency,
+            "placement_sources": list(eff.placement.sources),
+            "model_input_mode": eff.protection.model_input,
+            "client_output_mode": eff.protection.client_output,
+            "telemetry_io_mode": eff.protection.telemetry_io,
+            "detection_mode": eff.protection.detection,
+            "stream_mode": eff.protection.stream_mode,
+            "cross_axis_rules_fired": list(eff.cross_axis_rules_fired),
+            # Certificate-named duplicate of `detected_entities` (design §6's
+            # own field name for it) -- both stay TYPES only, never values;
+            # see `ExecutionPolicyContext.detected_entities`.
+            "detected_entity_types": list(ctx.detected_entities),
+        }
+
+    @staticmethod
+    def _eligible_candidate(ctx: ExecutionPolicyContext, name: str | None,
+                            provider: str | None) -> bool:
+        """Was this (name, provider) pair drawn from THIS request's own
+        eligible set -- `ctx.allowed_providers` narrowed by
+        `ctx.allowed_models` when the app scopes tiers/models? The single
+        predicate `_eligibility_checks` and the cache-hit path both check
+        against; never a re-derivation of the router's own scoring, only a
+        check of its output against the policy context that bounded it."""
+        return bool(provider in ctx.allowed_providers
+                    and (not ctx.model_scope_active or name in ctx.allowed_models))
+
+    @classmethod
+    def _eligibility_checks(cls, ctx: ExecutionPolicyContext,
+                            records: list[DecisionRecord]) -> dict:
+        """`sp.checks` (design §6): the one per-request proof the certificate
+        offers -- that the model(s) the gateway actually used were drawn from
+        THIS request's own eligible set, not a re-derivation of the routing
+        algorithm that chose among them. `chosen_in_eligible_set` checks the
+        hop that was actually SERVED (the last router hop with a chosen
+        candidate); `fallback_in_eligible_set` checks every earlier hop the
+        gateway fell back or escalated PAST. Either is `None` when there is
+        nothing to check this request (no served model / no fallback
+        occurred) -- never a fabricated boolean standing in for "not
+        applicable". Policy-WIDE invariants (monotonicity, noninterference)
+        are the harness's job (design §7); this checks one request's own
+        trace against its own context."""
+        chosen_hops = [r for r in records if r.chosen is not None]
+        if not chosen_hops:
+            return {"chosen_in_eligible_set": None, "fallback_in_eligible_set": None}
+        served = chosen_hops[-1]
+        fallback_ok = (
+            all(cls._eligible_candidate(ctx, r.chosen, r.chosen_provider)
+                for r in chosen_hops[:-1])
+            if len(chosen_hops) > 1 else None)
+        return {
+            "chosen_in_eligible_set": cls._eligible_candidate(
+                ctx, served.chosen, served.chosen_provider),
+            "fallback_in_eligible_set": fallback_ok,
+        }
+
+    @staticmethod
     def _publish_telemetry_views(internals: dict | None,
                                  reps: Representations) -> None:
         """Hand the caller the two values the EXPORTER needs (design §2.6).
@@ -337,7 +409,7 @@ class Pipeline:
     def _serve_from_cache(self, request_id: str, ctx: ExecutionPolicyContext,
                           sanitized: str, model_text: str, entry: CacheEntry,
                           det: Detector, client_output: str,
-                          check_latency_ms: float, policy_mode: str) -> dict | None:
+                          check_latency_ms: float, eff: EffectivePolicy) -> dict | None:
         """C4 keystone: re-verify the cached text against the CURRENT
         request's per-app detector + ctx before ever serving it -- this is
         the step-9 verification for the served response; compress/gateway/
@@ -374,6 +446,18 @@ class Pipeline:
             blocked_cloud_entries=self._cache.blocked_cloud_entries,
             latency_ms=check_latency_ms)
         trace = [vrec.model_dump(), cache_rec.model_dump()]
+        # No router ran this request (the cache short-circuits it) -- there is
+        # no "fallback" to check, but the SERVED (cached) model's provider is
+        # still checked against this request's CURRENT eligible set, since a
+        # policy that has since narrowed must not let an old cached answer
+        # read as compliant when it no longer would be chosen fresh.
+        provider = next(
+            (c.provider for c in self._pool() if c.name == entry.model), None)
+        checks = {
+            "chosen_in_eligible_set": self._eligible_candidate(
+                ctx, entry.model, provider),
+            "fallback_in_eligible_set": None,
+        }
         return {
             "id": request_id,
             "model": entry.model,
@@ -395,13 +479,16 @@ class Pipeline:
                        # EFFECTIVE posture (post-inherit, post-ceiling),
                        # derived from the COMPILED axes, never the raw
                        # nullable column -- see `_policy_mode_stamp`.
-                       "policy_mode": policy_mode,
+                       "policy_mode": self._policy_mode_stamp(eff),
                        # Task 8: the data-fidelity mode this request actually
                        # ran under -- "exact" means step 5 never transformed
                        # this app's content. A DATA control, distinct from
                        # `policy_mode` (a protection posture); see
                        # `ExecutionPolicyContext.content_integrity`.
-                       "content_integrity_mode": ctx.content_integrity},
+                       "content_integrity_mode": ctx.content_integrity,
+                       # Task 9: the decision certificate (design §6).
+                       **self._certificate(eff, ctx),
+                       "checks": checks},
             "sanitized_prompt": sanitized,
             # No raw/pre-verify text exists for a cache hit (no model call ran
             # this request) -- `text` (the just-re-verified, redacted answer)
@@ -574,7 +661,7 @@ class Pipeline:
                     # through to compress/gateway/verify), never served.
                     hit_resp = self._serve_from_cache(
                         request_id, ctx, sanitized, model_text, entry, det,
-                        client_output, check_latency_ms, policy_mode)
+                        client_output, check_latency_ms, eff)
                     if hit_resp is not None:
                         return hit_resp
                 cache_record = CacheRecord(
@@ -767,7 +854,10 @@ class Pipeline:
                        # this app's content. A DATA control, distinct from
                        # `policy_mode` (a protection posture); see
                        # `ExecutionPolicyContext.content_integrity`.
-                       "content_integrity_mode": ctx.content_integrity},
+                       "content_integrity_mode": ctx.content_integrity,
+                       # Task 9: the decision certificate (design §6).
+                       **self._certificate(eff, ctx),
+                       "checks": self._eligibility_checks(ctx, records)},
             "sanitized_prompt": sanitized,
             "raw_completion": result.text,
             # Internal-only, popped in routes.py alongside `raw_completion` --
@@ -915,7 +1005,7 @@ class Pipeline:
             if result is None:
                 raise PipelineRejected("stream ended without a final result")
             meta.update(self._assemble_stream_meta(
-                request_id, ctx, sanitized, comp, records, result, policy_mode,
+                request_id, ctx, sanitized, comp, records, result, eff,
                 recall.record))
 
         def get_meta() -> dict:
@@ -941,13 +1031,14 @@ class Pipeline:
 
     def _assemble_stream_meta(self, request_id: str, ctx: ExecutionPolicyContext,
                               sanitized: str, comp, records, result: GenerationResult,
-                              policy_mode: str,
+                              eff: EffectivePolicy,
                               mem_record: MemoryRecord | None = None) -> dict:
         """Assemble the final streaming metadata dict, mirroring run()'s record,
         two-lever cost, and quality assembly. Step-9 verification is WAIVED on
         this path: a VerificationRecord(performed=False, passed=True) is recorded
         in the trace so the "why" stays visible (Global Constraint 2), and the
         top-level `verification` marker is "waived" (Tasks 6/7 refine it)."""
+        policy_mode = self._policy_mode_stamp(eff)
         total = sum(r.actual_cost_usd or 0.0 for r in records)
         # Same two-lever accounting as run(): baseline prices tokens_before
         # (pre-both-levers), compression_saved is the tokens_before->tokens_after
@@ -998,7 +1089,10 @@ class Pipeline:
                        # this app's content. A DATA control, distinct from
                        # `policy_mode` (a protection posture); see
                        # `ExecutionPolicyContext.content_integrity`.
-                       "content_integrity_mode": ctx.content_integrity},
+                       "content_integrity_mode": ctx.content_integrity,
+                       # Task 9: the decision certificate (design §6).
+                       **self._certificate(eff, ctx),
+                       "checks": self._eligibility_checks(ctx, records)},
             "sanitized_prompt": sanitized,
             "raw_completion": result.text,
             # Step-9 verification marker: "waived" this task. Tasks 6/7 refine to

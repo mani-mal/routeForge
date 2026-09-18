@@ -60,15 +60,30 @@ def verify(detector: Detector, ctx: ExecutionPolicyContext, completion_text: str
     etypes = tuple(sorted({e.type for e in entities}))
     redacted, _map = det.anonymize(completion_text, entities)
 
+    # Under `client_output: raw`, `det` is the NullDetector (egress_detector,
+    # above), so `etypes` is ALWAYS empty here -- not because nothing was
+    # there, but because nothing looked. A bare "not required"/"verified"
+    # reason reads identically to the redact-side case where a real detector
+    # ran and genuinely found nothing, so a certificate reader (or an
+    # operator) cannot tell the two apart. Naming the posture in the reason
+    # closes that gap without touching the schema (no new field, no behaviour
+    # change -- `passed`/`entities_found` are exactly what they were).
+    raw_output = client_output != "redact"
+
     if not ctx.require_verification:
+        reason = "not required (client_output: raw)" if raw_output else "not required"
         return redacted, VerificationRecord(
             required=False, performed=False, passed=True,
-            entities_found=etypes, reason="not required")
+            entities_found=etypes, reason=reason)
 
     # required path
     unverifiable = "UNVERIFIABLE" in completion_text
     passed = not unverifiable
+    if passed:
+        reason = ("verified; egress redaction off (client_output: raw)" if raw_output
+                  else "verified")
+    else:
+        reason = "failed closed: unverifiable"
     return (redacted if passed else ""), VerificationRecord(
         required=True, performed=True, passed=passed,
-        entities_found=etypes,
-        reason="verified" if passed else "failed closed: unverifiable")
+        entities_found=etypes, reason=reason)

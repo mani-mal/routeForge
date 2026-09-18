@@ -53,6 +53,17 @@ def test_client_output_raw_leaves_the_completion_untouched():
     text, rec = verify(D, _ctx(False), "here is 482-73-1946", client_output="raw")
     assert text == "here is 482-73-1946"
     assert rec.entities_found == ()
+    # Task 9 item (a): `entities_found=()` here means "nobody looked" (the
+    # NullDetector ran), not "nothing was there" -- the reason must say so, or
+    # a certificate reader can't tell the two apart from a clean redact-side
+    # verdict (which uses the SAME empty tuple + a bare "not required").
+    assert rec.reason == "not required (client_output: raw)"
+
+
+def test_client_output_redact_reason_unchanged():
+    """The redact-side reason strings are untouched by item (a)'s fix."""
+    _, rec = verify(D, _ctx(False), "the answer is 4", client_output="redact")
+    assert rec.reason == "not required"
 
 def test_client_output_raw_still_fails_closed_on_unverifiable():
     text, rec = verify(D, _ctx(True), "UNVERIFIABLE 482-73-1946", client_output="raw")
@@ -64,3 +75,5 @@ def test_client_output_raw_required_and_clean_returns_verbatim():
     assert rec.passed is True
     assert rec.performed is True
     assert text == "ssn 482-73-1946 on file"
+    # Item (a): same posture-naming fix on the required/passed branch.
+    assert rec.reason == "verified; egress redaction off (client_output: raw)"

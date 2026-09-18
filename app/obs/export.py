@@ -299,11 +299,60 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                 # Data-fidelity mode this request ran under ("exact" |
                 # "transformations_allowed") -- see
                 # `ExecutionPolicyContext.content_integrity`. A DATA control,
-                # separate from `sp.policy_mode` (protection posture); Task 9
-                # folds this into the full per-axis certificate, this task
-                # just ensures the value is on the trace.
+                # separate from `sp.policy_mode` (protection posture).
                 root.set_attribute("sp.content_integrity_mode",
                                    str(policy["content_integrity_mode"]))
+            # Task 9 -- the rest of the decision certificate (design §6).
+            # `sp.policy_mode`/`sp.content_integrity_mode` above are the
+            # legacy compatibility surface (a client already reads them);
+            # everything below is the full per-axis breakdown that makes the
+            # certificate inspectable without having to infer one axis from
+            # another. All read from the SAME `policy` dict `Pipeline`
+            # assembled once, so the response the client sees and the trace
+            # a consumer reads can never disagree (Task 9 brief: "follow that
+            # exact pattern rather than inventing a new channel").
+            if policy.get("placement"):
+                # PLACEMENT: where compute may run, and what decided it.
+                # `sources` names the rung (app policy / preset / ceiling /
+                # deployment default) and any cross-axis rule that tightened
+                # it -- see app/policy/compile.py::Placement.
+                root.set_attribute("sp.placement", str(policy["placement"]))
+            if policy.get("placement_sources"):
+                root.set_attribute("sp.placement_sources",
+                                   ",".join(policy["placement_sources"]))
+            # PROTECTION: five independent axes, named individually so a
+            # trace reader never has to infer one from another (CLAUDE.md
+            # rule 2a -- placement and protection are separate axes).
+            for key, attr in (
+                ("model_input_mode", "sp.model_input_mode"),
+                ("client_output_mode", "sp.client_output_mode"),
+                ("telemetry_io_mode", "sp.telemetry_io_mode"),
+                ("detection_mode", "sp.detection_mode"),
+                ("stream_mode", "sp.stream_mode"),
+            ):
+                if policy.get(key):
+                    root.set_attribute(attr, str(policy[key]))
+            if policy.get("cross_axis_rules_fired"):
+                # Every declared rule (design §5) that fired for this
+                # request, whether or not it was allowed to move placement --
+                # see `sp.placement_sources` for the ones that actually did.
+                root.set_attribute("sp.cross_axis_rules_fired",
+                                   ",".join(policy["cross_axis_rules_fired"]))
+            if "detected_entity_types" in policy:
+                # Certificate-named twin of `sp.detected_entities` above --
+                # same TYPES-only list, under the design §6 field name.
+                root.set_attribute(
+                    "sp.detected_entity_types",
+                    ",".join(policy.get("detected_entity_types", [])))
+            checks = policy.get("checks")
+            if checks:
+                # sp.checks (design §6): the one per-request proof the
+                # certificate offers, JSON-encoded like `sp.candidates` --
+                # small structured data, not free text, so nothing here
+                # needs redaction. A `None` value (not applicable this
+                # request) survives the round-trip as JSON `null`, never a
+                # fabricated boolean.
+                root.set_attribute("sp.checks", json.dumps(checks))
             if prompt_version:
                 # Feature 3 (DSPy prompt-optimization) Task 1: sha256[:12]
                 # over the active managed-prompt texts (Settings.prompt_version).
