@@ -196,5 +196,15 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
         redaction_map_id=redaction_map_id,
         compression_override=(app_policy.compression_enabled
                               if app_policy is not None else None),
+        # Mirrors compression_override's travel pattern: read straight off the
+        # AppPolicyView (already validated to CONTENT_INTEGRITY at write time —
+        # app/policy/compile.py's `_resolve`), defaulting to
+        # "transformations_allowed" when absent or the app has no policy. A
+        # DATA axis only -- computed independently of `residency`/`rule` above,
+        # never folded into the placement decision.
+        content_integrity=(app_policy.content_integrity
+                           if app_policy is not None
+                           and app_policy.content_integrity is not None
+                           else "transformations_allowed"),
         app_policy_version=(app_policy.version() if app_policy is not None else ""),
     )

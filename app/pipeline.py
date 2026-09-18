@@ -395,7 +395,13 @@ class Pipeline:
                        # EFFECTIVE posture (post-inherit, post-ceiling),
                        # derived from the COMPILED axes, never the raw
                        # nullable column -- see `_policy_mode_stamp`.
-                       "policy_mode": policy_mode},
+                       "policy_mode": policy_mode,
+                       # Task 8: the data-fidelity mode this request actually
+                       # ran under -- "exact" means step 5 never transformed
+                       # this app's content. A DATA control, distinct from
+                       # `policy_mode` (a protection posture); see
+                       # `ExecutionPolicyContext.content_integrity`.
+                       "content_integrity_mode": ctx.content_integrity},
             "sanitized_prompt": sanitized,
             # No raw/pre-verify text exists for a cache hit (no model call ran
             # this request) -- `text` (the just-re-verified, redacted answer)
@@ -755,7 +761,13 @@ class Pipeline:
                        # EFFECTIVE posture (post-inherit, post-ceiling),
                        # derived from the COMPILED axes, never the raw
                        # nullable column -- see `_policy_mode_stamp`.
-                       "policy_mode": policy_mode},
+                       "policy_mode": policy_mode,
+                       # Task 8: the data-fidelity mode this request actually
+                       # ran under -- "exact" means step 5 never transformed
+                       # this app's content. A DATA control, distinct from
+                       # `policy_mode` (a protection posture); see
+                       # `ExecutionPolicyContext.content_integrity`.
+                       "content_integrity_mode": ctx.content_integrity},
             "sanitized_prompt": sanitized,
             "raw_completion": result.text,
             # Internal-only, popped in routes.py alongside `raw_completion` --
@@ -980,7 +992,13 @@ class Pipeline:
                        # EFFECTIVE posture (post-inherit, post-ceiling),
                        # derived from the COMPILED axes, never the raw
                        # nullable column -- see `_policy_mode_stamp`.
-                       "policy_mode": policy_mode},
+                       "policy_mode": policy_mode,
+                       # Task 8: the data-fidelity mode this request actually
+                       # ran under -- "exact" means step 5 never transformed
+                       # this app's content. A DATA control, distinct from
+                       # `policy_mode` (a protection posture); see
+                       # `ExecutionPolicyContext.content_integrity`.
+                       "content_integrity_mode": ctx.content_integrity},
             "sanitized_prompt": sanitized,
             "raw_completion": result.text,
             # Step-9 verification marker: "waived" this task. Tasks 6/7 refine to

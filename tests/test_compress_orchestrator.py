@@ -143,6 +143,49 @@ def test_app_override_on_onprem_only_ccr_never_to_cloud():
     assert ccr.retrievals_to_cloud == 0
 
 
+def test_content_integrity_exact_bypasses_compression():
+    """content_integrity: exact must disable compression outright, even with
+    compression enabled and a payload well over min_tokens (design P1a §8 --
+    a DATA control, not a privacy one). Arranged exactly like
+    test_applies_and_reduces_history (bypass_on.user_prompt forced False,
+    min_tokens=1) so the control case actually would have compressed --
+    proving the exact-mode test isn't passing for the wrong reason (the
+    default bypass_on.user_prompt=True no-ops single-turn requests anyway)."""
+    cfg = _reducible_cfg()
+    verbose = "INFO log line\n" * 800
+    messages = [Message(role="assistant", content=verbose)]
+
+    # Control: WITHOUT content_integrity: exact, this payload DOES compress.
+    baseline = compress(messages, _ctx(), cfg)
+    assert baseline.record.applied is True
+    assert baseline.tokens_after < baseline.tokens_before
+
+    # Same cfg, same messages, only content_integrity flipped to "exact" ->
+    # must NOT compress, and the messages that come back must be
+    # byte-identical to what went in.
+    r = compress(messages, _ctx(content_integrity="exact"), cfg)
+    assert r.record.applied is False
+    assert r.record.bypass_reason == "content_integrity_exact"
+    assert r.tokens_after == r.tokens_before
+    assert r.messages == messages
+    assert r.messages[0].content == verbose
+
+
+def test_content_integrity_exact_is_absolute_over_compression_override():
+    """Unlike the ordinary per-app compression_override (which can force
+    compression ON), content_integrity: exact cannot be overridden by it --
+    exact wins regardless of override."""
+    cfg = _cfg(enabled=False, min_tokens=1)
+    cfg = cfg.model_copy(
+        update={"bypass_on": cfg.bypass_on.model_copy(update={"user_prompt": False})})
+    messages = [Message(role="assistant", content="INFO log line\n" * 800)]
+    r = compress(messages, _ctx(compression_override=True, content_integrity="exact"),
+                 cfg)
+    assert r.record.applied is False
+    assert r.record.bypass_reason == "content_integrity_exact"
+    assert r.messages == messages
+
+
 def test_fail_open_on_compressor_error(monkeypatch):
     """A compressor exception must fall back to UNCOMPRESSED (fail OPEN) — the
     request still succeeds. Contrast the policy gate, which fails CLOSED."""

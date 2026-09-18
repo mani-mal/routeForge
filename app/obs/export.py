@@ -295,6 +295,15 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                 # bypassed for this app. An unprotected app must never be
                 # unprotected invisibly (the plan's "Never silent" guard).
                 root.set_attribute("sp.policy_mode", str(policy["policy_mode"]))
+            if policy.get("content_integrity_mode"):
+                # Data-fidelity mode this request ran under ("exact" |
+                # "transformations_allowed") -- see
+                # `ExecutionPolicyContext.content_integrity`. A DATA control,
+                # separate from `sp.policy_mode` (protection posture); Task 9
+                # folds this into the full per-axis certificate, this task
+                # just ensures the value is on the trace.
+                root.set_attribute("sp.content_integrity_mode",
+                                   str(policy["content_integrity_mode"]))
             if prompt_version:
                 # Feature 3 (DSPy prompt-optimization) Task 1: sha256[:12]
                 # over the active managed-prompt texts (Settings.prompt_version).
