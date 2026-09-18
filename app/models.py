@@ -135,6 +135,15 @@ class ExecutionPolicyContext(BaseModel):
     # co_cfg toggle; True/False = force compression on/off for this app.
     # Safety bypasses still apply.
     compression_override: bool | None = None
+    # Per-app data-fidelity mode (design P1a §8 / app/policy/compile.py's
+    # Protection.content_integrity), resolved at gate time so it travels with
+    # the request the same way `compression_override` does. "exact" means
+    # step 5 must never transform this app's content -- byte-identical in,
+    # byte-identical out; "transformations_allowed" (default) is the ordinary
+    # conditional-compression behaviour. A DATA control, never placement or
+    # protection: it must never change `onprem_only`, `allowed_providers`,
+    # sensitivity, or detection.
+    content_integrity: str = "transformations_allowed"
     # Short content hash of the per-app AppPolicyView in force for this request
     # (residency, pii_detection, denylist, score floor, tier/model/provider
     # allowlists). Stamped on every response's `policy` block and on the trace so

@@ -81,26 +81,47 @@ def _profile() -> AppPrivacyProfile:
         recognizers=(CustomRecognizer("MRN", r"\bMRN-\d{7}\b", 0.9),), rules=())
 
 
-# --- _policy_mode_for: effective-mode resolution ----------------------------
+# --- posture resolution, now through the compiler ---------------------------
+#
+# `Pipeline._policy_mode_for` is gone: nothing branches on a `policy_mode`
+# string any more. `_gate_inputs` compiles the whole effective policy and every
+# caller reads `eff.protection`, so these tests assert the compiled axes and
+# the legacy stamp `_policy_mode_stamp` derives from them.
+
+
+def _mode(pipe, app_policy) -> str:
+    """The effective posture as the response stamps it, resolved the way the
+    request path resolves it (compile -> axes -> stamp)."""
+    _det, _rules, eff = pipe._gate_inputs(app_policy, None)
+    return pipe._policy_mode_stamp(eff)
 
 
 def test_policy_mode_defaults_to_enforced_with_no_app_policy():
     pipe = _pipeline(_settings())
-    assert pipe._policy_mode_for(None) == "enforced"
+    assert _mode(pipe, None) == "enforced"
 
 
 def test_policy_mode_null_inherits_deployment_default():
     """`AppPolicy.policy_mode` null means inherit, exactly like
     `pii_detection` and `capture_io` already do."""
     pipe = _pipeline(_settings(default_policy_mode="passthrough"))
-    assert pipe._policy_mode_for(AppPolicyView()) == "passthrough"
+    assert _mode(pipe, AppPolicyView()) == "passthrough"
     # an explicit per-app value still wins over the deployment default
-    assert pipe._policy_mode_for(AppPolicyView(policy_mode="enforced")) == "enforced"
+    assert _mode(pipe, AppPolicyView(policy_mode="enforced")) == "enforced"
 
 
 def test_policy_mode_app_value_wins_over_enforced_default():
     pipe = _pipeline(_settings())
-    assert pipe._policy_mode_for(AppPolicyView(policy_mode="passthrough")) == "passthrough"
+    assert _mode(pipe, AppPolicyView(policy_mode="passthrough")) == "passthrough"
+
+
+def test_passthrough_preset_resolves_both_data_handling_axes_to_raw():
+    """What `passthrough` IS, now that it is a preset over independent axes:
+    the model and the client both see the data untouched."""
+    pipe = _pipeline(_settings())
+    _det, _rules, eff = pipe._gate_inputs(AppPolicyView(policy_mode="passthrough"), None)
+    assert eff.protection.model_input == "raw"
+    assert eff.protection.client_output == "raw"
 
 
 def test_deployment_ceiling_forces_enforced():
@@ -110,8 +131,8 @@ def test_deployment_ceiling_forces_enforced():
     lowered must not keep running unprotected."""
     s = _settings(default_policy_mode="passthrough", allow_app_passthrough=False)
     pipe = _pipeline(s)
-    assert pipe._policy_mode_for(AppPolicyView(policy_mode="passthrough")) == "enforced"
-    assert pipe._policy_mode_for(AppPolicyView()) == "enforced"  # via the default too
+    assert _mode(pipe, AppPolicyView(policy_mode="passthrough")) == "enforced"
+    assert _mode(pipe, AppPolicyView()) == "enforced"  # via the default too
 
 
 # --- the headline guarantee: placement kept, protection off -----------------
@@ -161,18 +182,45 @@ def test_passthrough_does_not_widen_allowed_providers_for_non_onprem_app():
     assert _SSN in out["sanitized_prompt"]
 
 
-def test_passthrough_uses_the_null_detector_whatever_pii_detection_says():
-    """Composition-level: passthrough overrides the app's own `pii_detection`
-    (here "presidio", the strongest mode) down to the null detector. Nothing
-    is wrapped around it -- no EffectiveDetector, no FilteredDetector."""
+def test_passthrough_uses_the_null_detector_when_detection_is_not_named():
+    """Composition-level: `passthrough` with `pii_detection` unset resolves
+    detection to "off", so the gate gets a BARE null detector -- nothing
+    wrapped around it, no EffectiveDetector, no FilteredDetector -- and the
+    app's denylist/score floor are moot with nothing to filter."""
     pipe = _pipeline(_settings("regex"))
-    ap = AppPolicyView(policy_mode="passthrough", pii_detection="presidio",
+    ap = AppPolicyView(policy_mode="passthrough",
                        pii_entity_denylist=frozenset({"PERSON"}),
                        pii_score_threshold=0.9)
-    det, rules, mode = pipe._gate_inputs(ap, _profile())
-    assert mode == "passthrough"
+    det, _rules, eff = pipe._gate_inputs(ap, _profile())
+    assert pipe._policy_mode_stamp(eff) == "passthrough"
+    assert eff.protection.detection == "off"
     assert isinstance(det, NullDetector)
     assert det.analyze(_PROMPT) == []
+
+
+def test_passthrough_with_an_explicit_detector_still_detects(): 
+    """CONTRACT CHANGE, design §4 + counterexample CE-3. `policy_mode` used to
+    force the null detector whatever `pii_detection` said, which silently
+    disabled placement escalation for a detected SSN. The axes are independent
+    now: an app that NAMES a detector gets it, so detection (and therefore
+    residency escalation) happens -- while `model_input`/`client_output` stay
+    `raw`, so nothing is redacted to the model or to the client.
+
+    An app that never names `pii_detection` is unaffected: the preset still
+    resolves it to "off" (the test above), which is what those apps do today.
+    """
+    pipe = _pipeline(_settings("regex"))
+    ap = AppPolicyView(residency="any", policy_mode="passthrough",
+                       pii_detection="regex")
+    det, _rules, eff = pipe._gate_inputs(ap, None)
+    assert not isinstance(det, NullDetector)
+    assert eff.protection.model_input == "raw"
+    assert eff.protection.client_output == "raw"
+
+    out = _run(pipe, _PROMPT, app_policy=ap)
+    # detection ran -> the declared cross-axis rule raised placement (CE-3)
+    assert "US_SSN" in out["policy"]["detected_entities"]
+    assert out["policy"]["onprem_only"] is True
 
 
 def test_passthrough_leaves_the_completion_untouched_on_egress():
@@ -355,8 +403,8 @@ def test_stream_path_composes_the_same_passthrough_detector():
     step-9 runtime floor raises StreamFallback first)."""
     pipe = _pipeline(_settings("regex"))
     ap = AppPolicyView(residency="any", policy_mode="passthrough")
-    det, _rules, mode = pipe._gate_inputs(ap, _profile())
-    assert mode == "passthrough"
+    det, _rules, eff = pipe._gate_inputs(ap, _profile())
+    assert pipe._policy_mode_stamp(eff) == "passthrough"
     assert isinstance(det, NullDetector)
     assert det.analyze(f"{_PROMPT} {_MRN}") == []
 
@@ -372,5 +420,78 @@ def test_presidio_global_passthrough_leaves_everything_verbatim():
 
     assert out["sanitized_prompt"] == _PROMPT
     assert "John Smith" in out["sanitized_prompt"]
+    assert out["policy"]["onprem_only"] is True
+    assert out["policy"]["allowed_providers"] == ["onprem"]
+
+
+# --- design §2.3: the detector is built when ANY consumer needs it ----------
+
+
+def test_detector_runs_when_only_the_client_needs_redaction():
+    """`model_input: raw` + `client_output: redact`: the MODEL sees the SSN, so
+    the old `policy_mode` branch would have handed the gate a null detector and
+    left egress with nothing to redact with. The detector must still be built,
+    because a consumer -- the client response -- needs it."""
+    pipe = _pipeline(_settings("regex"))
+    det, _rules, eff = pipe._gate_inputs(
+        AppPolicyView(residency="onprem_only", model_input="raw",
+                      client_output="redact", pii_detection="regex"), None)
+    assert not isinstance(det, NullDetector)
+    assert eff.protection.model_input == "raw"
+    assert eff.protection.client_output == "redact"
+
+
+def test_no_detector_for_a_router_only_app():
+    """The router-only app: nothing is scanned at all."""
+    pipe = _pipeline(_settings("regex"))
+    det, _rules, _eff = pipe._gate_inputs(
+        AppPolicyView(residency="any", policy_mode="passthrough"), None)
+    assert isinstance(det, NullDetector)
+
+
+def test_detector_runs_for_redacted_telemetry_alone():
+    """Unlock 1 (design §4): raw to the model AND raw to the client, but
+    telemetry must be redacted -- the exporter is the only consumer that needs
+    a detector, and that is enough to build one."""
+    pipe = _pipeline(_settings("regex"))
+    det, _rules, eff = pipe._gate_inputs(
+        AppPolicyView(residency="any", policy_mode="passthrough",
+                      pii_detection="regex", capture_io="redacted"), None)
+    assert not isinstance(det, NullDetector)
+    assert eff.protection.telemetry_io == "redacted"
+
+
+def test_nothing_is_scanned_when_no_consumer_needs_it():
+    """Escalation off, both data-handling axes raw, telemetry not redacted:
+    every consumer has declared it wants the data untouched, so the gate gets
+    the null detector even though the app names a real `pii_detection`."""
+    pipe = _pipeline(_settings("regex"))
+    det, _rules, eff = pipe._gate_inputs(
+        AppPolicyView(residency="onprem_only", model_input="raw",
+                      client_output="raw", pii_detection="regex",
+                      capture_io="off",
+                      escalate_residency_on_detection=False), None)
+    assert isinstance(det, NullDetector)
+    assert eff.escalate_residency_on_detection is False
+
+
+def test_escalation_switch_off_keeps_the_apps_own_residency():
+    """`escalate_residency_on_detection: false` stops the declared cross-axis
+    rule from RAISING placement. It can never lower it either -- the app's own
+    floor is exactly what it configured."""
+    pipe = _pipeline(_settings("regex"))
+    ap = AppPolicyView(residency="any", pii_detection="regex",
+                       escalate_residency_on_detection=False)
+    out = _run(pipe, _PROMPT, app_policy=ap)
+    assert "US_SSN" in out["policy"]["detected_entities"]  # detection still ran
+    assert out["policy"]["onprem_only"] is False           # placement did not move
+    assert _SSN not in out["sanitized_prompt"]             # protection unchanged
+
+
+def test_escalation_switch_off_never_lowers_an_onprem_floor():
+    pipe = _pipeline(_settings("regex"))
+    ap = AppPolicyView(residency="onprem_only", pii_detection="regex",
+                       escalate_residency_on_detection=False)
+    out = _run(pipe, _PROMPT, app_policy=ap)
     assert out["policy"]["onprem_only"] is True
     assert out["policy"]["allowed_providers"] == ["onprem"]

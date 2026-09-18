@@ -102,6 +102,43 @@ def test_run_stream_yields_deltas_in_order_no_verify_waived(monkeypatch):
     assert _litellm_fake.CALLS and _litellm_fake.CALLS[-1]["stream"] is True
     assert _litellm_fake.CALLS[-1]["stream_options"] == {"include_usage": True}
     assert "logprobs" not in _litellm_fake.CALLS[-1]        # omitted while streaming
+    # Regression: `_assemble_stream_meta` must carry the decision certificate
+    # (b8b8b2a threaded `det` into `_certificate` at the run()/run() call sites
+    # but left this streaming call site referencing an undefined `det`, which
+    # raised NameError on every streaming request). The default posture here
+    # is `enforced` -> `model_input: redact`, so a detector is actually built
+    # and used -- the certificate must name it, not stamp "off".
+    assert meta["policy"]["detection_mode"] == s.serving.pii_detection
+    assert meta["policy"]["detected_entity_types"] == []
+
+
+def test_run_stream_certificate_detection_mode_is_off_when_nothing_scanned(
+        monkeypatch):
+    """The other half of the regression test above, mirroring
+    tests/test_decision_certificate.py::test_certificate_detection_mode_is_off_when_nothing_scanned
+    for the streaming path: an app in the raw/raw/no-escalation posture gets
+    the NullDetector (`_gate_inputs` builds a detector only when some consumer
+    needs it), so the certificate must say `detection_mode: "off"`, not the
+    app's named (but never-run) detector."""
+    from app.gateway.backends import litellm_backend
+
+    monkeypatch.setattr(
+        litellm_backend, "acompletion",
+        make_streaming_acompletion(["ok"]))
+
+    s = _settings()
+    pipe = _pipeline(s)
+    nobody_looked = AppPolicyView(
+        residency="any", model_input="raw", client_output="raw",
+        capture_io="off", escalate_residency_on_detection=False,
+        pii_detection="presidio")
+
+    deltas, meta = asyncio.run(_drain_capture(
+        pipe, "Write a short greeting.", nobody_looked))
+
+    assert deltas == ["ok"]
+    assert meta["policy"]["detection_mode"] == "off"
+    assert meta["policy"]["detected_entity_types"] == []
 
 
 async def _drain_capture(pipeline: Pipeline, content: str, app_policy):

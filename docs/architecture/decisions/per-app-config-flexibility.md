@@ -114,6 +114,14 @@ missing lever: such an app picks `off` (or a scoped `regex`) and keeps its conte
    *(Superseded in part: the `onprem_only` half of this clamp was removed in `09a28db` —
    see the banner at the top. The `capture_io="redacted"` half stands unchanged.)*
 
+   *(Superseded again, 2026-09-18 — the **reasoning** above, not the rule. Telemetry no
+   longer reuses the gate's `sanitized_prompt`: `_set_io` builds its own redacted copy
+   from the raw values with the app's detector, so raw model input no longer implies raw
+   telemetry. The surviving rule is narrower and keys on the detector alone —
+   `capture_io="redacted"` is refused when the effective `pii_detection` resolves to
+   `off`, and is now **legal under `passthrough` when the app names a detector**. Current
+   contract: `docs/reference/per-app-config.md`.)*
+
    **Deliberate, narrower exception — operator-gated raw eval capture (2026-08-21,
    product-owner approved, relaxes CLAUDE.md rule 2):** `capture_io="full"` is *not*
    clamped away by the rule above. As written at the time, a **non-`onprem_only`** app

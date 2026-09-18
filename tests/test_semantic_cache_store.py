@@ -96,11 +96,14 @@ def test_lookup_itself_refuses_rogue_cloud_entry_in_onprem_partition():
     merely a consequence of store() always behaving."""
     c = DeterministicSemanticCache(ttl_seconds=3600, clock=lambda: 0.0)
     part = ("acme", True, frozenset({"onprem"}))
-    from app.cache.store import CacheEntry
+    # Built with the store's OWN key function: bucket keys are HMAC'd
+    # (app/cache/store.py::_key), so a plaintext key would simply never be
+    # looked up and this test would pass for the wrong reason.
+    from app.cache.store import CacheEntry, _key
     c._data[part] = {
-        "rogue query": CacheEntry(response_text="leaked cloud answer",
-                                   model="gpt-4o", provider="azure",
-                                   timestamp=0.0)
+        _key("rogue query"): CacheEntry(response_text="leaked cloud answer",
+                                        model="gpt-4o", provider="azure",
+                                        timestamp=0.0)
     }
     entry = c.lookup(tenant_id="acme", onprem_only=True,
                       allowed_providers=frozenset({"onprem"}),

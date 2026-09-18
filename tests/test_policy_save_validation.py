@@ -112,3 +112,57 @@ def test_warnings_failure_after_commit_is_not_a_500(admin, monkeypatch):
     r = _put(admin, capture_io="off")
     assert r.status_code == 200, r.text
     assert r.json()["warnings"] == []
+
+
+# --- save-time invariant check (design §7; app/policy/compile.py::check_invariants) ---
+
+
+def test_save_time_check_rejects_a_policy_that_breaks_an_invariant(monkeypatch):
+    """A cross-axis rule that LOWERS placement must never be savable."""
+    import app.policy.compile as c
+    from app.apps.policy import AppPolicyView
+    from app.config.loader import load_settings
+
+    S = load_settings()
+
+    def broken(eff, detected, rule):
+        return eff  # stand-in for a compiler bug: ignores the tightening rule
+
+    monkeypatch.setattr(c, "apply_signals", broken)
+    with pytest.raises(c.PolicyViolation) as e:
+        c.check_invariants(AppPolicyView(residency="any"), S)
+    assert e.value.code.startswith("INVARIANT_")
+
+
+def test_save_time_check_passes_for_every_shipped_recipe():
+    import app.policy.compile as c
+    from app.apps.policy import AppPolicyView
+    from app.config.loader import load_settings
+
+    S = load_settings()
+    for view in (AppPolicyView(residency="any", policy_mode="enforced"),
+                 AppPolicyView(residency="onprem_only", policy_mode="passthrough"),
+                 AppPolicyView(residency="onprem_only", model_input="raw",
+                               client_output="redact", pii_detection="presidio")):
+        c.check_invariants(view, S)
+
+
+def test_invariant_grid_is_bounded():
+    """The write path cannot afford unbounded work: assert the grid size is
+    bounded rather than timing the check, since wall-clock assertions are
+    flaky in CI."""
+    import app.policy.compile as c
+
+    assert len(c._INVARIANT_GRID) <= 64
+
+
+def test_every_shipped_recipe_still_saves_through_the_admin_api(admin):
+    """The invariant check must not regress the write path for any policy
+    that already shipped."""
+    r = _put(admin, residency="any", policy_mode="enforced")
+    assert r.status_code == 200, r.text
+    r = _put(admin, residency="onprem_only", policy_mode="passthrough")
+    assert r.status_code == 200, r.text
+    r = _put(admin, residency="onprem_only", model_input="raw",
+             client_output="redact", pii_detection="presidio")
+    assert r.status_code == 200, r.text

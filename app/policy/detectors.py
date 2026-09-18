@@ -75,6 +75,15 @@ class NullDetector:
         return None
 
 
+def detection_ran(det: object) -> bool:
+    """"No detector ran" is the NullDetector and nothing else -- an app with
+    `pii_detection: off` but custom recognizers layered on top
+    (EffectiveDetector) HAS scanned. `Gate.evaluate` and the pipeline's
+    decision-certificate builder must never disagree about this, so both call
+    this one predicate instead of each inlining `isinstance(det, NullDetector)`."""
+    return not isinstance(det, NullDetector)
+
+
 class PresidioDetector:
     """Real Presidio path (demo default). Lazy import so tests never need it.
 

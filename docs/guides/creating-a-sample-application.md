@@ -72,8 +72,29 @@ curl -sX PUT http://10.89.197.201:30808/admin/applications/sample-app/policy \
 - `allowed_models` — optional allow-list of specific slugs; null = any model the tiers/
   providers permit.
 - `residency` — per-app residency (`any` | `private_cloud_ok` | `onprem_only`), same
-  meaning as step 1.
+  meaning as step 1. This is the **placement** axis and the only one: it says where
+  compute may run, and nothing about how much is done to the data.
 - `max_spend_usd_per_day` / `max_rpm` — budget and rate caps (`429` when exceeded).
+
+The policy body above sets no **protection** fields, so the app inherits the deployment's
+defaults — normally `policy_mode: enforced`, which resolves to `model_input: redact` and
+`client_output: redact`. That is the right starting point. The protection axes
+(`model_input`, `client_output`, `capture_io`, `pii_detection`, `content_integrity`,
+`stream_mode`), the precedence order and every validation error code are in
+[`per-app-config.md`](../reference/per-app-config.md#the-axes--the-authoritative-model);
+[`choosing-app-settings.md`](./choosing-app-settings.md) is the decision guide if you are
+picking them for a real customer.
+
+> **Effective placement is two-sided, and can be raised per request.** Both of these must
+> hold for a model to be a candidate: the **model's** `allowed_app_ids` must permit the
+> application (§3 below), *and* the **application's** `allowed_providers` /
+> `allowed_tiers` / `allowed_models` must permit the model. On top of that, the request's
+> effective residency may be **raised** above the app's own floor by a declared
+> `sensitivity_rules` entry when the gate detects an entity (an SSN forces
+> `onprem_only`), gated per app by `escalate_residency_on_detection`. It is raise-only:
+> neither a protection setting nor a telemetry setting can ever lower the application's
+> residency floor, and an empty eligible set is a clean rejection, never a silent
+> widening to cloud.
 
 ## 3. Scope the model to the application (model side)
 

@@ -61,6 +61,13 @@ function compactReason(reason: string): string {
   return REASON_LABEL[reason] ?? reason;
 }
 
+// `sp.checks` (design P1a §6): a request-level proof, so its only honest
+// values are yes / no / "nothing to check this request" — never a fabricated
+// boolean for `null`/`undefined`.
+function formatCheck(v: boolean | null | undefined): string {
+  return v == null ? "n/a" : v ? "yes" : "no";
+}
+
 // One labelled row of detail — lifted from DecisionInspector.
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -197,6 +204,44 @@ function StepBody({ stepKey, detail }: { stepKey: string; detail: ChatResponse }
           <Row label="allowed providers">{p.allowed_providers.join(", ") || "none"}</Row>
           <Row label="onprem_only">{String(p.onprem_only)}</Row>
           <Row label="sensitivity">{p.sensitivity}</Row>
+          {/* The decision certificate (design P1a §6) — a renderer only, every
+              value below is read verbatim off `policy`, never re-derived. A
+              snapshot stored before this shipped simply omits these fields, so
+              each is guarded rather than assumed present. */}
+          {p.placement != null && (
+            <Row label="placement">
+              {p.placement}
+              {p.placement_sources && p.placement_sources.length > 0 && (
+                <span className="ml-1 text-gray-500">({p.placement_sources.join(" → ")})</span>
+              )}
+            </Row>
+          )}
+          {(p.model_input_mode != null || p.client_output_mode != null ||
+            p.telemetry_io_mode != null || p.detection_mode != null) && (
+            <>
+              <Row label="model input">{p.model_input_mode ?? "—"}</Row>
+              <Row label="client output">{p.client_output_mode ?? "—"}</Row>
+              <Row label="telemetry capture">{p.telemetry_io_mode ?? "—"}</Row>
+              <Row label="detection">{p.detection_mode ?? "—"}</Row>
+            </>
+          )}
+          {p.cross_axis_rules_fired != null && (
+            <Row label="rules fired">
+              {p.cross_axis_rules_fired.length ? p.cross_axis_rules_fired.join(", ") : "none"}
+            </Row>
+          )}
+          {p.checks != null && (
+            <>
+              <Row label="chosen in eligible set">{formatCheck(p.checks.chosen_in_eligible_set)}</Row>
+              <Row label="fallback in eligible set">{formatCheck(p.checks.fallback_in_eligible_set)}</Row>
+              <p className="text-xs text-gray-500 pt-1">
+                "Fallback" covers every candidate the gateway used before the one that was
+                served — a failed backend retried on a peer, or a low-confidence answer
+                escalated to a higher tier. "n/a" means the first candidate tried was served,
+                so there was nothing to check.
+              </p>
+            </>
+          )}
           <p className="text-xs text-gray-500 pt-2">
             This immutable policy travels with the request — the router can only pick from the allowed providers.
           </p>

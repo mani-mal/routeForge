@@ -328,6 +328,48 @@ def test_policy_deployment_ceiling_blocks_pii_downgrade(monkeypatch):
         assert "disabled" in r.text.lower()
 
 
+def test_policy_pii_downgrade_ceiling_covers_the_passthrough_preset(monkeypatch):
+    """Task 9 review round 1 (Fix round 1): `allow_app_pii_downgrade: false`
+    must reassign detection back to the deployment default for the
+    PASSTHROUGH PRESET too, not just an explicit per-app `pii_detection`
+    override (app/policy/compile.py's ceiling clamp, ~line 309, keys on the
+    resolved value being off/regex, not on its SOURCE). Concrete regression
+    for the drift the old `ui/src/admin/AppSettings.tsx::effDetectionFor`
+    client-side mirror had: it only covered the app-value and preset rungs,
+    so it computed "off" here and blocked Save with a 4xx the server never
+    intended. `capture_io: redacted` must be ACCEPTED, and the admin
+    response's `effective.detection` -- what the UI now reads instead of
+    re-deriving -- must report the deployment default, never "off"."""
+    monkeypatch.setenv("SP_ALLOW_APP_PII_DOWNGRADE", "false")
+    with TestClient(create_app()) as c:
+        _login(c)
+        c.post("/admin/applications", json={"id": "ceiling-passthrough", "name": "X"})
+        r = c.put("/admin/applications/ceiling-passthrough/policy",
+                  json={"policy_mode": "passthrough", "capture_io": "redacted"})
+        assert r.status_code == 200, r.text
+        assert r.json()["effective"]["detection"] != "off"
+        assert r.json()["policy"]["capture_io"] == "redacted"
+        # GET must report the SAME compiled value as the PUT response.
+        got = c.get("/admin/applications/ceiling-passthrough")
+        assert got.json()["effective"]["detection"] == r.json()["effective"]["detection"]
+
+
+def test_admin_app_carries_the_effective_block(client):
+    """The admin GET/PUT response's `effective` block (Task 9 Fix round 1) is
+    the compiled EffectivePolicy's axis values -- what the console reads
+    instead of re-deriving `compile_policy`'s precedence."""
+    _login(client)
+    client.post("/admin/applications", json={"id": "eff-block", "name": "X"})
+    r = client.get("/admin/applications/eff-block")
+    assert r.status_code == 200
+    eff = r.json()["effective"]
+    assert set(eff) == {"model_input", "client_output", "telemetry_io",
+                        "detection", "content_integrity"}
+    # Default app (no policy row, enforced): both data-handling axes redact.
+    assert eff["model_input"] == "redact"
+    assert eff["client_output"] == "redact"
+
+
 def test_policy_pii_and_stream_mode_round_trip(client):
     # (g) GET after PUT reflects the persisted values.
     _login(client)
@@ -902,3 +944,75 @@ def test_policy_in_fields_match_the_store_authority(client):
     from app.api.admin_routes import PolicyIn
     from app.apps.store import POLICY_FIELDS
     assert set(PolicyIn.model_fields) - {"reset"} == set(POLICY_FIELDS)
+
+
+def test_policy_put_unrelated_to_capture_never_decrypts_langfuse_creds(client, monkeypatch):
+    """An unrelated policy edit must not depend on the app's Langfuse secret
+    being decryptable.
+
+    `load_app_langfuse` decrypts the stored secret; ciphertext left behind by a
+    key rotation can raise (decrypt_secret swallows Fernet errors, not a
+    UnicodeDecodeError on garbage plaintext). The old clamp only reached that
+    lookup inside `if eff_capture == "full"`, so the compiler is handed a
+    CALLABLE and `validate_effective` invokes it only for the rule that needs
+    it. Resolved eagerly, a `max_rpm` edit would 500 for that app.
+    """
+    _login(client)
+    client.post("/admin/applications", json={"id": "lf-rotated", "name": "LfRotated"})
+    from app.apps import langfuse_provision
+
+    def _boom(_app):
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+    monkeypatch.setattr(langfuse_provision, "load_app_langfuse", _boom)
+    r = client.put("/admin/applications/lf-rotated/policy", json={"max_rpm": 20})
+    assert r.status_code == 200, r.text
+    assert client.get("/admin/applications/lf-rotated").json()["policy"]["max_rpm"] == 20
+
+    # ...and the lookup is still made when the verdict actually turns on it, so
+    # this is laziness, not a dropped rule.
+    with pytest.raises(UnicodeDecodeError):
+        client.put("/admin/applications/lf-rotated/policy", json={"capture_io": "full"})
+
+
+# --- default_residency is an enum, at both doors ------------------------------
+#
+# Found by the Task 10 Hypothesis harness. `CreateAppIn.default_residency` and
+# `UpdateAppIn.default_residency` were plain `str` with no enum check, and a
+# policy row with a null `residency` inherits `app.default_residency` -- so a
+# typo became that app's PLACEMENT. Combined with the (now fixed) fail-open in
+# `_placement_providers`, an app the operator meant to pin on-prem was routed
+# to cloud. Both doors validate now; the placement path fails closed as well
+# (tests/policy_compiler/test_invariants.py::
+# test_unparseable_residency_fails_closed_in_the_context_path).
+
+def test_create_application_rejects_a_bad_default_residency(client):
+    _login(client)
+    r = client.post("/admin/applications",
+                    json={"id": "bad-res", "name": "BadRes",
+                          "default_residency": "ONPREM_ONLY"})
+    assert r.status_code == 422, r.text
+    assert "default_residency" in r.text
+    # ...and nothing was created.
+    assert client.get("/admin/applications/bad-res").status_code == 404
+
+
+def test_patch_application_rejects_a_bad_default_residency(client):
+    _login(client)
+    client.post("/admin/applications", json={"id": "res-patch", "name": "ResPatch",
+                                             "default_residency": "onprem_only"})
+    r = client.patch("/admin/applications/res-patch",
+                     json={"default_residency": ""})
+    assert r.status_code == 422, r.text
+    # The stored placement is untouched by the refused write.
+    got = client.get("/admin/applications/res-patch").json()
+    assert got["default_residency"] == "onprem_only"
+
+
+def test_application_accepts_every_legal_default_residency(client):
+    _login(client)
+    for i, value in enumerate(("any", "private_cloud_ok", "onprem_only")):
+        r = client.post("/admin/applications",
+                        json={"id": f"res-ok-{i}", "name": "ResOk",
+                              "default_residency": value})
+        assert r.status_code == 200, r.text

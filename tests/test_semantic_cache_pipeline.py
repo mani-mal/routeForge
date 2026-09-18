@@ -22,7 +22,7 @@ from app.config.loader import load_settings
 from app.gateway.gateway import Gateway
 from app.models import ChatRequest, Message
 from app.pipeline import Pipeline, PipelineRejected
-from app.policy.detectors import make_detector
+from app.policy.detectors import NullDetector, make_detector
 from app.policy.gate import Gate
 from app.routing.router import Router
 from tests._litellm_fake import _DeterministicLiteLLM, make_test_registry
@@ -190,6 +190,42 @@ def test_reverify_redacts_with_the_current_apps_detector_never_serves_raw_cached
     assert len(rec.models_called) == 1      # served from cache -- no second model call
 
 
+def test_reverify_leaves_a_raw_client_output_apps_cached_text_byte_identical():
+    """The `client_output: raw` direction of the same C4 re-verify (design P1a
+    §2.5). A `passthrough` app that NAMES a detector really gets one at intake,
+    so the cache-hit path has everything it needs to over-redact -- and must
+    not: its cached answer comes back byte-for-byte. A `_serve_from_cache` that
+    verified with the intake detector unconditionally would serve `<US_SSN_1>`
+    and mangle the customer's own load-bearing data, with the rest of this file
+    still green."""
+    settings = _base_settings()
+    registry = make_test_registry(settings)
+    fixed_text = "Your records show SSN 482-73-1946 on file."
+    rec = RecordingBackend(_FixedTextBackend(settings, fixed_text))
+    pipe, cache = _pipeline(rec, settings, registry)
+    ap = AppPolicyView(policy_mode="passthrough", pii_detection="regex")
+    query = "Please check my account status"
+
+    # The over-redaction risk is real, not hypothetical: a live detector, and an
+    # egress axis that says do not use it.
+    det, _rules, eff = pipe._gate_inputs(ap, None)
+    assert not isinstance(det, NullDetector)
+    assert eff.protection.client_output == "raw"
+
+    out1 = asyncio.run(pipe.run(
+        "r1", "acme", ChatRequest(messages=[Message(role="user", content=query)]),
+        app_policy=ap))
+    out2 = asyncio.run(pipe.run(
+        "r2", "acme", ChatRequest(messages=[Message(role="user", content=query)]),
+        app_policy=ap))
+
+    assert any(r.get("hit") is True for r in _cache_trace_records(out2))
+    assert len(rec.models_called) == 1      # genuinely served from the cache
+    assert out2["choices"][0]["message"]["content"] == fixed_text
+    assert out2["choices"][0]["message"]["content"] == \
+        out1["choices"][0]["message"]["content"]
+
+
 def test_reverify_unverifiable_cached_text_is_treated_as_a_miss_never_served():
     settings = _base_settings()
     registry = make_test_registry(settings)
@@ -320,3 +356,59 @@ def test_cache_record_is_counts_only_and_a_fresh_miss_emits_hit_false():
     assert set(rec0.keys()) <= allowed_keys
     for forbidden in ("query", "response", "response_text", "text", "content"):
         assert forbidden not in rec0
+
+
+# --- 10. Cache keys are opaque (P1a Task 5, fix round 1) --------------------
+
+
+def test_cache_keys_hold_no_plaintext_under_model_input_raw():
+    """Under `model_input: raw` the model-facing text IS the raw prompt, and
+    the cache is keyed on the model-facing text (keying on the redacted view
+    would collapse two different values -- two prompts differing only in an
+    email address both redact to `<EMAIL_ADDRESS_1>`, and the second caller
+    would be served the first's answer). Keys are therefore HMAC'd after
+    normalization: the equivalence class is unchanged, but no prompt text
+    survives as a dict key."""
+    settings = _base_settings()
+    pipe, cache = _pipeline(_DeterministicLiteLLM(settings), settings)
+    # An email rather than an SSN: US_SSN classifies restricted/high-risk,
+    # which the cache bypasses outright (`_cache_bypass_reason`), so nothing
+    # would be stored and this test would assert nothing.
+    secret = "who owns hazelnut-quicksilver@example.com?"
+    ap = AppPolicyView(residency="onprem_only", model_input="raw",
+                       client_output="redact", pii_detection="regex")
+
+    asyncio.run(pipe.run("req-key-1", "acme",
+                         ChatRequest(messages=[Message(role="user", content=secret)]),
+                         app_policy=ap))
+
+    keys = [k for bucket in cache._data.values() for k in bucket]
+    assert keys, "nothing was stored, so this asserts nothing"
+    for k in keys:
+        for fragment in ("hazelnut", "quicksilver", "example.com", "owns"):
+            assert fragment not in k
+        assert len(k) == 64 and all(c in "0123456789abcdef" for c in k)
+
+    # ...and the cache still WORKS: the same query hits.
+    out = asyncio.run(pipe.run("req-key-2", "acme",
+                               ChatRequest(messages=[Message(role="user", content=secret)]),
+                               app_policy=ap))
+    assert cache.hits == 1
+    assert [r for r in out["trace"] if r.get("step") == "cache"][0]["hit"] is True
+
+
+def test_two_prompts_differing_only_in_a_redacted_value_do_not_collide():
+    """The correctness half of the same decision: keyed on the model-facing
+    text, these are two different cache entries. Keyed on the redacted view
+    they would be one, and the second caller would get the first's answer."""
+    settings = _base_settings()
+    pipe, cache = _pipeline(_DeterministicLiteLLM(settings), settings)
+    ap = AppPolicyView(residency="onprem_only", model_input="raw",
+                       client_output="redact", pii_detection="regex")
+    for i, addr in enumerate(("alice@example.com", "bob@example.com")):
+        asyncio.run(pipe.run(f"req-collide-{i}", "acme",
+                             ChatRequest(messages=[Message(
+                                 role="user", content=f"who owns {addr}?")]),
+                             app_policy=ap))
+    assert cache.size == 2
+    assert cache.hits == 0

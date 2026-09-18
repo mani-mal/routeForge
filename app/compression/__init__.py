@@ -48,6 +48,15 @@ def _effective_enabled(cfg, ctx) -> bool:
 def _bypass(cfg, ctx, tokens_before) -> str | None:
     if not _effective_enabled(cfg, ctx):
         return "disabled"
+    if ctx.content_integrity == "exact":
+        # Data-fidelity control (design P1a §8), not a privacy one: an app
+        # whose every byte is load-bearing (a CAD table, a contract, code)
+        # gets NO transformation at all, not even a lossless-looking one.
+        # Checked before every other bypass so it can never be shadowed by
+        # e.g. `min_tokens` deciding first for the wrong reason, and it is
+        # absolute -- unlike `compression_override`, no per-app "force on"
+        # setting may override it.
+        return "content_integrity_exact"
     if cfg.bypass_on.high_risk and ctx.risk_class == "high":
         return "high_risk"
     if cfg.bypass_on.restricted_sensitivity and ctx.sensitivity == "restricted":

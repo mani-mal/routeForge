@@ -21,10 +21,45 @@ dependencies = [
   # Egress gateway (steps 7-8): single multi-provider path (onprem/Azure/Bedrock).
   # Used as an SDK behind the policy gate, never as an ingress proxy.
   "litellm>=1.93,<2",
+  # Fernet encryption of each application's provisioned Langfuse SECRET key at
+  # rest (app/apps/langfuse_provision.py). A CORE dependency, not an extra: it
+  # used to arrive only as a transitive of `presidio-anonymizer`, so any install
+  # that skipped the `presidio` extra (a compose/Spark deployment running
+  # `pii_detection: regex`) silently fell through `_fernet()`'s except branch and
+  # stored every per-app Langfuse secret key in CLEARTEXT behind one log line.
+  # Secrets-at-rest must not depend on which detector an operator installed.
+  "cryptography>=42",
 ]
 
 [dependency-groups]
-dev = ["pytest>=8.3"]
+# The OTel SDK is a TEST dependency, not just the `observability` extra it also
+# appears in. Four whole modules -- test_capture_io, test_raw_completion_capture,
+# test_trace_full_io, test_obs_export -- open with
+# `pytest.importorskip("opentelemetry.sdk.trace")`, so without it they do not
+# fail, they vanish: a clean checkout reports them as 4 skips and a green run.
+# Those modules carry the CE-1 regression tests (the exporter must never author
+# raw content under a `redacted` label) and every other assertion about what
+# actually lands on a span. There is no CI in this repo, so a human running the
+# suite is the only thing standing between a regression and a release -- and a
+# silent skip defeats exactly that. Declared here so `uv sync` installs it.
+dev = [
+  "pytest>=8.3",
+  "opentelemetry-sdk>=1.27",
+  "opentelemetry-exporter-otlp-proto-http>=1.27",
+  # The property-based harness for the policy compiler (design P1a §7):
+  # tests/policy_compiler/ generates app policies, deployment ceilings and
+  # detected-entity signals and asserts the six noninterference invariants.
+  # A test dependency only -- nothing under app/ imports it.
+  "hypothesis>=6.100",
+  # `tests/test_metrics.py` HARD-imports prometheus_client (it asserts
+  # `metrics.AVAILABLE is True`, which an importorskip would turn into a
+  # silent skip -- the same failure mode the OTel note above describes, only
+  # worse: a hard import at module scope aborts COLLECTION, so a clean
+  # dev-only `uv sync` fails the whole suite rather than one module.
+  # Declared here for the same reason as the OTel SDK; it also ships in the
+  # `observability` extra, which is what a deployment installs.
+  "prometheus-client>=0.20",
+]
 
 # Presidio is the real demo detector but heavy (pulls spaCy). Tests use the
 # regex detector, so keep it an opt-in extra: `uv sync --extra presidio`.

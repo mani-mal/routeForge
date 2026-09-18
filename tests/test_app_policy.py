@@ -232,3 +232,21 @@ def test_policy_mode_defaults_to_inherit_and_is_orthogonal_to_residency():
     assert ap.residency == "onprem_only"
     ctx = _ctx(ap)
     assert set(ctx.allowed_providers) == {"onprem"}
+
+
+# --- P1a data-handling axes: the four new columns ---------------------------
+
+def test_new_axes_default_to_none_and_do_not_change_the_version_hash():
+    before = AppPolicyView(residency="any", policy_mode="enforced").version()
+    after = AppPolicyView(residency="any", policy_mode="enforced",
+                          model_input=None, client_output=None,
+                          content_integrity=None,
+                          escalate_residency_on_detection=None).version()
+    assert before == after
+
+
+def test_setting_an_axis_changes_the_version_hash():
+    a = AppPolicyView(residency="any", policy_mode="enforced").version()
+    b = AppPolicyView(residency="any", policy_mode="enforced",
+                      client_output="raw").version()
+    assert a != b

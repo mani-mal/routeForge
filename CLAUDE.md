@@ -79,16 +79,38 @@ guarantees.
    2a). Residency is placement; posture is protection.
 
 2a. **Placement and protection are separate axes; both are explicit.**
-   `residency` governs *where compute may run* and nothing else. `policy_mode`
-   governs *how much the gate does to the data*: `enforced` (default — detection,
-   redaction, sensitivity escalation, capture ceiling) or `passthrough` (router +
-   meter + tracer only, for a customer whose input is their own data and whose
-   every field is load-bearing output). `onprem_only` + `passthrough` is a valid,
-   honest configuration. Neither axis may be inferred from the other, and
-   `passthrough` must never widen `allowed_providers`, clear `onprem_only`, or
-   otherwise touch placement. A no-protection posture is never silent: it is
-   folded into `app_policy_version`, stamped on every response, and emitted on the
-   trace.
+   There is exactly one **placement** axis — `residency` — and it governs *where
+   compute may run*, nothing else. Everything else is **protection**, and each
+   protection axis is independent: `model_input` (`raw | redact` — what the model
+   is shown), `client_output` (`raw | redact` — what the client receives),
+   `capture_io` (`off | redacted | full` — what telemetry stores), `pii_detection`
+   (`off | regex | presidio` — which detector), `content_integrity`
+   (`transformations_allowed | exact` — whether lossy compression may run) and
+   `stream_mode`. `policy_mode` is a **preset**, not a seventh axis: `enforced`
+   resolves to `model_input: redact` + `client_output: redact`, `passthrough` to
+   `raw` + `raw` (and, only when the app names no detector, `pii_detection: off`).
+
+   One pure function resolves all of it — `compile_policy` in
+   `app/policy/compile.py`. Precedence, highest first: **deployment ceiling →
+   explicit per-app value → `policy_mode` preset → deployment default**; anything
+   unparseable **denies** to that axis's protective end and the write is refused.
+   Every consumer reads the compiled result; nothing re-derives a posture.
+
+   **Neither kind of axis may be inferred from the other.** A protection setting
+   must never move placement — `passthrough` must never widen `allowed_providers`,
+   clear `onprem_only`, or otherwise touch placement — and a placement setting must
+   never change a protection value. The *only* cross-axis path is declared and
+   raise-only: `config/policy.yaml`'s `sensitivity_rules` may **tighten** residency
+   on a detected entity, gated per app by `escalate_residency_on_detection`, and
+   every rule that fires is named on the response and the trace. `onprem_only` +
+   `passthrough` is a valid, honest configuration; so is `onprem_only` +
+   `model_input: raw` + `client_output: redact` (trusted in-boundary compute, safe
+   client response) — the configuration the single-switch design could not express.
+   A no-protection posture is never silent: it is folded into `app_policy_version`,
+   stamped on every response, and emitted on the trace, along with the full
+   per-axis decision certificate (`sp.placement`, `sp.model_input_mode`,
+   `sp.client_output_mode`, `sp.telemetry_io_mode`, `sp.detection_mode`,
+   `sp.cross_axis_rules_fired`, …). See `docs/reference/per-app-config.md`.
 3. **`onprem_only` is absolute.** If policy sets it, a cloud provider must be
    unreachable by construction — filtered out of the candidate pool before the router
    scores anything. Never a post-hoc check. Unchanged by rule 2a: `policy_mode`

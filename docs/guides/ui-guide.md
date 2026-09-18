@@ -420,31 +420,57 @@ absolute: cloud providers are filtered out of the candidate pool *before* the ro
 scores anything. Nothing in any step below can change this. The `providers`, `tiers` and
 `models` controls all read "none/empty = all".
 
-**Step 3 — Protection.** `policy_mode` **is the coarse switch.** `enforced` (the default)
-means detection, redaction in both directions, sensitivity escalation, custom
-recognizers, and the capture ceiling. `passthrough` means RouteForge is a router, meter
-and tracer only: PII detection/redaction and output verification are skipped, so the
-gate itself doesn't touch the prompt or completion. Selecting it raises an inline
-banner that says exactly that, alongside what *continues* unchanged — routing and tier
-selection, budgets, rate limits, usage metering, the full decision trace, Langfuse
-tracing — and two things worth being blunt about: **`passthrough` does not touch
-placement**, and it does not touch context compression either — if Headroom is enabled
+**Step 3 — Protection.** `policy_mode` **is a preset, not a master switch.** It sets two
+axes and nothing else: `enforced` (the default) resolves to `model_input: redact` +
+`client_output: redact` — redaction in both directions, plus sensitivity escalation, the
+app's custom recognizers and the capture ceiling. `passthrough` resolves to `raw` + `raw`,
+so RouteForge redacts in neither direction and the gate doesn't rewrite the prompt or the
+completion.
+
+Two things the old wording got wrong, and the banner with it:
+
+- **`passthrough` does not disable detection by itself.** It resolves `pii_detection` to
+  `off` only for an app that *names no detector*. An app that sets `pii_detection` to
+  `regex` or `presidio` keeps it under `passthrough` — entities are detected, classified
+  and reported, its custom recognizers run, and a declared sensitivity rule can still
+  raise residency. Nothing is redacted, because both data-handling axes are `raw`. (That
+  an app's own `pii_detection` used to be ignored under `passthrough` was counterexample
+  CE-3; see the pre-roll audit in
+  [`per-app-config.md`](../reference/per-app-config.md#pre-roll-audit-policy_mode-passthrough-rows-that-also-set-pii_detection).)
+- **Output verification is never skipped.** Step 9 runs on every request in every
+  posture; the `UNVERIFIABLE` check and the `require_verification` fail-closed path are
+  identical on both sides of the axis, and a failed verification returns nothing.
+  `client_output: raw` switches off *egress redaction*, which is one thing step 9 does —
+  not step 9.
+
+Selecting `passthrough` raises an inline banner naming what stops and what *continues*
+unchanged — routing and tier selection, budgets, rate limits, usage metering, the full
+decision trace, Langfuse tracing — and two things worth being blunt about:
+**`passthrough` does not touch placement**, and it does not touch context compression
+either — if Headroom is enabled
 for the deployment, it can still transform tool outputs/history, so an app that needs
 byte-exact content end to end must also have compression disabled. Residency in step 2
 still decides where compute may run, `onprem_only` stays absolute, and `onprem_only` +
-`passthrough` ("run only on my hardware, with the gate turned off") is a valid, honest
+`passthrough` ("run only on my hardware, with nothing redacted") is a valid, honest
 configuration with the on-prem guarantee fully intact. The posture is never silent: it
 is folded into `app_policy_version`, stamped on every response, and emitted on the
 trace.
 
-**The Detection & narrowing sub-group refines the `enforced` posture.** It is a
-collapsible group inside step 3: open by default while the posture is `enforced` (it is
-the substance of that posture), and collapsed to a single line under `passthrough`
-— *"inert while passthrough — 3 exempt types kept"* — instead of a screenful of controls
-that do nothing. It stays openable and editable there, and its stored values are **kept,
-not cleared**; opening it under `passthrough` shows a note saying so. Flipping the
-posture must never destroy the configuration you spent time on; set the app back to
-`enforced` and the same values apply again.
+**The Detection & narrowing sub-group.** It is a collapsible group inside step 3: open by
+default while the posture is `enforced` (it is the substance of that posture), and
+collapsed to a single line under `passthrough` instead of a screenful of controls that,
+for the common case, do nothing. "Common case" is doing real work in that sentence —
+the group is inert under `passthrough` only for an app that **names no detector**, which
+is the row `passthrough` resolves `pii_detection` to `off` for. **Naming a detector in
+this group is exactly how a `passthrough` app keeps detection while redaction stays
+off**, so the group stays openable and editable there. Both summary lines say which of
+the two you have: step 3's reads *"passthrough — nothing redacted, nothing detected"* or
+*"passthrough — nothing redacted · detection presidio still runs"*, and the sub-group's
+own collapsed line reads *"inert while passthrough — 3 exempt types kept"* or
+*"presidio still runs under passthrough (nothing redacted)"*. Its stored values are
+**kept, not cleared**; opening it under `passthrough` shows a note saying so. Flipping the posture must never
+destroy the configuration you spent time on; set the app back to `enforced` and the same
+values apply again.
 
 - **`pii detection`** — leaving it unset inherits the deployment's live detector, which
   is *not* a downgrade. Only an explicit `off` or `regex` is, and it blinds the gate to
@@ -498,12 +524,15 @@ predates the envelope the console falls back to naming nothing rather than guess
 
 **Options the server would refuse are disabled with the reason on the option itself**,
 not silently greyed. `capture_io = full` needs the app's own Langfuse project *and*, for
-an `onprem_only` app, `policy_mode = passthrough`; `capture_io = redacted` is
-unavailable under `passthrough` or an explicit `pii_detection = off`, because that
-export path reuses the gate's sanitized prompt and there is no sanitized prompt to
-reuse — `pii_detection = regex` is not blocked, since the regex detector still produces
-a sanitized (if lower-fidelity) prompt; `stream_unverified` is unavailable for an
-`onprem_only` app, which may never waive step-9 verification. The value an app is
+an `onprem_only` app, a declared no-protection posture (`model_input = raw` **and**
+`client_output = raw`, which is what `policy_mode = passthrough` resolves to);
+`capture_io = redacted` is unavailable only when the app's **effective**
+`pii_detection` resolves to `off`, because redacted telemetry needs a detector to build
+its redacted copy with — that control is server-driven, reading the compiled
+`effective.detection` off the admin response rather than re-deriving the precedence
+client-side, so it no longer blocks a `passthrough` app that names `regex` or
+`presidio`; `stream_unverified` is unavailable for an `onprem_only` app, which may never
+waive step-9 verification, and for an app with an explicit `client_output = redact`. The value an app is
 *currently* set to is never disabled — you can always see what it actually is.
 
 Two honesty notes about what this form does and doesn't guarantee:

@@ -36,3 +36,54 @@ def redact(text: str, recognizers: list[CustomRecognizer] | None = None) -> str:
 
 def redact_value(v):
     return redact(v) if isinstance(v, str) else v
+
+
+def redacted_copy(text: str, detector, recognizers=None, *,
+                  prepared: str | None = None) -> str:
+    """A redacted copy of a RAW value, built here and not borrowed (design
+    P1a §2.6).
+
+    The one rule shared by every surface that shows a request's content
+    without being allowed to show its PII: the Langfuse trace
+    (`app/obs/export.py::_set_io`) and the console's `display` block
+    (`app/api/routes.py::_finalize`). It lives in one function on purpose --
+    two copies of a privacy rule drift, and the bug this fixes (CE-1) was a
+    surface reusing a view that had been built for a DIFFERENT consumer under
+    a different rule.
+
+    `detector` is the request's own detector -- the same one the gate ran, so
+    the placeholder scheme (`<US_SSN_1>`) matches -- or None when nothing
+    scanned this request. **A None detector means no redacted copy exists**;
+    callers must not call this to launder raw text, they must fall closed to
+    showing nothing. It is still safe if they do (the regex pass below runs
+    regardless), but "safe apart from what a regex happens to catch" is
+    precisely the guarantee CE-1 shipped and this design refuses.
+
+    `prepared` is `detector`'s own redaction of **this same `text`**, when the
+    caller already has one, and skips the detector pass. The gate makes exactly
+    that for the request prompt (`Representations.text_redacted`), and on a
+    Presidio deployment repeating it here is a second spaCy NER pass over the
+    whole prompt for no new information. This is NOT the reuse CE-1 was about:
+    that was reading the MODEL-FACING view, which under `model_input: raw` is
+    the raw text and under `passthrough` is unredacted. This is a redaction
+    made with this very detector, over this very string.
+
+    The pairing has to hold, and nothing here can check it — so both values
+    must come from one `Representations`, which is frozen and built in one
+    place. Never assemble a `(text, prepared)` pair from two sources.
+
+    The `redact()` regex pass ALWAYS runs, `prepared` or not: it applies an
+    app's custom `recognizers` (which a denylist or score floor may have
+    exempted at intake) and the base regex net a `pii_detection: regex` app
+    relies on. Dropping it would make telemetry weaker than the detector pass
+    alone, which is the opposite of the point.
+    """
+    if not text:
+        return text
+    if prepared is not None:
+        out = prepared
+    elif detector is not None:
+        out, _ = detector.anonymize(text, detector.analyze(text))
+    else:
+        out = text
+    return redact(out, recognizers=recognizers)

@@ -242,7 +242,9 @@ POLICY_FIELDS: frozenset[str] = frozenset({
     "residency", "max_spend_usd_per_day", "max_cost_usd_per_request", "max_rpm",
     "compression_enabled", "capture_io",
     "policy_mode", "pii_detection", "stream_mode",
-    "pii_entity_denylist", "pii_score_threshold", "pii_exempt_patterns"})
+    "pii_entity_denylist", "pii_score_threshold", "pii_exempt_patterns",
+    "model_input", "client_output", "content_integrity",
+    "escalate_residency_on_detection"})
 
 
 async def upsert_policy(session: AsyncSession, app_id: str, **fields) -> AppPolicy:

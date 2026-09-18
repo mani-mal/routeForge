@@ -29,8 +29,8 @@ from app.errors import (
 )
 from app.models import ChatRequest
 from app.obs import metrics
-from app.obs.export import export_trace
-from app.obs.redact import redact
+from app.obs.export import export_trace, resolve_capture_io
+from app.obs.redact import redacted_copy
 from app.obs.scores import SCORE_NAMES, ensure_score_config, post_score
 from app.output.streaming_verify import StreamingVerifier
 from app.pipeline import PipelineRejected, StreamFallback
@@ -356,6 +356,14 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
     if session_id is None and s.serving.derive_session_id:
         session_id = _derive_session_id(body, tenant)
 
+    # The pipeline's out-parameter: the values `_finalize`'s two I/O surfaces
+    # need and NOTHING may serialize -- the gate's raw flattened prompt and the
+    # request's own detector (`Pipeline._publish_telemetry_views`). Kept off the
+    # response dict deliberately; `resp` is serialized to the client, to
+    # `request_snapshots.full_json` and to the console, and raw text on it is
+    # only ever one forgotten `pop` from leaking. Whichever pipeline call below
+    # actually serves the request fills it before any `_finalize` runs.
+    internals: dict = {}
     try:
         # Per-app privacy profile (custom recognizers + sensitivity rules,
         # Task 7), now cache-aware (Task 9): app.state.profile_cache is
@@ -393,7 +401,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
             try:
                 deltas, get_meta = await request.app.state.pipeline.run_stream(
                     request_id, tenant, body, app_policy=app_policy, profile=profile,
-                    session_id=client_session_id)
+                    session_id=client_session_id, internals=internals)
             except StreamFallback:
                 pass  # fall through: run the FULL verified pipeline, then chunk it
             else:
@@ -403,7 +411,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
                         get_meta=get_meta, body=body, tenant=tenant,
                         app_policy=app_policy, app_langfuse=app_langfuse,
                         profile=profile, session_id=session_id, s=s,
-                        started_ns=started_ns)
+                        internals=internals, started_ns=started_ns)
                 # incremental_verify (Task 7): stream real tokens, but pipe each
                 # delta through a hold-back StreamingVerifier so no un-redacted
                 # text is ever released. Build the verifier on the request's
@@ -414,11 +422,11 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
                     get_meta=get_meta, body=body, tenant=tenant,
                     app_policy=app_policy, app_langfuse=app_langfuse,
                     profile=profile, session_id=session_id, s=s,
-                    started_ns=started_ns)
+                    internals=internals, started_ns=started_ns)
         if stream_mode is not None:
             task = asyncio.create_task(request.app.state.pipeline.run(
                 request_id, tenant, body, app_policy=app_policy, profile=profile,
-                session_id=client_session_id))
+                session_id=client_session_id, internals=internals))
             keepalive = s.serving.stream_keepalive_s
             done, _ = await _wait_or_cancel_on_shutdown(task, keepalive)
             if not done:
@@ -427,12 +435,13 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
                     body=body, tenant=tenant, app_policy=app_policy,
                     app_langfuse=app_langfuse, profile=profile,
                     session_id=session_id, s=s, started=started,
+                    internals=internals,
                     started_ns=started_ns))
             resp = task.result()   # raises -> the except clauses below map it
         else:
             task = asyncio.create_task(request.app.state.pipeline.run(
                 request_id, tenant, body, app_policy=app_policy, profile=profile,
-                session_id=client_session_id))
+                session_id=client_session_id, internals=internals))
             resp = await _await_unless_disconnected(
                 task, request.is_disconnected, s.serving.stream_keepalive_s)
     except HTTPException:
@@ -456,7 +465,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
     await _finalize(request, resp, body=body, tenant=tenant, app_policy=app_policy,
                     app_langfuse=app_langfuse, profile=profile,
                     session_id=session_id, s=s, request_id=request_id,
-                    started_ns=started_ns)
+                    internals=internals, started_ns=started_ns)
     if stream_mode is None:
         return resp
     # verified_then_stream: the pipeline already ran the FULL request above
@@ -538,6 +547,7 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
                     tenant: str, app_policy: AppPolicyView,
                     app_langfuse: object | None, profile: AppPrivacyProfile,
                     session_id: str | None, s, request_id: str,
+                    internals: dict | None = None,
                     started_ns: int | None = None) -> None:
     """Post-model-call processing shared by every response shape (non-stream
     and every streaming mode): telemetry export, the first-party console
@@ -547,7 +557,13 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
     behavior is unchanged, only the call site moved so streaming responses
     can reuse it too. `body`/`profile` are the request body and the app's
     resolved privacy profile the pipeline call itself used, needed here for
-    the display-redaction block and egress recognizers."""
+    the display-redaction block and egress recognizers.
+
+    `internals` is the dict `chat_completions` handed the pipeline call
+    (`Pipeline.run`/`run_stream`), carrying the gate's raw flattened prompt and
+    the request's own detector. Both I/O surfaces here -- the Langfuse trace
+    and `resp["display"]` -- build their own redacted copy from those, and
+    neither value is ever on `resp`."""
     # OpenAI envelope (step 10): every response shape is assembled as a dict in
     # the pipeline WITHOUT these two fields, but OpenAI-compatible clients (the
     # `openai` SDK, LangChain's ChatOpenAI, etc.) require both — the SDK's
@@ -575,12 +591,33 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
     # here, outside the try, makes their removal structural: even if anything in
     # the telemetry block below raised, `resp` (returned to the client) can no
     # longer carry them. They're consumed only inside the try, via these locals.
-    sanitized_prompt = resp.pop("sanitized_prompt", "")
+    # `sanitized_prompt` is the MODEL's view of the request. No I/O surface
+    # reads it any more (that reuse WAS CE-1); it is popped purely so it cannot
+    # reach the client, a snapshot or the usage row.
+    resp.pop("sanitized_prompt", None)
     raw_completion = resp.pop("raw_completion", "")   # pre-verify; NEVER client-visible
     # Pre-egress-redaction tool_calls (Task 2) -- same never-client-visible
     # contract as `raw_completion` immediately above, popped at the same
     # chokepoint so it can never leak through any response shape.
     raw_tool_calls = resp.pop("raw_tool_calls", None)
+    # The gate's RAW flattened scan text and the request's own detector, from
+    # the pipeline's out-parameter (`Pipeline._publish_telemetry_views`) rather
+    # than from `resp` -- neither may ever be serialized, and the way to
+    # guarantee that is for them never to be on the dict that gets serialized.
+    # Together they are what lets the two I/O surfaces below build their OWN
+    # redacted copy instead of reusing the gate's model-facing view (design
+    # §2.6 / CE-1). `detector is None` means nothing scanned this request, so
+    # no redacted copy exists at all -- and an absent/empty `internals` (a
+    # caller that supplied none) reads the same way, which is the fail-closed
+    # direction.
+    internals = internals or {}
+    raw_prompt = internals.get("raw_prompt") or ""
+    detector = internals.get("detector")
+    # The gate's redaction OF `raw_prompt` with THAT detector -- the three come
+    # off one frozen `Representations`, so the pairing holds. Both surfaces
+    # below pass it as `prepared=` to skip re-running the detector over a
+    # string it has already scanned; the regex egress pass still runs.
+    redacted_prompt = internals.get("redacted_prompt")
     try:
         # Eval-capture (docs/archive/eval-logging-backlog.md; current capture_io
         # contract in docs/reference/per-app-config.md): when capture_io is
@@ -590,12 +627,20 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
         # mode — routes.py never decides what leaves; the exporter path does.
         # Per-app capture_io (B14) overrides the global default; null = inherit.
         capture_io = app_policy.capture_io or s.serving.observability.langfuse.capture_io
-        # Fail-closed clamp: `full` stores RAW, permitted only for a non-onprem app
-        # with its OWN Langfuse project (so raw lands only in a residency-local
-        # project). Otherwise downgrade to `redacted` — never store raw (CLAUDE.md rules 2/8).
-        if capture_io == "full" and (
-                app_policy.residency == "onprem_only" or app_langfuse is None):
-            capture_io = "redacted"
+        # NO residency clamp here any more (design §2.6, CE-1). It used to turn
+        # `full` into `redacted` for ANY onprem_only app whatever its
+        # policy_mode -- and the `redacted` path then re-exported the gate's
+        # model-facing view, which under `passthrough` IS the raw text. A
+        # placement setting silently rewrote telemetry protection, into a mode
+        # that did not protect. Placement and protection are separate axes
+        # (CLAUDE.md rule 2a); `residency` decides where compute may run and
+        # nothing else. What `full` still requires -- the app's own Langfuse
+        # project, and a declared no-protection posture for an onprem_only app
+        # -- is checked once, at write time, by `validate_effective`
+        # (app/policy/compile.py), and enforced again independently at the
+        # export boundary by `export_trace`/`resolve_capture_io`, which is
+        # where a downgrade can be made while there is still nothing authored
+        # to leak.
         prompt = (body.messages[-1].content or "") if body.messages else ""
         completion = ""
         try:
@@ -608,6 +653,13 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
         # (own-project telemetry) away from it -- see `_full_capture_io`'s
         # docstring (fix round 1: display must never carry raw tool_calls).
         display_completion = completion
+        # Resolve the capture BEFORE shaping anything for it: `full` needs the
+        # app's own Langfuse project (CLAUDE.md rule 2) and `redacted` needs a
+        # detector that actually ran, and both answers have to be known before
+        # the whole-exchange `full` payload is built. Same function the export
+        # boundary calls, so the two can't disagree.
+        capture_io = resolve_capture_io(
+            capture_io, has_own_project=app_langfuse is not None, detector=detector)
         if capture_io == "full":
             # `full` stores the WHOLE exchange in the app's own project, not
             # just the last message's text: an agentic client's earlier turns,
@@ -615,27 +667,17 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
             # the load-bearing part of its trace.
             prompt, completion, raw_completion, display_completion = _full_capture_io(
                 body, resp, prompt, completion, raw_completion, raw_tool_calls)
-        # First-party console view (Phase C Part 1). Mode-appropriate bodies for
-        # the admin drilldown ONLY — this is the request_snapshots cache, same
-        # residency boundary as serving, NOT a telemetry egress (export_trace
-        # is unchanged).
-        # `choices[]` stays raw for the calling client; this is additive metadata.
-        if capture_io == "full":
-            resp["display"] = {"mode": "full", "input": prompt, "output": display_completion}
-        elif capture_io == "redacted":
-            resp["display"] = {
-                "mode": "redacted",
-                "input": sanitized_prompt or redact(prompt, recognizers=profile.recognizers),
-                "output": redact(completion, recognizers=profile.recognizers),
-            }
-        else:  # "off"
-            resp["display"] = {"mode": "off", "input": None, "output": None}
         te = export_trace(
             request_id=resp["id"], tenant_id=tenant, model=resp["model"],
             cost=resp["cost"], policy=resp["policy"], trace=resp["trace"],
             application_id=tenant, app_langfuse=app_langfuse,
             capture_io=capture_io, prompt=prompt, completion=completion,
-            sanitized_prompt=sanitized_prompt, raw_completion=raw_completion,
+            # The gate's RAW flattened text and the request's OWN detector: the
+            # exporter builds its own redacted copy from them (design §2.6) and
+            # never reuses the view the model was given. `detector is None` is
+            # its fail-closed signal, not an invitation to export raw.
+            raw_prompt=raw_prompt, redacted_prompt=redacted_prompt,
+            detector=detector, raw_completion=raw_completion,
             # Task 8: thread the app's custom recognizers (already resolved
             # above for the pipeline run, Task 7) into egress redaction so a
             # custom entity type (e.g. a hospital's MRN pattern) is masked in
@@ -645,6 +687,38 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
             routing_policy_version=s.routing_policy_version,
             prompt_version=s.prompt_version,
             started_ns=started_ns, usage=resp.get("usage"))
+        # First-party console view (Phase C Part 1). Mode-appropriate bodies for
+        # the admin drilldown ONLY — this is the request_snapshots cache, same
+        # residency boundary as serving, NOT a telemetry egress.
+        # `choices[]` stays raw for the calling client; this is additive metadata.
+        #
+        # It is the SECOND I/O surface, so it obeys the same two rules as the
+        # first: it is keyed off what `export_trace` ACTUALLY exported
+        # (`te.capture_io`, which can be one step lower than the value above if
+        # the per-app tracer failed to build), and its `redacted` bodies are
+        # built by the shared `redacted_copy` from the raw values, never from
+        # the gate's model-facing view. Before this, `display` was fed
+        # `sanitized_prompt` — which under `passthrough` is the raw prompt —
+        # and so leaked exactly what telemetry now protects (CE-1).
+        if te.capture_io == "full":
+            resp["display"] = {"mode": "full", "input": prompt, "output": display_completion}
+        elif te.capture_io == "redacted":
+            resp["display"] = {
+                "mode": "redacted",
+                # `prepared` pairs with `raw_prompt` and only with it (the
+                # gate redacted that exact string, not the `prompt` fallback).
+                "input": (redacted_copy(raw_prompt, detector,
+                                        profile.recognizers,
+                                        prepared=redacted_prompt)
+                          if raw_prompt else
+                          redacted_copy(prompt, detector, profile.recognizers)),
+                # The CLIENT-facing body (never `completion`, which on the
+                # `full` branch above carries the model's raw tool_calls).
+                "output": redacted_copy(display_completion, detector,
+                                        profile.recognizers),
+            }
+        else:  # "off"
+            resp["display"] = {"mode": "off", "input": None, "output": None}
         # Live deep-link for the UI's "Langfuse trace" button, and the raw hex
         # trace id for an external eval/RLHF consumer (F1 Phase D task 2).
         # Both None when telemetry is off → the UI hides the link. Set before
@@ -759,6 +833,7 @@ async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
                             tenant: str, app_policy: AppPolicyView,
                             app_langfuse: object | None, profile: AppPrivacyProfile,
                             session_id: str | None, s, started: float,
+                            internals: dict | None = None,
                             started_ns: int | None = None) -> AsyncIterator[str]:
     """SSE for a streamed request whose complete, verified answer is not ready
     within one keepalive interval. Sends a keepalive comment each interval until
@@ -842,7 +917,7 @@ async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
             await _finalize(request, resp, body=body, tenant=tenant, app_policy=app_policy,
                             app_langfuse=app_langfuse, profile=profile,
                             session_id=session_id, s=s, request_id=request_id,
-                            started_ns=started_ns)
+                            internals=internals, started_ns=started_ns)
         message = resp["choices"][0]["message"]
         async for frame in chunk_text(request_id, resp["model"], message["content"] or "",
                                       tool_calls=message.get("tool_calls")):
@@ -882,7 +957,7 @@ def _stream_unverified_response(
         deltas: AsyncIterator[str], get_meta: Callable[[], dict],
         body: ChatRequest, tenant: str, app_policy: AppPolicyView,
         app_langfuse: object | None, profile: AppPrivacyProfile,
-        session_id: str | None, s,
+        session_id: str | None, s, internals: dict | None = None,
         started_ns: int | None = None) -> StreamingResponse:
     """Live token-forwarding SSE for `stream_unverified` (real backend
     streaming). Emits an OpenAI-style role frame, forwards each `deltas` token
@@ -918,7 +993,7 @@ def _stream_unverified_response(
                 get_meta=get_meta, meta=meta, body=body, tenant=tenant,
                 app_policy=app_policy, app_langfuse=app_langfuse,
                 profile=profile, session_id=session_id, s=s,
-                started_ns=started_ns)
+                internals=internals, started_ns=started_ns)
 
     return sse_response(_gen())
 
@@ -928,7 +1003,7 @@ def _incremental_verify_response(
         deltas: AsyncIterator[str], get_meta: Callable[[], dict],
         body: ChatRequest, tenant: str, app_policy: AppPolicyView,
         app_langfuse: object | None, profile: AppPrivacyProfile,
-        session_id: str | None, s,
+        session_id: str | None, s, internals: dict | None = None,
         started_ns: int | None = None) -> StreamingResponse:
     """Live token streaming for `incremental_verify` (Task 7). Real backend
     deltas are piped through a hold-back `StreamingVerifier` before egress, so
@@ -977,6 +1052,7 @@ def _incremental_verify_response(
                 get_meta=get_meta, meta=meta, body=body, tenant=tenant,
                 app_policy=app_policy, app_langfuse=app_langfuse,
                 profile=profile, session_id=session_id, s=s,
+                internals=internals,
                 verify_performed=True, verify_reason="incremental",
                 client_text="".join(released),
                 started_ns=started_ns)
@@ -989,7 +1065,7 @@ async def _finalize_stream(
         get_meta: Callable[[], dict], meta: dict | None,
         body: ChatRequest, tenant: str, app_policy: AppPolicyView,
         app_langfuse: object | None, profile: AppPrivacyProfile,
-        session_id: str | None, s,
+        session_id: str | None, s, internals: dict | None = None,
         verify_performed: bool = False,
         verify_reason: str = "waived: stream_unverified",
         client_text: str | None = None,
@@ -1046,7 +1122,8 @@ async def _finalize_stream(
         await _finalize(request, resp, body=body, tenant=tenant,
                         app_policy=app_policy, app_langfuse=app_langfuse,
                         profile=profile, session_id=session_id, s=s,
-                        request_id=request_id, started_ns=started_ns)
+                        internals=internals, request_id=request_id,
+                        started_ns=started_ns)
     except Exception:  # finalize must never break the (already sent) stream
         log.exception("streaming finalize failed (swallowed)")
 

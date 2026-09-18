@@ -150,6 +150,18 @@ class AppPolicy(Base):
     # type-independent complement to pii_entity_denylist. US_SSN can never be
     # exempted (FilteredDetector.PROTECTED_ENTITIES). null/[] = no exemption.
     pii_exempt_patterns: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # --- P1a data-handling axes. null = inherit (resolved by
+    # app/policy/compile.py). `policy_mode` remains a PRESET over
+    # model_input/client_output; an explicit value here beats the preset, and
+    # the allow_app_passthrough ceiling beats both.
+    model_input: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    client_output: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    content_integrity: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Declared cross-axis rule switch: may a detected entity RAISE this app's
+    # residency? null = true (today's behavior). false only ever prevents
+    # tightening -- it can never lower the app's own residency floor.
+    escalate_residency_on_detection: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True)
 
     application: Mapped[Application] = relationship(back_populates="policy")
 

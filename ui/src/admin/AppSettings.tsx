@@ -334,8 +334,20 @@ function protectionSummary(p: AdminPolicy, effPolicyMode: string, effPii: string
   if (patterns.length) narrowing.push(plural(patterns.length, "exempt value"));
 
   if (effPolicyMode === "passthrough") {
+    const inherited = p.policy_mode ? "" : " (deployment default)";
+    // `passthrough` means NOTHING IS REDACTED — it does not by itself mean
+    // nothing is detected. It resolves `pii_detection` to `off` only for an
+    // app that names no detector; an app that names one keeps detection, its
+    // recognizers and residency escalation (compile.py:344-346,
+    // pipeline.py:230-239). Saying "protection off" for that row is CE-3 in
+    // copy. Branching on the app's own column is a fact about the row, not a
+    // re-derivation of the compiler's precedence.
+    if (p.pii_detection && p.pii_detection !== "off") {
+      const kept = narrowing.length ? ` · ${narrowing.join(" · ")}` : "";
+      return `passthrough — nothing redacted${inherited} · detection ${p.pii_detection} still runs${kept}`;
+    }
     const kept = narrowing.length ? ` · ${narrowing.join(" · ")} kept` : "";
-    return `passthrough — protection off${p.policy_mode ? "" : " (deployment default)"}${kept}`;
+    return `passthrough — nothing redacted, nothing detected${inherited}${kept}`;
   }
   const bits = [`enforced${p.policy_mode ? "" : " (deployment default)"}`];
   bits.push(`detection ${effPii ?? "deployment default"}${p.pii_detection ? "" : " (inherited)"}`);
@@ -1018,34 +1030,55 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
   // server does NOT fold that into its downgrade clamp. Named here only for the
   // summary line; the clamp below still keys on the per-app override alone.
   const effPii = p.pii_detection ?? deployment?.default_pii_detection ?? null;
-  // `full` is refused for an onprem_only app only while it is still in the
-  // `enforced` posture (PR #34 — residency is placement, policy_mode is
-  // protection; onprem_only + passthrough + full is valid).
+  // `full` is refused for an onprem_only app that has not declared the
+  // no-protection posture. SERVER-DRIVEN, not a mirror: the rule is
+  // `model_input == "raw" AND client_output == "raw"` (app/policy/compile.py,
+  // CAPTURE_FULL_ONPREM_NEEDS_NO_PROTECTION) — two independent axes, not a
+  // `policy_mode` string. This used to test `effPolicyMode !== "passthrough"`
+  // and had already drifted stricter than the API: an app configured over the
+  // admin API as onprem_only + model_input: raw + client_output: raw +
+  // capture_io: full with NO policy_mode set is legal server-side, yet the
+  // console showed `full` blocked and told the operator to set a field it
+  // does not need. `app.effective` is `_effective_dict`'s compiled answer for
+  // this app's CURRENTLY SAVED policy (ceilings and all) — read it, exactly as
+  // `redactedBlocked` below reads `app.effective.detection`; never re-derive
+  // the precedence here.
   //
-  // Both capture clamps take the posture as a PARAMETER rather than reading
-  // `passthrough` directly. One copy of each rule, still — but a recipe sets
-  // policy_mode itself, so it must ask "would this be refused AFTER the recipe
-  // lands?" and not be told the answer for the posture the app is leaving.
-  const fullBlockedFor = (mode: string) => !hasOwnProject
+  // Absent `effective` (no deployment context — no such caller exists today)
+  // reads as "unknown, don't block", same as `redactedBlocked`: the server
+  // refuses the write and its 422 renders under Save.
+  const effNoProtection = app.effective
+    ? app.effective.model_input === "raw" && app.effective.client_output === "raw"
+    : true;
+  // The posture is a PARAMETER rather than read directly, because a recipe
+  // sets it itself: the preview must ask "would this be refused AFTER the
+  // recipe lands?" and not be told the answer for the posture the app is
+  // leaving.
+  const fullBlockedForPosture = (noProtection: boolean) => !hasOwnProject
     ? "needs this app's own Langfuse project"
-    : effResidency === "onprem_only" && mode !== "passthrough"
-      ? "onprem_only + enforced — set policy_mode = passthrough"
+    : effResidency === "onprem_only" && !noProtection
+      ? "onprem_only without a declared no-protection posture — set model_input and client_output to raw (policy_mode = passthrough is the preset for both)"
       : null;
-  const fullBlocked = fullBlockedFor(effPolicyMode);
-  // `redacted` reuses the gate's sanitized prompt, so it is refused wherever
-  // nothing is sanitized. Note pii_detection = null means "inherit the live
-  // global detector", which the server does NOT treat as a downgrade — only an
-  // explicit `off` trips this. `regex` is NOT blocked: the RegexDetector still
-  // redacts (SSN/card/email/custom recognizers), so the sanitized prompt is
-  // not raw — lower fidelity than presidio (it misses entities without a
-  // pattern, e.g. names), but genuinely redacted, so `redacted` telemetry is
-  // valid under `regex`.
-  const redactedBlockedFor = (mode: string) => mode === "passthrough"
-    ? "policy_mode = passthrough sanitizes nothing"
-    : p.pii_detection === "off"
-      ? `pii_detection = ${p.pii_detection} sanitizes nothing`
-      : null;
-  const redactedBlocked = redactedBlockedFor(effPolicyMode);
+  const fullBlocked = fullBlockedForPosture(effNoProtection);
+  // `redacted` needs a detector to redact WITH. THIS control is now
+  // server-driven, not a mirror (Task 9 review round 1 — a Fix-round-1
+  // Important finding): it used to re-derive `compile_policy`'s `detection`
+  // axis resolution client-side and omitted the `allow_pii_downgrade`
+  // ceiling clamp (app/policy/compile.py ~line 309), which reassigns
+  // `detection` back to the deployment default whenever the ceiling forbids
+  // landing on off/regex — INCLUDING when the passthrough PRESET (not just
+  // an explicit per-app override) put it there. Concrete drift that produced:
+  // `allow_app_pii_downgrade: false` + `policy_mode: passthrough` compiles
+  // server-side to the deployment default detector, making `capture_io:
+  // redacted` legal — but the old client mirror computed "off" and blocked
+  // Save regardless. `app.effective.detection` is the admin GET/PUT
+  // response's compiled value (`_effective_dict`, app/api/admin_routes.py) —
+  // exactly what `compile_policy` resolved for THIS app's CURRENTLY SAVED
+  // policy, ceilings and all. Reading it directly is the fix: no rung to
+  // omit, because nothing here re-implements the precedence any more.
+  const redactedBlocked = app.effective?.detection === "off"
+    ? "pii_detection resolves to off — nothing to redact telemetry with"
+    : null;
   // stream_unverified waives step 9 outright, which onprem_only may never do
   // (set_policy 422s on the pair; app/pipeline.py backstops it at runtime).
   const streamUnverifiedBlocked = effResidency === "onprem_only"
@@ -1055,6 +1088,30 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
   // enforced here: the write is what the server refuses.
   const passthroughCeiling = deployment && !deployment.allow_app_passthrough;
   const piiDowngradeCeiling = deployment && !deployment.allow_app_pii_downgrade;
+
+  // PREDICTIVE ONLY — used below by `recipeWarning` to preview a recipe's
+  // effect BEFORE it is saved. Unlike `redactedBlocked` above (which now
+  // reads the server's already-compiled `app.effective`, the CURRENTLY SAVED
+  // policy), this has to answer for a hypothetical `policy_mode` the app
+  // does not have yet, and there is no endpoint that compiles a draft policy
+  // — so it stays a client-side approximation of `compile_policy`'s
+  // precedence, folding in the SAME `allow_pii_downgrade` ceiling
+  // `redactedBlocked` is now driven by server-side, so the two don't drift
+  // apart from EACH OTHER even though this one can still drift from the
+  // compiler on a rung neither of us has thought of yet. It is advisory text
+  // only (see the "Nothing here disables Apply" note below) — the
+  // authoritative answer for any saved state is always `app.effective`, and
+  // for an unsaved one, Save's own 422.
+  const predictedDetectionFor = (mode: string) => {
+    const raw = p.pii_detection ?? (mode === "passthrough" ? "off" : (effPii ?? undefined));
+    return (!piiDowngradeCeiling || (raw !== "off" && raw !== "regex"))
+      ? raw
+      : (deployment?.default_pii_detection ?? undefined);
+  };
+  const predictedRedactedBlockedFor = (mode: string) =>
+    predictedDetectionFor(mode) === "off"
+      ? "pii_detection resolves to off — nothing to redact telemetry with"
+      : null;
 
   // --- recipes -------------------------------------------------------------
   // What the operator is told BEFORE applying a recipe: the prerequisite it
@@ -1081,7 +1138,16 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
       );
     }
     if (r.sets.capture_io === "full") {
-      const blocked = fullBlockedFor(mode);
+      // PREDICTIVE, like `predictedDetectionFor` above: `passthrough` is the
+      // preset that resolves BOTH data-handling axes to `raw`, so a recipe
+      // setting it lands in the no-protection posture and `enforced` does not.
+      // An explicit per-app `model_input`/`client_output` outranks the preset
+      // server-side, but neither axis is editable (or returned) on this form
+      // today, so the preset is the whole of what the console can predict; the
+      // authoritative answer for any SAVED state is `app.effective` above, and
+      // for an unsaved one, Save's own 422.
+      const blocked = fullBlockedForPosture(
+        mode === "passthrough" ? true : effNoProtection);
       if (blocked) {
         out.push(
           <>
@@ -1091,7 +1157,7 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
       }
     }
     if (r.sets.capture_io === "redacted") {
-      const blocked = redactedBlockedFor(mode);
+      const blocked = predictedRedactedBlockedFor(mode);
       if (blocked) {
         out.push(
           <>
@@ -1148,14 +1214,21 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
 
   const models = modelsText.split(",").map((m) => m.trim()).filter(Boolean);
   const detectionOpen = detectionOverride ?? !passthrough;
+  const narrowingBits = [
+    denylist.length ? plural(denylist.length, "exempt type") : null,
+    exemptPatterns.filter(Boolean).length ? plural(exemptPatterns.filter(Boolean).length, "exempt value") : null,
+    p.pii_score_threshold !== null && p.pii_score_threshold !== undefined ? `min conf ${p.pii_score_threshold}` : null,
+  ].filter(Boolean).join(" · ");
+  // "inert while passthrough" is only true for an app that names NO detector —
+  // that is the row `passthrough` resolves `pii_detection` to `off` for
+  // (compile.py:344-346). An app that names `regex`/`presidio` keeps detection,
+  // its recognizers and residency escalation under `passthrough`, so this group
+  // is live for it and the narrowing levers below genuinely apply. Calling that
+  // "inert" is counterexample CE-3 in copy.
   const detectionSummary = passthrough
-    ? `inert while passthrough — ${
-        [
-          denylist.length ? plural(denylist.length, "exempt type") : null,
-          exemptPatterns.filter(Boolean).length ? plural(exemptPatterns.filter(Boolean).length, "exempt value") : null,
-          p.pii_score_threshold !== null && p.pii_score_threshold !== undefined ? `min conf ${p.pii_score_threshold}` : null,
-        ].filter(Boolean).join(" · ") || "nothing set"
-      } kept`
+    ? (p.pii_detection && p.pii_detection !== "off"
+        ? `${p.pii_detection} still runs under passthrough (nothing redacted)${narrowingBits ? ` · ${narrowingBits}` : ""}`
+        : `inert while passthrough — ${narrowingBits || "nothing set"} kept`)
     : `${p.pii_detection ?? "inherited detector"}${
         denylist.length ? ` · ${plural(denylist.length, "exempt type")}` : ""
       }${exemptPatterns.filter(Boolean).length ? ` · ${plural(exemptPatterns.filter(Boolean).length, "exempt value")}` : ""}`;
@@ -1173,7 +1246,20 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
           <span aria-hidden className="text-gray-600">·</span>
           <span>capture {effCapture ?? "?"}</span>
           <span aria-hidden className="text-gray-600">·</span>
-          <span>detection {passthrough ? "off (passthrough)" : effPii ?? "?"}</span>
+          {/* The SERVER's compiled value, never a client-side re-derivation.
+              This used to hardcode "off (passthrough)", which is false for a
+              passthrough app that names a detector — exactly counterexample
+              CE-3's population. `app.effective.detection` is what
+              `compile_policy` resolved for this app's CURRENTLY SAVED policy,
+              ceilings and preset folded in (`_effective_dict`,
+              app/api/admin_routes.py), so there is no precedence rung for this
+              strip to get wrong. It reports the saved state, so while step 3
+              has unsaved edits it is labelled as such rather than quietly
+              disagreeing with the control above it. */}
+          <span>
+            detection {app.effective?.detection ?? effPii ?? "?"}
+            {dirty[3] && <span className="text-gray-500"> (saved)</span>}
+          </span>
         </span>
         {dirtySteps.length > 0 && (
           <span className="ml-auto text-xs text-accent">
@@ -1310,16 +1396,60 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
         </Row>
 
         {/* The consequence is stated where the operator picks it, not in a
-            tooltip. Owner voice, and only what is actually true: passthrough
-            removes protection and touches nothing else. */}
-        {passthrough && (
+            tooltip. Owner voice, and only what is actually true.
+
+            `passthrough` is a PRESET over two axes -- model_input and
+            client_output, both to `raw` -- not a master switch. It resolves
+            `pii_detection` to `off` ONLY for an app that names no detector
+            (app/policy/compile.py:344-346). An app that names one keeps it:
+            entities are still detected, classified and reported, its custom
+            recognizers still run (app/pipeline.py:230-239), and a declared
+            sensitivity rule can still raise residency. Only redaction stops.
+            That an app's own `pii_detection` used to be ignored under
+            `passthrough` was counterexample CE-3, so a banner that still
+            claims "nothing is detected" for those rows is the same bug in
+            copy.
+
+            `namesDetector` reads the app's own COLUMN -- a fact about the
+            row, not a client-side re-derivation of the compiler's
+            precedence. The RESOLVED kind comes from the server's
+            `app.effective.detection` (the compiled value for the saved
+            policy), never recomputed here. */}
+        {passthrough && (() => {
+          const namesDetector = !!p.pii_detection && p.pii_detection !== "off";
+          const savedDetection = app.effective?.detection;
+          return (
           <div className="rounded-md border border-frontier bg-frontier/10 text-frontier px-3 py-2 text-xs flex items-start gap-2">
             <span aria-hidden>⚠</span>
             <span>
-              <strong>Protection is off for this application.</strong> Nothing is detected and
-              nothing is redacted, in either direction — the prompt reaches the model verbatim
-              and the completion comes back verbatim. Custom recognizers and sensitivity rules
-              do not run.
+              <strong>Nothing is redacted for this application, in either direction.</strong>{" "}
+              The prompt reaches the model verbatim and the completion comes back verbatim
+              (<code className="font-mono">model_input</code> and{" "}
+              <code className="font-mono">client_output</code> both resolve to{" "}
+              <code className="font-mono">raw</code>).
+              {namesDetector ? (
+                <>
+                  {" "}<strong>Detection still runs.</strong> This app names{" "}
+                  <code className="font-mono">pii_detection = {p.pii_detection}</code>
+                  {savedDetection && savedDetection !== p.pii_detection
+                    ? <> (last saved policy resolves to{" "}
+                        <code className="font-mono">{savedDetection}</code>)</>
+                    : null}, so entities are still detected, classified and reported on the
+                  trace, this app&rsquo;s custom recognizers still run, and a sensitivity rule
+                  can still <em>raise</em> residency. Redaction is the only thing that stops.
+                  Clear the detector to &ldquo;(global default)&rdquo; or set it to{" "}
+                  <code className="font-mono">off</code> if you want nothing scanned at all.
+                </>
+              ) : (
+                <>
+                  {" "}<strong>Nothing is detected either.</strong> This app names no detector,
+                  so <code className="font-mono">passthrough</code> resolves{" "}
+                  <code className="font-mono">pii_detection</code> to{" "}
+                  <code className="font-mono">off</code>: custom recognizers and sensitivity
+                  rules do not run, and no entity can raise residency. Name a detector below
+                  to keep detection while redaction stays off.
+                </>
+              )}
               <br />
               What continues unchanged: routing and tier selection, budgets, rate limits,
               usage metering, the full decision trace, and Langfuse tracing.
@@ -1335,13 +1465,17 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
               save is refused with that reason.
             </span>
           </div>
-        )}
+          );
+        })()}
 
         {/* The three narrowing knobs + the detector choice are refinements
-            WITHIN the enforced posture. In passthrough nothing is detected, so
-            they do nothing — collapsed to one line and labelled, but deliberately
-            still editable and never cleared: a posture toggle must not destroy
-            the operator's stored configuration. */}
+            WITHIN the enforced posture. Under passthrough they still do
+            nothing for an app that names no detector (detection resolves to
+            `off`), which is the common case — so the group collapses to one
+            line and is labelled, but is deliberately still editable and never
+            cleared: a posture toggle must not destroy the operator's stored
+            configuration, and naming a detector here is exactly how a
+            passthrough app keeps detection while redaction stays off. */}
         <SubGroup
           title="Detection & narrowing"
           summary={detectionSummary}
@@ -1484,10 +1618,14 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
               What this app's traces carry. Raw I/O only ever reaches this app's own Langfuse
               project — never the shared one, which fails closed to{" "}
               <code className="font-mono">redacted</code> if the project is missing. An onprem_only
-              app must first declare <code className="font-mono">policy_mode = passthrough</code>{" "}
-              (step 3) before <code className="font-mono">full</code> is permitted: residency is
-              placement, policy_mode is protection, and it is the protection posture the capture
-              ceiling keys on.
+              app must first declare a no-protection posture before{" "}
+              <code className="font-mono">full</code> is permitted — that is{" "}
+              <code className="font-mono">model_input = raw</code> AND{" "}
+              <code className="font-mono">client_output = raw</code>, the two axes the server
+              actually checks. <code className="font-mono">policy_mode = passthrough</code> (step 3)
+              is the preset that resolves both, and setting the axes directly over the admin API
+              does the same. Residency is placement; these are protection, and it is the protection
+              posture the capture ceiling keys on.
             </>
           }>
           <select id={`${uid}-capture`} value={p.capture_io ?? ""}

@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 from app.config.schema import Settings
 from app.models import Entity, ExecutionPolicyContext
+from app.policy.compile import compile_policy, resolve_residency
 
 if TYPE_CHECKING:  # avoid importing the apps layer at module load
     from app.apps.policy import AppPolicyView
@@ -28,9 +29,32 @@ def _match_rule(rules, etypes: set[str]):
     return rules[-1]  # the public/empty rule
 
 
+def match_sensitivity_rule(settings: Settings, app_rules: list | None,
+                           etypes: set[str]):
+    """The one declared cross-axis rule (design §5) for these detected entity
+    types: the app's own resolved `sensitivity_rules` when it has a privacy
+    profile, else `config/policy.yaml`'s.
+
+    Exposed so the gate can hand the SAME matched rule to
+    `app/policy/compile.py::apply_signals` that `build_context` below uses,
+    instead of each re-deriving it and drifting.
+    """
+    rules = app_rules if app_rules is not None else settings.policy.sensitivity_rules
+    return _match_rule(rules, etypes)
+
+
 def _placement_providers(settings: Settings, residency: str,
                          app_policy: "AppPolicyView | None",
                          registry: "ModelRegistry | None") -> set[str]:
+    # Fail closed on a residency this function does not recognise. The `else`
+    # branch below is the loosest placement there is, so an unparseable value
+    # used to hand the request every enabled provider, cloud included, while
+    # `compile_policy` denied the very same value to `onprem_only` -- CLAUDE.md
+    # rules 3 and 5, and the defect the Task 10 harness found. Resolved through
+    # the compiler's own `resolve_residency` so the two cannot disagree. This
+    # is the second line of defence behind `build_context`'s (below); it is
+    # kept because `requestable_models` calls in here directly.
+    residency, _parsed = resolve_residency(residency)
     enabled = {p for p, c in settings.serving.providers.items() if c.enabled}
     # On-prem availability is derived from the registry, not a boot flag: with no
     # healthy onboarded on-prem model, drop "onprem" from `enabled` so an
@@ -117,12 +141,38 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
                   app_policy: "AppPolicyView | None" = None,
                   app_rules: list | None = None,
                   registry: "ModelRegistry | None" = None,
+                  escalate_residency: bool = True,
+                  content_integrity: str | None = None,
                   ) -> ExecutionPolicyContext:
+    """Step 3: the immutable ExecutionPolicyContext.
+
+    `content_integrity` is the app's COMPILED
+    `eff.protection.content_integrity` (design §2.2), threaded in by
+    `app/policy/gate.py` from the same `EffectivePolicy` every other consumer
+    reads. It used to be read straight off `app_policy.content_integrity`
+    here — a second resolution path for one axis, agreeing with the compiler
+    only by coincidence (same shape as the residency fail-open the Hypothesis
+    harness found: `_get(...) or default` in one place, a raw column read in
+    another). `None` means "no caller supplied one", and the compiler is then
+    run here rather than the precedence being re-implemented — so this
+    function has no way to answer differently from `compile_policy`.
+
+    `escalate_residency` is the app's compiled
+    `escalate_residency_on_detection` (design §5) — whether the declared
+    cross-axis rule may raise PLACEMENT for this app. It is the only switch
+    over placement here, and it is one-directional: the rule may **tighten**
+    residency and never loosen it, so `False` can only ever leave the app's own
+    residency floor exactly where the operator set it. Sensitivity,
+    `risk_class` and `require_verification` still come from the matched rule
+    either way — they are protection/verification signals, not placement.
+    No protection axis is read anywhere in this function; that is the
+    noninterference property the compiler exists to make checkable.
+    """
     etypes = {e.type for e in entities}
-    if app_rules is not None:
-        rule = _match_rule(app_rules, etypes)
-    else:
-        rule = _match_rule(settings.policy.sensitivity_rules, etypes)
+    rule = match_sensitivity_rule(settings, app_rules, etypes)
+    if content_integrity is None:
+        content_integrity = compile_policy(
+            app_policy, settings).protection.content_integrity
 
     # Residency: stricter of the entity rule and the application's own residency.
     # With a per-app policy we take residency from it (seeded to match
@@ -134,7 +184,15 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
         tenant = settings.policy.tenants.get(
             tenant_id, settings.policy.tenants["default"])
         app_residency = tenant.default_residency
-    residency = _stricter(rule.residency, app_residency)
+    # Resolve through the compiler's authority BEFORE `_stricter` (which would
+    # otherwise KeyError on an unparseable value) and before the placement
+    # filter. An unparseable residency denies to `onprem_only`, so it can never
+    # be routed as `any` -- the same answer `compile_policy` gives for the same
+    # stored value, by construction.
+    app_residency, _parsed = resolve_residency(app_residency)
+    # Raise-only, and only when the app declares the escalation on (default).
+    residency = (_stricter(rule.residency, app_residency) if escalate_residency
+                 else app_residency)
     onprem_only = residency == "onprem_only"
     allowed = _placement_providers(settings, residency, app_policy, registry)
 
@@ -169,5 +227,10 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
         redaction_map_id=redaction_map_id,
         compression_override=(app_policy.compression_enabled
                               if app_policy is not None else None),
+        # The COMPILED axis, never the raw nullable column: one authority
+        # (`compile_policy`), threaded in by the gate or resolved above when a
+        # caller supplies none. A DATA axis only -- computed independently of
+        # `residency`/`rule` above, never folded into the placement decision.
+        content_integrity=content_integrity,
         app_policy_version=(app_policy.version() if app_policy is not None else ""),
     )
