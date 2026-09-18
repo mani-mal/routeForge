@@ -152,6 +152,46 @@ def test_pii_detection_and_stream_mode_round_trip_through_policy_view():
     _run(go())
 
 
+def test_p1a_axes_round_trip_through_policy_view_and_reset_to_null():
+    """The four P1a columns write, read back, and reset to NULL through the
+    same upsert_policy path pii_detection/stream_mode already exercise."""
+    db = _fresh_db()
+
+    async def go():
+        async with db.session() as s:
+            await store.upsert_policy(
+                s, "acme", model_input="raw", client_output="redact",
+                content_integrity="exact",
+                escalate_residency_on_detection=False)
+            await s.commit()
+
+        async with db.session() as s:
+            app = await store.get_application_with_policy(s, "acme")
+            view = policy_view_from(app)
+            assert view.model_input == "raw"
+            assert view.client_output == "redact"
+            assert view.content_integrity == "exact"
+            assert view.escalate_residency_on_detection is False
+
+        # reset path: explicit None writes NULL back (inherit).
+        async with db.session() as s:
+            await store.upsert_policy(
+                s, "acme", model_input=None, client_output=None,
+                content_integrity=None,
+                escalate_residency_on_detection=None)
+            await s.commit()
+
+        async with db.session() as s:
+            app = await store.get_application_with_policy(s, "acme")
+            view = policy_view_from(app)
+            assert view.model_input is None
+            assert view.client_output is None
+            assert view.content_integrity is None
+            assert view.escalate_residency_on_detection is None
+
+    _run(go())
+
+
 def test_usage_summary_quality_aggregate_matches_history_formula():
     """usage_summary must emit token_intelligence_density/cost_intelligence_density
     computed exactly like app/api/history.py:145-146 (quality_sum/tok_sum*1000 and

@@ -530,7 +530,23 @@ ALTER TABLE app_policies ADD COLUMN pii_score_threshold FLOAT;     -- 0.20.x
 ALTER TABLE app_policies ADD COLUMN pii_exempt_patterns JSON;      -- 0.22.0
 ALTER TABLE app_policies ADD COLUMN policy_mode VARCHAR(16);       -- policy_mode release
 ALTER TABLE app_policies ADD COLUMN max_cost_usd_per_request FLOAT; -- 2026-09-15
+ALTER TABLE app_policies ADD COLUMN model_input VARCHAR(16);       -- 2026-09-18 (P1a)
+ALTER TABLE app_policies ADD COLUMN client_output VARCHAR(16);     -- 2026-09-18 (P1a)
+ALTER TABLE app_policies ADD COLUMN content_integrity VARCHAR(32); -- 2026-09-18 (P1a)
+ALTER TABLE app_policies ADD COLUMN escalate_residency_on_detection BOOLEAN; -- 2026-09-18 (P1a)
 ```
+
+> **Upgrade order for the four P1a data-handling columns (2026-09-18): migrate
+> first, then roll the image**, same as `max_cost_usd_per_request` above. These
+> four are added by Task 2 of the policy-compiler-p1a plan (`app/policy/compile.py`)
+> with NO behavior wired to them yet — they add no new decision path on their own —
+> but a later task's `AppPolicyView`/`compile_policy` reads them on every policy
+> lookup, so on a database without them the same `500` failure mode applies once
+> that task's image rolls. Run these `ALTER`s (or `scripts/migrate_app_policies.py`,
+> updated with the same four columns) before rolling any image built from a commit
+> that reads them. All four are nullable with no default; every existing row gets
+> `NULL`, which is "inherit" for each axis, so this migration alone changes no
+> app's effective policy.
 
 > **Upgrade order for `max_cost_usd_per_request` (2026-09-15): migrate first, then roll
 > the image.** Run this `ALTER` (or `scripts/migrate_app_policies.py`) **before** rolling

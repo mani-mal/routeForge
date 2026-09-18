@@ -48,6 +48,13 @@ COLUMNS: list[tuple[str, str, str]] = [
     ("pii_exempt_patterns", "JSON", "JSON"),
     # 2026-09-15 onboarding conformance — per-app per-request cost cap.
     ("max_cost_usd_per_request", "DOUBLE PRECISION", "FLOAT"),
+    # 2026-09-18 P1a policy compiler — the four data-handling axes
+    # (app/policy/compile.py). No behavior wired to them yet (Task 2 only);
+    # added here so the column exists before any later task's image reads them.
+    ("model_input", "VARCHAR(16)", "VARCHAR(16)"),
+    ("client_output", "VARCHAR(16)", "VARCHAR(16)"),
+    ("content_integrity", "VARCHAR(32)", "VARCHAR(32)"),
+    ("escalate_residency_on_detection", "BOOLEAN", "BOOLEAN"),
 ]
 
 

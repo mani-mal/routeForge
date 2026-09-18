@@ -135,6 +135,12 @@ class PolicyIn(BaseModel):
     # detected entity's VALUE (fullmatch). US_SSN can never be exempted
     # (rules 3/8). See docs/reference/per-app-config.md.
     pii_exempt_patterns: list[str] | None = None
+    # P1a data-handling axes (types only here -- validation is Task 3).
+    # None = inherit; see app/policy/compile.py for how these resolve.
+    model_input: str | None = None
+    client_output: str | None = None
+    content_integrity: str | None = None
+    escalate_residency_on_detection: bool | None = None
     # --- the one escape from the merge -------------------------------------
     # This PUT is a MERGE: `null` means "leave the stored value alone", which
     # plenty of callers depend on. That left no way to put a field BACK to NULL

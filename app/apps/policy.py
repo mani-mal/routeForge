@@ -42,6 +42,12 @@ class AppPolicyView:
     pii_entity_denylist: frozenset[str] | None = None  # entity types to NOT redact
     pii_score_threshold: float | None = None  # min Presidio confidence; None = no floor
     pii_exempt_patterns: frozenset[str] | None = None  # regexes; VALUE fullmatch => not redacted
+    # --- P1a data-handling axes. null = inherit; resolved by
+    # app/policy/compile.py::compile_policy, not here.
+    model_input: str | None = None            # None = inherit (policy_mode preset)
+    client_output: str | None = None          # None = inherit (policy_mode preset)
+    content_integrity: str | None = None      # None = inherit (transformations_allowed)
+    escalate_residency_on_detection: bool | None = None  # None = inherit (true)
 
     def version(self) -> str:
         """First 12 hex of sha256 over this app policy's decision-relevant
@@ -51,7 +57,9 @@ class AppPolicyView:
         operator edits residency, policy_mode (the protection posture — an app
         flipped to `passthrough` must never be unprotected invisibly),
         pii_detection, the denylist, the score floor, the value-shape exempt
-        patterns, or a tier/model/provider allowlist (all
+        patterns, a tier/model/provider allowlist, or (when set) one of the
+        P1a data-handling axes (model_input, client_output, content_integrity,
+        escalate_residency_on_detection) -- all
         mutated out-of-band via the admin API, which is exactly what makes a
         stale probe indistinguishable from a live one without this). Sorted-key
         JSON → stable across boots for equal policy. Mirrors
@@ -83,6 +91,18 @@ class AppPolicyView:
         # version hash unchanged (matches the field's null = inherit default).
         if self.max_cost_usd_per_request is not None:
             fields["max_cost_usd_per_request"] = self.max_cost_usd_per_request
+        # P1a data-handling axes: same "fold in only when set" rule, so an app
+        # with all four still-null columns hashes identically to before this
+        # task landed them.
+        if self.model_input is not None:
+            fields["model_input"] = self.model_input
+        if self.client_output is not None:
+            fields["client_output"] = self.client_output
+        if self.content_integrity is not None:
+            fields["content_integrity"] = self.content_integrity
+        if self.escalate_residency_on_detection is not None:
+            fields["escalate_residency_on_detection"] = \
+                self.escalate_residency_on_detection
         blob = json.dumps(fields, sort_keys=True, default=str)
         return hashlib.sha256(blob.encode()).hexdigest()[:12]
 
@@ -114,6 +134,10 @@ def policy_view_from(app: Application) -> AppPolicyView:
         pii_entity_denylist=_fs(p.pii_entity_denylist),
         pii_score_threshold=p.pii_score_threshold,
         pii_exempt_patterns=_fs(p.pii_exempt_patterns),
+        model_input=p.model_input,
+        client_output=p.client_output,
+        content_integrity=p.content_integrity,
+        escalate_residency_on_detection=p.escalate_residency_on_detection,
     )
 
 
