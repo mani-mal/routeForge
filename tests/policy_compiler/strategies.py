@@ -234,17 +234,52 @@ def ceilings(*, malformed: bool = True):
     return st.one_of(good, good, st.sampled_from(MALFORMED_CEILINGS))
 
 
+#: Malformed values for the three deployment DEFAULTS (`default_policy_mode`,
+#: `policy.pii_detection`, `observability.langfuse.capture_io`). Distinct from
+#: `INVALID_VALUES` so a failure says at a glance whether the bad value came
+#: from the app row or from the mounted YAML, and deliberately disjoint from
+#: `UNIMPLEMENTED_VALUES` so a junk default can never be mistaken for a
+#: design-§9 "not implemented" refusal.
+MALFORMED_DEFAULTS = ("", "nope", "PRESIDIO", "None", "yes")
+
+
+def deployment_default(good, *, malformed: bool):
+    legal = st.sampled_from(list(good))
+    if not malformed:
+        return legal
+    # ~20% malformed: enough to exercise every fail-closed guard on the
+    # deployment-default path without spending the budget there.
+    return st.one_of(legal, legal, legal, legal, st.sampled_from(MALFORMED_DEFAULTS))
+
+
 @st.composite
 def deployments(draw, *, malformed_ceilings: bool = False,
+                malformed_defaults: bool = True,
                 cloud_enabled: bool = True):
     """A deployment: both ceilings, the default posture, the global detector,
-    the global capture mode, and whether the cloud providers are switched on."""
+    the global capture mode, and whether the cloud providers are switched on.
+
+    **The deployment DEFAULTS are drawn malformed too, by default.** A mounted
+    `serving.yaml` is not validated against these enums at every upgrade, an
+    env override is a string, and `model_copy(update=…)` skips validation — so
+    `pii_detection: "PRESIDIO"` or a `capture_io` that stringified to `""` is a
+    reachable state of the process. `compile_policy` has explicit fail-closed
+    guards for exactly that (the `not in PII_MODES` / `not in TELEMETRY_IOS`
+    re-checks after `_resolve`), and until this strategy generated malformed
+    defaults those guards had **no property coverage at all** — the paper would
+    have claimed a fail-closed behaviour nothing here exercised.
+
+    `malformed_defaults=False` is for the handful of properties that assert on
+    *which* violation `validate_effective` reports first: a junk deployment
+    default is recorded in `rejected` ahead of the app's own bad value, which
+    changes the code without changing the guarantee.
+    """
     return _settings(
         draw(ceilings(malformed=malformed_ceilings)),
         draw(ceilings(malformed=malformed_ceilings)),
-        draw(st.sampled_from(POLICY_MODES)),
-        draw(st.sampled_from(DETECTIONS)),
-        draw(st.sampled_from(CAPTURE_IOS)),
+        draw(deployment_default(POLICY_MODES, malformed=malformed_defaults)),
+        draw(deployment_default(DETECTIONS, malformed=malformed_defaults)),
+        draw(deployment_default(CAPTURE_IOS, malformed=malformed_defaults)),
         cloud_enabled,
     )
 

@@ -20,7 +20,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
-from hypothesis import assume, given
+from hypothesis import assume, event, example, given
 from hypothesis import strategies as st
 
 from app.apps.policy import AppPolicyView
@@ -30,9 +30,11 @@ from app.policy.compile import (
 )
 from app.routing.router import Router
 from tests.policy_compiler.strategies import (
-    CLOUD_PROVIDERS, COMPILED_RANK, EMPTY_REGISTRY, INVALID_VALUES,
-    ONPREM_REGISTRY, RANK, app_policies, compiled_placement, context_for,
-    deployments, entity_types, protection_axes, valid_app_policies, _settings,
+    CAPTURE_IOS, CLOUD, CLOUD_PROVIDERS, COMPILED_RANK, DETECTIONS,
+    EMPTY_REGISTRY, INVALID_VALUES, ONPREM_REGISTRY, PROTECTION_FIELDS,
+    PROTECTION_VALUES, RANK, RESIDENCIES, app_policies, compiled_placement,
+    context_for, deployments, entity_types, protection_axes,
+    valid_app_policies, _settings,
 )
 
 # The golden table IS invariant 6; it is referenced, never restated (design §7).
@@ -68,13 +70,37 @@ def _tightenings(draw):
     """
     view = draw(valid_app_policies())
     deltas = {}
+    can_tighten = []          # axes with a strictly tighter value available
     for field, ranks in RANK.items():
         current = getattr(view, field)
         if current is None:
             continue
         tighter = sorted((v for v, r in ranks.items() if r >= ranks[current]),
                          key=ranks.get)
+        if len(tighter) > 1:
+            can_tighten.append(field)
         deltas[field] = draw(st.sampled_from(tighter))
+
+    # Guarantee the pair is a REAL tightening whenever one is possible. Without
+    # this every axis may draw its current value, and the property degenerates
+    # into "compile_policy is deterministic" -- true, and not what it claims to
+    # test. When the drawn deltas happen to change nothing, one axis that can
+    # move is bumped one step.
+    if not any(RANK[f][deltas[f]] > RANK[f][getattr(view, f)] for f in deltas):
+        if can_tighten:
+            field = draw(st.sampled_from(sorted(can_tighten)))
+            ranks = RANK[field]
+            current = ranks[getattr(view, field)]
+            deltas[field] = next(v for v, r in sorted(ranks.items(),
+                                                      key=lambda kv: kv[1])
+                                 if r > current)
+            event("tightening: forced one axis")
+        else:
+            # Every set axis is already at its strictest end; the identity pair
+            # is the honest answer and the property still has to hold for it.
+            event("tightening: already maximal")
+    else:
+        event("tightening: drawn")
     return view, replace(view, **deltas)
 
 
@@ -230,11 +256,18 @@ def test_ceilings_win(view, deployment):
         assert eff.protection.model_input == "redact"
         assert eff.protection.client_output == "redact"
     if deployment.serving.allow_app_pii_downgrade is not True:
-        floor = RANK["pii_detection"][deployment.serving.pii_detection]
-        assert RANK["pii_detection"][eff.protection.detection] >= floor, (
-            f"detection {eff.protection.detection!r} is weaker than the "
-            f"deployment default {deployment.serving.pii_detection!r} with the "
-            "downgrade ceiling closed")
+        default = deployment.serving.pii_detection
+        if default in RANK["pii_detection"]:
+            floor = RANK["pii_detection"][default]
+            assert RANK["pii_detection"][eff.protection.detection] >= floor, (
+                f"detection {eff.protection.detection!r} is weaker than the "
+                f"deployment default {default!r} with the downgrade ceiling "
+                "closed")
+        else:
+            # A malformed default cannot BE a floor, so the clamp has nothing
+            # legal to fall back to and the axis denies outright.
+            event("ceiling: closed over a malformed deployment default")
+            assert eff.protection.detection == "presidio"
 
 
 # --- invariant 5: an empty eligible set rejects ------------------------------
@@ -304,6 +337,14 @@ def test_preset_fidelity_matches_the_golden_table(mode, pii, capture, residency,
 
 @given(view=app_policies(), deployment=deployments(), detected=entity_types(),
        complexity=st.floats(0.0, 1.0))
+# The rule-8 half below is guarded by `risk_class == "high"`. On the current
+# strategies roughly half the generated examples reach it, but nothing in a
+# generator GUARANTEES that, and a property whose most important assertion is
+# silently never evaluated is worse than no property. This explicit example
+# pins it: `US_SSN` matches config/policy.yaml's restricted rule, so the
+# high-risk branch runs at least once however the strategies later change.
+@example(view=AppPolicyView(), deployment=CLOUD, detected=("US_SSN",),
+         complexity=0.1)
 def test_onprem_only_never_yields_a_cloud_candidate(view, deployment, detected,
                                                     complexity):
     """CLAUDE.md rules 3 and 8, asserted generatively over EVERY combination of
@@ -339,6 +380,7 @@ def test_onprem_only_never_yields_a_cloud_candidate(view, deployment, detected,
     if ctx.risk_class == "high":
         # `frontier` exists in the pool but not on-prem: the floor is clamped
         # to the best allowed tier, never satisfied by leaving the boundary.
+        event("rule 8: high-risk request floored inside the boundary")
         assert decision.chosen.tier == "mid"
         assert ctx.require_verification is True
     for rejected in decision.rejected:
@@ -346,6 +388,50 @@ def test_onprem_only_never_yields_a_cloud_candidate(view, deployment, detected,
             assert "residency" in rejected.reason, (
                 f"cloud candidate {rejected.name} was rejected for "
                 f"{rejected.reason!r}, not residency")
+
+# --- totality: the compiler never emits a value that is not on its axis -------
+
+@given(view=app_policies(), deployment=deployments())
+def test_every_compiled_value_is_legal_and_malformed_defaults_deny(view,
+                                                                   deployment):
+    """`compile_policy` is **total**: whatever is stored and whatever is
+    mounted, every value it returns is a legal member of its axis.
+
+    This is the property that covers the compiler's malformed-**deployment
+    default** guards — the `not in PII_MODES` / `not in TELEMETRY_IOS`
+    re-checks that run after `_resolve` has fallen through to
+    `serving.pii_detection` or `langfuse.capture_io`. Those guards had no
+    property coverage at all until `deployments()` started drawing malformed
+    defaults: a mutation removing one read as "equivalent" only because
+    nothing generated an input that could reach it. Absence of coverage is not
+    evidence of fail-closed behaviour, and the paper claims fail-closed
+    behaviour.
+    """
+    eff = compile_policy(view, deployment)
+    assert eff.placement.residency in RESIDENCIES
+    for field, attr in PROTECTION_FIELDS.items():
+        value = getattr(eff.protection, attr)
+        assert value in PROTECTION_VALUES[field], (
+            f"compiled {attr}={value!r}, which is not a member of the "
+            f"{field} axis")
+
+    # Telemetry has no preset, so a malformed deployment default always reaches
+    # the guard when the app names nothing: it must deny AND leave evidence.
+    if (view.capture_io is None
+            and deployment.serving.observability.langfuse.capture_io
+            not in CAPTURE_IOS):
+        event("malformed deployment default: capture_io")
+        assert eff.protection.telemetry_io == "off"
+        assert any(axis == "telemetry_io" for axis, _ in eff.rejected)
+
+    # Detection does have a preset (`passthrough` -> "off"), so either the
+    # preset supplied a legal value or the junk default was denied and recorded.
+    if view.pii_detection is None and deployment.serving.pii_detection not in DETECTIONS:
+        event("malformed deployment default: pii_detection")
+        assert (eff.protection.detection == "off"
+                or (eff.protection.detection == "presidio"
+                    and any(axis == "detection" for axis, _ in eff.rejected)))
+
 
 # --- the fail-open the harness found, now closed ------------------------------
 

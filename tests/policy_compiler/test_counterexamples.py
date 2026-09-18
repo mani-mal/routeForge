@@ -8,9 +8,31 @@ this one input" is satisfied by a lucky special case, while "no placement
 setting may rewrite a protection value, for any app, on any deployment" is a
 statement the old code could not have satisfied however it was patched.
 
-`CE-1` and `CE-2` were fixed in Tasks 7 and 3; they are re-asserted here
-through the compiler so that a future refactor cannot reintroduce either
-without a red test.
+**What these tests do and do not demonstrate - read this before citing them.**
+Design §13 says "the harness finds CE-1, CE-2 and CE-3 from a clean checkout of
+the pre-fix code". That is **not** what is shown here, and the difference is
+not pedantic:
+
+* `CE-1` and `CE-2` are pinned **at the compiler seam**. Both bugs lived in
+  code this branch deleted -- a clamp in `app/api/routes.py:596-598` and a
+  missing check in `app/api/admin_routes.py:424-431` -- and they are asserted
+  here through `compile_policy` / `validate_effective` /
+  `obs.export.resolve_capture_io`, none of which existed in the pre-fix tree.
+  The harness therefore cannot be run against a clean pre-fix checkout at all,
+  and reinstating either bug **at its original site** would not redden these
+  tests. What is demonstrated is narrower, and still worth having: neither bug
+  can be reintroduced *at the seam every consumer now reads*, which is where
+  this design moved the decision. The exporter half of `CE-1` is the exception
+  -- it is asserted over live code (`resolve_capture_io`), and a mutation of
+  that function is caught.
+* `CE-3` is the closest to end-to-end: its mechanism half calls the real
+  `Pipeline._gate_inputs`, the same function at the same site the bug lived at,
+  and its compiler half is a mutation of live code.
+
+End-to-end coverage of `CE-1` at the span level lives in
+`tests/test_capture_io.py` / `tests/test_obs_export.py`, and of `CE-2` at the
+HTTP boundary in `tests/test_admin_api.py`. Those are separate suites; this
+file constrains the compiler, not every site an old bug could live at.
 """
 from __future__ import annotations
 
@@ -66,11 +88,21 @@ def test_ce1_placement_must_not_rewrite_a_telemetry_protection_value():
       had handed the MODEL. Under `passthrough` that view is the raw prompt, so
       the "redaction" was the egress regex pass and nothing else.
 
-    Why the harness catches it: the rewrite is a violation of invariant 3,
-    "placement never changes protection" — the generative form of which is
+    Why the harness catches it, and where that stops. The rewrite is a
+    violation of invariant 3, "placement never changes protection" — the
+    generative form of which is
     `test_invariants.py::test_placement_never_changes_protection`. This test is
-    that invariant evaluated at CE-1's own point, so the bug is pinned by name
-    as well as by quantifier.
+    that invariant evaluated at CE-1's own point.
+
+    **Scope, stated precisely.** `compile_policy` did not exist when this bug
+    shipped, so this test could not have been run against the pre-fix tree, and
+    re-adding the clamp at `routes.py:596-598` today would not redden it —
+    `routes.py` no longer decides capture at all. What is pinned is that the
+    clamp cannot be written **at the compiler seam**: the mutation proving it
+    (M3, task report §3) inserts the same clamp inside `compile_policy`, which
+    is where such a rule would have to live now. The end-to-end claim — that no
+    span can carry raw content under a `redacted` label — is
+    `tests/test_capture_io.py` / `tests/test_obs_export.py`, not this file.
     """
     base = AppPolicyView(policy_mode="passthrough", capture_io="full")
     onprem = replace(base, residency="onprem_only")
@@ -88,8 +120,11 @@ def test_ce1_placement_must_not_rewrite_a_telemetry_protection_value():
 def test_ce1_no_residency_ever_moves_telemetry_io(view, deployment, residency):
     """CE-1, quantified: for every policy and every deployment, moving the
     residency axis leaves `telemetry_io` — and every other protection value —
-    untouched. The old clamp fails this for the whole `capture_io: full`
-    population, not just for the passthrough one."""
+    untouched. A clamp of the old shape, written at this seam, fails this for
+    the whole `capture_io: full` population and not just the passthrough one.
+
+    Seam-level, like the test above: it constrains `compile_policy`, which the
+    pre-fix tree did not have."""
     moved = compile_policy(replace(view, residency=residency), deployment)
     assert moved.protection == compile_policy(view, deployment).protection
 
@@ -104,7 +139,13 @@ def test_ce1_a_redacted_label_always_has_a_redactor_behind_it(
     under a redacted label, which is what shipped.
 
     `resolve_capture_io` is the single place that decision is made now, so the
-    property is stated over it directly."""
+    property is stated over it directly.
+
+    **This is the one CE-1 assertion over live code**: `resolve_capture_io` is
+    on the request path today, and mutation CE-1b (deleting its
+    no-detector-means-off rule) reddens this property. It still is not the
+    pre-fix code — that function was written in Task 7 — but it is the real
+    decision point rather than a seam that stands in for one."""
     detector = object() if has_detector else None
     resolved = resolve_capture_io(capture, has_own_project=own_project,
                                   detector=detector)
@@ -166,6 +207,14 @@ def test_ce2_capture_io_sometimes():
     strings in the generative test that follows. A fifth hand-written check
     would satisfy the first phrasing and fail the second the next time an axis
     is added.
+
+    **Scope, stated precisely.** This is a seam-level pin. It calls
+    `validate_effective`, which `set_policy` now delegates to; it does not call
+    the endpoint. Reverting `set_policy` to its own hand-written checks and
+    dropping `capture_io` again would not redden this test — it would redden
+    `tests/test_admin_api.py`, which exercises the HTTP boundary. What is
+    demonstrated here is that the authority `set_policy` delegates to cannot
+    have the hole, not that `set_policy` still delegates to it.
     """
     eff = compile_policy(AppPolicyView(capture_io="sometimes"), OPEN)
     assert eff.protection.telemetry_io == "off"           # fails closed
@@ -203,13 +252,20 @@ def test_ce2_every_axis_fails_closed_and_is_refused(field_deny, bad, view,
 
 @given(field_deny=st.sampled_from(_AXIS_DENY),
        bad=st.sampled_from(UNIMPLEMENTED_VALUES),
-       deployment=deployments())
+       deployment=deployments(malformed_defaults=False))
 def test_ce2_unimplemented_axis_values_are_rejected_not_faked(field_deny, bad,
                                                               deployment):
     """CE-2's companion, design §9: the axis values the design names but does
     not build must be refused with their OWN code, not silently treated as the
     nearest thing that exists. Accepting `model_input: tokenize` and running
-    plain redaction would promise a protection that does not run."""
+    plain redaction would promise a protection that does not run.
+
+    Legal deployment defaults only. `validate_effective` reports the FIRST
+    entry in `rejected`, and a malformed deployment default is recorded ahead
+    of the app's own value — so a junk default would change the reported code
+    without changing the guarantee. The guarantee under a junk default is
+    covered by `test_invariants.py::
+    test_every_compiled_value_is_legal_and_malformed_defaults_deny`."""
     field, _path, _deny = field_deny
     eff = compile_policy(AppPolicyView(**{field: bad}), deployment)
     with pytest.raises(PolicyViolation) as exc:
@@ -257,7 +313,8 @@ def test_ce3_a_protection_posture_never_disables_placement_escalation(
     """
     # Residency is drawn from the legal three: CE-3 is about a PROTECTION
     # setting moving placement, and an unparseable residency is a separate
-    # (reported) matter -- see test_invariants.py's xfail.
+    # (fixed) matter -- see test_invariants.py::
+    # test_unparseable_residency_fails_closed_in_the_context_path.
     view = replace(view, residency=residency)
     passthrough = replace(view, policy_mode="passthrough")
     enforced = replace(view, policy_mode="enforced")
