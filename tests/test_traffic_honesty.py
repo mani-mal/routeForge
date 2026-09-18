@@ -201,13 +201,14 @@ def test_residency_filter_is_what_keeps_pii_onprem_not_provider_availability():
 
     def _leaky_build_context(settings, request_id, tenant_id, entities,
                              redaction_map_id, app_policy=None, app_rules=None,
-                             registry=None):
+                             registry=None, escalate_residency=True):
         """Reimplements build_context but WITHOUT the onprem residency
         filter, to prove the guard above would catch this exact regression.
         (Signature mirrors build_context, incl. the app_policy/app_rules
-        params the gate now always passes; this leaky version ignores both —
-        the demo tenants carry no per-app policy/profile row, so residency
-        still comes from policy.yaml.)"""
+        params and the compiled `escalate_residency` switch the gate now
+        always passes; this leaky version ignores all three — the demo tenants
+        carry no per-app policy/profile row, so residency still comes from
+        policy.yaml and escalation is on.)"""
         etypes = {e.type for e in entities}
         rule = context_module._match_rule(settings.policy.sensitivity_rules, etypes)
         tenant = settings.policy.tenants.get(

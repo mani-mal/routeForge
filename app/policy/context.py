@@ -28,6 +28,20 @@ def _match_rule(rules, etypes: set[str]):
     return rules[-1]  # the public/empty rule
 
 
+def match_sensitivity_rule(settings: Settings, app_rules: list | None,
+                           etypes: set[str]):
+    """The one declared cross-axis rule (design §5) for these detected entity
+    types: the app's own resolved `sensitivity_rules` when it has a privacy
+    profile, else `config/policy.yaml`'s.
+
+    Exposed so the gate can hand the SAME matched rule to
+    `app/policy/compile.py::apply_signals` that `build_context` below uses,
+    instead of each re-deriving it and drifting.
+    """
+    rules = app_rules if app_rules is not None else settings.policy.sensitivity_rules
+    return _match_rule(rules, etypes)
+
+
 def _placement_providers(settings: Settings, residency: str,
                          app_policy: "AppPolicyView | None",
                          registry: "ModelRegistry | None") -> set[str]:
@@ -117,12 +131,23 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
                   app_policy: "AppPolicyView | None" = None,
                   app_rules: list | None = None,
                   registry: "ModelRegistry | None" = None,
+                  escalate_residency: bool = True,
                   ) -> ExecutionPolicyContext:
+    """Step 3: the immutable ExecutionPolicyContext.
+
+    `escalate_residency` is the app's compiled
+    `escalate_residency_on_detection` (design §5) — whether the declared
+    cross-axis rule may raise PLACEMENT for this app. It is the only switch
+    over placement here, and it is one-directional: the rule may **tighten**
+    residency and never loosen it, so `False` can only ever leave the app's own
+    residency floor exactly where the operator set it. Sensitivity,
+    `risk_class` and `require_verification` still come from the matched rule
+    either way — they are protection/verification signals, not placement.
+    No protection axis is read anywhere in this function; that is the
+    noninterference property the compiler exists to make checkable.
+    """
     etypes = {e.type for e in entities}
-    if app_rules is not None:
-        rule = _match_rule(app_rules, etypes)
-    else:
-        rule = _match_rule(settings.policy.sensitivity_rules, etypes)
+    rule = match_sensitivity_rule(settings, app_rules, etypes)
 
     # Residency: stricter of the entity rule and the application's own residency.
     # With a per-app policy we take residency from it (seeded to match
@@ -134,7 +159,9 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
         tenant = settings.policy.tenants.get(
             tenant_id, settings.policy.tenants["default"])
         app_residency = tenant.default_residency
-    residency = _stricter(rule.residency, app_residency)
+    # Raise-only, and only when the app declares the escalation on (default).
+    residency = (_stricter(rule.residency, app_residency) if escalate_residency
+                 else app_residency)
     onprem_only = residency == "onprem_only"
     allowed = _placement_providers(settings, residency, app_policy, registry)
 

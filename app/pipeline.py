@@ -16,10 +16,11 @@ from app.models import (
     Message, Usage, VerificationRecord,
 )
 from app.output.verify import verify
+from app.policy.compile import EffectivePolicy, compile_policy
 from app.policy.context import pinned_model_reason, registry_permits
 from app.policy.detectors import Detector, make_detector
 from app.policy.effective import EffectiveDetector, FilteredDetector
-from app.policy.gate import Gate, redact_tool_calls, redact_tool_calls_with_entities
+from app.policy.gate import Gate, Representations, redact_tool_calls_with_entities
 from app.apps.privacy import AppPrivacyProfile, effective_rules
 from app.compression import CompressionResult, compress
 from app.compression.ccr import CCRStore
@@ -138,7 +139,7 @@ class Pipeline:
         self._detectors[mode] = built
         return built
 
-    def _base_detector_for(self, app_policy) -> Detector:
+    def _base_detector_for(self, app_policy, kind: str) -> Detector:
         """The app's base detector (`_detector_for`) wrapped in the app's PII
         entity denylist / score threshold / value-shape exemption
         (FilteredDetector) when any is set.
@@ -150,8 +151,12 @@ class Pipeline:
         keeps every other recognizer -- and its residency/onprem_only floor, which
         is computed from `app_policy.residency` in context.py and never consults
         detection, is untouched. US_SSN can never be suppressed
-        (FilteredDetector.PROTECTED_ENTITIES), so rules 3/8 hold."""
-        base = self._detector_for(app_policy.pii_detection if app_policy else None)
+        (FilteredDetector.PROTECTED_ENTITIES), so rules 3/8 hold.
+
+        `kind` is the COMPILED `detection` axis (`eff.protection.detection`),
+        never the raw nullable column: it has already had the deployment
+        default folded in and the `allow_app_pii_downgrade` ceiling applied."""
+        base = self._detector_for(kind)
         deny = app_policy.pii_entity_denylist if app_policy else None
         thr = app_policy.pii_score_threshold if app_policy else None
         exempt = app_policy.pii_exempt_patterns if app_policy else None
@@ -159,83 +164,87 @@ class Pipeline:
             return FilteredDetector(base, deny, thr, exempt)
         return base
 
-    def _policy_mode_for(self, app_policy) -> str:
-        """The EFFECTIVE protection posture for this request: the app's own
-        `policy_mode`, else the deployment default (`serving.yaml
-        policy.default_policy_mode`) -- the same null-means-inherit resolution
-        `_detector_for` gives `pii_detection`.
-
-        Read live off `self._s` rather than snapshotted in `__init__`: nothing
-        is memoized on it, unlike `_global_pii_mode`, which seeds the detector
-        memo and must stay fixed for the life of the process.
-
-        Deployment ceiling: `serving.policy.allow_app_passthrough: false`
-        forbids `passthrough` install-wide, for EVERY app, regardless of the
-        per-app value or the default. It resolves back to "enforced" here --
-        fail closed (CLAUDE.md rule 5) -- as well as being refused at write
-        time by the admin API, so a policy row (or a `default_policy_mode`)
-        written before the ceiling was lowered can never run unprotected.
-        """
-        mode = getattr(app_policy, "policy_mode", None) if app_policy is not None else None
-        if mode is None:
-            mode = self._s.serving.default_policy_mode
-        if mode == "passthrough" and not self._s.serving.allow_app_passthrough:
-            return "enforced"
-        return mode
-
     def _gate_inputs(self, app_policy, profile: AppPrivacyProfile | None
-                     ) -> tuple[Detector, list | None, str]:
-        """Compose `(detector, sensitivity rules, effective policy_mode)` for one
+                     ) -> tuple[Detector, list | None, EffectivePolicy]:
+        """Compose `(detector, sensitivity rules, effective policy)` for one
         request. The ONE place the gate's detector is built: `run()` and
         `run_stream()` both call it, so the two paths can never drift.
 
-        `passthrough` means NO protection, at all. The base detector is the
-        null detector regardless of the app's own `pii_detection`; the app's
-        custom recognizers are NOT layered on (no `EffectiveDetector`); and its
-        denylist / score floor / value-shape exemptions are moot, so no
-        `FilteredDetector` either. That is a deliberate behaviour difference
-        from `pii_detection: "off"`, which still runs profile recognizers -- an
-        app the operator has declared untouched must not have a leftover custom
-        recognizer silently redacting its data, which is exactly the class of
-        bug this mode exists to kill. Nothing is detected, so nothing is
-        redacted at intake, and `verify()` -- handed this SAME detector on both
-        the direct and cached paths -- finds nothing to redact on egress
-        either.
+        Nothing here branches on `policy_mode` any more. `compile_policy`
+        resolves every axis once (per-app value, then the `policy_mode` preset,
+        then the deployment default, with the deployment ceilings on top) and
+        every caller reads `eff.protection` instead of re-deriving a posture.
 
-        What `passthrough` does NOT change is PLACEMENT. `build_context`
-        derives `onprem_only` / `allowed_providers` from `app_policy.residency`
-        alone and never consults detection; with no entities found,
-        `_match_rule` returns the public rule (exactly as `pii_detection: "off"`
-        already does) and `_stricter` still carries the app's own residency
-        through. The app's sensitivity rules are still resolved here for the
-        same reason -- they can only ever pin residency STRICTER. CLAUDE.md
-        rule 3 holds unchanged.
+        **The detector is built when ANY consumer needs it** (design §2.3) --
+        the model (`model_input: redact`), the client (`client_output:
+        redact`), the exporter (`telemetry_io: redacted`), or placement
+        escalation (`escalate_residency_on_detection`). Its KIND comes from
+        `eff.protection.detection`. That split is the point: an app whose model
+        sees raw text but whose CLIENT response must be redacted still gets a
+        real detector, which the old `policy_mode` branch could not express.
+
+        When no consumer needs it, the NullDetector is used and nothing is
+        scanned -- what a router-only app must get. Detection resolving to
+        `off` reaches the same NullDetector through `_detector_for`.
+
+        **The no-recognizers rule, preserved.** An app the operator has
+        declared untouched must not have a leftover custom recognizer silently
+        redacting its data. That used to be spelled "policy_mode is
+        passthrough"; it is now `detection == "off"` AND the app is in the
+        raw/raw posture (`model_input` and `client_output` both `raw`) -- which
+        is what `policy_mode: passthrough` compiles to. Such an app gets a bare
+        NullDetector: no `EffectiveDetector` layering the profile's
+        recognizers, and no `FilteredDetector` (its denylist / score floor /
+        value-shape exemptions are moot with nothing to filter). That is still
+        a deliberate behaviour difference from `pii_detection: "off"` alone,
+        which keeps running profile recognizers.
+
+        What none of this changes is PLACEMENT. `build_context` derives
+        `onprem_only` / `allowed_providers` from `app_policy.residency` plus
+        the declared cross-axis rule alone, and never consults a protection
+        axis. CLAUDE.md rule 3 holds unchanged.
         """
-        mode = self._policy_mode_for(app_policy)
+        eff = compile_policy(app_policy, self._s)
+        p = eff.protection
         rules = effective_rules(profile, self._s) if profile is not None else None
-        if mode == "passthrough":
-            return self._detector_for("off"), rules, mode
-        base = self._base_detector_for(app_policy)
+        needed = (p.model_input == "redact" or p.client_output == "redact"
+                  or p.telemetry_io == "redacted"
+                  or eff.escalate_residency_on_detection)
+        no_protection = p.model_input == "raw" and p.client_output == "raw"
+        if not needed or (p.detection == "off" and no_protection):
+            return self._detector_for("off"), rules, eff
+        base = self._base_detector_for(app_policy, p.detection)
         if profile is not None:
-            return EffectiveDetector(base, list(profile.recognizers)), rules, mode
-        return base, rules, mode
+            return EffectiveDetector(base, list(profile.recognizers)), rules, eff
+        return base, rules, eff
 
-    def _sanitize_msg(self, det: Detector, m: Message) -> Message:
-        """Redact one message's text with the request's effective detector,
-        preserving role + tool-calling structure. Used on the tool-calling
-        path so the full structured conversation reaches the model with every
-        message's PII masked (CLAUDE.md rule 1) -- the per-message analogue of
-        the flattened path's single sanitized blob. A None content (an
-        assistant turn that only carries tool_calls) passes through untouched.
-        `tool_calls` arguments are redacted the same way via `redact_tool_calls`
-        (app/policy/gate.py) -- a replayed assistant tool call whose arguments
-        carry an SSN must not forward it to the model untouched."""
-        content = m.content
-        if content:
-            content, _ = det.anonymize(content, det.analyze(content))
-        return Message(role=m.role, content=content,
-                       tool_calls=redact_tool_calls(m.tool_calls, det),
-                       tool_call_id=m.tool_call_id, name=m.name)
+    def _egress_detector(self, det: Detector, eff: EffectivePolicy) -> Detector:
+        """The detector step 9 / egress tool-call redaction runs with (design
+        §2.5): the request's own detector when `client_output: redact`, and the
+        NullDetector when the client has declared `raw` -- an app whose client
+        response must come back byte-for-byte gets no egress redaction, even
+        though a detector ran at intake for placement or for telemetry.
+
+        Selected at the CALL SITE rather than inside `app/output/verify.py`,
+        which a later task owns. Under both postures that existed before the
+        compiler this is the same object as `det`, so behaviour is unchanged.
+        """
+        return det if eff.protection.client_output == "redact" else self._detector_for("off")
+
+    @staticmethod
+    def _policy_mode_stamp(eff: EffectivePolicy) -> str:
+        """The legacy `policy["policy_mode"]` stamp, derived from the compiled
+        axes instead of a stored column: `passthrough` is exactly the raw/raw
+        posture that mode compiles to, and anything else reports `enforced` --
+        including a `passthrough` the deployment ceiling refused, so the stamp
+        always reports what RAN, never what was asked for.
+
+        It is a compatibility surface (clients read it today). The full
+        per-axis certificate is design §6's job, in a later task.
+        """
+        p = eff.protection
+        return "passthrough" if (p.model_input == "raw"
+                                 and p.client_output == "raw") else "enforced"
 
     def _baseline(self, in_tokens: int, out_tokens: int) -> float:
         """All-frontier baseline: input and output priced at the baseline
@@ -283,7 +292,8 @@ class Pipeline:
         return None
 
     def _serve_from_cache(self, request_id: str, ctx: ExecutionPolicyContext,
-                          sanitized: str, entry: CacheEntry, det: Detector,
+                          sanitized: str, model_text: str, entry: CacheEntry,
+                          det: Detector,
                           check_latency_ms: float, policy_mode: str) -> dict | None:
         """C4 keystone: re-verify the cached text against the CURRENT
         request's per-app detector + ctx before ever serving it -- this is
@@ -296,7 +306,10 @@ class Pipeline:
         text, vrec = verify(det, ctx, entry.response_text)
         if not vrec.passed:
             return None
-        tokens_in = count_tokens(sanitized)
+        # Priced on what the MODEL would have been sent (`model_text`), not on
+        # the redacted view -- the two differ only under `model_input: raw`,
+        # where the redacted copy is not what a real call would have cost.
+        tokens_in = count_tokens(model_text)
         tokens_out = count_tokens(text)
         # Honest third savings lever (CLAUDE.md: "don't attribute all savings
         # to routing"): a hit skips the model entirely, so the avoided cost is
@@ -327,8 +340,9 @@ class Pipeline:
                        "allowed_providers": sorted(ctx.allowed_providers),
                        "detected_entities": list(ctx.detected_entities),
                        "app_policy_version": ctx.app_policy_version,
-                       # EFFECTIVE posture (post-inherit, post-ceiling), never
-                       # the raw nullable column -- see `_policy_mode_for`.
+                       # EFFECTIVE posture (post-inherit, post-ceiling),
+                       # derived from the COMPILED axes, never the raw
+                       # nullable column -- see `_policy_mode_stamp`.
                        "policy_mode": policy_mode},
             "sanitized_prompt": sanitized,
             # No raw/pre-verify text exists for a cache hit (no model call ran
@@ -355,19 +369,31 @@ class Pipeline:
         # "off"/"regex" actually gets that detection mode instead of always
         # inheriting the process-wide default.
         #
-        # Per-app policy_mode: an app resolving to "passthrough" short-circuits
-        # ALL of the above to the null detector with no recognizers layered on
-        # -- see `_gate_inputs`. Placement (onprem_only/allowed_providers) is
-        # untouched by that; only protection is.
+        # Compiled effective policy (P1a): `_gate_inputs` builds the detector
+        # from the axes a consumer actually needs, and every selection below
+        # reads `eff.protection` -- never a `policy_mode` string.
+        #
+        # Fail closed (CLAUDE.md rule 5): any exception out of the gate is a
+        # PolicyGateError, which the route maps to a 503. Never a permissive
+        # default, and nothing external has run at this point.
         try:
-            det, rules, policy_mode = self._gate_inputs(app_policy, profile)
-            ctx, sanitized, _map = self._gate.evaluate(
+            det, rules, eff = self._gate_inputs(app_policy, profile)
+            ctx, reps, eff = self._gate.evaluate(
                 request_id, tenant_id, request, app_policy=app_policy,
-                detector=det, rules=rules)
+                detector=det, rules=rules, eff=eff)
         except PolicyGateError:
             raise
         except Exception as e:
             raise PolicyGateError("policy evaluation failed") from e
+        policy_mode = self._policy_mode_stamp(eff)
+        egress_det = self._egress_detector(det, eff)
+        # `sanitized` is the REDACTED view when a detector ran, and the raw
+        # text otherwise -- exactly the single value the gate used to return.
+        # It is what telemetry/console and memory read; it is NOT automatically
+        # what the model gets. That selection is `model_input`'s, below.
+        sanitized = (reps.text_redacted if reps.text_redacted is not None
+                     else reps.text_raw)
+        model_text = reps.text_raw if eff.protection.model_input == "raw" else sanitized
         if ctx.requested_model is not None:
             pool = self._reg.effective_pool() if self._reg else self._s.routing.model_pool
             permitted = {
@@ -394,19 +420,28 @@ class Pipeline:
         tool_mode = _is_tool_conversation(request)
 
         if tool_mode:
-            # Preserve roles + tool structure, but redact EACH message's text so
-            # no raw PII reaches the model (CLAUDE.md rule 1) -- the same
-            # guarantee the flattened path gives, applied message-by-message.
-            san_messages = [self._sanitize_msg(det, m) for m in request.messages]
+            # Preserve roles + tool structure. Which per-message view goes to
+            # the model is `model_input`'s call, exactly as on the flattened
+            # path below: `redact` sends the gate's per-message redacted copy
+            # (content AND replayed tool_call arguments masked -- CLAUDE.md
+            # rule 1), `raw` sends the client's messages untouched, so a
+            # replayed tool call's arguments reach the model verbatim.
+            # `reps.redacted` is None only when no detector ran, in which case
+            # there is nothing to redact and the raw view IS the redacted one.
+            san_messages = list(reps.raw if eff.protection.model_input == "raw"
+                                else (reps.redacted or reps.raw))
             recall = RecallResult([], None)
         else:
             # Step 4 (task mode) always decides "direct" -- agent loops are
             # client-driven, so there is no internal multi-step mode to divert
             # to (see app/routing/task_mode.py).
-            san_messages = [Message(role=request.messages[-1].role, content=sanitized)]
+            # `model_text` -- the raw flattened text under `model_input: raw`,
+            # the redacted one under `redact`. Compression (step 5) still runs
+            # strictly after the gate on whatever this is (CLAUDE.md rule 7).
+            san_messages = [Message(role=request.messages[-1].role, content=model_text)]
 
-            # Memory READ (Feature 5, Task 2): after san_messages (post-gate,
-            # sanitized) and before compress() -- recalled context is prepended
+            # Memory READ (Feature 5, Task 2): after san_messages (post-gate)
+            # and before compress() -- recalled context is prepended
             # so it gets compressed + priced like any other request tokens, no
             # separate untracked token path.
             #
@@ -456,7 +491,7 @@ class Pipeline:
                 try:
                     entry = self._cache.lookup(
                         tenant_id=tenant_id, onprem_only=ctx.onprem_only,
-                        allowed_providers=ctx.allowed_providers, query=sanitized)
+                        allowed_providers=ctx.allowed_providers, query=model_text)
                 except Exception:
                     # Fail-safe (CLAUDE.md rule 5 spirit): a cache error must
                     # never crash a served request -- skip the cache and serve
@@ -470,8 +505,8 @@ class Pipeline:
                     # re-verify is treated as an ordinary miss below (falls
                     # through to compress/gateway/verify), never served.
                     hit_resp = self._serve_from_cache(
-                        request_id, ctx, sanitized, entry, det, check_latency_ms,
-                        policy_mode)
+                        request_id, ctx, sanitized, model_text, entry, egress_det,
+                        check_latency_ms, policy_mode)
                     if hit_resp is not None:
                         return hit_resp
                 cache_record = CacheRecord(
@@ -504,7 +539,7 @@ class Pipeline:
             ctx, comp.messages, comp.tokens_after, complexity, hint,
             tools=tools, tool_choice=tool_choice, params=request.generation_params())
 
-        text, vrec = verify(det, ctx, result.text)
+        text, vrec = verify(egress_det, ctx, result.text)
         if not vrec.passed:
             raise PipelineRejected(vrec.reason)
 
@@ -524,7 +559,7 @@ class Pipeline:
         # never-client-visible contract); it is never returned to the client.
         # A None/empty `result.tool_calls` leaves `vrec` untouched.
         raw_tool_calls = result.tool_calls
-        tc_redaction = redact_tool_calls_with_entities(raw_tool_calls, det)
+        tc_redaction = redact_tool_calls_with_entities(raw_tool_calls, egress_det)
         redacted_tool_calls = tc_redaction.tool_calls
         if tc_redaction.entity_types:
             vrec = vrec.model_copy(update={
@@ -543,8 +578,14 @@ class Pipeline:
                         session_id=session_id or "")
         # Feature #6 — semantic cache STORE. Reached only on a genuine MISS
         # (a hit already returned above), enabled, and not bypassed. C1:
-        # cache the SANITIZED query (never raw) and the post-verify `text`
-        # (never `result.text`/raw_completion). C3 residency: the store
+        # cache the MODEL-FACING query and the post-verify `text` (never
+        # `result.text`/raw_completion). Keyed on what the model actually saw,
+        # not on the redacted view: under `model_input: raw` two different
+        # SSNs redact to the same placeholder, so keying on the redacted copy
+        # would serve one customer's answer for another's question. The cache
+        # therefore holds exactly what the model was sent -- which is what it
+        # already held for every app before the compiler, both postures.
+        # C3 residency: the store
         # itself refuses to persist a cloud-produced entry into an
         # onprem_only partition -- passing the REAL ctx values here is what
         # makes that refusal apply to real traffic.
@@ -554,7 +595,7 @@ class Pipeline:
                     (c.provider for c in self._pool() if c.name == result.model), "?")
                 self._cache.store(
                     tenant_id=tenant_id, onprem_only=ctx.onprem_only,
-                    allowed_providers=ctx.allowed_providers, query=sanitized,
+                    allowed_providers=ctx.allowed_providers, query=model_text,
                     response_text=text, model=result.model, provider=provider)
             except Exception:
                 # Fail-safe: a cache write must never crash a served request.
@@ -643,8 +684,9 @@ class Pipeline:
                        "allowed_providers": sorted(ctx.allowed_providers),
                        "detected_entities": list(ctx.detected_entities),
                        "app_policy_version": ctx.app_policy_version,
-                       # EFFECTIVE posture (post-inherit, post-ceiling), never
-                       # the raw nullable column -- see `_policy_mode_for`.
+                       # EFFECTIVE posture (post-inherit, post-ceiling),
+                       # derived from the COMPILED axes, never the raw
+                       # nullable column -- see `_policy_mode_stamp`.
                        "policy_mode": policy_mode},
             "sanitized_prompt": sanitized,
             "raw_completion": result.text,
@@ -692,19 +734,24 @@ class Pipeline:
         the per-app detector `_gate_inputs` composes, mirroring `run()`) runs
         first; compression runs strictly after it.
         """
-        # Gate first -- the SAME `_gate_inputs` composition run() uses (per-app
-        # policy_mode, pii_detection base detector, optional profile
+        # Gate first -- the SAME `_gate_inputs` composition run() uses (the
+        # compiled effective policy, its detector, optional profile
         # recognizers/rules; fail closed), so the streaming path can never
         # drift from the direct one.
         try:
-            det, rules, policy_mode = self._gate_inputs(app_policy, profile)
-            ctx, sanitized, _map = self._gate.evaluate(
+            det, rules, eff = self._gate_inputs(app_policy, profile)
+            ctx, reps, eff = self._gate.evaluate(
                 request_id, tenant_id, request, app_policy=app_policy,
-                detector=det, rules=rules)
+                detector=det, rules=rules, eff=eff)
         except PolicyGateError:
             raise
         except Exception as e:
             raise PolicyGateError("policy evaluation failed") from e
+        policy_mode = self._policy_mode_stamp(eff)
+        egress_det = self._egress_detector(det, eff)
+        sanitized = (reps.text_redacted if reps.text_redacted is not None
+                     else reps.text_raw)
+        model_text = reps.text_raw if eff.protection.model_input == "raw" else sanitized
 
         # A client-driven tool conversation needs run()'s structured path: it
         # forwards `tools` and keeps per-message roles/tool_call_ids, where the
@@ -724,7 +771,8 @@ class Pipeline:
                 "residency/verification floor: response must be verified as a "
                 "complete response before egress")
 
-        san_messages = [Message(role=request.messages[-1].role, content=sanitized)]
+        # `model_input` selects the model-facing view here exactly as in run().
+        san_messages = [Message(role=request.messages[-1].role, content=model_text)]
         # Memory READ only (Feature 5, Task 2) -- mirrors run()'s hook. NEVER
         # a WRITE on this path: step-9 verify() never runs while streaming
         # (waived, by design -- see this method's docstring), so there is no
@@ -777,7 +825,7 @@ class Pipeline:
         # are attached to `get_meta` rather than returned via it. Attribute
         # access keeps `run_stream`'s `(deltas, get_meta)` contract unchanged
         # for the `stream_unverified` caller (Task 6).
-        get_meta.detector = det   # type: ignore[attr-defined]
+        get_meta.detector = egress_det   # type: ignore[attr-defined]
         get_meta.ctx = ctx        # type: ignore[attr-defined]
         return _deltas(), get_meta
 
@@ -831,8 +879,9 @@ class Pipeline:
                        "allowed_providers": sorted(ctx.allowed_providers),
                        "detected_entities": list(ctx.detected_entities),
                        "app_policy_version": ctx.app_policy_version,
-                       # EFFECTIVE posture (post-inherit, post-ceiling), never
-                       # the raw nullable column -- see `_policy_mode_for`.
+                       # EFFECTIVE posture (post-inherit, post-ceiling),
+                       # derived from the COMPILED axes, never the raw
+                       # nullable column -- see `_policy_mode_stamp`.
                        "policy_mode": policy_mode},
             "sanitized_prompt": sanitized,
             "raw_completion": result.text,

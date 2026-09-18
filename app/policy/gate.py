@@ -7,8 +7,9 @@ from typing import TYPE_CHECKING, Any
 
 from app.config.schema import Settings
 from app.models import ChatRequest, Entity, ExecutionPolicyContext, Message
-from app.policy.context import build_context
-from app.policy.detectors import Detector
+from app.policy.compile import EffectivePolicy, apply_signals, compile_policy
+from app.policy.context import build_context, match_sensitivity_rule
+from app.policy.detectors import Detector, NullDetector
 from app.policy.merge import dedupe
 
 if TYPE_CHECKING:
@@ -119,7 +120,7 @@ def redact_tool_calls_with_entities(tool_calls: list[dict] | None,
     `function.name`, and every other key are preserved exactly; a non-dict
     call, a missing `function`, or a non-string `arguments` passes through
     untouched. Never mutates the caller's dicts. Shared by ingress
-    (`Pipeline._sanitize_msg`) and egress (output verification) so both
+    (`redact_message` below) and egress (output verification) so both
     directions redact tool-call arguments the same way, and egress takes the
     entity types from here instead of running detection again.
 
@@ -226,6 +227,90 @@ def redact_tool_calls(tool_calls: list[dict] | None, det: Detector) -> list[dict
     return redact_tool_calls_with_entities(tool_calls, det).tool_calls
 
 
+def redact_message(det: Detector, m: Message) -> Message:
+    """Redact one message's text with the request's effective detector,
+    preserving role + tool-calling structure. Used on the tool-calling path so
+    the full structured conversation reaches the model with every message's PII
+    masked (CLAUDE.md rule 1) -- the per-message analogue of the flattened
+    path's single sanitized blob. A None content (an assistant turn that only
+    carries tool_calls) passes through untouched. `tool_calls` arguments are
+    redacted the same way via `redact_tool_calls` -- a replayed assistant tool
+    call whose arguments carry an SSN must not forward it to the model
+    untouched.
+
+    Lives here, next to `redact_tool_calls`, rather than on `Pipeline`: it is
+    how `Representations.redacted` below is built, and the gate owns every
+    representation of a request.
+    """
+    content = m.content
+    if content:
+        content, _ = det.anonymize(content, det.analyze(content))
+    return Message(role=m.role, content=content,
+                   tool_calls=redact_tool_calls(m.tool_calls, det),
+                   tool_call_id=m.tool_call_id, name=m.name)
+
+
+@dataclass(frozen=True)
+class Representations:
+    """The gate's explicit views of one request (design §2.4).
+
+    There used to be one `sanitized_prompt` string, and every consumer read
+    whatever the MODEL had been given — which is how a raw-input app came to
+    export content labelled `redacted`. Now the gate publishes both views and
+    each consumer selects its own: the model by `model_input`, the client by
+    `client_output`, the exporter by `telemetry_io`. No consumer reads
+    another's view.
+
+    Two shapes of each view, because the pipeline genuinely needs both:
+
+    * `text_raw` / `text_redacted` — the FLATTENED scan text (`_scan_text`
+      joined over every message, tool-call arguments included) and its
+      redaction. This is what the gate classified, and what the ordinary
+      single-prompt path sends.
+    * `raw` / `redacted` — the per-message views, which the client-driven
+      tool-calling path needs because it must preserve roles and tool
+      structure.
+
+    `text_redacted` and `redacted` are **None exactly when no detector ran**
+    (design §2.4) — a router-only app scans nothing, so there is no redacted
+    copy to offer and no consumer may silently substitute the raw one.
+
+    The redaction map is deliberately NOT here. It stays inside the gate and is
+    discarded (tokenization is out of scope for P1a); `ctx.redaction_map_id`
+    remains the only trace of it.
+    """
+
+    #: The request's messages, untouched.
+    raw: tuple[Message, ...]
+    #: The flattened text the gate classified.
+    text_raw: str
+    #: Its redaction; None when no detector ran.
+    text_redacted: str | None
+    #: Entity TYPES only — never values.
+    detected_entity_types: tuple[str, ...]
+    #: The detector that produced the redacted views; None when none ran.
+    detector: Detector | None = None
+    #: Memo for the lazily built per-message redacted view (see `redacted`).
+    _redacted_msgs: dict = field(default_factory=dict, compare=False, repr=False)
+
+    @property
+    def redacted(self) -> tuple[Message, ...] | None:
+        """The per-message redacted view; None when no detector ran.
+
+        Built ON DEMAND and memoized. Per-message redaction costs one extra
+        `analyze` per message (plus two per message carrying tool_calls), and
+        its only consumer is the tool-calling path — computing it eagerly for
+        every request would roughly double the gate's detector work on the
+        ordinary path for nothing.
+        """
+        if self.text_redacted is None or self.detector is None:
+            return None
+        if "v" not in self._redacted_msgs:
+            self._redacted_msgs["v"] = tuple(
+                redact_message(self.detector, m) for m in self.raw)
+        return self._redacted_msgs["v"]
+
+
 def _scan_text(m: Message) -> str:
     """One message's scan text: `content` plus, when present, its tool-call
     argument text -- so a message that only carries `tool_calls` (content is
@@ -247,11 +332,28 @@ class Gate:
                  app_policy: "AppPolicyView | None" = None,
                  detector: Detector | None = None,
                  rules: list | None = None,
-                 ) -> tuple[ExecutionPolicyContext, str, dict[str, str]]:
-        # `detector`/`rules` let a caller supply the app's EffectiveDetector +
-        # effective_rules (per-app custom recognizers/classification) instead
-        # of the process-wide default -- see app/pipeline.py.
+                 eff: EffectivePolicy | None = None,
+                 ) -> tuple[ExecutionPolicyContext, Representations, EffectivePolicy]:
+        """Step 2. Returns `(ctx, reps, eff)`:
+
+        * `ctx` — the immutable ExecutionPolicyContext (step 3),
+        * `reps` — the explicit `Representations` of the request (design §2.4);
+          each consumer selects its own view, none reuses another's,
+        * `eff` — the compiled effective policy with the request's signals
+          applied (`apply_signals`): the cross-axis rules that fired, the
+          resulting placement sources, sensitivity and `require_verification`.
+
+        `detector`/`rules` let a caller supply the app's EffectiveDetector +
+        effective_rules (per-app custom recognizers/classification) instead of
+        the process-wide default, and `eff` the already-compiled policy those
+        were composed from -- see `app/pipeline.py::_gate_inputs`, the one
+        place that composition happens. `eff` is compiled here when a caller
+        (a test, a script) does not supply one, so the gate is never without
+        an effective policy to read.
+        """
         det = detector or self._detector
+        if eff is None:
+            eff = compile_policy(app_policy, self._settings)
         # scan the latest user message (the live prompt) + prior content.
         # `content or ""`: a tool-calling round-trip includes an assistant
         # message whose content is null (it only carries tool_calls) — joining
@@ -263,12 +365,36 @@ class Gate:
         # for them and the flattened scan text is unchanged.
         text = "\n".join(_scan_text(m) for m in request.messages)
         entities = det.analyze(text)
-        redacted, mapping = det.anonymize(text, entities)
+        # "No detector ran" is the NullDetector and nothing else: an app with
+        # `pii_detection: off` but custom recognizers layered on top
+        # (EffectiveDetector) HAS scanned, and must get a redacted view.
+        detection_ran = not isinstance(det, NullDetector)
+        redacted: str | None = None
+        mapping: dict[str, str] = {}
+        if detection_ran:
+            redacted, mapping = det.anonymize(text, entities)
+        # The redaction map holds the ORIGINAL values -- a second copy of
+        # sensitive data. It never leaves this method (only its id does), and
+        # nothing detokenizes anywhere (design §9).
         map_id = f"map-{uuid.uuid4().hex[:8]}" if mapping else None
+        etypes = {e.type for e in entities}
         ctx = build_context(self._settings, request_id, tenant_id, entities, map_id,
                             app_policy=app_policy, app_rules=rules,
-                            registry=self._registry)
+                            registry=self._registry,
+                            escalate_residency=eff.escalate_residency_on_detection)
         ctx = ctx.model_copy(update={
             "requested_model": None if request.model == "auto" else request.model,
         })
-        return ctx, redacted, mapping
+        # The SAME matched rule build_context used, so the compiled policy's
+        # placement sources and `cross_axis_rules_fired` describe the placement
+        # the context actually got.
+        rule = match_sensitivity_rule(self._settings, rules, etypes)
+        eff = apply_signals(eff, tuple(sorted(etypes)), rule)
+        reps = Representations(
+            raw=tuple(request.messages),
+            text_raw=text,
+            text_redacted=redacted,
+            detected_entity_types=tuple(sorted(etypes)),
+            detector=det if detection_ran else None,
+        )
+        return ctx, reps, eff
