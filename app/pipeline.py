@@ -253,6 +253,32 @@ class Pipeline:
         return "passthrough" if (p.model_input == "raw"
                                  and p.client_output == "raw") else "enforced"
 
+    @staticmethod
+    def _publish_telemetry_views(internals: dict | None,
+                                 reps: Representations) -> None:
+        """Hand the caller the two values the EXPORTER needs (design §2.6).
+
+        Deliberately NOT on the response dict. That dict is serialized -- to
+        the client, to `request_snapshots.full_json`, to a test's
+        `json.dumps` -- and these two are a live detector object and the RAW
+        prompt. The existing internal-only keys (`raw_completion`,
+        `sanitized_prompt`) already show how that goes: every one of them
+        needs a pop at exactly the right chokepoint, and a path that forgets
+        leaks or crashes. An explicit out-parameter the caller owns has no
+        such failure mode -- nothing to forget, nothing to serialize.
+
+        `reps.detector` is None exactly when no detector ran. That is the
+        exporter's fail-closed signal: `redacted` is not available to an app
+        that scans nothing, so it exports `off` rather than raw content under
+        a redacted label (CE-1). `reps.text_raw` is the gate's flattened raw
+        scan text, which the exporter redacts ITSELF -- it never receives a
+        view another consumer selected.
+        """
+        if internals is None:
+            return
+        internals["raw_prompt"] = reps.text_raw
+        internals["detector"] = reps.detector
+
     def _baseline(self, in_tokens: int, out_tokens: int) -> float:
         """All-frontier baseline: input and output priced at the baseline
         (most-expensive frontier) model's respective rates — the SAME token
@@ -371,7 +397,12 @@ class Pipeline:
     async def run(self, request_id: str, tenant_id: str,
                   request: ChatRequest, app_policy=None,
                   profile: AppPrivacyProfile | None = None,
-                  session_id: str | None = None) -> dict:
+                  session_id: str | None = None,
+                  internals: dict | None = None) -> dict:
+        # `internals` is an out-parameter: a dict the CALLER owns, which this
+        # method fills with the values the telemetry exporter needs and nobody
+        # may serialize (`_publish_telemetry_views`). Optional, so a script or
+        # a test that only wants the response can ignore it entirely.
         # Per-app effective detector + rules (Task 7): when the caller supplies
         # the app's privacy profile, layer its custom recognizers on top of the
         # base detector and use its resolved sensitivity rules for BOTH
@@ -401,6 +432,7 @@ class Pipeline:
             raise
         except Exception as e:
             raise PolicyGateError("policy evaluation failed") from e
+        self._publish_telemetry_views(internals, reps)
         policy_mode = self._policy_mode_stamp(eff)
         # The egress axis, read once and handed to every consumer that returns
         # bytes to the client (step-9 verify, the tool-call redactor, the cache
@@ -726,7 +758,8 @@ class Pipeline:
     async def run_stream(self, request_id: str, tenant_id: str,
                          request: ChatRequest, app_policy=None,
                          profile: AppPrivacyProfile | None = None,
-                         session_id: str | None = None
+                         session_id: str | None = None,
+                         internals: dict | None = None
                          ) -> tuple[AsyncIterator[str], Callable[[], dict]]:
         """Real backend token-streaming substrate for the direct (single-shot)
         path (Tasks 6-7 wire the route to this). Skips step-9 verification --
@@ -773,6 +806,7 @@ class Pipeline:
             raise
         except Exception as e:
             raise PolicyGateError("policy evaluation failed") from e
+        self._publish_telemetry_views(internals, reps)
         policy_mode = self._policy_mode_stamp(eff)
         # Same egress axis run() reads, selecting the detector `incremental_
         # verify`'s hold-back redactor runs with (attached to `get_meta` below):

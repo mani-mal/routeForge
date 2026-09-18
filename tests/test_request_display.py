@@ -63,10 +63,9 @@ def test_display_redacted_masks_both_bodies(client, monkeypatch):
     assert "123-45-6789" not in disp["output"]  # completion masked too
     # Prove masking actually happened rather than the entity being absent by
     # construction: the echoed completion carried the SSN, so a redaction
-    # placeholder must be present in its place. `input` comes from the gate's
-    # anonymize() (placeholder form `<US_SSN_1>`); `output` comes from
-    # `redact()` (placeholder form `<US_SSN>`) -- both are the US_SSN type,
-    # just different placeholder shapes from two different redaction paths.
+    # placeholder must be present in its place. Both bodies are now built by
+    # the SAME `redacted_copy` (design §2.6) from the raw values -- the app's
+    # detector first (`<US_SSN_1>`), then the regex egress pass (`<US_SSN>`).
     assert "US_SSN" in disp["output"]
     assert "US_SSN" in disp["input"]
 
@@ -84,7 +83,7 @@ def test_display_off_shows_no_bodies(client):
 
 def test_display_redacted_threads_app_recognizers_to_redact(client, monkeypatch):
     """Wiring proof, mirroring test_egress_custom_redaction.py's end-to-end
-    guard for export_trace: the display block's redact() calls must thread
+    guard for export_trace: the display block's redaction must thread
     `profile.recognizers` through (CLAUDE.md rule 2) -- export_trace already
     gets this right; this proves the display block does too, closing the gap
     a custom entity type (e.g. a hospital's MRN pattern) would otherwise
@@ -92,27 +91,29 @@ def test_display_redacted_threads_app_recognizers_to_redact(client, monkeypatch)
 
     A pure content assertion ("raw MRN absent from display.output") does NOT
     discriminate this fix and would be dishonest to rely on alone: step 9
-    output verification (app/output/verify.py) unconditionally anonymizes
-    the completion, and the privacy gate unconditionally anonymizes
-    sanitized_prompt, both using the SAME effective detector (base +
-    profile.recognizers) BEFORE either of the display block's redact() calls
-    ever runs -- so the raw value never survives to reach them whether or
-    not `recognizers=` is threaded there (confirmed empirically: the content
-    assertions below still pass with the routes.py fix reverted). Spy on
-    `redact()` itself instead, the same way tests/_litellm_fake.py's CALLS
-    list proves kwargs reached the backend -- that's the part that actually
-    catches a regression.
+    output verification (app/output/verify.py) anonymizes the completion with
+    the SAME effective detector (base + profile.recognizers) before the
+    display block runs at all -- so the raw value never survives to reach it
+    whether or not `recognizers=` is threaded there. Spy on the redaction
+    itself instead, the same way tests/_litellm_fake.py's CALLS list proves
+    kwargs reached the backend -- that's the part that actually catches a
+    regression.
+
+    The spy sits on `routes.redacted_copy` -- the shared redaction both I/O
+    surfaces now reach (design §2.6), bound into `app.api.routes` by name, so
+    what it records is exactly the DISPLAY block's calls and not
+    export_trace's (which resolves its own reference in `app.obs.export`).
     """
     import app.api.routes as routes_mod
 
     calls: list = []
-    real_redact = routes_mod.redact
+    real_copy = routes_mod.redacted_copy
 
-    def _spy(text, recognizers=None):
+    def _spy(text, detector, recognizers=None):
         calls.append(recognizers)
-        return real_redact(text, recognizers=recognizers)
+        return real_copy(text, detector, recognizers)
 
-    monkeypatch.setattr(routes_mod, "redact", _spy)
+    monkeypatch.setattr(routes_mod, "redacted_copy", _spy)
     _echo_backend(monkeypatch)
 
     _login(client)
@@ -141,9 +142,9 @@ def test_display_redacted_threads_app_recognizers_to_redact(client, monkeypatch)
     assert "MRN-1234567" not in disp["input"]
     assert "MRN-1234567" not in disp["output"]
 
-    # The discriminating assertion: at least one redact() call the handler
-    # made carried the app's MRN recognizer -- proves profile.recognizers
-    # reached the display block's redact() calls, not just export_trace's.
+    # The discriminating assertion: at least one display-block redaction
+    # carried the app's MRN recognizer -- proves profile.recognizers reached
+    # the display block, not just export_trace.
     assert any(recs and any(rc.name == "MRN" for rc in recs) for recs in calls), calls
 
 
@@ -195,21 +196,21 @@ def test_display_full_mode_shows_raw_bodies(monkeypatch, tmp_path):
     # to route around. What IS honestly provable for `full` mode: (1) the
     # DISPLAY INPUT is the true raw submission (prompt is never touched for
     # storage -- SSN present, unsanitized), and (2) the display block never
-    # calls redact() at all on the `full` branch, so `display.output` is an
-    # exact pass-through of whatever the pipeline already decided to return
-    # -- never re-processed a second time the way `redacted` mode is. Spy on
-    # redact() (same technique as the wiring test above) to prove (2)
+    # redacts at all on the `full` branch, so `display.output` is an exact
+    # pass-through of whatever the pipeline already decided to return --
+    # never re-processed a second time the way `redacted` mode is. Spy on
+    # `redacted_copy` (same technique as the wiring test above) to prove (2)
     # directly rather than via an unreachable content assertion.
     import app.api.routes as routes_mod
 
     calls: list = []
-    real_redact = routes_mod.redact
+    real_copy = routes_mod.redacted_copy
 
-    def _spy(text, recognizers=None):
+    def _spy(text, detector, recognizers=None):
         calls.append(text)
-        return real_redact(text, recognizers=recognizers)
+        return real_copy(text, detector, recognizers)
 
-    monkeypatch.setattr(routes_mod, "redact", _spy)
+    monkeypatch.setattr(routes_mod, "redacted_copy", _spy)
     _echo_backend(monkeypatch)
 
     _login(client)
@@ -226,6 +227,6 @@ def test_display_full_mode_shows_raw_bodies(monkeypatch, tmp_path):
     # (1) raw input, exactly as submitted -- SSN present, unsanitized.
     assert disp["input"] == text
     assert "123-45-6789" in disp["input"]
-    # (2) exact pass-through of the served completion, never redact()-ed.
+    # (2) exact pass-through of the served completion, never redacted.
     assert disp["output"] == resp["choices"][0]["message"]["content"]
-    assert calls == []  # redact() must never be invoked on the `full` branch
+    assert calls == []  # no redaction on the `full` branch

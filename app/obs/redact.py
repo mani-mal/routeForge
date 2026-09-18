@@ -36,3 +36,35 @@ def redact(text: str, recognizers: list[CustomRecognizer] | None = None) -> str:
 
 def redact_value(v):
     return redact(v) if isinstance(v, str) else v
+
+
+def redacted_copy(text: str, detector, recognizers=None) -> str:
+    """A redacted copy of a RAW value, built here and not borrowed (design
+    P1a §2.6).
+
+    The one rule shared by every surface that shows a request's content
+    without being allowed to show its PII: the Langfuse trace
+    (`app/obs/export.py::_set_io`) and the console's `display` block
+    (`app/api/routes.py::_finalize`). It lives in one function on purpose --
+    two copies of a privacy rule drift, and the bug this fixes (CE-1) was a
+    surface reusing a view that had been built for a DIFFERENT consumer under
+    a different rule.
+
+    `detector` is the request's own detector -- the same one the gate ran, so
+    the placeholder scheme (`<US_SSN_1>`) matches -- or None when nothing
+    scanned this request. **A None detector means no redacted copy exists**;
+    callers must not call this to launder raw text, they must fall closed to
+    showing nothing. It is still safe if they do (the regex pass below runs
+    regardless), but "safe apart from what a regex happens to catch" is
+    precisely the guarantee CE-1 shipped and this design refuses.
+
+    The `redact()` regex pass afterwards is defence in depth, and the only
+    thing that applies an app's custom `recognizers` when the detector itself
+    doesn't carry them.
+    """
+    if not text:
+        return text
+    out = text
+    if detector is not None:
+        out, _ = detector.anonymize(out, detector.analyze(out))
+    return redact(out, recognizers=recognizers)

@@ -213,11 +213,21 @@ def _make_redacting_exporter():
             if not attrs:
                 return
             # In capture_io='full' the I/O keys are intentionally left raw
-            # (lint-gated, residency-local); everything else still redacts.
-            # Per-app full exporters pass skip_io=True; the shared exporter
-            # falls back to the process-global flag. Either way, non-I/O keys
-            # always redact.
+            # (residency-local, the app's own project); everything else still
+            # redacts. Per-app full exporters pass skip_io=True; the shared
+            # exporter falls back to the process-global flag. Either way,
+            # non-I/O keys always redact.
             skip = _IO_KEYS if (self._skip_io or _capture_io_full) else frozenset()
+            # ...and a span that names the capture its OWN request resolved to
+            # (`sp.capture_io`, set by app/obs/export.py) can only TIGHTEN that.
+            # Both conditions above are properties of the EXPORTER, not of the
+            # request: a process-global `capture_io: full`, or a per-app full
+            # provider reused for a later request, would otherwise skip
+            # redaction for a request whose effective capture is `redacted`.
+            # Never the reverse — a span cannot talk this exporter INTO keeping
+            # raw I/O, so this is a one-way ratchet towards redaction.
+            if attrs.get("sp.capture_io", "full") != "full":
+                skip = frozenset()
             keys_to_redact = [k for k in attrs.keys()
                               if k in REDACT_KEYS and k not in skip]
             if not keys_to_redact:
