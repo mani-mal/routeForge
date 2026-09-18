@@ -190,14 +190,32 @@ class Pipeline:
         **The no-recognizers rule, preserved.** An app the operator has
         declared untouched must not have a leftover custom recognizer silently
         redacting its data. That used to be spelled "policy_mode is
-        passthrough"; it is now `detection == "off"` AND the app is in the
-        raw/raw posture (`model_input` and `client_output` both `raw`) -- which
-        is what `policy_mode: passthrough` compiles to. Such an app gets a bare
+        passthrough"; it is now `detection == "off"` AND the raw/raw posture
+        (`model_input` and `client_output` both `raw`). Such an app gets a bare
         NullDetector: no `EffectiveDetector` layering the profile's
         recognizers, and no `FilteredDetector` (its denylist / score floor /
         value-shape exemptions are moot with nothing to filter). That is still
         a deliberate behaviour difference from `pii_detection: "off"` alone,
         which keeps running profile recognizers.
+
+        The new spelling is NOT the same set of apps as the old one, and the
+        difference is deliberate: `passthrough` WITH an explicit
+        `pii_detection` used to get the null detector and now gets the
+        detector it named, recognizers included, so detection (and therefore
+        placement escalation) happens again -- design §4 and counterexample
+        CE-3. Nothing is redacted for such an app, since both data-handling
+        axes stay `raw`, but rows in that shape exist in deployed databases:
+        see the pre-roll audit in `docs/reference/per-app-config.md`. An app
+        that names no `pii_detection` is unaffected -- the preset still
+        resolves detection to `off`.
+
+        `escalate_residency_on_detection` defaults to true and appears in
+        `needed` below, but it is structurally inert for an app with no
+        detector: `detection == "off"` resolves to the NullDetector either
+        way, so the switch can only ever matter once some detector runs. That
+        is not a bug -- the axes are independent by design, and the switch
+        governs whether a rule may move placement, not whether scanning
+        happens.
 
         What none of this changes is PLACEMENT. `build_context` derives
         `onprem_only` / `allowed_providers` from `app_policy.residency` plus

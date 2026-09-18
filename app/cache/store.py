@@ -4,8 +4,9 @@ tenant+residency-partitioned cache of already-verified responses. CCR-class
 telemetry (only a counts-only `app.models.CacheRecord` reaches a trace).
 
 Mirrors `app/compression/ccr.py::CCRStore`'s TTL sweep-on-write / evict-on-
-read / honesty-counter machinery, but keys on a CONTENT-DERIVED normalized
-query instead of an opaque uuid, and additionally partitions by residency: a
+read / honesty-counter machinery, but keys on a CONTENT-DERIVED value (the
+normalized query, then HMAC'd -- see `_key`) instead of an opaque uuid, and
+additionally partitions by residency: a
 cache hit skips the model entirely, so serving a cloud-produced answer to an
 onprem_only request would be as real a Rule-3 breach as routing the live call
 to the cloud. See docs/architecture/specs/semantic-cache-residency-spec.md
@@ -19,7 +20,10 @@ only (C8, deferred).
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import re
+import secrets
 import time
 from dataclasses import dataclass
 from typing import Callable, Protocol
@@ -40,6 +44,36 @@ def _normalize(query: str) -> str:
     built now (C4/C8) -- no stemming, no embedding similarity. "Hello  World"
     and "hello world" match; anything else is a genuinely different query."""
     return _WHITESPACE_RUN.sub(" ", query.strip().lower())
+
+
+#: Per-process HMAC key for `_key` below. Random at import, never persisted and
+#: never logged, so a cache key is meaningless outside the process that made it
+#: -- and a heap or core dump from another process cannot be replayed against
+#: these keys.
+_KEY_SECRET = secrets.token_bytes(32)
+
+
+def _key(query: str) -> str:
+    """The bucket key for a query: `_normalize` first, then HMAC-SHA256.
+
+    The cache is keyed on what the MODEL was sent (`app/pipeline.py`), because
+    keying on the redacted view would collapse two different values onto one
+    key -- two prompts differing only in an email address both redact to
+    `<EMAIL_ADDRESS_1>` and the second caller would be served the first's
+    answer. Under `model_input: raw` that model-facing text is the raw prompt,
+    so keying on it verbatim would leave raw prompts sitting in the process as
+    plaintext dict keys. Hashing after normalization keeps both properties: the
+    lowercase/whitespace equivalence class is exactly as before, and no bucket
+    key is readable.
+
+    HMAC with a per-process random key, not a bare digest: these prompts are
+    low-entropy and a bare sha256 of "look up ssn NNN-NN-NNNN" is trivially
+    brute-forced. Nothing reads these keys -- store/lookup/`_sweep_expired` use
+    the dict for identity only, `size` counts, and no admin endpoint or trace
+    ever sees them -- so they never need to be readable.
+    """
+    return hmac.new(_KEY_SECRET, _normalize(query).encode("utf-8"),
+                    hashlib.sha256).hexdigest()
 
 
 def _partition(tenant_id: str, onprem_only: bool,
@@ -115,7 +149,7 @@ class DeterministicSemanticCache:
             return
         part = _partition(tenant_id, onprem_only, allowed_providers)
         bucket = self._data.setdefault(part, {})
-        bucket[_normalize(query)] = CacheEntry(
+        bucket[_key(query)] = CacheEntry(
             response_text=response_text, model=model, provider=provider,
             timestamp=self._clock())
 
@@ -139,7 +173,7 @@ class DeterministicSemanticCache:
         bucket = self._data.get(part)
         if bucket is None:
             return None
-        key = _normalize(query)
+        key = _key(query)
         entry = bucket.get(key)
         if entry is None:
             return None

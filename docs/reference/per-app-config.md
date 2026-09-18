@@ -578,3 +578,64 @@ explicitly sets a value. Works unmodified on both SQLite and Postgres (SQLite ig
 Run it once per already-deployed environment (DGX, PCAI, any customer install predating
 this change) before rolling out this version, or the first admin write attempting to set
 either field will fail with a raw DB error instead of a 422.
+
+### Pre-roll audit: `policy_mode: passthrough` rows that also set `pii_detection`
+
+**Do this BEFORE rolling any image built from the policy-compiler-p1a branch.** It is a
+read-only audit, not a migration, and it is the one behavior change in that branch that
+can affect an application already in a deployed database.
+
+Until now, `policy_mode: passthrough` forced the null detector *whatever* the app's own
+`pii_detection` said. The two axes are independent under the compiler: an app that
+**names** a detector now gets it. `passthrough` still means the app's data is untouched —
+both `model_input` and `client_output` stay `raw`, so nothing is redacted to the model or
+to the client — but **detection runs again**, and detection feeds the declared cross-axis
+rule.
+
+The admin API validated `policy_mode` and `pii_detection` independently and never
+cross-checked them, so rows in this shape can exist and were accepted at write time. Find
+them:
+
+```sql
+SELECT application_id, residency, policy_mode, pii_detection, stream_mode, capture_io
+FROM   app_policies
+WHERE  policy_mode = 'passthrough'
+  AND  pii_detection IS NOT NULL;
+```
+
+(If the deployment sets `serving.policy.default_policy_mode: passthrough`, widen it to
+`WHERE (policy_mode = 'passthrough' OR policy_mode IS NULL) AND pii_detection IS NOT NULL`
+— a `NULL` `policy_mode` inherits that default and is just as affected.)
+
+For every row returned, after the roll a request whose content trips a
+`config/policy.yaml` `sensitivity_rules` entry can now:
+
+| Consequence | What the operator sees |
+|---|---|
+| **Residency raised to `onprem_only`** by the rule | cloud providers drop out of `allowed_providers` for that request |
+| **A derived reject** if that app has no healthy on-prem model | `onprem_only` with an empty candidate set is rejected, never silently sent to cloud — the correct behavior, but it is a *new* rejection for this app |
+| **`require_verification` set** | step 9 runs the full verification path |
+| **`stream_unverified` floored** | the request falls back to `verified_then_stream` (`StreamFallback`); real token streaming stops for those requests |
+| **Semantic-cache bypass** | a restricted/high-risk classification bypasses the cache, so cached-hit rate drops |
+| **`detected_entities` populated** | entity *types* appear on the response `policy` block and on the trace (values never do) |
+
+None of these weakens anything — every one is a *tightening*, and the change exists
+because the old behavior was the counterexample `CE-3` ("selecting `passthrough` silently
+disabled placement escalation for a detected SSN"). But an app that was quietly running
+with escalation disabled may start being rejected or stop streaming, so audit before the
+roll rather than diagnosing it afterwards.
+
+**If a row should keep the old behavior**, set its detector off explicitly — this is the
+configuration that has always meant "scan nothing", and it is unchanged by the compiler:
+
+```sql
+UPDATE app_policies SET pii_detection = 'off'
+WHERE  policy_mode = 'passthrough' AND pii_detection IS NOT NULL;
+```
+
+Do that per application after confirming with its owner, not as a blanket statement:
+setting `pii_detection` on a `passthrough` app was previously inert, so some of those
+rows are an operator's *intent* that never took effect, and this change grants it.
+
+Rows with `policy_mode = 'passthrough'` and `pii_detection IS NULL` are unaffected: the
+preset still resolves detection to `off`, which is exactly what they do today.

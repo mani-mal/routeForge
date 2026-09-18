@@ -320,3 +320,59 @@ def test_cache_record_is_counts_only_and_a_fresh_miss_emits_hit_false():
     assert set(rec0.keys()) <= allowed_keys
     for forbidden in ("query", "response", "response_text", "text", "content"):
         assert forbidden not in rec0
+
+
+# --- 10. Cache keys are opaque (P1a Task 5, fix round 1) --------------------
+
+
+def test_cache_keys_hold_no_plaintext_under_model_input_raw():
+    """Under `model_input: raw` the model-facing text IS the raw prompt, and
+    the cache is keyed on the model-facing text (keying on the redacted view
+    would collapse two different values -- two prompts differing only in an
+    email address both redact to `<EMAIL_ADDRESS_1>`, and the second caller
+    would be served the first's answer). Keys are therefore HMAC'd after
+    normalization: the equivalence class is unchanged, but no prompt text
+    survives as a dict key."""
+    settings = _base_settings()
+    pipe, cache = _pipeline(_DeterministicLiteLLM(settings), settings)
+    # An email rather than an SSN: US_SSN classifies restricted/high-risk,
+    # which the cache bypasses outright (`_cache_bypass_reason`), so nothing
+    # would be stored and this test would assert nothing.
+    secret = "who owns hazelnut-quicksilver@example.com?"
+    ap = AppPolicyView(residency="onprem_only", model_input="raw",
+                       client_output="redact", pii_detection="regex")
+
+    asyncio.run(pipe.run("req-key-1", "acme",
+                         ChatRequest(messages=[Message(role="user", content=secret)]),
+                         app_policy=ap))
+
+    keys = [k for bucket in cache._data.values() for k in bucket]
+    assert keys, "nothing was stored, so this asserts nothing"
+    for k in keys:
+        for fragment in ("hazelnut", "quicksilver", "example.com", "owns"):
+            assert fragment not in k
+        assert len(k) == 64 and all(c in "0123456789abcdef" for c in k)
+
+    # ...and the cache still WORKS: the same query hits.
+    out = asyncio.run(pipe.run("req-key-2", "acme",
+                               ChatRequest(messages=[Message(role="user", content=secret)]),
+                               app_policy=ap))
+    assert cache.hits == 1
+    assert [r for r in out["trace"] if r.get("step") == "cache"][0]["hit"] is True
+
+
+def test_two_prompts_differing_only_in_a_redacted_value_do_not_collide():
+    """The correctness half of the same decision: keyed on the model-facing
+    text, these are two different cache entries. Keyed on the redacted view
+    they would be one, and the second caller would get the first's answer."""
+    settings = _base_settings()
+    pipe, cache = _pipeline(_DeterministicLiteLLM(settings), settings)
+    ap = AppPolicyView(residency="onprem_only", model_input="raw",
+                       client_output="redact", pii_detection="regex")
+    for i, addr in enumerate(("alice@example.com", "bob@example.com")):
+        asyncio.run(pipe.run(f"req-collide-{i}", "acme",
+                             ChatRequest(messages=[Message(
+                                 role="user", content=f"who owns {addr}?")]),
+                             app_policy=ap))
+    assert cache.size == 2
+    assert cache.hits == 0
