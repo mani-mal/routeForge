@@ -902,3 +902,32 @@ def test_policy_in_fields_match_the_store_authority(client):
     from app.api.admin_routes import PolicyIn
     from app.apps.store import POLICY_FIELDS
     assert set(PolicyIn.model_fields) - {"reset"} == set(POLICY_FIELDS)
+
+
+def test_policy_put_unrelated_to_capture_never_decrypts_langfuse_creds(client, monkeypatch):
+    """An unrelated policy edit must not depend on the app's Langfuse secret
+    being decryptable.
+
+    `load_app_langfuse` decrypts the stored secret; ciphertext left behind by a
+    key rotation can raise (decrypt_secret swallows Fernet errors, not a
+    UnicodeDecodeError on garbage plaintext). The old clamp only reached that
+    lookup inside `if eff_capture == "full"`, so the compiler is handed a
+    CALLABLE and `validate_effective` invokes it only for the rule that needs
+    it. Resolved eagerly, a `max_rpm` edit would 500 for that app.
+    """
+    _login(client)
+    client.post("/admin/applications", json={"id": "lf-rotated", "name": "LfRotated"})
+    from app.apps import langfuse_provision
+
+    def _boom(_app):
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+    monkeypatch.setattr(langfuse_provision, "load_app_langfuse", _boom)
+    r = client.put("/admin/applications/lf-rotated/policy", json={"max_rpm": 20})
+    assert r.status_code == 200, r.text
+    assert client.get("/admin/applications/lf-rotated").json()["policy"]["max_rpm"] == 20
+
+    # ...and the lookup is still made when the verdict actually turns on it, so
+    # this is laziness, not a dropped rule.
+    with pytest.raises(UnicodeDecodeError):
+        client.put("/admin/applications/lf-rotated/policy", json={"capture_io": "full"})

@@ -191,3 +191,34 @@ def test_stream_unverified_still_legal_under_the_enforced_preset():
                                        stream_mode="stream_unverified"), S)
     assert eff.protection.client_output == "redact"
     validate_effective(eff, S, has_own_langfuse_project=True)
+
+
+# --- the own-project lookup is lazy ------------------------------------------
+
+def test_own_project_callable_is_only_invoked_for_full_capture():
+    """`has_own_langfuse_project` may be a callable, and it is asked only when
+    `telemetry_io` is `full`. The admin API's answer comes from decrypting
+    stored credentials, which can raise on ciphertext left by a key rotation —
+    so an unrelated policy write must never trigger it."""
+    calls = []
+
+    def _lookup():
+        calls.append(1)
+        return True
+
+    for capture in ("off", "redacted"):
+        eff = compile_policy(AppPolicyView(residency="any", capture_io=capture,
+                                           pii_detection="presidio"), S)
+        validate_effective(eff, S, has_own_langfuse_project=_lookup)
+    assert calls == []
+
+    eff = compile_policy(AppPolicyView(residency="any", capture_io="full"), S)
+    validate_effective(eff, S, has_own_langfuse_project=_lookup)
+    assert calls == [1]
+
+
+def test_own_project_callable_still_refuses_full_without_a_project():
+    eff = compile_policy(AppPolicyView(residency="any", capture_io="full"), S)
+    with pytest.raises(PolicyViolation) as e:
+        validate_effective(eff, S, has_own_langfuse_project=lambda: False)
+    assert e.value.code == "CAPTURE_FULL_NEEDS_OWN_PROJECT"

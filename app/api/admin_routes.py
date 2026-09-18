@@ -536,11 +536,20 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
         # compiler cannot see: it is DB state, not policy. Raw capture requires
         # it and nothing ever relaxes that (CLAUDE.md rule 2), so it is passed
         # in rather than inferred.
+        #
+        # Passed as a CALLABLE, and `validate_effective` only invokes it when
+        # the effective capture is 'full' — matching the old clamp, which was
+        # reached only inside `if eff_capture == "full"`. `load_app_langfuse`
+        # decrypts the stored secret, and ciphertext left behind by a key
+        # rotation can raise (decrypt_secret swallows Fernet errors but not a
+        # UnicodeDecodeError on garbage plaintext). Resolved eagerly, that would
+        # 500 an unrelated PUT — editing `max_rpm` on such an app — instead of
+        # only the writes that actually depend on the answer.
         from app.apps.langfuse_provision import load_app_langfuse
         try:
             validate_effective(
                 compile_policy(post_write, settings), settings,
-                has_own_langfuse_project=load_app_langfuse(app) is not None)
+                has_own_langfuse_project=lambda: load_app_langfuse(app) is not None)
         except PolicyViolation as exc:
             # Every refusal reaches the operator as the 422 it always did; the
             # rules, their reasons and their wording now live beside the

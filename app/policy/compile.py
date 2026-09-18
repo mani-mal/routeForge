@@ -33,7 +33,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from types import MappingProxyType
-from typing import Literal, Mapping
+from typing import Callable, Literal, Mapping
 
 from app.config.schema import Settings
 from app.policy.enums import PII_MODES, POLICY_MODES, RESIDENCY, STREAM_MODES
@@ -444,7 +444,8 @@ def _capture_alternatives(residency: str) -> str:
 
 
 def validate_effective(eff: EffectivePolicy, deployment: Settings, *,
-                       has_own_langfuse_project: bool) -> None:
+                       has_own_langfuse_project: bool | Callable[[], bool]
+                       ) -> None:
     """Refuse an effective policy that may not be persisted, or return None.
 
     This is the single authority the admin API and the golden table both call,
@@ -464,6 +465,15 @@ def validate_effective(eff: EffectivePolicy, deployment: Settings, *,
     table: unparseable values first (the operator's typo is the most useful
     thing to report), then deployment ceilings, then the capture rules, then the
     streaming rules.
+
+    `has_own_langfuse_project` may be a bool or a zero-argument callable, and a
+    callable is **only invoked when `telemetry_io` resolves to `full`** — the
+    one rule that needs it. That laziness is not a micro-optimisation: the
+    caller's answer comes from decrypting stored credentials, which can raise on
+    ciphertext left behind by a key rotation. Resolving it eagerly would turn
+    every unrelated policy write (a `max_rpm` edit, say) into a 500 for that
+    app. Whatever the caller passes stays DB-derived; this function never infers
+    it from the policy.
     """
     p = eff.protection
     residency = eff.placement.residency
@@ -515,8 +525,12 @@ def validate_effective(eff: EffectivePolicy, deployment: Settings, *,
         # (a) Own provisioned Langfuse project — NEVER relaxed, by anything.
         # Raw I/O stays tenant-isolated: one customer's raw prompts must never
         # land in another's traces or in the shared project (CLAUDE.md rule 2).
-        # No posture, and no residency, touches this condition.
-        if not has_own_langfuse_project:
+        # No posture, and no residency, touches this condition. Resolved here
+        # and nowhere else, so a caller that has to decrypt something to answer
+        # is only asked when the answer can change the verdict.
+        own_project = (has_own_langfuse_project() if callable(has_own_langfuse_project)
+                       else has_own_langfuse_project)
+        if not own_project:
             raise PolicyViolation(
                 "CAPTURE_FULL_NEEDS_OWN_PROJECT",
                 "capture_io='full' stores raw telemetry and is allowed only "
