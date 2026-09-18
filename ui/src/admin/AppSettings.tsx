@@ -334,8 +334,20 @@ function protectionSummary(p: AdminPolicy, effPolicyMode: string, effPii: string
   if (patterns.length) narrowing.push(plural(patterns.length, "exempt value"));
 
   if (effPolicyMode === "passthrough") {
+    const inherited = p.policy_mode ? "" : " (deployment default)";
+    // `passthrough` means NOTHING IS REDACTED — it does not by itself mean
+    // nothing is detected. It resolves `pii_detection` to `off` only for an
+    // app that names no detector; an app that names one keeps detection, its
+    // recognizers and residency escalation (compile.py:344-346,
+    // pipeline.py:230-239). Saying "protection off" for that row is CE-3 in
+    // copy. Branching on the app's own column is a fact about the row, not a
+    // re-derivation of the compiler's precedence.
+    if (p.pii_detection && p.pii_detection !== "off") {
+      const kept = narrowing.length ? ` · ${narrowing.join(" · ")}` : "";
+      return `passthrough — nothing redacted${inherited} · detection ${p.pii_detection} still runs${kept}`;
+    }
     const kept = narrowing.length ? ` · ${narrowing.join(" · ")} kept` : "";
-    return `passthrough — protection off${p.policy_mode ? "" : " (deployment default)"}${kept}`;
+    return `passthrough — nothing redacted, nothing detected${inherited}${kept}`;
   }
   const bits = [`enforced${p.policy_mode ? "" : " (deployment default)"}`];
   bits.push(`detection ${effPii ?? "deployment default"}${p.pii_detection ? "" : " (inherited)"}`);
@@ -1177,14 +1189,21 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
 
   const models = modelsText.split(",").map((m) => m.trim()).filter(Boolean);
   const detectionOpen = detectionOverride ?? !passthrough;
+  const narrowingBits = [
+    denylist.length ? plural(denylist.length, "exempt type") : null,
+    exemptPatterns.filter(Boolean).length ? plural(exemptPatterns.filter(Boolean).length, "exempt value") : null,
+    p.pii_score_threshold !== null && p.pii_score_threshold !== undefined ? `min conf ${p.pii_score_threshold}` : null,
+  ].filter(Boolean).join(" · ");
+  // "inert while passthrough" is only true for an app that names NO detector —
+  // that is the row `passthrough` resolves `pii_detection` to `off` for
+  // (compile.py:344-346). An app that names `regex`/`presidio` keeps detection,
+  // its recognizers and residency escalation under `passthrough`, so this group
+  // is live for it and the narrowing levers below genuinely apply. Calling that
+  // "inert" is counterexample CE-3 in copy.
   const detectionSummary = passthrough
-    ? `inert while passthrough — ${
-        [
-          denylist.length ? plural(denylist.length, "exempt type") : null,
-          exemptPatterns.filter(Boolean).length ? plural(exemptPatterns.filter(Boolean).length, "exempt value") : null,
-          p.pii_score_threshold !== null && p.pii_score_threshold !== undefined ? `min conf ${p.pii_score_threshold}` : null,
-        ].filter(Boolean).join(" · ") || "nothing set"
-      } kept`
+    ? (p.pii_detection && p.pii_detection !== "off"
+        ? `${p.pii_detection} still runs under passthrough (nothing redacted)${narrowingBits ? ` · ${narrowingBits}` : ""}`
+        : `inert while passthrough — ${narrowingBits || "nothing set"} kept`)
     : `${p.pii_detection ?? "inherited detector"}${
         denylist.length ? ` · ${plural(denylist.length, "exempt type")}` : ""
       }${exemptPatterns.filter(Boolean).length ? ` · ${plural(exemptPatterns.filter(Boolean).length, "exempt value")}` : ""}`;
@@ -1202,7 +1221,20 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
           <span aria-hidden className="text-gray-600">·</span>
           <span>capture {effCapture ?? "?"}</span>
           <span aria-hidden className="text-gray-600">·</span>
-          <span>detection {passthrough ? "off (passthrough)" : effPii ?? "?"}</span>
+          {/* The SERVER's compiled value, never a client-side re-derivation.
+              This used to hardcode "off (passthrough)", which is false for a
+              passthrough app that names a detector — exactly counterexample
+              CE-3's population. `app.effective.detection` is what
+              `compile_policy` resolved for this app's CURRENTLY SAVED policy,
+              ceilings and preset folded in (`_effective_dict`,
+              app/api/admin_routes.py), so there is no precedence rung for this
+              strip to get wrong. It reports the saved state, so while step 3
+              has unsaved edits it is labelled as such rather than quietly
+              disagreeing with the control above it. */}
+          <span>
+            detection {app.effective?.detection ?? effPii ?? "?"}
+            {dirty[3] && <span className="text-gray-500"> (saved)</span>}
+          </span>
         </span>
         {dirtySteps.length > 0 && (
           <span className="ml-auto text-xs text-accent">
@@ -1339,16 +1371,60 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
         </Row>
 
         {/* The consequence is stated where the operator picks it, not in a
-            tooltip. Owner voice, and only what is actually true: passthrough
-            removes protection and touches nothing else. */}
-        {passthrough && (
+            tooltip. Owner voice, and only what is actually true.
+
+            `passthrough` is a PRESET over two axes -- model_input and
+            client_output, both to `raw` -- not a master switch. It resolves
+            `pii_detection` to `off` ONLY for an app that names no detector
+            (app/policy/compile.py:344-346). An app that names one keeps it:
+            entities are still detected, classified and reported, its custom
+            recognizers still run (app/pipeline.py:230-239), and a declared
+            sensitivity rule can still raise residency. Only redaction stops.
+            That an app's own `pii_detection` used to be ignored under
+            `passthrough` was counterexample CE-3, so a banner that still
+            claims "nothing is detected" for those rows is the same bug in
+            copy.
+
+            `namesDetector` reads the app's own COLUMN -- a fact about the
+            row, not a client-side re-derivation of the compiler's
+            precedence. The RESOLVED kind comes from the server's
+            `app.effective.detection` (the compiled value for the saved
+            policy), never recomputed here. */}
+        {passthrough && (() => {
+          const namesDetector = !!p.pii_detection && p.pii_detection !== "off";
+          const savedDetection = app.effective?.detection;
+          return (
           <div className="rounded-md border border-frontier bg-frontier/10 text-frontier px-3 py-2 text-xs flex items-start gap-2">
             <span aria-hidden>⚠</span>
             <span>
-              <strong>Protection is off for this application.</strong> Nothing is detected and
-              nothing is redacted, in either direction — the prompt reaches the model verbatim
-              and the completion comes back verbatim. Custom recognizers and sensitivity rules
-              do not run.
+              <strong>Nothing is redacted for this application, in either direction.</strong>{" "}
+              The prompt reaches the model verbatim and the completion comes back verbatim
+              (<code className="font-mono">model_input</code> and{" "}
+              <code className="font-mono">client_output</code> both resolve to{" "}
+              <code className="font-mono">raw</code>).
+              {namesDetector ? (
+                <>
+                  {" "}<strong>Detection still runs.</strong> This app names{" "}
+                  <code className="font-mono">pii_detection = {p.pii_detection}</code>
+                  {savedDetection && savedDetection !== p.pii_detection
+                    ? <> (last saved policy resolves to{" "}
+                        <code className="font-mono">{savedDetection}</code>)</>
+                    : null}, so entities are still detected, classified and reported on the
+                  trace, this app&rsquo;s custom recognizers still run, and a sensitivity rule
+                  can still <em>raise</em> residency. Redaction is the only thing that stops.
+                  Clear the detector to &ldquo;(global default)&rdquo; or set it to{" "}
+                  <code className="font-mono">off</code> if you want nothing scanned at all.
+                </>
+              ) : (
+                <>
+                  {" "}<strong>Nothing is detected either.</strong> This app names no detector,
+                  so <code className="font-mono">passthrough</code> resolves{" "}
+                  <code className="font-mono">pii_detection</code> to{" "}
+                  <code className="font-mono">off</code>: custom recognizers and sensitivity
+                  rules do not run, and no entity can raise residency. Name a detector below
+                  to keep detection while redaction stays off.
+                </>
+              )}
               <br />
               What continues unchanged: routing and tier selection, budgets, rate limits,
               usage metering, the full decision trace, and Langfuse tracing.
@@ -1364,13 +1440,17 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
               save is refused with that reason.
             </span>
           </div>
-        )}
+          );
+        })()}
 
         {/* The three narrowing knobs + the detector choice are refinements
-            WITHIN the enforced posture. In passthrough nothing is detected, so
-            they do nothing — collapsed to one line and labelled, but deliberately
-            still editable and never cleared: a posture toggle must not destroy
-            the operator's stored configuration. */}
+            WITHIN the enforced posture. Under passthrough they still do
+            nothing for an app that names no detector (detection resolves to
+            `off`), which is the common case — so the group collapses to one
+            line and is labelled, but is deliberately still editable and never
+            cleared: a posture toggle must not destroy the operator's stored
+            configuration, and naming a detector here is exactly how a
+            passthrough app keeps detection while redaction stays off. */}
         <SubGroup
           title="Detection & narrowing"
           summary={detectionSummary}

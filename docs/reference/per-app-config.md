@@ -78,8 +78,16 @@ true in the compiler *and* in `app/policy/context.py`, which calls the same
 For every axis, highest wins:
 
 1. **Deployment ceiling** — `serving.policy.allow_app_passthrough`,
-   `serving.policy.allow_app_pii_downgrade`. An absolute constraint: no app may reach the
-   forbidden value, whatever it or the deployment default says.
+   `serving.policy.allow_app_pii_downgrade`. No app may weaken *past* it by its own
+   choice. Note what each one floors an app at, because they differ:
+   `allow_app_passthrough: false` clamps `model_input` and `client_output` to `redact`
+   outright, so no app on the deployment is in a no-protection posture whatever its row
+   or the deployment default says. `allow_app_pii_downgrade: false` clamps `detection`
+   back to **the deployment's own `serving.policy.pii_detection`** — not to `presidio`.
+   So on a deployment whose default is `regex` (or `off`), closing that ceiling leaves
+   every app at `regex` (or `off`); it forbids an app from *choosing* a downgrade, not
+   the deployment from *being* one. A deployment that wants `presidio` everywhere has to
+   set the default as well as the ceiling.
 2. **The explicit per-app value** — the column, when it is not `null`.
 3. **The `policy_mode` preset** — for `model_input`, `client_output` and (only when
    `pii_detection` is `null`) `pii_detection`.
@@ -333,17 +341,27 @@ score is below `0.0`, so it passes everything); `null` means no per-app floor at
 **Start here.** This is the coarse switch; every knob below it is a refinement within
 the `enforced` posture.
 
-> **Console:** *Settings → step 3 Protection → policy mode.* Selecting `passthrough` raises an
-> inline banner stating what stops (redaction in both directions, and — for an app that
-> names no detector — detection, custom recognizers and sensitivity escalation with it),
-> what continues (routing, budgets, metering, the decision trace, Langfuse), and that
-> **placement is untouched** — residency in step 2 still decides where compute may run.
-> An app that *does* name a `pii_detection` keeps detection, its recognizers and
-> escalation under `passthrough`; only redaction stops. The *Detection & narrowing* sub-group below
-> collapses to a one-line summary while `passthrough` is selected, because nothing is
-> detected, but it stays openable and editable and its stored values are **kept, not
-> cleared** — the summary names what is being kept — and they apply again the moment the
-> app returns to `enforced`.
+> **Console:** *Settings → step 3 Protection → policy mode.* Selecting `passthrough` raises
+> an inline banner that **branches on whether this app names a detector**, because the
+> answer differs:
+> - it always leads with *"nothing is redacted, in either direction"* (both
+>   data-handling axes resolve to `raw`);
+> - for an app with no `pii_detection` of its own it adds that nothing is detected
+>   either — recognizers and sensitivity rules do not run, and no entity can raise
+>   residency;
+> - for an app that **names** `regex` or `presidio` it says instead that **detection
+>   still runs** — entities are detected, classified and traced, the app's custom
+>   recognizers run, and a sensitivity rule can still *raise* residency. Redaction is the
+>   only thing that stops.
+>
+> It then names what continues (routing, budgets, metering, the decision trace, Langfuse)
+> and that **placement is untouched** — residency in step 2 still decides where compute
+> may run. The *Detection & narrowing* sub-group below collapses to a one-line summary
+> while `passthrough` is selected — because for the common case (no named detector)
+> nothing is scanned — but it stays openable and editable, and naming a detector there is
+> exactly how a `passthrough` app keeps detection with redaction off. Its stored values
+> are **kept, not cleared** — the summary names what is being kept — and they apply again
+> the moment the app returns to `enforced`.
 > **API:** `PUT /admin/applications/{app_id}/policy`, field `policy_mode`.
 
 RouteForge separates two things that are easy to confuse:

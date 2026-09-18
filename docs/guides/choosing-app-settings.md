@@ -275,7 +275,7 @@ of whatever the model was shown. Detection still runs, so a detected SSN can sti
 residency and set `require_verification`.
 
 **What it costs you.** The client sees placeholders where real values were, and nothing
-detokenizes them (there is no tokenization in RouteForge — see §6.7). If the *calling
+detokenizes them (there is no tokenization in RouteForge — see §6.8). If the *calling
 application* needs the real value back, this recipe is not for it; that app wants
 `client_output: "raw"` and has to be trusted with the data.
 

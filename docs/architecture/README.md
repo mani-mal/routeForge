@@ -104,10 +104,17 @@ simulation.** If no on-prem model is enabled, `onprem_only` requests are rejecte
 (derived — `has_healthy_onprem()` is false), never a silent cloud fallback. See the
 `inference-backends` skill.
 
-## Redaction map return path
+## Redaction map return path — placeholders, and nothing else
 
 The gate (step 2) replaces entities with placeholders (`<SSN_1>`) and keeps the map
-internal. Whether step 10 detokenizes is a **config decision**, not an omission:
-placeholder mode returns placeholders deliberately (it shows redaction working);
-detokenize mode re-inserts values inside the gate's trust boundary, after step 9. See the
-`privacy-gate` and `output-controls` skills.
+internal. **There is no detokenization.** The map is built during `anonymize()` and then
+discarded; nothing re-inserts an original value, there is no broker, and there is no
+config switch that turns one on. Placeholders are the deliverable, deliberately — they
+show redaction working — and `model_input: "tokenize"` /
+`client_output: "authorized_rehydrate"` are rejected with a 422
+(`AXIS_VALUE_NOT_IMPLEMENTED`) rather than faked.
+
+The consequence worth stating: **a redacted value cannot be a lookup key.** An app whose
+tool must find a record by SSN needs `model_input: "raw"` — the axis exists for exactly
+that — not a placeholder. See the `privacy-gate` and `output-controls` skills, and
+`docs/reference/per-app-config.md` for the axis.

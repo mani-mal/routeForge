@@ -245,8 +245,10 @@ is one of its inputs.
 
 ## 4. The invariants, and how each is checked
 
-Eight properties over `compile_policy` / `apply_signals` and the real placement path.
-`tests/policy_compiler/test_invariants.py`.
+**Eight invariants**, carried by ten property functions in
+`tests/policy_compiler/test_invariants.py` (invariant 4 takes two), over `compile_policy`
+/ `apply_signals` and the real placement path. The module total of twenty test functions
+in `tests/policy_compiler/` is these ten plus the ten counterexample regressions of §6.
 
 | # | Invariant | Property |
 |---|---|---|
@@ -459,7 +461,7 @@ git clone <repo> && cd routeForge
 git checkout feat/policy-compiler-p1a          # merge base a7db4f5
 uv sync --group dev                            # installs hypothesis, OTel SDK, prometheus-client
 
-# the harness: 20 properties, ~8 s
+# the harness: 20 test functions (10 invariant properties + 10 CE regressions), ~8 s
 LITELLM_LOCAL_MODEL_COST_MAP=True uv run pytest tests/policy_compiler -o addopts="" -q
 
 # with the compiler's own unit + golden-table suites (1514 tests, ~8 s)
@@ -483,7 +485,7 @@ over the network at import and pytest wedges in D-state on an offline machine.
 | File | Contents |
 |---|---|
 | `tests/policy_compiler/strategies.py` | Hypothesis strategies for `AppPolicyView` (legal, invalid and design-§9 unimplemented values), `Settings` (both ceilings, including malformed ones, and malformed deployment *defaults*), and detected-entity tuples drawn from `config/policy.yaml`'s own `sensitivity_rules`. Also the two profiles. |
-| `tests/policy_compiler/test_invariants.py` | The eight properties of §4. |
+| `tests/policy_compiler/test_invariants.py` | The eight invariants of §4, as ten property functions. |
 | `tests/policy_compiler/test_counterexamples.py` | CE-1..3, each named for the bug it encodes, with the pre-branch `file:line` in its docstring. |
 
 **Profiles.** `default` is 200 examples with `derandomize=True` — deliberately a

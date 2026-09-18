@@ -1,6 +1,6 @@
 ---
 name: output-controls
-description: Use when implementing step 9 of the Serving Plane - output controls and verification. Leakage checks on completions, the require_verification flow, escalation on verification failure, sampling rate, streaming policy, and detokenization ordering. Trigger on mentions of output verification, leakage check, require_verification, egress redaction, structured-output validation, or streaming.
+description: Use when implementing step 9 of the Serving Plane - output controls and verification. Leakage checks on completions, the require_verification flow, escalation on verification failure, sampling rate, streaming policy, and the client_output egress axis (there is no detokenization - see the skill). Trigger on mentions of output verification, leakage check, require_verification, egress redaction, client_output, structured-output validation, or streaming.
 ---
 
 # Output Controls & Verification (Step 9)
