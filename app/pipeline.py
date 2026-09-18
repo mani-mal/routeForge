@@ -1032,7 +1032,7 @@ class Pipeline:
                 raise PipelineRejected("stream ended without a final result")
             meta.update(self._assemble_stream_meta(
                 request_id, ctx, sanitized, comp, records, result, eff,
-                recall.record))
+                det, recall.record))
 
         def get_meta() -> dict:
             if not meta:
@@ -1057,7 +1057,7 @@ class Pipeline:
 
     def _assemble_stream_meta(self, request_id: str, ctx: ExecutionPolicyContext,
                               sanitized: str, comp, records, result: GenerationResult,
-                              eff: EffectivePolicy,
+                              eff: EffectivePolicy, det: Detector,
                               mem_record: MemoryRecord | None = None) -> dict:
         """Assemble the final streaming metadata dict, mirroring run()'s record,
         two-lever cost, and quality assembly. Step-9 verification is WAIVED on
