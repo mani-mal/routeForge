@@ -201,14 +201,20 @@ def test_residency_filter_is_what_keeps_pii_onprem_not_provider_availability():
 
     def _leaky_build_context(settings, request_id, tenant_id, entities,
                              redaction_map_id, app_policy=None, app_rules=None,
-                             registry=None, escalate_residency=True):
+                             registry=None, escalate_residency=True,
+                             content_integrity=None):
         """Reimplements build_context but WITHOUT the onprem residency
         filter, to prove the guard above would catch this exact regression.
         (Signature mirrors build_context, incl. the app_policy/app_rules
-        params and the compiled `escalate_residency` switch the gate now
-        always passes; this leaky version ignores all three — the demo tenants
-        carry no per-app policy/profile row, so residency still comes from
-        policy.yaml and escalation is on.)"""
+        params, the compiled `escalate_residency` switch, and the compiled
+        `content_integrity` axis (add8954) the gate now always passes; this
+        leaky version ignores all four for PLACEMENT purposes — the demo
+        tenants carry no per-app policy/profile row, so residency still comes
+        from policy.yaml and escalation is on. `content_integrity` is a DATA
+        axis, orthogonal to the residency filter this test is about, so it is
+        threaded straight into the returned context exactly as the real
+        build_context does — resolved through the compiler when the caller
+        supplies none — rather than being silently dropped.)"""
         etypes = {e.type for e in entities}
         rule = context_module._match_rule(settings.policy.sensitivity_rules, etypes)
         tenant = settings.policy.tenants.get(
@@ -219,6 +225,10 @@ def test_residency_filter_is_what_keeps_pii_onprem_not_provider_availability():
         allowed = enabled  # BUG: residency filter removed on purpose
         allowed_models = frozenset(
             c.name for c in settings.routing.model_pool if c.provider in allowed)
+        if content_integrity is None:
+            from app.policy.compile import compile_policy
+            content_integrity = compile_policy(
+                app_policy, settings).protection.content_integrity
         from app.models import ExecutionPolicyContext
         return ExecutionPolicyContext(
             request_id=request_id, tenant_id=tenant_id, sensitivity=rule.sensitivity,
@@ -227,7 +237,8 @@ def test_residency_filter_is_what_keeps_pii_onprem_not_provider_availability():
             max_cost_usd=settings.policy.budgets["default_max_spend_usd"],
             max_latency_ms=int(settings.policy.budgets["default_max_latency_ms"]),
             risk_class=rule.risk_class, require_verification=rule.require_verification,
-            detected_entities=tuple(sorted(etypes)), redaction_map_id=redaction_map_id)
+            detected_entities=tuple(sorted(etypes)), redaction_map_id=redaction_map_id,
+            content_integrity=content_integrity)
 
     gate_module.build_context = _leaky_build_context
     try:
