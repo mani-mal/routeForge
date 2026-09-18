@@ -65,15 +65,27 @@ UNIMPLEMENTED = {"tokenize", "authorized_rehydrate", "resolve_tokens",
 _RESIDENCY_RANK = {"any": 0, "private_cloud_ok": 1, "onprem_only": 2}
 
 #: What each axis resolves to when a value cannot be parsed, or when a ceiling
-#: forbids the requested one. Always the protective end of the axis.
+#: forbids the requested one. Always the protective end of the axis. Every axis
+#: `_resolve` is ever called for MUST have an entry — a missing one turns a
+#: malformed stored value into a KeyError (a 500) instead of a denial, which is
+#: exactly the fail-open this module exists to prevent. `_AXES` below is the
+#: guard: it asserts the two stay in step at import time.
 _DENY = {
     "residency": "onprem_only",
+    "policy_mode": "enforced",
     "model_input": "redact",
     "client_output": "redact",
     "telemetry_io": "off",
+    "detection": "presidio",
     "content_integrity": "transformations_allowed",
     "stream_mode": "off",
 }
+
+#: Every axis this module resolves. Kept beside `_DENY` so a future axis cannot
+#: be added to one and forgotten in the other.
+_AXES = ("residency", "policy_mode", "model_input", "client_output",
+         "telemetry_io", "detection", "content_integrity", "stream_mode")
+assert set(_AXES) == set(_DENY), "every axis needs a fail-closed deny value"
 
 # Source labels, so every resolved value can name the rung of §2.2 it came from.
 _APP = "app_policy"
@@ -119,6 +131,11 @@ class EffectivePolicy:
     #: Every declared cross-axis rule that fired, whether or not it was allowed
     #: to move placement — the certificate's `sp.cross_axis_rules_fired`.
     cross_axis_rules_fired: tuple[str, ...] = ()
+    #: `(axis, offending_value)` for every stored value that could not be
+    #: parsed and was denied to the safe default. Compilation still fails
+    #: closed; this is the evidence that survives it, so a validator can tell a
+    #: typo apart from a deliberate safe setting and reject the write.
+    rejected: tuple[tuple[str, str], ...] = ()
 
 
 # --- helpers -----------------------------------------------------------------
@@ -141,15 +158,30 @@ def _flag(deployment: Settings, name: str) -> bool:
 
 def _resolve(axis: str, app_value, legal: tuple[str, ...],
              preset: str | None, preset_label: str | None,
-             default: str) -> tuple[str, str]:
+             default: str, rejected: list[tuple[str, str]]) -> tuple[str, str]:
     """Rungs 2-4 of the precedence order for one axis: the explicit per-app
     value, else the `policy_mode` preset, else the deployment default. Returns
-    `(value, source)`. An explicit value that is unimplemented or simply not a
-    legal member of the axis denies to `_DENY[axis]`, attributed to the ceiling
-    — never silently ignored and never widened."""
+    `(value, source)`.
+
+    An explicit value that is unimplemented (design §9) or simply not a legal
+    member of the axis **denies**: it resolves to `_DENY[axis]`, is attributed
+    to the ceiling, and — crucially — is appended to `rejected` as
+    `(axis, offending_value)`.
+
+    That last part is why compilation can fail closed without losing evidence.
+    `source == "ceiling"` alone is ambiguous: it also means "a legal `raw` was
+    clamped by `allow_app_passthrough`". Without `rejected`, `capture_io:
+    "sometimes"` and `capture_io: "off"` compile to the same
+    `telemetry_io: "off"` and the typo is unrecoverable — so the admin API
+    could only answer 200 to a policy the operator never asked for. Keeping the
+    offending value lets a later task's validator raise
+    `CAPTURE_IO_UNKNOWN_VALUE` / `AXIS_VALUE_NOT_IMPLEMENTED` (design §9's
+    "a 422 that says it is not implemented") off the compiled result.
+    """
     if app_value is not None:
         if app_value in legal:
             return app_value, _APP
+        rejected.append((axis, str(app_value)))
         return _DENY[axis], _CEILING
     if preset is not None:
         return preset, preset_label or _DEFAULT
@@ -166,11 +198,14 @@ def compile_policy(app_policy, deployment: Settings) -> EffectivePolicy:
     touches no DB, no clock and no request, and it never inspects a protection
     axis while computing placement.
     """
+    rejected: list[tuple[str, str]] = []
+
     # -- placement. Residency, and only residency. -----------------------------
     residency = _get(app_policy, "residency") or "any"
     if residency in RESIDENCY:
         placement_source = _APP if app_policy is not None else _DEFAULT
     else:
+        rejected.append(("residency", str(residency)))
         residency, placement_source = _DENY["residency"], _CEILING
     placement = Placement(residency=residency, sources=(placement_source,))
 
@@ -180,7 +215,8 @@ def compile_policy(app_policy, deployment: Settings) -> EffectivePolicy:
 
     mode = _get(app_policy, "policy_mode") or deployment.serving.default_policy_mode
     if mode not in POLICY_MODES:
-        mode = "enforced"                      # unparseable posture denies
+        rejected.append(("policy_mode", str(mode)))
+        mode = _DENY["policy_mode"]            # unparseable posture denies
     if mode == "passthrough" and not allow_passthrough:
         mode = "enforced"                      # deployment ceiling wins
     preset_label = f"preset:{mode}"
@@ -190,10 +226,10 @@ def compile_policy(app_policy, deployment: Settings) -> EffectivePolicy:
 
     model_input, sources["model_input"] = _resolve(
         "model_input", _get(app_policy, "model_input"), MODEL_INPUTS,
-        preset_raw, preset_label, "redact")
+        preset_raw, preset_label, "redact", rejected)
     client_output, sources["client_output"] = _resolve(
         "client_output", _get(app_policy, "client_output"), CLIENT_OUTPUTS,
-        preset_raw, preset_label, "redact")
+        preset_raw, preset_label, "redact", rejected)
 
     # `raw` on either side is a declared no-protection posture, and
     # `allow_app_passthrough` gates the two of them independently (design §4).
@@ -208,26 +244,33 @@ def compile_policy(app_policy, deployment: Settings) -> EffectivePolicy:
     detection, sources["detection"] = _resolve(
         "detection", _get(app_policy, "pii_detection"), PII_MODES,
         "off" if mode == "passthrough" else None, preset_label,
-        deployment.serving.pii_detection)
+        deployment.serving.pii_detection, rejected)
     if detection not in PII_MODES:                     # malformed deployment value
-        detection, sources["detection"] = "presidio", _CEILING
+        rejected.append(("detection", str(detection)))
+        detection, sources["detection"] = _DENY["detection"], _CEILING
     if not allow_pii_downgrade and detection in ("off", "regex"):
+        # The ceiling clamps a LEGAL value — not a rejection.
         detection = deployment.serving.pii_detection
         sources["detection"] = _CEILING
+        if detection not in PII_MODES:                 # ...and the default is junk too
+            rejected.append(("detection", str(detection)))
+            detection = _DENY["detection"]
 
     telemetry_io, sources["telemetry_io"] = _resolve(
         "telemetry_io", _get(app_policy, "capture_io"), TELEMETRY_IOS,
-        None, None, deployment.serving.observability.langfuse.capture_io)
+        None, None, deployment.serving.observability.langfuse.capture_io,
+        rejected)
     if telemetry_io not in TELEMETRY_IOS:              # malformed deployment value
-        telemetry_io, sources["telemetry_io"] = "off", _CEILING
+        rejected.append(("telemetry_io", str(telemetry_io)))
+        telemetry_io, sources["telemetry_io"] = _DENY["telemetry_io"], _CEILING
 
     content_integrity, sources["content_integrity"] = _resolve(
         "content_integrity", _get(app_policy, "content_integrity"),
-        CONTENT_INTEGRITY, None, None, "transformations_allowed")
+        CONTENT_INTEGRITY, None, None, "transformations_allowed", rejected)
 
     stream_mode, sources["stream_mode"] = _resolve(
         "stream_mode", _get(app_policy, "stream_mode"), STREAM_MODES,
-        None, None, "off")
+        None, None, "off", rejected)
 
     protection = Protection(
         model_input=model_input,
@@ -248,6 +291,7 @@ def compile_policy(app_policy, deployment: Settings) -> EffectivePolicy:
         escalate_residency_on_detection=True if escalate is None else bool(escalate),
         require_verification=False,
         version=version,
+        rejected=tuple(rejected),
     )
 
 
@@ -272,20 +316,27 @@ def apply_signals(eff: EffectivePolicy, detected_entity_types: tuple[str, ...],
     placement = eff.placement
     if eff.escalate_residency_on_detection:
         rule_residency = getattr(rule, "residency", None)
-        residency = placement.residency
         if (rule_residency in _RESIDENCY_RANK
-                and _RESIDENCY_RANK[rule_residency] > _RESIDENCY_RANK[residency]):
-            residency = rule_residency      # tighten only; never the other way
-        placement = Placement(
-            residency=residency,
-            sources=placement.sources + (f"rule:{sensitivity}",),
-        )
+                and _RESIDENCY_RANK[rule_residency]
+                > _RESIDENCY_RANK[placement.residency]):
+            # Only a rule that actually MOVED residency is named in
+            # placement.sources — otherwise sources would claim an influence
+            # that never happened. A rule that fired without moving placement
+            # (it was already stricter, or escalation is off) is recorded in
+            # cross_axis_rules_fired instead, which is what that field is for.
+            placement = Placement(
+                residency=rule_residency,   # tighten only; never the other way
+                sources=placement.sources + (f"rule:{sensitivity}",),
+            )
 
     return replace(
         eff,
         placement=placement,
         require_verification=(eff.require_verification
                               or bool(getattr(rule, "require_verification", False))),
+        # SET from the matched rule, not max()'d against the current value: this
+        # mirrors how app/policy/context.py resolves sensitivity today (one
+        # matched rule decides the label). Not a monotonicity bug.
         sensitivity=sensitivity if sensitivity is not None else eff.sensitivity,
         cross_axis_rules_fired=fired,
     )
