@@ -87,6 +87,21 @@ _AXES = ("residency", "policy_mode", "model_input", "client_output",
          "telemetry_io", "detection", "content_integrity", "stream_mode")
 assert set(_AXES) == set(_DENY), "every axis needs a fail-closed deny value"
 
+#: The legal vocabulary of each axis, so `validate_effective` can tell an
+#: operator what they *may* write instead of only that their value was wrong.
+#: Sorted at use, because two of these are frozensets.
+_LEGAL = {
+    "residency": RESIDENCY,
+    "policy_mode": POLICY_MODES,
+    "model_input": MODEL_INPUTS,
+    "client_output": CLIENT_OUTPUTS,
+    "telemetry_io": TELEMETRY_IOS,
+    "detection": PII_MODES,
+    "content_integrity": CONTENT_INTEGRITY,
+    "stream_mode": STREAM_MODES,
+}
+assert set(_AXES) == set(_LEGAL), "every axis needs its legal vocabulary"
+
 # Source labels, so every resolved value can name the rung of §2.2 it came from.
 _APP = "app_policy"
 _CEILING = "ceiling"
@@ -136,6 +151,28 @@ class EffectivePolicy:
     #: closed; this is the evidence that survives it, so a validator can tell a
     #: typo apart from a deliberate safe setting and reject the write.
     rejected: tuple[tuple[str, str], ...] = ()
+    #: `(axis, requested_value)` for every value that was **legal** but that a
+    #: deployment ceiling refused, so the compiler substituted the protective
+    #: one. `rejected`'s sibling, and needed for exactly the same reason:
+    #: `sources[axis] == "ceiling"` is ambiguous three ways — the app asked for
+    #: something the ceiling forbids, a *preset* implied it, or the deployment's
+    #: own default simply sits at the value the ceiling names. Only the first is
+    #: an operator error worth a 422; the last one is every app on a deployment
+    #: whose `pii_detection` default is `regex` while `allow_app_pii_downgrade`
+    #: is false (this repo's own test config), which is why a validator that
+    #: keys on the *effective* value would refuse every write.
+    #:
+    #: So an entry is recorded only when the **app itself** asked (rung 2 of
+    #: §2.2) — with one deliberate exception, `policy_mode`, which is recorded
+    #: whether the app or the deployment default supplied `passthrough`. That
+    #: asymmetry is not a slip: it is the one `set_policy` has always had, and
+    #: it is load-bearing. `pii_detection` unset means "inherit the live global
+    #: detector", which is not an opt-out of anything; `policy_mode` unset on a
+    #: deployment with `default_policy_mode: passthrough` genuinely puts the app
+    #: into the no-protection posture, and the ceiling must see that — an app is
+    #: exactly as unprotected whether the passthrough came from its own row or
+    #: from the default.
+    clamped: tuple[tuple[str, str], ...] = ()
 
 
 # --- helpers -----------------------------------------------------------------
@@ -199,6 +236,7 @@ def compile_policy(app_policy, deployment: Settings) -> EffectivePolicy:
     axis while computing placement.
     """
     rejected: list[tuple[str, str]] = []
+    clamped: list[tuple[str, str]] = []
 
     # -- placement. Residency, and only residency. -----------------------------
     residency = _get(app_policy, "residency") or "any"
@@ -218,6 +256,9 @@ def compile_policy(app_policy, deployment: Settings) -> EffectivePolicy:
         rejected.append(("policy_mode", str(mode)))
         mode = _DENY["policy_mode"]            # unparseable posture denies
     if mode == "passthrough" and not allow_passthrough:
+        # Recorded whether the app or `default_policy_mode` supplied it — see
+        # the `clamped` docstring for why this axis, alone, ignores the source.
+        clamped.append(("policy_mode", "passthrough"))
         mode = "enforced"                      # deployment ceiling wins
     preset_label = f"preset:{mode}"
     preset_raw = "raw" if mode == "passthrough" else "redact"
@@ -235,8 +276,12 @@ def compile_policy(app_policy, deployment: Settings) -> EffectivePolicy:
     # `allow_app_passthrough` gates the two of them independently (design §4).
     if not allow_passthrough:
         if model_input == "raw":
+            if sources["model_input"] == _APP:
+                clamped.append(("model_input", "raw"))
             model_input, sources["model_input"] = "redact", _CEILING
         if client_output == "raw":
+            if sources["client_output"] == _APP:
+                clamped.append(("client_output", "raw"))
             client_output, sources["client_output"] = "redact", _CEILING
 
     # Detection: explicit axis; else off under `passthrough` (what those apps
@@ -250,6 +295,13 @@ def compile_policy(app_policy, deployment: Settings) -> EffectivePolicy:
         detection, sources["detection"] = _DENY["detection"], _CEILING
     if not allow_pii_downgrade and detection in ("off", "regex"):
         # The ceiling clamps a LEGAL value — not a rejection.
+        if sources["detection"] == _APP:
+            # Only an actual per-app override is a downgrade the operator asked
+            # for. Inheriting a non-presidio deployment default is not an
+            # opt-out of anything, and a `preset:passthrough` "off" is governed
+            # by `allow_app_passthrough`, not by this ceiling. Recording either
+            # here would 422 writes that have always been legal.
+            clamped.append(("detection", detection))
         detection = deployment.serving.pii_detection
         sources["detection"] = _CEILING
         if detection not in PII_MODES:                 # ...and the default is junk too
@@ -292,6 +344,7 @@ def compile_policy(app_policy, deployment: Settings) -> EffectivePolicy:
         require_verification=False,
         version=version,
         rejected=tuple(rejected),
+        clamped=tuple(clamped),
     )
 
 
@@ -340,3 +393,204 @@ def apply_signals(eff: EffectivePolicy, detected_entity_types: tuple[str, ...],
         sensitivity=sensitivity if sensitivity is not None else eff.sensitivity,
         cross_axis_rules_fired=fired,
     )
+
+
+# --- validation (design §4: the compatibility contract) ----------------------
+
+class PolicyViolation(Exception):
+    """One named reason an effective policy may not be persisted.
+
+    `code` is the stable identifier the golden table asserts on; `message` is
+    what the operator reads in the admin API's 422. Every message names the
+    axis, why it is refused, and the legal alternatives — these strings have
+    been in front of operators since the per-app config shipped, so their
+    wording is API surface, not prose.
+    """
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+#: Axis name -> the name the operator types in the admin API / console. The
+#: compiler's internal names (`telemetry_io`, `detection`) are deliberately
+#: different from the stored column names (`capture_io`, `pii_detection`); an
+#: error message that used the internal one would name a field the operator
+#: cannot find.
+_OPERATOR_NAME = {
+    "residency": "residency",
+    "policy_mode": "policy_mode",
+    "model_input": "model_input",
+    "client_output": "client_output",
+    "telemetry_io": "capture_io",
+    "detection": "pii_detection",
+    "content_integrity": "content_integrity",
+    "stream_mode": "stream_mode",
+}
+
+
+def _capture_alternatives(residency: str) -> str:
+    """The legal `capture_io` values to offer when `redacted` is refused.
+
+    `full` is offered only off-prem. For an `onprem_only` app raw capture needs
+    the declared no-protection posture as well, so naming it here would send
+    the operator straight into the next 422 — and a test asserts the word
+    "full" never appears in that app's message.
+    """
+    if residency == "onprem_only":
+        return "capture_io='off'."
+    return "capture_io='full' with the app's own Langfuse project, or capture_io='off'."
+
+
+def validate_effective(eff: EffectivePolicy, deployment: Settings, *,
+                       has_own_langfuse_project: bool) -> None:
+    """Refuse an effective policy that may not be persisted, or return None.
+
+    This is the single authority the admin API and the golden table both call,
+    replacing the hand-written clamps `set_policy` used to carry. Two properties
+    of those clamps are preserved deliberately and must survive any edit here:
+
+    * **It judges the compiled, post-write state**, never the request body. A
+      partial PUT that never mentions `stream_mode` still gets judged on the
+      stream mode the app will have afterwards, and a `reset` is judged on what
+      the app falls back to. `set_policy` builds the post-write view; this
+      function never sees the body at all.
+    * **Each violation is its own named code**, so the operator is told which
+      guardrail fired. `capture_io='full'` failing the own-project condition and
+      failing the posture condition are different problems with different fixes.
+
+    Order matters where two rules can fire at once, and it follows the golden
+    table: unparseable values first (the operator's typo is the most useful
+    thing to report), then deployment ceilings, then the capture rules, then the
+    streaming rules.
+    """
+    p = eff.protection
+    residency = eff.placement.residency
+
+    # --- 1. values that could not be parsed. `compile_policy` already failed
+    # closed to the protective value; refusing the *write* is what stops a typo
+    # from being answered 200 and stored as a policy the operator never asked
+    # for (CE-2: `capture_io` was never validated at all, so "sometimes" was
+    # persisted and silently behaved as "off").
+    for axis, value in eff.rejected:
+        name = _OPERATOR_NAME.get(axis, axis)
+        if value in UNIMPLEMENTED:
+            # Design §9: named in the design, deliberately not built. Rejected
+            # rather than faked — a policy that asks for tokenization must not
+            # be accepted and then silently run as plain redaction.
+            raise PolicyViolation(
+                "AXIS_VALUE_NOT_IMPLEMENTED",
+                f"{name}={value!r} is not implemented in this release. It is a "
+                "named part of the design, but nothing behind this API does it "
+                "yet, so accepting it would promise a protection that does not "
+                "run. Use one of: "
+                f"{', '.join(repr(v) for v in sorted(_LEGAL[axis]))}.")
+        raise PolicyViolation(
+            f"{name.upper()}_UNKNOWN_VALUE",
+            f"bad {name} {value!r}; legal values: "
+            f"{', '.join(repr(v) for v in sorted(_LEGAL[axis]))}.")
+
+    # --- 2. deployment ceilings. A locked-down deployment forbids the posture
+    # install-wide, so no app may reach it — including by way of the
+    # deployment's own default (see `EffectivePolicy.clamped` for why
+    # `policy_mode` keys on the effective value while `pii_detection` keys on
+    # the app's own override; both halves of that asymmetry are load-bearing).
+    for axis, value in eff.clamped:
+        if axis in ("policy_mode", "model_input", "client_output"):
+            raise PolicyViolation(
+                "PASSTHROUGH_FORBIDDEN",
+                "per-app passthrough policy_mode disabled on this deployment "
+                f"(refused {_OPERATOR_NAME[axis]}={value!r}; "
+                "serving.policy.allow_app_passthrough is false).")
+        if axis == "detection":
+            raise PolicyViolation(
+                "PII_DOWNGRADE_FORBIDDEN",
+                "per-app PII downgrade disabled on this deployment "
+                f"(refused pii_detection={value!r}; "
+                "serving.policy.allow_app_pii_downgrade is false).")
+
+    # --- 3. telemetry capture.
+    if p.telemetry_io == "full":
+        # (a) Own provisioned Langfuse project — NEVER relaxed, by anything.
+        # Raw I/O stays tenant-isolated: one customer's raw prompts must never
+        # land in another's traces or in the shared project (CLAUDE.md rule 2).
+        # No posture, and no residency, touches this condition.
+        if not has_own_langfuse_project:
+            raise PolicyViolation(
+                "CAPTURE_FULL_NEEDS_OWN_PROJECT",
+                "capture_io='full' stores raw telemetry and is allowed only "
+                "for an application with its own provisioned Langfuse project "
+                "(raw I/O must never reach the shared project; CLAUDE.md rule 2). "
+                "Use 'redacted'.")
+        # (b) Posture. Before `policy_mode` existed, `onprem_only` was used as a
+        # proxy for "maximum protection", so raw capture was refused for onprem
+        # apps outright. That proxy is what this feature removes: an app the
+        # operator has explicitly put in a no-protection posture has declared
+        # it, and raw capture into its OWN project is then coherent at any
+        # residency — the whole point of onprem_only + passthrough. Spelled on
+        # the axes now rather than on `policy_mode`, which is exactly what
+        # `policy_mode: passthrough` compiles to; an app still showing the gate
+        # a redacted view keeps the old rule (rule 8: residency beats eval).
+        if residency == "onprem_only" and not (p.model_input == "raw"
+                                               and p.client_output == "raw"):
+            raise PolicyViolation(
+                "CAPTURE_FULL_ONPREM_NEEDS_NO_PROTECTION",
+                "capture_io='full' stores raw telemetry and is not allowed for "
+                "an onprem_only application that has not declared a "
+                "no-protection posture — that is model_input='raw' AND "
+                "client_output='raw' (residency beats eval; CLAUDE.md rules "
+                "2/8). Use 'redacted', or set policy_mode='passthrough' (which "
+                "resolves both axes to 'raw') to declare the app unprotected.")
+
+    if p.telemetry_io == "redacted" and p.detection == "off":
+        # Redacted telemetry needs something to redact with. This is the one
+        # rule design §4 narrows rather than keeps whole: it used to refuse
+        # `redacted` for any no-protection posture, because the exporter reused
+        # whatever view the gate handed the MODEL. §2.6 gives telemetry its own
+        # sanitizer, so raw model input no longer implies raw telemetry — what
+        # is left, and all that was ever really being protected against, is
+        # having no detector at all.
+        if p.sources.get("detection", "").startswith("preset:"):
+            # The posture, not an explicit axis, is what turned detection off —
+            # name that, so the operator fixes the right field.
+            raise PolicyViolation(
+                "CAPTURE_REDACTED_NEEDS_A_DETECTOR",
+                "capture_io='redacted' cannot be combined with "
+                "policy_mode='passthrough': passthrough leaves PII detection "
+                "off, so there is nothing to redact telemetry with. Set "
+                "pii_detection='regex' or 'presidio' to keep redacted "
+                "telemetry, or use " + _capture_alternatives(residency))
+        raise PolicyViolation(
+            "CAPTURE_REDACTED_NEEDS_A_DETECTOR",
+            "capture_io='redacted' cannot be combined with pii_detection "
+            "off: redacted telemetry needs a detector to redact with, and "
+            "none is configured. Use " + _capture_alternatives(residency))
+
+    # --- 4. streaming. `stream_unverified` streams real backend tokens and
+    # explicitly waives step 9, so it can only ever be an app's own, narrow
+    # opt-in.
+    if p.stream_mode == "stream_unverified":
+        if residency == "onprem_only":
+            raise PolicyViolation(
+                "STREAM_UNVERIFIED_FORBIDDEN_ONPREM",
+                "stream_unverified not allowed for onprem_only apps: the "
+                "step-9 floor is absolute for them and can never be waived "
+                "(CLAUDE.md rule 8). Use stream_mode='verified_then_stream' or "
+                "'incremental_verify'.")
+        if p.sources.get("client_output") == _APP and p.client_output == "redact":
+            # Design §2.5. Scoped to an EXPLICIT client_output, deliberately:
+            # `redact` is also what the `enforced` preset resolves to, and
+            # `enforced` + `stream_unverified` is legal today for every app that
+            # has opted into it. Widening this to the effective value would
+            # refuse that whole population — a contract change, not this rule.
+            # An app that named the axis has asked for an egress guarantee this
+            # stream mode cannot keep, and that contradiction is worth a 422.
+            raise PolicyViolation(
+                "STREAM_UNVERIFIED_FORBIDDEN_REDACTED_OUTPUT",
+                "stream_mode='stream_unverified' cannot be combined with an "
+                "explicit client_output='redact': unverified streaming emits "
+                "backend tokens as they arrive, so no egress redaction can run "
+                "over the complete response. Use "
+                "stream_mode='incremental_verify' (hold-back redaction) or "
+                "'verified_then_stream', or set client_output='raw'.")
