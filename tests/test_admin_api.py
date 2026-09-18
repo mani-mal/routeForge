@@ -328,6 +328,48 @@ def test_policy_deployment_ceiling_blocks_pii_downgrade(monkeypatch):
         assert "disabled" in r.text.lower()
 
 
+def test_policy_pii_downgrade_ceiling_covers_the_passthrough_preset(monkeypatch):
+    """Task 9 review round 1 (Fix round 1): `allow_app_pii_downgrade: false`
+    must reassign detection back to the deployment default for the
+    PASSTHROUGH PRESET too, not just an explicit per-app `pii_detection`
+    override (app/policy/compile.py's ceiling clamp, ~line 309, keys on the
+    resolved value being off/regex, not on its SOURCE). Concrete regression
+    for the drift the old `ui/src/admin/AppSettings.tsx::effDetectionFor`
+    client-side mirror had: it only covered the app-value and preset rungs,
+    so it computed "off" here and blocked Save with a 4xx the server never
+    intended. `capture_io: redacted` must be ACCEPTED, and the admin
+    response's `effective.detection` -- what the UI now reads instead of
+    re-deriving -- must report the deployment default, never "off"."""
+    monkeypatch.setenv("SP_ALLOW_APP_PII_DOWNGRADE", "false")
+    with TestClient(create_app()) as c:
+        _login(c)
+        c.post("/admin/applications", json={"id": "ceiling-passthrough", "name": "X"})
+        r = c.put("/admin/applications/ceiling-passthrough/policy",
+                  json={"policy_mode": "passthrough", "capture_io": "redacted"})
+        assert r.status_code == 200, r.text
+        assert r.json()["effective"]["detection"] != "off"
+        assert r.json()["policy"]["capture_io"] == "redacted"
+        # GET must report the SAME compiled value as the PUT response.
+        got = c.get("/admin/applications/ceiling-passthrough")
+        assert got.json()["effective"]["detection"] == r.json()["effective"]["detection"]
+
+
+def test_admin_app_carries_the_effective_block(client):
+    """The admin GET/PUT response's `effective` block (Task 9 Fix round 1) is
+    the compiled EffectivePolicy's axis values -- what the console reads
+    instead of re-deriving `compile_policy`'s precedence."""
+    _login(client)
+    client.post("/admin/applications", json={"id": "eff-block", "name": "X"})
+    r = client.get("/admin/applications/eff-block")
+    assert r.status_code == 200
+    eff = r.json()["effective"]
+    assert set(eff) == {"model_input", "client_output", "telemetry_io",
+                        "detection", "content_integrity"}
+    # Default app (no policy row, enforced): both data-handling axes redact.
+    assert eff["model_input"] == "redact"
+    assert eff["client_output"] == "redact"
+
+
 def test_policy_pii_and_stream_mode_round_trip(client):
     # (g) GET after PUT reflects the persisted values.
     _login(client)

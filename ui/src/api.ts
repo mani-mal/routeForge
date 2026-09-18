@@ -292,6 +292,24 @@ export interface AdminPolicyWrite extends AdminPolicy {
   reset?: string[];
 }
 
+// The already-compiled axis VALUES for this app (app/policy/compile.py's
+// `EffectivePolicy.protection`, minus sources/rules/version — the request-level
+// certificate, design P1a §6, already carries those). Fix round 1 (Task 9
+// review): the admin console must READ this, never re-derive it — a
+// client-side mirror of `compile_policy`'s precedence (per-app value > preset
+// > deployment default > ceiling clamps) drifts the moment a rung is added or
+// changed server-side, which is exactly what happened to the redacted-capture
+// clamp this fixes. Present only when the server compiled one (every real
+// response does; absent only for a caller with no deployment context, which
+// does not exist in this codebase today).
+export interface AdminEffectivePolicy {
+  model_input: string;
+  client_output: string;
+  telemetry_io: string;
+  detection: string;
+  content_integrity: string;
+}
+
 export interface AdminApp {
   id: string;
   name: string;
@@ -304,6 +322,7 @@ export interface AdminApp {
   created_at: string | null;
   policy: AdminPolicy | null;
   tokens: AdminToken[];
+  effective?: AdminEffectivePolicy;
 }
 
 export interface UsageSummary {

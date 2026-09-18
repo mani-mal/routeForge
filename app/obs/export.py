@@ -352,6 +352,15 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                 # needs redaction. A `None` value (not applicable this
                 # request) survives the round-trip as JSON `null`, never a
                 # fabricated boolean.
+                #
+                # `fallback_in_eligible_set` covers every router hop the
+                # gateway moved PAST before the one that was served -- a
+                # failed-over backend retry (Gateway.run's failover loop) AND
+                # a confidence escalation to a higher tier both count, since
+                # both are cases where the gateway used a candidate other than
+                # its first pick. It is `null` when the served model was
+                # chosen on the first hop (nothing to check). See
+                # `Pipeline._eligibility_checks`.
                 root.set_attribute("sp.checks", json.dumps(checks))
             if prompt_version:
                 # Feature 3 (DSPy prompt-optimization) Task 1: sha256[:12]

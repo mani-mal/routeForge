@@ -1032,29 +1032,25 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
       ? "onprem_only + enforced — set policy_mode = passthrough"
       : null;
   const fullBlocked = fullBlockedFor(effPolicyMode);
-  // `redacted` needs a detector to redact WITH. Mirrors the compiler's own
-  // `detection` axis resolution (app/policy/compile.py `_resolve` +
-  // `validate_effective`'s `telemetry_io == "redacted" and detection ==
-  // "off"` check) exactly: an explicit per-app `pii_detection` always wins,
-  // `passthrough` with nothing set resolves detection to "off", and anything
-  // else falls to the deployment's global default. Note pii_detection = null
-  // means "inherit the live global detector" — only an explicit `off` (or the
-  // passthrough preset falling to it) trips this. `regex` is NOT blocked: the
-  // RegexDetector still redacts (SSN/card/email/custom recognizers), so the
-  // sanitized prompt is not raw — lower fidelity than presidio (it misses
-  // entities without a pattern, e.g. names), but genuinely redacted.
-  //
-  // Design P1a §4's deliberate unlock: `policy_mode = passthrough` no longer
-  // blocks `redacted` by itself — an app that names a real detector under
-  // passthrough gets one (§2.6 gives telemetry its own sanitizer), so only an
-  // app that ends up with NO detection at all blocks this option, whichever
-  // axis put it there.
-  const effDetectionFor = (mode: string) =>
-    p.pii_detection ?? (mode === "passthrough" ? "off" : (effPii ?? undefined));
-  const redactedBlockedFor = (mode: string) => effDetectionFor(mode) === "off"
+  // `redacted` needs a detector to redact WITH. THIS control is now
+  // server-driven, not a mirror (Task 9 review round 1 — a Fix-round-1
+  // Important finding): it used to re-derive `compile_policy`'s `detection`
+  // axis resolution client-side and omitted the `allow_pii_downgrade`
+  // ceiling clamp (app/policy/compile.py ~line 309), which reassigns
+  // `detection` back to the deployment default whenever the ceiling forbids
+  // landing on off/regex — INCLUDING when the passthrough PRESET (not just
+  // an explicit per-app override) put it there. Concrete drift that produced:
+  // `allow_app_pii_downgrade: false` + `policy_mode: passthrough` compiles
+  // server-side to the deployment default detector, making `capture_io:
+  // redacted` legal — but the old client mirror computed "off" and blocked
+  // Save regardless. `app.effective.detection` is the admin GET/PUT
+  // response's compiled value (`_effective_dict`, app/api/admin_routes.py) —
+  // exactly what `compile_policy` resolved for THIS app's CURRENTLY SAVED
+  // policy, ceilings and all. Reading it directly is the fix: no rung to
+  // omit, because nothing here re-implements the precedence any more.
+  const redactedBlocked = app.effective?.detection === "off"
     ? "pii_detection resolves to off — nothing to redact telemetry with"
     : null;
-  const redactedBlocked = redactedBlockedFor(effPolicyMode);
   // stream_unverified waives step 9 outright, which onprem_only may never do
   // (set_policy 422s on the pair; app/pipeline.py backstops it at runtime).
   const streamUnverifiedBlocked = effResidency === "onprem_only"
@@ -1064,6 +1060,30 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
   // enforced here: the write is what the server refuses.
   const passthroughCeiling = deployment && !deployment.allow_app_passthrough;
   const piiDowngradeCeiling = deployment && !deployment.allow_app_pii_downgrade;
+
+  // PREDICTIVE ONLY — used below by `recipeWarning` to preview a recipe's
+  // effect BEFORE it is saved. Unlike `redactedBlocked` above (which now
+  // reads the server's already-compiled `app.effective`, the CURRENTLY SAVED
+  // policy), this has to answer for a hypothetical `policy_mode` the app
+  // does not have yet, and there is no endpoint that compiles a draft policy
+  // — so it stays a client-side approximation of `compile_policy`'s
+  // precedence, folding in the SAME `allow_pii_downgrade` ceiling
+  // `redactedBlocked` is now driven by server-side, so the two don't drift
+  // apart from EACH OTHER even though this one can still drift from the
+  // compiler on a rung neither of us has thought of yet. It is advisory text
+  // only (see the "Nothing here disables Apply" note below) — the
+  // authoritative answer for any saved state is always `app.effective`, and
+  // for an unsaved one, Save's own 422.
+  const predictedDetectionFor = (mode: string) => {
+    const raw = p.pii_detection ?? (mode === "passthrough" ? "off" : (effPii ?? undefined));
+    return (!piiDowngradeCeiling || (raw !== "off" && raw !== "regex"))
+      ? raw
+      : (deployment?.default_pii_detection ?? undefined);
+  };
+  const predictedRedactedBlockedFor = (mode: string) =>
+    predictedDetectionFor(mode) === "off"
+      ? "pii_detection resolves to off — nothing to redact telemetry with"
+      : null;
 
   // --- recipes -------------------------------------------------------------
   // What the operator is told BEFORE applying a recipe: the prerequisite it
@@ -1100,7 +1120,7 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
       }
     }
     if (r.sets.capture_io === "redacted") {
-      const blocked = redactedBlockedFor(mode);
+      const blocked = predictedRedactedBlockedFor(mode);
       if (blocked) {
         out.push(
           <>

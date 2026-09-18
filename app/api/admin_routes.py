@@ -18,7 +18,7 @@ from app.apps.admin_auth import SESSION_COOKIE, require_admin
 from app.apps.langfuse_provision import LangfuseProvisioner, encrypt_secret
 from app.apps.policy_lint import price_warnings
 from app.apps.probe import probe_endpoint
-from app.apps.policy import AppPolicyView
+from app.apps.policy import AppPolicyView, policy_view_from
 from app.apps.tokens import new_token
 from app.policy.compile import (PolicyViolation, check_invariants, compile_policy,
                                 validate_effective)
@@ -73,7 +73,37 @@ def _onboarded_dict(m) -> dict:
             "notes": m.notes, "updated_at": _iso(m.updated_at)}
 
 
-def _app_dict(app, *, with_children: bool = True) -> dict:
+def _effective_dict(app, settings) -> dict:
+    """The compiled `EffectivePolicy`'s axis VALUES only -- no sources, no
+    cross-axis rules, no version; the certificate (Task 9) already carries
+    those on a served REQUEST. This is the fix for Task 9 review round 1's
+    Important finding: `ui/src/admin/AppSettings.tsx` used to re-derive this
+    same precedence client-side (`effDetectionFor`) and it drifted the moment
+    a rung was added server-side -- `compile_policy`'s `allow_pii_downgrade`
+    ceiling (app/policy/compile.py ~line 309) reassigns `detection` back to
+    the deployment default whenever the ceiling is false and the resolved
+    value is off/regex, INCLUDING the `passthrough` preset case, not just an
+    explicit per-app override. A client-side mirror had no way to learn that
+    without literally re-implementing `compile_policy`, and it fell behind.
+
+    The fix is server-driven, not a better mirror: hand the client the
+    already-compiled values and let it read them. `compile_policy` is pure
+    and cheap (no DB, no I/O -- see its own docstring), so recomputing it on
+    every app read is free; this is the one place it runs for the admin
+    surface, and every `_app_dict` caller gets it, so GET and the PUT
+    response can never disagree about what the app's policy actually
+    resolves to."""
+    eff = compile_policy(policy_view_from(app), settings)
+    return {
+        "model_input": eff.protection.model_input,
+        "client_output": eff.protection.client_output,
+        "telemetry_io": eff.protection.telemetry_io,
+        "detection": eff.protection.detection,
+        "content_integrity": eff.protection.content_integrity,
+    }
+
+
+def _app_dict(app, *, with_children: bool = True, settings=None) -> dict:
     d = {"id": app.id, "name": app.name, "owner_email": app.owner_email,
          "status": app.status, "default_residency": app.default_residency,
          "langfuse_project_id": app.langfuse_project_id,
@@ -84,6 +114,11 @@ def _app_dict(app, *, with_children: bool = True) -> dict:
         d["policy"] = _policy_dict(app.policy)
         d["tokens"] = [_token_dict(t) for t in sorted(
             app.tokens, key=lambda t: t.created_at or dt.datetime.min)]
+        # `settings` is optional only so a caller with no deployment context
+        # (there is none in this codebase today) degrades to omitting the
+        # block rather than crashing -- every real call site below passes it.
+        if settings is not None:
+            d["effective"] = _effective_dict(app, settings)
     return d
 
 
@@ -315,7 +350,7 @@ async def list_applications(request: Request, _: str = Depends(require_admin)) -
         out = []
         for app in await store.list_applications(session):
             full = await store.get_application_with_policy(session, app.id)
-            out.append(_app_dict(full))
+            out.append(_app_dict(full, settings=request.app.state.settings))
         return out
 
 
@@ -344,7 +379,8 @@ async def create_application(body: CreateAppIn, request: Request,
                 langfuse_secret_key_enc=encrypt_secret(provisioned.secret_key))
         await session.commit()
         full = await store.get_application_with_policy(session, body.id)
-        return {"application": _app_dict(full), "token": raw}
+        return {"application": _app_dict(full, settings=request.app.state.settings),
+                "token": raw}
 
 
 async def _maybe_provision_langfuse(app_id: str, name: str):
@@ -361,7 +397,7 @@ async def get_application(app_id: str, request: Request,
         full = await store.get_application_with_policy(session, app_id)
         if full is None:
             raise HTTPException(404, "application not found")
-        return _app_dict(full)
+        return _app_dict(full, settings=request.app.state.settings)
 
 
 @admin_router.patch("/applications/{app_id}")
@@ -374,7 +410,7 @@ async def update_application(app_id: str, body: UpdateAppIn, request: Request,
             raise HTTPException(404, "application not found")
         await session.commit()
         full = await store.get_application_with_policy(session, app_id)
-        return _app_dict(full)
+        return _app_dict(full, settings=request.app.state.settings)
 
 
 @admin_router.put("/applications/{app_id}/langfuse")
@@ -396,7 +432,7 @@ async def set_langfuse_creds(app_id: str, body: LangfuseCredsIn, request: Reques
             raise HTTPException(404, "application not found")
         await session.commit()
         full = await store.get_application_with_policy(session, app_id)
-        return _app_dict(full)
+        return _app_dict(full, settings=request.app.state.settings)
 
 
 @admin_router.put("/applications/{app_id}/policy")
@@ -588,8 +624,7 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
         # (expire_on_commit=False on this sessionmaker).
         session.expire(app)
         full = await store.get_application_with_policy(session, app_id)
-        app_dict = _app_dict(full)
-        from app.apps.policy import policy_view_from
+        app_dict = _app_dict(full, settings=settings)
         view = policy_view_from(full)
     # Outside the session block: registry.ensure_loaded() opens its own
     # db.session(), which would deadlock on the non-reentrant SQLite

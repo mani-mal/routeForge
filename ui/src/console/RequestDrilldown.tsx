@@ -234,6 +234,12 @@ function StepBody({ stepKey, detail }: { stepKey: string; detail: ChatResponse }
             <>
               <Row label="chosen in eligible set">{formatCheck(p.checks.chosen_in_eligible_set)}</Row>
               <Row label="fallback in eligible set">{formatCheck(p.checks.fallback_in_eligible_set)}</Row>
+              <p className="text-xs text-gray-500 pt-1">
+                "Fallback" covers every candidate the gateway used before the one that was
+                served — a failed backend retried on a peer, or a low-confidence answer
+                escalated to a higher tier. "n/a" means the first candidate tried was served,
+                so there was nothing to check.
+              </p>
             </>
           )}
           <p className="text-xs text-gray-500 pt-2">
