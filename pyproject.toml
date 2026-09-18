@@ -38,6 +38,11 @@ dev = [
   "pytest>=8.3",
   "opentelemetry-sdk>=1.27",
   "opentelemetry-exporter-otlp-proto-http>=1.27",
+  # The property-based harness for the policy compiler (design P1a §7):
+  # tests/policy_compiler/ generates app policies, deployment ceilings and
+  # detected-entity signals and asserts the six noninterference invariants.
+  # A test dependency only -- nothing under app/ imports it.
+  "hypothesis>=6.100",
 ]
 
 # Presidio is the real demo detector but heavy (pulls spaCy). Tests use the

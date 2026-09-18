@@ -252,8 +252,21 @@ def compile_policy(app_policy, deployment: Settings) -> EffectivePolicy:
     clamped: list[tuple[str, str]] = []
 
     # -- placement. Residency, and only residency. -----------------------------
-    residency = _get(app_policy, "residency") or "any"
-    if residency in RESIDENCY:
+    # `None` means "unset" and inherits `any`, exactly as every other nullable
+    # axis inherits. Anything else is parsed, and an unparseable value DENIES
+    # like the rest of them. The distinction is load-bearing and used to be
+    # missing: `_get(...) or "any"` resolved every FALSY stored value -- an
+    # empty string from a migration, a `default_residency: ""` on an
+    # application row (`CreateAppIn.default_residency` is a plain `str` with no
+    # enum check) -- to the LOOSEST placement, silently, with nothing in
+    # `rejected` for a validator to refuse the write on. Found by the Task 10
+    # Hypothesis harness (tests/policy_compiler/test_counterexamples.py::
+    # test_ce2_every_axis_fails_closed_and_is_refused).
+    residency = _get(app_policy, "residency")
+    if residency is None:
+        residency = "any"
+        placement_source = _APP if app_policy is not None else _DEFAULT
+    elif residency in RESIDENCY:
         placement_source = _APP if app_policy is not None else _DEFAULT
     else:
         rejected.append(("residency", str(residency)))
