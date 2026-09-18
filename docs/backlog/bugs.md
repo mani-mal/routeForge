@@ -94,6 +94,54 @@ the audit trail in that sweep's task report.
 
 ---
 
+## B37 — `/health` reports a model as available for 22 hours after its endpoint died
+
+**Observed (DGX Spark, 2026-09-18).** The vLLM container serving `qwen3.8-27b`
+stopped at `00:13:48Z` (clean SIGTERM, exit 0, `restart: unless-stopped`, so it
+stayed down). For the next ~22 hours `GET /health` kept answering:
+
+```
+{"status":"ok","backend":"litellm","models":["llama3.2:latest","qwen3.8-27b"]}
+```
+
+while every request to that model failed — 11 logged `502 no backend could serve
+this request`, first at `00:13:48Z` (the same second the server shut down), last
+at `13:16:43Z`. An operator checking `/health` during the outage would have
+concluded RouteForge was healthy and the client was at fault.
+
+**Cause.** `app/api/routes.py::health` returns `registry.effective_pool()` name-for-name
+— the onboarded+enabled rows — with no reachability check:
+
+```python
+pool = registry.effective_pool() if registry else s.routing.model_pool
+return {"status": "ok", "backend": "litellm", "models": [c.name for c in pool]}
+```
+
+`effective_pool()` answers "what is configured and enabled", which is the right
+input for routing eligibility and the wrong answer to "what can serve a request
+right now". Onboarding is probe-gated at write time, but nothing re-probes after.
+
+**Why it matters beyond the confusion.** `ModelRegistry.has_healthy_onprem()` is
+what drops `onprem` from `allowed_providers` and turns an `onprem_only` request
+into a derived reject (CLAUDE.md, "No on-prem model onboarded ⇒ derived reject").
+If that flag is as stale as the `/health` list, the derived-reject guarantee is
+answering from configuration rather than from reality — worth checking whether
+the two share a source, and whether an `onprem_only` app gets a clean reject or a
+502 when its only endpoint is down.
+
+**Fix, roughly.** Give `/health` a liveness dimension rather than a flat list:
+report each model with a last-probe result and timestamp, and make "healthy" mean
+probed-recently-and-answered. Needs a background re-probe with a bounded interval
+and a stale-after window; `/health` must stay cheap and must not probe inline on
+every call. Decide explicitly what the top-level `status` means when some models
+are down but others serve — degraded is probably right, and whatever is chosen
+should be what a load balancer and an operator both read correctly.
+
+**Cross-refs.** B32 (onboarding reports a 401 as "unreachable" — same probe
+surface). The `/metrics` families would be the natural place to expose per-model
+liveness for alerting, so an outage pages someone instead of waiting for a user
+to notice.
+
 ## B36 — A conversation that outgrew the model's context window was reported as `502`  ✅ RESOLVED (2026-09-16)
 
 **Observed (DGX Spark, agent client).** A long coding-agent session grew to
