@@ -357,6 +357,13 @@ async def list_applications(request: Request, _: str = Depends(require_admin)) -
 @admin_router.post("/applications")
 async def create_application(body: CreateAppIn, request: Request,
                              _: str = Depends(require_admin)) -> dict:
+    # Validated against the enum like every other placement/posture field. It
+    # is not cosmetic: a policy row with a null `residency` inherits
+    # `app.default_residency` (see `policy_view_from`), so a typo here becomes
+    # that app's placement. Unvalidated, it was the way an unparseable
+    # residency reached the request path at all.
+    if body.default_residency not in RESIDENCY:
+        raise HTTPException(422, f"bad default_residency {body.default_residency!r}")
     async with request.app.state.db.session() as session:
         if await store.get_application(session, body.id) is not None:
             raise HTTPException(409, f"application {body.id!r} already exists")
@@ -403,6 +410,12 @@ async def get_application(app_id: str, request: Request,
 @admin_router.patch("/applications/{app_id}")
 async def update_application(app_id: str, body: UpdateAppIn, request: Request,
                             _: str = Depends(require_admin)) -> dict:
+    # Same enum check as on create: this PATCH is the other door to
+    # `app.default_residency`, and `store.update_application` whitelists the
+    # column without validating it.
+    if (body.default_residency is not None
+            and body.default_residency not in RESIDENCY):
+        raise HTTPException(422, f"bad default_residency {body.default_residency!r}")
     async with request.app.state.db.session() as session:
         app = await store.update_application(
             session, app_id, **body.model_dump(exclude_none=True))

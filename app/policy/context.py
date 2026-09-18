@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 from app.config.schema import Settings
 from app.models import Entity, ExecutionPolicyContext
+from app.policy.compile import resolve_residency
 
 if TYPE_CHECKING:  # avoid importing the apps layer at module load
     from app.apps.policy import AppPolicyView
@@ -45,6 +46,15 @@ def match_sensitivity_rule(settings: Settings, app_rules: list | None,
 def _placement_providers(settings: Settings, residency: str,
                          app_policy: "AppPolicyView | None",
                          registry: "ModelRegistry | None") -> set[str]:
+    # Fail closed on a residency this function does not recognise. The `else`
+    # branch below is the loosest placement there is, so an unparseable value
+    # used to hand the request every enabled provider, cloud included, while
+    # `compile_policy` denied the very same value to `onprem_only` -- CLAUDE.md
+    # rules 3 and 5, and the defect the Task 10 harness found. Resolved through
+    # the compiler's own `resolve_residency` so the two cannot disagree. This
+    # is the second line of defence behind `build_context`'s (below); it is
+    # kept because `requestable_models` calls in here directly.
+    residency, _parsed = resolve_residency(residency)
     enabled = {p for p, c in settings.serving.providers.items() if c.enabled}
     # On-prem availability is derived from the registry, not a boot flag: with no
     # healthy onboarded on-prem model, drop "onprem" from `enabled` so an
@@ -159,6 +169,12 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
         tenant = settings.policy.tenants.get(
             tenant_id, settings.policy.tenants["default"])
         app_residency = tenant.default_residency
+    # Resolve through the compiler's authority BEFORE `_stricter` (which would
+    # otherwise KeyError on an unparseable value) and before the placement
+    # filter. An unparseable residency denies to `onprem_only`, so it can never
+    # be routed as `any` -- the same answer `compile_policy` gives for the same
+    # stored value, by construction.
+    app_residency, _parsed = resolve_residency(app_residency)
     # Raise-only, and only when the app declares the escalation on (default).
     residency = (_stricter(rule.residency, app_residency) if escalate_residency
                  else app_residency)

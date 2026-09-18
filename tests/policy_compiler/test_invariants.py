@@ -30,8 +30,8 @@ from app.policy.compile import (
 )
 from app.routing.router import Router
 from tests.policy_compiler.strategies import (
-    CLOUD, CLOUD_PROVIDERS, COMPILED_RANK, EMPTY_REGISTRY, ONPREM_REGISTRY,
-    PROTECTION_FIELDS, RANK, app_policies, compiled_placement, context_for,
+    CLOUD_PROVIDERS, COMPILED_RANK, EMPTY_REGISTRY, INVALID_VALUES,
+    ONPREM_REGISTRY, RANK, app_policies, compiled_placement, context_for,
     deployments, entity_types, protection_axes, valid_app_policies, _settings,
 )
 
@@ -347,40 +347,49 @@ def test_onprem_only_never_yields_a_cloud_candidate(view, deployment, detected,
                 f"cloud candidate {rejected.name} was rejected for "
                 f"{rejected.reason!r}, not residency")
 
+# --- the fail-open the harness found, now closed ------------------------------
 
-# --- a finding, not a passing property ---------------------------------------
+@given(bad=st.sampled_from(INVALID_VALUES), escalate=st.booleans(),
+       detected=entity_types(), deployment=deployments())
+def test_unparseable_residency_fails_closed_in_the_context_path(
+        bad, escalate, detected, deployment):
+    """A residency the compiler denies must be denied by the placement path
+    too - the two may not disagree about where one app's compute may run.
 
-@pytest.mark.xfail(strict=True, reason=(
-    "FINDING (Task 10): build_context fails OPEN on a residency string the "
-    "compiler denies. Reported, not fixed — see the task report."))
-def test_unparseable_residency_must_fail_closed_in_the_context_path():
-    """**This test is expected to fail.** It records a real defect the harness
-    found, in its minimal form, so that fixing the defect flips it green
-    (`strict=True` makes an unnoticed fix a failure too).
+    **The defect this records (found by this harness, fixed in this branch).**
+    `compile_policy` denied an unparseable `residency` to `onprem_only`
+    (`_DENY`, CLAUDE.md rule 5) while `app/policy/context.py` did not: with
+    `escalate_residency_on_detection` false it skipped `_stricter` entirely,
+    and `_placement_providers`'s ``if residency == "onprem_only" ... else:
+    allowed = enabled`` treated anything it did not recognise as the LOOSEST
+    placement. Minimal repro:
 
-    `compile_policy` denies an unparseable `residency` to `onprem_only`
-    (`_DENY`, CLAUDE.md rule 5). `app/policy/context.py` does not: with
-    `escalate_residency_on_detection` false it skips `_stricter` entirely, and
-    `_placement_providers`'s `if residency == "onprem_only" ... else: allowed =
-    enabled` treats anything it does not recognise as the LOOSEST placement —
-    so a garbage residency yields every enabled provider, cloud included, and
-    `ctx.onprem_only` false. (With escalation on, the same value instead raises
-    `KeyError` out of `_stricter`: a 500, which at least does not route.)
+        view = AppPolicyView(residency="ONPREM_ONLY",
+                             escalate_residency_on_detection=False)
+        compile_policy(view, CLOUD).placement.residency
+        # -> 'onprem_only'                              (denied, correct)
+        build_context(...).allowed_providers
+        # -> frozenset({'azure', 'bedrock', 'onprem'})  <-- routed to CLOUD
+        build_context(...).onprem_only
+        # -> False
 
-    Reachable without touching the database: `CreateAppIn.default_residency`
-    and `UpdateAppIn.default_residency` are plain `str` with no enum check
-    (`app/api/admin_routes.py:136,143`), and a policy row with null residency
-    inherits `app.default_residency`. Create the app, save a policy with
-    `escalate_residency_on_detection: false` (legal), then PATCH
-    `default_residency` to a typo.
+    With escalation ON the same value instead raised `KeyError` out of
+    `_stricter` - a 500, which at least did not route. Reachable without a
+    direct DB write: `CreateAppIn.default_residency` and
+    `UpdateAppIn.default_residency` were plain `str` with no enum check, and a
+    policy row with a null residency inherits `app.default_residency`.
 
-    Not fixed here because the fix belongs to `app/policy/context.py` /
-    the admin boundary, not to the compiler this task tests, and Task 10 is
-    forbidden from changing application behaviour.
+    Closed at both ends: `app/policy/compile.py::resolve_residency` is now the
+    single authority the compiler AND the placement path call, and both admin
+    endpoints validate `default_residency` against the enum (regression tests
+    in `tests/test_admin_api.py`).
     """
-    view = AppPolicyView(residency="ONPREM_ONLY",
-                         escalate_residency_on_detection=False)
-    assert compile_policy(view, CLOUD).placement.residency == "onprem_only"
-    ctx = context_for(view, CLOUD, ())
-    assert ctx.onprem_only is True
+    view = AppPolicyView(residency=bad, escalate_residency_on_detection=escalate)
+    eff = compile_policy(view, deployment)
+    assert eff.placement.residency == "onprem_only"
+    assert ("residency", bad) in eff.rejected
+
+    ctx = context_for(view, deployment, detected)
+    assert ctx.onprem_only is True, (
+        f"residency={bad!r} routed as {set(ctx.allowed_providers)!r}")
     assert not (ctx.allowed_providers & CLOUD_PROVIDERS)

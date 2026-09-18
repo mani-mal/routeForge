@@ -238,6 +238,32 @@ def _resolve(axis: str, app_value, legal: tuple[str, ...],
     return default, _DEFAULT
 
 
+def resolve_residency(value) -> tuple[str, bool]:
+    """Resolve one stored residency to `(residency, parsed)` — the single
+    authority on what a stored residency MEANS.
+
+    * `None` (unset) inherits `any`, exactly as every other nullable axis
+      inherits, and counts as parsed.
+    * A legal member of the axis resolves to itself.
+    * **Anything else denies**, to `onprem_only` — the most restrictive
+      placement — and reports `parsed=False` so the caller can record it in
+      `rejected` and refuse the write (CLAUDE.md rule 5).
+
+    Shared with `app/policy/context.py`, deliberately. Placement decided in two
+    places is placement that can disagree with itself, and it did: the compiler
+    denied `residency="ONPREM_ONLY"` to `onprem_only` while
+    `_placement_providers`'s `if residency == "onprem_only" ... else: allowed =
+    enabled` treated the same value as the LOOSEST placement and handed the
+    request every enabled cloud provider. One function, one answer, so a value
+    the compiler refuses can never be routed as `any`.
+    """
+    if value is None:
+        return "any", True
+    if value in RESIDENCY:
+        return value, True
+    return _DENY["residency"], False
+
+
 # --- the compiler ------------------------------------------------------------
 
 def compile_policy(app_policy, deployment: Settings) -> EffectivePolicy:
@@ -262,15 +288,18 @@ def compile_policy(app_policy, deployment: Settings) -> EffectivePolicy:
     # `rejected` for a validator to refuse the write on. Found by the Task 10
     # Hypothesis harness (tests/policy_compiler/test_counterexamples.py::
     # test_ce2_every_axis_fails_closed_and_is_refused).
-    residency = _get(app_policy, "residency")
-    if residency is None:
-        residency = "any"
-        placement_source = _APP if app_policy is not None else _DEFAULT
-    elif residency in RESIDENCY:
+    #
+    # The resolution itself lives in `resolve_residency` below, because
+    # `app/policy/context.py` needs the identical answer: the compiler and the
+    # placement path must not be able to disagree about where one app's
+    # compute may run (see that function's docstring).
+    stored_residency = _get(app_policy, "residency")
+    residency, parsed = resolve_residency(stored_residency)
+    if parsed:
         placement_source = _APP if app_policy is not None else _DEFAULT
     else:
-        rejected.append(("residency", str(residency)))
-        residency, placement_source = _DENY["residency"], _CEILING
+        rejected.append(("residency", str(stored_residency)))
+        placement_source = _CEILING
     placement = Placement(residency=residency, sources=(placement_source,))
 
     # -- protection. Ceilings first (rung 1), then preset, then defaults. ------

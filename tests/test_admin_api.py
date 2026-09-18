@@ -973,3 +973,46 @@ def test_policy_put_unrelated_to_capture_never_decrypts_langfuse_creds(client, m
     # this is laziness, not a dropped rule.
     with pytest.raises(UnicodeDecodeError):
         client.put("/admin/applications/lf-rotated/policy", json={"capture_io": "full"})
+
+
+# --- default_residency is an enum, at both doors ------------------------------
+#
+# Found by the Task 10 Hypothesis harness. `CreateAppIn.default_residency` and
+# `UpdateAppIn.default_residency` were plain `str` with no enum check, and a
+# policy row with a null `residency` inherits `app.default_residency` -- so a
+# typo became that app's PLACEMENT. Combined with the (now fixed) fail-open in
+# `_placement_providers`, an app the operator meant to pin on-prem was routed
+# to cloud. Both doors validate now; the placement path fails closed as well
+# (tests/policy_compiler/test_invariants.py::
+# test_unparseable_residency_fails_closed_in_the_context_path).
+
+def test_create_application_rejects_a_bad_default_residency(client):
+    _login(client)
+    r = client.post("/admin/applications",
+                    json={"id": "bad-res", "name": "BadRes",
+                          "default_residency": "ONPREM_ONLY"})
+    assert r.status_code == 422, r.text
+    assert "default_residency" in r.text
+    # ...and nothing was created.
+    assert client.get("/admin/applications/bad-res").status_code == 404
+
+
+def test_patch_application_rejects_a_bad_default_residency(client):
+    _login(client)
+    client.post("/admin/applications", json={"id": "res-patch", "name": "ResPatch",
+                                             "default_residency": "onprem_only"})
+    r = client.patch("/admin/applications/res-patch",
+                     json={"default_residency": ""})
+    assert r.status_code == 422, r.text
+    # The stored placement is untouched by the refused write.
+    got = client.get("/admin/applications/res-patch").json()
+    assert got["default_residency"] == "onprem_only"
+
+
+def test_application_accepts_every_legal_default_residency(client):
+    _login(client)
+    for i, value in enumerate(("any", "private_cloud_ok", "onprem_only")):
+        r = client.post("/admin/applications",
+                        json={"id": f"res-ok-{i}", "name": "ResOk",
+                              "default_residency": value})
+        assert r.status_code == 200, r.text
