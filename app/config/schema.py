@@ -110,6 +110,13 @@ class PriceCfg(BaseModel):
     output: float
     tier: str
     provider: str
+    # USD/1M for prompt tokens the provider served from ITS OWN prompt cache
+    # (`usage.prompt_tokens_details.cached_tokens`). None = undeclared, and an
+    # undeclared rate bills cached tokens at the full `input` rate --
+    # RouteForge never invents a discount an operator did not declare. On-prem
+    # endpoints normally declare this EQUAL to `input`: a vLLM prefix-cache hit
+    # saves latency, not GPU amortization.
+    cached_input: float | None = None
 
 
 class PricingCfg(BaseModel):

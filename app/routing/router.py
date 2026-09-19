@@ -8,6 +8,7 @@ from app.config.schema import PoolCandidate, Settings
 from app.errors import NoEligibleCandidate
 from app.models import ExecutionPolicyContext, RejectedCandidate
 from app.policy.feasible import DATA_HANDLING_HINTS, feasible_set
+from app.routing.pricing import price_call
 from app.routing.quality import QualityResolver
 from app.routing.strategy import RoutingStrategy, build_strategy
 
@@ -97,9 +98,13 @@ class Router:
         return "frontier"
 
     def _est_cost(self, cand: PoolCandidate, tokens_after: int, output_tokens: int) -> float:
+        """Pre-call estimate. Deliberately assumes ZERO cached prompt tokens:
+        the router cannot know the hit rate before the call, and guessing one
+        biases routing toward whichever model the guess was generous about.
+        Estimate high, record true (see the actual cost on the DecisionRecord)."""
         p = (self._reg.price_for(cand.name) if self._reg
              else self._s.pricing.models[cand.name])
-        return (tokens_after * p.input + output_tokens * p.output) / 1_000_000
+        return price_call(p, prompt_tokens=tokens_after, completion_tokens=output_tokens)
 
     def select(self, ctx: ExecutionPolicyContext, tokens_after: int,
                complexity: float, min_tier: str | None = None,

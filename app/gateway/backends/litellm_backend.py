@@ -17,6 +17,7 @@ from app.config.schema import PriceCfg, Settings
 from app.errors import ContextWindowExceeded
 from app.gateway.backends.base import BackendHealth, StreamChunk
 from app.models import GenerationResult, Message
+from app.routing.pricing import price_call
 
 DEFAULT_CONFIDENCE = 0.9
 
@@ -137,7 +138,8 @@ class LiteLLMBackend:
         usage = data.get("usage") or {}
         tokens_in = usage.get("prompt_tokens", 0)
         tokens_out = usage.get("completion_tokens", 0)
-        cost_usd = (tokens_in * price.input + tokens_out * price.output) / 1_000_000
+        cost_usd = price_call(price, prompt_tokens=tokens_in,
+                              completion_tokens=tokens_out)
 
         logprobs = (choice.get("logprobs") or {}).get("content") if choice.get("logprobs") else None
         if logprobs:
@@ -199,7 +201,8 @@ class LiteLLMBackend:
         text = "".join(parts)
         tokens_in = usage.get("prompt_tokens", 0)
         tokens_out = usage.get("completion_tokens", 0)
-        cost_usd = (tokens_in * price.input + tokens_out * price.output) / 1_000_000
+        cost_usd = price_call(price, prompt_tokens=tokens_in,
+                              completion_tokens=tokens_out)
         yield StreamChunk(final=GenerationResult(
             model=model, text=text, tokens_in=tokens_in, tokens_out=tokens_out,
             latency_ms=latency_ms, cost_usd=cost_usd, confidence=None,
