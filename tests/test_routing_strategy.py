@@ -36,9 +36,17 @@ REG = make_test_registry(S)
 
 
 def _ctx(providers, risk="low", onprem=False):
+    providers = frozenset(providers)
     return ExecutionPolicyContext(
         request_id="r", tenant_id="t", sensitivity="public", onprem_only=onprem,
-        allowed_providers=frozenset(providers), allowed_models=frozenset(),
+        allowed_providers=providers,
+        # The eligible set these tests have always assumed: an app that narrows
+        # nothing, so every pool candidate whose provider is permitted is a
+        # candidate -- what `build_context` computes for such an app. Stated
+        # because `ctx.allowed_models` is binding on the router, with no flag
+        # that can turn it off (app/policy/feasible.py).
+        allowed_models=frozenset(c.name for c in REG.effective_pool()
+                                 if c.provider in providers),
         max_cost_usd=0.05, max_latency_ms=15000, risk_class=risk,
         require_verification=False, detected_entities=(), redaction_map_id=None)
 

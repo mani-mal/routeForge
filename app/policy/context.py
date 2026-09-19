@@ -193,9 +193,6 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
         allowed_providers=frozenset(allowed),
         allowed_models=allowed_models,
         model_scope_active=model_scope_active,
-        # `allowed_models` above IS this request's feasible set, so every
-        # consumer may enforce it directly instead of re-deriving eligibility.
-        eligibility_resolved=True,
         max_cost_usd=(app_policy.max_cost_usd_per_request
                       if app_policy is not None
                       and app_policy.max_cost_usd_per_request is not None

@@ -24,7 +24,12 @@ CAP = 0.00015
 def _ctx(max_cost: float = CAP) -> ExecutionPolicyContext:
     return ExecutionPolicyContext(
         request_id="r", tenant_id="t", sensitivity="public", onprem_only=False,
-        allowed_providers=frozenset({"onprem"}), allowed_models=frozenset(),
+        allowed_providers=frozenset({"onprem"}),
+        # The two seeded on-prem models above -- the eligible set this test has
+        # always assumed (an app that narrows nothing, on-prem only). Stated
+        # because `ctx.allowed_models` is binding on the router, with no flag
+        # that can turn it off (app/policy/feasible.py).
+        allowed_models=frozenset({"local-8b", "local-32b"}),
         max_cost_usd=max_cost, max_latency_ms=15000, risk_class="low",
         require_verification=False, detected_entities=(), redaction_map_id=None)
 

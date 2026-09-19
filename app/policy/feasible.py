@@ -144,21 +144,18 @@ def _ctx_scope(ctx: ExecutionPolicyContext) -> Callable[[PoolCandidate], bool]:
     carries the set those produced -- `ctx.allowed_models`, which
     `build_context` computes from stages 1 and 3 of this same filter (and from
     nothing else, so that a name missing from it means *app scope refused it*
-    and stage 5 keeps its own, more specific reasons). Honouring it is NOT
-    gated on `ctx.model_scope_active`: that flag says whether the app narrowed
-    anything (the console reads it), and using it as an enforcement switch is
-    what let the router ignore a context-side rule for every app that set no
-    allowlist.
+    and stage 5 keeps its own, more specific reasons).
 
-    `eligibility_resolved` is the gate's own marker that `allowed_models` is
-    that computed set. A context assembled directly (tests, internal callers)
-    leaves it false and carries a placeholder `allowed_models`, so stage 3 is
-    skipped for it and stages 1/2/4/5 still apply -- the same answer those
-    callers get today.
+    It is honoured unconditionally. Not gated on `ctx.model_scope_active` --
+    that flag says whether the app narrowed anything (the console reads it),
+    and using it as an enforcement switch is what let the router ignore a
+    context-side rule for every app that set no allowlist -- and not gated on a
+    "was this computed?" marker either: a flag whose default turns a privacy
+    control off is the same defect wearing a different hat. Every context
+    carries a binding `allowed_models`, and one that carries an empty set has
+    no eligible candidate and is rejected (fail closed), never routed.
     """
     def ok(c: PoolCandidate) -> bool:
-        if not ctx.eligibility_resolved:
-            return True
         return c.name in ctx.allowed_models
     return ok
 

@@ -21,10 +21,22 @@ REG = make_test_registry(S)
 R = Router(S, registry=REG)
 
 
+def _eligible(providers):
+    """The eligible set these scoring tests have always assumed: an app that
+    narrows nothing, so every pool candidate whose provider is permitted is a
+    candidate. Exactly what `build_context` computes for an app with no
+    allowed_tiers/allowed_models -- stated here rather than left empty because
+    `ctx.allowed_models` is binding on the router, with no flag that can turn
+    it off (app/policy/feasible.py)."""
+    return frozenset(c.name for c in REG.effective_pool()
+                     if c.provider in providers)
+
+
 def _ctx(providers, risk="low", onprem=False):
+    providers = frozenset(providers)
     return ExecutionPolicyContext(
         request_id="r", tenant_id="t", sensitivity="public", onprem_only=onprem,
-        allowed_providers=frozenset(providers), allowed_models=frozenset(),
+        allowed_providers=providers, allowed_models=_eligible(providers),
         max_cost_usd=0.05, max_latency_ms=15000, risk_class=risk,
         require_verification=False, detected_entities=(), redaction_map_id=None)
 
@@ -146,7 +158,8 @@ def test_budget_exhaustion_raises():
     ctx = ExecutionPolicyContext(
         request_id="r", tenant_id="t", sensitivity="public", onprem_only=False,
         allowed_providers=frozenset({"onprem", "azure", "bedrock"}),
-        allowed_models=frozenset(), max_cost_usd=0.0, max_latency_ms=15000,
+        allowed_models=_eligible({"onprem", "azure", "bedrock"}),
+        max_cost_usd=0.0, max_latency_ms=15000,
         risk_class="high", require_verification=False, detected_entities=(),
         redaction_map_id=None)
     with pytest.raises(ValueError):
