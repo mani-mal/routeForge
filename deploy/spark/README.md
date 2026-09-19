@@ -214,6 +214,76 @@ in again.
 an existing one. After pulling a version that adds a column, either apply the
 `ALTER` by hand or `down -v` and re-onboard.
 
+### Keeping the model server up — RouteForge will not do it for you
+
+RouteForge routes; it never starts, restarts, scales or supervises an inference
+server (CLAUDE.md rule 4). If your vLLM/ollama process stops, RouteForge notices
+only when a request fails, and every request to that model returns
+`502 no backend could serve this request` until you start it again.
+
+**Observed twice on this box (2026-09-18 and 2026-09-19)**, with `vllm-qwen38`
+run as a plain `docker run ... --restart unless-stopped` container:
+
+| | first | second |
+|---|---|---|
+| exit | `0` | `137` (SIGKILL) |
+| logs | graceful shutdown, idle | graceful shutdown **while serving**, killed at the 10s grace timeout |
+| OOM | no (`OOMKilled=false`, ~77 GB free) | no |
+| downtime | ~22 h | ~11 h |
+
+Both are the signature of `docker stop`, not a crash: a SIGTERM the process
+handles, then Docker's `--time` timeout. The suspected source is an agent
+session on the host stopping the container to free memory during an install —
+worth knowing if you run coding agents on the same machine that serves them.
+
+**`--restart unless-stopped` does not help here, by design.** It restarts after a
+daemon restart or a host reboot, but a deliberate `docker stop` is exactly the
+case it declines to undo. `--restart always` behaves the same way for a manual
+stop.
+
+**Diagnosing a stop:**
+
+```bash
+docker inspect vllm-qwen38 --format 'State={{.State.Status}} Exit={{.State.ExitCode}} OOM={{.State.OOMKilled}} Finished={{.State.FinishedAt}}'
+docker logs --tail 30 vllm-qwen38          # graceful "shutdown triggered" == something asked it to stop
+free -g                                     # rules OOM in or out; GB10 memory is unified
+docker start vllm-qwen38                    # ~3.5 min to load a 27B NVFP4 checkpoint
+```
+
+Exit `137` with `OOMKilled=false` and a clean shutdown sequence in the log is a
+stop that overran its grace period — not the kernel. A real OOM shows
+`OOMKilled=true` or an `oom-kill` line in `dmesg -T`.
+
+**If you want it supervised**, run the server as a systemd unit instead of a bare
+container, so a stop is a policy decision rather than an accident. Sketch, not
+installed by this repo:
+
+```ini
+# /etc/systemd/system/vllm-qwen38.service
+[Unit]
+Description=vLLM qwen3.8-27b
+After=docker.service
+Requires=docker.service
+
+[Service]
+Restart=always
+RestartSec=10
+ExecStart=/usr/bin/docker start -a vllm-qwen38
+ExecStop=/usr/bin/docker stop -t 60 vllm-qwen38
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`-t 60` gives an in-flight request time to finish instead of being SIGKILLed at
+10 s. With `Restart=always`, stopping it for real means `systemctl stop
+vllm-qwen38`, and `docker stop` alone will bring it back — which is the point.
+
+**RouteForge's side of this line** is telling you the model is unreachable rather
+than listing it as available: backlog B37 (`docs/backlog/bugs.md`). Until that
+ships, `GET /health` reports what is *configured*, not what can serve — an
+endpoint that died hours ago still appears in `models`.
+
 ---
 
 ## Exposure notes — read before putting this on a network you share
