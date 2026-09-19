@@ -39,6 +39,11 @@ export interface RejectedCandidate {
   tier: string;
   reason: string;
   display_name?: string | null; // human-facing name; falls back to `name`
+  // Stable stage identifier (app/policy/feasible.py's `code`, e.g.
+  // "region_not_allowed") for a P1b data-handling exclusion; null/absent for
+  // every other rejection reason (residency/app_scope/budget/tier/score),
+  // which have no stable code of their own.
+  code?: string | null;
 }
 
 // A trace record is one of several step shapes; fields are optional per step.
@@ -113,6 +118,23 @@ export interface ChatResponse {
     checks?: {
       chosen_in_eligible_set: boolean | null;
       fallback_in_eligible_set: boolean | null;
+    };
+    // P1b design §6: a content hash over the effective pool's identity and
+    // data-handling metadata — names the endpoint registry this decision was
+    // made against, beside `app_policy_version` above. "" with no registry
+    // (the internal/direct pipeline paths), mirroring that field's own
+    // empty-string "not applicable" default. Optional for the same reason
+    // every certificate field is: a snapshot stored before this shipped
+    // won't carry it.
+    endpoint_registry_version?: string;
+    // The served endpoint's three P1b declarations plus where each came from
+    // (model | provider_default | unknown) — a declaration, never a verified
+    // fact (design §2).
+    endpoint_data_handling?: {
+      region: string;
+      prompt_retention: string;
+      accepts_raw_sensitive: string;
+      source: Record<string, string>;
     };
   };
 }
@@ -448,6 +470,14 @@ export type OnboardedModel = {
   quality: number | null; context_window: number | null;
   enabled: boolean; allowed_app_ids: string[] | null;
   probe_status: string; probe_error: string | null; notes: string | null;
+  // P1b endpoint data-handling declarations (design §2). NOT YET returned by
+  // GET /admin/infra/models (app/api/admin_routes.py::_onboarded_dict) as of
+  // this task — typed here so the form can read them the day it is wired,
+  // without the type lying about what the server sends today. Until then
+  // these always come back undefined and the form reads that as "unknown".
+  region?: string | null;
+  prompt_retention?: string | null;
+  accepts_raw_sensitive?: boolean | null;
 };
 export type OnboardIn = {
   slug: string; display_name: string; tier: string; endpoint: string;
@@ -455,6 +485,14 @@ export type OnboardIn = {
   quality?: number | null; context_window?: number | null;
   allowed_app_ids?: string[] | null; notes?: string | null;
   enabled?: boolean;
+  // P1b endpoint data-handling declarations (design §2/§8). NOT YET accepted
+  // by POST/PUT /admin/infra/models (app/api/admin_routes.py::OnboardIn) as
+  // of this task -- sent here so the request body is forward-compatible, but
+  // the server silently drops unknown fields (no `extra="forbid"`), so these
+  // three currently have no effect. See task-8-report.md.
+  region?: string | null;
+  prompt_retention?: string | null;       // "none" | "retained" | null (unknown)
+  accepts_raw_sensitive?: boolean | null; // JSON boolean, null = unknown
 };
 export const onboardApi = {
   list: () => fetch("/admin/infra/models", { credentials: CRED }).then(j<OnboardedModel[]>),

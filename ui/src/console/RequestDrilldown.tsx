@@ -57,7 +57,20 @@ const REASON_LABEL: Record<string, string> = {
   "lower score": "lower score",
 };
 
-function compactReason(reason: string): string {
+// P1b's three data-handling exclusions (app/policy/feasible.py stage 2) carry
+// a parameterised reason string ("excluded · region · endpoint declares
+// 'us', application allows 'eu'") that can't be an exact key above — but each
+// one arrives with a stable `code` (RejectedCandidate.code), so key on that
+// instead of parsing the prose. The full reason stays in the `title` tooltip
+// (see the caller) so nothing here is lost, only compacted.
+const CODE_LABEL: Record<string, string> = {
+  region_not_allowed: "excluded · region",
+  prompt_retention_not_allowed: "excluded · prompt retention",
+  raw_sensitive_not_accepted: "excluded · raw sensitive content",
+};
+
+function compactReason(reason: string, code?: string | null): string {
+  if (code && CODE_LABEL[code]) return CODE_LABEL[code];
   return REASON_LABEL[reason] ?? reason;
 }
 
@@ -120,7 +133,7 @@ function Chosen({ r, cumulative }: { r: TraceRecord; cumulative?: number }) {
                   <span className="truncate text-gray-300">{c.display_name ?? c.name}</span>
                 </span>
                 <span className="shrink-0 text-right text-gray-500" title={c.reason}>
-                  {compactReason(c.reason)}
+                  {compactReason(c.reason, c.code)}
                 </span>
               </li>
             ))}
@@ -229,6 +242,18 @@ function StepBody({ stepKey, detail }: { stepKey: string; detail: ChatResponse }
             <Row label="rules fired">
               {p.cross_axis_rules_fired.length ? p.cross_axis_rules_fired.join(", ") : "none"}
             </Row>
+          )}
+          {/* The certificate names the two policies this decision was made
+              against (design §6) — app_policy_version beside
+              endpoint_registry_version, the same pairing the certificate
+              itself carries. Guarded independently: either can be "" (not
+              applicable / no registry on this path) or absent (a snapshot
+              stored before P1b shipped). */}
+          {p.app_policy_version != null && (
+            <Row label="app policy version">{p.app_policy_version || "—"}</Row>
+          )}
+          {p.endpoint_registry_version != null && (
+            <Row label="endpoint registry version">{p.endpoint_registry_version || "—"}</Row>
           )}
           {p.checks != null && (
             <>
