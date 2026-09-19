@@ -151,3 +151,68 @@ def test_provenance_names_where_each_value_came_from():
         "region": "model", "prompt_retention": "provider_default",
         "accepts_raw_sensitive": "model"}
     assert cand.accepts_raw_sensitive == "false"
+
+
+# --- P1b Task 6: registry_version() (design §6) ------------------------------
+# Same shape as AppPolicyView.version() / app/config/loader.py::_policy_version
+# -- sha256[:12] over the decision-relevant fields, sorted-key JSON so it is
+# stable across boots for equal input. What makes a candidate's identity here
+# is name/provider/tier plus the three P1b declarations -- never
+# quality/display_name/price, which don't change eligibility.
+
+def test_registry_version_is_12_hex_chars():
+    reg = _run(_reg_with({}))
+    v = reg.registry_version()
+    assert isinstance(v, str)
+    assert len(v) == 12
+    int(v, 16)  # hex
+
+
+def test_registry_version_stable_across_boots_for_equal_input():
+    rows = {
+        "m1": dict(display_name="M1", provider="onprem", tier="mid",
+            price_input=0.1, price_output=0.1, endpoint="http://x/v1",
+            enabled=True, region="eu", prompt_retention="none",
+            accepts_raw_sensitive=True)}
+    reg_a = _run(_reg_with(rows))
+    reg_b = _run(_reg_with(rows))
+    assert reg_a.registry_version() == reg_b.registry_version()
+
+
+def test_registry_version_changes_when_a_declaration_changes():
+    base_rows = {
+        "m1": dict(display_name="M1", provider="onprem", tier="mid",
+            price_input=0.1, price_output=0.1, endpoint="http://x/v1",
+            enabled=True, region="eu")}
+    changed_rows = {
+        "m1": dict(display_name="M1", provider="onprem", tier="mid",
+            price_input=0.1, price_output=0.1, endpoint="http://x/v1",
+            enabled=True, region="us")}   # only the declared region moved
+    v_before = _run(_reg_with(base_rows)).registry_version()
+    v_after = _run(_reg_with(changed_rows)).registry_version()
+    assert v_before != v_after
+
+
+def test_registry_version_unaffected_by_non_decision_fields():
+    """Quality/display_name/price never gate eligibility -- the hash must not
+    churn on a field this request-scoped decision never reads."""
+    rows_a = {
+        "m1": dict(display_name="M1", provider="onprem", tier="mid",
+            price_input=0.1, price_output=0.1, endpoint="http://x/v1",
+            enabled=True, region="eu", quality=0.5)}
+    rows_b = {
+        "m1": dict(display_name="Something Else", provider="onprem", tier="mid",
+            price_input=0.99, price_output=0.99, endpoint="http://x/v1",
+            enabled=True, region="eu", quality=0.9)}
+    v_a = _run(_reg_with(rows_a)).registry_version()
+    v_b = _run(_reg_with(rows_b)).registry_version()
+    assert v_a == v_b
+
+
+def test_registry_version_changes_when_a_model_is_added():
+    v_empty = _run(_reg_with({})).registry_version()
+    v_one = _run(_reg_with({
+        "m1": dict(display_name="M1", provider="onprem", tier="mid",
+            price_input=0.1, price_output=0.1, endpoint="http://x/v1",
+            enabled=True)})).registry_version()
+    assert v_empty != v_one

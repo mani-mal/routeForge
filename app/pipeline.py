@@ -256,7 +256,8 @@ class Pipeline:
 
     @staticmethod
     def _certificate(eff: EffectivePolicy, ctx: ExecutionPolicyContext,
-                     det: Detector) -> dict:
+                     det: Detector, endpoint_registry_version: str,
+                     endpoint_data_handling: dict) -> dict:
         """The per-axis fields of the decision certificate (design P1a §6)
         common to every response shape. Reads straight off the already-
         compiled `eff` (placement + protection + the cross-axis rules that
@@ -294,7 +295,18 @@ class Pipeline:
         (which stamps the matching `sp.*` attributes) -- one dict, two
         channels, so they can never disagree (the same pattern
         `policy_mode`/`content_integrity_mode` already use).
-        """
+
+        `endpoint_registry_version` and `endpoint_data_handling` (P1b design
+        §6) are computed by the caller (`_endpoint_registry_version`,
+        `_endpoint_declaration` below) rather than here, because they need
+        `self._reg`/`self._pool()` and this method stays a `@staticmethod` --
+        the same reason `eff`/`ctx`/`det` are handed in rather than
+        recomputed. `endpoint_registry_version` names the registry this
+        decision was made against (an edited endpoint declaration becomes
+        visible as a changed hash, not silent); `endpoint_data_handling`
+        names what the SERVED endpoint declared and where each of the three
+        values came from (model / provider_default / unknown) -- a
+        declaration, never a verified fact (design §2)."""
         ran = detection_ran(det)
         return {
             "placement": eff.placement.residency,
@@ -309,7 +321,45 @@ class Pipeline:
             # own field name for it) -- both stay TYPES only, never values;
             # see `ExecutionPolicyContext.detected_entities`.
             "detected_entity_types": list(ctx.detected_entities),
+            # P1b Task 6 additions (design §6) -- see docstring above.
+            "endpoint_registry_version": endpoint_registry_version,
+            "endpoint_data_handling": endpoint_data_handling,
         }
+
+    def _endpoint_registry_version(self) -> str:
+        """`ModelRegistry.registry_version()`, or `""` with no registry (the
+        internal/direct-pipeline paths that never construct one) -- mirrors
+        `ctx.app_policy_version`'s empty-string default for "not applicable"
+        rather than fabricating a hash over nothing."""
+        return self._reg.registry_version() if self._reg is not None else ""
+
+    def _endpoint_declaration(self, candidate: PoolCandidate | None) -> dict:
+        """The served endpoint's three P1b declarations plus their
+        provenance, read straight off the already-RESOLVED `PoolCandidate`
+        (`ModelRegistry.effective_pool()` is the one place that resolves
+        them -- see `app/apps/registry.py`) -- never re-derived here.
+        `candidate is None` only when the model can't be found in `_pool()`
+        (unreachable on a served response; defensive), and reads as
+        "unknown" all round rather than raising out of a certificate build."""
+        if candidate is None:
+            return {"region": "unknown", "prompt_retention": "unknown",
+                    "accepts_raw_sensitive": "unknown",
+                    "source": {"region": "unknown", "prompt_retention": "unknown",
+                              "accepts_raw_sensitive": "unknown"}}
+        return {
+            "region": candidate.region,
+            "prompt_retention": candidate.prompt_retention,
+            "accepts_raw_sensitive": candidate.accepts_raw_sensitive,
+            "source": dict(candidate.data_handling_source or {}),
+        }
+
+    def _candidate_by_name(self, name: str) -> PoolCandidate | None:
+        """The resolved `PoolCandidate` for a served model name, looked up
+        against the same merged pool `_pool()` -- shared with
+        `_display_name`'s and the cache STORE hook's provider resolution
+        (see `_pool`'s docstring), so this is a third reader of the one
+        lookup rather than a new one."""
+        return next((c for c in self._pool() if c.name == name), None)
 
     def _eligible_now(self, ctx: ExecutionPolicyContext,
                       name: str) -> PoolCandidate | None:
@@ -574,7 +624,12 @@ class Pipeline:
                        # `ExecutionPolicyContext.content_integrity`.
                        "content_integrity_mode": ctx.content_integrity,
                        # Task 9: the decision certificate (design §6).
-                       **self._certificate(eff, ctx, det),
+                       # `served` is the ALREADY-RESOLVED PoolCandidate the
+                       # eligibility re-check above looked up (P1b Task 6):
+                       # reuse it rather than looking `entry.model` up again.
+                       **self._certificate(
+                           eff, ctx, det, self._endpoint_registry_version(),
+                           self._endpoint_declaration(served)),
                        "checks": checks},
             "sanitized_prompt": sanitized,
             # No raw/pre-verify text exists for a cache hit (no model call ran
@@ -968,7 +1023,10 @@ class Pipeline:
                        # `ExecutionPolicyContext.content_integrity`.
                        "content_integrity_mode": ctx.content_integrity,
                        # Task 9: the decision certificate (design §6).
-                       **self._certificate(eff, ctx, det),
+                       **self._certificate(
+                           eff, ctx, det, self._endpoint_registry_version(),
+                           self._endpoint_declaration(
+                               self._candidate_by_name(result.model))),
                        "checks": self._eligibility_checks(ctx, records)},
             "sanitized_prompt": sanitized,
             "raw_completion": result.text,
@@ -1203,7 +1261,10 @@ class Pipeline:
                        # `ExecutionPolicyContext.content_integrity`.
                        "content_integrity_mode": ctx.content_integrity,
                        # Task 9: the decision certificate (design §6).
-                       **self._certificate(eff, ctx, det),
+                       **self._certificate(
+                           eff, ctx, det, self._endpoint_registry_version(),
+                           self._endpoint_declaration(
+                               self._candidate_by_name(result.model))),
                        "checks": self._eligibility_checks(ctx, records)},
             "sanitized_prompt": sanitized,
             "raw_completion": result.text,

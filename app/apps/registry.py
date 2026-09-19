@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from dataclasses import dataclass
 
@@ -151,6 +153,36 @@ class ModelRegistry:
                     region=region, prompt_retention=retention,
                     accepts_raw_sensitive=raw, data_handling_source=src))
         return pool
+
+    def registry_version(self) -> str:
+        """First 12 hex of sha256 over the effective pool's identity + the
+        three P1b data-handling declarations (design §6), sorted for
+        stability. Same shape as `AppPolicyView.version()`
+        (`app/apps/policy.py`) and `app/config/loader.py::_policy_version`
+        for routing/pricing -- sorted-key JSON over exactly the fields a
+        decision reads, so the hash is stable across boots for equal input
+        and changes the instant any of them does.
+
+        Emitted as `sp.endpoint_registry_version` beside `app_policy_version`
+        and `routing_policy_version`: a decision then names the registry it
+        was made against, and a changed endpoint declaration (an operator
+        editing a region, say, or onboarding/disabling a model) becomes
+        visible in the trace instead of silent.
+
+        Deliberately narrow: name/provider/tier (the routing identity) plus
+        region/prompt_retention/accepts_raw_sensitive (what stage 2 of
+        `app/policy/feasible.py` filters on). `quality`, `display_name` and
+        price never gate eligibility, so they are left out -- a cosmetic
+        rename or a price update must not churn a version a replay consumer
+        keys on."""
+        items = sorted(
+            ({"name": c.name, "provider": c.provider, "tier": c.tier,
+              "region": c.region, "prompt_retention": c.prompt_retention,
+              "accepts_raw_sensitive": c.accepts_raw_sensitive}
+             for c in self.effective_pool()),
+            key=lambda d: (d["name"], d["provider"]))
+        blob = json.dumps(items, sort_keys=True, default=str)
+        return hashlib.sha256(blob.encode()).hexdigest()[:12]
 
     def price_for(self, slug: str) -> PriceCfg:
         p = self._s.pricing.models.get(slug)

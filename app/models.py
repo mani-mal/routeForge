@@ -187,6 +187,13 @@ class RejectedCandidate(BaseModel):
     tier: str
     reason: str
     display_name: str | None = None  # human-facing model name; falls back to name in UI
+    # Stable stage identifier (`app/policy/feasible.py`'s `code`, e.g.
+    # "region_not_allowed") for a stage-2 data-handling exclusion; None for
+    # every other rejection reason (residency/app_scope/budget/tier/score),
+    # which have no stable code of their own. Lets `sp.candidates` answer
+    # "why not that endpoint" by code, not just by parsing the operator-facing
+    # `reason` string (P1b design §6).
+    code: str | None = None
 
 
 class DecisionRecord(BaseModel):

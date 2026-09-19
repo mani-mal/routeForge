@@ -117,7 +117,8 @@ class Router:
         allowed = list(feasible.eligible)
         rejected: list[RejectedCandidate] = [
             RejectedCandidate(name=r.name, provider=r.provider, tier=r.tier,
-                              display_name=r.display_name, reason=r.reason)
+                              display_name=r.display_name, reason=r.reason,
+                              code=r.code)
             for r in feasible.rejected]
         if not allowed:
             if not feasible.rejected:   # nothing filtered because there was nothing
