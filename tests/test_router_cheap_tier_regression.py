@@ -18,6 +18,16 @@ S = load_settings()
 REG = make_test_registry(S)
 R = Router(S, registry=REG)
 
+# `build_context` below is given the SAME registry the Router routes over.
+# It used to be called without one, which meant the context was built from the
+# static YAML pool (cloud-only, both providers disabled) while the router
+# scored the registry's merged pool -- so `ctx.allowed_models` came out empty
+# and named none of the models actually being routed. That mismatch was
+# invisible while `Router.select` honoured `allowed_models` only when
+# `model_scope_active` was true; since it became binding (P1b Task 3) the
+# fixture's two halves have to agree, exactly as they do in production, where
+# `app/main.py` hands one registry to both the Gate and the Router.
+
 _LOCATION_ENTITY = [Entity(type="LOCATION", start=13, end=19, value="France")]
 
 _DEMOTED_RULES = [
@@ -33,7 +43,8 @@ _DEMOTED_RULES = [
 def test_demoted_location_targets_cheap():
     ctx = build_context(
         S, request_id="r1", tenant_id="default", entities=_LOCATION_ENTITY,
-        redaction_map_id=None, app_policy=None, app_rules=_DEMOTED_RULES)
+        redaction_map_id=None, app_policy=None, app_rules=_DEMOTED_RULES,
+        registry=REG)
 
     assert ctx.risk_class == "low"
     assert "onprem" in ctx.allowed_providers  # cheap tier must be reachable
@@ -47,7 +58,8 @@ def test_demoted_location_targets_cheap():
 def test_global_rules_still_target_mid():
     ctx = build_context(
         S, request_id="r2", tenant_id="default", entities=_LOCATION_ENTITY,
-        redaction_map_id=None, app_policy=None, app_rules=None)
+        redaction_map_id=None, app_policy=None, app_rules=None,
+        registry=REG)
 
     assert ctx.risk_class == "medium"
     assert "onprem" in ctx.allowed_providers

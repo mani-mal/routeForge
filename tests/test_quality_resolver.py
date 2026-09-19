@@ -11,6 +11,22 @@ def _registry(s):
     return make_test_registry(s)
 
 
+def _with_published_quality(s, slug, quality):
+    """Give a static pool entry a published `quality`, through the SETTINGS the
+    registry reads.
+
+    `ModelRegistry.effective_pool()` returns `model_copy` results (it resolves
+    the P1b data-handling declarations onto each candidate), so the older
+    `reg.effective_pool()[0].quality = 0.61` mutated a throwaway copy and the
+    resolver never saw it. Setting it on `routing.model_pool` -- the thing the
+    pool is BUILT from -- expresses the same intent and survives the copy.
+    """
+    pool = [c.model_copy(update={"quality": quality}) if c.name == slug else c
+            for c in s.routing.model_pool]
+    return s.model_copy(update={"routing": s.routing.model_copy(
+        update={"model_pool": pool})})
+
+
 def _with_azure_enabled(s):
     # B10: azure is disabled by default in serving.yaml, so effective_pool()
     # now omits azure-gpt-mid entirely unless the provider is enabled -- these
@@ -30,18 +46,18 @@ def test_tier_default_rung_for_model_without_published_quality():
 
 
 def test_published_rung_when_pool_entry_has_quality():
-    s = _with_azure_enabled(_settings())
+    s = _with_published_quality(
+        _with_azure_enabled(_settings()), "azure-gpt-mid", 0.61)
     reg = _registry(s)
-    reg.effective_pool()[0].quality = 0.61  # azure-gpt-mid published
     r = QualityResolver(s, registry=reg)
     q = r.resolve("azure-gpt-mid")
     assert q == QualityScore(0.61, "published")
 
 
 def test_override_rung_beats_published_and_tier_default():
-    s = _with_azure_enabled(_settings())
+    s = _with_published_quality(
+        _with_azure_enabled(_settings()), "azure-gpt-mid", 0.61)
     reg = _registry(s)
-    reg.effective_pool()[0].quality = 0.61
     r = QualityResolver(s, overrides={"azure-gpt-mid": QualityScore(0.9, "customer")},
                         registry=reg)
     assert r.resolve("azure-gpt-mid") == QualityScore(0.9, "customer")

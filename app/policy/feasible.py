@@ -34,28 +34,44 @@ transient prior failure or by a softer app-scope reason -- but it must never
 outrank residency, which is absolute.
 
 **Stage 2 -- the three data-handling rules (P1b design §4).** Each compares one
-APP REQUIREMENT against one ENDPOINT DECLARATION:
+requirement against one ENDPOINT DECLARATION:
 
-| rule          | fires when                                                          |
-|---------------|---------------------------------------------------------------------|
-| region        | the app set `allowed_regions` and the endpoint's region is not in it |
-| retention     | the app set `require_no_retention` and retention is not `none`       |
-| raw sensitive | the request sends raw sensitive content and the endpoint does not declare `accepts_raw_sensitive: true` |
+| rule          | fires when                                                          | unknown endpoint |
+|---------------|---------------------------------------------------------------------|------------------|
+| region        | the app set `allowed_regions` and the endpoint's region is not in it | excluded |
+| retention     | the app set `require_no_retention` and retention is not `none`       | excluded |
+| raw sensitive | the request sends raw sensitive content and the endpoint declares `accepts_raw_sensitive: false` | KEPT |
+
+**Why that last column is not uniform.** It looks like an inconsistency and is
+the opposite -- it is what keeps the two halves of "unknown never satisfies a
+requirement, and never blocks a request that imposes none" from contradicting
+each other:
+
+* region and retention exclude an `unknown` endpoint because **the app
+  declared a requirement**. An endpoint that cannot prove it does not qualify;
+  that is the whole content of the requirement.
+* the raw-sensitive rule has **no app-declared requirement behind it** -- it
+  fires from the request's own shape (a `raw` model_input over a
+  better-than-public sensitivity). Excluding `unknown` there would retire
+  every endpoint in every existing deployment by a rule nobody asked for, and
+  break design §12's promise that an app which sets neither requirement routes
+  byte-identically. So an undeclared endpoint keeps today's behaviour, and
+  only an operator's explicit `false` is enforced.
+
+  The healthcare case in the priorities doc still works exactly as written:
+  "Azure US -- permitted after redaction" is a **declared `false`**, so it is
+  excluded for a raw+sensitive request and eligible again the moment
+  `model_input` is `redact`.
 
 Two properties hold across all three, and both are load-bearing:
 
-* **Unknown never satisfies a requirement, and never blocks a request that
-  imposes none.** Every endpoint in every existing deployment is `unknown` on
-  all three, so an app that sets neither requirement routes byte-identically
-  to before this stage existed. `unknown` is read AT THE POINT OF USE
-  (`_declared` below), not assumed to have been resolved upstream: the
-  no-registry paths (`app/pipeline.py`, `app/policy/context.py`,
-  `app/routing/quality.py`, `app/gateway/backends/litellm_backend.py`,
-  `app/api/routes.py`) fall back to `settings.routing.model_pool` directly,
-  whose candidates carry `None` in these fields because
-  `ModelRegistry.effective_pool()` -- the one resolver -- never ran. `None`,
-  `""` and a whitespace token all read as `unknown` here, which is the
-  fail-closed direction: an undeclared endpoint can never PROVE a property.
+* **`unknown` is read AT THE POINT OF USE** (`_declared` below), never assumed
+  to have been resolved upstream: the no-registry paths (`app/pipeline.py`,
+  `app/policy/context.py`, `app/routing/quality.py`,
+  `app/gateway/backends/litellm_backend.py`, `app/api/routes.py`) fall back to
+  `settings.routing.model_pool` directly, whose candidates carry `None` in
+  these fields because `ModelRegistry.effective_pool()` -- the one resolver --
+  never ran. `None`, `""` and a whitespace token all read as `unknown` here.
   A rule that silently no-ops on the internal path would be a policy that
   appears enforced and is not.
 * **They may only narrow.** No value of any of the three can add a candidate
@@ -103,7 +119,9 @@ REASON_RETENTION_PREFIX = "excluded · prompt retention"
 REASON_RAW_SENSITIVE_PREFIX = "excluded · raw sensitive content"
 
 #: What an endpoint that declared nothing reads as, on every one of the three
-#: attributes. Never satisfies a requirement.
+#: attributes. It never SATISFIES an app-declared requirement (region,
+#: retention), but it does not by itself trigger the request-shaped
+#: raw-sensitive rule -- see the stage-2 section of the module docstring.
 UNKNOWN = "unknown"
 
 
@@ -196,7 +214,18 @@ def _data_handling_rejection(c: PoolCandidate,
                              dh: DataHandling) -> tuple[str, str] | None:
     """Stage 2: `(reason, code)` for the first data-handling rule this
     candidate fails, or `None`. Order is region, retention, raw-sensitive --
-    stable so an endpoint failing two rules always reads the same one."""
+    stable so an endpoint failing two rules always reads the same one.
+
+    **The two `unknown` readings below are different on purpose** (see the
+    module docstring's stage-2 table for the full statement):
+
+    * region and retention exclude on `unknown`, because the APP declared a
+      requirement and an endpoint that cannot prove it does not qualify;
+    * raw-sensitive excludes only on a declared `false`, because no app
+      declared anything -- the requirement comes from the request's own shape
+      -- so an undeclared endpoint keeps today's behaviour instead of being
+      retired by a rule nobody asked for.
+    """
     if dh.allowed_regions is not None:
         region = _declared(c, "region")
         if region not in dh.allowed_regions:
@@ -211,8 +240,12 @@ def _data_handling_rejection(c: PoolCandidate,
                     f"{retention!r}, application requires 'none'",
                     PROMPT_RETENTION_NOT_ALLOWED)
     if dh.sends_raw_sensitive:
+        # `== "false"`, NOT `!= "true"`. An operator who declared an endpoint
+        # unwilling to receive unredacted content is refused; an endpoint that
+        # declared nothing is left exactly where it was. See the docstring
+        # above for why this one rule reads `unknown` the other way.
         raw = _declared(c, "accepts_raw_sensitive")
-        if raw != "true":
+        if raw == "false":
             return (f"{REASON_RAW_SENSITIVE_PREFIX} · endpoint declares "
                     f"accepts_raw_sensitive={raw!r}, and this request sends "
                     "unredacted sensitive content",

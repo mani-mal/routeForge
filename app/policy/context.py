@@ -92,7 +92,7 @@ def pinned_model_reason(pool, ctx: ExecutionPolicyContext, registry: "ModelRegis
                 "under Infrastructure, or clear the application's "
                 "require_no_retention)")
     if rejection.code == RAW_SENSITIVE_NOT_ACCEPTED:
-        return (f"{rejection.reason} (declare accepts_raw_sensitive on the "
+        return (f"{rejection.reason} (set accepts_raw_sensitive on the "
                 "endpoint, or set the application's model_input to 'redact')")
     if rejection.code == APP_SCOPE:
         return "it is outside the application's allowed_tiers / allowed_models"

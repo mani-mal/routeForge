@@ -45,8 +45,9 @@ _FIX_HINT_PREFIXES = (
      "declare the endpoint's prompt_retention under Infrastructure, or clear "
      "the application's require_no_retention"),
     (REASON_RAW_SENSITIVE_PREFIX,
-     "declare accepts_raw_sensitive on an endpoint trusted with unredacted "
-     "content, or set the application's model_input to 'redact'"),
+     "this endpoint is declared accepts_raw_sensitive: false; set it true if "
+     "it is trusted with unredacted content, or set the application's "
+     "model_input to 'redact'"),
 )
 
 

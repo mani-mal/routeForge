@@ -218,13 +218,14 @@ def test_raw_sensitive_rule_fires_only_for_raw_model_input_and_a_sensitive_reque
     policy = AppPolicyView()
     ssn = [Entity(type="US_SSN", start=0, end=11, value="123-45-6789")]
 
-    # raw + sensitive -> only the endpoint that declares `true` survives.
+    # raw + sensitive -> the endpoint that declares `false` is refused. The
+    # one that declares NOTHING is kept: see
+    # `test_raw_sensitive_rule_keeps_an_endpoint_that_declares_nothing`.
     raw_ctx = _ctx(reg, policy, entities=ssn, model_input="raw")
     assert raw_ctx.sensitivity == "restricted"
     fs_raw = feasible_set(S, reg, raw_ctx, tenant_id="acme")
-    assert _names(fs_raw) == {"trusted"}
+    assert _names(fs_raw) == {"trusted", "silent"}
     assert _by_code(fs_raw)["untrusted"] == RAW_SENSITIVE_NOT_ACCEPTED
-    assert _by_code(fs_raw)["silent"] == RAW_SENSITIVE_NOT_ACCEPTED
     reason = _by_reason(fs_raw)["untrusted"]
     assert reason.startswith("excluded · raw sensitive content")
     assert "false" in reason
@@ -240,6 +241,49 @@ def test_raw_sensitive_rule_fires_only_for_raw_model_input_and_a_sensitive_reque
     assert public_ctx.sensitivity == "public"
     assert _names(feasible_set(S, reg, public_ctx, tenant_id="acme")) == {
         "trusted", "untrusted", "silent"}
+
+
+def test_raw_sensitive_rule_keeps_an_endpoint_that_declares_nothing():
+    """The deliberate asymmetry with region/retention, and the reason this
+    branch is upgrade-safe.
+
+    Region and retention exclude an `unknown` endpoint because the APP
+    declared a requirement and an undeclared endpoint cannot prove it. The
+    raw-sensitive rule has no app-declared requirement behind it -- it fires
+    from the request's own shape -- so excluding `unknown` would retire every
+    endpoint in every existing deployment by a rule nobody asked for. Only an
+    operator's explicit `false` is enforced.
+    """
+    from app.models import Entity
+
+    reg = _registry({"silent": _onprem("silent"),
+                     "refuses": _onprem("refuses", accepts_raw_sensitive=False,
+                                        tier="mid")})
+    ssn = [Entity(type="US_SSN", start=0, end=11, value="123-45-6789")]
+    ctx = _ctx(reg, AppPolicyView(), entities=ssn, model_input="raw")
+
+    fs = feasible_set(S, reg, ctx, tenant_id="acme")
+    assert _names(fs) == {"silent"}
+    assert _by_code(fs)["refuses"] == RAW_SENSITIVE_NOT_ACCEPTED
+
+
+def test_an_undeclared_pool_under_raw_sensitive_routes_exactly_as_before():
+    """Design §12's upgrade-safety promise, at its sharpest: the whole pool
+    declares nothing, the app declares nothing, and the request is the most
+    sensitive shape there is (raw model_input + an SSN). Nothing is excluded
+    and the request still routes."""
+    from app.models import Entity
+
+    reg = _registry({"a-8b": _onprem("a-8b"), "b-32b": _onprem("b-32b", tier="mid")})
+    ssn = [Entity(type="US_SSN", start=0, end=11, value="123-45-6789")]
+    ctx = _ctx(reg, AppPolicyView(), entities=ssn, model_input="raw")
+
+    assert ctx.sends_raw_sensitive is True     # the rule IS armed ...
+    fs = feasible_set(S, reg, ctx, tenant_id="acme")
+    assert fs.rejected == ()                    # ... and excludes nothing
+    assert _names(fs) == {"a-8b", "b-32b"}
+    assert Router(S, registry=reg).select(
+        ctx, tokens_after=20, complexity=0.1).chosen is not None
 
 
 # --- 5. the empty set is a reject, never a relaxation ------------------------

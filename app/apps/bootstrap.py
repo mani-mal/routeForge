@@ -94,16 +94,6 @@ async def seed_test_models(session: AsyncSession) -> None:
             provider="onprem", tier=tier, endpoint="http://test-local/v1",
             api_key_env=None, price_input=price, price_output=price,
             enabled=True, probe_status="healthy", allowed_app_ids=None,
-            # P1b data-handling declaration. These two rows stand in for a
-            # local endpoint INSIDE the residency boundary, which is exactly
-            # the endpoint an operator declares trusted with unredacted
-            # content -- without it, every suite that drives an app in a
-            # `model_input: raw` posture over a request carrying any entity
-            # would hit the raw-sensitive exclusion (design §4) and reject,
-            # which is the rule working, not the fixture's subject. Region and
-            # retention stay UNDECLARED on purpose, so the default fixture
-            # keeps exercising the `unknown` path for those two.
-            accepts_raw_sensitive=True,
             notes="test fixture")
 
 
