@@ -22,6 +22,13 @@ class _OnboardedRow:
     api_key_env: str | None
     enabled: bool
     allowed_app_ids: tuple[str, ...] | None
+    # P1b endpoint data-handling declarations (design doc §2). The raw,
+    # unresolved per-model DECLARATION as stored on the onboarded row --
+    # `effective_pool()` is the only place these are resolved (per-model,
+    # else provider default, else "unknown"). Not a verified fact.
+    region: str | None = None
+    prompt_retention: str | None = None
+    accepts_raw_sensitive: bool | None = None
 
 
 class ModelRegistry:
@@ -49,13 +56,66 @@ class ModelRegistry:
                     tier=r.tier, quality=r.quality, price_input=r.price_input,
                     price_output=r.price_output, endpoint=r.endpoint,
                     api_key_env=r.api_key_env, enabled=bool(r.enabled),
-                    allowed_app_ids=tuple(r.allowed_app_ids) if r.allowed_app_ids else None)
+                    allowed_app_ids=tuple(r.allowed_app_ids) if r.allowed_app_ids else None,
+                    region=r.region, prompt_retention=r.prompt_retention,
+                    accepts_raw_sensitive=r.accepts_raw_sensitive)
                 for r in rows}
         except Exception:
             _log.exception("registry refresh failed; keeping last-known-good")
 
     def _onboarded(self) -> dict[str, _OnboardedRow]:
         return self._rows or {}
+
+    def _resolve_data_handling(
+        self, *, model_region: str | None, model_retention: str | None,
+        model_raw_sensitive: bool | str | None, provider: str,
+    ) -> tuple[str, str, str, dict[str, str]]:
+        """Resolve region/prompt_retention/accepts_raw_sensitive for one
+        candidate. Resolution order per field: the per-model declared value,
+        else the provider default (serving.yaml), else "unknown".
+
+        These are DECLARATIONS an operator has recorded about an endpoint --
+        RouteForge cannot verify a provider's contractual claim (e.g. that it
+        truly discards prompts). It only records what was declared and later
+        enforces policy against that record. "unknown" is the normal,
+        expected result for every endpoint that does not declare these
+        fields -- never an error, never a boot failure.
+        """
+        cfg = self._s.serving.providers.get(provider)
+        prov_region = cfg.region if cfg else None
+        prov_retention = cfg.prompt_retention if cfg else None
+        prov_raw = cfg.accepts_raw_sensitive if cfg else None
+
+        def tok(v: bool | str | None) -> str | None:
+            if isinstance(v, bool):
+                return "true" if v else "false"
+            return v
+
+        if model_region:
+            region, region_src = model_region.strip().lower(), "model"
+        elif prov_region:
+            region, region_src = prov_region.strip().lower(), "provider_default"
+        else:
+            region, region_src = "unknown", "unknown"
+
+        if model_retention:
+            retention, retention_src = model_retention, "model"
+        elif prov_retention:
+            retention, retention_src = prov_retention, "provider_default"
+        else:
+            retention, retention_src = "unknown", "unknown"
+
+        model_raw = tok(model_raw_sensitive)
+        if model_raw is not None:
+            raw, raw_src = model_raw, "model"
+        elif prov_raw is not None:
+            raw, raw_src = prov_raw, "provider_default"
+        else:
+            raw, raw_src = "unknown", "unknown"
+
+        return region, retention, raw, {
+            "region": region_src, "prompt_retention": retention_src,
+            "accepts_raw_sensitive": raw_src}
 
     def effective_pool(self) -> list[PoolCandidate]:
         # A static (YAML) cloud candidate is only routable when its provider is
@@ -64,13 +124,32 @@ class ModelRegistry:
         # (B10). Onboarded on-prem rows are gated per-model by r.enabled; the
         # on-prem infra kill-switch is handled in policy/context via
         # has_healthy_onprem, so it is not re-applied here.
+        #
+        # This is also the single place the three P1b data-handling
+        # declarations (region/prompt_retention/accepts_raw_sensitive) are
+        # resolved -- every consumer reads the resolved PoolCandidate; none
+        # should re-derive the resolution.
         enabled = {p for p, c in self._s.serving.providers.items() if c.enabled}
-        pool = [c for c in self._s.routing.model_pool if c.provider in enabled]
+        pool = []
+        for c in self._s.routing.model_pool:
+            if c.provider not in enabled:
+                continue
+            region, retention, raw, src = self._resolve_data_handling(
+                model_region=c.region, model_retention=c.prompt_retention,
+                model_raw_sensitive=c.accepts_raw_sensitive, provider=c.provider)
+            pool.append(c.model_copy(update={
+                "region": region, "prompt_retention": retention,
+                "accepts_raw_sensitive": raw, "data_handling_source": src}))
         for r in self._onboarded().values():
             if r.enabled:
+                region, retention, raw, src = self._resolve_data_handling(
+                    model_region=r.region, model_retention=r.prompt_retention,
+                    model_raw_sensitive=r.accepts_raw_sensitive, provider=r.provider)
                 pool.append(PoolCandidate(
                     name=r.slug, provider=r.provider, tier=r.tier,
-                    display_name=r.display_name, quality=r.quality))
+                    display_name=r.display_name, quality=r.quality,
+                    region=region, prompt_retention=retention,
+                    accepts_raw_sensitive=raw, data_handling_source=src))
         return pool
 
     def price_for(self, slug: str) -> PriceCfg:

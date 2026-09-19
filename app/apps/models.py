@@ -297,6 +297,18 @@ class OnboardedModel(Base):
     context_window: Mapped[int | None] = mapped_column(Integer, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     allowed_app_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # P1b endpoint data-handling declarations (docs/superpowers/specs/
+    # 2026-09-19-endpoint-data-handling-p1b-design.md §2). These are
+    # DECLARATIONS an operator records about this endpoint -- RouteForge
+    # cannot verify a provider's contractual claim, only record what was
+    # declared and enforce policy against that record. null on every field
+    # means "not declared here"; ModelRegistry.effective_pool() resolves
+    # null to the provider default (serving.yaml) or finally "unknown" --
+    # "unknown" is the normal value for every endpoint onboarded before this
+    # feature existed, never an error.
+    region: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    prompt_retention: Mapped[str | None] = mapped_column(String(16), nullable=True)  # none|retained|unknown
+    accepts_raw_sensitive: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     probe_status: Mapped[str] = mapped_column(String(16), default="unknown")
     probe_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
     notes: Mapped[str | None] = mapped_column(String(255), nullable=True)
