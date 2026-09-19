@@ -7,11 +7,9 @@ from app.models import Entity, ExecutionPolicyContext
 from app.policy.compile import compile_policy, resolve_residency
 from app.policy.feasible import (  # noqa: F401  (re-exported: app/pipeline.py imports registry_permits from here)
     APP_SCOPE,
+    DATA_HANDLING_HINTS,
     MODEL_SCOPE,
-    PROMPT_RETENTION_NOT_ALLOWED,
-    RAW_SENSITIVE_NOT_ACCEPTED,
     REASON_DISABLED,
-    REGION_NOT_ALLOWED,
     RESIDENCY,
     DataHandling,
     _ctx_scope,
@@ -84,16 +82,11 @@ def pinned_model_reason(pool, ctx: ExecutionPolicyContext, registry: "ModelRegis
     # the requirement AND what the endpoint declared -- collapsing that into
     # the generic "not permitted for application" below is exactly what this
     # branch exists to prevent, since the two are fixed by different settings.
-    if rejection.code == REGION_NOT_ALLOWED:
-        return (f"{rejection.reason} (declare the endpoint's region under "
-                "Infrastructure, or widen the application's allowed_regions)")
-    if rejection.code == PROMPT_RETENTION_NOT_ALLOWED:
-        return (f"{rejection.reason} (declare the endpoint's prompt_retention "
-                "under Infrastructure, or clear the application's "
-                "require_no_retention)")
-    if rejection.code == RAW_SENSITIVE_NOT_ACCEPTED:
-        return (f"{rejection.reason} (set accepts_raw_sensitive on the "
-                "endpoint, or set the application's model_input to 'redact')")
+    # The fix hint comes from `DATA_HANDLING_HINTS`, the same table the router
+    # explains a rejected candidate from, so one rule never gets two different
+    # instructions.
+    if rejection.code in DATA_HANDLING_HINTS:
+        return f"{rejection.reason} ({DATA_HANDLING_HINTS[rejection.code][1]})"
     if rejection.code == APP_SCOPE:
         return "it is outside the application's allowed_tiers / allowed_models"
     if rejection.code == MODEL_SCOPE and rejection.reason == REASON_DISABLED:

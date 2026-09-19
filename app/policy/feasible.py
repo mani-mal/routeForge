@@ -118,6 +118,28 @@ REASON_REGION_PREFIX = "excluded · region"
 REASON_RETENTION_PREFIX = "excluded · prompt retention"
 REASON_RAW_SENSITIVE_PREFIX = "excluded · raw sensitive content"
 
+#: code -> (reason prefix, operator fix hint). ONE source for both consumers:
+#: `app/routing/router.py` matches the prefix to explain a rejected candidate,
+#: and `app/policy/context.py::pinned_model_reason` looks up the code to
+#: explain a refused pin. They were separate string literals for one commit and
+#: promptly disagreed -- the raw-sensitive pair told an operator to "declare
+#: accepts_raw_sensitive" on an endpoint that already declares it, as `false`.
+DATA_HANDLING_HINTS: dict[str, tuple[str, str]] = {
+    REGION_NOT_ALLOWED: (
+        REASON_REGION_PREFIX,
+        "declare the endpoint's region under Infrastructure, or widen the "
+        "application's allowed_regions"),
+    PROMPT_RETENTION_NOT_ALLOWED: (
+        REASON_RETENTION_PREFIX,
+        "declare the endpoint's prompt_retention under Infrastructure, or "
+        "clear the application's require_no_retention"),
+    RAW_SENSITIVE_NOT_ACCEPTED: (
+        REASON_RAW_SENSITIVE_PREFIX,
+        "this endpoint is declared accepts_raw_sensitive: false; set it true "
+        "if it is trusted with unredacted content, or set the application's "
+        "model_input to 'redact'"),
+}
+
 #: What an endpoint that declared nothing reads as, on every one of the three
 #: attributes. It never SATISFIES an app-declared requirement (region,
 #: retention), but it does not by itself trigger the request-shaped
@@ -199,8 +221,22 @@ def _declared(c, field: str) -> str:
     paths fall back to `settings.routing.model_pool`, whose `PoolCandidate`s
     carry the raw, unresolved declaration (`None` when the YAML entry declares
     nothing) and an empty `data_handling_source`. Reading `None`/`""` as
-    `unknown` here is what makes the three rules enforce identically on both
-    paths instead of silently no-opping on one of them.
+    `unknown` here is what stops the rules silently no-opping on that path.
+
+    **It does not make all three enforce identically on both paths**, and the
+    gap is worth naming rather than implying away. Only `effective_pool()`
+    applies the PROVIDER-level default from `serving.yaml`; a raw candidate
+    carries the per-model value alone. For region and retention that is
+    harmless in the strict direction -- a missing provider default reads
+    `unknown`, which excludes -- but the raw-sensitive rule fires only on a
+    declared `false` (see `_data_handling_rejection`), so a provider-level
+    `accepts_raw_sensitive: false` would be invisible to a `registry=None`
+    caller and the endpoint would be KEPT. That is unreachable today:
+    `app/main.py` always builds a registry, so every request-path caller has
+    one. It would start to matter if a serving path were ever wired without a
+    registry, or if a deployment moved to declaring `accepts_raw_sensitive`
+    only at provider level; the fix then is to give that path the registry,
+    not to re-derive the provider default here.
     """
     v = getattr(c, field, None)
     if isinstance(v, bool):        # a raw onboarded row's accepts_raw_sensitive
@@ -229,9 +265,12 @@ def _data_handling_rejection(c: PoolCandidate,
     if dh.allowed_regions is not None:
         region = _declared(c, "region")
         if region not in dh.allowed_regions:
+            # Both sides quoted, so the mismatch is visible in the console
+            # without anyone opening the application's policy to look up what
+            # it allows.
+            allows = ", ".join(repr(r) for r in sorted(dh.allowed_regions))
             return (f"{REASON_REGION_PREFIX} · endpoint declares {region!r}, "
-                    f"application allows "
-                    f"{', '.join(sorted(dh.allowed_regions)) or '(none)'}",
+                    f"application allows {allows or '(nothing)'}",
                     REGION_NOT_ALLOWED)
     if dh.require_no_retention:
         retention = _declared(c, "prompt_retention")

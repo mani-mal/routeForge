@@ -7,12 +7,7 @@ from typing import TYPE_CHECKING
 from app.config.schema import PoolCandidate, Settings
 from app.errors import NoEligibleCandidate
 from app.models import ExecutionPolicyContext, RejectedCandidate
-from app.policy.feasible import (
-    REASON_RAW_SENSITIVE_PREFIX,
-    REASON_REGION_PREFIX,
-    REASON_RETENTION_PREFIX,
-    feasible_set,
-)
+from app.policy.feasible import DATA_HANDLING_HINTS, feasible_set
 from app.routing.quality import QualityResolver
 from app.routing.strategy import RoutingStrategy, build_strategy
 
@@ -37,18 +32,9 @@ _FIX_HINTS = {
 # parameterised tail naming the requirement and what the endpoint declared, so
 # they cannot be exact keys above. Matched by PREFIX instead -- without this,
 # `_explain` falls back to repeating the whole reason string as its own hint.
-_FIX_HINT_PREFIXES = (
-    (REASON_REGION_PREFIX,
-     "declare the endpoint's region under Infrastructure, or widen the "
-     "application's allowed_regions"),
-    (REASON_RETENTION_PREFIX,
-     "declare the endpoint's prompt_retention under Infrastructure, or clear "
-     "the application's require_no_retention"),
-    (REASON_RAW_SENSITIVE_PREFIX,
-     "this endpoint is declared accepts_raw_sensitive: false; set it true if "
-     "it is trusted with unredacted content, or set the application's "
-     "model_input to 'redact'"),
-)
+# The texts come from `DATA_HANDLING_HINTS`, shared with the pinned-model
+# explainer in app/policy/context.py so the two cannot drift apart.
+_FIX_HINT_PREFIXES = tuple(DATA_HANDLING_HINTS.values())
 
 
 def _fix_hint(reason: str) -> str:

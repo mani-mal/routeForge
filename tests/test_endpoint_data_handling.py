@@ -2,19 +2,30 @@
 
 Design: docs/superpowers/specs/2026-09-19-endpoint-data-handling-p1b-design.md §4.
 
-| rule          | condition                                                   | code                          |
-|---------------|-------------------------------------------------------------|-------------------------------|
-| region        | app sets `allowed_regions` and the endpoint's is not in it   | region_not_allowed            |
-| retention     | app sets `require_no_retention` and retention is not `none`  | prompt_retention_not_allowed  |
-| raw sensitive | the request sends raw sensitive content and the endpoint     | raw_sensitive_not_accepted    |
-|               | does not declare `accepts_raw_sensitive: true`               |                               |
+| rule          | condition                                                   | code                          | unknown |
+|---------------|-------------------------------------------------------------|-------------------------------|---------|
+| region        | app sets `allowed_regions` and the endpoint's is not in it   | region_not_allowed            | excluded |
+| retention     | app sets `require_no_retention` and retention is not `none`  | prompt_retention_not_allowed  | excluded |
+| raw sensitive | the request sends raw sensitive content and the endpoint     | raw_sensitive_not_accepted    | KEPT    |
+|               | declares `accepts_raw_sensitive: false`                      |                               |         |
+
+The last column is deliberately not uniform, and the tests below assert both
+readings. Region and retention exclude an `unknown` endpoint because the APP
+declared a requirement and an endpoint that cannot prove it does not qualify.
+The raw-sensitive rule has no app-declared requirement behind it -- it fires
+from the request's own shape -- so an undeclared endpoint keeps today's
+behaviour and only an operator's explicit `false` is enforced. (§4 of the
+design carries the full justification, and records that this supersedes its
+original "does not declare `accepts_raw_sensitive: true`" wording.)
 
 Two properties this file exists to pin, beyond the rules themselves:
 
 * **Unknown never satisfies a requirement, and never blocks a request that
   imposes none.** Every endpoint in every deployment today is `unknown` on all
   three, so an app that sets neither requirement must route byte-identically
-  to before this branch landed.
+  to before this branch landed -- including under a `raw` model_input over a
+  sensitive request, which is the sharp case
+  (`test_an_undeclared_pool_under_raw_sensitive_routes_exactly_as_before`).
 * **An empty feasible set is a REJECT WITH REASONS**, never a relaxation
   (CLAUDE.md rule 5 / IP-9's derived reject).
 """

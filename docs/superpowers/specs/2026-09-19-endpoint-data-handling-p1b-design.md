@@ -77,28 +77,54 @@ Applied where the candidate pool is already filtered (`app/policy/context.py`),
 so an excluded endpoint is unreachable by construction rather than rejected
 post-hoc (CLAUDE.md rule 3's shape, extended to contractual facts):
 
-| Rule | Condition | Reason code |
-|---|---|---|
-| Region | `allowed_regions` set and the endpoint's region is not in it | `region_not_allowed` |
-| Retention | `require_no_retention` and retention is not `none` | `prompt_retention_not_allowed` |
-| Raw sensitive | the request would send raw sensitive content and the endpoint does not declare `accepts_raw_sensitive: true` | `raw_sensitive_not_accepted` |
+| Rule | Condition | Reason code | An `unknown` endpoint is |
+|---|---|---|---|
+| Region | `allowed_regions` set and the endpoint's region is not in it | `region_not_allowed` | **excluded** |
+| Retention | `require_no_retention` and retention is not `none` | `prompt_retention_not_allowed` | **excluded** |
+| Raw sensitive | the request would send raw sensitive content and the endpoint declares `accepts_raw_sensitive: false` | `raw_sensitive_not_accepted` | **kept** |
+
+> **Amended 2026-09-19.** The raw-sensitive row originally read "…and the
+> endpoint **does not declare** `accepts_raw_sensitive: true`", which excluded
+> an `unknown` endpoint as well as a declared `false`. That is superseded by the
+> wording above — the rule now fires **only on a declared `false`**. The
+> original wording is recorded here rather than silently rewritten, because the
+> obvious "fix" is to restore it: see the justification below for why that would
+> be a regression, not a correction.
 
 **"Would send raw sensitive content"** means: the compiled `model_input` is `raw`
 **and** the gate classified the request above `public` (i.e. a sensitivity rule
 matched at least one detected entity). Under `model_input: redact` the model
 receives placeholders, so the rule does not fire — which is exactly the
 priorities doc's "Azure US: eligible after redaction" row, obtained from P1a's
-existing axis rather than a third app knob.
+existing axis rather than a third app knob. Azure US's row is a **declared
+`false`**: it is excluded for a raw+sensitive request and eligible again the
+moment `model_input` is `redact`, so the amendment leaves the healthcare
+scenario working exactly as §12 describes it.
 
 **Unknown never satisfies a requirement, and never blocks a request that imposes
-none.** An endpoint whose region is `unknown` is excluded only for an app that
-set `allowed_regions`; an app that set neither column routes exactly as it does
-today. This is the deliberate reading of the priorities doc's invariant 4: an
-endpoint may not *prove* a property it never declared, but an undeclared property
-is not itself a defect for a policy that never asks about it. The strict
-alternative — every incompletely-described endpoint leaves every candidate set —
-would make this branch an outage for every existing deployment on upgrade, and is
-deferred behind a future per-deployment switch that nobody has asked for yet.
+none.** Both halves of that sentence are load-bearing, and they are why the
+`unknown` column above is not uniform:
+
+- **Region and retention exclude an `unknown` endpoint**, because *the app
+  declared a requirement*. An endpoint that cannot prove the property does not
+  qualify — that is the entire content of the requirement. An endpoint whose
+  region is `unknown` is therefore excluded only for an app that set
+  `allowed_regions`; an app that set neither column is unaffected.
+- **The raw-sensitive rule keeps an `unknown` endpoint**, because *no app
+  declared anything*. Its requirement comes from the request's own shape (a
+  `raw` model_input over a better-than-public sensitivity), so excluding
+  `unknown` there would retire **every endpoint in every existing deployment**
+  on the first request carrying a detected entity — a rule nobody asked for,
+  breaking §12's promise that an app which sets neither requirement routes
+  byte-identically. Nothing backfills `accepts_raw_sensitive`, so there is no
+  upgrade path that avoids it. Only an operator's explicit `false` is enforced.
+
+This is the deliberate reading of the priorities doc's invariant 4: an endpoint
+may not *prove* a property it never declared, but an undeclared property is not
+itself a defect for a policy that never asks about it. The strict alternative —
+every incompletely-described endpoint leaves every candidate set — would make
+this branch an outage for every existing deployment on upgrade, and is deferred
+behind a future per-deployment switch that nobody has asked for yet.
 
 ## 5. Fallback stays inside the eligible set
 
