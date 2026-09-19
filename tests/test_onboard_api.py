@@ -333,3 +333,71 @@ def test_onboard_with_no_declarations_reads_back_undeclared(client, monkeypatch)
     assert row["region"] is None
     assert row["prompt_retention"] is None
     assert row["accepts_raw_sensitive"] is None
+
+
+# --- accepts_raw_sensitive: omission must not clear it (task-8 review) -----
+# Every other optional field on this route -- including region and
+# prompt_retention above -- is full-replace: an omitted field clears the
+# stored value, because the console's edit form always resubmits the whole
+# row. accepts_raw_sensitive is the deliberate exception: clearing a
+# declared `false` to unknown SILENTLY REOPENS the endpoint to raw sensitive
+# traffic (app/policy/feasible.py's raw-sensitive rule fires only on a
+# declared `false`, never on "unknown"), so an omitted field must preserve
+# what's stored, while an EXPLICIT null still clears it (real operator
+# intent, not an accident of an older body shape). See
+# app/api/admin_routes.py::_resolved_accepts_raw_sensitive.
+
+def test_edit_omitting_accepts_raw_sensitive_keeps_stored_value(client, monkeypatch):
+    monkeypatch.setattr("app.api.admin_routes.probe_endpoint", _ok)
+    _login(client)
+    assert client.post("/admin/infra/models", json={
+        **_BODY, "slug": "closed-model", "accepts_raw_sensitive": False}).status_code == 200
+
+    # This PUT body has no "accepts_raw_sensitive" key at all (just _BODY's
+    # fields plus a changed price) -- an omission, not an explicit null.
+    r = client.put("/admin/infra/models/closed-model",
+                   json={**_BODY, "slug": "closed-model", "price_input": 0.5})
+    assert r.status_code == 200
+
+    row = next(m for m in client.get("/admin/infra/models").json()
+               if m["slug"] == "closed-model")
+    assert row["accepts_raw_sensitive"] is False  # preserved, not cleared
+    assert row["price_input"] == 0.5              # the actual edit still applied
+
+
+def test_edit_explicit_null_accepts_raw_sensitive_clears_it(client, monkeypatch):
+    monkeypatch.setattr("app.api.admin_routes.probe_endpoint", _ok)
+    _login(client)
+    assert client.post("/admin/infra/models", json={
+        **_BODY, "slug": "closed-model", "accepts_raw_sensitive": False}).status_code == 200
+
+    r = client.put("/admin/infra/models/closed-model",
+                   json={**_BODY, "slug": "closed-model", "accepts_raw_sensitive": None})
+    assert r.status_code == 200
+
+    row = next(m for m in client.get("/admin/infra/models").json()
+               if m["slug"] == "closed-model")
+    assert row["accepts_raw_sensitive"] is None    # explicit clear honoured
+
+
+def test_edit_omitting_region_and_retention_still_clears_them(client, monkeypatch):
+    # The contrast case: region/prompt_retention are NOT given the same
+    # exception. Omitting them on a PUT still clears them to undeclared,
+    # because that direction fails CLOSED (an app requiring either excludes
+    # an "unknown" endpoint) -- pinned here so the asymmetry above stays a
+    # deliberate, single-field exception and is never "fixed" into
+    # consistency with accepts_raw_sensitive.
+    monkeypatch.setattr("app.api.admin_routes.probe_endpoint", _ok)
+    _login(client)
+    assert client.post("/admin/infra/models", json={
+        **_BODY, "slug": "declared-model", "region": "eu",
+        "prompt_retention": "retained"}).status_code == 200
+
+    r = client.put("/admin/infra/models/declared-model",
+                   json={**_BODY, "slug": "declared-model"})
+    assert r.status_code == 200
+
+    row = next(m for m in client.get("/admin/infra/models").json()
+               if m["slug"] == "declared-model")
+    assert row["region"] is None
+    assert row["prompt_retention"] is None

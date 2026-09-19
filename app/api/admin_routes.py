@@ -265,9 +265,21 @@ class OnboardIn(BaseModel):
     # JSON boolean here, matching the DB column -- the YAML pool's string
     # token form ("true"/"false"/"unknown") is a different surface (Task 1's
     # concern note) and not this one.
+    # Free customer vocabulary (design §2) -- deliberately unvalidated (no
+    # RouteForge-owned geography enum), so the literal string "unknown"
+    # typed into the form is a legal, storable value here and reads back
+    # indistinguishable from an omitted/null region: both resolve to
+    # "unknown" at app/policy/feasible.py::_declared. Not worth guarding
+    # against -- same resolved behaviour either way -- just a trap for a
+    # reader who expects the stored string to prove which one happened.
     region: str | None = None
     prompt_retention: str | None = None       # none|retained|unknown, or None (undeclared)
-    accepts_raw_sensitive: bool | None = None  # JSON boolean; None (undeclared)
+    # JSON boolean; None (undeclared). UNLIKE every other optional field on
+    # this route (including region/prompt_retention above), an OMITTED
+    # accepts_raw_sensitive on a PUT/re-POST does NOT full-replace to None --
+    # see `_resolved_accepts_raw_sensitive` below for why, and do not "fix"
+    # this back into consistency with the other fields.
+    accepts_raw_sensitive: bool | None = None
 
 
 class RecognizerIn(BaseModel):
@@ -874,6 +886,39 @@ def _normalized_region(region: str | None) -> str | None:
     return stripped or None
 
 
+def _resolved_accepts_raw_sensitive(body: OnboardIn, existing) -> bool | None:
+    """`accepts_raw_sensitive` is the one field on this route that does NOT
+    full-replace on omission, unlike every other optional OnboardIn field
+    (region/prompt_retention included) -- deliberate, found in Task 8's
+    console review, not an oversight.
+
+    Why it's asymmetric: `region`/`prompt_retention` clearing to "unknown"
+    makes app/policy/feasible.py's stage-2 rule MORE restrictive (an app
+    that requires a region or no-retention excludes an "unknown" endpoint),
+    so full-replace-on-omission fails CLOSED for those two -- safe.
+    `accepts_raw_sensitive` is the opposite: the raw-sensitive rule
+    (`_data_handling_rejection`) fires ONLY on a declared `false` -- an
+    "unknown" endpoint is KEPT, not excluded. So clearing a declared
+    `false` to unknown/None on omission would SILENTLY REOPEN an endpoint
+    an operator had explicitly closed to raw sensitive traffic the moment
+    any caller resubmits a body that doesn't happen to name this field
+    (e.g. a scripted price update written against an older body shape) --
+    fail-OPEN, with no error or warning. CLAUDE.md rule 5 (fail closed) and
+    rule 2a (a no-protection posture is never silent) both rule that out.
+
+    So: the field being ABSENT from the request (`"accepts_raw_sensitive"
+    not in body.model_fields_set`) keeps whatever is already stored (`None`
+    on a brand-new row -- nothing to preserve). The field being PRESENT --
+    including an explicit JSON `null` -- is honoured as real intent: an
+    operator who explicitly clears the declaration must still be able to,
+    on this same route; only silent, accidental clearing via omission is
+    blocked.
+    """
+    if "accepts_raw_sensitive" not in body.model_fields_set:
+        return existing.accepts_raw_sensitive if existing is not None else None
+    return body.accepts_raw_sensitive
+
+
 @admin_router.post("/infra/models")
 async def onboard_model(body: OnboardIn, request: Request,
                         _: str = Depends(require_admin)) -> dict:
@@ -909,16 +954,22 @@ async def onboard_model(body: OnboardIn, request: Request,
             allowed_app_ids=body.allowed_app_ids, notes=body.notes,
             enabled=final_enabled, probe_status=("healthy" if ok else "unreachable"),
             probe_error=(None if ok else detail),
-            # P1b declarations -- same full-replace semantics as every other
-            # optional field on this route (api_key_env, quality, notes, …):
-            # the body IS the new stored state, so an omitted/null field
-            # clears back to "undeclared" rather than being preserved. The
-            # console's edit form always resubmits the full row (see
-            # ui/src/admin/InfrastructurePanel.tsx::fieldsOf/toBody), so this
-            # matches what an operator editing in place actually intends.
+            # P1b declarations. `region`/`prompt_retention` are full-replace,
+            # same as every other optional field on this route (api_key_env,
+            # quality, notes, …): the body IS the new stored state, so an
+            # omitted/null field clears back to "undeclared" rather than
+            # being preserved. The console's edit form always resubmits the
+            # full row (see ui/src/admin/InfrastructurePanel.tsx::
+            # fieldsOf/toBody), so this matches what an operator editing in
+            # place actually intends. `accepts_raw_sensitive` is the
+            # deliberate exception -- see `_resolved_accepts_raw_sensitive`.
+            # Applied here too, not just on the PUT below: a re-POST of an
+            # existing (disabled) row is the same self-heal upsert path
+            # (B19) and carries the identical silent-reopen risk once the
+            # row re-enables.
             region=_normalized_region(body.region),
             prompt_retention=body.prompt_retention,
-            accepts_raw_sensitive=body.accepts_raw_sensitive)
+            accepts_raw_sensitive=_resolved_accepts_raw_sensitive(body, existing))
         await session.commit()
     await reg.refresh(request.app.state.db)
     return {"slug": body.slug, "enabled": final_enabled,
@@ -939,7 +990,8 @@ async def edit_onboarded_model(slug: str, body: OnboardIn, request: Request,
     reg = request.app.state.registry
     _static_validate_onboard(body, s)
     async with request.app.state.db.session() as session:
-        if await store.get_onboarded(session, slug) is None:
+        existing = await store.get_onboarded(session, slug)
+        if existing is None:
             raise HTTPException(404, f"onboarded model {slug!r} not found")
         if body.allowed_app_ids:
             for aid in body.allowed_app_ids:
@@ -956,10 +1008,12 @@ async def edit_onboarded_model(slug: str, body: OnboardIn, request: Request,
             allowed_app_ids=body.allowed_app_ids, notes=body.notes,
             enabled=final_enabled, probe_status=("healthy" if ok else "unreachable"),
             probe_error=(None if ok else detail),
-            # Same full-replace semantics as onboard_model above.
+            # region/prompt_retention: same full-replace semantics as
+            # onboard_model above. accepts_raw_sensitive: the deliberate
+            # exception -- see _resolved_accepts_raw_sensitive.
             region=_normalized_region(body.region),
             prompt_retention=body.prompt_retention,
-            accepts_raw_sensitive=body.accepts_raw_sensitive)
+            accepts_raw_sensitive=_resolved_accepts_raw_sensitive(body, existing))
         await session.commit()
     await reg.refresh(request.app.state.db)
     return {"slug": slug, "enabled": final_enabled,

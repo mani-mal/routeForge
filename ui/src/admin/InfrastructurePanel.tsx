@@ -120,6 +120,12 @@ function toBody(f: ModelFormFields, enabled: boolean): OnboardIn {
     // "unknown". Region is a free token; the server normalizes it
     // (strip + lowercase) the same way ModelRegistry resolves it for
     // routing, so no client-side normalization is needed here.
+    //
+    // accepts_raw_sensitive is always sent explicitly by this form (as an
+    // actual JSON `null` when "unknown" is selected, never omitted) -- so
+    // this form is unaffected by the server's omission-vs-null distinction
+    // for that field (app/api/admin_routes.py::_resolved_accepts_raw_sensitive):
+    // choosing "unknown" here is a real, explicit clear, exactly as it looks.
     region: f.region.trim() ? f.region.trim() : null,
     prompt_retention: f.promptRetention === "unknown" ? null : f.promptRetention,
     accepts_raw_sensitive: f.acceptsRawSensitive === "unknown" ? null : f.acceptsRawSensitive === "true",
