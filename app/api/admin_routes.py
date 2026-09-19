@@ -100,6 +100,11 @@ def _effective_dict(app, settings) -> dict:
         "telemetry_io": eff.protection.telemetry_io,
         "detection": eff.protection.detection,
         "content_integrity": eff.protection.content_integrity,
+        # P1b app-side data-handling requirements (design doc §3). Server-
+        # resolved so the console never re-derives normalisation itself.
+        "allowed_regions":
+            sorted(eff.allowed_regions) if eff.allowed_regions else None,
+        "require_no_retention": eff.require_no_retention,
     }
 
 
@@ -179,6 +184,12 @@ class PolicyIn(BaseModel):
     client_output: str | None = None
     content_integrity: str | None = None
     escalate_residency_on_detection: bool | None = None
+    # P1b app-side data-handling requirements (design doc §3; types only here
+    # -- shape/normalisation validation is app/policy/compile.py::
+    # validate_effective, like every other axis). None = no constraint. No
+    # enforcement yet (Tasks 3-5 own narrowing the candidate set).
+    allowed_regions: list[str] | None = None
+    require_no_retention: bool | None = None
     # --- the one escape from the merge -------------------------------------
     # This PUT is a MERGE: `null` means "leave the stored value alone", which
     # plenty of callers depend on. That left no way to put a field BACK to NULL
@@ -581,6 +592,8 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
             content_integrity=_merged("content_integrity"),
             escalate_residency_on_detection=_merged(
                 "escalate_residency_on_detection"),
+            allowed_regions=_merged("allowed_regions"),
+            require_no_retention=_merged("require_no_retention"),
         )
         # An app's own provisioned Langfuse project is the one condition the
         # compiler cannot see: it is DB state, not policy. Raw capture requires

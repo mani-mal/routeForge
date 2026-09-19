@@ -154,6 +154,15 @@ class EffectivePolicy:
     escalate_residency_on_detection: bool
     require_verification: bool
     version: str  # app_policy_version
+    # --- P1b app-side data-handling requirements (design doc §3).
+    # Placement-ADJACENT, not a protection axis: never read while computing
+    # `placement` above, and never widens it. Resolved explicit-or-null --
+    # neither has a `policy_mode` preset or a deployment default. `None` =
+    # no regional constraint; `False` = no retention requirement. Tasks 3-5
+    # apply the three exclusion rules against these; this module only
+    # resolves and validates the shape.
+    allowed_regions: frozenset[str] | None = None
+    require_no_retention: bool = False
     #: Sensitivity label, raised by a cross-axis rule in `apply_signals`.
     sensitivity: str | None = None
     #: Every declared cross-axis rule that fired, whether or not it was allowed
@@ -262,6 +271,37 @@ def resolve_residency(value) -> tuple[str, bool]:
     if value in RESIDENCY:
         return value, True
     return _DENY["residency"], False
+
+
+def resolve_allowed_regions(value) -> tuple[frozenset[str] | None, bool]:
+    """Resolve one stored `allowed_regions` to `(regions, parsed)` (design
+    §3). There is no ceiling, preset or deployment default for this axis --
+    it is explicit-or-null:
+
+    * `None` (unset) means "no regional constraint" and counts as parsed.
+    * A non-empty list/tuple/set of non-empty string tokens resolves to the
+      stripped, lowercased set of those tokens -- matching the endpoint-side
+      normalisation `ModelRegistry._resolve_data_handling` already applies to
+      a declared `region` (Task 1), so an app's requirement and an endpoint's
+      declaration compare on the same casing.
+    * Anything else -- not list-like, empty, or containing a non-string /
+      blank element -- **denies**: `parsed=False`, resolves to `frozenset()`
+      (matches no region, the most restrictive reading available for an axis
+      whose unset value is "no constraint"), and the caller records the
+      offending value so the write can be refused (CLAUDE.md rule 5).
+    """
+    if value is None:
+        return None, True
+    if not isinstance(value, (list, tuple, frozenset, set)):
+        return frozenset(), False
+    tokens: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            return frozenset(), False
+        tokens.append(item.strip().lower())
+    if not tokens:
+        return frozenset(), False
+    return frozenset(tokens), True
 
 
 # --- the compiler ------------------------------------------------------------
@@ -392,6 +432,18 @@ def compile_policy(app_policy, deployment: Settings) -> EffectivePolicy:
     escalate = _get(app_policy, "escalate_residency_on_detection")
     version = app_policy.version() if hasattr(app_policy, "version") else ""
 
+    # -- P1b app-side data-handling requirements (design §3). Explicit-or-null,
+    # read AFTER placement/protection are already decided and never fed back
+    # into either -- keeps them placement-adjacent rather than a placement
+    # input (CLAUDE.md rule 3 is about providers/onprem_only; these are a
+    # narrower, separate axis Tasks 3-5 enforce against the registry).
+    stored_allowed_regions = _get(app_policy, "allowed_regions")
+    allowed_regions, ar_parsed = resolve_allowed_regions(stored_allowed_regions)
+    if not ar_parsed:
+        rejected.append(("allowed_regions", str(stored_allowed_regions)))
+
+    require_no_retention = bool(_get(app_policy, "require_no_retention"))
+
     return EffectivePolicy(
         placement=placement,
         protection=protection,
@@ -400,6 +452,8 @@ def compile_policy(app_policy, deployment: Settings) -> EffectivePolicy:
         version=version,
         rejected=tuple(rejected),
         clamped=tuple(clamped),
+        allowed_regions=allowed_regions,
+        require_no_retention=require_no_retention,
     )
 
 
@@ -540,6 +594,15 @@ def validate_effective(eff: EffectivePolicy, deployment: Settings, *,
     # persisted and silently behaved as "off").
     for axis, value in eff.rejected:
         name = _OPERATOR_NAME.get(axis, axis)
+        if axis == "allowed_regions":
+            # No enum to offer (design §3 has no _LEGAL vocabulary for this
+            # axis, unlike the P1a rungs below) -- the message names the
+            # field and spells out the legal SHAPE instead.
+            raise PolicyViolation(
+                "ALLOWED_REGIONS_INVALID",
+                f"bad allowed_regions {value!r}; legal shape: a non-empty "
+                "list of non-empty region tokens (strings), e.g. "
+                '["us", "eu"]. Tokens are normalised to lowercase.')
         if value in UNIMPLEMENTED:
             # Design §9: named in the design, deliberately not built. Rejected
             # rather than faked — a policy that asks for tokenization must not

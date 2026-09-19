@@ -364,10 +364,14 @@ def test_admin_app_carries_the_effective_block(client):
     assert r.status_code == 200
     eff = r.json()["effective"]
     assert set(eff) == {"model_input", "client_output", "telemetry_io",
-                        "detection", "content_integrity"}
+                        "detection", "content_integrity",
+                        "allowed_regions", "require_no_retention"}
     # Default app (no policy row, enforced): both data-handling axes redact.
     assert eff["model_input"] == "redact"
     assert eff["client_output"] == "redact"
+    # P1b requirements default to no constraint (design doc §3).
+    assert eff["allowed_regions"] is None
+    assert eff["require_no_retention"] is False
 
 
 def test_policy_pii_and_stream_mode_round_trip(client):

@@ -156,6 +156,19 @@ def test_invariant_grid_is_bounded():
     assert len(c._INVARIANT_GRID) <= 64
 
 
+# --- P1b requirements: allowed_regions shape validation (design doc §3) -----
+
+def test_allowed_regions_is_normalised_and_rejected_when_not_a_list_of_tokens(admin):
+    """A 422 naming the field, like every other axis (P1a error-code style)."""
+    r = _put(admin, allowed_regions=["US", " Eu "])
+    assert r.status_code == 200, r.text
+    assert r.json()["effective"]["allowed_regions"] == ["eu", "us"]
+
+    r = _put(admin, allowed_regions=["  "])
+    assert r.status_code == 422, r.text
+    assert "allowed_regions" in r.json()["detail"]
+
+
 def test_every_shipped_recipe_still_saves_through_the_admin_api(admin):
     """The invariant check must not regress the write path for any policy
     that already shipped."""

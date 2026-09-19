@@ -162,6 +162,20 @@ class AppPolicy(Base):
     # tightening -- it can never lower the app's own residency floor.
     escalate_residency_on_detection: Mapped[bool | None] = mapped_column(
         Boolean, nullable=True)
+    # --- P1b app-side data-handling REQUIREMENTS (design doc §3). null = no
+    # constraint. Resolved explicit-or-null in app/policy/compile.py -- unlike
+    # the P1a axes above, neither has a `policy_mode` preset or a deployment
+    # default to fall back to. Placement-ADJACENT, not a protection axis: they
+    # narrow WHERE a request may run (region) and WHAT retention promise an
+    # endpoint must make, never what the gate does to the data. May only ever
+    # NARROW the candidate set -- no value of either may widen
+    # allowed_providers, clear onprem_only, or add a model (P1a noninterference
+    # must survive). No enforcement lives here yet: Tasks 3-5 apply the three
+    # exclusion rules against ModelRegistry.effective_pool()'s resolved
+    # region/prompt_retention/accepts_raw_sensitive (Task 1). This task only
+    # stores, resolves and validates the shape.
+    allowed_regions: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    require_no_retention: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
     application: Mapped[Application] = relationship(back_populates="policy")
 
