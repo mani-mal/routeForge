@@ -208,13 +208,37 @@ because it asks the one eligibility authority at the moment of use. It also surv
 C8: a future fuzzy backend inherits this guarantee unchanged, because it lives in the
 pipeline, not in the store.
 
-**A refusal is not an eviction.** The entry stays. The partition is shared across an
-app's siblings, so an entry one app's `allowed_regions` excludes may be perfectly
-eligible for another; deleting it would let one app's narrower policy mutate another
-app's cache — a cross-app side effect from a rule defined to narrow only *this*
-request's candidate set — and would make hit/miss timing an information channel about
-a sibling's policy. C5's TTL already bounds staleness and C6 keeps the entry
-in-process, so a kept-but-unservable entry costs only memory.
+**A refusal is not an eviction.** The entry stays. Two reasons, both about what the
+check *is*:
+
+1. **A read must not mutate shared state.** `lookup` is a read. Eviction would make the
+   act of looking change what other readers of the same partition find — a side effect
+   nothing in the calling code can see or reason about.
+2. **The judgement is per-request, not about the entry.** "Not eligible" here means *not
+   for this request*, which is a statement about an app's compiled policy at one moment,
+   not about the cached text. The very next request through the same partition — a
+   sibling app, or the same app after an operator widens `allowed_regions` — may be
+   perfectly entitled to it. Deleting on a per-request judgement conflates "not for you"
+   with "not for anyone", and C5's TTL already owns the entry's lifetime.
+
+Keeping it is also cheap and safe: C6 means the entry never leaves the process, and the
+guard above means it is never served, so an unservable entry costs only memory.
+
+**What keeping does NOT buy, and why — do not read more into this than it gives.** It
+would be natural to add that keeping the entry preserves the sibling app's later hit, or
+that evicting would open a timing side channel on a sibling's policy. **Neither holds
+today.** The refusing request goes on to route normally and then stores *its own* answer
+under the same partition and the same query key (`app/pipeline.py`'s store-on-miss; the
+refusal deliberately does not set `cache_bypass_reason`, which would also suppress that
+store). So the sibling's entry is overwritten a moment later regardless of what the
+refusal did, and the observable hit/miss pattern is the same either way. Two apps in one
+partition with disjoint eligible sets therefore *mutually evict* each other by writing,
+with the write amplification that implies — a real cost, tracked as backlog, and the fix
+belongs to the cache's key (an eligibility fingerprint, rather than enumerating each new
+rule into the partition tuple), not to an eviction policy. The narrow property the
+decision actually rests on, and the one the test pins, is that **`lookup` does not
+mutate** — asserted in the only window where it is observable, between the refused read
+and that store.
 
 **Enforcement point:** `app/pipeline.py` (lookup call site + `_serve_from_cache`),
 asking `app/policy/feasible.py`.

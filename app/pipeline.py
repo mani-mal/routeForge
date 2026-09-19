@@ -330,6 +330,18 @@ class Pipeline:
         needs its `provider` too and one traversal of the effective pool
         should answer both questions.
 
+        **Matches by NAME only, and every caller pairs it with a provider
+        comparison** (`_eligible_candidate` below; both semantic-cache
+        guards). The name is the routing identity everywhere else in the
+        system -- `Router.select`'s `exclude` set, `ModelRegistry.price_for`,
+        `is_enabled` and `is_allowed_for_app` all key on it alone, and
+        `effective_pool()` is expected to carry each slug once. That
+        expectation is not enforced anywhere, though: the pool is the YAML
+        cloud entries UNION the enabled onboarded rows, so one slug could in
+        principle appear under two providers. Comparing the provider at each
+        call site costs nothing and means a same-slug collision degrades to a
+        refusal rather than to an unchecked match.
+
         No `exclude` is passed: a hop the gateway fell back PAST was eligible
         when it was chosen, and the prior-failure stage is about what may be
         tried NEXT, not about what was legitimately served.
@@ -495,7 +507,12 @@ class Pipeline:
         # `allowed_models` or the three data-handling declarations, and a key
         # drifts out of date the moment a rule is added, where this cannot.
         served = self._eligible_now(ctx, entry.model)
-        if served is None:
+        if served is None or served.provider != entry.provider:
+            # The provider comparison is not redundant with the name match:
+            # `CacheEntry` self-describes the provider that PRODUCED the text
+            # (the same field C3's residency re-check reads), so if the slug
+            # now resolves to a different provider the cached answer came from
+            # somewhere this request never evaluated. See `_eligible_now`.
             return None
         text, vrec = verify(det, ctx, entry.response_text,
                             client_output=client_output)
@@ -737,10 +754,13 @@ class Pipeline:
                 # was never servable. `_serve_from_cache` repeats the check --
                 # it is the function that hands cached text to a client.
                 refused: str | None = None
-                if entry is not None and self._eligible_now(
-                        ctx, entry.model) is None:
-                    refused = "entry_not_in_eligible_set"
-                    entry = None
+                if entry is not None:
+                    # Name AND provider -- the entry self-describes the
+                    # provider that produced it; see `_eligible_now`.
+                    cand = self._eligible_now(ctx, entry.model)
+                    if cand is None or cand.provider != entry.provider:
+                        refused = "entry_not_in_eligible_set"
+                        entry = None
                 if entry is not None:
                     # C4 KEYSTONE: re-verify with the CURRENT request's
                     # detector/ctx before ever serving cached text. A failed

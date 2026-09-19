@@ -417,51 +417,64 @@ def test_a_cache_hit_from_a_data_handling_excluded_model_is_a_miss():
     assert hit["policy"]["checks"]["chosen_in_eligible_set"] is True
 
 
-def test_a_refused_cache_entry_is_kept_for_the_apps_it_is_still_valid_for():
-    """The refusal is per-request, not an eviction. The partition key is
-    (tenant, onprem_only, allowed_providers) -- several apps of one tenant
-    share it -- so an entry one app's `allowed_regions` excludes may be
-    perfectly eligible for a sibling app. Deleting it would let one app's
-    narrower policy mutate another app's cache, which is a cross-app side
-    effect from a rule defined to narrow only THIS request's candidate set
-    (and an information channel: B could infer A's policy from hit/miss).
-    TTL already bounds staleness, and the entry never leaves the process.
+def test_a_refused_cache_entry_is_not_evicted_by_the_refusing_read():
+    """A refusal is a read-only judgement about THIS request, not a statement
+    that the entry is invalid -- so the read must not delete it.
+
+    **This has to be asserted in a narrow window, and the window is the
+    point.** The refusing request goes on to route normally and then STORES
+    its own answer under the same partition and the same query key, so a
+    `cache.size` (or a later lookup) taken after the request completes cannot
+    tell a kept entry from an evicted one -- both read 1. The only moment at
+    which the refusal's own effect is observable is between the refused read
+    and that store, which is what `_SnapshottingCache` captures.
+
+    That store-over is also why keeping the entry does not, today, preserve
+    the sibling's hit: see the write-amplification note in
+    docs/architecture/specs/semantic-cache-residency-spec.md C9. What this
+    test pins is the narrower, real property -- `lookup` does not mutate.
     """
     from app.cache.store import DeterministicSemanticCache
+
+    class _SnapshottingCache(DeterministicSemanticCache):
+        """Records what the store held at the moment each `store()` began."""
+
+        def __init__(self, *a, **kw) -> None:
+            super().__init__(*a, **kw)
+            self.at_store: list[list[str]] = []
+
+        def store(self, **kw):
+            self.at_store.append(sorted(
+                e.model for b in self._data.values() for e in b.values()))
+            return super().store(**kw)
 
     s = S.model_copy(update={"serving": S.serving.model_copy(update={
         "semantic_cache": S.serving.semantic_cache.model_copy(
             update={"enabled": True})})})
     reg = _two_regions()
-    cache = DeterministicSemanticCache(ttl_seconds=3600)
+    cache = _SnapshottingCache(ttl_seconds=3600)
     rec = RecordingBackend(_DeterministicLiteLLM(s))
     pipe = _pipeline(rec, s, reg, cache=cache)
     eu_only = AppPolicyView(allowed_models=frozenset({"eu-8b"}))
     req = ChatRequest(messages=[Message(role="user", content="hello there")])
 
-    _run(pipe.run("r1", "acme", req, app_policy=eu_only))     # warms eu-8b
-    assert cache.size == 1
+    warm = _run(pipe.run("r1", "acme", req, app_policy=eu_only))
+    assert warm["model"] == "eu-8b"
+    assert cache.at_store == [[]]          # nothing cached before the first store
 
-    # A different app of the same tenant requires `us`: refused, and the
-    # entry survives the refusal (the store below replaces it only because
-    # this app's own answer lands on the same key).
-    _run(pipe.run("r2", "acme", req,
-                  app_policy=AppPolicyView(allowed_regions=frozenset({"us"}))))
-    assert cache.size == 1
+    # A sibling app of the same tenant requires `us`: it finds the `eu-8b`
+    # entry, refuses it, and routes to `us-8b`.
+    hit = _run(pipe.run("r2", "acme", req,
+                        app_policy=AppPolicyView(allowed_regions=frozenset({"us"}))))
+    assert hit["model"] == "us-8b"
+    cache_recs = [r for r in hit["trace"] if r.get("step") == "cache"]
+    assert cache_recs[0]["bypass_reason"] == "entry_not_in_eligible_set"
 
-    # Nothing was evicted on the read: the eu-only app is served from cache
-    # again on a query the `us` app never asked.
-    other = ChatRequest(messages=[Message(role="user", content="second question")])
-    _run(pipe.run("r3", "acme", other, app_policy=eu_only))
-    _run(pipe.run("r4", "acme", other,
-                  app_policy=AppPolicyView(allowed_regions=frozenset({"us"}))))
-    warm_again = _run(pipe.run("r5", "acme", other, app_policy=eu_only))
-    assert cache.size == 2
-    # r5 is a genuine hit only if r4's refusal left something to hit. (r4
-    # stored its own us-8b answer over the key, which eu-only then refuses in
-    # turn -- see the hit-rate note in the task report; what matters here is
-    # that nothing was DELETED by a read.)
-    assert warm_again["model"] in {"eu-8b", "us-8b"}
+    # THE ASSERTION: at the moment r2 stored its own answer -- i.e. after the
+    # refused read -- the `eu-8b` entry was still there. Under an
+    # evict-on-refusal policy this list would be empty.
+    assert len(cache.at_store) == 2
+    assert cache.at_store[1] == ["eu-8b"]
 
 
 # --- 8. failover and escalation stay inside the feasible set ----------------
@@ -530,8 +543,16 @@ def test_escalation_stays_inside_the_feasible_set():
         "us-32b": _onprem("us-32b", tier="mid", region="us", price=0.40),
     })
     msgs = [Message(role="user", content="hello there")]
-    ctx = _ctx(reg, AppPolicyView(allowed_regions=frozenset({"us"})))
 
+    # Control: with no regional requirement the escalation lands on `eu-32b`
+    # (cheapest mid) -- so its absence below is the exclusion doing the work,
+    # not the escalation simply never reaching mid.
+    open_backend = _FailForModels(S, set())
+    _run(_gateway(open_backend, reg).run(
+        _ctx(reg, AppPolicyView()), msgs, 20, 0.1, {"mock_confidence": 0.1}))
+    assert open_backend.calls == ["us-8b", "eu-32b"]
+
+    ctx = _ctx(reg, AppPolicyView(allowed_regions=frozenset({"us"})))
     backend = _FailForModels(S, set())
     result, records = _run(_gateway(backend, reg).run(
         ctx, msgs, 20, 0.1, {"mock_confidence": 0.1}))
