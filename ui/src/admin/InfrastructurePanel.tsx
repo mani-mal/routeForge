@@ -117,8 +117,9 @@ function toBody(f: ModelFormFields, enabled: boolean): OnboardIn {
     enabled,
     // P1b declarations -- "unknown" in the form means "declare nothing",
     // sent as null (the server's own no-declaration value), not the string
-    // "unknown". See the OnboardIn comment in api.ts: the admin API does not
-    // read these fields yet, so this is a forward-compatible no-op today.
+    // "unknown". Region is a free token; the server normalizes it
+    // (strip + lowercase) the same way ModelRegistry resolves it for
+    // routing, so no client-side normalization is needed here.
     region: f.region.trim() ? f.region.trim() : null,
     prompt_retention: f.promptRetention === "unknown" ? null : f.promptRetention,
     accepts_raw_sensitive: f.acceptsRawSensitive === "unknown" ? null : f.acceptsRawSensitive === "true",

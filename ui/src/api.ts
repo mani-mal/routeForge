@@ -470,11 +470,11 @@ export type OnboardedModel = {
   quality: number | null; context_window: number | null;
   enabled: boolean; allowed_app_ids: string[] | null;
   probe_status: string; probe_error: string | null; notes: string | null;
-  // P1b endpoint data-handling declarations (design §2). NOT YET returned by
-  // GET /admin/infra/models (app/api/admin_routes.py::_onboarded_dict) as of
-  // this task — typed here so the form can read them the day it is wired,
-  // without the type lying about what the server sends today. Until then
-  // these always come back undefined and the form reads that as "unknown".
+  // P1b endpoint data-handling declarations (design §2), returned raw (the
+  // stored value, not resolved through a provider default) by
+  // GET/POST/PUT /admin/infra/models (app/api/admin_routes.py::_onboarded_dict).
+  // Optional here only because a row onboarded before this shipped has them
+  // as null — the field itself is always present on the wire.
   region?: string | null;
   prompt_retention?: string | null;
   accepts_raw_sensitive?: boolean | null;
@@ -485,11 +485,12 @@ export type OnboardIn = {
   quality?: number | null; context_window?: number | null;
   allowed_app_ids?: string[] | null; notes?: string | null;
   enabled?: boolean;
-  // P1b endpoint data-handling declarations (design §2/§8). NOT YET accepted
-  // by POST/PUT /admin/infra/models (app/api/admin_routes.py::OnboardIn) as
-  // of this task -- sent here so the request body is forward-compatible, but
-  // the server silently drops unknown fields (no `extra="forbid"`), so these
-  // three currently have no effect. See task-8-report.md.
+  // P1b endpoint data-handling declarations (design §2/§8), accepted by
+  // POST/PUT /admin/infra/models (app/api/admin_routes.py::OnboardIn) and
+  // passed through to store.upsert_onboarded. null/omitted = undeclared
+  // ("unknown" at resolution time). Full-replace on PUT, like every other
+  // optional field on this route: an omitted value clears the stored one
+  // back to undeclared, it does not preserve it.
   region?: string | null;
   prompt_retention?: string | null;       // "none" | "retained" | null (unknown)
   accepts_raw_sensitive?: boolean | null; // JSON boolean, null = unknown

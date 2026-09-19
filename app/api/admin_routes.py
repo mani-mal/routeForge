@@ -26,6 +26,7 @@ from app.policy.effective import PROTECTED_ENTITIES
 from app.policy.enums import (
     PII_MODES,
     POLICY_MODES,
+    PROMPT_RETENTION_VALUES,
     RESIDENCY,
     RISK_CLASS,
     SENSITIVITY,
@@ -70,7 +71,14 @@ def _onboarded_dict(m) -> dict:
             "api_key_env": m.api_key_env, "context_window": m.context_window,
             "enabled": m.enabled, "allowed_app_ids": m.allowed_app_ids,
             "probe_status": m.probe_status, "probe_error": m.probe_error,
-            "notes": m.notes, "updated_at": _iso(m.updated_at)}
+            "notes": m.notes, "updated_at": _iso(m.updated_at),
+            # P1b declarations (design §2/§8) -- the STORED, raw values (not
+            # resolved: no provider-default fallback, no "unknown" backfill).
+            # `ModelRegistry.effective_pool()` is what resolves these for
+            # routing; this is what the operator declared for THIS row, so
+            # the form can render exactly what was saved.
+            "region": m.region, "prompt_retention": m.prompt_retention,
+            "accepts_raw_sensitive": m.accepts_raw_sensitive}
 
 
 def _effective_dict(app, settings) -> dict:
@@ -249,6 +257,17 @@ class OnboardIn(BaseModel):
     allowed_app_ids: list[str] | None = None
     notes: str | None = None
     enabled: bool = True
+    # P1b endpoint data-handling declarations (design §2/§8; Task 1's DB
+    # columns and store.upsert_onboarded already accept these -- this is the
+    # admin-HTTP wiring that was missing). None = undeclared ("unknown" at
+    # resolution time -- app/policy/feasible.py::_declared reads None the
+    # same way it reads an explicit "unknown"). `accepts_raw_sensitive` is a
+    # JSON boolean here, matching the DB column -- the YAML pool's string
+    # token form ("true"/"false"/"unknown") is a different surface (Task 1's
+    # concern note) and not this one.
+    region: str | None = None
+    prompt_retention: str | None = None       # none|retained|unknown, or None (undeclared)
+    accepts_raw_sensitive: bool | None = None  # JSON boolean; None (undeclared)
 
 
 class RecognizerIn(BaseModel):
@@ -828,6 +847,31 @@ def _static_validate_onboard(body: OnboardIn, s) -> None:
         raise HTTPException(422, "endpoint must be an http(s) URL")
     if body.price_input < 0 or body.price_output < 0:
         raise HTTPException(422, "price must be >= 0")
+    # P1b: prompt_retention is a fixed enum (app/policy/enums.py, shared with
+    # the YAML lint so an admin-accepted value is a value the resolver will
+    # actually read as a real declaration) -- None (undeclared) is always
+    # legal and is not in the set. `region` is deliberately NOT validated
+    # here: it is customer vocabulary with no RouteForge-owned list (design
+    # §2), matched exactly after normalisation, not against an enum.
+    if (body.prompt_retention is not None
+            and body.prompt_retention not in PROMPT_RETENTION_VALUES):
+        raise HTTPException(
+            422, f"bad prompt_retention {body.prompt_retention!r}; legal values: "
+            f"{sorted(PROMPT_RETENTION_VALUES)}, or omit/null for undeclared")
+
+
+def _normalized_region(region: str | None) -> str | None:
+    """Store `region` pre-normalized (stripped + lowercased) so a value the
+    admin API accepted reads back exactly as `ModelRegistry._resolve_data_handling`
+    would resolve it -- the same `.strip().lower()` that function already
+    applies at read time (app/apps/registry.py), done once here so the GET
+    response and the form show the same token the router will actually
+    match, rather than the raw un-normalized input. A blank/whitespace-only
+    string is undeclared, same as omitting the field."""
+    if region is None:
+        return None
+    stripped = region.strip().lower()
+    return stripped or None
 
 
 @admin_router.post("/infra/models")
@@ -864,7 +908,17 @@ async def onboard_model(body: OnboardIn, request: Request,
             quality=body.quality, context_window=body.context_window,
             allowed_app_ids=body.allowed_app_ids, notes=body.notes,
             enabled=final_enabled, probe_status=("healthy" if ok else "unreachable"),
-            probe_error=(None if ok else detail))
+            probe_error=(None if ok else detail),
+            # P1b declarations -- same full-replace semantics as every other
+            # optional field on this route (api_key_env, quality, notes, …):
+            # the body IS the new stored state, so an omitted/null field
+            # clears back to "undeclared" rather than being preserved. The
+            # console's edit form always resubmits the full row (see
+            # ui/src/admin/InfrastructurePanel.tsx::fieldsOf/toBody), so this
+            # matches what an operator editing in place actually intends.
+            region=_normalized_region(body.region),
+            prompt_retention=body.prompt_retention,
+            accepts_raw_sensitive=body.accepts_raw_sensitive)
         await session.commit()
     await reg.refresh(request.app.state.db)
     return {"slug": body.slug, "enabled": final_enabled,
@@ -901,7 +955,11 @@ async def edit_onboarded_model(slug: str, body: OnboardIn, request: Request,
             quality=body.quality, context_window=body.context_window,
             allowed_app_ids=body.allowed_app_ids, notes=body.notes,
             enabled=final_enabled, probe_status=("healthy" if ok else "unreachable"),
-            probe_error=(None if ok else detail))
+            probe_error=(None if ok else detail),
+            # Same full-replace semantics as onboard_model above.
+            region=_normalized_region(body.region),
+            prompt_retention=body.prompt_retention,
+            accepts_raw_sensitive=body.accepts_raw_sensitive)
         await session.commit()
     await reg.refresh(request.app.state.db)
     return {"slug": slug, "enabled": final_enabled,
