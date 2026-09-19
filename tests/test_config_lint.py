@@ -142,3 +142,79 @@ def test_missing_default_estimated_output_tokens_is_a_boot_failure():
     assert any("default_estimated_output_tokens" in e for e in errs), errs
     with pytest.raises(SystemExit):
         enforce(s)
+
+
+# --- P1b: endpoint data-handling declarations (design §7) --------------------
+# region has NO enum (customer vocabulary, normalized to lowercase — never
+# linted as invalid). prompt_retention and accepts_raw_sensitive DO have a
+# fixed enum, and a value outside it must fail the boot with a named
+# violation, on either a serving.yaml providers.<name> default or a
+# routing.yaml model_pool entry.
+
+def test_provider_prompt_retention_bad_value_is_a_boot_failure():
+    s = copy.deepcopy(load_settings())
+    s.serving.providers["azure"].prompt_retention = "sometimes"
+    errs = lint_settings(s)
+    assert any("PROVIDER_PROMPT_RETENTION_UNKNOWN" in e and "azure" in e
+               for e in errs), errs
+    with pytest.raises(SystemExit):
+        enforce(s)
+
+
+def test_provider_raw_sensitive_bad_value_is_a_boot_failure():
+    s = copy.deepcopy(load_settings())
+    s.serving.providers["azure"].accepts_raw_sensitive = "sometimes"
+    errs = lint_settings(s)
+    assert any("PROVIDER_RAW_SENSITIVE_UNKNOWN" in e and "azure" in e
+               for e in errs), errs
+    with pytest.raises(SystemExit):
+        enforce(s)
+
+
+def test_pool_prompt_retention_bad_value_is_a_boot_failure():
+    s = copy.deepcopy(load_settings())
+    victim = s.routing.model_pool[0]
+    victim.prompt_retention = "sometimes"
+    errs = lint_settings(s)
+    assert any("POOL_PROMPT_RETENTION_UNKNOWN" in e and victim.name in e
+               for e in errs), errs
+    with pytest.raises(SystemExit):
+        enforce(s)
+
+
+def test_pool_raw_sensitive_bad_value_is_a_boot_failure():
+    s = copy.deepcopy(load_settings())
+    victim = s.routing.model_pool[0]
+    victim.accepts_raw_sensitive = "sometimes"
+    errs = lint_settings(s)
+    assert any("POOL_RAW_SENSITIVE_UNKNOWN" in e and victim.name in e
+               for e in errs), errs
+    with pytest.raises(SystemExit):
+        enforce(s)
+
+
+def test_region_is_not_linted_as_an_enum():
+    # Regions are customer vocabulary (design §2) -- an unrecognised token is
+    # never a lint violation, on either source.
+    s = copy.deepcopy(load_settings())
+    s.serving.providers["azure"].region = "narnia"
+    s.routing.model_pool[0].region = "mordor"
+    assert lint_settings(s) == []
+
+
+def test_data_handling_valid_values_boot_clean():
+    s = copy.deepcopy(load_settings())
+    s.serving.providers["azure"].prompt_retention = "none"
+    s.serving.providers["azure"].accepts_raw_sensitive = "true"
+    s.routing.model_pool[0].prompt_retention = "retained"
+    s.routing.model_pool[0].accepts_raw_sensitive = "false"
+    assert lint_settings(s) == []
+
+
+def test_data_handling_values_are_case_insensitive():
+    # `ModelRegistry._resolve_data_handling`/`_declared` lowercase-strip at
+    # read time -- the lint must accept what they will accept.
+    s = copy.deepcopy(load_settings())
+    s.serving.providers["azure"].prompt_retention = "NONE"
+    s.serving.providers["azure"].accepts_raw_sensitive = " True "
+    assert lint_settings(s) == []

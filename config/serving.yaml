@@ -99,6 +99,21 @@ observability:
 
 # Provider *availability* (infra on/off) only. Tier membership is defined by the
 # pool in routing.yaml — the single source of truth for which model is which tier.
+# Each provider block may also declare the three P1b endpoint data-handling
+# defaults (design docs/superpowers/specs/2026-09-19-endpoint-data-handling-p1b-design.md
+# §2) — DECLARATIONS an operator records, never verified facts, and the
+# fallback for any onboarded row / model_pool entry that leaves the field
+# unset. All three are optional; a block naming none of them (every entry
+# below today) resolves to "unknown" at every level, exactly as before this
+# feature existed:
+#   region:                 a token, lowercased (e.g. us / eu / de / onprem).
+#                            Customer vocabulary — no enum, never lint-checked.
+#   prompt_retention:        none | retained | unknown
+#   accepts_raw_sensitive:   "true" | "false" | "unknown"   (a STRING token here —
+#                            the onboarding API/DB column is a JSON boolean instead)
+# Example (commented — does not change shipped behavior):
+#   azure: {enabled: false, litellm_prefix: azure, region: us, prompt_retention: none,
+#           accepts_raw_sensitive: "false"}
 providers:
   onprem:  {enabled: true,  litellm_prefix: openai,  api_key_env: SP_ONPREM_API_KEY}
   azure:   {enabled: false, litellm_prefix: azure,   api_base_env: AZURE_API_BASE, api_key_env: AZURE_API_KEY, api_version_env: AZURE_API_VERSION}

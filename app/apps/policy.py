@@ -48,6 +48,12 @@ class AppPolicyView:
     client_output: str | None = None          # None = inherit (policy_mode preset)
     content_integrity: str | None = None      # None = inherit (transformations_allowed)
     escalate_residency_on_detection: bool | None = None  # None = inherit (true)
+    # --- P1b app-side data-handling requirements (design doc §3). null = no
+    # constraint; resolved explicit-or-null by app/policy/compile.py (no
+    # preset, no deployment default -- unlike the P1a axes above). Narrows
+    # the candidate set only; never widens allowed_providers/onprem_only.
+    allowed_regions: frozenset[str] | None = None       # None = no regional constraint
+    require_no_retention: bool | None = None            # None = inherit (false)
 
     def version(self) -> str:
         """First 12 hex of sha256 over this app policy's decision-relevant
@@ -59,7 +65,8 @@ class AppPolicyView:
         pii_detection, the denylist, the score floor, the value-shape exempt
         patterns, a tier/model/provider allowlist, or (when set) one of the
         P1a data-handling axes (model_input, client_output, content_integrity,
-        escalate_residency_on_detection) -- all
+        escalate_residency_on_detection), or one of the P1b app-side
+        requirements (allowed_regions, require_no_retention) -- all
         mutated out-of-band via the admin API, which is exactly what makes a
         stale probe indistinguishable from a live one without this). Sorted-key
         JSON → stable across boots for equal policy. Mirrors
@@ -103,6 +110,11 @@ class AppPolicyView:
         if self.escalate_residency_on_detection is not None:
             fields["escalate_residency_on_detection"] = \
                 self.escalate_residency_on_detection
+        # P1b data-handling requirements: same "fold in only when set" rule.
+        if self.allowed_regions is not None:
+            fields["allowed_regions"] = sorted(self.allowed_regions)
+        if self.require_no_retention is not None:
+            fields["require_no_retention"] = self.require_no_retention
         blob = json.dumps(fields, sort_keys=True, default=str)
         return hashlib.sha256(blob.encode()).hexdigest()[:12]
 
@@ -138,6 +150,8 @@ def policy_view_from(app: Application) -> AppPolicyView:
         client_output=p.client_output,
         content_integrity=p.content_integrity,
         escalate_residency_on_detection=p.escalate_residency_on_detection,
+        allowed_regions=_fs(p.allowed_regions),
+        require_no_retention=p.require_no_retention,
     )
 
 

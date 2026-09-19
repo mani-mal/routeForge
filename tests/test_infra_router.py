@@ -35,11 +35,22 @@ async def _reg_with(rows):
     return reg
 
 
-def _ctx(providers, *, tenant_id="t", risk="low", onprem=False):
+def _eligible(pool, providers):
+    """The eligible set an app that narrows nothing gets: every candidate in
+    the pool whose provider is permitted. Exactly what `build_context` computes
+    (placement AND app scope, never the per-model registry gates -- those stay
+    the router's to report, which is what these tests assert). Stated because
+    `ctx.allowed_models` is binding on the router, with no flag that can turn
+    it off (app/policy/feasible.py)."""
+    return frozenset(c.name for c in pool if c.provider in providers)
+
+
+def _ctx(pool, providers, *, tenant_id="t", risk="low", onprem=False):
     return ExecutionPolicyContext(
         request_id="r", tenant_id=tenant_id, sensitivity="public",
         onprem_only=onprem, allowed_providers=frozenset(providers),
-        allowed_models=frozenset(), max_cost_usd=0.05, max_latency_ms=15000,
+        allowed_models=_eligible(pool, providers),
+        max_cost_usd=0.05, max_latency_ms=15000,
         risk_class=risk, require_verification=False, detected_entities=(),
         redaction_map_id=None)
 
@@ -54,7 +65,7 @@ def test_onprem_only_selects_onprem_candidate():
     # Residency filter: an onprem_only request only ever picks an on-prem model.
     reg = _run(_reg_with({"nem": _onprem("nem", tier="mid")}))
     d = Router(S, registry=reg).select(
-        _ctx({"onprem"}, onprem=True), tokens_after=20, complexity=0.9)
+        _ctx(reg.effective_pool(), {"onprem"}, onprem=True), tokens_after=20, complexity=0.9)
     assert d.chosen.provider == "onprem"
 
 
@@ -69,7 +80,7 @@ def test_disabled_onboarded_model_not_a_candidate():
         "off-cheap": _onprem("off-cheap", enabled=False),
         "on-cheap": _onprem("on-cheap")}))
     d = Router(S, registry=reg).select(
-        _ctx({"onprem"}, onprem=True), tokens_after=20, complexity=0.1)
+        _ctx(reg.effective_pool(), {"onprem"}, onprem=True), tokens_after=20, complexity=0.1)
     assert d.chosen.name != "off-cheap"
     assert all(rc.name != "off-cheap" for rc in d.rejected)
 
@@ -83,7 +94,7 @@ def test_app_scoped_model_rejected_for_other_app():
         "acme-only": _onprem("acme-only", allowed_app_ids=["acme"]),
         "open-cheap": _onprem("open-cheap")}))
     d = Router(S, registry=reg).select(
-        _ctx({"onprem"}, tenant_id="hospital", onprem=True),
+        _ctx(reg.effective_pool(), {"onprem"}, tenant_id="hospital", onprem=True),
         tokens_after=20, complexity=0.1)
     assert d.chosen.name != "acme-only"
     assert any(rc.name == "acme-only" and "not permitted" in rc.reason
@@ -94,7 +105,7 @@ def test_app_scoped_model_permitted_for_its_own_app():
     reg = _run(_reg_with({
         "acme-only": _onprem("acme-only", allowed_app_ids=["acme"])}))
     d = Router(S, registry=reg).select(
-        _ctx({"onprem"}, tenant_id="acme", onprem=True),
+        _ctx(reg.effective_pool(), {"onprem"}, tenant_id="acme", onprem=True),
         tokens_after=20, complexity=0.1)
     assert not any("not permitted" in rc.reason for rc in d.rejected)
 
@@ -117,8 +128,9 @@ def test_empty_registry_matches_no_registry():
     # needed) is equivalent to _reg_with({}) here and avoids rebuilding it
     # against the wrong settings object.
     reg = ModelRegistry(s)
+    every = {"onprem", "azure", "bedrock"}
     with_reg = Router(s, registry=reg).select(
-        _ctx({"onprem", "azure", "bedrock"}), tokens_after=20, complexity=0.1)
+        _ctx(reg.effective_pool(), every), tokens_after=20, complexity=0.1)
     without = Router(s).select(
-        _ctx({"onprem", "azure", "bedrock"}), tokens_after=20, complexity=0.1)
+        _ctx(s.routing.model_pool, every), tokens_after=20, complexity=0.1)
     assert with_reg.chosen.name == without.chosen.name

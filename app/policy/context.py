@@ -5,6 +5,19 @@ from typing import TYPE_CHECKING
 from app.config.schema import Settings
 from app.models import Entity, ExecutionPolicyContext
 from app.policy.compile import compile_policy, resolve_residency
+from app.policy.feasible import (  # noqa: F401  (re-exported: app/pipeline.py imports registry_permits from here)
+    APP_SCOPE,
+    DATA_HANDLING_HINTS,
+    MODEL_SCOPE,
+    REASON_DISABLED,
+    RESIDENCY,
+    DataHandling,
+    _ctx_scope,
+    _placement_providers,
+    candidate_rejection,
+    feasible_set,
+    registry_permits,
+)
 
 if TYPE_CHECKING:  # avoid importing the apps layer at module load
     from app.apps.policy import AppPolicyView
@@ -43,97 +56,58 @@ def match_sensitivity_rule(settings: Settings, app_rules: list | None,
     return _match_rule(rules, etypes)
 
 
-def _placement_providers(settings: Settings, residency: str,
-                         app_policy: "AppPolicyView | None",
-                         registry: "ModelRegistry | None") -> set[str]:
-    # Fail closed on a residency this function does not recognise. The `else`
-    # branch below is the loosest placement there is, so an unparseable value
-    # used to hand the request every enabled provider, cloud included, while
-    # `compile_policy` denied the very same value to `onprem_only` -- CLAUDE.md
-    # rules 3 and 5, and the defect the Task 10 harness found. Resolved through
-    # the compiler's own `resolve_residency` so the two cannot disagree. This
-    # is the second line of defence behind `build_context`'s (below); it is
-    # kept because `requestable_models` calls in here directly.
-    residency, _parsed = resolve_residency(residency)
-    enabled = {p for p, c in settings.serving.providers.items() if c.enabled}
-    # On-prem availability is derived from the registry, not a boot flag: with no
-    # healthy onboarded on-prem model, drop "onprem" from `enabled` so an
-    # onprem_only request resolves to an empty allowed set and is rejected
-    # downstream by the router's "no candidates after residency filter" path --
-    # never silently routed to cloud (CLAUDE.md backend rule; replaces the old
-    # inference_backend == "none" drop).
-    if registry is not None and not registry.has_healthy_onprem():
-        enabled = enabled - {"onprem"}
-    if residency == "onprem_only":
-        # onprem_only means exactly that: the only legal provider is "onprem",
-        # never derived from routing.model_pool membership (on-prem candidates
-        # are onboarded at runtime — the static YAML pool may have none —
-        # see registry-derived `enabled` drop above for actual availability).
-        allowed = enabled & {"onprem"}
-    else:
-        allowed = enabled  # private_cloud_ok and any both allow enabled cloud here
-
-    # Per-application narrowing (never widening): the app may permit only a
-    # subset of providers; models may be further limited by tier and by an
-    # explicit model allowlist. All null => no extra restriction.
-    if app_policy is not None and app_policy.allowed_providers is not None:
-        allowed = allowed & app_policy.allowed_providers
-    return allowed
-
-
-def _in_app_scope(c, allowed: set[str], app_policy: "AppPolicyView | None") -> bool:
-    if c.provider not in allowed:
-        return False
-    if app_policy is not None:
-        if (app_policy.allowed_tiers is not None
-                and c.tier not in app_policy.allowed_tiers):
-            return False
-        if (app_policy.allowed_models is not None
-                and c.name not in app_policy.allowed_models):
-            return False
-    return True
-
-
-def registry_permits(registry: "ModelRegistry | None", c, tenant_id: str) -> bool:
-    """Per-model registry gates on top of policy: an onboarded model restricted
-    to other apps, or a disabled on-prem row, is never requestable."""
-    if registry is None:
-        return True
-    return (registry.is_allowed_for_app(c.name, tenant_id)
-            and (c.provider != "onprem" or registry.is_enabled(c.name)))
-
-
 def pinned_model_reason(pool, ctx: ExecutionPolicyContext, registry: "ModelRegistry | None",
                         tenant_id: str, name: str) -> str:
-    """Which gate refused a pinned `model`, phrased as what to change."""
+    """Which gate refused a pinned `model`, phrased as what to change.
+
+    The gates themselves are `app/policy/feasible.py`'s, asked one candidate at
+    a time with no pin and nothing excluded, so this message can never describe
+    a filter the request did not actually hit.
+    """
     c = next((c for c in pool if c.name == name), None)
     not_found = "it is not onboarded, or is disabled (see GET /v1/models)"
     if c is None:
         return not_found
-    if c.provider not in ctx.allowed_providers:
+    rejection = candidate_rejection(
+        c, allowed_providers=ctx.allowed_providers, onprem_only=ctx.onprem_only,
+        in_scope=_ctx_scope(ctx), requested_model=None,
+        exclude=frozenset(), registry=registry, tenant_id=tenant_id,
+        data_handling=DataHandling.from_context(ctx))
+    if rejection is None:
+        return "it is disabled"
+    if rejection.code == RESIDENCY:
         return (f"provider {c.provider!r} is excluded by residency or the "
                 "application's allowed_providers")
-    if ctx.model_scope_active and name not in ctx.allowed_models:
+    # The data-handling rules (P1b design §4). Their own `reason` already names
+    # the requirement AND what the endpoint declared -- collapsing that into
+    # the generic "not permitted for application" below is exactly what this
+    # branch exists to prevent, since the two are fixed by different settings.
+    # The fix hint comes from `DATA_HANDLING_HINTS`, the same table the router
+    # explains a rejected candidate from, so one rule never gets two different
+    # instructions.
+    if rejection.code in DATA_HANDLING_HINTS:
+        return f"{rejection.reason} ({DATA_HANDLING_HINTS[rejection.code][1]})"
+    if rejection.code == APP_SCOPE:
         return "it is outside the application's allowed_tiers / allowed_models"
-    if registry is not None and not registry.is_allowed_for_app(name, tenant_id):
-        # Same text as an unknown slug: naming allowed_app_ids would disclose
-        # that a model scoped to another application exists (cross-tenant).
-        return not_found
-    return "it is disabled"
+    if rejection.code == MODEL_SCOPE and rejection.reason == REASON_DISABLED:
+        return "it is disabled"
+    # A model scoped to other applications gets the same text as an unknown
+    # slug: naming allowed_app_ids would disclose that a model scoped to
+    # another application exists (cross-tenant).
+    return not_found
 
 
 def requestable_models(settings: Settings, registry: "ModelRegistry | None",
                        tenant_id: str, app_policy: "AppPolicyView") -> list:
     """The pool candidates this application may pin as `model` on a request
-    that carries no sensitive data -- what GET /v1/models lists. Uses the same
-    placement, allowlist and registry rules as the pipeline's pinned-model
-    check. A request whose content escalates residency (e.g. an SSN under an
-    onprem_only rule) can narrow this further, never widen it."""
-    allowed = _placement_providers(settings, app_policy.residency, app_policy, registry)
-    pool = registry.effective_pool() if registry is not None else settings.routing.model_pool
-    return [c for c in pool
-            if _in_app_scope(c, allowed, app_policy)
-            and registry_permits(registry, c, tenant_id)]
+    that carries no sensitive data -- what GET /v1/models lists. The same one
+    filter the pipeline's pinned-model check and the router run
+    (`app/policy/feasible.py`), asked without a request: no pin, nothing
+    excluded, and the app's own stored residency rather than a per-request
+    escalation of it. A request whose content escalates residency (e.g. an SSN
+    under an onprem_only rule) can narrow this further, never widen it."""
+    return list(feasible_set(settings, registry, app_policy,
+                             tenant_id=tenant_id).eligible)
 
 
 def build_context(settings: Settings, request_id: str, tenant_id: str,
@@ -143,6 +117,7 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
                   registry: "ModelRegistry | None" = None,
                   escalate_residency: bool = True,
                   content_integrity: str | None = None,
+                  model_input: str | None = None,
                   ) -> ExecutionPolicyContext:
     """Step 3: the immutable ExecutionPolicyContext.
 
@@ -170,9 +145,16 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
     """
     etypes = {e.type for e in entities}
     rule = match_sensitivity_rule(settings, app_rules, etypes)
+    # One compile, read for whatever the caller did not already supply. The
+    # gate threads `content_integrity`/`model_input` in from the SAME
+    # `EffectivePolicy` every other consumer reads; `None` means "no caller
+    # supplied one", and the compiler is run here rather than the precedence
+    # being re-implemented.
+    eff = compile_policy(app_policy, settings)
     if content_integrity is None:
-        content_integrity = compile_policy(
-            app_policy, settings).protection.content_integrity
+        content_integrity = eff.protection.content_integrity
+    if model_input is None:
+        model_input = eff.protection.model_input
 
     # Residency: stricter of the entity rule and the application's own residency.
     # With a per-app policy we take residency from it (seeded to match
@@ -196,12 +178,64 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
     onprem_only = residency == "onprem_only"
     allowed = _placement_providers(settings, residency, app_policy, registry)
 
-    # Onboarded on-prem models never appear in the static YAML
-    # `settings.routing.model_pool` -- read the registry's merged pool when
-    # available, or every onboarded model would be silently excluded here
-    # regardless of the app's own allowed_tiers/allowed_models policy.
-    pool = registry.effective_pool() if registry is not None else settings.routing.model_pool
-    allowed_models = frozenset(c.name for c in pool if _in_app_scope(c, allowed, app_policy))
+    # The one eligibility filter (`app/policy/feasible.py`), given the placement
+    # this function has just resolved -- `_placement_providers` cannot re-derive
+    # it, because a detected entity may have TIGHTENED residency above the one
+    # the stored policy shows. There is no pin and nothing excluded here: both
+    # belong to a request, and the router applies them to this same filter.
+    # The app's COMPILED data-handling requirements (design §3), plus the one
+    # request-shaped condition rule 3 needs. "Would send raw sensitive content"
+    # is computed HERE and only here -- this is the one function holding both
+    # halves (the compiled `model_input` axis and the sensitivity the matched
+    # rule just assigned) -- and travels on the context as a single boolean, so
+    # the rule's condition exists in exactly one expression.
+    #
+    # `above public` is read off `policy.yaml`'s canonical
+    # `sensitivity_scale`, the same single source every other sensitivity
+    # comparison uses. A request that matched no entity rule is `public`, so it
+    # sends nothing sensitive and rule 3 cannot fire for it, however raw its
+    # `model_input` is.
+    scale = settings.policy.sensitivity_scale
+    above_public = (scale.index(rule.sensitivity) > 0
+                    if rule.sensitivity in scale else rule.sensitivity != "public")
+    # `detection == "off"` is the SECOND way to send raw sensitive content, and
+    # without it the rule was permanently inert for the one app class that by
+    # definition sends unredacted content. A `passthrough` app resolves to
+    # `model_input: raw` AND `detection: off`; with no detector nothing is ever
+    # detected, no sensitivity rule matches, `rule.sensitivity` is the
+    # `entities: []` fallback (`public`), and `above_public` is false forever.
+    # The endpoint that declared it will not accept raw sensitive content would
+    # have stayed eligible for exactly the requests it refused.
+    #
+    # An app that has declared it sends UNCLASSIFIED raw data cannot prove its
+    # content is public, and an endpoint that declared it will not accept raw
+    # sensitive content should not be handed content nobody has classified.
+    # This is the same fail-closed posture as "unknown never satisfies a
+    # requirement", applied to the request side rather than the endpoint's.
+    unclassified_raw = eff.protection.detection == "off"
+    data_handling = DataHandling(
+        allowed_regions=eff.allowed_regions,
+        require_no_retention=eff.require_no_retention,
+        sends_raw_sensitive=(model_input == "raw"
+                             and (above_public or unclassified_raw)))
+
+    feasible = feasible_set(settings, registry, app_policy, tenant_id=tenant_id,
+                            allowed_providers=frozenset(allowed),
+                            onprem_only=onprem_only,
+                            data_handling=data_handling)
+    # PLACEMENT and APP SCOPE only (the filter's stages 1 and 3) -- that is
+    # what `allowed_models` has always meant and what every consumer reads it
+    # as. Every other stage's rejections stay OUT of the subtraction, so each
+    # keeps its own, more specific operator-facing reason instead of being
+    # relabelled "not permitted for application" when the router re-applies
+    # this set: "disabled by admin" for a disabled row, a deliberately vague
+    # "unknown model" for one another application owns, and (from Task 4) the
+    # data-handling exclusions. A new stage added to the seam therefore needs
+    # no change here.
+    allowed_models = frozenset(
+        [c.name for c in feasible.eligible]
+        + [r.name for r in feasible.rejected
+           if r.code not in (RESIDENCY, APP_SCOPE)])
     model_scope_active = bool(
         app_policy is not None
         and (app_policy.allowed_tiers is not None
@@ -233,4 +267,11 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
         # `residency`/`rule` above, never folded into the placement decision.
         content_integrity=content_integrity,
         app_policy_version=(app_policy.version() if app_policy is not None else ""),
+        # Placement-ADJACENT requirements, carried so that every later consumer
+        # of this context (the router, the pinned-model check, the decision
+        # certificate's eligibility check) asks `app/policy/feasible.py` the
+        # SAME question this function just asked -- the seam's whole point.
+        allowed_regions=data_handling.allowed_regions,
+        require_no_retention=data_handling.require_no_retention,
+        sends_raw_sensitive=data_handling.sends_raw_sensitive,
     )

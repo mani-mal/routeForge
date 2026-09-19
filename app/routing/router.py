@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from app.config.schema import PoolCandidate, Settings
 from app.errors import NoEligibleCandidate
 from app.models import ExecutionPolicyContext, RejectedCandidate
+from app.policy.feasible import DATA_HANDLING_HINTS, feasible_set
 from app.routing.quality import QualityResolver
 from app.routing.strategy import RoutingStrategy, build_strategy
 
@@ -27,10 +28,28 @@ _FIX_HINTS = {
     "excluded · prior failure": "the model already failed on this request",
 }
 
+# P1b's data-handling reasons (app/policy/feasible.py stage 2) carry a
+# parameterised tail naming the requirement and what the endpoint declared, so
+# they cannot be exact keys above. Matched by PREFIX instead -- without this,
+# `_explain` falls back to repeating the whole reason string as its own hint.
+# The texts come from `DATA_HANDLING_HINTS`, shared with the pinned-model
+# explainer in app/policy/context.py so the two cannot drift apart.
+_FIX_HINT_PREFIXES = tuple(DATA_HANDLING_HINTS.values())
+
+
+def _fix_hint(reason: str) -> str:
+    hint = _FIX_HINTS.get(reason)
+    if hint is not None:
+        return hint
+    for prefix, prefix_hint in _FIX_HINT_PREFIXES:
+        if reason.startswith(prefix):
+            return prefix_hint
+    return reason
+
 
 def _explain(rejected) -> str:
     counts = Counter(r.reason for r in rejected)
-    return "; ".join(f"{n} {reason} ({_FIX_HINTS.get(reason, reason)})"
+    return "; ".join(f"{n} {reason} ({_fix_hint(reason)})"
                      for reason, n in counts.most_common())
 
 
@@ -88,58 +107,21 @@ class Router:
                output_tokens: int | None = None) -> RoutingDecision:
         out_tokens = (output_tokens if output_tokens is not None
                       else expected_output_tokens(self._s, None))
-        rejected: list[RejectedCandidate] = []
-        pool = self._reg.effective_pool() if self._reg else self._s.routing.model_pool
-
-        # 1. residency filter (residency beats everything below), then the
-        #    per-app scope filter and the admin disable-gate for on-prem
-        #    candidates that pass residency
-        allowed = []
-        for c in pool:
-            if c.provider not in ctx.allowed_providers:
-                reason = ("excluded · residency" if ctx.onprem_only
-                          else "not permitted for application")
-                rejected.append(RejectedCandidate(
-                    name=c.name, provider=c.provider, tier=c.tier,
-                    display_name=c.display_name, reason=reason))
-                continue
-            # Failure-driven lateral switch: drop a model the gateway already
-            # saw fail on this request. Placed AFTER the residency check so an
-            # excluded cloud model under onprem_only still reads "residency",
-            # never "prior failure" -- excluding a name only ever removes a
-            # candidate, so it can never weaken residency.
-            if c.name in exclude:
-                rejected.append(RejectedCandidate(
-                    name=c.name, provider=c.provider, tier=c.tier,
-                    display_name=c.display_name, reason="excluded · prior failure"))
-                continue
-            if ctx.model_scope_active and c.name not in ctx.allowed_models:
-                rejected.append(RejectedCandidate(
-                    name=c.name, provider=c.provider, tier=c.tier,
-                    display_name=c.display_name,
-                    reason="not permitted for application"))
-                continue
-            if ctx.requested_model is not None and c.name != ctx.requested_model:
-                rejected.append(RejectedCandidate(
-                    name=c.name, provider=c.provider, tier=c.tier,
-                    display_name=c.display_name, reason="not requested model"))
-                continue
-            if (self._reg is not None
-                    and not self._reg.is_allowed_for_app(c.name, ctx.tenant_id)):
-                rejected.append(RejectedCandidate(
-                    name=c.name, provider=c.provider, tier=c.tier,
-                    display_name=c.display_name,
-                    reason="not permitted for application"))
-                continue
-            if (c.provider == "onprem" and self._reg is not None
-                    and not self._reg.is_enabled(c.name)):
-                rejected.append(RejectedCandidate(
-                    name=c.name, provider=c.provider, tier=c.tier,
-                    display_name=c.display_name, reason="disabled by admin"))
-                continue
-            allowed.append(c)
+        # 1. eligibility: residency/placement, prior failures, the app's own
+        #    scope, the request's pinned model and the registry's per-model
+        #    gates. ONE authority for all of it (app/policy/feasible.py) --
+        #    this step used to re-derive the same decision the policy gate had
+        #    already made, and the two could disagree.
+        feasible = feasible_set(self._s, self._reg, ctx, tenant_id=ctx.tenant_id,
+                                exclude=exclude)
+        allowed = list(feasible.eligible)
+        rejected: list[RejectedCandidate] = [
+            RejectedCandidate(name=r.name, provider=r.provider, tier=r.tier,
+                              display_name=r.display_name, reason=r.reason,
+                              code=r.code)
+            for r in feasible.rejected]
         if not allowed:
-            if not pool:
+            if not feasible.rejected:   # nothing filtered because there was nothing
                 raise NoEligibleCandidate(
                     "no candidates after residency filter: the model pool is empty; "
                     "onboard a model (residency cannot be satisfied by an empty pool)")

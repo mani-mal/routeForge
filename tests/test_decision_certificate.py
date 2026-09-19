@@ -49,6 +49,10 @@ _CERT_KEYS = (
     "cross_axis_rules_fired", "detected_entity_types",
 )
 
+# P1b Task 6 (design §6): the registry version and the served endpoint's
+# declaration provenance, added to the same certificate.
+_P1B_CERT_KEYS = ("endpoint_registry_version", "endpoint_data_handling")
+
 
 def _settings():
     return load_settings()
@@ -94,6 +98,67 @@ def test_certificate_fields_present_on_response():
     assert p["cross_axis_rules_fired"] == []
 
 
+# --- P1b Task 6: registry version + endpoint declaration provenance (§6) ----
+
+def test_p1b_certificate_fields_present_on_response():
+    pipe = _pipeline(_settings())
+    out = _run(pipe, _BENIGN)
+    p = out["policy"]
+    for key in _P1B_CERT_KEYS:
+        assert key in p, f"{key!r} missing from response policy block"
+    v = p["endpoint_registry_version"]
+    assert isinstance(v, str) and len(v) == 12
+    int(v, 16)  # hex
+    # The registry version names the SAME registry `ModelRegistry.
+    # registry_version()` computes -- one authority, read here rather than
+    # re-derived.
+    assert v == pipe._reg.registry_version()
+
+
+def test_p1b_endpoint_data_handling_names_declaration_and_provenance():
+    """The certificate must be able to answer 'what did the decision rest
+    on' for the SERVED endpoint: its three declarations, and where each one
+    came from (model / provider_default / unknown) -- never a verified fact,
+    see design §2."""
+    pipe = _pipeline(_settings())
+    out = _run(pipe, _BENIGN)
+    dh = out["policy"]["endpoint_data_handling"]
+    assert set(dh) == {"region", "prompt_retention", "accepts_raw_sensitive", "source"}
+    assert set(dh["source"]) == {"region", "prompt_retention", "accepts_raw_sensitive"}
+    for field in ("region", "prompt_retention", "accepts_raw_sensitive"):
+        # provenance is one of the three the design defines
+        assert dh["source"][field] in ("model", "provider_default", "unknown")
+    # The seeded test registry (tests/_litellm_fake.py::make_test_registry)
+    # declares nothing for local-8b/local-32b, so every field here reads
+    # "unknown" with "unknown" provenance -- the normal, expected case for
+    # every endpoint that exists today (design §2).
+    assert dh == {
+        "region": "unknown", "prompt_retention": "unknown",
+        "accepts_raw_sensitive": "unknown",
+        "source": {"region": "unknown", "prompt_retention": "unknown",
+                   "accepts_raw_sensitive": "unknown"},
+    }
+
+
+def test_registry_version_changes_when_a_declaration_changes_end_to_end():
+    """The version differs the instant an operator edits an endpoint's
+    declared region -- a changed declaration becomes visible in the trace
+    rather than silent (design §6's whole point)."""
+    settings = _settings()
+    pipe_before = _pipeline(settings)
+    v_before = _run(pipe_before, _BENIGN)["policy"]["endpoint_registry_version"]
+
+    # Mutate the seeded registry's local-8b row in place (same object the
+    # pipeline already holds), the way an admin edit would.
+    reg = pipe_before._reg
+    row = reg._rows["local-8b"]
+    from dataclasses import replace
+    reg._rows["local-8b"] = replace(row, region="eu")
+
+    v_after = _run(pipe_before, _BENIGN)["policy"]["endpoint_registry_version"]
+    assert v_before != v_after
+
+
 # --- 2. cross_axis_rules_fired: named when it fires, empty when it doesn't --
 
 def test_cross_axis_rule_named_when_ssn_escalates_residency():
@@ -125,6 +190,14 @@ def test_no_raw_value_in_certificate():
     assert _SSN not in blob
     # The TYPE is exactly what should be there instead.
     assert "US_SSN" in blob
+    # P1b Task 6: the new fields carry model identities and DECLARATIONS
+    # (region/retention/raw-sensitive tokens, provenance labels) -- never
+    # prompt content. Asserted here rather than a parallel test, since this
+    # is already the one place the whole certificate is scanned for a leak.
+    assert "endpoint_registry_version" in out["policy"]
+    assert "endpoint_data_handling" in out["policy"]
+    dh_blob = json.dumps(out["policy"]["endpoint_data_handling"])
+    assert _SSN not in dh_blob
 
 
 # --- 4. `detection_mode` reports what RAN, not what was configured ----------
@@ -172,14 +245,30 @@ def test_certificate_detection_mode_names_the_detector_that_did_run():
 # --- eligibility checks: direct unit coverage of the fallback semantics -----
 
 def _ctx(**overrides) -> ExecutionPolicyContext:
+    # `allowed_models` carries BOTH seeded on-prem rows: since P1b Task 3 the
+    # eligibility seam honours `ctx.allowed_models` unconditionally (it is not
+    # gated on `model_scope_active`), so a context claiming a model was served
+    # while omitting it from `allowed_models` describes a request that could
+    # not have happened. `test_eligibility_checks_respects_model_scope` below
+    # narrows it back to one model to assert the scoping itself.
     base = dict(
         request_id="r", tenant_id="t", sensitivity="public", onprem_only=False,
         allowed_providers=frozenset({"onprem", "azure"}),
-        allowed_models=frozenset({"local-8b"}), model_scope_active=False,
+        allowed_models=frozenset({"local-8b", "local-32b"}),
+        model_scope_active=False,
         max_cost_usd=0.05, max_latency_ms=15000, risk_class="low",
         require_verification=False, detected_entities=(), redaction_map_id=None)
     base.update(overrides)
     return ExecutionPolicyContext(**base)
+
+
+def _checks_pipeline() -> Pipeline:
+    """`_eligibility_checks` asks `app/policy/feasible.py` -- the ONE
+    eligibility authority -- rather than re-deriving the rule inline, so it
+    needs the settings + registry a Pipeline holds. It is an instance method
+    for that reason; these tests build the same seeded pipeline the
+    end-to-end ones use."""
+    return _pipeline(_settings())
 
 
 def _rec(chosen, provider, **kw) -> DecisionRecord:
@@ -188,13 +277,13 @@ def _rec(chosen, provider, **kw) -> DecisionRecord:
 
 
 def test_eligibility_checks_no_chosen_hop_is_not_applicable():
-    checks = Pipeline._eligibility_checks(_ctx(), [])
+    checks = _checks_pipeline()._eligibility_checks(_ctx(), [])
     assert checks == {"chosen_in_eligible_set": None, "fallback_in_eligible_set": None}
 
 
 def test_eligibility_checks_single_eligible_hop():
     records = [_rec("local-8b", "onprem")]
-    checks = Pipeline._eligibility_checks(_ctx(), records)
+    checks = _checks_pipeline()._eligibility_checks(_ctx(), records)
     assert checks["chosen_in_eligible_set"] is True
     assert checks["fallback_in_eligible_set"] is None  # nothing to check -- no fallback
 
@@ -203,7 +292,7 @@ def test_eligibility_checks_flags_ineligible_served_model():
     """provider not in ctx.allowed_providers -- would be a real policy
     violation if it ever happened; the certificate must be able to say so."""
     records = [_rec("cloud-x", "bedrock")]
-    checks = Pipeline._eligibility_checks(_ctx(), records)
+    checks = _checks_pipeline()._eligibility_checks(_ctx(), records)
     assert checks["chosen_in_eligible_set"] is False
 
 
@@ -215,23 +304,23 @@ def test_eligibility_checks_fallback_all_eligible():
         _rec("local-8b", "onprem"),
         _rec("local-32b", "onprem"),
     ]
-    checks = Pipeline._eligibility_checks(_ctx(), records)
+    checks = _checks_pipeline()._eligibility_checks(_ctx(), records)
     assert checks["chosen_in_eligible_set"] is True   # the SERVED (last) hop
     assert checks["fallback_in_eligible_set"] is True  # the earlier hop too
 
 
 def test_eligibility_checks_fallback_flags_an_ineligible_earlier_hop():
     records = [_rec("cloud-x", "bedrock"), _rec("local-8b", "onprem")]
-    checks = Pipeline._eligibility_checks(_ctx(), records)
+    checks = _checks_pipeline()._eligibility_checks(_ctx(), records)
     assert checks["chosen_in_eligible_set"] is True    # served hop is fine
     assert checks["fallback_in_eligible_set"] is False  # the one before it wasn't
 
 
 def test_eligibility_checks_respects_model_scope():
     ctx = _ctx(model_scope_active=True, allowed_models=frozenset({"local-8b"}))
-    ok = Pipeline._eligibility_checks(ctx, [_rec("local-8b", "onprem")])
+    ok = _checks_pipeline()._eligibility_checks(ctx, [_rec("local-8b", "onprem")])
     assert ok["chosen_in_eligible_set"] is True
-    out_of_scope = Pipeline._eligibility_checks(ctx, [_rec("local-32b", "onprem")])
+    out_of_scope = _checks_pipeline()._eligibility_checks(ctx, [_rec("local-32b", "onprem")])
     assert out_of_scope["chosen_in_eligible_set"] is False
 
 
@@ -261,6 +350,16 @@ def _cert_sample():
             "sensitivity": "restricted", "onprem_only": True,
             "allowed_providers": ["onprem"], "detected_entities": ["US_SSN"],
             "app_policy_version": "abc123",
+            # P1b Task 6 (design §6): the registry this decision was made
+            # against, and the served endpoint's declared data handling +
+            # provenance -- model identities/enums only, never raw content.
+            "endpoint_registry_version": "def456abc123",
+            "endpoint_data_handling": {
+                "region": "onprem", "prompt_retention": "none",
+                "accepts_raw_sensitive": "true",
+                "source": {"region": "model", "prompt_retention": "model",
+                          "accepts_raw_sensitive": "provider_default"},
+            },
             "placement": "onprem_only",
             "placement_sources": ["app_policy", "rule:restricted"],
             "model_input_mode": "redact", "client_output_mode": "redact",
@@ -293,9 +392,16 @@ def test_export_stamps_the_certificate_and_leaks_no_raw_value(mem_provider):
     assert root.attributes["sp.detected_entity_types"] == "US_SSN"
     checks = json.loads(root.attributes["sp.checks"])
     assert checks == {"chosen_in_eligible_set": True, "fallback_in_eligible_set": None}
+    # P1b Task 6: the registry version and the served endpoint's declared
+    # data handling + provenance ride the same certificate channel.
+    assert root.attributes["sp.endpoint_registry_version"] == "def456abc123"
 
     # No raw value anywhere on ANY span this export produced -- the planted
     # SSN lived only in the (unrelated, already-covered) trace reason text.
+    # This also covers the P1b additions above: model identities
+    # ("onprem"/"none"/"true"/"model"/"provider_default") and the registry
+    # hash are exactly what may appear here, and none of it is prompt
+    # content.
     blob = "".join(str(dict(s.attributes)) + s.name for s in spans)
     assert _SSN not in blob
 
@@ -311,3 +417,4 @@ def test_export_omits_checks_when_absent(mem_provider):
     root = next(s for s in mem_provider.get_finished_spans() if s.name == "serving.request")
     assert "sp.checks" not in root.attributes
     assert "sp.placement" not in root.attributes
+    assert "sp.endpoint_registry_version" not in root.attributes

@@ -76,3 +76,23 @@ def test_boot_survives_serving_yaml_without_policy_mode_keys(tmp_path, monkeypat
     s = load_settings(config_dir=str(tmp_path))  # must not raise
     assert s.serving.default_policy_mode == "enforced"
     assert s.serving.allow_app_passthrough is True
+
+
+# --- P1b: endpoint data-handling declarations (design §2/§7) -----------------
+
+def test_shipped_config_declares_no_data_handling_keys():
+    # The shipped YAMLs carry only COMMENTED examples (design §7) -- no
+    # provider default and no model_pool entry declares region /
+    # prompt_retention / accepts_raw_sensitive. Every field resolves to
+    # None on the raw (unresolved) PoolCandidate/ProviderCfg; the upgrade
+    # -safety property this pins is that a config with none of the new keys
+    # boots and behaves exactly as it did before P1b.
+    s = load_settings()
+    for pname, pcfg in s.serving.providers.items():
+        assert pcfg.region is None, pname
+        assert pcfg.prompt_retention is None, pname
+        assert pcfg.accepts_raw_sensitive is None, pname
+    for c in s.routing.model_pool:
+        assert c.region is None, c.name
+        assert c.prompt_retention is None, c.name
+        assert c.accepts_raw_sensitive is None, c.name

@@ -105,7 +105,12 @@ class _Scripted(_DeterministicLiteLLM):
 
 def _gw_run(backend, reg):
     gw = Gateway(S, backend, Router(S, registry=reg), reg)
-    return asyncio.run(gw.run(_ctx({"onprem"}, onprem=True),
+    # `_ctx` (tests/test_gateway_lateral_failover.py) takes the registry first:
+    # it derives `allowed_models` from that registry's own pool, because
+    # `ctx.allowed_models` is binding on the router with no flag that can turn
+    # it off (P1b Task 3, app/policy/feasible.py). This call site kept the old
+    # two-argument shape after that change.
+    return asyncio.run(gw.run(_ctx(reg, {"onprem"}, onprem=True),
                               [Message(role="user", content="hello")], 20, 0.1, {}))
 
 

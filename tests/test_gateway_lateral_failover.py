@@ -69,11 +69,20 @@ class _FailForModels(_DeterministicLiteLLM):
         return await super().generate(model, messages, price, tier, {})
 
 
-def _ctx(providers, *, onprem: bool = False, risk: str = "low",
+def _ctx(reg, providers, *, onprem: bool = False, risk: str = "low",
          max_cost: float = 0.05) -> ExecutionPolicyContext:
+    providers = frozenset(providers)
     return ExecutionPolicyContext(
         request_id="r", tenant_id="t", sensitivity="public", onprem_only=onprem,
-        allowed_providers=frozenset(providers), allowed_models=frozenset(),
+        allowed_providers=providers,
+        # The eligible set these tests have always assumed: an app that narrows
+        # nothing, so every pool candidate whose provider is permitted is a
+        # candidate -- what `build_context` computes for such an app. Stated
+        # because `ctx.allowed_models` is binding on the router, with no flag
+        # that can turn it off (app/policy/feasible.py). The failover exclusion
+        # set is applied by the router on top of it, not folded in here.
+        allowed_models=frozenset(c.name for c in reg.effective_pool()
+                                 if c.provider in providers),
         max_cost_usd=max_cost, max_latency_ms=15000, risk_class=risk,
         require_verification=False, detected_entities=(), redaction_map_id=None)
 
@@ -92,7 +101,7 @@ def test_onprem_only_lateral_peer_chosen_cloud_never_called():
     # cloud model may ever be called.
     reg = _reg({"onprem-a": _onprem("onprem-a"), "onprem-b": _onprem("onprem-b")})
     backend = _FailForModels(S, {"onprem-a"})
-    result, records = _run(backend, _ctx({"onprem"}, onprem=True), reg)
+    result, records = _run(backend, _ctx(reg, {"onprem"}, onprem=True), reg)
     chosen = next(r for r in records if r.step == "router")
     assert chosen.chosen == "onprem-b"
     assert chosen.chosen_provider == "onprem"
@@ -107,7 +116,7 @@ def test_onprem_only_all_peers_fail_raises_never_cloud():
     reg = _reg({"onprem-a": _onprem("onprem-a"), "onprem-b": _onprem("onprem-b")})
     backend = _FailForModels(S, {"onprem-a", "onprem-b"})
     with pytest.raises(BackendUnavailable):
-        _run(backend, _ctx({"onprem"}, onprem=True), reg)
+        _run(backend, _ctx(reg, {"onprem"}, onprem=True), reg)
     assert set(backend.calls) <= {"onprem-a", "onprem-b"}
     assert not any(m.startswith("azure") or m.startswith("bedrock")
                    for m in backend.calls)
@@ -122,7 +131,7 @@ def test_lateral_switch_stays_in_tier():
                 "onprem-b": _onprem("onprem-b"),
                 "onprem-mid": _onprem("onprem-mid", tier="mid")})
     backend = _FailForModels(S, {"onprem-a"})
-    result, records = _run(backend, _ctx({"onprem"}, onprem=True), reg)
+    result, records = _run(backend, _ctx(reg, {"onprem"}, onprem=True), reg)
     chosen = next(r for r in records if r.step == "router")
     assert chosen.chosen == "onprem-b"
     assert chosen.chosen_tier == "cheap"
@@ -138,7 +147,7 @@ def test_escalates_to_next_tier_when_cheap_tier_exhausted():
                 "onprem-b": _onprem("onprem-b"),
                 "onprem-mid": _onprem("onprem-mid", tier="mid")})
     backend = _FailForModels(S, {"onprem-a", "onprem-b"})
-    result, records = _run(backend, _ctx({"onprem"}, onprem=True), reg)
+    result, records = _run(backend, _ctx(reg, {"onprem"}, onprem=True), reg)
     chosen = next(r for r in records if r.step == "router")
     assert chosen.chosen == "onprem-mid"
     assert chosen.chosen_tier == "mid"
@@ -156,7 +165,7 @@ def test_bounded_by_max_failover_attempts():
     backend = _FailForModels(S, {"onprem-a", "onprem-b", "onprem-mid"})
     assert S.routing.max_failover_attempts == 2
     with pytest.raises(BackendUnavailable):
-        _run(backend, _ctx({"onprem"}, onprem=True), reg)
+        _run(backend, _ctx(reg, {"onprem"}, onprem=True), reg)
     assert len(backend.calls) == 3
 
 
@@ -169,7 +178,7 @@ def test_zero_max_failover_makes_single_failure_terminal():
     gw = Gateway(s, backend, Router(s, registry=reg), reg)
     msgs = [Message(role="user", content="hello")]
     with pytest.raises(BackendUnavailable):
-        asyncio.run(gw.run(_ctx({"onprem"}, onprem=True), msgs, 20, 0.1, {}))
+        asyncio.run(gw.run(_ctx(reg, {"onprem"}, onprem=True), msgs, 20, 0.1, {}))
     assert len(backend.calls) == 1
 
 
@@ -179,7 +188,7 @@ def test_everything_failing_raises_backend_unavailable():
     reg = _reg({"onprem-a": _onprem("onprem-a")})
     backend = _FailForModels(S, {"onprem-a"})
     with pytest.raises(BackendUnavailable):
-        _run(backend, _ctx({"onprem"}, onprem=True), reg)
+        _run(backend, _ctx(reg, {"onprem"}, onprem=True), reg)
 
 
 # --- Invariant 6: trace completeness --------------------------------------
@@ -187,7 +196,7 @@ def test_everything_failing_raises_backend_unavailable():
 def test_each_failed_attempt_emits_its_own_decision_record():
     reg = _reg({"onprem-a": _onprem("onprem-a"), "onprem-b": _onprem("onprem-b")})
     backend = _FailForModels(S, {"onprem-a"})
-    result, records = _run(backend, _ctx({"onprem"}, onprem=True), reg)
+    result, records = _run(backend, _ctx(reg, {"onprem"}, onprem=True), reg)
     failures = [r for r in records if r.step == "gateway" and r.chosen is None]
     assert len(failures) == 1
     assert "failed" in failures[0].reason
@@ -200,6 +209,6 @@ def test_each_failed_attempt_emits_its_own_decision_record():
 def test_success_first_try_no_failover_records():
     reg = _reg({"onprem-a": _onprem("onprem-a"), "onprem-b": _onprem("onprem-b")})
     backend = _FailForModels(S, set())
-    result, records = _run(backend, _ctx({"onprem"}, onprem=True), reg)
+    result, records = _run(backend, _ctx(reg, {"onprem"}, onprem=True), reg)
     assert len(backend.calls) == 1
     assert not any(r.step == "gateway" and r.chosen is None for r in records)

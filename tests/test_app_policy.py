@@ -250,3 +250,43 @@ def test_setting_an_axis_changes_the_version_hash():
     b = AppPolicyView(residency="any", policy_mode="enforced",
                       client_output="raw").version()
     assert a != b
+
+
+# --- P1b requirements: the two new columns (design doc §3) -------------------
+
+def test_new_requirement_columns_default_to_none_and_do_not_change_the_version_hash():
+    before = AppPolicyView(residency="any", policy_mode="enforced").version()
+    after = AppPolicyView(residency="any", policy_mode="enforced",
+                          allowed_regions=None, require_no_retention=None).version()
+    assert before == after
+
+
+def test_setting_a_requirement_changes_the_version_hash():
+    base = AppPolicyView(residency="any", policy_mode="enforced").version()
+    regions = AppPolicyView(residency="any", policy_mode="enforced",
+                            allowed_regions=frozenset({"us"})).version()
+    retention = AppPolicyView(residency="any", policy_mode="enforced",
+                              require_no_retention=True).version()
+    assert base != regions
+    assert base != retention
+    assert regions != retention
+
+
+def test_requirements_cannot_widen_anything():
+    """No value of either column may add a provider or model that residency,
+    the app allowlists or the registry had excluded. Task 2 wires no
+    enforcement yet (Tasks 3-5 own it), so today the candidate set a
+    requirement produces must be IDENTICAL to the same app without it -- a
+    strict subset is what Tasks 3-5 turn this into; this pins that it can
+    never go the other way."""
+    base = AppPolicyView(residency="onprem_only",
+                         allowed_providers=frozenset({"onprem"}))
+    narrowed = AppPolicyView(residency="onprem_only",
+                             allowed_providers=frozenset({"onprem"}),
+                             allowed_regions=frozenset({"us"}),
+                             require_no_retention=True)
+    ctx_base = _ctx(base)
+    ctx_narrowed = _ctx(narrowed)
+    assert set(ctx_narrowed.allowed_providers) <= set(ctx_base.allowed_providers)
+    assert set(ctx_narrowed.allowed_models) <= set(ctx_base.allowed_models)
+    assert ctx_narrowed.onprem_only == ctx_base.onprem_only

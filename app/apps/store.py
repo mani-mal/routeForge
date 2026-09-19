@@ -244,7 +244,8 @@ POLICY_FIELDS: frozenset[str] = frozenset({
     "policy_mode", "pii_detection", "stream_mode",
     "pii_entity_denylist", "pii_score_threshold", "pii_exempt_patterns",
     "model_input", "client_output", "content_integrity",
-    "escalate_residency_on_detection"})
+    "escalate_residency_on_detection",
+    "allowed_regions", "require_no_retention"})
 
 
 async def upsert_policy(session: AsyncSession, app_id: str, **fields) -> AppPolicy:
@@ -490,7 +491,8 @@ async def load_quality_overrides(session: AsyncSession) -> dict[str, tuple[float
 _ONBOARDED_FIELDS = {
     "display_name", "provider", "tier", "quality", "price_input",
     "price_output", "endpoint", "api_key_env", "context_window", "enabled",
-    "allowed_app_ids", "probe_status", "probe_error", "notes"}
+    "allowed_app_ids", "probe_status", "probe_error", "notes",
+    "region", "prompt_retention", "accepts_raw_sensitive"}
 
 
 async def list_onboarded(session: AsyncSession) -> list[OnboardedModel]:

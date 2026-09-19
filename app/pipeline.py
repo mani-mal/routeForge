@@ -6,7 +6,7 @@ import time
 from typing import AsyncIterator, Callable, TYPE_CHECKING
 
 from app.cache.store import CacheEntry, DeterministicSemanticCache
-from app.config.schema import ContextOptimizationCfg, Settings
+from app.config.schema import ContextOptimizationCfg, PoolCandidate, Settings
 from app.errors import PolicyGateError
 from app.gateway.backends.base import count_tokens
 from app.gateway.gateway import Gateway
@@ -17,7 +17,8 @@ from app.models import (
 )
 from app.output.verify import egress_detector, verify
 from app.policy.compile import APP_SOURCE, EffectivePolicy, compile_policy
-from app.policy.context import pinned_model_reason, registry_permits
+from app.policy.context import pinned_model_reason
+from app.policy.feasible import feasible_set
 from app.policy.detectors import Detector, detection_ran, make_detector
 from app.policy.effective import EffectiveDetector, FilteredDetector
 from app.policy.gate import Gate, Representations, redact_tool_calls_with_entities
@@ -255,7 +256,8 @@ class Pipeline:
 
     @staticmethod
     def _certificate(eff: EffectivePolicy, ctx: ExecutionPolicyContext,
-                     det: Detector) -> dict:
+                     det: Detector, endpoint_registry_version: str,
+                     endpoint_data_handling: dict) -> dict:
         """The per-axis fields of the decision certificate (design P1a §6)
         common to every response shape. Reads straight off the already-
         compiled `eff` (placement + protection + the cross-axis rules that
@@ -293,7 +295,18 @@ class Pipeline:
         (which stamps the matching `sp.*` attributes) -- one dict, two
         channels, so they can never disagree (the same pattern
         `policy_mode`/`content_integrity_mode` already use).
-        """
+
+        `endpoint_registry_version` and `endpoint_data_handling` (P1b design
+        §6) are computed by the caller (`_endpoint_registry_version`,
+        `_endpoint_declaration` below) rather than here, because they need
+        `self._reg`/`self._pool()` and this method stays a `@staticmethod` --
+        the same reason `eff`/`ctx`/`det` are handed in rather than
+        recomputed. `endpoint_registry_version` names the registry this
+        decision was made against (an edited endpoint declaration becomes
+        visible as a changed hash, not silent); `endpoint_data_handling`
+        names what the SERVED endpoint declared and where each of the three
+        values came from (model / provider_default / unknown) -- a
+        declaration, never a verified fact (design §2)."""
         ran = detection_ran(det)
         return {
             "placement": eff.placement.residency,
@@ -308,22 +321,97 @@ class Pipeline:
             # own field name for it) -- both stay TYPES only, never values;
             # see `ExecutionPolicyContext.detected_entities`.
             "detected_entity_types": list(ctx.detected_entities),
+            # P1b Task 6 additions (design §6) -- see docstring above.
+            "endpoint_registry_version": endpoint_registry_version,
+            "endpoint_data_handling": endpoint_data_handling,
         }
 
-    @staticmethod
-    def _eligible_candidate(ctx: ExecutionPolicyContext, name: str | None,
+    def _endpoint_registry_version(self) -> str:
+        """`ModelRegistry.registry_version()`, or `""` with no registry (the
+        internal/direct-pipeline paths that never construct one) -- mirrors
+        `ctx.app_policy_version`'s empty-string default for "not applicable"
+        rather than fabricating a hash over nothing."""
+        return self._reg.registry_version() if self._reg is not None else ""
+
+    def _endpoint_declaration(self, candidate: PoolCandidate | None) -> dict:
+        """The served endpoint's three P1b declarations plus their
+        provenance, read straight off the already-RESOLVED `PoolCandidate`
+        (`ModelRegistry.effective_pool()` is the one place that resolves
+        them -- see `app/apps/registry.py`) -- never re-derived here.
+        `candidate is None` only when the model can't be found in `_pool()`
+        (unreachable on a served response; defensive), and reads as
+        "unknown" all round rather than raising out of a certificate build."""
+        if candidate is None:
+            return {"region": "unknown", "prompt_retention": "unknown",
+                    "accepts_raw_sensitive": "unknown",
+                    "source": {"region": "unknown", "prompt_retention": "unknown",
+                              "accepts_raw_sensitive": "unknown"}}
+        return {
+            "region": candidate.region,
+            "prompt_retention": candidate.prompt_retention,
+            "accepts_raw_sensitive": candidate.accepts_raw_sensitive,
+            "source": dict(candidate.data_handling_source or {}),
+        }
+
+    def _candidate_by_name(self, name: str) -> PoolCandidate | None:
+        """The resolved `PoolCandidate` for a served model name, looked up
+        against the same merged pool `_pool()` -- shared with
+        `_display_name`'s and the cache STORE hook's provider resolution
+        (see `_pool`'s docstring), so this is a third reader of the one
+        lookup rather than a new one."""
+        return next((c for c in self._pool() if c.name == name), None)
+
+    def _eligible_now(self, ctx: ExecutionPolicyContext,
+                      name: str) -> PoolCandidate | None:
+        """The candidate called `name` in THIS request's own eligible set, or
+        None if this request may not reach it.
+
+        Asked of `app/policy/feasible.py` -- the one authority -- rather than
+        re-implemented here. It used to be an inline expression in
+        `_eligible_candidate` (`provider in ctx.allowed_providers and (not
+        ctx.model_scope_active or name in ctx.allowed_models)`), which is a
+        second copy of the eligibility rule and drifted the instant a new
+        stage was added: P1b's data-handling exclusions are deliberately kept
+        IN `ctx.allowed_models` so each keeps its own specific reason (see
+        `build_context`), so that expression would have read a
+        data-handling-EXCLUDED model as eligible.
+
+        Returns the candidate, not a bool, because the semantic-cache path
+        needs its `provider` too and one traversal of the effective pool
+        should answer both questions.
+
+        **Matches by NAME only, and every caller pairs it with a provider
+        comparison** (`_eligible_candidate` below; both semantic-cache
+        guards). The name is the routing identity everywhere else in the
+        system -- `Router.select`'s `exclude` set, `ModelRegistry.price_for`,
+        `is_enabled` and `is_allowed_for_app` all key on it alone, and
+        `effective_pool()` is expected to carry each slug once. That
+        expectation is not enforced anywhere, though: the pool is the YAML
+        cloud entries UNION the enabled onboarded rows, so one slug could in
+        principle appear under two providers. Comparing the provider at each
+        call site costs nothing and means a same-slug collision degrades to a
+        refusal rather than to an unchecked match.
+
+        No `exclude` is passed: a hop the gateway fell back PAST was eligible
+        when it was chosen, and the prior-failure stage is about what may be
+        tried NEXT, not about what was legitimately served.
+        """
+        feasible = feasible_set(self._s, self._reg, ctx, tenant_id=ctx.tenant_id)
+        return next((c for c in feasible.eligible if c.name == name), None)
+
+    def _eligible_candidate(self, ctx: ExecutionPolicyContext, name: str | None,
                             provider: str | None) -> bool:
         """Was this (name, provider) pair drawn from THIS request's own
-        eligible set -- `ctx.allowed_providers` narrowed by
-        `ctx.allowed_models` when the app scopes tiers/models? The single
-        predicate `_eligibility_checks` and the cache-hit path both check
-        against; never a re-derivation of the router's own scoring, only a
-        check of its output against the policy context that bounded it."""
-        return bool(provider in ctx.allowed_providers
-                    and (not ctx.model_scope_active or name in ctx.allowed_models))
+        eligible set? The single predicate `_eligibility_checks` checks the
+        gateway's hops against; never a re-derivation of the router's own
+        scoring, only a check of its output against the policy that bounded
+        it."""
+        if name is None or provider is None:
+            return False
+        cand = self._eligible_now(ctx, name)
+        return cand is not None and cand.provider == provider
 
-    @classmethod
-    def _eligibility_checks(cls, ctx: ExecutionPolicyContext,
+    def _eligibility_checks(self, ctx: ExecutionPolicyContext,
                             records: list[DecisionRecord]) -> dict:
         """`sp.checks` (design §6): the one per-request proof the certificate
         offers -- that the model(s) the gateway actually used were drawn from
@@ -342,11 +430,11 @@ class Pipeline:
             return {"chosen_in_eligible_set": None, "fallback_in_eligible_set": None}
         served = chosen_hops[-1]
         fallback_ok = (
-            all(cls._eligible_candidate(ctx, r.chosen, r.chosen_provider)
+            all(self._eligible_candidate(ctx, r.chosen, r.chosen_provider)
                 for r in chosen_hops[:-1])
             if len(chosen_hops) > 1 else None)
         return {
-            "chosen_in_eligible_set": cls._eligible_candidate(
+            "chosen_in_eligible_set": self._eligible_candidate(
                 ctx, served.chosen, served.chosen_provider),
             "fallback_in_eligible_set": fallback_ok,
         }
@@ -451,7 +539,31 @@ class Pipeline:
         detector and its real `client_output` -- selecting one here would be a
         second copy of that rule, and a cached answer that bypassed (or
         gratuitously applied) egress redaction is precisely the drift the
-        single `verify()` decision exists to prevent."""
+        single `verify()` decision exists to prevent.
+
+        The caller applies the SAME eligibility guard before calling (so the
+        trace can name the refusal); this repeats it because `_serve_from_cache`
+        is the function that actually hands cached text to a client, and an
+        eligibility check that lives only in its caller is one refactor away
+        from being skipped."""
+        # Second guard (P1b design §5/§12): a cache hit bypasses the router
+        # entirely, so nothing else on this path re-applies the request's own
+        # eligible set. An entry produced by an endpoint THIS request may not
+        # reach -- a region the app now excludes, a provider residency now
+        # forbids, a model dropped from `allowed_models` since it was cached --
+        # is a MISS, not a served response with an honest certificate saying it
+        # should not have been sent. Checked against the eligible set rather
+        # than folded into the cache's partition key: the key cannot know about
+        # `allowed_models` or the three data-handling declarations, and a key
+        # drifts out of date the moment a rule is added, where this cannot.
+        served = self._eligible_now(ctx, entry.model)
+        if served is None or served.provider != entry.provider:
+            # The provider comparison is not redundant with the name match:
+            # `CacheEntry` self-describes the provider that PRODUCED the text
+            # (the same field C3's residency re-check reads), so if the slug
+            # now resolves to a different provider the cached answer came from
+            # somewhere this request never evaluated. See `_eligible_now`.
+            return None
         text, vrec = verify(det, ctx, entry.response_text,
                             client_output=client_output)
         if not vrec.passed:
@@ -472,16 +584,15 @@ class Pipeline:
             blocked_cloud_entries=self._cache.blocked_cloud_entries,
             latency_ms=check_latency_ms)
         trace = [vrec.model_dump(), cache_rec.model_dump()]
-        # No router ran this request (the cache short-circuits it) -- there is
-        # no "fallback" to check, but the SERVED (cached) model's provider is
-        # still checked against this request's CURRENT eligible set, since a
-        # policy that has since narrowed must not let an old cached answer
-        # read as compliant when it no longer would be chosen fresh.
-        provider = next(
-            (c.provider for c in self._pool() if c.name == entry.model), None)
+        # No router ran this request (the cache short-circuits it) -- so there
+        # is no "fallback" to check, and `chosen_in_eligible_set` is True by
+        # CONSTRUCTION rather than by measurement: the guard at the top of this
+        # function returned a miss for any other answer. It stays in the
+        # certificate (an auditor reads one shape for every served response,
+        # cached or routed) and it stays honest, because the only path that
+        # reaches here is the one that just proved it.
         checks = {
-            "chosen_in_eligible_set": self._eligible_candidate(
-                ctx, entry.model, provider),
+            "chosen_in_eligible_set": True,
             "fallback_in_eligible_set": None,
         }
         return {
@@ -513,7 +624,12 @@ class Pipeline:
                        # `ExecutionPolicyContext.content_integrity`.
                        "content_integrity_mode": ctx.content_integrity,
                        # Task 9: the decision certificate (design §6).
-                       **self._certificate(eff, ctx, det),
+                       # `served` is the ALREADY-RESOLVED PoolCandidate the
+                       # eligibility re-check above looked up (P1b Task 6):
+                       # reuse it rather than looking `entry.model` up again.
+                       **self._certificate(
+                           eff, ctx, det, self._endpoint_registry_version(),
+                           self._endpoint_declaration(served)),
                        "checks": checks},
             "sanitized_prompt": sanitized,
             # No raw/pre-verify text exists for a cache hit (no model call ran
@@ -577,12 +693,17 @@ class Pipeline:
         model_text = reps.text_raw if eff.protection.model_input == "raw" else sanitized
         if ctx.requested_model is not None:
             pool = self._reg.effective_pool() if self._reg else self._s.routing.model_pool
-            permitted = {
-                c.name for c in pool
-                if c.provider in ctx.allowed_providers
-                and (not ctx.model_scope_active or c.name in ctx.allowed_models)
-                and registry_permits(self._reg, c, tenant_id)
-            }
+            # Asked of `app/policy/feasible.py`, not re-derived. The inline set
+            # this replaced was a second authority over eligibility: it gated
+            # app scope on `model_scope_active` (so a context-side rule was
+            # ignored for every app that set no allowlist) and knew nothing of
+            # P1b's data-handling stage, so a pinned model excluded for its
+            # region read the generic "not permitted for application" instead
+            # of the rule that actually refused it. `ctx.requested_model` is
+            # already set, so the seam's own pin stage leaves exactly the
+            # pinned candidate eligible when it survives every other stage.
+            permitted = {c.name for c in feasible_set(
+                self._s, self._reg, ctx, tenant_id=tenant_id).eligible}
             if ctx.requested_model not in permitted:
                 raise PipelineRejected(
                     f"requested model {ctx.requested_model!r} is not permitted or "
@@ -680,6 +801,21 @@ class Pipeline:
                     log.exception("semantic cache lookup failed (swallowed); "
                                   "serving normally")
                 check_latency_ms = (time.monotonic() - t0) * 1000
+                # P1b design §5/§12: an entry whose model is not in THIS
+                # request's eligible set is a MISS. Checked here, ahead of the
+                # re-verify, so the trace can NAME the refusal (an operator
+                # seeing a stubborn miss needs to know an entry existed and why
+                # it was refused) and so the detector never runs over text that
+                # was never servable. `_serve_from_cache` repeats the check --
+                # it is the function that hands cached text to a client.
+                refused: str | None = None
+                if entry is not None:
+                    # Name AND provider -- the entry self-describes the
+                    # provider that produced it; see `_eligible_now`.
+                    cand = self._eligible_now(ctx, entry.model)
+                    if cand is None or cand.provider != entry.provider:
+                        refused = "entry_not_in_eligible_set"
+                        entry = None
                 if entry is not None:
                     # C4 KEYSTONE: re-verify with the CURRENT request's
                     # detector/ctx before ever serving cached text. A failed
@@ -690,8 +826,13 @@ class Pipeline:
                         client_output, check_latency_ms, eff)
                     if hit_resp is not None:
                         return hit_resp
+                # `refused` is recorded on the trace but deliberately NOT
+                # assigned to `cache_bypass_reason`: that variable also gates
+                # the STORE below, and this request's own (eligible) answer is
+                # exactly the entry worth caching.
                 cache_record = CacheRecord(
-                    enabled=True, hit=False, entries_size=self._cache.size,
+                    enabled=True, hit=False, bypass_reason=refused or "",
+                    entries_size=self._cache.size,
                     blocked_cloud_entries=self._cache.blocked_cloud_entries,
                     latency_ms=check_latency_ms)
 
@@ -882,7 +1023,10 @@ class Pipeline:
                        # `ExecutionPolicyContext.content_integrity`.
                        "content_integrity_mode": ctx.content_integrity,
                        # Task 9: the decision certificate (design §6).
-                       **self._certificate(eff, ctx, det),
+                       **self._certificate(
+                           eff, ctx, det, self._endpoint_registry_version(),
+                           self._endpoint_declaration(
+                               self._candidate_by_name(result.model))),
                        "checks": self._eligibility_checks(ctx, records)},
             "sanitized_prompt": sanitized,
             "raw_completion": result.text,
@@ -1117,7 +1261,10 @@ class Pipeline:
                        # `ExecutionPolicyContext.content_integrity`.
                        "content_integrity_mode": ctx.content_integrity,
                        # Task 9: the decision certificate (design §6).
-                       **self._certificate(eff, ctx, det),
+                       **self._certificate(
+                           eff, ctx, det, self._endpoint_registry_version(),
+                           self._endpoint_declaration(
+                               self._candidate_by_name(result.model))),
                        "checks": self._eligibility_checks(ctx, records)},
             "sanitized_prompt": sanitized,
             "raw_completion": result.text,

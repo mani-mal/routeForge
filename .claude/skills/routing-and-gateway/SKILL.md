@@ -111,6 +111,48 @@ not restate it here or in code. There are exactly three tiers: `cheap | mid | fr
 config — never hard-code provider names, or the empty-on-prem-pool case (no model
 onboarded yet, or every onboarded model disabled) breaks. See `config/pricing.yaml` for per-model costs.
 
+## Eligibility is one seam — `app/policy/feasible.py`
+
+Nothing in the router, the gateway or the gate re-derives which candidates a request may
+reach. `feasible_set()` is the single authority, and it runs a fixed, ordered sequence of
+stages, each with a stable `code`:
+
+1. **residency / provider placement** (`residency`) — absolute, and always first
+   (CLAUDE.md rule 3).
+2. **the endpoint's data-handling declarations** — `region_not_allowed`,
+   `prompt_retention_not_allowed`, `raw_sensitive_not_accepted`.
+3. **prior failure on this request** (`prior_failure`).
+4. **the app's `allowed_tiers` / `allowed_models`** (`app_scope`).
+5. **the request's pinned `model`** (`not_requested`).
+6. **the registry's per-model gates** (`model_scope`).
+
+Stage 2 compares an application's requirement against what an **operator declared** about
+an endpoint: `region`, `prompt_retention`, `accepts_raw_sensitive`, resolved once in
+`ModelRegistry.effective_pool()` (per-model value → provider default → `unknown`).
+**RouteForge records what an operator declared about an endpoint and enforces policy
+against that declaration — it cannot verify a provider's contractual claim.**
+
+Two things about stage 2 that look like bugs and are not:
+
+- **`unknown` excludes for region and retention, but is kept by the raw-sensitive rule.**
+  The first two fire because *the app declared a requirement* and an endpoint that cannot
+  show the property does not qualify. The third has no app-declared requirement behind it
+  — it comes from the request's own shape (a `raw` `model_input` over a better-than-public
+  sensitivity) — so it fires **only on a declared `false`**, or it would retire every
+  endpoint in every existing deployment. Do not "fix" this into uniformity.
+- **These constraints may only narrow.** No value of any of them can add a candidate back,
+  reach a provider residency excluded, or touch `allowed_providers` / `onprem_only`.
+
+Failover and confidence escalation draw from the **same compiled feasible set**, so a
+candidate excluded on the first pass is structurally unreachable on a retry — that is what
+makes the "cloud fallback on an `onprem_only` request" bug below impossible by
+construction rather than by a repeated check. An empty set is a **reject with reasons**,
+never a relaxation.
+
+Full reference: `docs/reference/per-app-config.md` (rules, codes, the app-side
+`allowed_regions` / `require_no_retention`) and `docs/guides/onboarding-models.md` (the
+declarations and their two input shapes).
+
 ## DecisionRecord
 
 Every routing decision emits this. It drives the UI and Langfuse both.

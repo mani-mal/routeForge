@@ -20,6 +20,20 @@ class PoolCandidate(BaseModel):
     # tier_default rung. Populating this is an onboarding activity (spec §9/§13);
     # the shipped demo leaves it unset so routing stays a tier-default regression.
     quality: float | None = None
+    # --- P1b endpoint data-handling declarations (design doc §2). On a static
+    # routing.yaml model_pool entry these three are the per-model DECLARATION
+    # (unset = "not declared here"); they are never verified, only recorded
+    # and later enforced against. `ModelRegistry.effective_pool()` is the one
+    # place that RESOLVES them (per-model value, else the provider default
+    # from serving.yaml, else "unknown") and overwrites these same fields with
+    # the resolved, never-None result plus `data_handling_source` -- no other
+    # consumer should re-derive the resolution.
+    region: str | None = None                  # lowercase token (e.g. us/eu/de/onprem), or "unknown"
+    prompt_retention: str | None = None         # none | retained | unknown
+    accepts_raw_sensitive: str | None = None    # "true" | "false" | "unknown"
+    # field -> "model" | "provider_default" | "unknown". Populated only by
+    # effective_pool()'s resolution; empty on a raw/unresolved PoolCandidate.
+    data_handling_source: dict[str, str] = Field(default_factory=dict)
 
 
 class PromptOptCfg(BaseModel):
@@ -115,6 +129,13 @@ class ProviderCfg(BaseModel):
     api_base_env: str | None = None
     api_key_env: str | None = None
     api_version_env: str | None = None
+    # --- P1b endpoint data-handling provider defaults (design doc §2). Fall
+    # back for any per-model value left unset on an onboarded row or a
+    # routing.yaml model_pool entry; unset here too resolves to "unknown" in
+    # ModelRegistry.effective_pool(). Declarations, not verified facts.
+    region: str | None = None                  # lowercase token, e.g. us/eu/de/onprem
+    prompt_retention: str | None = None         # none | retained | unknown
+    accepts_raw_sensitive: str | None = None    # "true" | "false" | "unknown"
 
 
 class LangfuseCfg(BaseModel):

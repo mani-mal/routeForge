@@ -3,7 +3,8 @@ import pytest
 
 from app.config.loader import load_settings
 from app.apps.policy import AppPolicyView
-from app.policy.compile import UNIMPLEMENTED, compile_policy, apply_signals
+from app.policy.compile import (UNIMPLEMENTED, PolicyViolation, apply_signals,
+                                compile_policy, validate_effective)
 
 S = load_settings()
 
@@ -238,3 +239,94 @@ def test_apply_signals_never_touches_protection():
     out = apply_signals(eff, ("US_SSN",),
                         _rule("onprem_only", "high", True, "restricted"))
     assert out.protection == eff.protection
+
+
+# --- P1b requirements: the two new columns (design doc §3) -------------------
+#
+# Explicit-or-null (no ceiling, no preset, no deployment default), resolved
+# independently of placement and protection -- placement-adjacent, not a
+# protection axis, and never fed into either computation.
+
+def test_requirements_default_to_no_constraint():
+    eff = compile_policy(AppPolicyView(residency="any"), S)
+    assert eff.allowed_regions is None
+    assert eff.require_no_retention is False
+
+
+def test_allowed_regions_normalised_to_lowercase_tokens():
+    eff = compile_policy(
+        AppPolicyView(residency="any",
+                      allowed_regions=frozenset({"US", " eu "})), S)
+    assert eff.allowed_regions == frozenset({"us", "eu"})
+
+
+def test_require_no_retention_explicit_value_is_honored():
+    eff = compile_policy(
+        AppPolicyView(residency="any", require_no_retention=True), S)
+    assert eff.require_no_retention is True
+
+
+def test_allowed_regions_garbage_denies_and_is_preserved_for_validation():
+    """Not a list -- denies to frozenset() (matches no region, the most
+    restrictive reading for an axis whose unset value is 'no constraint'),
+    and the offending value survives in `rejected` so the write is refused
+    rather than silently persisted (CE-2's lesson, applied to this axis)."""
+    eff = compile_policy(AppPolicyView(residency="any", allowed_regions="us"), S)
+    assert eff.allowed_regions == frozenset()
+    assert ("allowed_regions", "us") in eff.rejected
+
+
+def test_allowed_regions_blank_token_denies_and_is_rejected():
+    eff = compile_policy(
+        AppPolicyView(residency="any", allowed_regions=frozenset({"  "})), S)
+    assert eff.allowed_regions == frozenset()
+    assert any(axis == "allowed_regions" for axis, _ in eff.rejected)
+
+
+def test_allowed_regions_invalid_shape_is_refused_at_write_time():
+    eff = compile_policy(AppPolicyView(residency="any", allowed_regions="us"), S)
+    with pytest.raises(PolicyViolation) as exc:
+        validate_effective(eff, S, has_own_langfuse_project=False)
+    assert exc.value.code == "ALLOWED_REGIONS_INVALID"
+    # The message must name the way OUT, not only the legal shape: an empty
+    # list is refused, so `reset` is the only way to clear the field and an
+    # operator who does not know that has no next move.
+    assert "reset" in exc.value.message
+
+
+def test_requirements_never_move_placement_or_protection():
+    base = compile_policy(AppPolicyView(residency="onprem_only"), S)
+    for regions in (frozenset({"us"}), frozenset(), None):
+        eff = compile_policy(
+            AppPolicyView(residency="onprem_only", allowed_regions=regions), S)
+        assert eff.placement == base.placement
+        assert eff.protection == base.protection
+    for retention in (True, False, None):
+        eff = compile_policy(
+            AppPolicyView(residency="onprem_only",
+                          require_no_retention=retention), S)
+        assert eff.placement == base.placement
+        assert eff.protection == base.protection
+
+
+def test_residency_and_protection_axes_never_move_requirements():
+    """The reverse direction of the noninterference property: sweeping every
+    residency and protection axis must leave a fixed requirement untouched."""
+    base = compile_policy(
+        AppPolicyView(residency="any", allowed_regions=frozenset({"us"}),
+                      require_no_retention=True), S)
+    for residency in ("any", "private_cloud_ok", "onprem_only"):
+        eff = compile_policy(
+            AppPolicyView(residency=residency, allowed_regions=frozenset({"us"}),
+                          require_no_retention=True), S)
+        assert eff.allowed_regions == base.allowed_regions
+        assert eff.require_no_retention == base.require_no_retention
+    for axis, values in (("model_input", ("raw", "redact")),
+                         ("client_output", ("raw", "redact")),
+                         ("policy_mode", ("enforced", "passthrough"))):
+        for value in values:
+            eff = compile_policy(
+                AppPolicyView(residency="any", allowed_regions=frozenset({"us"}),
+                              require_no_retention=True, **{axis: value}), S)
+            assert eff.allowed_regions == base.allowed_regions
+            assert eff.require_no_retention == base.require_no_retention

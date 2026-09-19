@@ -59,12 +59,20 @@ type ModelFormFields = {
   contextWindow: string;
   appIds: string[];
   notes: string;
+  // P1b data-handling declarations (design §2/§8): what the operator
+  // declares about this endpoint, not a verified fact. "unknown" is the
+  // default for all three -- an endpoint that declares nothing behaves
+  // exactly as it did before P1b (design §12).
+  region: string;               // free token, "" = unset/unknown
+  promptRetention: string;      // "unknown" | "none" | "retained"
+  acceptsRawSensitive: string;  // "unknown" | "true" | "false"
 };
 
 const EMPTY_FIELDS: ModelFormFields = {
   slug: "", displayName: "", tier: "mid", endpoint: "", apiKeyEnv: "",
   priceInput: "", priceOutput: "", quality: "", contextWindow: "",
   appIds: [], notes: "",
+  region: "", promptRetention: "unknown", acceptsRawSensitive: "unknown",
 };
 
 // Seed the edit form from the row the server already stored.
@@ -81,6 +89,12 @@ function fieldsOf(m: OnboardedModel): ModelFormFields {
     contextWindow: m.context_window === null ? "" : String(m.context_window),
     appIds: m.allowed_app_ids ?? [],
     notes: m.notes ?? "",
+    // `undefined` (the server doesn't send these back yet -- see the
+    // OnboardedModel comment in api.ts) and `null` (declared unset) both
+    // read as "unknown", same as the server's own `_declared()`.
+    region: m.region ?? "",
+    promptRetention: m.prompt_retention ?? "unknown",
+    acceptsRawSensitive: m.accepts_raw_sensitive == null ? "unknown" : String(m.accepts_raw_sensitive),
   };
 }
 
@@ -101,6 +115,20 @@ function toBody(f: ModelFormFields, enabled: boolean): OnboardIn {
     allowed_app_ids: f.appIds.length > 0 ? f.appIds : null,
     notes: f.notes.trim() ? f.notes.trim() : null,
     enabled,
+    // P1b declarations -- "unknown" in the form means "declare nothing",
+    // sent as null (the server's own no-declaration value), not the string
+    // "unknown". Region is a free token; the server normalizes it
+    // (strip + lowercase) the same way ModelRegistry resolves it for
+    // routing, so no client-side normalization is needed here.
+    //
+    // accepts_raw_sensitive is always sent explicitly by this form (as an
+    // actual JSON `null` when "unknown" is selected, never omitted) -- so
+    // this form is unaffected by the server's omission-vs-null distinction
+    // for that field (app/api/admin_routes.py::_resolved_accepts_raw_sensitive):
+    // choosing "unknown" here is a real, explicit clear, exactly as it looks.
+    region: f.region.trim() ? f.region.trim() : null,
+    prompt_retention: f.promptRetention === "unknown" ? null : f.promptRetention,
+    accepts_raw_sensitive: f.acceptsRawSensitive === "unknown" ? null : f.acceptsRawSensitive === "true",
   };
 }
 
@@ -192,6 +220,50 @@ function ModelFields({
         notes
         <input value={fields.notes} onChange={(e) => set({ notes: e.target.value })} placeholder="(none)" className={inputCls} />
       </label>
+
+      <div className="flex flex-col gap-2 rounded-md border border-edge/60 p-2.5">
+        <p className="text-[10px] uppercase tracking-wide text-gray-500">Data handling</p>
+        <div className="grid grid-cols-3 gap-3">
+          <label className="flex flex-col gap-1 text-xs text-gray-500">
+            region
+            <input
+              value={fields.region}
+              onChange={(e) => set({ region: e.target.value })}
+              placeholder="unknown"
+              title="A free token, e.g. us / eu / de / onprem — RouteForge ships no geography list; matched exactly against an application's allowed_regions."
+              className={inputCls}
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-gray-500">
+            prompt retention
+            <select
+              value={fields.promptRetention}
+              onChange={(e) => set({ promptRetention: e.target.value })}
+              className={inputCls}
+            >
+              <option value="unknown">unknown</option>
+              <option value="none">none</option>
+              <option value="retained">retained</option>
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-gray-500">
+            accepts raw sensitive
+            <select
+              value={fields.acceptsRawSensitive}
+              onChange={(e) => set({ acceptsRawSensitive: e.target.value })}
+              className={inputCls}
+            >
+              <option value="unknown">unknown</option>
+              <option value="true">true</option>
+              <option value="false">false</option>
+            </select>
+          </label>
+        </div>
+        <p className="text-[10px] leading-relaxed text-gray-600">
+          RouteForge enforces these against application policy but cannot verify them — they are what
+          the operator declares about this endpoint.
+        </p>
+      </div>
     </>
   );
 }

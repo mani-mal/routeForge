@@ -26,6 +26,7 @@ from app.policy.effective import PROTECTED_ENTITIES
 from app.policy.enums import (
     PII_MODES,
     POLICY_MODES,
+    PROMPT_RETENTION_VALUES,
     RESIDENCY,
     RISK_CLASS,
     SENSITIVITY,
@@ -70,7 +71,14 @@ def _onboarded_dict(m) -> dict:
             "api_key_env": m.api_key_env, "context_window": m.context_window,
             "enabled": m.enabled, "allowed_app_ids": m.allowed_app_ids,
             "probe_status": m.probe_status, "probe_error": m.probe_error,
-            "notes": m.notes, "updated_at": _iso(m.updated_at)}
+            "notes": m.notes, "updated_at": _iso(m.updated_at),
+            # P1b declarations (design §2/§8) -- the STORED, raw values (not
+            # resolved: no provider-default fallback, no "unknown" backfill).
+            # `ModelRegistry.effective_pool()` is what resolves these for
+            # routing; this is what the operator declared for THIS row, so
+            # the form can render exactly what was saved.
+            "region": m.region, "prompt_retention": m.prompt_retention,
+            "accepts_raw_sensitive": m.accepts_raw_sensitive}
 
 
 def _effective_dict(app, settings) -> dict:
@@ -100,6 +108,11 @@ def _effective_dict(app, settings) -> dict:
         "telemetry_io": eff.protection.telemetry_io,
         "detection": eff.protection.detection,
         "content_integrity": eff.protection.content_integrity,
+        # P1b app-side data-handling requirements (design doc §3). Server-
+        # resolved so the console never re-derives normalisation itself.
+        "allowed_regions":
+            sorted(eff.allowed_regions) if eff.allowed_regions else None,
+        "require_no_retention": eff.require_no_retention,
     }
 
 
@@ -179,6 +192,12 @@ class PolicyIn(BaseModel):
     client_output: str | None = None
     content_integrity: str | None = None
     escalate_residency_on_detection: bool | None = None
+    # P1b app-side data-handling requirements (design doc §3; types only here
+    # -- shape/normalisation validation is app/policy/compile.py::
+    # validate_effective, like every other axis). None = no constraint. No
+    # enforcement yet (Tasks 3-5 own narrowing the candidate set).
+    allowed_regions: list[str] | None = None
+    require_no_retention: bool | None = None
     # --- the one escape from the merge -------------------------------------
     # This PUT is a MERGE: `null` means "leave the stored value alone", which
     # plenty of callers depend on. That left no way to put a field BACK to NULL
@@ -238,6 +257,29 @@ class OnboardIn(BaseModel):
     allowed_app_ids: list[str] | None = None
     notes: str | None = None
     enabled: bool = True
+    # P1b endpoint data-handling declarations (design §2/§8; Task 1's DB
+    # columns and store.upsert_onboarded already accept these -- this is the
+    # admin-HTTP wiring that was missing). None = undeclared ("unknown" at
+    # resolution time -- app/policy/feasible.py::_declared reads None the
+    # same way it reads an explicit "unknown"). `accepts_raw_sensitive` is a
+    # JSON boolean here, matching the DB column -- the YAML pool's string
+    # token form ("true"/"false"/"unknown") is a different surface (Task 1's
+    # concern note) and not this one.
+    # Free customer vocabulary (design §2) -- deliberately unvalidated (no
+    # RouteForge-owned geography enum), so the literal string "unknown"
+    # typed into the form is a legal, storable value here and reads back
+    # indistinguishable from an omitted/null region: both resolve to
+    # "unknown" at app/policy/feasible.py::_declared. Not worth guarding
+    # against -- same resolved behaviour either way -- just a trap for a
+    # reader who expects the stored string to prove which one happened.
+    region: str | None = None
+    prompt_retention: str | None = None       # none|retained|unknown, or None (undeclared)
+    # JSON boolean; None (undeclared). UNLIKE every other optional field on
+    # this route (including region/prompt_retention above), an OMITTED
+    # accepts_raw_sensitive on a PUT/re-POST does NOT full-replace to None --
+    # see `_resolved_accepts_raw_sensitive` below for why, and do not "fix"
+    # this back into consistency with the other fields.
+    accepts_raw_sensitive: bool | None = None
 
 
 class RecognizerIn(BaseModel):
@@ -581,6 +623,8 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
             content_integrity=_merged("content_integrity"),
             escalate_residency_on_detection=_merged(
                 "escalate_residency_on_detection"),
+            allowed_regions=_merged("allowed_regions"),
+            require_no_retention=_merged("require_no_retention"),
         )
         # An app's own provisioned Langfuse project is the one condition the
         # compiler cannot see: it is DB state, not policy. Raw capture requires
@@ -815,6 +859,64 @@ def _static_validate_onboard(body: OnboardIn, s) -> None:
         raise HTTPException(422, "endpoint must be an http(s) URL")
     if body.price_input < 0 or body.price_output < 0:
         raise HTTPException(422, "price must be >= 0")
+    # P1b: prompt_retention is a fixed enum (app/policy/enums.py, shared with
+    # the YAML lint so an admin-accepted value is a value the resolver will
+    # actually read as a real declaration) -- None (undeclared) is always
+    # legal and is not in the set. `region` is deliberately NOT validated
+    # here: it is customer vocabulary with no RouteForge-owned list (design
+    # §2), matched exactly after normalisation, not against an enum.
+    if (body.prompt_retention is not None
+            and body.prompt_retention not in PROMPT_RETENTION_VALUES):
+        raise HTTPException(
+            422, f"bad prompt_retention {body.prompt_retention!r}; legal values: "
+            f"{sorted(PROMPT_RETENTION_VALUES)}, or omit/null for undeclared")
+
+
+def _normalized_region(region: str | None) -> str | None:
+    """Store `region` pre-normalized (stripped + lowercased) so a value the
+    admin API accepted reads back exactly as `ModelRegistry._resolve_data_handling`
+    would resolve it -- the same `.strip().lower()` that function already
+    applies at read time (app/apps/registry.py), done once here so the GET
+    response and the form show the same token the router will actually
+    match, rather than the raw un-normalized input. A blank/whitespace-only
+    string is undeclared, same as omitting the field."""
+    if region is None:
+        return None
+    stripped = region.strip().lower()
+    return stripped or None
+
+
+def _resolved_accepts_raw_sensitive(body: OnboardIn, existing) -> bool | None:
+    """`accepts_raw_sensitive` is the one field on this route that does NOT
+    full-replace on omission, unlike every other optional OnboardIn field
+    (region/prompt_retention included) -- deliberate, found in Task 8's
+    console review, not an oversight.
+
+    Why it's asymmetric: `region`/`prompt_retention` clearing to "unknown"
+    makes app/policy/feasible.py's stage-2 rule MORE restrictive (an app
+    that requires a region or no-retention excludes an "unknown" endpoint),
+    so full-replace-on-omission fails CLOSED for those two -- safe.
+    `accepts_raw_sensitive` is the opposite: the raw-sensitive rule
+    (`_data_handling_rejection`) fires ONLY on a declared `false` -- an
+    "unknown" endpoint is KEPT, not excluded. So clearing a declared
+    `false` to unknown/None on omission would SILENTLY REOPEN an endpoint
+    an operator had explicitly closed to raw sensitive traffic the moment
+    any caller resubmits a body that doesn't happen to name this field
+    (e.g. a scripted price update written against an older body shape) --
+    fail-OPEN, with no error or warning. CLAUDE.md rule 5 (fail closed) and
+    rule 2a (a no-protection posture is never silent) both rule that out.
+
+    So: the field being ABSENT from the request (`"accepts_raw_sensitive"
+    not in body.model_fields_set`) keeps whatever is already stored (`None`
+    on a brand-new row -- nothing to preserve). The field being PRESENT --
+    including an explicit JSON `null` -- is honoured as real intent: an
+    operator who explicitly clears the declaration must still be able to,
+    on this same route; only silent, accidental clearing via omission is
+    blocked.
+    """
+    if "accepts_raw_sensitive" not in body.model_fields_set:
+        return existing.accepts_raw_sensitive if existing is not None else None
+    return body.accepts_raw_sensitive
 
 
 @admin_router.post("/infra/models")
@@ -851,7 +953,23 @@ async def onboard_model(body: OnboardIn, request: Request,
             quality=body.quality, context_window=body.context_window,
             allowed_app_ids=body.allowed_app_ids, notes=body.notes,
             enabled=final_enabled, probe_status=("healthy" if ok else "unreachable"),
-            probe_error=(None if ok else detail))
+            probe_error=(None if ok else detail),
+            # P1b declarations. `region`/`prompt_retention` are full-replace,
+            # same as every other optional field on this route (api_key_env,
+            # quality, notes, …): the body IS the new stored state, so an
+            # omitted/null field clears back to "undeclared" rather than
+            # being preserved. The console's edit form always resubmits the
+            # full row (see ui/src/admin/InfrastructurePanel.tsx::
+            # fieldsOf/toBody), so this matches what an operator editing in
+            # place actually intends. `accepts_raw_sensitive` is the
+            # deliberate exception -- see `_resolved_accepts_raw_sensitive`.
+            # Applied here too, not just on the PUT below: a re-POST of an
+            # existing (disabled) row is the same self-heal upsert path
+            # (B19) and carries the identical silent-reopen risk once the
+            # row re-enables.
+            region=_normalized_region(body.region),
+            prompt_retention=body.prompt_retention,
+            accepts_raw_sensitive=_resolved_accepts_raw_sensitive(body, existing))
         await session.commit()
     await reg.refresh(request.app.state.db)
     return {"slug": body.slug, "enabled": final_enabled,
@@ -872,7 +990,8 @@ async def edit_onboarded_model(slug: str, body: OnboardIn, request: Request,
     reg = request.app.state.registry
     _static_validate_onboard(body, s)
     async with request.app.state.db.session() as session:
-        if await store.get_onboarded(session, slug) is None:
+        existing = await store.get_onboarded(session, slug)
+        if existing is None:
             raise HTTPException(404, f"onboarded model {slug!r} not found")
         if body.allowed_app_ids:
             for aid in body.allowed_app_ids:
@@ -888,7 +1007,13 @@ async def edit_onboarded_model(slug: str, body: OnboardIn, request: Request,
             quality=body.quality, context_window=body.context_window,
             allowed_app_ids=body.allowed_app_ids, notes=body.notes,
             enabled=final_enabled, probe_status=("healthy" if ok else "unreachable"),
-            probe_error=(None if ok else detail))
+            probe_error=(None if ok else detail),
+            # region/prompt_retention: same full-replace semantics as
+            # onboard_model above. accepts_raw_sensitive: the deliberate
+            # exception -- see _resolved_accepts_raw_sensitive.
+            region=_normalized_region(body.region),
+            prompt_retention=body.prompt_retention,
+            accepts_raw_sensitive=_resolved_accepts_raw_sensitive(body, existing))
         await session.commit()
     await reg.refresh(request.app.state.db)
     return {"slug": slug, "enabled": final_enabled,

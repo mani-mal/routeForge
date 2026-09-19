@@ -162,6 +162,20 @@ class AppPolicy(Base):
     # tightening -- it can never lower the app's own residency floor.
     escalate_residency_on_detection: Mapped[bool | None] = mapped_column(
         Boolean, nullable=True)
+    # --- P1b app-side data-handling REQUIREMENTS (design doc §3). null = no
+    # constraint. Resolved explicit-or-null in app/policy/compile.py -- unlike
+    # the P1a axes above, neither has a `policy_mode` preset or a deployment
+    # default to fall back to. Placement-ADJACENT, not a protection axis: they
+    # narrow WHERE a request may run (region) and WHAT retention promise an
+    # endpoint must make, never what the gate does to the data. May only ever
+    # NARROW the candidate set -- no value of either may widen
+    # allowed_providers, clear onprem_only, or add a model (P1a noninterference
+    # must survive). No enforcement lives here yet: Tasks 3-5 apply the three
+    # exclusion rules against ModelRegistry.effective_pool()'s resolved
+    # region/prompt_retention/accepts_raw_sensitive (Task 1). This task only
+    # stores, resolves and validates the shape.
+    allowed_regions: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    require_no_retention: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
     application: Mapped[Application] = relationship(back_populates="policy")
 
@@ -297,6 +311,18 @@ class OnboardedModel(Base):
     context_window: Mapped[int | None] = mapped_column(Integer, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     allowed_app_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # P1b endpoint data-handling declarations (docs/superpowers/specs/
+    # 2026-09-19-endpoint-data-handling-p1b-design.md §2). These are
+    # DECLARATIONS an operator records about this endpoint -- RouteForge
+    # cannot verify a provider's contractual claim, only record what was
+    # declared and enforce policy against that record. null on every field
+    # means "not declared here"; ModelRegistry.effective_pool() resolves
+    # null to the provider default (serving.yaml) or finally "unknown" --
+    # "unknown" is the normal value for every endpoint onboarded before this
+    # feature existed, never an error.
+    region: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    prompt_retention: Mapped[str | None] = mapped_column(String(16), nullable=True)  # none|retained|unknown
+    accepts_raw_sensitive: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     probe_status: Mapped[str] = mapped_column(String(16), default="unknown")
     probe_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
     notes: Mapped[str | None] = mapped_column(String(255), nullable=True)

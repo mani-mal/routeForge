@@ -39,11 +39,15 @@ def _candidates_json(rec: dict) -> str | None:
     if chosen:
         items.append({"model": chosen, "tier": rec.get("chosen_tier"),
                       "provider": rec.get("chosen_provider"), "eligible": True,
-                      "reason": rec.get("reason", "")})
+                      "reason": rec.get("reason", ""), "code": None})
     for r in rejected:
+        # `code` (P1b design §6): the stable stage identifier behind a
+        # data-handling exclusion (e.g. "region_not_allowed"), or None for a
+        # rejection with no code of its own (residency/budget/tier/score) --
+        # `.get` defaults absent, never fabricates one.
         items.append({"model": r.get("name"), "tier": r.get("tier"),
                       "provider": r.get("provider"), "eligible": False,
-                      "reason": r.get("reason", "")})
+                      "reason": r.get("reason", ""), "code": r.get("code")})
     return json.dumps(items)
 
 
@@ -287,6 +291,16 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                 # lets a trace consumer correlate a decision to the exact app
                 # policy it ran under, and spot a stale conformance probe.
                 root.set_attribute("sp.app_policy_version", policy["app_policy_version"])
+            if policy.get("endpoint_registry_version"):
+                # P1b Task 6 (design §6): the endpoint registry this decision
+                # was made against -- `ModelRegistry.registry_version()`,
+                # same stamp-when-non-empty pattern as
+                # `sp.routing_policy_version`/`sp.app_policy_version` above.
+                # Lets a replay consumer tell whether an operator changed an
+                # endpoint's declared region/retention/raw-sensitive between
+                # this decision and now, instead of that drift being silent.
+                root.set_attribute("sp.endpoint_registry_version",
+                                   policy["endpoint_registry_version"])
             if policy.get("policy_mode"):
                 # Effective protection posture ("enforced" | "passthrough") this
                 # request actually ran under. Emitted alongside the policy

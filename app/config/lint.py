@@ -3,9 +3,20 @@ import sys
 from app.config.loader import load_settings
 from app.config.schema import Settings
 from app.policy.enums import POLICY_MODES
+from app.policy.enums import PROMPT_RETENTION_VALUES, RAW_SENSITIVE_VALUES
 from app.policy.enums import RESIDENCY as valid_residency
 from app.prompts.store import load_artifact
 from app.routing.strategy import _STRATEGIES as _KNOWN_STRATEGIES
+
+
+def _data_handling_token(v) -> str | None:
+    """Normalize one declared prompt_retention/accepts_raw_sensitive value
+    the same way the read-time resolvers do (lowercase, stripped). `None`
+    means "not declared here" and is never linted -- an undeclared value is
+    the normal, expected state (design §2)."""
+    if v is None:
+        return None
+    return str(v).strip().lower()
 
 
 class ConfigLintError(Exception):
@@ -105,6 +116,41 @@ def lint_settings(s: Settings) -> list[str]:
             continue
         if artifact is None:
             errs.append(f"PROMPT_ACTIVE_MISSING {prompt_id}:{label}")
+
+    # P1b endpoint data-handling declarations (design §7). `region` is
+    # customer vocabulary with NO enum -- deliberately never linted here (an
+    # unrecognised token is a legal declaration, not a drift).
+    # `prompt_retention`/`accepts_raw_sensitive` DO have a fixed enum, and a
+    # malformed declaration on either source is a boot failure, matching the
+    # existing drift-becomes-boot-failure posture (POOL_TIER_UNKNOWN /
+    # PRICING_TIER_UNKNOWN). Unset (None) is "not declared here" and is
+    # never an error -- only a value that IS present and doesn't match.
+    for pname, pcfg in s.serving.providers.items():
+        retention = _data_handling_token(pcfg.prompt_retention)
+        if retention is not None and retention not in PROMPT_RETENTION_VALUES:
+            errs.append(
+                f"PROVIDER_PROMPT_RETENTION_UNKNOWN providers.{pname} "
+                f"prompt_retention={pcfg.prompt_retention!r} not in "
+                f"{sorted(PROMPT_RETENTION_VALUES)}")
+        raw = _data_handling_token(pcfg.accepts_raw_sensitive)
+        if raw is not None and raw not in RAW_SENSITIVE_VALUES:
+            errs.append(
+                f"PROVIDER_RAW_SENSITIVE_UNKNOWN providers.{pname} "
+                f"accepts_raw_sensitive={pcfg.accepts_raw_sensitive!r} not in "
+                f"{sorted(RAW_SENSITIVE_VALUES)}")
+    for c in s.routing.model_pool:
+        retention = _data_handling_token(c.prompt_retention)
+        if retention is not None and retention not in PROMPT_RETENTION_VALUES:
+            errs.append(
+                f"POOL_PROMPT_RETENTION_UNKNOWN model_pool:{c.name} "
+                f"prompt_retention={c.prompt_retention!r} not in "
+                f"{sorted(PROMPT_RETENTION_VALUES)}")
+        raw = _data_handling_token(c.accepts_raw_sensitive)
+        if raw is not None and raw not in RAW_SENSITIVE_VALUES:
+            errs.append(
+                f"POOL_RAW_SENSITIVE_UNKNOWN model_pool:{c.name} "
+                f"accepts_raw_sensitive={c.accepts_raw_sensitive!r} not in "
+                f"{sorted(RAW_SENSITIVE_VALUES)}")
 
     return errs
 

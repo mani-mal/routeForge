@@ -95,8 +95,11 @@ The full eligible/rejected candidate set for that routing decision:
 
 ```json
 [
-  {"model": "onprem-7b", "tier": "cheap", "provider": "onprem",  "eligible": true,  "reason": "..."},
-  {"model": "gpt-4o",   "tier": "frontier", "provider": "bedrock", "eligible": false, "reason": "excluded · residency"}
+  {"model": "onprem-7b", "tier": "cheap", "provider": "onprem",  "eligible": true,  "reason": "...", "code": null},
+  {"model": "gpt-4o",   "tier": "frontier", "provider": "bedrock", "eligible": false, "reason": "excluded · residency", "code": null},
+  {"model": "eu-32b", "tier": "mid", "provider": "onprem", "eligible": false,
+   "reason": "excluded · region · endpoint declares 'eu', application allows 'us'",
+   "code": "region_not_allowed"}
 ]
 ```
 
@@ -104,6 +107,40 @@ The chosen candidate is `eligible: true`; each rejected candidate is
 `eligible: false` with its rejection reason. This is the RLHF/eval substrate
 (see `docs/roadmap/rlhf-readiness.md`) — it records *what else could have been chosen and
 why it wasn't*, without building any feedback API (that stays out of scope).
+
+**`code` — the three endpoint data-handling exclusions.** A rejection caused by an
+endpoint's declared data handling carries a stable code alongside the operator-facing
+`reason`, so a consumer can branch on *which rule fired* without parsing prose:
+
+| `code` | Fired because |
+|---|---|
+| `region_not_allowed` | the app set `allowed_regions` and the endpoint's declared region is not in it |
+| `prompt_retention_not_allowed` | the app set `require_no_retention` and the endpoint's declared retention is not `none` |
+| `raw_sensitive_not_accepted` | the request sends raw sensitive content and the endpoint declares `accepts_raw_sensitive: false` |
+
+Every other rejection — residency, budget, tier, score, app scope — has `code: null`.
+The codes are never fabricated: a rejection with no code of its own gets `null`, not a
+guess. See `docs/reference/per-app-config.md` for the rules themselves.
+
+### `sp.endpoint_registry_version` — on the root span
+
+A short content hash (first 12 hex of sha256) over the **effective endpoint pool** — each
+candidate's `name` / `provider` / `tier` plus its three resolved data-handling
+declarations (`region`, `prompt_retention`, `accepts_raw_sensitive`), sorted for
+stability. Computed by `ModelRegistry.registry_version()` and stamped on every trace's
+root span beside `sp.app_policy_version` and `sp.routing_policy_version`, so a decision
+names the registry it was made against and an operator editing a declaration becomes
+visible in the trace instead of silent.
+
+- Deliberately narrow: `quality`, `display_name` and price are **not** in it, because
+  they never gate eligibility — a cosmetic rename or a price edit must not churn a
+  version a replay consumer keys on. Price changes already move
+  `sp.routing_policy_version`.
+- Onboarding, disabling or re-declaring any endpoint changes it.
+- The response `policy` block additionally carries `endpoint_data_handling`: the three
+  declarations of the endpoint that **served** the request, plus the provenance of each
+  (`model` / `provider_default` / `unknown`). These are operator declarations RouteForge
+  enforces against, never facts it verified.
 
 ### `sp.routing_policy_version` — on the root span
 
@@ -137,8 +174,9 @@ line 196).
 # ① metrics render with the four families
 curl -s http://<api>/metrics | grep -E '^# TYPE routeforge_'
 
-# ② open any Langfuse trace: root span has sp.routing_policy_version;
-#    each decision step has sp.candidates (chosen + rejected).
+# ② open any Langfuse trace: root span has sp.routing_policy_version and
+#    sp.endpoint_registry_version; each decision step has sp.candidates
+#    (chosen + rejected, each rejection carrying its `code` or null).
 ```
 
 ## Related
