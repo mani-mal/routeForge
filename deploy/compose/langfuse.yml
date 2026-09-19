@@ -2,10 +2,20 @@
 # Self-hosted Langfuse for local observability testing (Phase 4).
 # Brings up Langfuse v3 (web+worker) with Postgres, ClickHouse, Redis, MinIO.
 # Full app stack (api image + this) is assembled in Phase 8.
+#
+# Every long-lived service here carries `restart: unless-stopped`, matching the
+# services it observes. Without it the whole observability stack stays down after
+# a host reboot while the router comes back on its own -- so RouteForge's exporter
+# retries a name that no longer resolves and every trace is dropped, silently,
+# from exactly the window an operator most wants to look at. Observed on the DGX
+# Spark 2026-09-19: api/ui/db and the model server returned after a reboot; all
+# six Langfuse containers did not. `minio-init` is deliberately excluded -- it is
+# a one-shot bucket creator and `unless-stopped` would restart it forever.
 name: serving-plane-obs
 services:
   langfuse-web:
     image: langfuse/langfuse:3
+    restart: unless-stopped
     depends_on:
       postgres: {condition: service_started}
       clickhouse: {condition: service_started}
@@ -39,6 +49,7 @@ services:
       LANGFUSE_INIT_USER_PASSWORD: demodemo
   langfuse-worker:
     image: langfuse/langfuse-worker:3
+    restart: unless-stopped
     depends_on:
       postgres: {condition: service_started}
       clickhouse: {condition: service_started}
@@ -63,18 +74,22 @@ services:
       ENCRYPTION_KEY: "990fd1a2bc4b761112c44dc47f5cb88634d3e37c919dbef7c59b4f3ef8d2b464"
   postgres:
     image: postgres:16
+    restart: unless-stopped
     environment: {POSTGRES_PASSWORD: postgres}
     volumes: [obs-pg:/var/lib/postgresql/data]
   clickhouse:
     image: clickhouse/clickhouse-server:24
+    restart: unless-stopped
     environment: {CLICKHOUSE_PASSWORD: clickhouse}
     volumes: [obs-ch:/var/lib/clickhouse]
   redis:
     image: redis:7
+    restart: unless-stopped
   minio:
     # quay.io, not Docker Hub: minio/minio and minio/mc were removed from
     # Docker Hub (pull access denied, confirmed 2026-09-14).
     image: quay.io/minio/minio
+    restart: unless-stopped
     command: server /data --console-address ":9001"
     environment: {MINIO_ROOT_USER: minio, MINIO_ROOT_PASSWORD: miniosecret}
     volumes: [obs-minio:/data]
