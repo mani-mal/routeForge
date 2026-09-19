@@ -177,6 +177,48 @@ needing a residency retrofit later.
 **Enforcement point:** deferred; `SemanticCacheBackend` Protocol exists now so the seam
 is typed, no lint guard exists yet (nothing to guard).
 
+## C9 — eligibility carryover (added 2026-09-19, P1b Task 5)
+
+C3 partitions on `(tenant_id, onprem_only, allowed_providers)`. That key is the whole
+of what the *store* knows about placement, and it is strictly less than what a request
+is allowed to reach: it knows nothing about the app's `allowed_models`/`allowed_tiers`,
+nothing about the registry's per-model gates, and nothing about P1b's three endpoint
+data-handling declarations (`region`, `prompt_retention`, `accepts_raw_sensitive`). So
+two apps of one tenant share a partition while having different eligible sets, and an
+app declaring `allowed_regions: [us]` could be served a completion produced by an `eu`
+endpoint. The rule:
+
+> An entry whose model is not in **this request's** `FeasibleSet.eligible`
+> (`app/policy/feasible.py`) is a **MISS**. It is not served; the request routes
+> normally.
+
+A cache hit bypasses the router entirely, so this is the *only* point at which the
+request's own eligible set is applied to a cached answer. Enforced in
+`app/pipeline.py` at the lookup call site (so the trace can name the refusal:
+`CacheRecord.bypass_reason = "entry_not_in_eligible_set"`) and again inside
+`_serve_from_cache`, which is the function that actually hands cached text to a
+client — the same two-place, defense-in-depth shape as C3.
+
+**Why not widen the partition key instead.** A key can only encode the rules that
+existed when it was written, and drifts silently the moment a rule is added — exactly
+what happened here between the cache landing and P1b. Checking against the feasible
+set closes the whole class in one place, including the pre-existing case where an
+app's `allowed_models` changed after an entry was cached, and it cannot go stale
+because it asks the one eligibility authority at the moment of use. It also survives
+C8: a future fuzzy backend inherits this guarantee unchanged, because it lives in the
+pipeline, not in the store.
+
+**A refusal is not an eviction.** The entry stays. The partition is shared across an
+app's siblings, so an entry one app's `allowed_regions` excludes may be perfectly
+eligible for another; deleting it would let one app's narrower policy mutate another
+app's cache — a cross-app side effect from a rule defined to narrow only *this*
+request's candidate set — and would make hit/miss timing an information channel about
+a sibling's policy. C5's TTL already bounds staleness and C6 keeps the entry
+in-process, so a kept-but-unservable entry costs only memory.
+
+**Enforcement point:** `app/pipeline.py` (lookup call site + `_serve_from_cache`),
+asking `app/policy/feasible.py`.
+
 ## Summary table
 
 | Guarantee | What | Enforced where | Status |
@@ -189,3 +231,4 @@ is typed, no lint guard exists yet (nothing to guard).
 | C6 | never exported | `CacheRecord` counts-only + lint | built + tested |
 | C7 | default OFF / one owner | `serving.yaml` + loader | built + tested |
 | C8 | embedding seam | `SemanticCacheBackend` Protocol | typed seam only, no backend, no lint guard yet |
+| C9 | eligibility carryover | `pipeline.py` lookup guard + `_serve_from_cache` guard, via `policy/feasible.py` | built + tested |

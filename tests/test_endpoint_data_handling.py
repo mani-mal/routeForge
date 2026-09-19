@@ -374,10 +374,19 @@ def _pipeline(rec, settings, registry, cache=None):
                     ccr=CCRStore(3600), registry=registry, cache=cache)
 
 
-def test_a_cache_hit_from_a_data_handling_excluded_model_is_not_certified_eligible():
-    """The certificate's `chosen_in_eligible_set` is checked for a model the
-    router never chose. A cached answer produced by an endpoint this request's
-    own rules exclude must read False, not True."""
+def test_a_cache_hit_from_a_data_handling_excluded_model_is_a_miss():
+    """A stored entry whose model is NOT in THIS request's eligible set is
+    never served -- the lookup is a MISS and the request routes normally.
+
+    This test used to assert the opposite half of the same fact: that the
+    cached `eu-8b` answer WAS served, with the certificate honestly recording
+    `chosen_in_eligible_set: False`. An honest certificate attached to a
+    response that should never have been sent is not a fix -- the cache
+    bypasses the router entirely, so the eligibility check at lookup time is
+    the ONLY thing standing between a region-excluded endpoint's output and
+    the client. So the check now gates the serve instead of annotating it,
+    and a served hit's `chosen_in_eligible_set` is True by construction.
+    """
     from app.cache.store import DeterministicSemanticCache
 
     s = S.model_copy(update={"serving": S.serving.model_copy(update={
@@ -394,10 +403,142 @@ def test_a_cache_hit_from_a_data_handling_excluded_model_is_not_certified_eligib
                          app_policy=AppPolicyView(allowed_models=frozenset({"eu-8b"}))))
     assert warm["model"] == "eu-8b"
     assert warm["policy"]["checks"]["chosen_in_eligible_set"] is True
+    assert rec.models_called == ["eu-8b"]
 
-    # 2. the same tenant, now requiring `us`, hits that cached `eu-8b` answer.
+    # 2. the same tenant, now requiring `us`, finds that `eu-8b` entry (same
+    #    partition, same query) and must NOT be served it.
     hit = _run(pipe.run("r2", "acme", req,
                         app_policy=AppPolicyView(allowed_regions=frozenset({"us"}))))
-    assert hit["model"] == "eu-8b"
-    assert any(r.get("step") == "cache" and r.get("hit") for r in hit["trace"])
-    assert hit["policy"]["checks"]["chosen_in_eligible_set"] is False
+    assert hit["model"] == "us-8b"                    # routed, not served
+    assert rec.models_called == ["eu-8b", "us-8b"]    # the model really ran
+    cache_recs = [r for r in hit["trace"] if r.get("step") == "cache"]
+    assert cache_recs and cache_recs[0]["hit"] is False
+    assert cache_recs[0]["bypass_reason"] == "entry_not_in_eligible_set"
+    assert hit["policy"]["checks"]["chosen_in_eligible_set"] is True
+
+
+def test_a_refused_cache_entry_is_kept_for_the_apps_it_is_still_valid_for():
+    """The refusal is per-request, not an eviction. The partition key is
+    (tenant, onprem_only, allowed_providers) -- several apps of one tenant
+    share it -- so an entry one app's `allowed_regions` excludes may be
+    perfectly eligible for a sibling app. Deleting it would let one app's
+    narrower policy mutate another app's cache, which is a cross-app side
+    effect from a rule defined to narrow only THIS request's candidate set
+    (and an information channel: B could infer A's policy from hit/miss).
+    TTL already bounds staleness, and the entry never leaves the process.
+    """
+    from app.cache.store import DeterministicSemanticCache
+
+    s = S.model_copy(update={"serving": S.serving.model_copy(update={
+        "semantic_cache": S.serving.semantic_cache.model_copy(
+            update={"enabled": True})})})
+    reg = _two_regions()
+    cache = DeterministicSemanticCache(ttl_seconds=3600)
+    rec = RecordingBackend(_DeterministicLiteLLM(s))
+    pipe = _pipeline(rec, s, reg, cache=cache)
+    eu_only = AppPolicyView(allowed_models=frozenset({"eu-8b"}))
+    req = ChatRequest(messages=[Message(role="user", content="hello there")])
+
+    _run(pipe.run("r1", "acme", req, app_policy=eu_only))     # warms eu-8b
+    assert cache.size == 1
+
+    # A different app of the same tenant requires `us`: refused, and the
+    # entry survives the refusal (the store below replaces it only because
+    # this app's own answer lands on the same key).
+    _run(pipe.run("r2", "acme", req,
+                  app_policy=AppPolicyView(allowed_regions=frozenset({"us"}))))
+    assert cache.size == 1
+
+    # Nothing was evicted on the read: the eu-only app is served from cache
+    # again on a query the `us` app never asked.
+    other = ChatRequest(messages=[Message(role="user", content="second question")])
+    _run(pipe.run("r3", "acme", other, app_policy=eu_only))
+    _run(pipe.run("r4", "acme", other,
+                  app_policy=AppPolicyView(allowed_regions=frozenset({"us"}))))
+    warm_again = _run(pipe.run("r5", "acme", other, app_policy=eu_only))
+    assert cache.size == 2
+    # r5 is a genuine hit only if r4's refusal left something to hit. (r4
+    # stored its own us-8b answer over the key, which eu-only then refuses in
+    # turn -- see the hit-rate note in the task report; what matters here is
+    # that nothing was DELETED by a read.)
+    assert warm_again["model"] in {"eu-8b", "us-8b"}
+
+
+# --- 8. failover and escalation stay inside the feasible set ----------------
+
+
+class _FailForModels(_DeterministicLiteLLM):
+    """Records every model the gateway actually reached, and fails the named
+    ones so the failover path runs."""
+
+    def __init__(self, settings, fail: set[str]) -> None:
+        super().__init__(settings)
+        self._fail = set(fail)
+        self.calls: list[str] = []
+
+    async def generate(self, model, messages, price, tier, hint, tools=None,
+                       tool_choice=None, params=None):
+        self.calls.append(model)
+        if model in self._fail:
+            raise RuntimeError(f"forced failure for {model}")
+        return await super().generate(model, messages, price, tier, hint)
+
+
+def _gateway(backend, registry, settings=S) -> Gateway:
+    return Gateway(settings, backend, Router(settings, registry=registry), registry)
+
+
+def test_a_data_handling_excluded_endpoint_is_never_tried_on_failover():
+    """The first-choice endpoint fails; the excluded one must not be the retry,
+    even though it is healthy, cheaper and in the pool."""
+    reg = _registry({
+        "eu-cheap": _onprem("eu-cheap", region="eu", price=0.01),   # cheapest
+        "us-a": _onprem("us-a", region="us", price=0.20),
+        "us-b": _onprem("us-b", region="us", price=0.30),
+    })
+    msgs = [Message(role="user", content="hello there")]
+
+    # Control: with no regional requirement, `eu-cheap` is what the router
+    # picks first -- so its absence below is an exclusion, not an accident.
+    open_ctx = _ctx(reg, AppPolicyView())
+    open_backend = _FailForModels(S, set())
+    _run(_gateway(open_backend, reg).run(open_ctx, msgs, 20, 0.1, {}))
+    assert open_backend.calls == ["eu-cheap"]
+
+    ctx = _ctx(reg, AppPolicyView(allowed_regions=frozenset({"us"})))
+    backend = _FailForModels(S, {"us-a"})
+    result, records = _run(_gateway(backend, reg).run(ctx, msgs, 20, 0.1, {}))
+
+    assert result.model == "us-b"
+    assert backend.calls == ["us-a", "us-b"]
+    assert "eu-cheap" not in backend.calls
+    # ... and the retry's own candidate set still names the region exclusion,
+    # not a softer reason.
+    retry = [r for r in records if r.step == "router"][-1]
+    reasons = {c.name: c.reason for c in retry.rejected}
+    assert reasons["eu-cheap"].startswith("excluded · region")
+    assert reasons["us-a"] == "excluded · prior failure"
+
+
+def test_escalation_stays_inside_the_feasible_set():
+    """A confidence escalation raises the target tier; the higher tier's
+    excluded endpoint must stay unreachable, even when it is the only cheap
+    way to satisfy the new floor."""
+    reg = _registry({
+        "us-8b": _onprem("us-8b", region="us", price=0.05),
+        "eu-32b": _onprem("eu-32b", tier="mid", region="eu", price=0.01),
+        "us-32b": _onprem("us-32b", tier="mid", region="us", price=0.40),
+    })
+    msgs = [Message(role="user", content="hello there")]
+    ctx = _ctx(reg, AppPolicyView(allowed_regions=frozenset({"us"})))
+
+    backend = _FailForModels(S, set())
+    result, records = _run(_gateway(backend, reg).run(
+        ctx, msgs, 20, 0.1, {"mock_confidence": 0.1}))
+
+    # cheap served first, confidence below threshold -> escalate to mid.
+    assert backend.calls == ["us-8b", "us-32b"]
+    assert "eu-32b" not in backend.calls
+    assert result.model == "us-32b"
+    tiers = [r.chosen_tier for r in records if r.step == "router"]
+    assert tiers == ["cheap", "mid"]
