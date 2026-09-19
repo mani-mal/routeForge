@@ -227,6 +227,10 @@ class UsageRecord(Base):
     prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
     completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
     total_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    # Nullable with no default: this column is added to deployed databases by
+    # scripts/migrate_app_policies.py, whose stated invariant is that every
+    # column it adds is nullable with no default. Readers coerce NULL to 0.
+    cached_prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     quality: Mapped[float] = mapped_column(Float, default=0.0)
     quality_source: Mapped[str] = mapped_column(String(20), default="?")
 

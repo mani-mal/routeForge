@@ -90,6 +90,15 @@ MODEL_COLUMNS: list[tuple[str, str, str]] = [
     ("accepts_raw_sensitive", "BOOLEAN", "BOOLEAN"),
 ]
 
+# 2026-09-19 P2a cached-token accounting. Nullable with no default: an existing
+# row reads NULL, which every reader coerces to 0 ("no cached tokens recorded"),
+# so this migration changes no cost figure already written.
+USAGE_TABLE = "usage_records"
+
+USAGE_COLUMNS: list[tuple[str, str, str]] = [
+    ("cached_prompt_tokens", "INTEGER", "INTEGER"),
+]
+
 
 async def _run() -> int:
     url = os.environ.get("DATABASE_URL") or DEFAULT_SQLITE_URL
@@ -110,7 +119,9 @@ async def _run() -> int:
         # got a traceback instead of the per-column log. Per-table scoping means
         # a table that is absent is reported and skipped, and the other table's
         # migration still commits.
-        for table, columns in ((TABLE, COLUMNS), (MODELS_TABLE, MODEL_COLUMNS)):
+        for table, columns in ((TABLE, COLUMNS),
+                               (MODELS_TABLE, MODEL_COLUMNS),
+                               (USAGE_TABLE, USAGE_COLUMNS)):
             print(f"  {table}:")
             async with engine.begin() as conn:
                 try:

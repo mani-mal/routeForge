@@ -291,3 +291,7 @@ class GenerationResult(BaseModel):
     # None on the direct path (which never passes tools). Each item is an
     # OpenAI-shape tool_call dict: {id, type, function:{name, arguments}}.
     tool_calls: list[dict] | None = None
+    # Prompt tokens the PROVIDER served from its own prompt cache
+    # (`usage.prompt_tokens_details.cached_tokens`). 0 when the provider does
+    # not report the field, which is indistinguishable from a genuine miss.
+    cached_prompt_tokens: int = 0
