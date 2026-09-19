@@ -218,6 +218,14 @@ On-prem models are onboarded at runtime, not declared in YAML — see
 backend selector: on-prem endpoints, prices, and tiers come from the `ModelRegistry`
 (YAML cloud pool ∪ enabled onboarded rows), never a static `base_url` here.
 
+Onboarding also records three **data-handling declarations** per endpoint — `region`,
+`prompt_retention`, `accepts_raw_sensitive` — resolved per-model → provider default →
+`unknown`, which an app's `allowed_regions` / `require_no_retention` are enforced against
+in `app/policy/feasible.py` before the router scores anything. **RouteForge records what
+an operator declared about an endpoint and enforces policy against that declaration — it
+cannot verify a provider's contractual claim.** See
+`docs/guides/onboarding-models.md` §(e2) and `docs/reference/per-app-config.md`.
+
 **Canonical values that used to drift — now single-sourced:**
 - Provider name is `onprem` (one word) in every file. Residency flag is `onprem_only`.
 - Tiers are exactly `cheap | mid | frontier`. There is **no `strong` tier**.

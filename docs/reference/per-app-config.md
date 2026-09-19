@@ -31,8 +31,13 @@ to prevent:
 
 | | Governs | Fields |
 |---|---|---|
-| **Placement** | *Where compute may run.* Nothing else. | `residency` |
+| **Placement** | *Where compute may run.* Nothing else. | `residency`, and the placement-adjacent `allowed_regions` / `require_no_retention` |
 | **Protection** | *How much is done to the data.* Nothing else. | `model_input`, `client_output`, `capture_io`, `pii_detection`, `content_integrity`, `stream_mode` |
+
+`allowed_regions` and `require_no_retention` are placement-adjacent **constraints** rather
+than a second placement axis: they can only narrow which endpoints a request may reach,
+never widen it and never change what the gate does to the data. See
+[Endpoint data handling](#endpoint-data-handling--region-retention-raw-sensitive-content).
 
 **Neither may be inferred from the other.** A protection setting can never move
 placement, and a placement setting can never change a protection value. The one
@@ -244,6 +249,7 @@ sp.model_input_mode, sp.client_output_mode, sp.telemetry_io_mode
 sp.detection_mode, sp.content_integrity_mode, sp.stream_mode
 sp.cross_axis_rules_fired, sp.detected_entity_types     # types only, never values
 sp.candidates, sp.app_policy_version, sp.routing_policy_version
+sp.endpoint_registry_version, endpoint_data_handling    # the endpoint declarations a decision rested on
 sp.checks: {chosen_in_eligible_set, fallback_in_eligible_set}
 ```
 
@@ -862,6 +868,153 @@ pool before the router scores anything. Neither a protection setting nor a telem
 setting can lower the application's residency floor, and an empty eligible set is a clean
 rejection, never a silent widening.
 
+A third pair of constraints sits alongside those two — see the next section.
+
+## Endpoint data handling — region, retention, raw sensitive content
+
+**RouteForge records what an operator DECLARED about an endpoint and enforces policy
+against that declaration — it cannot verify a provider's contractual claim.** Everything
+in this section rests on that sentence. A `prompt_retention: none` on an endpoint is the
+operator's statement about a contract they signed; RouteForge stores it, filters on it,
+names it in the trace and shows its provenance to an auditor. It does not, and cannot,
+prove the provider honours it.
+
+### What an endpoint declares
+
+Three attributes, on every endpoint RouteForge can reach — an onboarded on-prem row or a
+`config/routing.yaml` `model_pool` entry:
+
+| Attribute | Values | Meaning |
+|---|---|---|
+| `region` | any token, normalized to lowercase (`us`, `eu`, `de`, `onprem`, …) | Where the compute runs. |
+| `prompt_retention` | `none` \| `retained` \| `unknown` | Whether the provider keeps prompts. |
+| `accepts_raw_sensitive` | `true` \| `false` \| `unknown` | Whether this endpoint may receive **unredacted** sensitive content. |
+
+**`region` is customer vocabulary, not a RouteForge enum.** It is compared exactly, after
+lowercasing and stripping, and nothing validates it — RouteForge ships no geography list,
+because one customer's `eu` may mean something specific to their contract. The other two
+*are* fixed enums, and a value outside them fails the boot (see "Config lint" below).
+
+Set them at onboarding — see `docs/guides/onboarding-models.md` for the API and YAML
+shapes, and for the console form.
+
+### Resolution order
+
+Per attribute, most specific wins:
+
+1. **the per-model value** — a column on `onboarded_models`, or a key on a
+   `routing.yaml` `model_pool` entry;
+2. **the provider default** — `providers.<name>.{region,prompt_retention,accepts_raw_sensitive}`
+   in `config/serving.yaml`;
+3. **`unknown`**.
+
+`ModelRegistry.effective_pool()` is the one place this resolution happens; every consumer
+reads the resolved candidate and none re-derives it. The resolved value **and its
+provenance** (`model` / `provider_default` / `unknown`) are what the certificate reports,
+so an auditor can see whether a decision rested on a per-endpoint declaration or on a
+blanket provider default.
+
+### What an application requires
+
+Two nullable columns on `app_policies`, compiled like every other field:
+
+| Field | Values | `null` means |
+|---|---|---|
+| `allowed_regions` | non-empty list of region tokens, e.g. `["us"]` | No regional constraint. |
+| `require_no_retention` | `true` \| `false` | `false` — no retention constraint. |
+
+They are **placement-adjacent constraints, not protection axes**: they narrow *where* a
+request may run and never change what the gate does to the data. They can only ever
+narrow the candidate set — no value of either can widen it, reach a provider residency
+excluded, or touch `allowed_providers` / `onprem_only`.
+
+`allowed_regions` has no ceiling, no preset and no deployment default — it is
+explicit-or-null. An unparseable value (not a list, empty, or holding a non-string or
+blank token) **denies** to "matches nothing" and the write is refused with
+`ALLOWED_REGIONS_INVALID`. Tokens are normalized to lowercase on both sides, so an app
+asking for `"US"` matches an endpoint declaring `us`.
+
+### The three exclusion rules
+
+They run in `app/policy/feasible.py`, immediately **behind** the residency filter and
+ahead of everything else — so an excluded endpoint is unreachable by construction rather
+than rejected post-hoc, and a contractual refusal is never relabelled by a softer "not
+permitted for application". Residency still outranks all three (CLAUDE.md rule 3).
+
+| Rule | Fires when | Reason code | An `unknown` endpoint is |
+|---|---|---|---|
+| Region | the app set `allowed_regions` and the endpoint's region is not in it | `region_not_allowed` | **excluded** |
+| Retention | the app set `require_no_retention` and the endpoint's retention is not `none` | `prompt_retention_not_allowed` | **excluded** |
+| Raw sensitive | the request would send raw sensitive content **and** the endpoint declares `accepts_raw_sensitive: false` | `raw_sensitive_not_accepted` | **kept** |
+
+"The request would send raw sensitive content" means the compiled `model_input` is `raw`
+**and** the gate classified the request above `public`. Under `model_input: redact` the
+model is shown placeholders, so the rule does not fire — which is how an endpoint that
+declares `accepts_raw_sensitive: false` is *eligible after redaction* without needing a
+third app-side knob.
+
+An excluded endpoint is excluded for failover and for confidence escalation too: both
+draw from the same compiled feasible set, so a candidate refused on the first pass cannot
+be reached on a retry. If every candidate is excluded, the request is **rejected with
+reasons** — never relaxed onto a non-compliant endpoint (CLAUDE.md rule 5).
+
+### `unknown` never satisfies a requirement, and never blocks a request that imposes none
+
+Both halves of that sentence are load-bearing, and together they are why the `unknown`
+column above is **not uniform**.
+
+- **Region and retention exclude an `unknown` endpoint,** because *the application
+  declared a requirement*. An endpoint that cannot show the property does not qualify —
+  that is the entire content of the requirement. An endpoint whose region is `unknown` is
+  therefore excluded only for an app that set `allowed_regions`; an app that set neither
+  column is unaffected by it.
+- **The raw-sensitive rule keeps an `unknown` endpoint** — it fires *only* on a declared
+  `false`. This is the exception, and it differs because **no application declared
+  anything**: the requirement comes from the request's own shape (a `raw` `model_input`
+  over a better-than-public sensitivity). Excluding `unknown` there would retire **every
+  endpoint in every existing deployment** on the first request carrying a detected
+  entity — a rule nobody asked for. Nothing backfills `accepts_raw_sensitive`, so there is
+  no upgrade path that avoids it. Only an operator's explicit `false` is enforced.
+
+The practical consequence, and the upgrade promise: **an application that sets neither
+`allowed_regions` nor `require_no_retention` routes exactly as it did before this feature
+existed**, on a pool where every endpoint is `unknown` on all three.
+
+A strict mode that excluded any incompletely-described endpoint was considered and
+deliberately not built: it would be an outage for every existing deployment on upgrade.
+
+### Config lint and save-time warnings
+
+Four boot-failing violations, on top of the existing config lint:
+
+```
+PROVIDER_PROMPT_RETENTION_UNKNOWN providers.<name> prompt_retention=<v> not in ['none','retained','unknown']
+PROVIDER_RAW_SENSITIVE_UNKNOWN    providers.<name> accepts_raw_sensitive=<v> not in ['false','true','unknown']
+POOL_PROMPT_RETENTION_UNKNOWN     model_pool:<slug> prompt_retention=<v> not in [...]
+POOL_RAW_SENSITIVE_UNKNOWN        model_pool:<slug> accepts_raw_sensitive=<v> not in [...]
+```
+
+An unset value is never a violation — "not declared here" is the normal state. `region`
+is never linted, because it has no enum to lint against.
+
+Saving an app policy whose `allowed_regions` no endpoint currently declares returns a
+**warning**, not an error: the matching endpoint may be onboarded later. The warning
+names what the app wants, what the pool declares, and that every request is rejected until
+one of the two changes.
+
+### Evidence on the response and the trace
+
+```
+sp.endpoint_registry_version   # content hash over the effective pool's identity + these three declarations
+endpoint_data_handling         # the SERVED endpoint's three values + the provenance of each
+sp.candidates                  # rejected entries carry `code`: region_not_allowed | prompt_retention_not_allowed | raw_sensitive_not_accepted
+```
+
+`endpoint_registry_version` changes the instant any endpoint's declaration changes, so an
+edited declaration becomes visible in the trace instead of silent. It deliberately covers
+only name/provider/tier plus the three declarations — a rename or a price change must not
+churn a version a replay consumer keys on. See `docs/reference/routing-observability.md`.
+
 ## `stream_mode`
 
 **Console:** *Settings → step 5 Delivery and limits → streaming.* The unset option names
@@ -990,7 +1143,36 @@ ALTER TABLE app_policies ADD COLUMN model_input VARCHAR(16);       -- 2026-09-18
 ALTER TABLE app_policies ADD COLUMN client_output VARCHAR(16);     -- 2026-09-18 (P1a)
 ALTER TABLE app_policies ADD COLUMN content_integrity VARCHAR(32); -- 2026-09-18 (P1a)
 ALTER TABLE app_policies ADD COLUMN escalate_residency_on_detection BOOLEAN; -- 2026-09-18 (P1a)
+ALTER TABLE app_policies ADD COLUMN allowed_regions JSON;          -- 2026-09-19 (P1b)
+ALTER TABLE app_policies ADD COLUMN require_no_retention BOOLEAN;  -- 2026-09-19 (P1b)
 ```
+
+P1b also adds three columns to a **second** table, `onboarded_models` — the endpoint side
+of the same feature (what an operator declares about an endpoint, see
+[Endpoint data handling](#endpoint-data-handling--region-retention-raw-sensitive-content)):
+
+```sql
+ALTER TABLE onboarded_models ADD COLUMN region VARCHAR(64);            -- 2026-09-19 (P1b)
+ALTER TABLE onboarded_models ADD COLUMN prompt_retention VARCHAR(16);  -- 2026-09-19 (P1b)
+ALTER TABLE onboarded_models ADD COLUMN accepts_raw_sensitive BOOLEAN; -- 2026-09-19 (P1b)
+```
+
+> **Upgrade order for the five P1b columns (2026-09-19): migrate first, then roll the
+> image.** Run these five `ALTER`s — or `scripts/migrate_app_policies.py`, which now
+> covers both tables and is safe to run repeatedly — **before** rolling any image built
+> from the P1b branch. The new image reads `allowed_regions` / `require_no_retention` on
+> every policy lookup and the three `onboarded_models` columns on every registry refresh,
+> so on a database missing them the failure is a raw DB error, not a clean 422. The old
+> image never references them, so applying the `ALTER`s early is always safe.
+>
+> **No backfill, and no behavior change for existing rows.** All five are nullable with
+> no default, so every existing row gets `NULL`. On `app_policies`, `NULL` means *no
+> constraint* — `allowed_regions` NULL is "no regional requirement" and
+> `require_no_retention` NULL reads as `false`. On `onboarded_models`, `NULL` means
+> *undeclared*, which resolves to `unknown`, and an `unknown` endpoint is only ever
+> excluded for an application that declared a matching requirement. So after this
+> migration **every existing application routes to exactly the endpoints it routed to
+> before**, and nothing changes until an operator sets a declaration or a requirement.
 
 > **Upgrade order for the four P1a data-handling columns (2026-09-18): migrate
 > first, then roll the image**, same as `max_cost_usd_per_request` above. These

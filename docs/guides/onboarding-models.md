@@ -48,6 +48,9 @@ Field reference (`OnboardIn`):
 | `allowed_app_ids` | list[str] \| null | no | App-scoping — see (d). |
 | `notes` | str \| null | no | Free text. |
 | `enabled` | bool | no (default `true`) | Admin intent — see (c) for how this combines with the probe. |
+| `region` | str \| null | no | Data-handling declaration — see (e2). Free customer vocabulary, stored lowercased. |
+| `prompt_retention` | str \| null | no | Data-handling declaration — `none \| retained \| unknown`. |
+| `accepts_raw_sensitive` | bool \| null | no | Data-handling declaration — JSON boolean here. |
 
 Edit an onboarded model with `PUT /admin/infra/models/{slug}` (same body,
 full replace — it re-probes on every edit). Remove one with
@@ -89,6 +92,69 @@ guarantee the old `inference_backend: none` reject gave; it's now derived <!-- p
 from onboarding state instead of a static config value, and it holds even
 if a previously-healthy model goes unreachable and is later disabled by an
 edit or a failed re-probe.
+
+## (e2) Data-handling declarations
+
+An operator declares three data-handling attributes about an endpoint at onboarding.
+**RouteForge records what an operator declared about an endpoint and enforces policy
+against that declaration — it cannot verify a provider's contractual claim.** These are
+statements about a contract the operator signed, stored so that an application's policy
+can be enforced against them and so that an auditor can see what a decision rested on.
+They are never a proof, and the console says so on the form.
+
+| Attribute | Values | Meaning |
+|---|---|---|
+| `region` | any token, lowercased (`us`, `eu`, `de`, `onprem`, …) | Where the compute runs. Customer vocabulary — RouteForge ships no geography list and validates nothing here. |
+| `prompt_retention` | `none` \| `retained` \| `unknown` | Whether the provider keeps prompts. |
+| `accepts_raw_sensitive` | `true` \| `false` \| `unknown` | Whether this endpoint may receive **unredacted** sensitive content. |
+
+**Two shapes for the same attribute, and they differ on purpose.**
+
+- **Onboarding API / DB / console** (`POST`/`PUT /admin/infra/models`):
+  `accepts_raw_sensitive` is a **JSON boolean** (`true` / `false`), and *omitting* it —
+  or sending `null` — means "undeclared". `region` and `prompt_retention` are strings, or
+  `null` for undeclared.
+
+  ```json
+  {"slug": "qwen3-8b", "display_name": "Qwen3 8B", "tier": "cheap",
+   "endpoint": "http://vllm.my-ns:8000/v1", "price_input": 0, "price_output": 0,
+   "region": "us", "prompt_retention": "none", "accepts_raw_sensitive": true}
+  ```
+
+- **YAML** (`config/routing.yaml`'s `model_pool` entries, and provider defaults under
+  `config/serving.yaml`'s `providers.<name>`): all three are **string tokens**, so
+  `accepts_raw_sensitive` is `"true"` / `"false"` / `"unknown"`, not a YAML boolean.
+
+  ```yaml
+  # serving.yaml — the provider-wide default
+  providers:
+    azure: {enabled: true, region: us, prompt_retention: none, accepts_raw_sensitive: "false"}
+
+  # routing.yaml — a per-model declaration, which wins over the provider default
+  model_pool:
+    - {name: gpt-4o-mini, provider: azure, tier: mid, region: us, prompt_retention: none}
+  ```
+
+**Resolution order**, per attribute: the per-model value, else the provider default from
+`serving.yaml`, else `unknown`. `ModelRegistry.effective_pool()` resolves it once and
+records the provenance (`model` / `provider_default` / `unknown`) on the decision
+certificate.
+
+**One asymmetry worth knowing before you edit an endpoint.** `PUT /admin/infra/models/{slug}`
+is a full replace, so omitting `region` or `prompt_retention` clears them back to
+undeclared — that direction is *stricter*, since an app requiring a region excludes an
+undeclared endpoint. `accepts_raw_sensitive` is the exception: omitting it keeps the
+stored value, because clearing it would *loosen* the endpoint (the raw-sensitive rule
+fires only on a declared `false`). Send `"accepts_raw_sensitive": null` explicitly to
+clear it.
+
+**A malformed `prompt_retention` or `accepts_raw_sensitive` in YAML fails the boot**
+(`POOL_*_UNKNOWN` / `PROVIDER_*_UNKNOWN`). An unset value never does. `region` is never
+linted — it has no enum.
+
+What an application does with these — `allowed_regions`, `require_no_retention`, the
+three exclusion rules and their reason codes — is in
+`docs/reference/per-app-config.md`.
 
 ## (f) Migration note (existing deployments)
 

@@ -563,3 +563,167 @@ def test_escalation_stays_inside_the_feasible_set():
     assert result.model == "us-32b"
     tiers = [r.chosen_tier for r in records if r.step == "router"]
     assert tiers == ["cheap", "mid"]
+
+
+# --- 9. the healthcare scenario, end to end at the HTTP boundary -------------
+#
+# Design §12's definition of done, and the priorities doc's §6 table. Every
+# assertion below is made on what a CLIENT receives from
+# `POST /v1/chat/completions` -- not on an internal `feasible_set` call -- so
+# it pins the whole path: admin onboarding of the four endpoints, the app's
+# two requirements, the gate detecting the SSN, stage 2 narrowing the
+# candidate set, and the certificate/trace naming the exclusions in the
+# operator's own vocabulary.
+#
+#   | endpoint            | region | retention | accepts_raw_sensitive | verdict |
+#   |---------------------|--------|-----------|-----------------------|---------|
+#   | local-8b-us         | us     | none      | true                  | eligible |
+#   | cloud-us            | us     | none      | FALSE                 | eligible -- AFTER REDACTION |
+#   | cloud-eu            | eu     | none      | true                  | region_not_allowed |
+#   | cloud-us-retaining  | us     | RETAINED  | true                  | prompt_retention_not_allowed |
+#
+# `cloud-us` is the priorities doc's "Azure US -- permitted after redaction"
+# row, and it is the reason the scenario is asserted twice: under the default
+# `enforced` posture the model is shown placeholders, so the raw-sensitive
+# rule does not fire and `cloud-us` survives; flip the app to
+# `model_input: raw` and the SAME endpoint leaves the set with
+# `raw_sensitive_not_accepted`. One declaration, two request shapes.
+
+
+HEALTHCARE_ENDPOINTS = {
+    # slug                  tier     region  retention   accepts_raw_sensitive
+    "local-8b-us":        ("cheap", "us",   "none",     True),
+    "cloud-us":           ("mid",   "us",   "none",     False),
+    "cloud-eu":           ("mid",   "eu",   "none",     True),
+    "cloud-us-retaining": ("mid",   "us",   "retained", True),
+}
+
+_SSN_PROMPT = {"model": "auto", "messages": [
+    {"role": "user",
+     "content": "Patient SSN is 123-45-6789 — summarise the intake note."}]}
+
+
+def _healthcare_client(harness, client):
+    harness.disable_seeded_models(client)
+    for slug, (tier, region, retention, raw_ok) in HEALTHCARE_ENDPOINTS.items():
+        harness.add_model(client, slug, tier=tier, price_input=0.1,
+                          price_output=0.1, region=region,
+                          prompt_retention=retention,
+                          accepts_raw_sensitive=raw_ok)
+
+
+def _router_record(body: dict) -> dict:
+    return [r for r in body["trace"] if r.get("step") == "router"][0]
+
+
+def _data_handling_exclusions(record: dict) -> dict[str, str]:
+    """Only the stage-2 rejections. A rejection with `code: null` is an
+    ordinary routing reason (tier, score, budget) and is NOT an exclusion --
+    the endpoint was still in the feasible set."""
+    return {r["name"]: r["code"] for r in record["rejected"] if r.get("code")}
+
+
+def test_healthcare_scenario_over_http_two_survivors_two_named_exclusions():
+    """Design §12: four endpoints, an SSN request, two survivors, and the two
+    exclusions explained in the operator's own vocabulary."""
+    from tests.onboarding import harness
+
+    with harness.conformance_client() as client:
+        _healthcare_client(harness, client)
+        app = harness.onboard(client, "general-health",
+                              allowed_regions=["us"], require_no_retention=True)
+
+        r = app.chat(_SSN_PROMPT)
+        assert r.status_code == 200, r.text
+        body = r.json()
+
+        # The gate ran first and classified the request off the SSN: the
+        # data-handling rules are narrowing a set that residency has already
+        # decided (rule 3), never the other way round.
+        assert body["policy"]["detected_entity_types"] == ["US_SSN"]
+        assert body["policy"]["placement"] == "onprem_only"
+        assert body["policy"]["model_input_mode"] == "redact"
+
+        record = _router_record(body)
+        # The two non-compliant endpoints, each named by its own code.
+        assert _data_handling_exclusions(record) == {
+            "cloud-eu": REGION_NOT_ALLOWED,
+            "cloud-us-retaining": PROMPT_RETENTION_NOT_ALLOWED,
+        }
+        # ... in the customer's vocabulary, with both sides of the mismatch.
+        reasons = {r["name"]: r["reason"] for r in record["rejected"]}
+        assert reasons["cloud-eu"] == (
+            "excluded · region · endpoint declares 'eu', application allows 'us'")
+        assert reasons["cloud-us-retaining"] == (
+            "excluded · prompt retention · endpoint declares 'retained', "
+            "application requires 'none'")
+
+        # The two compliant endpoints survive. `cloud-us` declares
+        # accepts_raw_sensitive: false and is STILL eligible, because the
+        # compiled model_input is `redact` -- the priorities doc's "eligible
+        # after redaction" row, obtained from P1a's existing axis.
+        survivors = {"local-8b-us", "cloud-us"}
+        assert survivors.isdisjoint(_data_handling_exclusions(record))
+        assert record["chosen"] in survivors
+        # Whichever of the two the router did not serve was set aside for an
+        # ordinary routing reason (tier), not excluded.
+        not_served = (survivors - {record["chosen"]}).pop()
+        assert {r["name"]: r["code"] for r in record["rejected"]}.get(
+            not_served, "absent") in (None, "absent")
+
+        # The decision names the registry it was made against, and what the
+        # SERVED endpoint declared -- with the provenance of each value, so an
+        # auditor can see the decision rested on a per-model declaration
+        # rather than a provider default (design §6).
+        policy = body["policy"]
+        assert len(policy["endpoint_registry_version"]) == 12
+        assert policy["endpoint_data_handling"]["region"] == "us"
+        assert policy["endpoint_data_handling"]["prompt_retention"] == "none"
+        assert policy["endpoint_data_handling"]["source"] == {
+            "region": "model", "prompt_retention": "model",
+            "accepts_raw_sensitive": "model"}
+        assert policy["checks"]["chosen_in_eligible_set"] is True
+
+
+def test_healthcare_scenario_over_http_raw_input_drops_the_redaction_only_endpoint():
+    """Same four endpoints, same app requirements, same SSN -- but the app is
+    configured to show the model raw input. `cloud-us`, which declares
+    `accepts_raw_sensitive: false`, now leaves the set as
+    `raw_sensitive_not_accepted`; the other two exclusions are unchanged, and
+    the endpoint declaring `true` serves the request."""
+    from tests.onboarding import harness
+
+    with harness.conformance_client() as client:
+        _healthcare_client(harness, client)
+        app = harness.onboard(client, "general-health-raw",
+                              allowed_regions=["us"], require_no_retention=True,
+                              model_input="raw", client_output="redact")
+
+        r = app.chat(_SSN_PROMPT)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["policy"]["model_input_mode"] == "raw"
+
+        record = _router_record(body)
+        assert _data_handling_exclusions(record) == {
+            "cloud-eu": REGION_NOT_ALLOWED,
+            "cloud-us-retaining": PROMPT_RETENTION_NOT_ALLOWED,
+            "cloud-us": RAW_SENSITIVE_NOT_ACCEPTED,
+        }
+        assert record["chosen"] == "local-8b-us"
+
+
+def test_healthcare_endpoints_are_all_eligible_for_an_app_that_requires_nothing():
+    """The upgrade-safety half of design §12, asserted on the same four
+    endpoints over HTTP: an app that sets neither requirement reaches all of
+    them, so nothing about declaring these fields narrows anybody else."""
+    from tests.onboarding import harness
+
+    with harness.conformance_client() as client:
+        _healthcare_client(harness, client)
+        app = harness.onboard(client, "no-requirements")
+
+        r = app.chat(_SSN_PROMPT)
+        assert r.status_code == 200, r.text
+        record = _router_record(r.json())
+        assert _data_handling_exclusions(record) == {}

@@ -204,6 +204,27 @@ Never silently route it to cloud — that inverts the entire privacy claim. See
 `docs/guides/onboarding-models.md` §(e) and CLAUDE.md's "No on-prem model onboarded ⇒ derived
 reject, not a backend value" note. Test this explicitly.
 
+## What the operator declares about an endpoint — and what routeForge can prove
+
+Onboarding records three data-handling declarations alongside the endpoint's transport
+details: `region` (free customer vocabulary, lowercased), `prompt_retention`
+(`none | retained | unknown`) and `accepts_raw_sensitive` (`true | false | unknown`).
+An application's policy may then require `allowed_regions` or `require_no_retention`, and
+a non-matching endpoint is filtered out of the candidate pool **before** the router scores
+anything (`app/policy/feasible.py`), with the reason named in the trace.
+
+**RouteForge records what an operator declared about an endpoint and enforces policy
+against that declaration — it cannot verify a provider's contractual claim.** Nothing
+about what runs behind the endpoint is inspected, probed or attested: the onboarding probe
+checks reachability and that the slug is served, and that is the entire extent of what
+routeForge knows first-hand. Do not describe these as verified facts anywhere, in docs or
+in the console.
+
+Undeclared is the normal state, and it resolves to `unknown`. An `unknown` endpoint is
+excluded only for an application that declared a matching requirement; it is never a boot
+failure and never narrows an app that asks for nothing. Reference:
+`docs/guides/onboarding-models.md` §(e2) and `docs/reference/per-app-config.md`.
+
 ## No boot-time backend health check
 
 There is no `inference_backend` to validate at startup and no `allow_backend_fallback`
