@@ -284,6 +284,25 @@ than listing it as available: backlog B37 (`docs/backlog/bugs.md`). Until that
 ships, `GET /health` reports what is *configured*, not what can serve — an
 endpoint that died hours ago still appears in `models`.
 
+**The Langfuse overlay used to have the same problem, and no longer does.** After
+a host reboot on 2026-09-19 the api, ui, db and model server all came back while
+all six Langfuse containers stayed down — they carried no restart policy — so the
+exporter retried a name that no longer resolved and every trace was dropped from
+exactly the window worth looking at. `deploy/compose/langfuse.yml` now sets
+`restart: unless-stopped` on each long-lived service. If you are running a stack
+started before that change, recreate it once to pick the policy up:
+
+```bash
+docker compose -p routeforge-spark \
+  -f deploy/spark/docker-compose.yml \
+  -f deploy/compose/langfuse.yml \
+  -f deploy/spark/docker-compose.langfuse.yml \
+  up -d
+```
+
+A container keeps the policy it was created with, so `up -d` (which recreates on a
+config change) is what applies it — restarting the container does not.
+
 ---
 
 ## Exposure notes — read before putting this on a network you share
