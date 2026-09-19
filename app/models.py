@@ -122,7 +122,19 @@ class ExecutionPolicyContext(BaseModel):
     onprem_only: bool
     allowed_providers: frozenset[str]
     allowed_models: frozenset[str]
+    # Does the app narrow the model set at all (allowed_tiers/allowed_models)?
+    # A UI/reporting signal only. It is NOT an enforcement switch: for years it
+    # doubled as one in `Router.select`, which meant an eligibility rule written
+    # into `allowed_models` was ignored for every app that set no allowlist.
+    # `eligibility_resolved` below is what says `allowed_models` is binding.
     model_scope_active: bool = False
+    # True when `app/policy/context.py::build_context` computed `allowed_models`
+    # as this request's feasible set (`app/policy/feasible.py`). False on a
+    # context assembled directly -- tests and internal callers that pass a
+    # placeholder `allowed_models` -- where the feasible set is recomputed from
+    # the pool instead. Never widens anything: placement, the pin, prior
+    # failures and the registry gates apply either way.
+    eligibility_resolved: bool = False
     requested_model: str | None = None
     max_cost_usd: float
     max_latency_ms: int
