@@ -15,7 +15,9 @@ exactly like the app (`app/apps/db.py`).
 
     DATABASE_URL=postgresql+asyncpg://... python scripts/migrate_app_policies.py
 
-Prints one line per column (added / already present) and exits 0 on success.
+Prints one line per column (added / already present) and exits 0 on success. A
+table that does not exist yet is reported (`table absent, skipped`) and does not
+stop the other table's migration — each table runs in its own transaction.
 
 **Run it BEFORE rolling the image**, never after. The old image never references
 a column it does not know about, so applying the ALTERs early is always safe;
@@ -34,6 +36,7 @@ import os
 import sys
 
 from sqlalchemy import inspect, text
+from sqlalchemy.exc import NoSuchTableError
 from sqlalchemy.ext.asyncio import create_async_engine
 
 # Mirror app/apps/db.py's default so the script stands alone (no `app` import,
@@ -94,14 +97,31 @@ async def _run() -> int:
     safe = url.split("@")[-1] if "@" in url else url
     print(f"migrate_app_policies: target …@{safe}")
     engine = create_async_engine(url)
+    dialect = engine.dialect.name  # "postgresql" | "sqlite" | ...
     try:
-        async with engine.begin() as conn:
-            dialect = engine.dialect.name  # "postgresql" | "sqlite" | ...
-            for table, columns in ((TABLE, COLUMNS), (MODELS_TABLE, MODEL_COLUMNS)):
-                print(f"  {table}:")
-                existing = await conn.run_sync(
-                    lambda sync_conn, t=table: {
-                        c["name"] for c in inspect(sync_conn).get_columns(t)})
+        # ONE TRANSACTION PER TABLE, and the missing-table case handled inside
+        # it. A database can legitimately have one of these tables and not the
+        # other (`onboarded_models` is created on first boot of a version that
+        # has it), and `inspect(...).get_columns` raises `NoSuchTableError` for
+        # the absent one. Under a single shared `engine.begin()` that exception
+        # unwound the whole block, so on Postgres — where DDL is transactional,
+        # and Postgres is what the deployed nodes run — the `app_policies`
+        # ALTERs that had already succeeded ROLLED BACK too, and the operator
+        # got a traceback instead of the per-column log. Per-table scoping means
+        # a table that is absent is reported and skipped, and the other table's
+        # migration still commits.
+        for table, columns in ((TABLE, COLUMNS), (MODELS_TABLE, MODEL_COLUMNS)):
+            print(f"  {table}:")
+            async with engine.begin() as conn:
+                try:
+                    existing = await conn.run_sync(
+                        lambda sync_conn, t=table: {
+                            c["name"] for c in inspect(sync_conn).get_columns(t)})
+                except NoSuchTableError:
+                    # Not an error: nothing to migrate, and `create_all` will
+                    # build it with every column already in place.
+                    print("    ~ table absent, skipped")
+                    continue
                 for name, pg_type, sqlite_type in columns:
                     if name in existing:
                         print(f"    = {name}: already present")

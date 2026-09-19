@@ -602,7 +602,9 @@ def validate_effective(eff: EffectivePolicy, deployment: Settings, *,
                 "ALLOWED_REGIONS_INVALID",
                 f"bad allowed_regions {value!r}; legal shape: a non-empty "
                 "list of non-empty region tokens (strings), e.g. "
-                '["us", "eu"]. Tokens are normalised to lowercase.')
+                '["us", "eu"]. Tokens are normalised to lowercase. An empty '
+                'list is refused; to remove the constraint send '
+                'reset: ["allowed_regions"].')
         if value in UNIMPLEMENTED:
             # Design §9: named in the design, deliberately not built. Rejected
             # rather than faked — a policy that asks for tokenization must not

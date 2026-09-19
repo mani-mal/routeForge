@@ -288,6 +288,10 @@ def test_allowed_regions_invalid_shape_is_refused_at_write_time():
     with pytest.raises(PolicyViolation) as exc:
         validate_effective(eff, S, has_own_langfuse_project=False)
     assert exc.value.code == "ALLOWED_REGIONS_INVALID"
+    # The message must name the way OUT, not only the legal shape: an empty
+    # list is refused, so `reset` is the only way to clear the field and an
+    # operator who does not know that has no next move.
+    assert "reset" in exc.value.message
 
 
 def test_requirements_never_move_placement_or_protection():

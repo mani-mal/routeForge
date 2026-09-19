@@ -90,10 +90,24 @@ post-hoc (CLAUDE.md rule 3's shape, extended to contractual facts):
 > original wording is recorded here rather than silently rewritten, because the
 > obvious "fix" is to restore it: see the justification below for why that would
 > be a regression, not a correction.
+>
+> **Amended again 2026-09-19 (final branch review).** "Would send raw sensitive
+> content" originally required a sensitivity above `public`, which made the rule
+> **permanently inert for `policy_mode: passthrough`** — the one app class that
+> by definition sends unredacted content. The passthrough preset resolves to
+> `model_input: raw` *and* `pii_detection: off`; with no detector nothing is ever
+> detected, no sensitivity rule matches, the request classifies `public`, and the
+> flag was always false. An app that has declared it sends *unclassified* raw
+> data cannot show its content is public, so `model_input: raw` + detection `off`
+> now counts on its own — the same fail-closed posture as "`unknown` never
+> satisfies a requirement", applied to the request side. The rule still fires
+> only on an operator's explicit `accepts_raw_sensitive: false`, so §12's
+> upgrade-safety promise is untouched.
 
 **"Would send raw sensitive content"** means: the compiled `model_input` is `raw`
-**and** the gate classified the request above `public` (i.e. a sensitivity rule
-matched at least one detected entity). Under `model_input: redact` the model
+**and** either the gate classified the request above `public` (i.e. a sensitivity
+rule matched at least one detected entity) **or** the compiled `pii_detection` is
+`off`. Under `model_input: redact` the model
 receives placeholders, so the rule does not fire — which is exactly the
 priorities doc's "Azure US: eligible after redaction" row, obtained from P1a's
 existing axis rather than a third app knob. Azure US's row is a **declared

@@ -52,7 +52,8 @@ each other:
   that is the whole content of the requirement.
 * the raw-sensitive rule has **no app-declared requirement behind it** -- it
   fires from the request's own shape (a `raw` model_input over a
-  better-than-public sensitivity). Excluding `unknown` there would retire
+  better-than-public sensitivity, or a `raw` model_input with detection off,
+  where nothing classified the content at all). Excluding `unknown` there would retire
   every endpoint in every existing deployment by a rule nobody asked for, and
   break design §12's promise that an app which sets neither requirement routes
   byte-identically. So an undeclared endpoint keeps today's behaviour, and
@@ -179,8 +180,10 @@ class DataHandling:
 
     `sends_raw_sensitive` is the request-shaped half of the third rule, reduced
     to ONE boolean on purpose. "Would send raw sensitive content" is the
-    compiled `model_input` being `raw` AND the gate having classified the
-    request above `public`; computing it once (in `app/policy/context.py`,
+    compiled `model_input` being `raw` AND either the gate having classified
+    the request above `public` or the app having turned `detection` off (an app
+    that classifies nothing cannot prove its content is public -- see
+    `app/policy/context.py`); computing it once (in `app/policy/context.py`,
     which holds both) and carrying the answer means the rule's condition exists
     in exactly one expression. A second copy in the router or the gateway is
     precisely what this module exists to prevent.

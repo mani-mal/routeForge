@@ -932,7 +932,9 @@ excluded, or touch `allowed_providers` / `onprem_only`.
 explicit-or-null. An unparseable value (not a list, empty, or holding a non-string or
 blank token) **denies** to "matches nothing" and the write is refused with
 `ALLOWED_REGIONS_INVALID`. Tokens are normalized to lowercase on both sides, so an app
-asking for `"US"` matches an endpoint declaring `us`.
+asking for `"US"` matches an endpoint declaring `us`. An empty list is one of the refused
+shapes, so it is **not** how the constraint is cleared — send
+`reset: ["allowed_regions"]`, which the 422 message names.
 
 ### The three exclusion rules
 
@@ -948,10 +950,24 @@ permitted for application". Residency still outranks all three (CLAUDE.md rule 3
 | Raw sensitive | the request would send raw sensitive content **and** the endpoint declares `accepts_raw_sensitive: false` | `raw_sensitive_not_accepted` | **kept** |
 
 "The request would send raw sensitive content" means the compiled `model_input` is `raw`
-**and** the gate classified the request above `public`. Under `model_input: redact` the
-model is shown placeholders, so the rule does not fire — which is how an endpoint that
-declares `accepts_raw_sensitive: false` is *eligible after redaction* without needing a
-third app-side knob.
+**and** either the gate classified the request above `public` **or** the app's compiled
+`pii_detection` is `off`. Under `model_input: redact` the model is shown placeholders, so
+the rule does not fire — which is how an endpoint that declares
+`accepts_raw_sensitive: false` is *eligible after redaction* without needing a third
+app-side knob.
+
+**Why `pii_detection: off` counts on its own.** It is the `policy_mode: passthrough`
+shape — the preset resolves to `model_input: raw` *and* `pii_detection: off` — and it is
+the one app class that by definition sends unredacted content. With no detector nothing
+is ever detected, no sensitivity rule matches, and the request classifies `public`
+forever; on an "above public" test alone the rule would be permanently inert for exactly
+the posture it exists to constrain. An app that has declared it sends *unclassified* raw
+data cannot show its content is public, and an endpoint that declared it will not accept
+raw sensitive content should not be handed content nobody has classified. That is the
+same fail-closed reading as "`unknown` never satisfies a requirement", applied to the
+request side. It still only ever bites on an operator's **explicit**
+`accepts_raw_sensitive: false`: nothing backfills that declaration, so a passthrough app
+over an undeclared pool routes exactly as before.
 
 An excluded endpoint is excluded for failover and for confidence escalation too: both
 draw from the same compiled feasible set, so a candidate refused on the first pass cannot
@@ -971,7 +987,8 @@ column above is **not uniform**.
 - **The raw-sensitive rule keeps an `unknown` endpoint** — it fires *only* on a declared
   `false`. This is the exception, and it differs because **no application declared
   anything**: the requirement comes from the request's own shape (a `raw` `model_input`
-  over a better-than-public sensitivity). Excluding `unknown` there would retire **every
+  over a better-than-public sensitivity, or a `raw` `model_input` with detection off).
+  Excluding `unknown` there would retire **every
   endpoint in every existing deployment** on the first request carrying a detected
   entity — a rule nobody asked for. Nothing backfills `accepts_raw_sensitive`, so there is
   no upgrade path that avoids it. Only an operator's explicit `false` is enforced.

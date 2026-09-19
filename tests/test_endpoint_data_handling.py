@@ -278,6 +278,55 @@ def test_raw_sensitive_rule_keeps_an_endpoint_that_declares_nothing():
     assert _by_code(fs)["refuses"] == RAW_SENSITIVE_NOT_ACCEPTED
 
 
+def test_passthrough_app_counts_as_sending_raw_sensitive_content():
+    """The one app class that by definition sends unredacted content.
+
+    `policy_mode: passthrough` resolves to `model_input: raw` AND
+    `detection: off`. With no detector nothing is ever detected, so no
+    sensitivity rule matches, the request classifies `public`, and an
+    "above public" test alone would leave the rule permanently inert for
+    exactly the posture it exists to constrain. An app that classifies nothing
+    cannot prove its content is public, so an endpoint that DECLARED it will
+    not accept raw sensitive content is refused -- the same fail-closed
+    reading as "unknown never satisfies a requirement", on the request side.
+    """
+    reg = _registry({
+        "trusted": _onprem("trusted", accepts_raw_sensitive=True),
+        "refuses": _onprem("refuses", accepts_raw_sensitive=False, tier="mid"),
+    })
+    ctx = _ctx(reg, AppPolicyView(policy_mode="passthrough"))
+
+    # The gate detected nothing (there is no detector) -- the point of the fix.
+    assert ctx.sensitivity == "public"
+    assert ctx.sends_raw_sensitive is True
+
+    fs = feasible_set(S, reg, ctx, tenant_id="acme")
+    assert _names(fs) == {"trusted"}
+    assert _by_code(fs)["refuses"] == RAW_SENSITIVE_NOT_ACCEPTED
+    assert _by_reason(fs)["refuses"].startswith(
+        "excluded · raw sensitive content")
+
+
+def test_passthrough_app_over_an_undeclared_pool_excludes_nothing():
+    """Upgrade safety, for the passthrough posture specifically.
+
+    The rule above can only ever bite on an operator's EXPLICIT
+    `accepts_raw_sensitive: false`. Nothing backfills that column, so every
+    endpoint in every existing deployment reads `unknown` and stays eligible --
+    a passthrough app that was routing before this branch routes identically
+    after it.
+    """
+    reg = _registry({"a-8b": _onprem("a-8b"), "b-32b": _onprem("b-32b", tier="mid")})
+    ctx = _ctx(reg, AppPolicyView(policy_mode="passthrough"))
+
+    assert ctx.sends_raw_sensitive is True      # the rule IS armed ...
+    fs = feasible_set(S, reg, ctx, tenant_id="acme")
+    assert fs.rejected == ()                     # ... and excludes nothing
+    assert _names(fs) == {"a-8b", "b-32b"}
+    assert Router(S, registry=reg).select(
+        ctx, tokens_after=20, complexity=0.1).chosen is not None
+
+
 def test_an_undeclared_pool_under_raw_sensitive_routes_exactly_as_before():
     """Design §12's upgrade-safety promise, at its sharpest: the whole pool
     declares nothing, the app declares nothing, and the request is the most

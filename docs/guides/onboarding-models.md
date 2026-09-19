@@ -108,6 +108,14 @@ They are never a proof, and the console says so on the form.
 | `prompt_retention` | `none` \| `retained` \| `unknown` | Whether the provider keeps prompts. |
 | `accepts_raw_sensitive` | `true` \| `false` \| `unknown` | Whether this endpoint may receive **unredacted** sensitive content. |
 
+A declared `false` excludes this endpoint for any request that would send it raw
+sensitive content — which is an app running `model_input: raw` over content the gate
+classified above `public`, **and also** an app running `model_input: raw` with
+`pii_detection: off` (the `policy_mode: passthrough` shape). An app that classifies
+nothing cannot show its content is public, so an endpoint that declared it will not take
+unredacted sensitive content is not handed content nobody has classified. Full statement
+of all three rules: `docs/reference/per-app-config.md`.
+
 **Two shapes for the same attribute, and they differ on purpose.**
 
 - **Onboarding API / DB / console** (`POST`/`PUT /admin/infra/models`):

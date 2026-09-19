@@ -198,10 +198,26 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
     scale = settings.policy.sensitivity_scale
     above_public = (scale.index(rule.sensitivity) > 0
                     if rule.sensitivity in scale else rule.sensitivity != "public")
+    # `detection == "off"` is the SECOND way to send raw sensitive content, and
+    # without it the rule was permanently inert for the one app class that by
+    # definition sends unredacted content. A `passthrough` app resolves to
+    # `model_input: raw` AND `detection: off`; with no detector nothing is ever
+    # detected, no sensitivity rule matches, `rule.sensitivity` is the
+    # `entities: []` fallback (`public`), and `above_public` is false forever.
+    # The endpoint that declared it will not accept raw sensitive content would
+    # have stayed eligible for exactly the requests it refused.
+    #
+    # An app that has declared it sends UNCLASSIFIED raw data cannot prove its
+    # content is public, and an endpoint that declared it will not accept raw
+    # sensitive content should not be handed content nobody has classified.
+    # This is the same fail-closed posture as "unknown never satisfies a
+    # requirement", applied to the request side rather than the endpoint's.
+    unclassified_raw = eff.protection.detection == "off"
     data_handling = DataHandling(
         allowed_regions=eff.allowed_regions,
         require_no_retention=eff.require_no_retention,
-        sends_raw_sensitive=(model_input == "raw" and above_public))
+        sends_raw_sensitive=(model_input == "raw"
+                             and (above_public or unclassified_raw)))
 
     feasible = feasible_set(settings, registry, app_policy, tenant_id=tenant_id,
                             allowed_providers=frozenset(allowed),

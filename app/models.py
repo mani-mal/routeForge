@@ -172,11 +172,14 @@ class ExecutionPolicyContext(BaseModel):
     allowed_regions: frozenset[str] | None = None   # None = no regional constraint
     require_no_retention: bool = False
     # "This request would send raw sensitive content": the compiled
-    # `model_input` is `raw` AND the gate classified the request above
-    # `public`. Computed ONCE, in `app/policy/context.py::build_context`, which
-    # is the only place holding both halves -- the rule's condition must exist
-    # in exactly one expression. Under `model_input: redact` the model sees
-    # placeholders, so this is false and the rule does not fire ("eligible
+    # `model_input` is `raw` AND EITHER the gate classified the request above
+    # `public` OR the app runs with `detection: off`, in which case nobody
+    # classified it and it cannot prove itself public (a `passthrough` app is
+    # exactly this shape -- `raw` + `off` -- and would otherwise never arm the
+    # rule at all). Computed ONCE, in `app/policy/context.py::build_context`,
+    # which is the only place holding both halves -- the rule's condition must
+    # exist in exactly one expression. Under `model_input: redact` the model
+    # sees placeholders, so this is false and the rule does not fire ("eligible
     # after redaction").
     sends_raw_sensitive: bool = False
 
