@@ -16,3 +16,15 @@ STREAM_MODES = ("off", "verified_then_stream", "stream_unverified", "incremental
 # = router + meter + tracer only (no detection, no redaction either direction).
 # Placement is untouched by either value: onprem_only still pins routing.
 POLICY_MODES = ("enforced", "passthrough")
+
+# --- P1b endpoint data-handling declarations (design doc §2/§7) --------------
+# `prompt_retention` and `accepts_raw_sensitive` are fixed enums (unlike
+# `region`, which is customer vocabulary and deliberately has none — see
+# app/config/lint.py). Values are matched lowercase-stripped, mirroring the
+# read-time normalization `ModelRegistry._resolve_data_handling`/
+# `app.policy.feasible._declared` already apply, so a value the lint accepts
+# is a value those readers will actually resolve to a real declaration.
+PROMPT_RETENTION_VALUES = frozenset({"none", "retained", "unknown"})
+# The YAML declaration is a STRING token ("true" | "false" | "unknown"); the
+# onboarding API/DB column is a JSON boolean. Both are legal inputs here.
+RAW_SENSITIVE_VALUES = frozenset({"true", "false", "unknown"})

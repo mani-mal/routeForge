@@ -67,6 +67,17 @@ risk_floors:
 # runtime (ModelRegistry merges enabled onboarded rows into the effective pool
 # at request time) — routeForge deploys nothing. An empty on-prem tier boots
 # clean; on-prem candidates only appear once a customer onboards one.
+# Each entry may also declare the three P1b endpoint data-handling attributes
+# (design docs/superpowers/specs/2026-09-19-endpoint-data-handling-p1b-design.md
+# §2) as a PER-MODEL override of the provider default in serving.yaml — most
+# specific wins (model > provider default > "unknown"). Same three
+# fields/shapes as serving.yaml's providers.<name> block (region has no enum;
+# prompt_retention is none|retained|unknown; accepts_raw_sensitive is the
+# STRING "true"|"false"|"unknown"). Optional; no entry below declares them
+# today, so this does not change shipped behavior.
+# Example (commented):
+#   - {name: azure-gpt-mid, provider: azure, tier: mid, region: us,
+#      prompt_retention: none, accepts_raw_sensitive: "false"}
 model_pool:
   - {name: azure-gpt-mid,    provider: azure,   tier: mid,      display_name: "GPT-4o mini (Azure)",   litellm_model: "azure/gpt-4o-mini"}
   - {name: bedrock-frontier, provider: bedrock, tier: frontier, display_name: "Claude Sonnet (Bedrock)", litellm_model: "bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0"}

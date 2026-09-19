@@ -37,7 +37,9 @@ def _run(client: TestClient, coro_fn) -> None:
 
 def add_model(client: TestClient, slug: str, *, tier: str = "cheap",
               price_input: float = 0.0, price_output: float = 0.0,
-              allowed_app_ids: list[str] | None = None, enabled: bool = True) -> None:
+              allowed_app_ids: list[str] | None = None, enabled: bool = True,
+              region: str | None = None, prompt_retention: str | None = None,
+              accepts_raw_sensitive: bool | None = None) -> None:
     app = client.app
 
     async def go():
@@ -48,7 +50,8 @@ def add_model(client: TestClient, slug: str, *, tier: str = "cheap",
                 price_input=price_input, price_output=price_output, quality=None,
                 context_window=None, allowed_app_ids=allowed_app_ids, notes=None,
                 enabled=enabled, probe_status="healthy" if enabled else "unreachable",
-                probe_error=None)
+                probe_error=None, region=region, prompt_retention=prompt_retention,
+                accepts_raw_sensitive=accepts_raw_sensitive)
             await session.commit()
         await app.state.registry.refresh(app.state.db)
 
