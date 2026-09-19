@@ -7,7 +7,12 @@ from typing import TYPE_CHECKING
 from app.config.schema import PoolCandidate, Settings
 from app.errors import NoEligibleCandidate
 from app.models import ExecutionPolicyContext, RejectedCandidate
-from app.policy.feasible import feasible_set
+from app.policy.feasible import (
+    REASON_RAW_SENSITIVE_PREFIX,
+    REASON_REGION_PREFIX,
+    REASON_RETENTION_PREFIX,
+    feasible_set,
+)
 from app.routing.quality import QualityResolver
 from app.routing.strategy import RoutingStrategy, build_strategy
 
@@ -28,10 +33,36 @@ _FIX_HINTS = {
     "excluded · prior failure": "the model already failed on this request",
 }
 
+# P1b's data-handling reasons (app/policy/feasible.py stage 2) carry a
+# parameterised tail naming the requirement and what the endpoint declared, so
+# they cannot be exact keys above. Matched by PREFIX instead -- without this,
+# `_explain` falls back to repeating the whole reason string as its own hint.
+_FIX_HINT_PREFIXES = (
+    (REASON_REGION_PREFIX,
+     "declare the endpoint's region under Infrastructure, or widen the "
+     "application's allowed_regions"),
+    (REASON_RETENTION_PREFIX,
+     "declare the endpoint's prompt_retention under Infrastructure, or clear "
+     "the application's require_no_retention"),
+    (REASON_RAW_SENSITIVE_PREFIX,
+     "declare accepts_raw_sensitive on an endpoint trusted with unredacted "
+     "content, or set the application's model_input to 'redact'"),
+)
+
+
+def _fix_hint(reason: str) -> str:
+    hint = _FIX_HINTS.get(reason)
+    if hint is not None:
+        return hint
+    for prefix, prefix_hint in _FIX_HINT_PREFIXES:
+        if reason.startswith(prefix):
+            return prefix_hint
+    return reason
+
 
 def _explain(rejected) -> str:
     counts = Counter(r.reason for r in rejected)
-    return "; ".join(f"{n} {reason} ({_FIX_HINTS.get(reason, reason)})"
+    return "; ".join(f"{n} {reason} ({_fix_hint(reason)})"
                      for reason, n in counts.most_common())
 
 

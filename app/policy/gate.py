@@ -385,7 +385,12 @@ class Gate:
                             app_policy=app_policy, app_rules=rules,
                             registry=self._registry,
                             escalate_residency=eff.escalate_residency_on_detection,
-                            content_integrity=eff.protection.content_integrity)
+                            content_integrity=eff.protection.content_integrity,
+                            # The compiled egress-to-the-MODEL axis, threaded
+                            # from the same EffectivePolicy: `build_context`
+                            # needs it for P1b's raw-sensitive eligibility rule
+                            # (design §4) and must not re-derive it.
+                            model_input=eff.protection.model_input)
         ctx = ctx.model_copy(update={
             "requested_model": None if request.model == "auto" else request.model,
         })

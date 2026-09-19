@@ -8,8 +8,12 @@ from app.policy.compile import compile_policy, resolve_residency
 from app.policy.feasible import (  # noqa: F401  (re-exported: app/pipeline.py imports registry_permits from here)
     APP_SCOPE,
     MODEL_SCOPE,
+    PROMPT_RETENTION_NOT_ALLOWED,
+    RAW_SENSITIVE_NOT_ACCEPTED,
     REASON_DISABLED,
+    REGION_NOT_ALLOWED,
     RESIDENCY,
+    DataHandling,
     _ctx_scope,
     _placement_providers,
     candidate_rejection,
@@ -69,12 +73,27 @@ def pinned_model_reason(pool, ctx: ExecutionPolicyContext, registry: "ModelRegis
     rejection = candidate_rejection(
         c, allowed_providers=ctx.allowed_providers, onprem_only=ctx.onprem_only,
         in_scope=_ctx_scope(ctx), requested_model=None,
-        exclude=frozenset(), registry=registry, tenant_id=tenant_id)
+        exclude=frozenset(), registry=registry, tenant_id=tenant_id,
+        data_handling=DataHandling.from_context(ctx))
     if rejection is None:
         return "it is disabled"
     if rejection.code == RESIDENCY:
         return (f"provider {c.provider!r} is excluded by residency or the "
                 "application's allowed_providers")
+    # The data-handling rules (P1b design §4). Their own `reason` already names
+    # the requirement AND what the endpoint declared -- collapsing that into
+    # the generic "not permitted for application" below is exactly what this
+    # branch exists to prevent, since the two are fixed by different settings.
+    if rejection.code == REGION_NOT_ALLOWED:
+        return (f"{rejection.reason} (declare the endpoint's region under "
+                "Infrastructure, or widen the application's allowed_regions)")
+    if rejection.code == PROMPT_RETENTION_NOT_ALLOWED:
+        return (f"{rejection.reason} (declare the endpoint's prompt_retention "
+                "under Infrastructure, or clear the application's "
+                "require_no_retention)")
+    if rejection.code == RAW_SENSITIVE_NOT_ACCEPTED:
+        return (f"{rejection.reason} (declare accepts_raw_sensitive on the "
+                "endpoint, or set the application's model_input to 'redact')")
     if rejection.code == APP_SCOPE:
         return "it is outside the application's allowed_tiers / allowed_models"
     if rejection.code == MODEL_SCOPE and rejection.reason == REASON_DISABLED:
@@ -105,6 +124,7 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
                   registry: "ModelRegistry | None" = None,
                   escalate_residency: bool = True,
                   content_integrity: str | None = None,
+                  model_input: str | None = None,
                   ) -> ExecutionPolicyContext:
     """Step 3: the immutable ExecutionPolicyContext.
 
@@ -132,9 +152,16 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
     """
     etypes = {e.type for e in entities}
     rule = match_sensitivity_rule(settings, app_rules, etypes)
+    # One compile, read for whatever the caller did not already supply. The
+    # gate threads `content_integrity`/`model_input` in from the SAME
+    # `EffectivePolicy` every other consumer reads; `None` means "no caller
+    # supplied one", and the compiler is run here rather than the precedence
+    # being re-implemented.
+    eff = compile_policy(app_policy, settings)
     if content_integrity is None:
-        content_integrity = compile_policy(
-            app_policy, settings).protection.content_integrity
+        content_integrity = eff.protection.content_integrity
+    if model_input is None:
+        model_input = eff.protection.model_input
 
     # Residency: stricter of the entity rule and the application's own residency.
     # With a per-app policy we take residency from it (seeded to match
@@ -163,9 +190,30 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
     # it, because a detected entity may have TIGHTENED residency above the one
     # the stored policy shows. There is no pin and nothing excluded here: both
     # belong to a request, and the router applies them to this same filter.
+    # The app's COMPILED data-handling requirements (design §3), plus the one
+    # request-shaped condition rule 3 needs. "Would send raw sensitive content"
+    # is computed HERE and only here -- this is the one function holding both
+    # halves (the compiled `model_input` axis and the sensitivity the matched
+    # rule just assigned) -- and travels on the context as a single boolean, so
+    # the rule's condition exists in exactly one expression.
+    #
+    # `above public` is read off `policy.yaml`'s canonical
+    # `sensitivity_scale`, the same single source every other sensitivity
+    # comparison uses. A request that matched no entity rule is `public`, so it
+    # sends nothing sensitive and rule 3 cannot fire for it, however raw its
+    # `model_input` is.
+    scale = settings.policy.sensitivity_scale
+    above_public = (scale.index(rule.sensitivity) > 0
+                    if rule.sensitivity in scale else rule.sensitivity != "public")
+    data_handling = DataHandling(
+        allowed_regions=eff.allowed_regions,
+        require_no_retention=eff.require_no_retention,
+        sends_raw_sensitive=(model_input == "raw" and above_public))
+
     feasible = feasible_set(settings, registry, app_policy, tenant_id=tenant_id,
                             allowed_providers=frozenset(allowed),
-                            onprem_only=onprem_only)
+                            onprem_only=onprem_only,
+                            data_handling=data_handling)
     # PLACEMENT and APP SCOPE only (the filter's stages 1 and 3) -- that is
     # what `allowed_models` has always meant and what every consumer reads it
     # as. Every other stage's rejections stay OUT of the subtraction, so each
@@ -210,4 +258,11 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
         # `residency`/`rule` above, never folded into the placement decision.
         content_integrity=content_integrity,
         app_policy_version=(app_policy.version() if app_policy is not None else ""),
+        # Placement-ADJACENT requirements, carried so that every later consumer
+        # of this context (the router, the pinned-model check, the decision
+        # certificate's eligibility check) asks `app/policy/feasible.py` the
+        # SAME question this function just asked -- the seam's whole point.
+        allowed_regions=data_handling.allowed_regions,
+        require_no_retention=data_handling.require_no_retention,
+        sends_raw_sensitive=data_handling.sends_raw_sensitive,
     )

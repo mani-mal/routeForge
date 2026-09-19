@@ -172,14 +172,30 @@ def test_certificate_detection_mode_names_the_detector_that_did_run():
 # --- eligibility checks: direct unit coverage of the fallback semantics -----
 
 def _ctx(**overrides) -> ExecutionPolicyContext:
+    # `allowed_models` carries BOTH seeded on-prem rows: since P1b Task 3 the
+    # eligibility seam honours `ctx.allowed_models` unconditionally (it is not
+    # gated on `model_scope_active`), so a context claiming a model was served
+    # while omitting it from `allowed_models` describes a request that could
+    # not have happened. `test_eligibility_checks_respects_model_scope` below
+    # narrows it back to one model to assert the scoping itself.
     base = dict(
         request_id="r", tenant_id="t", sensitivity="public", onprem_only=False,
         allowed_providers=frozenset({"onprem", "azure"}),
-        allowed_models=frozenset({"local-8b"}), model_scope_active=False,
+        allowed_models=frozenset({"local-8b", "local-32b"}),
+        model_scope_active=False,
         max_cost_usd=0.05, max_latency_ms=15000, risk_class="low",
         require_verification=False, detected_entities=(), redaction_map_id=None)
     base.update(overrides)
     return ExecutionPolicyContext(**base)
+
+
+def _checks_pipeline() -> Pipeline:
+    """`_eligibility_checks` asks `app/policy/feasible.py` -- the ONE
+    eligibility authority -- rather than re-deriving the rule inline, so it
+    needs the settings + registry a Pipeline holds. It is an instance method
+    for that reason; these tests build the same seeded pipeline the
+    end-to-end ones use."""
+    return _pipeline(_settings())
 
 
 def _rec(chosen, provider, **kw) -> DecisionRecord:
@@ -188,13 +204,13 @@ def _rec(chosen, provider, **kw) -> DecisionRecord:
 
 
 def test_eligibility_checks_no_chosen_hop_is_not_applicable():
-    checks = Pipeline._eligibility_checks(_ctx(), [])
+    checks = _checks_pipeline()._eligibility_checks(_ctx(), [])
     assert checks == {"chosen_in_eligible_set": None, "fallback_in_eligible_set": None}
 
 
 def test_eligibility_checks_single_eligible_hop():
     records = [_rec("local-8b", "onprem")]
-    checks = Pipeline._eligibility_checks(_ctx(), records)
+    checks = _checks_pipeline()._eligibility_checks(_ctx(), records)
     assert checks["chosen_in_eligible_set"] is True
     assert checks["fallback_in_eligible_set"] is None  # nothing to check -- no fallback
 
@@ -203,7 +219,7 @@ def test_eligibility_checks_flags_ineligible_served_model():
     """provider not in ctx.allowed_providers -- would be a real policy
     violation if it ever happened; the certificate must be able to say so."""
     records = [_rec("cloud-x", "bedrock")]
-    checks = Pipeline._eligibility_checks(_ctx(), records)
+    checks = _checks_pipeline()._eligibility_checks(_ctx(), records)
     assert checks["chosen_in_eligible_set"] is False
 
 
@@ -215,23 +231,23 @@ def test_eligibility_checks_fallback_all_eligible():
         _rec("local-8b", "onprem"),
         _rec("local-32b", "onprem"),
     ]
-    checks = Pipeline._eligibility_checks(_ctx(), records)
+    checks = _checks_pipeline()._eligibility_checks(_ctx(), records)
     assert checks["chosen_in_eligible_set"] is True   # the SERVED (last) hop
     assert checks["fallback_in_eligible_set"] is True  # the earlier hop too
 
 
 def test_eligibility_checks_fallback_flags_an_ineligible_earlier_hop():
     records = [_rec("cloud-x", "bedrock"), _rec("local-8b", "onprem")]
-    checks = Pipeline._eligibility_checks(_ctx(), records)
+    checks = _checks_pipeline()._eligibility_checks(_ctx(), records)
     assert checks["chosen_in_eligible_set"] is True    # served hop is fine
     assert checks["fallback_in_eligible_set"] is False  # the one before it wasn't
 
 
 def test_eligibility_checks_respects_model_scope():
     ctx = _ctx(model_scope_active=True, allowed_models=frozenset({"local-8b"}))
-    ok = Pipeline._eligibility_checks(ctx, [_rec("local-8b", "onprem")])
+    ok = _checks_pipeline()._eligibility_checks(ctx, [_rec("local-8b", "onprem")])
     assert ok["chosen_in_eligible_set"] is True
-    out_of_scope = Pipeline._eligibility_checks(ctx, [_rec("local-32b", "onprem")])
+    out_of_scope = _checks_pipeline()._eligibility_checks(ctx, [_rec("local-32b", "onprem")])
     assert out_of_scope["chosen_in_eligible_set"] is False
 
 

@@ -202,13 +202,13 @@ def test_residency_filter_is_what_keeps_pii_onprem_not_provider_availability():
     def _leaky_build_context(settings, request_id, tenant_id, entities,
                              redaction_map_id, app_policy=None, app_rules=None,
                              registry=None, escalate_residency=True,
-                             content_integrity=None):
+                             content_integrity=None, model_input=None):
         """Reimplements build_context but WITHOUT the onprem residency
         filter, to prove the guard above would catch this exact regression.
         (Signature mirrors build_context, incl. the app_policy/app_rules
         params, the compiled `escalate_residency` switch, and the compiled
-        `content_integrity` axis (add8954) the gate now always passes; this
-        leaky version ignores all four for PLACEMENT purposes — the demo
+        `content_integrity` and `model_input` axes the gate now always passes;
+        this leaky version ignores all five for PLACEMENT purposes — the demo
         tenants carry no per-app policy/profile row, so residency still comes
         from policy.yaml and escalation is on. `content_integrity` is a DATA
         axis, orthogonal to the residency filter this test is about, so it is

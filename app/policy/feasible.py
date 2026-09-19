@@ -17,16 +17,50 @@ produces the operator-facing `reason` string the console already renders:
 | # | stage                                   | code            | reason |
 |---|-----------------------------------------|-----------------|--------|
 | 1 | residency / provider placement          | `residency`     | "excluded · residency" under onprem_only, else "not permitted for application" |
-| 2 | prior failure on this request           | `prior_failure` | "excluded · prior failure" |
-| 3 | the app's allowed_tiers / allowed_models| `app_scope`     | "not permitted for application" |
-| 4 | the request's pinned `model`            | `not_requested` | "not requested model" |
-| 5 | the registry's per-model gates          | `model_scope`   | "not permitted for application" / "disabled by admin" |
+| 2 | the endpoint's data-handling declarations| `region_not_allowed` / `prompt_retention_not_allowed` / `raw_sensitive_not_accepted` | "excluded · region …" / "excluded · prompt retention …" / "excluded · raw sensitive content …" |
+| 3 | prior failure on this request           | `prior_failure` | "excluded · prior failure" |
+| 4 | the app's allowed_tiers / allowed_models| `app_scope`     | "not permitted for application" |
+| 5 | the request's pinned `model`            | `not_requested` | "not requested model" |
+| 6 | the registry's per-model gates          | `model_scope`   | "not permitted for application" / "disabled by admin" |
 
 The order is load-bearing, not stylistic: placement runs first so an excluded
 cloud model under `onprem_only` always reads "residency" rather than a softer
 reason further down (CLAUDE.md rule 3), and `exclude` sits behind it because a
 failure-driven exclusion may only ever remove a candidate, never relabel a
-placement decision.
+placement decision. Stage 2 sits immediately behind placement for the same
+reason `exclude` sits behind placement: a data-handling exclusion is a
+contractual refusal of the endpoint, so it must not be relabelled by a
+transient prior failure or by a softer app-scope reason -- but it must never
+outrank residency, which is absolute.
+
+**Stage 2 -- the three data-handling rules (P1b design §4).** Each compares one
+APP REQUIREMENT against one ENDPOINT DECLARATION:
+
+| rule          | fires when                                                          |
+|---------------|---------------------------------------------------------------------|
+| region        | the app set `allowed_regions` and the endpoint's region is not in it |
+| retention     | the app set `require_no_retention` and retention is not `none`       |
+| raw sensitive | the request sends raw sensitive content and the endpoint does not declare `accepts_raw_sensitive: true` |
+
+Two properties hold across all three, and both are load-bearing:
+
+* **Unknown never satisfies a requirement, and never blocks a request that
+  imposes none.** Every endpoint in every existing deployment is `unknown` on
+  all three, so an app that sets neither requirement routes byte-identically
+  to before this stage existed. `unknown` is read AT THE POINT OF USE
+  (`_declared` below), not assumed to have been resolved upstream: the
+  no-registry paths (`app/pipeline.py`, `app/policy/context.py`,
+  `app/routing/quality.py`, `app/gateway/backends/litellm_backend.py`,
+  `app/api/routes.py`) fall back to `settings.routing.model_pool` directly,
+  whose candidates carry `None` in these fields because
+  `ModelRegistry.effective_pool()` -- the one resolver -- never ran. `None`,
+  `""` and a whitespace token all read as `unknown` here, which is the
+  fail-closed direction: an undeclared endpoint can never PROVE a property.
+  A rule that silently no-ops on the internal path would be a policy that
+  appears enforced and is not.
+* **They may only narrow.** No value of any of the three can add a candidate
+  back, reach a provider residency excluded, or touch `allowed_providers` /
+  `onprem_only`. They run after stage 1 and never feed into it.
 """
 from __future__ import annotations
 
@@ -35,7 +69,7 @@ from typing import TYPE_CHECKING, Callable
 
 from app.config.schema import PoolCandidate, Settings
 from app.models import ExecutionPolicyContext
-from app.policy.compile import resolve_residency
+from app.policy.compile import compile_policy, resolve_residency
 
 if TYPE_CHECKING:  # avoid importing the apps layer at module load
     from app.apps.policy import AppPolicyView
@@ -47,6 +81,12 @@ PRIOR_FAILURE = "prior_failure"
 APP_SCOPE = "app_scope"
 NOT_REQUESTED = "not_requested"
 MODEL_SCOPE = "model_scope"
+# Stage 2 -- one code per data-handling rule (P1b design §4/§6). These join
+# `sp.candidates`' rejected set, so the certificate answers "why not that
+# endpoint" in the compliance officer's vocabulary rather than the router's.
+REGION_NOT_ALLOWED = "region_not_allowed"
+PROMPT_RETENTION_NOT_ALLOWED = "prompt_retention_not_allowed"
+RAW_SENSITIVE_NOT_ACCEPTED = "raw_sensitive_not_accepted"
 
 # Operator-facing strings. The console renders these verbatim and
 # `app/routing/router.py::_FIX_HINTS` keys on them -- they are an interface.
@@ -55,6 +95,16 @@ REASON_APP = "not permitted for application"
 REASON_PRIOR_FAILURE = "excluded · prior failure"
 REASON_NOT_REQUESTED = "not requested model"
 REASON_DISABLED = "disabled by admin"
+# Stage 2's reasons carry a parameterised tail (what was required, what the
+# endpoint declared) -- an operator cannot act on "excluded · region" alone.
+# `app/routing/router.py::_fix_hint` therefore matches these by PREFIX.
+REASON_REGION_PREFIX = "excluded · region"
+REASON_RETENTION_PREFIX = "excluded · prompt retention"
+REASON_RAW_SENSITIVE_PREFIX = "excluded · raw sensitive content"
+
+#: What an endpoint that declared nothing reads as, on every one of the three
+#: attributes. Never satisfies a requirement.
+UNKNOWN = "unknown"
 
 
 @dataclass(frozen=True)
@@ -72,6 +122,102 @@ class Rejection:
 class FeasibleSet:
     eligible: tuple[PoolCandidate, ...]
     rejected: tuple[Rejection, ...]
+
+
+@dataclass(frozen=True)
+class DataHandling:
+    """What this request REQUIRES of an endpoint's data handling (design §3/§4).
+
+    Three values, and only three, because the seam must be able to answer the
+    rules from whichever authority the caller holds -- an
+    `ExecutionPolicyContext` after the gate, or an `AppPolicyView` before it.
+
+    `allowed_regions` / `require_no_retention` are the app's own compiled
+    requirements (`app/policy/compile.py`, never the raw nullable column: the
+    compiler is what lowercases the tokens and DENIES an unparseable value to
+    `frozenset()`).
+
+    `sends_raw_sensitive` is the request-shaped half of the third rule, reduced
+    to ONE boolean on purpose. "Would send raw sensitive content" is the
+    compiled `model_input` being `raw` AND the gate having classified the
+    request above `public`; computing it once (in `app/policy/context.py`,
+    which holds both) and carrying the answer means the rule's condition exists
+    in exactly one expression. A second copy in the router or the gateway is
+    precisely what this module exists to prevent.
+
+    The default is the no-requirement value of every field, so a caller with no
+    per-app policy at all imposes nothing -- and `unknown` blocks nothing.
+    """
+
+    allowed_regions: frozenset[str] | None = None
+    require_no_retention: bool = False
+    sends_raw_sensitive: bool = False
+
+    @classmethod
+    def from_context(cls, ctx: ExecutionPolicyContext) -> "DataHandling":
+        return cls(allowed_regions=ctx.allowed_regions,
+                   require_no_retention=ctx.require_no_retention,
+                   sends_raw_sensitive=ctx.sends_raw_sensitive)
+
+    @classmethod
+    def from_policy(cls, settings: Settings,
+                    app_policy: "AppPolicyView | None") -> "DataHandling":
+        """The app's requirements with no request in hand -- what
+        `GET /v1/models` and the gate's own pre-request filter ask. There is no
+        request to be sensitive, so `sends_raw_sensitive` is false: a pin that
+        later arrives WITH sensitive content is narrowed again by the context
+        path, never widened by this one.
+        """
+        eff = compile_policy(app_policy, settings)
+        return cls(allowed_regions=eff.allowed_regions,
+                   require_no_retention=eff.require_no_retention)
+
+
+def _declared(c, field: str) -> str:
+    """One endpoint declaration, read at the POINT OF USE.
+
+    `ModelRegistry.effective_pool()` resolves these three to a never-None
+    token, but not every path holds a registry: the internal/direct pipeline
+    paths fall back to `settings.routing.model_pool`, whose `PoolCandidate`s
+    carry the raw, unresolved declaration (`None` when the YAML entry declares
+    nothing) and an empty `data_handling_source`. Reading `None`/`""` as
+    `unknown` here is what makes the three rules enforce identically on both
+    paths instead of silently no-opping on one of them.
+    """
+    v = getattr(c, field, None)
+    if isinstance(v, bool):        # a raw onboarded row's accepts_raw_sensitive
+        return "true" if v else "false"
+    if isinstance(v, str) and v.strip():
+        return v.strip().lower()
+    return UNKNOWN
+
+
+def _data_handling_rejection(c: PoolCandidate,
+                             dh: DataHandling) -> tuple[str, str] | None:
+    """Stage 2: `(reason, code)` for the first data-handling rule this
+    candidate fails, or `None`. Order is region, retention, raw-sensitive --
+    stable so an endpoint failing two rules always reads the same one."""
+    if dh.allowed_regions is not None:
+        region = _declared(c, "region")
+        if region not in dh.allowed_regions:
+            return (f"{REASON_REGION_PREFIX} · endpoint declares {region!r}, "
+                    f"application allows "
+                    f"{', '.join(sorted(dh.allowed_regions)) or '(none)'}",
+                    REGION_NOT_ALLOWED)
+    if dh.require_no_retention:
+        retention = _declared(c, "prompt_retention")
+        if retention != "none":
+            return (f"{REASON_RETENTION_PREFIX} · endpoint declares "
+                    f"{retention!r}, application requires 'none'",
+                    PROMPT_RETENTION_NOT_ALLOWED)
+    if dh.sends_raw_sensitive:
+        raw = _declared(c, "accepts_raw_sensitive")
+        if raw != "true":
+            return (f"{REASON_RAW_SENSITIVE_PREFIX} · endpoint declares "
+                    f"accepts_raw_sensitive={raw!r}, and this request sends "
+                    "unredacted sensitive content",
+                    RAW_SENSITIVE_NOT_ACCEPTED)
+    return None
 
 
 def registry_permits(registry: "ModelRegistry | None", c, tenant_id: str) -> bool:
@@ -170,11 +316,26 @@ def candidate_rejection(c: PoolCandidate, *, allowed_providers: frozenset[str] |
                         requested_model: str | None,
                         exclude: frozenset[str],
                         registry: "ModelRegistry | None",
-                        tenant_id: str) -> Rejection | None:
-    """The five stages, in order, for one candidate. `None` means eligible."""
+                        tenant_id: str,
+                        data_handling: DataHandling) -> Rejection | None:
+    """The six stages, in order, for one candidate. `None` means eligible.
+
+    `data_handling` is REQUIRED, with no default. A default would make stage 2
+    silently absent for any caller that forgot it -- a policy that appears
+    enforced and is not -- which is exactly the defect the `FeasibleSet` seam
+    was extracted to end. `DataHandling()` is the explicit no-requirement
+    value for a caller that genuinely has none.
+    """
     if c.provider not in allowed_providers:
         return _rejection(c, REASON_RESIDENCY if onprem_only else REASON_APP,
                           RESIDENCY)
+    # Stage 2: the endpoint's data-handling declarations against this request's
+    # requirements. Behind residency (which is absolute -- rule 3) and ahead of
+    # everything else, so a contractual refusal is never relabelled by a
+    # transient prior failure or by the softer "not permitted for application".
+    dh = _data_handling_rejection(c, data_handling)
+    if dh is not None:
+        return _rejection(c, dh[0], dh[1])
     # Failure-driven lateral switch: drop a model the gateway already saw fail
     # on this request. Placed AFTER the residency check so an excluded cloud
     # model under onprem_only still reads "residency", never "prior failure" --
@@ -199,7 +360,8 @@ def feasible_set(settings: Settings, registry: "ModelRegistry | None",
                  *, tenant_id: str,
                  exclude: frozenset[str] = frozenset(),
                  allowed_providers: frozenset[str] | None = None,
-                 onprem_only: bool | None = None) -> FeasibleSet:
+                 onprem_only: bool | None = None,
+                 data_handling: DataHandling | None = None) -> FeasibleSet:
     """Every candidate this request may reach, and every one it may not.
 
     `ctx_or_policy` is whichever authority the caller holds: an
@@ -211,6 +373,14 @@ def feasible_set(settings: Settings, registry: "ModelRegistry | None",
     has already resolved (residency may have been *tightened* by a detected
     entity, which the stored policy alone does not show). Omitted, placement is
     resolved from the policy's own residency.
+
+    `data_handling` is stage 2's input. Omitted, it is derived from the same
+    authority the caller passed: off the context (which carries the compiled
+    requirements and the one precomputed `sends_raw_sensitive` boolean), or
+    from the compiler for a policy-side caller, which has no request and so
+    sends nothing raw. It is never derived from the RAW `AppPolicyView`
+    columns -- the compiler is what lowercases a region token and denies an
+    unparseable `allowed_regions` to "matches nothing".
 
     Onboarded on-prem models never appear in the static YAML
     `settings.routing.model_pool` -- read the registry's merged pool when
@@ -226,6 +396,8 @@ def feasible_set(settings: Settings, registry: "ModelRegistry | None",
         onprem = ctx.onprem_only if onprem_only is None else onprem_only
         requested_model = ctx.requested_model
         in_scope = _ctx_scope(ctx)
+        if data_handling is None:
+            data_handling = DataHandling.from_context(ctx)
     else:
         policy: "AppPolicyView | None" = ctx_or_policy
         if allowed_providers is not None:
@@ -244,6 +416,8 @@ def feasible_set(settings: Settings, registry: "ModelRegistry | None",
         # and reaches this function only through a context.
         requested_model = None
         in_scope = _policy_scope(policy)
+        if data_handling is None:
+            data_handling = DataHandling.from_policy(settings, policy)
 
     eligible: list[PoolCandidate] = []
     rejected: list[Rejection] = []
@@ -251,7 +425,8 @@ def feasible_set(settings: Settings, registry: "ModelRegistry | None",
         r = candidate_rejection(
             c, allowed_providers=providers, onprem_only=onprem,
             in_scope=in_scope, requested_model=requested_model,
-            exclude=exclude, registry=registry, tenant_id=tenant_id)
+            exclude=exclude, registry=registry, tenant_id=tenant_id,
+            data_handling=data_handling)
         if r is None:
             eligible.append(c)
         else:

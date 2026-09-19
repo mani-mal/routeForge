@@ -17,7 +17,8 @@ from app.models import (
 )
 from app.output.verify import egress_detector, verify
 from app.policy.compile import APP_SOURCE, EffectivePolicy, compile_policy
-from app.policy.context import pinned_model_reason, registry_permits
+from app.policy.context import pinned_model_reason
+from app.policy.feasible import feasible_set
 from app.policy.detectors import Detector, detection_ran, make_detector
 from app.policy.effective import EffectiveDetector, FilteredDetector
 from app.policy.gate import Gate, Representations, redact_tool_calls_with_entities
@@ -310,20 +311,38 @@ class Pipeline:
             "detected_entity_types": list(ctx.detected_entities),
         }
 
-    @staticmethod
-    def _eligible_candidate(ctx: ExecutionPolicyContext, name: str | None,
+    def _eligible_candidate(self, ctx: ExecutionPolicyContext, name: str | None,
                             provider: str | None) -> bool:
         """Was this (name, provider) pair drawn from THIS request's own
-        eligible set -- `ctx.allowed_providers` narrowed by
-        `ctx.allowed_models` when the app scopes tiers/models? The single
-        predicate `_eligibility_checks` and the cache-hit path both check
-        against; never a re-derivation of the router's own scoring, only a
-        check of its output against the policy context that bounded it."""
-        return bool(provider in ctx.allowed_providers
-                    and (not ctx.model_scope_active or name in ctx.allowed_models))
+        eligible set? The single predicate `_eligibility_checks` and the
+        cache-hit path both check against; never a re-derivation of the
+        router's own scoring, only a check of its output against the policy
+        that bounded it.
 
-    @classmethod
-    def _eligibility_checks(cls, ctx: ExecutionPolicyContext,
+        Asked of `app/policy/feasible.py` -- the one authority -- rather than
+        re-implemented here. It used to be its own inline expression
+        (`provider in ctx.allowed_providers and (not ctx.model_scope_active or
+        name in ctx.allowed_models)`), which is a second copy of the
+        eligibility rule and drifted the instant a new stage was added: P1b's
+        data-handling exclusions are deliberately kept IN `ctx.allowed_models`
+        so each keeps its own specific reason (see `build_context`), so that
+        expression would certify a data-handling-EXCLUDED model as
+        `chosen_in_eligible_set: True`. That matters most on the semantic-cache
+        hit below, where the model did not come from the router at all and this
+        check is the only thing standing between a stale cached answer and a
+        certificate saying it was compliant.
+
+        No `exclude` is passed: a hop the gateway fell back PAST was eligible
+        when it was chosen, and the prior-failure stage is about what may be
+        tried NEXT, not about what was legitimately served.
+        """
+        if name is None or provider is None:
+            return False
+        feasible = feasible_set(self._s, self._reg, ctx, tenant_id=ctx.tenant_id)
+        return any(c.name == name and c.provider == provider
+                   for c in feasible.eligible)
+
+    def _eligibility_checks(self, ctx: ExecutionPolicyContext,
                             records: list[DecisionRecord]) -> dict:
         """`sp.checks` (design §6): the one per-request proof the certificate
         offers -- that the model(s) the gateway actually used were drawn from
@@ -342,11 +361,11 @@ class Pipeline:
             return {"chosen_in_eligible_set": None, "fallback_in_eligible_set": None}
         served = chosen_hops[-1]
         fallback_ok = (
-            all(cls._eligible_candidate(ctx, r.chosen, r.chosen_provider)
+            all(self._eligible_candidate(ctx, r.chosen, r.chosen_provider)
                 for r in chosen_hops[:-1])
             if len(chosen_hops) > 1 else None)
         return {
-            "chosen_in_eligible_set": cls._eligible_candidate(
+            "chosen_in_eligible_set": self._eligible_candidate(
                 ctx, served.chosen, served.chosen_provider),
             "fallback_in_eligible_set": fallback_ok,
         }
@@ -577,12 +596,17 @@ class Pipeline:
         model_text = reps.text_raw if eff.protection.model_input == "raw" else sanitized
         if ctx.requested_model is not None:
             pool = self._reg.effective_pool() if self._reg else self._s.routing.model_pool
-            permitted = {
-                c.name for c in pool
-                if c.provider in ctx.allowed_providers
-                and (not ctx.model_scope_active or c.name in ctx.allowed_models)
-                and registry_permits(self._reg, c, tenant_id)
-            }
+            # Asked of `app/policy/feasible.py`, not re-derived. The inline set
+            # this replaced was a second authority over eligibility: it gated
+            # app scope on `model_scope_active` (so a context-side rule was
+            # ignored for every app that set no allowlist) and knew nothing of
+            # P1b's data-handling stage, so a pinned model excluded for its
+            # region read the generic "not permitted for application" instead
+            # of the rule that actually refused it. `ctx.requested_model` is
+            # already set, so the seam's own pin stage leaves exactly the
+            # pinned candidate eligible when it survives every other stage.
+            permitted = {c.name for c in feasible_set(
+                self._s, self._reg, ctx, tenant_id=tenant_id).eligible}
             if ctx.requested_model not in permitted:
                 raise PipelineRejected(
                     f"requested model {ctx.requested_model!r} is not permitted or "

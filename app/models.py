@@ -157,6 +157,28 @@ class ExecutionPolicyContext(BaseModel):
     # policy edit. "" when no per-app policy applies. Mirrors
     # Settings.routing_policy_version's empty-string default (upgrade-safe).
     app_policy_version: str = ""
+    # --- P1b endpoint data-handling (design §3/§4). The app's COMPILED
+    # requirements plus the one request-shaped condition the third rule needs,
+    # resolved at gate time so they travel with the request exactly as
+    # `content_integrity` does. `app/policy/feasible.py` is the only consumer:
+    # it compares these against each endpoint's declarations.
+    #
+    # They are PLACEMENT-ADJACENT, not placement: they narrow which endpoints
+    # this request may reach and can never widen `allowed_providers` or clear
+    # `onprem_only` (stage 1 runs first and is untouched by them).
+    #
+    # Defaults are the no-requirement values, so a context built by a test or
+    # an internal path that sets none of them behaves exactly as before.
+    allowed_regions: frozenset[str] | None = None   # None = no regional constraint
+    require_no_retention: bool = False
+    # "This request would send raw sensitive content": the compiled
+    # `model_input` is `raw` AND the gate classified the request above
+    # `public`. Computed ONCE, in `app/policy/context.py::build_context`, which
+    # is the only place holding both halves -- the rule's condition must exist
+    # in exactly one expression. Under `model_input: redact` the model sees
+    # placeholders, so this is false and the rule does not fire ("eligible
+    # after redaction").
+    sends_raw_sensitive: bool = False
 
 
 class RejectedCandidate(BaseModel):
