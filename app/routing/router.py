@@ -10,6 +10,7 @@ from app.models import ExecutionPolicyContext, RejectedCandidate
 from app.policy.feasible import DATA_HANDLING_HINTS, feasible_set
 from app.routing.pricing import price_call
 from app.routing.quality import QualityResolver
+from app.routing.signals import SignalStore
 from app.routing.strategy import RoutingStrategy, build_strategy
 
 if TYPE_CHECKING:
@@ -212,11 +213,19 @@ class Router:
         #    wins). Delegated to the pluggable strategy (app/routing/strategy.py)
         #    -- it only ranks this already-filtered eligible set, it can never
         #    add a candidate back in.
-        ordered = self._strategy.rank(
+        # NOTE: a fresh, never-observed SignalStore is constructed here, so
+        # this call site currently reproduces pre-P2a scoring exactly (the
+        # identity property). Wiring a persistent, traffic-fed SignalStore
+        # (and cached_pricing) into Router is Task 7's job.
+        result = self._strategy.rank(
             eligible, ctx=ctx, tokens_after=tokens_after,
-            weights=self._s.routing.weights, quality_resolver=self._quality)
-        chosen, est = ordered[0]
-        for c, _e in ordered[1:]:
+            weights=self._s.routing.weights, quality_resolver=self._quality,
+            signals=SignalStore(self._s.routing.signals),
+            signals_cfg=self._s.routing.signals)
+        ordered = result.ordered
+        chosen, est = ordered[0].candidate, ordered[0].est_cost_usd
+        for sc in ordered[1:]:
+            c = sc.candidate
             rejected.append(RejectedCandidate(
                 name=c.name, provider=c.provider, tier=c.tier,
                 display_name=c.display_name, reason="lower score"))

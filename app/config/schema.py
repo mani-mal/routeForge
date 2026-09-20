@@ -126,13 +126,11 @@ class RoutingCfg(BaseModel):
         boundary; what RouteForge can observe is whether calls have been
         succeeding, which is availability.
 
-        The alias is accepted so no deployed routing.yaml fails to boot.
-        `weights["capacity"]` is also mirrored onto `weights["availability"]`
-        -- until `app/routing/strategy.py` (Task 6) stops reading
-        `weights["capacity"]`, both keys must resolve to the same value so
-        the scoring formula keeps working during the P2a-Task5/6 gap. Task 6
-        removes this mirror once `strategy.py` reads `weights["availability"]`
-        directly.
+        The alias is accepted so no deployed routing.yaml fails to boot:
+        `weights["capacity"]` is renamed to `weights["availability"]` (an
+        explicit `availability` wins over a stale `capacity` alias) and the
+        `capacity` key is dropped. `app/routing/strategy.py` reads
+        `weights["availability"]` only.
         """
         if not isinstance(data, dict):
             return data
@@ -149,11 +147,6 @@ class RoutingCfg(BaseModel):
                     "routing.yaml: weights.capacity is deprecated; rename it "
                     "to weights.availability (the old term never affected "
                     "ranking)")
-        # Mirror: strategy.py still reads weights["capacity"] until Task 6
-        # rewrites the scoring formula to read weights["availability"] and
-        # this mirror is dropped.
-        if "availability" in weights:
-            weights["capacity"] = weights["availability"]
         data = {**data, "weights": weights}
         return data
 

@@ -25,6 +25,7 @@ def test_capacity_is_accepted_as_a_deprecated_alias_for_availability():
     cfg = RoutingCfg(**_routing(
         weights={"quality": 1.0, "cost": 0.6, "latency": 0.3, "capacity": 0.2}))
     assert cfg.weights["availability"] == 0.2
+    assert "capacity" not in cfg.weights
 
 
 def test_an_explicit_availability_wins_over_a_stale_capacity_alias():
