@@ -17,6 +17,7 @@ from app.config.schema import PriceCfg, Settings
 from app.errors import ContextWindowExceeded
 from app.gateway.backends.base import BackendHealth, StreamChunk
 from app.models import GenerationResult, Message
+from app.routing.pricing import price_call
 
 DEFAULT_CONFIDENCE = 0.9
 
@@ -36,16 +37,39 @@ async def _acompletion(model: str, call: dict):
             f"{model}: {_LITELLM_PREFIX.sub('', str(exc))}") from exc
 
 
+def _cached_tokens(u) -> int:
+    """`usage.prompt_tokens_details.cached_tokens`, across the dict, pydantic
+    and SimpleNamespace shapes litellm hands back. A provider that does not
+    report the field yields 0 -- indistinguishable from a real cache miss, which
+    is a documented limitation, not an inference."""
+    det = (u.get("prompt_tokens_details") if isinstance(u, dict)
+           else getattr(u, "prompt_tokens_details", None))
+    if det is None:
+        return 0
+    raw = det.get("cached_tokens") if isinstance(det, dict) else getattr(det, "cached_tokens", 0)
+    try:
+        return max(0, int(raw or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _usage_dict(u) -> dict:
     """Normalize a litellm usage object (pydantic-ish), a plain dict, or a
-    SimpleNamespace-style object into a `{prompt_tokens, completion_tokens}`
-    dict -- streaming's terminal usage chunk shape varies by provider."""
+    SimpleNamespace-style object into a `{prompt_tokens, completion_tokens,
+    cached_tokens}` dict -- streaming's terminal usage chunk shape varies by
+    provider."""
     if isinstance(u, dict):
-        return u
+        return {"prompt_tokens": u.get("prompt_tokens", 0),
+                "completion_tokens": u.get("completion_tokens", 0),
+                "cached_tokens": _cached_tokens(u)}
     if hasattr(u, "model_dump"):
-        return u.model_dump()
+        d = u.model_dump()
+        return {"prompt_tokens": d.get("prompt_tokens", 0),
+                "completion_tokens": d.get("completion_tokens", 0),
+                "cached_tokens": _cached_tokens(d)}
     return {"prompt_tokens": getattr(u, "prompt_tokens", 0),
-            "completion_tokens": getattr(u, "completion_tokens", 0)}
+            "completion_tokens": getattr(u, "completion_tokens", 0),
+            "cached_tokens": _cached_tokens(u)}
 
 
 def _to_wire(m) -> dict:
@@ -137,7 +161,10 @@ class LiteLLMBackend:
         usage = data.get("usage") or {}
         tokens_in = usage.get("prompt_tokens", 0)
         tokens_out = usage.get("completion_tokens", 0)
-        cost_usd = (tokens_in * price.input + tokens_out * price.output) / 1_000_000
+        cached_in = _cached_tokens(usage)
+        cost_usd = price_call(price, prompt_tokens=tokens_in,
+                              completion_tokens=tokens_out,
+                              cached_prompt_tokens=cached_in)
 
         logprobs = (choice.get("logprobs") or {}).get("content") if choice.get("logprobs") else None
         if logprobs:
@@ -149,7 +176,7 @@ class LiteLLMBackend:
         return GenerationResult(
             model=model, text=text, tokens_in=tokens_in, tokens_out=tokens_out,
             latency_ms=latency_ms, cost_usd=cost_usd, confidence=confidence,
-            tool_calls=tool_calls)
+            tool_calls=tool_calls, cached_prompt_tokens=cached_in)
 
     async def generate_stream(self, model: str, messages: list[Message], price: PriceCfg,
                               tier: str, hint: dict,
@@ -199,11 +226,14 @@ class LiteLLMBackend:
         text = "".join(parts)
         tokens_in = usage.get("prompt_tokens", 0)
         tokens_out = usage.get("completion_tokens", 0)
-        cost_usd = (tokens_in * price.input + tokens_out * price.output) / 1_000_000
+        cached_in = usage.get("cached_tokens", 0)
+        cost_usd = price_call(price, prompt_tokens=tokens_in,
+                              completion_tokens=tokens_out,
+                              cached_prompt_tokens=cached_in)
         yield StreamChunk(final=GenerationResult(
             model=model, text=text, tokens_in=tokens_in, tokens_out=tokens_out,
             latency_ms=latency_ms, cost_usd=cost_usd, confidence=None,
-            tool_calls=[]))
+            tool_calls=[], cached_prompt_tokens=cached_in))
 
     async def health(self) -> BackendHealth:
         # Per-model reachability is probed at onboard time (registry), not at

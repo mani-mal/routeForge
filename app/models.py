@@ -80,6 +80,11 @@ class Usage(BaseModel):
     prompt_tokens: int
     completion_tokens: int
     total_tokens: int
+    # Prompt tokens the provider served from its own prompt cache. 0 when the
+    # provider does not report the field, or when no provider call happened
+    # (a semantic-cache hit). Carried here so the meter in app/api/routes.py
+    # can persist it: routes.py reads resp["usage"], never a GenerationResult.
+    cached_prompt_tokens: int = 0
 
 
 class Choice(BaseModel):
@@ -215,6 +220,12 @@ class DecisionRecord(BaseModel):
     tokens_out: int = 0   # completion tokens for this attempt (baseline pricing, B12)
     quality_score: float | None = None
     quality_source: str | None = None  # customer|calibrated|published|tier_default
+    # P2a scoring record: per-eligible-candidate term values and provenance.
+    # Ids/enums/numbers only -- emitted regardless of capture_io, like
+    # `candidates`. Rejected candidates are absent by design: they were never
+    # scored, and inventing terms for them would be exactly the overstatement
+    # P2a exists to remove.
+    scoring: dict | None = None
 
 
 class VerificationRecord(BaseModel):
@@ -291,3 +302,7 @@ class GenerationResult(BaseModel):
     # None on the direct path (which never passes tools). Each item is an
     # OpenAI-shape tool_call dict: {id, type, function:{name, arguments}}.
     tool_calls: list[dict] | None = None
+    # Prompt tokens the PROVIDER served from its own prompt cache
+    # (`usage.prompt_tokens_details.cached_tokens`). 0 when the provider does
+    # not report the field, which is indistinguishable from a genuine miss.
+    cached_prompt_tokens: int = 0

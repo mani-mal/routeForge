@@ -65,6 +65,28 @@ def _is_tool_conversation(request: ChatRequest) -> bool:
         m.tool_calls or m.tool_call_id for m in request.messages)
 
 
+def _chosen_scoring(scoring: dict | None, chosen: str | None) -> dict | None:
+    """The chosen candidate's terms, for the response body. The full eligible
+    set goes to the trace only (`sp.scoring`, app/obs/export.py) -- the
+    response is a client-facing surface on every chat completion and must
+    stay small; see spec §7.1."""
+    if not scoring or not chosen:
+        return None
+    for c in scoring.get("candidates", []):
+        if c.get("name") == chosen:
+            # `latency_scale_ms`/`max_latency_norm` complete the replay inputs
+            # for THIS ONE candidate (two floats -- negligible payload). The
+            # response still carries only one candidate, so a client can
+            # recompute the chosen candidate's score, never the ordering
+            # among candidates it was never shown (see spec §7.1 and
+            # docs/reference/routing-observability.md).
+            return {"weights": scoring["weights"],
+                    "signals_enabled": scoring["signals_enabled"],
+                    "latency_scale_ms": scoring["latency_scale_ms"],
+                    "max_latency_norm": scoring["max_latency_norm"], **c}
+    return None
+
+
 class Pipeline:
     def __init__(self, settings: Settings, gate: Gate, detector: Detector,
                  gateway: Gateway,
@@ -257,7 +279,8 @@ class Pipeline:
     @staticmethod
     def _certificate(eff: EffectivePolicy, ctx: ExecutionPolicyContext,
                      det: Detector, endpoint_registry_version: str,
-                     endpoint_data_handling: dict) -> dict:
+                     endpoint_data_handling: dict,
+                     chosen_scoring: dict | None = None) -> dict:
         """The per-axis fields of the decision certificate (design P1a §6)
         common to every response shape. Reads straight off the already-
         compiled `eff` (placement + protection + the cross-axis rules that
@@ -306,7 +329,13 @@ class Pipeline:
         visible as a changed hash, not silent); `endpoint_data_handling`
         names what the SERVED endpoint declared and where each of the three
         values came from (model / provider_default / unknown) -- a
-        declaration, never a verified fact (design §2)."""
+        declaration, never a verified fact (design §2).
+
+        `chosen_scoring` (P2a Task 8, `_chosen_scoring` below) is the served
+        candidate's own scoring terms and provenance -- already narrowed to
+        one candidate by the caller. The full eligible set never appears
+        here: that stays on the trace only (`sp.scoring`), because this
+        certificate is on the response body of every chat completion."""
         ran = detection_ran(det)
         return {
             "placement": eff.placement.residency,
@@ -324,6 +353,10 @@ class Pipeline:
             # P1b Task 6 additions (design §6) -- see docstring above.
             "endpoint_registry_version": endpoint_registry_version,
             "endpoint_data_handling": endpoint_data_handling,
+            # P2a Task 8: chosen-candidate-only scoring terms + provenance.
+            # None when no router ran (e.g. a semantic-cache hit) or the
+            # served hop carried no scoring record.
+            "scoring": chosen_scoring,
         }
 
     def _endpoint_registry_version(self) -> str:
@@ -438,6 +471,19 @@ class Pipeline:
                 ctx, served.chosen, served.chosen_provider),
             "fallback_in_eligible_set": fallback_ok,
         }
+
+    @staticmethod
+    def _served_scoring(records: list[DecisionRecord]) -> dict | None:
+        """The SERVED hop's (last router hop with a chosen candidate --
+        same rule `_eligibility_checks` uses) chosen-candidate scoring
+        terms, for the response certificate. `None` when no router ran
+        this request (e.g. a semantic-cache hit) or that hop carried no
+        scoring record."""
+        chosen_hops = [r for r in records if r.chosen is not None]
+        if not chosen_hops:
+            return None
+        served = chosen_hops[-1]
+        return _chosen_scoring(served.scoring, served.chosen)
 
     @staticmethod
     def _publish_telemetry_views(internals: dict | None,
@@ -602,6 +648,9 @@ class Pipeline:
             "choices": [Choice(index=0,
                                message=Message(role="assistant", content=text)
                                ).model_dump()],
+            # cached_prompt_tokens left at its default 0: a semantic-cache hit
+            # makes no provider call, so there is no cache-usage figure to
+            # report -- 0 is the truth here, not a missing value.
             "usage": Usage(prompt_tokens=tokens_in, completion_tokens=tokens_out,
                            total_tokens=tokens_in + tokens_out).model_dump(),
             "trace": trace,
@@ -1001,7 +1050,8 @@ class Pipeline:
                                finish_reason=finish_reason).model_dump()],
             "usage": Usage(prompt_tokens=result.tokens_in,
                            completion_tokens=result.tokens_out,
-                           total_tokens=result.tokens_in + result.tokens_out
+                           total_tokens=result.tokens_in + result.tokens_out,
+                           cached_prompt_tokens=result.cached_prompt_tokens
                            ).model_dump(),
             "trace": trace,
             "cost": cost,
@@ -1026,7 +1076,8 @@ class Pipeline:
                        **self._certificate(
                            eff, ctx, det, self._endpoint_registry_version(),
                            self._endpoint_declaration(
-                               self._candidate_by_name(result.model))),
+                               self._candidate_by_name(result.model)),
+                           self._served_scoring(records)),
                        "checks": self._eligibility_checks(ctx, records)},
             "sanitized_prompt": sanitized,
             "raw_completion": result.text,
@@ -1237,7 +1288,8 @@ class Pipeline:
             "model_display": self._display_name(result.model),
             "usage": Usage(prompt_tokens=result.tokens_in,
                            completion_tokens=result.tokens_out,
-                           total_tokens=result.tokens_in + result.tokens_out
+                           total_tokens=result.tokens_in + result.tokens_out,
+                           cached_prompt_tokens=result.cached_prompt_tokens
                            ).model_dump(),
             "trace": trace,
             "cost": {"total_usd": total, "baseline_usd": baseline_usd,
@@ -1264,7 +1316,8 @@ class Pipeline:
                        **self._certificate(
                            eff, ctx, det, self._endpoint_registry_version(),
                            self._endpoint_declaration(
-                               self._candidate_by_name(result.model))),
+                               self._candidate_by_name(result.model)),
+                           self._served_scoring(records)),
                        "checks": self._eligibility_checks(ctx, records)},
             "sanitized_prompt": sanitized,
             "raw_completion": result.text,

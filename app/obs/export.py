@@ -435,6 +435,9 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                         cands = _candidates_json(rec)
                         if cands is not None:
                             sp.set_attribute("sp.candidates", redact_value(cands))
+                        if rec.get("scoring"):
+                            sp.set_attribute("sp.scoring",
+                                             redact_value(json.dumps(rec["scoring"])))
                         for k in ("hop_index", "actual_cost_usd", "est_cost_usd", "latency_ms"):
                             if rec.get(k) is not None:
                                 sp.set_attribute(f"sp.{k}", float(rec[k]))

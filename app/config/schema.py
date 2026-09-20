@@ -1,4 +1,6 @@
-from pydantic import BaseModel, Field
+import logging
+
+from pydantic import BaseModel, Field, model_validator
 
 from app.prompts.store import PromptArtifact
 
@@ -48,6 +50,38 @@ class PromptOptCfg(BaseModel):
     active: dict[str, str] = {}     # prompt_id -> pinned label (the human-gate pin)
 
 
+class SignalsCfg(BaseModel):
+    """Measured routing signals (P2a). Owned by routing.yaml only."""
+    enabled: bool = True
+    # Latency used for a model with no usable measurement, per canonical tier.
+    # These defaults are NOT arbitrary: with `latency_scale_ms` 1000 they make
+    # the normalized latency term evaluate to 0.2/0.5/1.0 -- byte-identical to
+    # the pre-P2a hardcoded `_L` table -- so an empty SignalStore reproduces
+    # today's scores exactly. Changing either without the other breaks that
+    # identity property (spec §6.2).
+    #
+    # Deliberately NOT the same numbers as
+    # app/gateway/backends/base.py::TIER_LATENCY_MS (200/500/2000, test-fake-
+    # only) -- this table's `frontier` is 1000, not 2000. Production and
+    # test-only tables, on purpose; do not "fix" the discrepancy (spec §9).
+    tier_latency_ms: dict[str, float] = Field(
+        default_factory=lambda: {"cheap": 200.0, "mid": 500.0, "frontier": 1000.0})
+    latency_scale_ms: float = 1000.0
+    # Ceiling on the normalized latency term, so one pathologically slow
+    # endpoint cannot swamp quality and cost entirely.
+    max_latency_norm: float = 3.0
+    # Wall-clock half-life for availability's decay back toward 1.0.
+    half_life_s: float = 900.0
+    # Observations required before a signal is reported as `measured`.
+    min_samples: int = 5
+    # A latency observation older than this is no longer a measurement.
+    staleness_s: float = 3600.0
+    seed_window_hours: int = 24
+    # EWMA smoothing floor. Early on, alpha = 1/(n+1) behaves as a running
+    # mean; once n exceeds 1/alpha_floor it becomes a fixed-width EWMA.
+    alpha_floor: float = 0.1
+
+
 class RoutingCfg(BaseModel):
     tiers: list[str]
     score_on: str
@@ -82,6 +116,44 @@ class RoutingCfg(BaseModel):
     # registry). Owned here only -- the config lint rejects an unknown name at
     # boot (never a silent fallback to "default").
     strategy: str = "default"
+    # P2a measured routing signals. Owned here (routing input), never restated.
+    signals: SignalsCfg = SignalsCfg()
+
+    @model_validator(mode="before")
+    @classmethod
+    def _rename_capacity_weight(cls, data):
+        """`capacity` -> `availability` (P2a).
+
+        The old term added the SAME constant to every candidate, so it
+        cancelled out of the ordering and never influenced a routing
+        decision. It is renamed because true capacity -- queue depth,
+        admission pressure -- is unobservable across an OpenAI-compatible
+        boundary; what RouteForge can observe is whether calls have been
+        succeeding, which is availability.
+
+        The alias is accepted so no deployed routing.yaml fails to boot:
+        `weights["capacity"]` is renamed to `weights["availability"]` (an
+        explicit `availability` wins over a stale `capacity` alias) and the
+        `capacity` key is dropped. `app/routing/strategy.py` reads
+        `weights["availability"]` only.
+        """
+        if not isinstance(data, dict):
+            return data
+        weights = data.get("weights")
+        if not isinstance(weights, dict):
+            return data
+        weights = dict(weights)
+        if "capacity" in weights:
+            legacy = weights.pop("capacity")
+            had_explicit_availability = "availability" in weights
+            weights.setdefault("availability", legacy)
+            if not had_explicit_availability:
+                logging.getLogger(__name__).warning(
+                    "routing.yaml: weights.capacity is deprecated; rename it "
+                    "to weights.availability (the old term never affected "
+                    "ranking)")
+        data = {**data, "weights": weights}
+        return data
 
 
 class SensitivityRule(BaseModel):
@@ -110,6 +182,13 @@ class PriceCfg(BaseModel):
     output: float
     tier: str
     provider: str
+    # USD/1M for prompt tokens the provider served from ITS OWN prompt cache
+    # (`usage.prompt_tokens_details.cached_tokens`). None = undeclared, and an
+    # undeclared rate bills cached tokens at the full `input` rate --
+    # RouteForge never invents a discount an operator did not declare. On-prem
+    # endpoints normally declare this EQUAL to `input`: a vLLM prefix-cache hit
+    # saves latency, not GPU amortization.
+    cached_input: float | None = None
 
 
 class PricingCfg(BaseModel):

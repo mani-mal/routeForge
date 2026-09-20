@@ -43,6 +43,7 @@ Field reference (`OnboardIn`):
 | `api_key_env` | str \| null | no | Name of the env var holding the bearer token for this endpoint, if any — never the key value itself. |
 | `price_input` | float | yes | USD per 1M input tokens. |
 | `price_output` | float | yes | USD per 1M output tokens. |
+| `price_cached_input` | float \| null | no | USD per 1M prompt tokens this endpoint served from its **own** prompt cache — see (b2). `null`/omitted = undeclared, which bills cached tokens at the full `price_input` rate. |
 | `quality` | float \| null | no | Optional published quality score; falls back to the tier-default quality ladder if omitted. |
 | `context_window` | int \| null | no | |
 | `allowed_app_ids` | list[str] \| null | no | App-scoping — see (d). |
@@ -56,6 +57,44 @@ Edit an onboarded model with `PUT /admin/infra/models/{slug}` (same body,
 full replace — it re-probes on every edit). Remove one with
 `DELETE /admin/infra/models/{slug}`. List all onboarded rows with
 `GET /admin/infra/models`. All four endpoints require admin auth.
+
+## (b2) `price_cached_input` — the cached-prompt-token rate
+
+Providers that serve part of a prompt from a cache often bill those tokens at a
+reduced rate. RouteForge captures the count the provider reports
+(`usage.prompt_tokens_details.cached_tokens`), persists it on the usage row, and
+prices it — but **only at a rate the operator declared**.
+
+- **Undeclared (`null`, or the field omitted) ⇒ cached tokens bill at the full
+  `price_input` rate.** RouteForge never invents a discount, so onboarding
+  nothing here leaves every cost figure exactly as it was.
+- **Declared ⇒** the cached portion of the prompt is billed at that rate and the
+  rest at `price_input`. The count is clamped into `[0, prompt_tokens]`, because
+  providers occasionally over-report it and an unclamped value would drive the
+  cost below zero.
+- The estimate the router budgets against **always assumes zero cached tokens.**
+  The hit rate is unknowable before the call, and guessing one would bias
+  routing toward whichever model the guess was generous about. Estimate high,
+  record true: budget enforcement stays at least as strict as before.
+
+**On-prem guidance: set `price_cached_input` equal to `price_input`.** A vLLM (or
+SGLang, or TensorRT-LLM) prefix-cache hit saves *latency*, not GPU
+amortization — the GPU-hours you are amortizing over your token price were spent
+either way. Declaring a discount you did not receive understates your own cost
+and makes the cost dashboard lie to you. The prefix cache does pay off, and
+RouteForge does see it: as a lower measured latency for that endpoint, which
+feeds the routing signal (`docs/reference/routing-observability.md` §3). That is
+where the on-prem win shows up.
+
+Two behaviours worth knowing:
+
+- **A provider that does not report cached tokens yields `0`**, which is
+  indistinguishable from a genuine cache miss. RouteForge does not guess.
+- **On `PUT` (edit), omitting the field preserves the stored value**; only an
+  explicit `null` clears it. This differs from `region` / `prompt_retention`,
+  which full-replace. A price quietly reverting to "no discount" because a
+  scripted display-name update was written against an older body shape would
+  overstate spend with no operator action.
 
 ## (c) What the probe checks
 

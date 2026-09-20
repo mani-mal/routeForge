@@ -24,6 +24,7 @@ from app.config.schema import PoolCandidate
 from app.models import ExecutionPolicyContext
 from app.routing.quality import QualityResolver
 from app.routing.router import Router, expected_output_tokens
+from app.routing.signals import SignalStore
 from app.routing.strategy import DefaultRoutingStrategy, build_strategy
 from tests._litellm_fake import make_test_registry
 
@@ -61,7 +62,7 @@ def _pre_refactor_score(c: PoolCandidate, est: float, max_cost: float,
     norm = est / max_cost if max_cost > 0 else 0.0
     q = quality_resolver.resolve(c.name).score
     return (w["quality"] * q - w["cost"] * norm
-            - w["latency"] * _L[c.tier] + w["capacity"] * 1.0)
+            - w["latency"] * _L[c.tier] + w["availability"] * 1.0)
 
 
 @pytest.mark.parametrize("tokens_after,complexity,min_tier", [
@@ -70,6 +71,15 @@ def _pre_refactor_score(c: PoolCandidate, est: float, max_cost: float,
     (20, 0.9, None),      # frontier tier
 ])
 def test_default_strategy_matches_pre_refactor_scoring(tokens_after, complexity, min_tier):
+    # NOTE (B44): this is an ORDERING oracle over a single-tier eligible set --
+    # within one tier a set-max-normalized latency term is constant across
+    # candidates and can't change an ordering, so this test does NOT catch a
+    # regression to set-max normalization (a Task 6 review mutation confirmed
+    # it survives that mutant). The score-level pin is
+    # tests/routing/test_strategy_identity.py::
+    # test_empty_signal_store_reproduces_the_legacy_scores_exactly -- read that
+    # one for the identity property; do not mistake this older test for
+    # equivalent coverage.
     ctx = _ctx({"onprem", "azure", "bedrock"})
     router = Router(S, registry=REG)
 
@@ -96,13 +106,14 @@ def test_default_strategy_matches_pre_refactor_scoring(tokens_after, complexity,
         key=lambda it: (-_pre_refactor_score(it[0], it[1], max_cost, S.routing.weights,
                                               router._quality, _L), it[1]))
 
-    strategy_out = DefaultRoutingStrategy().rank(
+    result = DefaultRoutingStrategy().rank(
         eligible, ctx=ctx, tokens_after=tokens_after, weights=S.routing.weights,
-        quality_resolver=router._quality)
+        quality_resolver=router._quality,
+        signals=SignalStore(S.routing.signals), signals_cfg=S.routing.signals)
 
-    assert [c.name for c, _ in strategy_out] == [c.name for c, _ in golden]
-    assert strategy_out[0][0].name == decision.chosen.name
-    assert strategy_out[0][1] == pytest.approx(decision.est_cost_usd)
+    assert [sc.candidate.name for sc in result.ordered] == [c.name for c, _ in golden]
+    assert result.ordered[0].candidate.name == decision.chosen.name
+    assert result.ordered[0].est_cost_usd == pytest.approx(decision.est_cost_usd)
 
 
 def test_higher_quality_wins_reproduced_via_default_strategy():
@@ -128,11 +139,13 @@ class _SpyStrategy:
     def __init__(self):
         self.seen: list[tuple[PoolCandidate, float]] = []
 
-    def rank(self, eligible, *, ctx, tokens_after, weights, quality_resolver):
+    def rank(self, eligible, *, ctx, tokens_after, weights, quality_resolver,
+             signals, signals_cfg, cached_pricing=None):
         self.seen = list(eligible)
         return DefaultRoutingStrategy().rank(
             eligible, ctx=ctx, tokens_after=tokens_after, weights=weights,
-            quality_resolver=quality_resolver)
+            quality_resolver=quality_resolver, signals=signals,
+            signals_cfg=signals_cfg, cached_pricing=cached_pricing)
 
 
 def test_strategy_never_sees_residency_filtered_cloud_candidate():
@@ -216,10 +229,12 @@ def test_default_strategy_returns_same_members_only_reordered():
                 if c.provider in ctx.allowed_providers and c.tier == tier]
     assert len(eligible) >= 2  # otherwise this test proves nothing
 
-    ordered = DefaultRoutingStrategy().rank(
+    result = DefaultRoutingStrategy().rank(
         eligible, ctx=ctx, tokens_after=200, weights=S.routing.weights,
-        quality_resolver=router._quality)
+        quality_resolver=router._quality,
+        signals=SignalStore(S.routing.signals), signals_cfg=S.routing.signals)
 
-    assert len(ordered) == len(eligible)
-    assert {c.name for c, _ in ordered} == {c.name for c, _ in eligible}
-    assert {(c.name, e) for c, e in ordered} == {(c.name, e) for c, e in eligible}
+    assert len(result.ordered) == len(eligible)
+    assert {sc.candidate.name for sc in result.ordered} == {c.name for c, _ in eligible}
+    assert ({(sc.candidate.name, sc.est_cost_usd) for sc in result.ordered}
+            == {(c.name, e) for c, e in eligible})

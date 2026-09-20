@@ -204,6 +204,31 @@ def test_each_failed_attempt_emits_its_own_decision_record():
     assert failures[0].est_cost_usd >= 0.0
 
 
+def test_failed_attempt_carries_scoring_too_not_just_the_survivor():
+    """P2a: the FAILED hop's own scoring must not be discarded. No
+    step="router" record is ever emitted for a candidate that failed, so if
+    its scoring lived only on that never-created record, a replay could never
+    ask whether the failed choice was reasonable given what was known at the
+    time -- and failover is exactly where the availability signal matters.
+    Both the failed gateway-step record and the survivor's router-step record
+    must carry a scoring dict, and they must disagree about which candidate
+    ranked first (the failed hop's excluded onprem-a, the survivor's
+    onprem-b)."""
+    reg = _reg({"onprem-a": _onprem("onprem-a"), "onprem-b": _onprem("onprem-b")})
+    backend = _FailForModels(S, {"onprem-a"})
+    result, records = _run(backend, _ctx(reg, {"onprem"}, onprem=True), reg)
+    scored = [r for r in records if r.scoring is not None]
+    assert len(scored) == 2
+    failed, served = scored
+    assert failed.step == "gateway" and failed.chosen is None
+    assert served.step == "router" and served.chosen == "onprem-b"
+    failed_top = failed.scoring["candidates"][0]["name"]
+    served_top = served.scoring["candidates"][0]["name"]
+    assert failed_top == "onprem-a"
+    assert served_top == "onprem-b"
+    assert failed_top != served_top
+
+
 # --- Invariant 7: default-safe (success on first try, no exclusion) --------
 
 def test_success_first_try_no_failover_records():

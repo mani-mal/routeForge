@@ -88,6 +88,18 @@ MODEL_COLUMNS: list[tuple[str, str, str]] = [
     ("region", "VARCHAR(64)", "VARCHAR(64)"),
     ("prompt_retention", "VARCHAR(16)", "VARCHAR(16)"),
     ("accepts_raw_sensitive", "BOOLEAN", "BOOLEAN"),
+    # 2026-09-19 P2a — the endpoint's declared cached-input rate. NULL =
+    # undeclared -> bill cached tokens at price_input, i.e. today's behaviour.
+    ("price_cached_input", "DOUBLE PRECISION", "FLOAT"),
+]
+
+# 2026-09-19 P2a cached-token accounting. Nullable with no default: an existing
+# row reads NULL, which every reader coerces to 0 ("no cached tokens recorded"),
+# so this migration changes no cost figure already written.
+USAGE_TABLE = "usage_records"
+
+USAGE_COLUMNS: list[tuple[str, str, str]] = [
+    ("cached_prompt_tokens", "INTEGER", "INTEGER"),
 ]
 
 
@@ -110,7 +122,9 @@ async def _run() -> int:
         # got a traceback instead of the per-column log. Per-table scoping means
         # a table that is absent is reported and skipped, and the other table's
         # migration still commits.
-        for table, columns in ((TABLE, COLUMNS), (MODELS_TABLE, MODEL_COLUMNS)):
+        for table, columns in ((TABLE, COLUMNS),
+                               (MODELS_TABLE, MODEL_COLUMNS),
+                               (USAGE_TABLE, USAGE_COLUMNS)):
             print(f"  {table}:")
             async with engine.begin() as conn:
                 try:

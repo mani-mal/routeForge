@@ -71,6 +71,29 @@ def lint_settings(s: Settings) -> list[str]:
         if c.quality is not None and not (0.0 <= c.quality <= 1.0):
             errs.append(f"POOL_QUALITY_OUT_OF_RANGE {c.name}={c.quality}")
 
+    # P2a measured routing signals (routing.yaml `signals`). Every canonical
+    # tier needs an unmeasured-fallback latency, and it must be positive --
+    # a zero/negative value would make the normalized latency term degenerate
+    # rather than reproduce the pre-P2a identity property (spec §6.2).
+    for t in tiers:
+        if t not in s.routing.signals.tier_latency_ms:
+            errs.append(f"TIER_LATENCY_MISSING {t}")
+    for t, ms in s.routing.signals.tier_latency_ms.items():
+        if ms <= 0:
+            errs.append(f"TIER_LATENCY_NOT_POSITIVE {t}={ms}")
+    # `latency_scale_ms` is the divisor in `DefaultRoutingStrategy.rank`'s
+    # `lat.value / signals_cfg.latency_scale_ms` normalization -- a zero (or
+    # negative) value passes every other check above and then raises
+    # ZeroDivisionError on the first scored request (app/routing/strategy.py).
+    if s.routing.signals.latency_scale_ms <= 0:
+        errs.append("LATENCY_SCALE_NOT_POSITIVE "
+                    f"{s.routing.signals.latency_scale_ms}")
+    # `availability` is the renamed scoring weight (was `capacity`); a
+    # routing.yaml with neither key is a boot failure, not a silent 0 weight.
+    if "availability" not in s.routing.weights:
+        errs.append("WEIGHT_MISSING availability (routing.yaml; "
+                    "`capacity` is the deprecated alias)")
+
     # The router prices every request's output at this when the client sends
     # no max_tokens; a policy.yaml without it would KeyError (500) per request.
     if "default_estimated_output_tokens" not in s.policy.budgets:

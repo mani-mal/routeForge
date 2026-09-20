@@ -8,11 +8,14 @@ from app.config.schema import PoolCandidate, Settings
 from app.errors import NoEligibleCandidate
 from app.models import ExecutionPolicyContext, RejectedCandidate
 from app.policy.feasible import DATA_HANDLING_HINTS, feasible_set
+from app.routing.pricing import price_call
 from app.routing.quality import QualityResolver
+from app.routing.signals import SignalStore
 from app.routing.strategy import RoutingStrategy, build_strategy
 
 if TYPE_CHECKING:
     from app.apps.registry import ModelRegistry
+    from app.routing.strategy import RankResult
 
 _ORDER = {"cheap": 0, "mid": 1, "frontier": 2}
 
@@ -71,13 +74,15 @@ class RoutingDecision:
     rejected: list[RejectedCandidate] = field(default_factory=list)
     quality_score: float = 0.0
     quality_source: str = "tier_default"
+    scoring: "RankResult | None" = None
 
 
 class Router:
     def __init__(self, settings: Settings,
                  quality_resolver: QualityResolver | None = None,
                  registry: "ModelRegistry | None" = None,
-                 strategy: RoutingStrategy | None = None) -> None:
+                 strategy: RoutingStrategy | None = None,
+                 signals: "SignalStore | None" = None) -> None:
         self._s = settings
         self._reg = registry
         # Registry-aware by default (onboarded on-prem models never appear in
@@ -87,6 +92,13 @@ class Router:
         # Step-5 scoring seam (app/routing/strategy.py). Injectable like
         # quality_resolver; config-selected otherwise (routing.strategy).
         self._strategy = strategy or build_strategy(settings.routing.strategy)
+        # P2a measured signals (app/routing/signals.py). Injectable so callers
+        # (app/main.py) can share ONE persistent, traffic-fed store across the
+        # Router and the Gateway; defaults to a fresh, never-observed store so
+        # every other construction site (tests, ad-hoc scripts) keeps working
+        # unchanged -- reporting tier_default/neutral for everything, same as
+        # pre-P2a.
+        self._signals = signals or SignalStore(settings.routing.signals)
 
     def _complexity_tier(self, complexity: float) -> str:
         t = self._s.routing.complexity_thresholds
@@ -97,9 +109,13 @@ class Router:
         return "frontier"
 
     def _est_cost(self, cand: PoolCandidate, tokens_after: int, output_tokens: int) -> float:
+        """Pre-call estimate. Deliberately assumes ZERO cached prompt tokens:
+        the router cannot know the hit rate before the call, and guessing one
+        biases routing toward whichever model the guess was generous about.
+        Estimate high, record true (see the actual cost on the DecisionRecord)."""
         p = (self._reg.price_for(cand.name) if self._reg
              else self._s.pricing.models[cand.name])
-        return (tokens_after * p.input + output_tokens * p.output) / 1_000_000
+        return price_call(p, prompt_tokens=tokens_after, completion_tokens=output_tokens)
 
     def select(self, ctx: ExecutionPolicyContext, tokens_after: int,
                complexity: float, min_tier: str | None = None,
@@ -206,12 +222,27 @@ class Router:
         # 5. score within the tier (chooses provider/model — cheaper on-prem
         #    wins). Delegated to the pluggable strategy (app/routing/strategy.py)
         #    -- it only ranks this already-filtered eligible set, it can never
-        #    add a candidate back in.
-        ordered = self._strategy.rank(
+        #    add a candidate back in. `self._signals` is a persistent,
+        #    traffic-fed store shared with the Gateway (see app/main.py) --
+        #    NOT a fresh one per call.
+        cached_pricing = {}
+        for c, _e in eligible:
+            try:
+                p = (self._reg.price_for(c.name) if self._reg
+                     else self._s.pricing.models[c.name])
+            except KeyError:
+                continue
+            cached_pricing[c.name] = "priced" if p.cached_input is not None else "unpriced"
+
+        result = self._strategy.rank(
             eligible, ctx=ctx, tokens_after=tokens_after,
-            weights=self._s.routing.weights, quality_resolver=self._quality)
-        chosen, est = ordered[0]
-        for c, _e in ordered[1:]:
+            weights=self._s.routing.weights, quality_resolver=self._quality,
+            signals=self._signals, signals_cfg=self._s.routing.signals,
+            cached_pricing=cached_pricing)
+        ordered = result.ordered
+        chosen, est = ordered[0].candidate, ordered[0].est_cost_usd
+        for sc in ordered[1:]:
+            c = sc.candidate
             rejected.append(RejectedCandidate(
                 name=c.name, provider=c.provider, tier=c.tier,
                 display_name=c.display_name, reason="lower score"))
@@ -221,4 +252,5 @@ class Router:
             reason=(f"tier {chosen.tier} (target {target}, budget fallback from {fallback_from})"
                     if fallback_from else f"tier {chosen.tier} (target {target})"),
             rejected=rejected,
-            quality_score=chosen_q.score, quality_source=chosen_q.source)
+            quality_score=chosen_q.score, quality_source=chosen_q.source,
+            scoring=result)
