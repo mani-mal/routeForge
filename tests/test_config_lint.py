@@ -232,6 +232,17 @@ def test_lint_rejects_a_nonpositive_tier_latency_ms():
     assert any(e.startswith("TIER_LATENCY_NOT_POSITIVE") for e in lint_settings(s))
 
 
+def test_lint_rejects_a_nonpositive_latency_scale_ms():
+    # `latency_scale_ms: 0` passes every other check and then ZeroDivisionErrors
+    # on the first scored request (DefaultRoutingStrategy.rank divides by it) --
+    # the lint must catch it at boot, not at request time.
+    s = copy.deepcopy(load_settings())
+    s.routing.signals.latency_scale_ms = 0.0
+    assert any(e.startswith("LATENCY_SCALE_NOT_POSITIVE") for e in lint_settings(s))
+    with pytest.raises(SystemExit):
+        enforce(s)
+
+
 def test_lint_rejects_weights_with_no_availability():
     s = copy.deepcopy(load_settings())
     s.routing.weights.pop("availability")

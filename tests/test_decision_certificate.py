@@ -170,14 +170,22 @@ def test_router_hop_scoring_carries_every_eligible_candidate():
 def test_response_scoring_carries_chosen_candidate_only():
     """Placement decision 2/3: the RESPONSE certificate carries only the
     served candidate's terms -- no `candidates` list, and its `name` is the
-    served model, matching `out["model"]`."""
+    served model, matching `out["model"]`.
+
+    `latency_scale_ms`/`max_latency_norm` ride along with `weights`/
+    `signals_enabled` so the response is self-consistent enough to recompute
+    THIS ONE candidate's score -- see `app/pipeline.py::_chosen_scoring` and
+    docs/reference/routing-observability.md. It still carries only one
+    candidate, so it can verify that candidate's score but never reproduce
+    the ordering among candidates it was never shown."""
     pipe = _pipeline(_settings())
     out = _run(pipe, _BENIGN)
     sc = out["policy"]["scoring"]
     assert sc is not None
     assert "candidates" not in sc
     assert sc["name"] == out["model"]
-    assert set(sc) == {"weights", "signals_enabled", "name", "score",
+    assert set(sc) == {"weights", "signals_enabled", "latency_scale_ms",
+                       "max_latency_norm", "name", "score",
                        "quality", "latency", "availability", "cost"}
 
 

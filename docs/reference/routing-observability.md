@@ -192,7 +192,7 @@ four report **where their value came from**. Source of truth:
 | Surface | Carries | Why |
 |---|---|---|
 | **Trace** — `sp.scoring`, on each router hop's own span, beside `sp.candidates` | **every eligible candidate**, plus `weights`, `signals_enabled`, `latency_scale_ms`, `max_latency_norm` | the audit and replay surface |
-| **HTTP response** — `policy.scoring` in the decision certificate | the **chosen candidate only**, plus `weights` and `signals_enabled` | the response is on *every* chat completion and has to stay small |
+| **HTTP response** — `policy.scoring` in the decision certificate | the **chosen candidate only**, plus `weights`, `signals_enabled`, `latency_scale_ms`, `max_latency_norm` | the response is on *every* chat completion and has to stay small |
 
 **Per router hop, never collapsed.** A failover or confidence escalation
 produces a second hop with a different eligible set and different signal state;
@@ -238,9 +238,16 @@ score = w.quality      · quality
 so the trace record is **sufficient to recompute the hop's ranking offline** —
 no signal store, no live config. That is pinned by
 `tests/routing/test_scoring_record_replay.py`, which replays the record after a
-`json.dumps`/`json.loads` round-trip. Note the *response* form is deliberately
-not replayable: it carries one candidate and omits `latency_scale_ms` /
-`max_latency_norm`. Replay is a trace property.
+`json.dumps`/`json.loads` round-trip.
+
+**The response form now carries `latency_scale_ms`/`max_latency_norm` too**
+(added alongside `weights`/`signals_enabled`), so a client can recompute the
+*chosen* candidate's score from the response alone. Be precise about what that
+does and does not buy: the response still carries **one** candidate, never the
+full eligible set, so it can verify that one score but can never reproduce the
+*ordering* among candidates it was never shown — only the trace form, with
+every eligible candidate, can do that. Full replay (the ranking, not just one
+candidate's score) stays a trace-only property.
 
 ### The four provenance values
 
@@ -317,6 +324,18 @@ escape hatch and restores the same numbers with `src: "disabled"`.
   observations to be down-weighted again. Tracked as a backlog item.
 - **`n` is `0` on the `disabled` path** even when the store holds observations,
   unlike `tier_default`/`neutral`, which report the true count. Also backlogged.
+- **A semantic-cache hit pollutes the seeded latency signal with the cache lookup's
+  latency, not the model's.** A cache hit returns a full response stamped with the
+  serving model's slug (`entry.model`) and a trace whose only latency entry is the
+  ~3 ms cache lookup (`app/pipeline.py`). That flows through the same `_finalize`
+  path and writes an `ok` `usage_records` row for that model — which
+  `aggregate_model_signals` then averages in. A model whose recent window is
+  mostly cache hits can seed at a few hundred milliseconds `measured`, n in the
+  dozens, and outrank a genuinely faster peer that has never been cache-hit.
+  Mitigated today only because `semantic_cache.enabled: false` is the shipped
+  default (`config/serving.yaml`). No code fix is proposed here — it would need a
+  cache-hit marker on `usage_records` distinguishing a cache-served row from a
+  model-served one, which is out of scope for this slice. Folded into backlog B39.
 - **Cached-token capture depends on the provider.** A provider that does not
   report `usage.prompt_tokens_details.cached_tokens` yields `0`, which is
   indistinguishable from a genuine cache miss.

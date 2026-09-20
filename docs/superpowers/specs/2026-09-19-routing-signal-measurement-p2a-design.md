@@ -20,6 +20,19 @@ measure what their names claim:
 | `quality` | a published or calibrated score | often `tier_default`; the four-way provenance ladder exists (`app/routing/quality.py`) but is invisible outside the chosen candidate |
 | `cost` | USD for this call | correct on the input/output axes, but **cached prompt tokens are neither captured nor priced anywhere in `app/`** — the provider's prompt-cache discount is invisible and spend is overstated |
 
+> **Corrected 2026-09-19 (fix wave).** The table's `latency` row is also understated,
+> in exactly the way this section accuses B30 of understating `capacity`. `Router
+> .select` filters `eligible` down to a **single tier** before scoring
+> (`app/routing/router.py:165-172`, and the budget-fallback branch at `:195-199`
+> likewise). Every scored candidate therefore shared the same `_L[c.tier]` —
+> **pre-P2a the latency term also canceled out of the ordering, exactly like
+> `capacity`.** Only quality and cost ever ordered anything, pre-P2a; the table above
+> is left as originally written, with this correction beside it, for the same reason
+> §3's dead-endpoint correction is left visible rather than silently edited. Note the
+> corollary in §6.2's own correction below: this also **strengthens** what this slice
+> delivers — latency now differentiates between same-tier candidates for the first
+> time, which is a real capability the original framing didn't credit it with.
+
 The `capacity` finding deserves emphasis because the backlog understates it.
 B30 records it as "capacity is hardcoded to 1.0". It is worse than hardcoded:
 adding an identical constant to every candidate's score leaves the ordering
@@ -304,6 +317,21 @@ set-max because cost is inherently comparative (dollars per model vary by orders
 of magnitude); latency is absolute (milliseconds mean the same thing everywhere).
 The two terms want different normalizations, and conflating them is the bug this
 paragraph exists to prevent a future refactor from introducing.
+
+> **Corrected 2026-09-19 (fix wave).** The "two-tier eligible set" in the paragraph
+> above describes a set `Router.select` cannot actually produce — it filters
+> `eligible` down to a single tier before scoring (see §1's correction), so a
+> multi-tier rescaling scenario never arises in production. The *argument* for fixed-
+> scale over set-max still holds on its own terms (latency is absolute, cost is
+> comparative), so this does not change the identity property or the decision it
+> defends. But `tests/routing/test_strategy_identity.py`'s Hypothesis grid generates
+> candidate sets spanning all three tiers, which is a wider domain than production
+> ever exercises through this strategy. That does not invalidate the test — it still
+> correctly pins that the *formula* reproduces pre-P2a scores for any tier mix it is
+> given, which is the honest scope of a strategy-level property (a `RoutingStrategy`
+> is handed whatever `eligible` set its caller built, per the module docstring in
+> `app/routing/strategy.py`) — but a reader should not conclude from it that
+> production ever calls `rank()` with a multi-tier set today.
 
 `max_latency_norm` (default 3.0) clamps the term so one pathologically slow
 endpoint cannot swamp quality and cost entirely.

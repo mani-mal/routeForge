@@ -59,6 +59,11 @@ class SignalsCfg(BaseModel):
     # the pre-P2a hardcoded `_L` table -- so an empty SignalStore reproduces
     # today's scores exactly. Changing either without the other breaks that
     # identity property (spec §6.2).
+    #
+    # Deliberately NOT the same numbers as
+    # app/gateway/backends/base.py::TIER_LATENCY_MS (200/500/2000, test-fake-
+    # only) -- this table's `frontier` is 1000, not 2000. Production and
+    # test-only tables, on purpose; do not "fix" the discrepancy (spec §9).
     tier_latency_ms: dict[str, float] = Field(
         default_factory=lambda: {"cheap": 200.0, "mid": 500.0, "frontier": 1000.0})
     latency_scale_ms: float = 1000.0

@@ -21,6 +21,11 @@ def count_tokens(text: str | None) -> int:
 # gets a stable, non-zero latency in tests. The real LiteLLMBackend.generate
 # measures actual wall-clock latency instead. This table is the single
 # source the fake reads; production never uses it.
+#
+# Deliberately NOT the same numbers as app/config/schema.py::SignalsCfg
+# .tier_latency_ms (200/500/1000, the production unmeasured-fallback table) --
+# this one's `frontier` is 2000, not 1000. Test-only and production tables,
+# on purpose; do not "fix" the discrepancy by making them match (spec §9).
 TIER_LATENCY_MS = {"cheap": 200.0, "mid": 500.0, "frontier": 2000.0}
 
 

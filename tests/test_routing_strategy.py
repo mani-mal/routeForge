@@ -71,6 +71,15 @@ def _pre_refactor_score(c: PoolCandidate, est: float, max_cost: float,
     (20, 0.9, None),      # frontier tier
 ])
 def test_default_strategy_matches_pre_refactor_scoring(tokens_after, complexity, min_tier):
+    # NOTE (B44): this is an ORDERING oracle over a single-tier eligible set --
+    # within one tier a set-max-normalized latency term is constant across
+    # candidates and can't change an ordering, so this test does NOT catch a
+    # regression to set-max normalization (a Task 6 review mutation confirmed
+    # it survives that mutant). The score-level pin is
+    # tests/routing/test_strategy_identity.py::
+    # test_empty_signal_store_reproduces_the_legacy_scores_exactly -- read that
+    # one for the identity property; do not mistake this older test for
+    # equivalent coverage.
     ctx = _ctx({"onprem", "azure", "bedrock"})
     router = Router(S, registry=REG)
 

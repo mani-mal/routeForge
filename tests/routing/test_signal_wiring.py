@@ -17,10 +17,15 @@ from app.apps.bootstrap import seed_demo_apps
 from app.apps.db import Database
 from app.apps import store
 from app.apps.models import UsageRecord, utcnow
+from app.apps.policy import AppPolicyView
+from app.compression.ccr import CCRStore
 from app.config.loader import load_settings
 from app.errors import ContextWindowExceeded
 from app.gateway.gateway import Gateway, counts_as_endpoint_unhealth
-from app.models import ExecutionPolicyContext, Message
+from app.models import ChatRequest, ExecutionPolicyContext, Message
+from app.pipeline import Pipeline, PipelineRejected
+from app.policy.detectors import make_detector
+from app.policy.gate import Gate
 from app.routing.router import Router
 from app.routing.signals import SignalStore
 from tests._litellm_fake import _DeterministicLiteLLM, make_test_registry
@@ -43,8 +48,14 @@ def test_a_context_window_overflow_is_the_REQUEST_being_wrong():
     assert counts_as_endpoint_unhealth(ContextWindowExceeded("too long")) is False
 
 
-@pytest.mark.parametrize("code", [400, 401, 403, 404, 422])
+@pytest.mark.parametrize("code", [400, 401, 403, 404, 422, 428, 430, 499])
 def test_client_errors_do_not_count_against_the_endpoint(code):
+    """428, 430 and 499 close the upper-boundary gap of `not (400 <= code <
+    500)` that the pre-existing 400/401/403/404/422 cases don't reach (B46).
+    499 (nginx's "client closed request") is the practically important one:
+    it is not rare behind a proxy, and misclassifying it as endpoint unhealth
+    would push traffic off a healthy endpoint on every client disconnect --
+    precisely the failure mode ruling 2 exists to prevent."""
     assert counts_as_endpoint_unhealth(_Status(code)) is False
 
 
@@ -53,10 +64,16 @@ def test_server_errors_count(code):
     assert counts_as_endpoint_unhealth(_Status(code)) is True
 
 
-def test_rate_limiting_counts_as_unhealth():
+@pytest.mark.parametrize("code", [399, 429])
+def test_rate_limiting_and_the_sub_400_boundary_count_as_unhealth(code):
     """429 is the closest thing to admission pressure an OpenAI-compatible
-    endpoint can express -- the one real capacity signal available."""
-    assert counts_as_endpoint_unhealth(_Status(429)) is True
+    endpoint can express -- the one real capacity signal available. 399
+    closes the LOWER boundary of `not (400 <= code < 500)` (B46): not a real
+    HTTP status, but exactly where an off-by-one (`400 < code`, ...) would
+    first show up -- it falls outside the 4xx range entirely, so the
+    predicate correctly counts it as endpoint unhealth like any other
+    non-4xx code."""
+    assert counts_as_endpoint_unhealth(_Status(code)) is True
 
 
 def test_a_connection_error_with_no_status_counts():
@@ -105,11 +122,32 @@ def test_a_failed_request_observes_availability_not_latency():
 
 
 def test_a_rejected_request_never_reaches_the_gateway_so_never_touches_signals():
-    """Rejection happens at the policy gate (step 2), never inside the
-    gateway -- there is nothing to assert here beyond the fact that the
-    gateway's own failure path is keyed on counts_as_endpoint_unhealth, which
-    a rejection can never reach (it isn't a backend Exception at all)."""
-    assert True  # documented, not exercised: rejections never call Gateway.run
+    """Rejection happens before the gateway is ever called -- here, a pinned
+    `model` the app's policy does not permit is refused by
+    `Pipeline.run`'s eligibility check (app/pipeline.py), which raises
+    `PipelineRejected` well before `Router.select`/`Gateway.run` run. If a
+    rejection ever did reach the gateway, this SignalStore (shared with the
+    Router and Gateway the way `test_a_served_request_records_a_latency_
+    observation` wires it) would pick up an observation -- so the assertion
+    that its snapshot stays empty is a real, falsifiable check of the claim
+    in this test's name, not just documentation."""
+    store_ = SignalStore(S.routing.signals)
+    det = make_detector(S.serving.pii_detection)
+    gate = Gate(S, det, registry=REG)
+    gateway = Gateway(S, _DeterministicLiteLLM(S),
+                      Router(S, registry=REG, signals=store_), REG, signals=store_)
+    pipe = Pipeline(S, gate, det, gateway,
+                    co_cfg_provider=lambda: S.serving.context_optimization,
+                    ccr=CCRStore(3600), registry=REG)
+    req = ChatRequest(model="local-8b",
+                      messages=[Message(role="user", content="hello")])
+
+    with pytest.raises(PipelineRejected):
+        asyncio.run(pipe.run(
+            "r1", "acme", req,
+            app_policy=AppPolicyView(allowed_models=frozenset({"local-32b"}))))
+
+    assert store_.snapshot() == {}
 
 
 def test_router_decision_carries_the_scoring_record():

@@ -1,4 +1,5 @@
 import json
+import time
 
 import pytest
 
@@ -37,12 +38,23 @@ def test_the_record_alone_reproduces_the_router_order(seed, quality_resolver_fac
                 for i in range(rnd.randint(1, 6))]
     cfg = SignalsCfg(min_samples=1)
     store = SignalStore(cfg)
+    # `rank()` reads signals on the real `time.monotonic()` clock (no clock
+    # seam -- see backlog B40), so observations must be anchored to that same
+    # clock or the staleness check compares a real `now` against a synthetic
+    # one and every observation reads as stale. On a host with meaningful
+    # uptime, `now=float(k)` (k in [0, 6)) is always far in the "past" of a
+    # `time.monotonic()` that started counting at boot, so every candidate
+    # fell back to `tier_default`/`neutral` and the replay property was pinned
+    # only where both new terms are constants -- the region it exists to
+    # cover was never exercised. Same idiom as
+    # tests/routing/test_strategy_identity.py:89,105,200.
+    t0 = time.monotonic()
     for c, _e in eligible:
         for k in range(rnd.randint(0, 6)):
             if rnd.random() < 0.3:
-                store.observe_error(c.name, now=float(k))
+                store.observe_error(c.name, now=t0 + k)
             else:
-                store.observe_success(c.name, rnd.uniform(50.0, 5_000.0), now=float(k))
+                store.observe_success(c.name, rnd.uniform(50.0, 5_000.0), now=t0 + k)
 
     result = DefaultRoutingStrategy().rank(
         eligible, ctx=None, tokens_after=0, weights=WEIGHTS,

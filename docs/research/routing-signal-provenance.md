@@ -51,6 +51,17 @@ name says. RouteForge's step-6 scorer presented four terms. Three did not.
 | `quality` | a published or calibrated score | usually `tier_default`; the four-rung provenance ladder existed but was visible only for the chosen candidate |
 | `cost` | USD for this call | correct on input/output, but cached prompt tokens were neither captured nor priced anywhere in `app/` |
 
+> **Corrected 2026-09-19 (fix wave).** The `latency` row above is also understated, in
+> exactly the way §1.1 accuses B30 of understating `capacity`. `Router.select` filters
+> `eligible` down to a **single tier** before scoring (`app/routing/router.py:165-172`,
+> and the budget-fallback branch at `:195-199`). Every scored candidate therefore shared
+> the same `_L[c.tier]`, so **pre-P2a the latency term also canceled out of the ordering,
+> exactly like `capacity`** — only quality and cost ever ordered anything, pre-P2a. The
+> table is left as originally written; this is the correction beside it, in the same
+> visible style as the dead-endpoint correction in §2.5. The corollary is a point in this
+> slice's favor: latency now differentiates between same-tier candidates for the first
+> time, a real capability the original framing didn't credit it with.
+
 ### 1.1 The `capacity` term was algebraically inert, not merely hardcoded
 
 This is the finding worth a paragraph in the paper, and the repo's own backlog (B30)
@@ -306,6 +317,20 @@ identity property. That generalizes into a methodological sentence for the paper
 and an ordering comparison silently tolerates any monotone perturbation of the score.**
 (Filed as backlog B44 so the older oracle is not mistaken for equivalent cover.)
 
+> **Corrected 2026-09-19 (fix wave).** The "two-tier eligible set" scenario the set-max
+> argument above warns against is one `Router.select` cannot actually produce — it
+> filters `eligible` down to a single tier before scoring (see §1's correction), so a
+> multi-tier rescaling never arises in production. The argument for fixed-scale over
+> set-max still holds on its own terms (latency is absolute, cost is comparative), so
+> this does not change the identity property or the decision it defends. It does mean
+> the Hypothesis grid above (tiers sampled per-candidate from all three) generates
+> candidate sets **wider than production ever exercises through this strategy**. That
+> does not invalidate the test — it correctly pins that the formula reproduces pre-P2a
+> scores for whatever tier mix `rank()` is handed, which is the honest scope of a
+> strategy-level property (`RoutingStrategy` takes whatever eligible set its caller
+> built, per `app/routing/strategy.py`'s module docstring) — but do not read the grid as
+> evidence that production calls `rank()` with a multi-tier set today; it does not.
+
 ---
 
 ## 4. Provenance
@@ -364,7 +389,7 @@ back channel.
 | Surface | Carries | Why |
 |---|---|---|
 | Trace, per router hop | every **eligible** candidate | audit and replay surface |
-| HTTP response certificate | the **chosen** candidate only, plus `weights` and `signals_enabled` | on every chat completion; has to stay small |
+| HTTP response certificate | the **chosen** candidate only, plus `weights`, `signals_enabled`, `latency_scale_ms`, `max_latency_norm` | on every chat completion; has to stay small |
 
 Three consequences worth stating precisely:
 
@@ -380,8 +405,13 @@ Three consequences worth stating precisely:
 - **Rejected candidates get no scoring entry.** They were never scored; inventing terms
   for them would be the same overstatement this slice exists to remove. Why they were
   rejected is already in `sp.candidates`.
-- **The response form is not replayable** and is not meant to be: it carries one candidate
-  and omits `latency_scale_ms` / `max_latency_norm`. Replay is a trace property.
+- **The response form carries `latency_scale_ms`/`max_latency_norm` too (fix wave,
+  2026-09-19),** alongside `weights`/`signals_enabled`, so a client can recompute the
+  *chosen* candidate's score from the response alone. It still carries only one
+  candidate, never the full eligible set, so it can verify that one score but can never
+  reproduce the *ordering* among candidates it was never shown. Full replay of the
+  ranking stays a trace property — do not overstate this into "the response is
+  replayable."
 
 The record is emitted **regardless of `capture_io`**, on the same footing as
 `sp.candidates`, and is safe to do so because it is ids, enums and numbers only — pinned
@@ -514,13 +544,27 @@ this codebase during implementation review; none is hypothetical.
   `min_samples` live observations to be down-weighted again. Bounded, but it means the
   boot-seeding mechanism is half as capable as the design describes. (Backlog B38.)
 
-- **Confidence-driven escalation inflates seeded latency.** `_finalize` sums `latency_ms`
-  across the whole trace and attributes the sum to the final model, so an
-  escalated-after-success request charges the earlier hop's time to the model that
-  answered second. Live observation is per-hop and correct; only the *seeded* value is
-  affected, and pure failover is unaffected (failed-hop records are hardcoded
-  `latency_ms = 0.0`). Self-correcting as live observations accumulate, but an
-  escalation-heavy application's frontier models seed slow. (Backlog B39.)
+- **The whole-trace `latency_ms` sum blends three different sources into one boot-seeded
+  EWMA, not just confidence escalation.** `_finalize` sums `latency_ms` across the whole
+  trace and attributes the sum to the final model. The confidence-escalation case is the
+  one first recorded: an escalated-after-success request charges the earlier hop's time to
+  the model that answered second. But the same sum also folds in `CompressionRecord
+  .latency_ms` and `CacheRecord.latency_ms` whenever those steps ran, so what gets
+  **seeded** is whole-pipeline latency while `Gateway.run`'s `observe_success` records
+  **backend-only** latency per hop — two different quantities under one `measured` label.
+  With the shipped defaults (Headroom off, semantic cache off) it collapses to the
+  escalation case. **With Headroom on — a shipped, advertised feature — every compressed
+  request's compression-step latency adds to the served model's seeded figure, uniformly,
+  not only on escalations: a systematic upward bias, not just an escalation artifact.**
+  A semantic-cache hit is a related but distinct pollution source, separately findable: it
+  writes an `ok` row stamped with the served model's slug but carrying only the cache
+  lookup's ~3 ms latency, which can seed a heavily-cached model at an artificially low
+  `measured` latency that outranks a genuinely faster never-cached peer (mitigated today
+  only by `semantic_cache.enabled: false` being the default). Live per-hop observation is
+  correct in all cases; only the *seeded* value is affected, and pure failover is
+  unaffected (failed-hop records are hardcoded `latency_ms = 0.0`). Self-correcting as live
+  observations accumulate. (Backlog B39, widened in the fix wave that reviewed this
+  artifact.)
 
 - **The signals are per-replica, and no claim of global consistency is made.** The store
   is per-process; each API replica learns from its own traffic, so two replicas can hold

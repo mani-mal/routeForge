@@ -74,8 +74,16 @@ def _chosen_scoring(scoring: dict | None, chosen: str | None) -> dict | None:
         return None
     for c in scoring.get("candidates", []):
         if c.get("name") == chosen:
+            # `latency_scale_ms`/`max_latency_norm` complete the replay inputs
+            # for THIS ONE candidate (two floats -- negligible payload). The
+            # response still carries only one candidate, so a client can
+            # recompute the chosen candidate's score, never the ordering
+            # among candidates it was never shown (see spec §7.1 and
+            # docs/reference/routing-observability.md).
             return {"weights": scoring["weights"],
-                    "signals_enabled": scoring["signals_enabled"], **c}
+                    "signals_enabled": scoring["signals_enabled"],
+                    "latency_scale_ms": scoring["latency_scale_ms"],
+                    "max_latency_norm": scoring["max_latency_norm"], **c}
     return None
 
 

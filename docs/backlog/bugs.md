@@ -117,7 +117,11 @@ the audit trail in that sweep's task report.
 ## B46 — `counts_as_endpoint_unhealth` is tested in the interior of every branch and at none of its boundaries
 
 **Severity:** low (coverage gap; the classifier is correct today)
-**Found:** 2026-09-19, P2a Task 9 review. **Open.**
+**Found:** 2026-09-19, P2a Task 9 review. **Resolved 2026-09-19 (fix wave).**
+`tests/routing/test_signal_wiring.py` now parametrizes 399 and 429 (expect `True`) and
+400/401/403/404/422/428/430/499 (expect `False`), closing both the lower and upper
+boundary of `not (400 <= code < 500)` and the 429 carve-out. No production change --
+the classifier was already correct at every boundary.
 
 `app/gateway/gateway.py::counts_as_endpoint_unhealth` decides endpoint unhealth with
 
@@ -200,7 +204,11 @@ be taken with the other in view.
 ## B44 — `test_default_strategy_matches_pre_refactor_scoring` is an ordering-only oracle and reads like a stronger guarantee than it is
 
 **Severity:** trivial (documentation of a test; no defect)
-**Found:** 2026-09-19, P2a Task 6 review. **Open.**
+**Found:** 2026-09-19, P2a Task 6 review. **Resolved 2026-09-19 (fix wave):** a comment
+at `tests/test_routing_strategy.py:73-80` (just inside
+`test_default_strategy_matches_pre_refactor_scoring`) now points at
+`tests/routing/test_strategy_identity.py::
+test_empty_signal_store_reproduces_the_legacy_scores_exactly` as the score-level pin.
 
 `tests/test_routing_strategy.py::test_default_strategy_matches_pre_refactor_scoring`
 compares the strategy's output *ordering* against a golden re-implementation, over a
@@ -317,10 +325,10 @@ forward it to both store calls. Protocol-signature changes in this repo have bee
 as `NoEligibleCandidate` before (see the OpenAI tool-calling fix) — every implementation and
 every test fake must change in the same commit.
 
-## B39 — confidence escalation inflates the final model's persisted `latency_ms`, which then inflates the seeded latency signal
+## B39 — the whole-trace `latency_ms` sum blends escalation, compression and cache latency into the boot-seeded signal, not just escalation
 
 **Severity:** low (affects the boot seed only; self-correcting as live observations accumulate)
-**Found:** 2026-09-19, P2a Task 7 review. **Open.**
+**Found:** 2026-09-19, P2a Task 7 review. **Widened 2026-09-19 (fix wave), still open.**
 
 `app/api/routes.py::_finalize` computes the persisted usage row's latency as
 
@@ -331,22 +339,47 @@ latency_ms = sum(float(r.get("latency_ms", 0.0)) for r in trace
 
 — the sum over the **whole trace** — and writes it against `resp["model"]`, the model that
 served the final answer. That is the right number for "how long did this request take",
-and the wrong number to attribute to one model. On a confidence-driven escalation the
-earlier hop actually ran and actually took time, and that time is charged to the model
-that answered second.
+and the wrong number to attribute to one model.
+
+**Originally recorded as an escalation-only problem: it is not.** The same line also sums
+in `CompressionRecord.latency_ms` and `CacheRecord.latency_ms` (`app/models.py:255,284`),
+both present in `trace` whenever their step ran. So what gets **seeded** is whole-pipeline
+latency, while `Gateway.run`'s `observe_success` records **backend-only** latency per hop
+— two different quantities blended into one EWMA both labelled `measured`. On a
+confidence-driven escalation the earlier hop's time is charged to the model that answered
+second, exactly as originally filed. With the shipped defaults (Headroom/`context_
+optimization.enabled: false`, semantic cache off) that escalation case is the only one
+that fires and this collapses to the original framing.
+
+**With Headroom on — a shipped, advertised feature — it is a systematic upward bias, not
+just an escalation artifact.** Every compressed request's `CompressionRecord.latency_ms`
+(the compression step's own wall time) adds to the seeded figure for whatever model served
+that request, on every request, not only on escalations. Toggling Headroom on therefore
+inflates every served model's seeded latency by roughly the compression step's cost,
+uniformly, which the escalation framing did not capture.
 
 P2a's boot seeding averages `usage_records.latency_ms` per model
 (`aggregate_model_signals`), so an escalation-heavy application seeds its frontier models
-with inflated latency and mildly under-prefers them until live observations wash it out.
+with inflated latency and mildly under-prefers them until live observations wash it out;
+a Headroom-on deployment seeds *every* model's latency slightly high, uniformly, until the
+same washout.
 
 **Bounded.** Live observation is per-hop and correct (`Gateway.run` calls
-`observe_success(cand.name, result.latency_ms)` with that hop's own latency). Pure failover
-is unaffected, because failed-hop `DecisionRecord`s are hardcoded `latency_ms=0.0`.
+`observe_success(cand.name, result.latency_ms)` with that hop's own backend-only latency).
+Pure failover is unaffected, because failed-hop `DecisionRecord`s are hardcoded
+`latency_ms=0.0`.
 
-**Fix, roughly.** Either persist per-hop latency for the served model specifically (not the
-trace sum), or add a separate column so the request total and the served-model latency stop
-being the same field. Changing what `latency_ms` means also changes what the cost dashboard
-and admin UI show, which is why it was not done inside P2a.
+**A third contributor, found separately (fix wave, 2026-09-19): a semantic-cache hit.**
+A cache hit returns a full response stamped with the serving model's slug (`entry.model`,
+`app/pipeline.py`) and a trace whose only latency entry is the ~3 ms cache lookup. That
+flows through the same `_finalize` path into an `ok` `usage_records` row for that model,
+which `aggregate_model_signals` averages in alongside genuinely-served rows. A model whose
+recent window is mostly cache hits can seed at a few hundred milliseconds `measured` with
+tens of samples, and outrank a genuinely faster peer that has never been cache-served.
+Mitigated today only because `semantic_cache.enabled: false` is the shipped default
+(`config/serving.yaml`). A fix needs a cache-hit marker on `usage_records` distinguishing
+a cache-served row from a model-served one — out of scope for this fix wave, same as the
+rest of B39.
 
 ## B38 — no `usage_records` row is written for a failed request, so the availability signal can never seed
 
@@ -382,6 +415,22 @@ with the model that was attempted, zero tokens and zero cost. That changes what
 count against anything? how is a failover counted — one row or several?), which is a
 feature with its own review surface, not a line in a routing slice. Decide those questions
 first.
+
+**Latent latency/samples inversion, to fix in the same pass as B38 (found in the fix
+wave, 2026-09-19).** `aggregate_model_signals` (`app/apps/store.py:125-145`) averages
+`avg_latency_ms` over `ok` rows only, correctly, but reports `samples` as
+`count(ok) + count(error)` for **both** signals it produces. If a model's window were ever
+all-`error` — impossible today only because nothing writes `status = 'error'`, i.e. B38
+itself — the `ok`-only average would compute over zero rows (SQL `AVG` of an empty/NULL
+set), coalesce to `0.0`, while `samples` would still report the full error count. E.g.
+`SeedRow(avg_latency_ms=0.0, error_rate=1.0, samples=40)` seeds as
+`SignalValue(0.0, "measured", 40)` for latency — the **strongest possible latency
+preference**, `measured` with 40 samples, for a completely dead endpoint, at the same time
+availability correctly seeds it as terrible. Whoever fixes B38 (starts writing `error`
+rows) must either key `samples` per-signal (`ok`-count for latency, `ok+error`-count for
+availability) or guard the latency average so an all-error window reports `tier_default`
+instead of a spurious `measured` zero. Do not fix B38 without also fixing this — it would
+ship the inversion live.
 
 ## B37 — `/health` reports a model as available for 22 hours after its endpoint died
 
