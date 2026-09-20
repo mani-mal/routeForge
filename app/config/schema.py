@@ -48,6 +48,33 @@ class PromptOptCfg(BaseModel):
     active: dict[str, str] = {}     # prompt_id -> pinned label (the human-gate pin)
 
 
+class SignalsCfg(BaseModel):
+    """Measured routing signals (P2a). Owned by routing.yaml only."""
+    enabled: bool = True
+    # Latency used for a model with no usable measurement, per canonical tier.
+    # These defaults are NOT arbitrary: with `latency_scale_ms` 1000 they make
+    # the normalized latency term evaluate to 0.2/0.5/1.0 -- byte-identical to
+    # the pre-P2a hardcoded `_L` table -- so an empty SignalStore reproduces
+    # today's scores exactly. Changing either without the other breaks that
+    # identity property (spec §6.2).
+    tier_latency_ms: dict[str, float] = Field(
+        default_factory=lambda: {"cheap": 200.0, "mid": 500.0, "frontier": 1000.0})
+    latency_scale_ms: float = 1000.0
+    # Ceiling on the normalized latency term, so one pathologically slow
+    # endpoint cannot swamp quality and cost entirely.
+    max_latency_norm: float = 3.0
+    # Wall-clock half-life for availability's decay back toward 1.0.
+    half_life_s: float = 900.0
+    # Observations required before a signal is reported as `measured`.
+    min_samples: int = 5
+    # A latency observation older than this is no longer a measurement.
+    staleness_s: float = 3600.0
+    seed_window_hours: int = 24
+    # EWMA smoothing floor. Early on, alpha = 1/(n+1) behaves as a running
+    # mean; once n exceeds 1/alpha_floor it becomes a fixed-width EWMA.
+    alpha_floor: float = 0.1
+
+
 class RoutingCfg(BaseModel):
     tiers: list[str]
     score_on: str
