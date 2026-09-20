@@ -202,7 +202,8 @@ class Gateway:
                 actual_cost_usd=result.cost_usd, latency_ms=result.latency_ms,
                 hop_index=len(records),
                 quality_score=decision.quality_score,
-                quality_source=decision.quality_source))
+                quality_source=decision.quality_source,
+                scoring=decision.scoring.to_record() if decision.scoring else None))
             metrics.observe_routing_decision(cand.tier, escalated=escalations > 0)
 
             # For onprem_only requests the router clamps an out-of-reach tier back
@@ -252,7 +253,8 @@ class Gateway:
             rejected=decision.rejected, est_cost_usd=decision.est_cost_usd,
             actual_cost_usd=None, latency_ms=0.0, hop_index=0,
             quality_score=decision.quality_score,
-            quality_source=decision.quality_source)
+            quality_source=decision.quality_source,
+            scoring=decision.scoring.to_record() if decision.scoring else None)
         records: list[DecisionRecord] = [record]
         metrics.observe_routing_decision(cand.tier, escalated=False)
 

@@ -220,6 +220,12 @@ class DecisionRecord(BaseModel):
     tokens_out: int = 0   # completion tokens for this attempt (baseline pricing, B12)
     quality_score: float | None = None
     quality_source: str | None = None  # customer|calibrated|published|tier_default
+    # P2a scoring record: per-eligible-candidate term values and provenance.
+    # Ids/enums/numbers only -- emitted regardless of capture_io, like
+    # `candidates`. Rejected candidates are absent by design: they were never
+    # scored, and inventing terms for them would be exactly the overstatement
+    # P2a exists to remove.
+    scoring: dict | None = None
 
 
 class VerificationRecord(BaseModel):

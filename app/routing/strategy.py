@@ -72,6 +72,30 @@ class RankResult:
     latency_scale_ms: float
     max_latency_norm: float
 
+    def to_record(self) -> dict:
+        """The scoring record: enough to RECOMPUTE this ranking offline with no
+        SignalStore and no live config (spec §7.3). Ids, enums and numbers
+        only -- it is emitted regardless of `capture_io`, exactly like
+        `sp.candidates`, so it must never carry free text."""
+        return {
+            "weights": self.weights,
+            "signals_enabled": self.signals_enabled,
+            "latency_scale_ms": self.latency_scale_ms,
+            "max_latency_norm": self.max_latency_norm,
+            "candidates": [
+                {"name": sc.candidate.name,
+                 "score": sc.score,
+                 "quality": {"v": sc.quality.value, "src": sc.quality.source},
+                 "latency": {"ms": sc.latency.value, "src": sc.latency.source,
+                             "n": sc.latency.samples},
+                 "availability": {"v": sc.availability.value,
+                                  "src": sc.availability.source,
+                                  "n": sc.availability.samples},
+                 "cost": {"est_usd": sc.est_cost_usd, "norm": sc.cost_norm,
+                          "cached": sc.cost_cached_pricing}}
+                for sc in self.ordered],
+        }
+
 
 class RoutingStrategy(Protocol):
     def rank(self, eligible: list[tuple[PoolCandidate, float]], *,
