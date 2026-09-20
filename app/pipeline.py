@@ -602,6 +602,9 @@ class Pipeline:
             "choices": [Choice(index=0,
                                message=Message(role="assistant", content=text)
                                ).model_dump()],
+            # cached_prompt_tokens left at its default 0: a semantic-cache hit
+            # makes no provider call, so there is no cache-usage figure to
+            # report -- 0 is the truth here, not a missing value.
             "usage": Usage(prompt_tokens=tokens_in, completion_tokens=tokens_out,
                            total_tokens=tokens_in + tokens_out).model_dump(),
             "trace": trace,
@@ -1001,7 +1004,8 @@ class Pipeline:
                                finish_reason=finish_reason).model_dump()],
             "usage": Usage(prompt_tokens=result.tokens_in,
                            completion_tokens=result.tokens_out,
-                           total_tokens=result.tokens_in + result.tokens_out
+                           total_tokens=result.tokens_in + result.tokens_out,
+                           cached_prompt_tokens=result.cached_prompt_tokens
                            ).model_dump(),
             "trace": trace,
             "cost": cost,
@@ -1237,7 +1241,8 @@ class Pipeline:
             "model_display": self._display_name(result.model),
             "usage": Usage(prompt_tokens=result.tokens_in,
                            completion_tokens=result.tokens_out,
-                           total_tokens=result.tokens_in + result.tokens_out
+                           total_tokens=result.tokens_in + result.tokens_out,
+                           cached_prompt_tokens=result.cached_prompt_tokens
                            ).model_dump(),
             "trace": trace,
             "cost": {"total_usd": total, "baseline_usd": baseline_usd,

@@ -80,6 +80,11 @@ class Usage(BaseModel):
     prompt_tokens: int
     completion_tokens: int
     total_tokens: int
+    # Prompt tokens the provider served from its own prompt cache. 0 when the
+    # provider does not report the field, or when no provider call happened
+    # (a semantic-cache hit). Carried here so the meter in app/api/routes.py
+    # can persist it: routes.py reads resp["usage"], never a GenerationResult.
+    cached_prompt_tokens: int = 0
 
 
 class Choice(BaseModel):
