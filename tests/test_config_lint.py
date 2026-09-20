@@ -218,3 +218,21 @@ def test_data_handling_values_are_case_insensitive():
     s.serving.providers["azure"].prompt_retention = "NONE"
     s.serving.providers["azure"].accepts_raw_sensitive = " True "
     assert lint_settings(s) == []
+
+
+def test_lint_rejects_a_tier_missing_from_tier_latency_ms():
+    s = copy.deepcopy(load_settings())
+    s.routing.signals.tier_latency_ms.pop("frontier")
+    assert any(e.startswith("TIER_LATENCY_MISSING") for e in lint_settings(s))
+
+
+def test_lint_rejects_a_nonpositive_tier_latency_ms():
+    s = copy.deepcopy(load_settings())
+    s.routing.signals.tier_latency_ms["mid"] = 0
+    assert any(e.startswith("TIER_LATENCY_NOT_POSITIVE") for e in lint_settings(s))
+
+
+def test_lint_rejects_weights_with_no_availability():
+    s = copy.deepcopy(load_settings())
+    s.routing.weights.pop("availability")
+    assert any(e.startswith("WEIGHT_MISSING") for e in lint_settings(s))

@@ -1,4 +1,6 @@
-from pydantic import BaseModel, Field
+import logging
+
+from pydantic import BaseModel, Field, model_validator
 
 from app.prompts.store import PromptArtifact
 
@@ -109,6 +111,51 @@ class RoutingCfg(BaseModel):
     # registry). Owned here only -- the config lint rejects an unknown name at
     # boot (never a silent fallback to "default").
     strategy: str = "default"
+    # P2a measured routing signals. Owned here (routing input), never restated.
+    signals: SignalsCfg = SignalsCfg()
+
+    @model_validator(mode="before")
+    @classmethod
+    def _rename_capacity_weight(cls, data):
+        """`capacity` -> `availability` (P2a).
+
+        The old term added the SAME constant to every candidate, so it
+        cancelled out of the ordering and never influenced a routing
+        decision. It is renamed because true capacity -- queue depth,
+        admission pressure -- is unobservable across an OpenAI-compatible
+        boundary; what RouteForge can observe is whether calls have been
+        succeeding, which is availability.
+
+        The alias is accepted so no deployed routing.yaml fails to boot.
+        `weights["capacity"]` is also mirrored onto `weights["availability"]`
+        -- until `app/routing/strategy.py` (Task 6) stops reading
+        `weights["capacity"]`, both keys must resolve to the same value so
+        the scoring formula keeps working during the P2a-Task5/6 gap. Task 6
+        removes this mirror once `strategy.py` reads `weights["availability"]`
+        directly.
+        """
+        if not isinstance(data, dict):
+            return data
+        weights = data.get("weights")
+        if not isinstance(weights, dict):
+            return data
+        weights = dict(weights)
+        if "capacity" in weights:
+            legacy = weights.pop("capacity")
+            had_explicit_availability = "availability" in weights
+            weights.setdefault("availability", legacy)
+            if not had_explicit_availability:
+                logging.getLogger(__name__).warning(
+                    "routing.yaml: weights.capacity is deprecated; rename it "
+                    "to weights.availability (the old term never affected "
+                    "ranking)")
+        # Mirror: strategy.py still reads weights["capacity"] until Task 6
+        # rewrites the scoring formula to read weights["availability"] and
+        # this mirror is dropped.
+        if "availability" in weights:
+            weights["capacity"] = weights["availability"]
+        data = {**data, "weights": weights}
+        return data
 
 
 class SensitivityRule(BaseModel):

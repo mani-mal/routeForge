@@ -12,7 +12,21 @@
 tiers: [cheap, mid, frontier]
 
 score_on: post_compression       # MUST be post_compression when Headroom is on
-weights: {quality: 1.0, cost: 0.6, latency: 0.3, capacity: 0.2}
+weights: {quality: 1.0, cost: 0.6, latency: 0.3, availability: 0.2}
+
+# P2a measured routing signals. `tier_latency_ms` and `latency_scale_ms` are
+# paired: with the defaults below an UNMEASURED candidate's normalized latency
+# term is 0.2/0.5/1.0 -- exactly the pre-P2a hardcoded constants -- so turning
+# measurement on changes nothing until a measurement actually exists.
+signals:
+  enabled: true
+  tier_latency_ms:   {cheap: 200, mid: 500, frontier: 1000}
+  latency_scale_ms:  1000
+  max_latency_norm:  3.0
+  half_life_s:       900
+  min_samples:       5
+  staleness_s:       3600
+  seed_window_hours: 24
 
 # Step-6 scoring strategy (app/routing/strategy.py). "default" reproduces the
 # scoring above exactly. An unknown name fails the config lint at boot -- it
