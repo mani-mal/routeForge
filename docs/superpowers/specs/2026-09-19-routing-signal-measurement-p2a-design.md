@@ -69,8 +69,11 @@ measurement has a real control arm (`signals.enabled: false`).
   how you get a confident model of nothing. P2a produces the measurement F2 needs.
 - **The evaluation plane / regret metric / FeasibleRouteBench.** That is P2b.
 - **Cross-replica signal sharing.** The store is per-process. See §4.5.
-- **A circuit breaker.** Availability here is a ranking *preference*. It never
-  removes a candidate; failover remains the only recovery mechanism.
+- **A circuit breaker.** Availability here is a ranking *preference*, and a
+  **bounded** one: it never removes a candidate, it can cost a candidate at most
+  `w.availability`, and a dead endpoint may still rank first. Failover remains
+  the only recovery mechanism. (Corrected 2026-09-19 — see §3's note; the
+  original wording implied a stronger de-preference than the formula provides.)
 - **Predicting cached tokens at estimate time.** See §5.3.
 - **Console UI for the scoring record.** API- and trace-only, on the same
   footing as P1a's console-controls gap.
@@ -85,8 +88,24 @@ erodes them:
 - **Eligibility never consults a signal.** `feasible_set` (`app/policy/feasible.py`)
   remains the one authority on who is admissible. The signal store is injected
   into the *strategy*, which by protocol can only reorder the set it is handed
-  (`app/routing/strategy.py` module docstring). A dead endpoint ranks last; it
-  does not become ineligible. An ineligible endpoint is not revived by being fast.
+  (`app/routing/strategy.py` module docstring). A dead endpoint is **penalized,
+  never removed**; it does not become ineligible. An ineligible endpoint is not
+  revived by being fast.
+
+  > **Corrected 2026-09-19 (Task 9 review).** This bullet originally read *"A dead
+  > endpoint ranks last."* **That is false.** Availability is an additive term in
+  > `[0, w.availability]`, so a dead endpoint loses **at most `w.availability`**
+  > — `0.2` with the shipped weights, against `0.6` for cost and `1.0` for
+  > quality. A dead endpoint therefore **can and does still rank first** when it
+  > is enough cheaper or higher-quality than a healthy peer; the review
+  > demonstrated a fully dead endpoint at `+0.3800` beating a healthy pricier peer
+  > at `+0.0400`. The corrected sentence is above. The false one is left visible
+  > here rather than deleted, because it was quoted into
+  > `docs/research/routing-signal-provenance.md` and is exactly the kind of
+  > safety claim a reader will rely on. Whether `0.2` is the right magnitude is
+  > unmeasured — see backlog **B45**; it must not be tuned inside this slice,
+  > because changing a weight here would break §6.2's premise that nothing moves
+  > without a measurement.
 - **Rule 3 (`onprem_only` absolute) and rule 8 (residency beats the risk floor)**
   are untouched: both are enforced before the strategy is called.
 - **No PII.** Signal values are model ids, floats, and enum strings. The scoring

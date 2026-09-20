@@ -97,14 +97,105 @@ the audit trail in that sweep's task report.
 > **Update 2026-09-19 (P2a routing signal measurement).** **B30** is resolved —
 > the inert `capacity` term is now a measured `availability` signal, latency is
 > measured too, and every scoring term reports its provenance on `sp.scoring`.
-> Seven findings surfaced during implementation and were ruled out of that
-> slice's scope rather than patched into it; they are recorded below as
-> **B38**–**B44**. None is a regression: B38, B39, B41 and B42 bound how much the
-> new signal can know, B40 is a test-seam gap, B43 is a deferred API-surface
-> decision, B44 is a comment. All seven are also named in
+> Nine findings surfaced during implementation and review, and were ruled out of
+> that slice's scope rather than patched into it; they are recorded below as
+> **B38**–**B46**. None is a regression: B38, B39, B41 and B42 bound how much the
+> new signal can know, B40 and B46 are test-coverage gaps, B43 is a deferred
+> API-surface decision, B44 is a comment, and **B45** is the one product question
+> the slice deliberately refused to answer by guessing. All nine are named in
 > [`docs/research/routing-signal-provenance.md`](../research/routing-signal-provenance.md) §6.
+>
+> **One correction is worth reading on its own.** The design spec and the first
+> draft of the research artifact both asserted that *"a dead endpoint ranks
+> last."* That is **false** — availability is an additive term bounded by
+> `weights.availability`, so a dead endpoint loses at most `0.2` and can still
+> rank **first**. Both documents now carry the correction inline rather than a
+> silent edit, and B45 below is the measurement question underneath it.
 
 ---
+
+## B46 — `counts_as_endpoint_unhealth` is tested in the interior of every branch and at none of its boundaries
+
+**Severity:** low (coverage gap; the classifier is correct today)
+**Found:** 2026-09-19, P2a Task 9 review. **Open.**
+
+`app/gateway/gateway.py::counts_as_endpoint_unhealth` decides endpoint unhealth with
+
+```python
+if code == 429:
+    return True
+return not (400 <= code < 500)
+```
+
+`tests/routing/test_signal_wiring.py` exercises **400, 401, 403, 404, 422** (expect
+`False`), **500, 502, 503, 504** (expect `True`), **429** (expect `True`), a no-status
+exception, and `ContextWindowExceeded`. Every one of those is comfortably inside a
+branch. **The boundaries — 399, 428, 430 and 499 — are untested**, and they are exactly
+the edges of the range comparison and of the 429 carve-out.
+
+So an off-by-one (`400 < code`, `code <= 500`, `code >= 429`, `code in range(400, 499)`)
+survives this suite. The practical blast radius is small — 399 is not a real HTTP status,
+428 and 430 are rare — but 499 (nginx's "client closed request") is not rare behind a
+proxy, and misclassifying it would push traffic off a healthy endpoint every time a
+client disconnected, which is precisely the failure mode ruling 2 exists to prevent.
+
+**Fix.** Add 399, 428, 430 and 499 to the existing `@pytest.mark.parametrize` lists.
+Four lines; no production change. Worth doing before anyone edits that predicate.
+
+## B45 — is `weights.availability: 0.2` large enough for a dead endpoint to lose? Unmeasured, and must not be tuned by guess
+
+**Severity:** design question, not a defect (the formula does what it says; the question
+is whether the magnitude is right)
+**Found:** 2026-09-19, P2a Task 9 review, while falsifying a claim in the design spec.
+**Open — for the successor slice to MEASURE.**
+
+Availability enters the step-6 score as an additive term `+ w.availability · availability`
+with `availability ∈ [0, 1]`. So moving a model from perfectly healthy to completely dead
+changes its score by **exactly `w.availability`, and no more**. With the shipped weights
+(`config/routing.yaml`: quality 1.0, cost 0.6, latency 0.3, **availability 0.2**), that is
+a `0.2` penalty, against a cost term spanning `0.6` across the eligible set and a quality
+term spanning `1.0`.
+
+**Consequence, demonstrated rather than argued:** a fully dead endpoint
+(`availability = 4.0e-08`, `src: measured`, `n = 10`) scored **+0.3800** against a healthy
+but pricier peer at **+0.0400** — and **ranked first**. A dead endpoint outranks a healthy
+peer whenever the peer is worse on cost by more than a third of the set maximum, or worse
+on quality by more than `0.2`.
+
+This is not a bug in the formula. A bounded additive preference is exactly what was
+specified, and availability is explicitly **not** a circuit breaker (P2a §2, "out of
+scope"). It became an issue because the design spec described it in language — *"a dead
+endpoint ranks last"* — that promised protection the formula does not provide, and that
+sentence was the stated reassurance for shipping without a breaker. Both the spec and
+`docs/research/routing-signal-provenance.md` now carry the correction inline.
+
+**The open question is the magnitude**, and it has two sides that trade against each
+other on *every* request, not only on requests involving a sick endpoint:
+
+- too low, and a failing endpoint keeps winning on price until failover absorbs the
+  cost — extra latency and a wasted call on every request that picks it;
+- too high, and availability starts overriding genuine cost and quality differences
+  between two perfectly healthy models, which is the term reaching beyond its remit.
+
+**Do not tune this now.** Changing a scoring weight inside P2a would break the premise of
+the identity property (design §6.2): that with an empty signal store the new formula
+reproduces the old scores exactly, so every post-deploy behaviour change is attributable
+to a measurement existing. A weight change is a behaviour change with no measurement
+behind it, and it would also destroy the clean control arm P2b needs
+(`signals.enabled: false`).
+
+**This is P2b's question.** The evaluation plane is the first thing in the programme able
+to answer it: sweep `weights.availability` against a feasible-oracle benchmark with
+injected endpoint failures and report the regret curve. Until then the honest operator
+guidance — now in `docs/reference/routing-observability.md` — is that availability is a
+ranking preference, and the way to take a failing endpoint out of rotation is to disable
+it.
+
+**Related.** B37 (`/health` reports a dead model as available for 22 hours) and B38
+(a failed request writes no usage row, so availability never seeds) both make a dead
+endpoint *less* visible to this signal than it should be. A breaker (CLAUDE.md step 7,
+still unimplemented) is the other answer to the same problem, and a decision on one should
+be taken with the other in view.
 
 ## B44 — `test_default_strategy_matches_pre_refactor_scoring` is an ordering-only oracle and reads like a stronger guarantee than it is
 
@@ -184,10 +275,17 @@ in the type.
 
 `SignalStore.observe_success` / `observe_error` are called only from
 `Gateway.run()` (`app/gateway/gateway.py`), never from `run_stream()`. A **streaming-only
-application therefore contributes nothing to the measured signal**, and the endpoints it
-uses stay at `tier_default` / `neutral` indefinitely, however much traffic they serve.
-Real clients this affects today: the Qwen Code / kit-gtm agent clients on the Spark, which
-stream.
+application therefore contributes nothing to the measured signal**, however much traffic
+it serves. Real clients this affects today: the Qwen Code / kit-gtm agent clients on the
+Spark, which stream.
+
+Whether the endpoints it uses *report* a default depends on the rest of the deployment:
+the store is keyed **per model, not per application**, so any other application sending
+non-streaming traffic to the same model makes it `measured` — on that other application's
+traffic. It is the single-tenant or all-streaming deployment whose endpoints stay at
+`tier_default` / `neutral` indefinitely. Both shapes are wrong in their own way: in the
+first, a model is ranked on a signal measured from requests nothing like the ones being
+ranked; in the second, the signal never exists at all.
 
 **This was ruled deliberate, not overlooked.** Two reasons, both worth keeping:
 
@@ -642,9 +740,13 @@ than it presents itself, and `routing.yaml`'s weight implies otherwise)
 > `docs/research/routing-signal-provenance.md`.
 >
 > Five limitations of the new signal, found while building it, are filed
-> separately as **B38**–**B42** (plus **B43**/**B44**, which are an API-surface
-> decision and a test-comment nit). None is a regression, and every one is named
-> in the research artifact's "what is not demonstrated" section.
+> separately as **B38**–**B42** (plus **B43**/**B44**, an API-surface decision and
+> a test-comment nit, and **B45**/**B46** from the final review). None is a
+> regression, and every one is named in the research artifact's "what is not
+> demonstrated" section. **B45 is the one to read**: the `availability` term is
+> real now, but it is bounded by its weight (`0.2`), so a dead endpoint can still
+> rank first — replacing an inert term with a measured one did not make it a
+> health gate, and nothing here claims it did.
 
 `app/routing/strategy.py:60`, `DefaultRoutingStrategy.rank`'s `score()`:
 

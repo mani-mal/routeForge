@@ -274,6 +274,19 @@ escape hatch and restores the same numbers with `src: "disabled"`.
 
 ### Caveats an operator should know
 
+- **A dead endpoint is penalized, not removed — and the penalty is small.**
+  Availability is an additive term in `[0, w.availability]`, so swinging a model
+  from perfectly healthy to completely dead changes its score by **at most
+  `weights.availability`** — `0.2` with the shipped weights, against `0.6` for
+  cost and `1.0` for quality. **A dead endpoint can and does still rank first**
+  when it is enough cheaper, or scores enough higher on quality, than a healthy
+  peer. Availability is a ranking preference, **not a circuit breaker and not a
+  health gate**; it can never make a candidate ineligible, and failover remains
+  the only recovery mechanism. If you need a failing endpoint out of rotation,
+  disable it (`PUT /admin/infra/models/{slug}` with `enabled: false`) — do not
+  expect the signal to do it. Raising `weights.availability` is not advised
+  without measurement: it trades against cost and quality on every request, not
+  only on requests involving a sick endpoint.
 - **Per-replica drift is real.** The signal store is per-process: each API
   replica learns from its own traffic, so two replicas can hold different
   latency estimates for the same model and rank the same eligible set
@@ -285,12 +298,17 @@ escape hatch and restores the same numbers with `src: "disabled"`.
   deliberately not built.
 - **Streaming feeds no observations.** `observe_success` / `observe_error` are
   called only from `Gateway.run()`, never from `run_stream()`. A
-  streaming-only application therefore contributes nothing to the signal and its
-  endpoints stay at `tier_default` / `neutral` indefinitely — the scoring record
-  is still emitted on the streaming path, but every term on it is a default.
-  This is deliberate: recording streaming successes without failures would bias
-  the signal, and time-to-last-token is not the same quantity as a non-streaming
-  call's latency. Absent is honest; biased would not be.
+  streaming-only application therefore **contributes nothing to the signal**.
+  Whether its endpoints *report* a default depends on the rest of the
+  deployment: the store is keyed per **model**, not per application, so those
+  same endpoints go `measured` as soon as any *other* application sends
+  non-streaming traffic to them. It is a single-tenant or
+  streaming-only deployment whose endpoints stay at `tier_default` / `neutral`
+  indefinitely. Either way the streaming request's own scoring record is still
+  emitted; it just may carry only defaults. The omission is deliberate:
+  recording streaming successes without failures would bias the signal, and
+  time-to-last-token is not the same quantity as a non-streaming call's
+  latency. Absent is honest; biased would not be.
 - **Seeded availability is always `1.0`.** No code path writes
   `usage_records.status = 'error'` — a failed request raises before
   `record_usage` is reached, so no row is written at all. Latency seeds
@@ -327,6 +345,20 @@ curl -s http://<api>/metrics | grep -E '^# TYPE routeforge_'
 # ② open any Langfuse trace: root span has sp.routing_policy_version and
 #    sp.endpoint_registry_version; each decision step has sp.candidates
 #    (chosen + rejected, each rejection carrying its `code` or null).
+
+# ③ the same trace: each ROUTER-hop span also has sp.scoring, whose
+#    `candidates` list covers every ELIGIBLE candidate from that hop's
+#    sp.candidates (and none of the rejected ones). Spot-check one entry:
+#    every term carries a `src`, and `latency.src` is `measured` only where
+#    `n` >= signals.min_samples.
+
+# ④ the response body: policy.scoring carries exactly ONE candidate, whose
+#    `name` equals the top-level `model`, and no `candidates` list.
+curl -s -X POST http://<api>/v1/chat/completions \
+  -H 'Authorization: Bearer <app-token>' -H 'content-type: application/json' \
+  -d '{"messages":[{"role":"user","content":"hi"}]}' \
+  | python3 -c 'import json,sys; d=json.load(sys.stdin); s=d["policy"]["scoring"]; \
+print(d["model"], s["name"], s["latency"]["src"], s["availability"]["src"])'
 ```
 
 ## Related
