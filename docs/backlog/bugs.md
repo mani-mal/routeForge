@@ -94,6 +94,197 @@ the audit trail in that sweep's task report.
 
 ---
 
+> **Update 2026-09-19 (P2a routing signal measurement).** **B30** is resolved —
+> the inert `capacity` term is now a measured `availability` signal, latency is
+> measured too, and every scoring term reports its provenance on `sp.scoring`.
+> Seven findings surfaced during implementation and were ruled out of that
+> slice's scope rather than patched into it; they are recorded below as
+> **B38**–**B44**. None is a regression: B38, B39, B41 and B42 bound how much the
+> new signal can know, B40 is a test-seam gap, B43 is a deferred API-surface
+> decision, B44 is a comment. All seven are also named in
+> [`docs/research/routing-signal-provenance.md`](../research/routing-signal-provenance.md) §6.
+
+---
+
+## B44 — `test_default_strategy_matches_pre_refactor_scoring` is an ordering-only oracle and reads like a stronger guarantee than it is
+
+**Severity:** trivial (documentation of a test; no defect)
+**Found:** 2026-09-19, P2a Task 6 review. **Open.**
+
+`tests/test_routing_strategy.py::test_default_strategy_matches_pre_refactor_scoring`
+compares the strategy's output *ordering* against a golden re-implementation, over a
+single tier. The P2a Task 6 reviewer mutated the latency term to candidate-set-max
+normalization — which breaks the identity property outright — and this test **stayed
+green**, because within one tier a set-max latency term is constant across candidates
+and cannot change an ordering. The new
+`tests/routing/test_strategy_identity.py::test_empty_signal_store_reproduces_the_legacy_scores_exactly`
+went red, as designed, and is the **only** thing in the repo pinning score-level
+identity.
+
+**Fix.** A comment at `tests/test_routing_strategy.py:95-106` pointing at the
+score-level pin, so a future reader does not retire the identity test believing the
+older oracle covers it.
+
+## B43 — the response `usage` object carries a flat `cached_prompt_tokens`, not OpenAI's nested shape
+
+**Severity:** low (API-surface decision, deliberately deferred; benign today)
+**Found:** 2026-09-19, P2a Task 2 ruling. **Open — needs a decision, not a fix.**
+
+P2a threads the provider-reported cached prompt-token count through to the response so
+the meter can persist it. It is exposed as a **flat** key:
+
+```json
+"usage": {"prompt_tokens": 1000, "completion_tokens": 50, "total_tokens": 1050,
+          "cached_prompt_tokens": 768}
+```
+
+OpenAI's own shape is nested — `usage.prompt_tokens_details.cached_tokens` — which is
+also the shape RouteForge *reads* from upstream providers
+(`app/gateway/backends/litellm_backend.py::_usage_dict`). So RouteForge currently
+consumes the standard shape and emits a non-standard one.
+
+Benign in practice: OpenAI-compatible clients ignore unknown `usage` keys, and
+`tests/test_openai_compat.py` uses a subset check, so nothing breaks. But it is a
+divergence on the one surface that is supposed to be a drop-in, and adopting the nested
+shape later is a breaking change for anything that starts reading the flat key.
+
+**Decide explicitly:** emit the nested shape (and possibly keep the flat key as a
+deprecated duplicate for one release), or document the flat key as intentional. See the
+`consumer-contract-tests` skill — this is exactly the class of wire-shape drift it exists
+to catch.
+
+## B42 — `SignalStore` reports `samples: 0` on the `disabled` path even when observations exist
+
+**Severity:** trivial (cosmetic honesty gap in the scoring record)
+**Found:** 2026-09-19, P2a Task 4 review. **Open.**
+
+`app/routing/signals.py`'s `latency()` and `availability()` return early when
+`signals.enabled` is false:
+
+```python
+if not self._cfg.enabled:
+    return SignalValue(default, "disabled", 0)
+```
+
+The `0` is hardcoded, while `observe_success` / `observe_error` keep incrementing the
+internal counters regardless of `enabled`. So a `disabled` term reports `n: 0` even
+though the store may hold hundreds of observations for that model. The
+`tier_default` / `neutral` paths do the opposite — they deliberately report the *true*
+count so the record is honest about how little (or how much) is known.
+
+Defensible as "zero signals were consulted", but it is inconsistent with the two
+sibling paths and slightly understates what an operator would recover by flipping
+`signals.enabled` back on. Either report the true count, or document the `0` as "consulted",
+in the type.
+
+## B41 — streaming requests feed no routing-signal observations at all
+
+**Severity:** low (bounded, deliberate; but it silently excludes whole applications)
+**Found:** 2026-09-19, P2a Task 7 ruling. **Open by decision.**
+
+`SignalStore.observe_success` / `observe_error` are called only from
+`Gateway.run()` (`app/gateway/gateway.py`), never from `run_stream()`. A **streaming-only
+application therefore contributes nothing to the measured signal**, and the endpoints it
+uses stay at `tier_default` / `neutral` indefinitely, however much traffic they serve.
+Real clients this affects today: the Qwen Code / kit-gtm agent clients on the Spark, which
+stream.
+
+**This was ruled deliberate, not overlooked.** Two reasons, both worth keeping:
+
+1. `run_stream()` has no retry loop, so it would record successes without a comparable
+   failure path — a biased signal is strictly worse than an absent one.
+2. A stream's latency is time-to-last-token over a whole generation. That is not the
+   same quantity as a non-streaming call's latency, and mixing the two would corrupt
+   the EWMA rather than enrich it.
+
+**Fix, if picked up.** Observe streaming separately — a distinct signal (time to *first*
+token is the comparable quantity) or a distinct store keyed on `(model, mode)` — with its
+own failure path. Do not simply call `observe_success` from `_agen()`'s terminal chunk.
+
+## B40 — no clock seam on `RoutingStrategy.rank`, so staleness and availability decay can't be tested through the strategy
+
+**Severity:** low (test-seam gap; production behaviour is correct)
+**Found:** 2026-09-19, P2a Task 6 review. **Open.**
+
+`DefaultRoutingStrategy.rank` calls `signals.latency(...)` / `signals.availability(...)`
+without the `now` argument those methods accept, so both read `time.monotonic()`. Production
+is correct — writer and reader share the same clock — but **no test can exercise the
+staleness cliff or the availability decay *through* the strategy**, only at the store level
+(`tests/routing/test_signals.py` covers both there). It also made two Task 6 tests
+clock-mix: they had to observe on the real clock, because observing on a synthetic one and
+reading on the real one makes every measurement look stale.
+
+**Fix.** Add `now: float | None = None` to `rank` and to the `RoutingStrategy` Protocol and
+forward it to both store calls. Protocol-signature changes in this repo have been swallowed
+as `NoEligibleCandidate` before (see the OpenAI tool-calling fix) — every implementation and
+every test fake must change in the same commit.
+
+## B39 — confidence escalation inflates the final model's persisted `latency_ms`, which then inflates the seeded latency signal
+
+**Severity:** low (affects the boot seed only; self-correcting as live observations accumulate)
+**Found:** 2026-09-19, P2a Task 7 review. **Open.**
+
+`app/api/routes.py::_finalize` computes the persisted usage row's latency as
+
+```python
+latency_ms = sum(float(r.get("latency_ms", 0.0)) for r in trace
+                 if r.get("latency_ms") is not None)
+```
+
+— the sum over the **whole trace** — and writes it against `resp["model"]`, the model that
+served the final answer. That is the right number for "how long did this request take",
+and the wrong number to attribute to one model. On a confidence-driven escalation the
+earlier hop actually ran and actually took time, and that time is charged to the model
+that answered second.
+
+P2a's boot seeding averages `usage_records.latency_ms` per model
+(`aggregate_model_signals`), so an escalation-heavy application seeds its frontier models
+with inflated latency and mildly under-prefers them until live observations wash it out.
+
+**Bounded.** Live observation is per-hop and correct (`Gateway.run` calls
+`observe_success(cand.name, result.latency_ms)` with that hop's own latency). Pure failover
+is unaffected, because failed-hop `DecisionRecord`s are hardcoded `latency_ms=0.0`.
+
+**Fix, roughly.** Either persist per-hop latency for the served model specifically (not the
+trace sum), or add a separate column so the request total and the served-model latency stop
+being the same field. Changing what `latency_ms` means also changes what the cost dashboard
+and admin UI show, which is why it was not done inside P2a.
+
+## B38 — no `usage_records` row is written for a failed request, so the availability signal can never seed
+
+**Severity:** low–medium (bounded by `min_samples` after each restart; but it makes one
+documented enum value dead)
+**Found:** 2026-09-19, P2a Task 7 review. **Open by decision.**
+
+`app/apps/store.aggregate_model_signals` seeds the P2a signal store from rows with
+`status IN ('ok','error')`. That filter is correct against the documented status enum —
+but **nothing in the codebase ever writes `status = 'error'`.** `app/api/routes.py`
+writes exactly three values: `"ok"` (`_finalize`, the served path), `"rejected"` (the
+daily-budget rejection) and `"cancelled"` (client disconnect). When `pipeline.run()`
+raises — `BackendUnavailable`, `NoEligibleCandidate`, precisely what a failing endpoint
+produces — the handler maps the exception to an `HTTPException` and returns; `_finalize`
+and therefore `record_usage` are never reached, so **no row is written at all.**
+Separately, a request that succeeds via failover persists only the *winning* model's row;
+the candidates the gateway observed failing live get no row.
+
+Consequence for P2a: **latency seeds correctly from `ok` rows; availability always seeds
+at `1.0`.** After a restart a badly-failing endpoint starts neutral and needs
+`signals.min_samples` (default 5) live observations to be down-weighted again — five
+failed-and-failed-over requests per replica restart, not a correctness hole, and never an
+eligibility change (a signal can only reorder).
+
+Consequence beyond P2a, and the reason this is worth its own entry: **failed requests are
+invisible to the meter.** They do not appear in the usage table, the cost dashboard, or
+any per-app aggregate. An application whose endpoint is down looks, in the console, like
+an application that sent no traffic.
+
+**Fix, roughly.** Meter failed requests — write an `error` row from the exception path
+with the model that was attempted, zero tokens and zero cost. That changes what
+`usage_records` *means* for budget accounting and the dashboard (does an errored request
+count against anything? how is a failover counted — one row or several?), which is a
+feature with its own review surface, not a line in a routing slice. Decide those questions
+first.
+
 ## B37 — `/health` reports a model as available for 22 hours after its endpoint died
 
 **Observed (DGX Spark, 2026-09-18).** The vLLM container serving `qwen3.8-27b`
@@ -424,12 +615,36 @@ re-encoding a piece of the server contract and drifting from it once the server 
 client-side type) rather than a stricter re-derived rule, but the root cause is the same:
 a second, hand-maintained copy of a server contract that nothing keeps in sync.
 
-## B30 — Router's `capacity` scoring term is a constant, not a signal
+## B30 — Router's `capacity` scoring term is a constant, not a signal  ✅ RESOLVED (2026-09-19, P2a)
 
 **Severity:** low (no incorrect ranking today, but the scoring function is less rich
 than it presents itself, and `routing.yaml`'s weight implies otherwise)
 **Found:** 2026-09-10, docs-reclassification Task 8; independently confirmed in review.
-**Open.**
+
+> **Resolved 2026-09-19 (P2a) — renamed and made real.** The original entry
+> understated this. `capacity` was not merely hardcoded: it added the *same*
+> constant to every candidate, so it cancelled out of the ordering and never
+> influenced a single routing decision — changing `weights.capacity` from `0.2`
+> to `20` would have changed nothing. It is now `availability`, computed from an
+> EWMA over call outcomes (`app/routing/signals.py`). The rename is deliberate:
+> true capacity (queue depth, admission pressure) is **unobservable across an
+> OpenAI-compatible boundary**, so a term named `capacity` promised a measurement
+> the protocol cannot deliver. `capacity` remains a deprecated alias in
+> `routing.yaml` (renamed by a `RoutingCfg` validator with a boot warning), so no
+> deployed config fails to start.
+>
+> The same slice replaced the other placeholder term: `latency` was `_L[tier]`, a
+> per-tier constant, and is now an EWMA over observed latency with a
+> `tier_default` fallback. Both terms, plus `quality` and `cost`, now report
+> their provenance per candidate on `sp.scoring`. With an empty signal store the
+> new formula reproduces the pre-P2a scores **numerically** — see
+> `tests/routing/test_strategy_identity.py` and
+> `docs/research/routing-signal-provenance.md`.
+>
+> Five limitations of the new signal, found while building it, are filed
+> separately as **B38**–**B42** (plus **B43**/**B44**, which are an API-surface
+> decision and a test-comment nit). None is a regression, and every one is named
+> in the research artifact's "what is not demonstrated" section.
 
 `app/routing/strategy.py:60`, `DefaultRoutingStrategy.rank`'s `score()`:
 

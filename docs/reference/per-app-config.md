@@ -1174,6 +1174,33 @@ ALTER TABLE onboarded_models ADD COLUMN prompt_retention VARCHAR(16);  -- 2026-0
 ALTER TABLE onboarded_models ADD COLUMN accepts_raw_sensitive BOOLEAN; -- 2026-09-19 (P1b)
 ```
 
+P2a (routing signal measurement) adds two more, on `onboarded_models` and on a
+**third** table, `usage_records`:
+
+```sql
+ALTER TABLE onboarded_models ADD COLUMN price_cached_input FLOAT;   -- 2026-09-19 (P2a)
+ALTER TABLE usage_records    ADD COLUMN cached_prompt_tokens INTEGER; -- 2026-09-19 (P2a)
+```
+
+- `onboarded_models.price_cached_input` — USD per 1M prompt tokens the endpoint
+  served from its own prompt cache. `NULL` means *undeclared*, and undeclared
+  bills cached tokens at the full `price_input` rate: RouteForge never invents a
+  discount, so no deployment's cost figures move on upgrade. See
+  [`docs/guides/onboarding-models.md`](../guides/onboarding-models.md).
+- `usage_records.cached_prompt_tokens` — the provider-reported
+  `usage.prompt_tokens_details.cached_tokens` for that call, `0` when the
+  provider does not report it (indistinguishable from a genuine cache miss).
+  Nullable in the model, written as `0` on every new row.
+
+> **A deployment still on pre-P1a code now needs eleven `ALTER`s before the image
+> is rolled:** P1a's 4 on `app_policies`, P1b's 5 (2 on `app_policies`, 3 on
+> `onboarded_models`), and P2a's 2 (1 on `onboarded_models`, 1 on
+> `usage_records`). `scripts/migrate_app_policies.py` applies all of them and is
+> idempotent — it skips a table that is absent and a column that already exists,
+> so running it repeatedly is safe. **It has been exercised against SQLite only.
+> Run it against a restored Postgres snapshot first; the Spark and DGX both run
+> Postgres.** (That dry run is carried forward from P1b and is still outstanding.)
+
 > **Upgrade order for the five P1b columns (2026-09-19): migrate first, then roll the
 > image.** Run these five `ALTER`s — or `scripts/migrate_app_policies.py`, which now
 > covers both tables and is safe to run repeatedly — **before** rolling any image built

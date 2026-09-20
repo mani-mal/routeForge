@@ -10,13 +10,21 @@ neither touches the Improvement Plane, neither weakens a privacy invariant.
 2. **Always-on candidate snapshot + routing-policy-version** — extra Langfuse
    trace metadata, emitted regardless of `capture_io`.
 
+3. **Per-hop scoring record** (P2a, 2026-09-19) — `sp.scoring`: each eligible
+   candidate's scoring terms and, per term, where the value came from.
+
 > **Superseded 2026-09-17:** this page also documented `routing.stage_signals`, a
 > flag-gated raise-only tier bias derived from the internal agent loop's state.
 > The internal NAT agent and the multi-step path were removed, so the signal had
-> no hop to observe; `config/routing.yaml`'s `stage_signals` block and
+> no hop to observe; `config/routing.yaml`'s `stage_signals` block and the old
 > `app/routing/signals.py` are gone. Agent loops are client-driven — the
 > equivalent bias would have to be derived per conversation, which is not built.
 > The removed code is recoverable from git history.
+>
+> **Name reused 2026-09-19.** `app/routing/signals.py` exists again and is a
+> *different* thing: P2a's per-model measured latency/availability store (§3
+> below). It observes completed calls; it derives nothing from an agent hop, and
+> it can only reorder an eligible set, never bias a tier.
 
 This is what shipped and is verified live — code, not intent. The design record
 is `docs/superpowers/specs/2026-08-15-routing-observability-and-signals-design.md`;
@@ -165,6 +173,148 @@ span **when non-empty**, mirroring `sp.routing_policy_version` exactly — so a
 later eval pipeline can also group decisions by the exact managed-prompt set in
 effect. Source: `app/obs/export.py` (docstring lines 112-114, `set_attribute` at
 line 196).
+
+---
+
+## 3. The scoring record — `sp.scoring` (P2a)
+
+Before P2a the router presented a four-term score of which three terms did not
+measure what their names claimed: latency was a per-tier constant, `capacity`
+added the *same* constant to every candidate (so it never changed an ordering at
+all), and quality's provenance ladder existed but was invisible outside the
+chosen candidate. P2a replaces the first two with measured signals and makes all
+four report **where their value came from**. Source of truth:
+`app/routing/strategy.py` (`RankResult.to_record`), `app/obs/export.py`,
+`app/pipeline.py` (`_chosen_scoring`).
+
+### Where it appears
+
+| Surface | Carries | Why |
+|---|---|---|
+| **Trace** — `sp.scoring`, on each router hop's own span, beside `sp.candidates` | **every eligible candidate**, plus `weights`, `signals_enabled`, `latency_scale_ms`, `max_latency_norm` | the audit and replay surface |
+| **HTTP response** — `policy.scoring` in the decision certificate | the **chosen candidate only**, plus `weights` and `signals_enabled` | the response is on *every* chat completion and has to stay small |
+
+**Per router hop, never collapsed.** A failover or confidence escalation
+produces a second hop with a different eligible set and different signal state;
+each hop emits its own record. A hop whose backend call *failed* also carries
+one (its `chosen` is `null`, because nothing was served, but the failed
+candidate is recoverable as `scoring.candidates[0].name` — the strategy sorts
+best-first and the router takes `ordered[0]`). Without that, a failed
+candidate's pre-failure provenance would be lost permanently, and failover is
+exactly where availability matters.
+
+**Rejected candidates get no entry.** They were never scored — inventing terms
+for them would be the overstatement this record exists to remove. What they
+were rejected *for* is already in `sp.candidates`.
+
+**Emitted regardless of `capture_io`**, like `sp.candidates`, and for the same
+reason: it is ids, enums and numbers only, never free text, and it still runs
+through `redact_value` defensively at emit time.
+
+### Shape (trace form)
+
+```json
+{"weights": {"quality": 1.0, "cost": 0.6, "latency": 0.3, "availability": 0.2},
+ "signals_enabled": true,
+ "latency_scale_ms": 1000.0,
+ "max_latency_norm": 3.0,
+ "candidates": [
+   {"name": "qwen3-8b", "score": 0.71,
+    "quality":      {"v": 0.5,    "src": "tier_default"},
+    "latency":      {"ms": 342.0, "src": "measured", "n": 128},
+    "availability": {"v": 0.99,   "src": "measured", "n": 128},
+    "cost":         {"est_usd": 0.00012, "norm": 0.4, "cached": "unpriced"}}]}
+```
+
+The score is
+
+```
+score = w.quality      · quality
+      − w.cost         · cost.norm
+      − w.latency      · min(latency.ms / latency_scale_ms, max_latency_norm)
+      + w.availability · availability
+```
+
+so the trace record is **sufficient to recompute the hop's ranking offline** —
+no signal store, no live config. That is pinned by
+`tests/routing/test_scoring_record_replay.py`, which replays the record after a
+`json.dumps`/`json.loads` round-trip. Note the *response* form is deliberately
+not replayable: it carries one candidate and omits `latency_scale_ms` /
+`max_latency_norm`. Replay is a trace property.
+
+### The four provenance values
+
+`src` on `latency` and `availability`:
+
+| `src` | Means |
+|---|---|
+| `measured` | an EWMA over at least `signals.min_samples` observed calls, not stale. `n` is the observation count. |
+| `tier_default` | **latency only.** No usable measurement — fewer than `min_samples` observations, or the newest one is older than `signals.staleness_s`. The value is `signals.tier_latency_ms[tier]`. `n` still reports the true count, which may be non-zero. |
+| `neutral` | **availability only.** Fewer than `min_samples` observations; the value is `1.0`, which is exactly the pre-P2a hardcoded constant. |
+| `disabled` | `signals.enabled: false`. Tier default / `1.0`, and `n` is reported as `0` even when observations exist (see the caveat below). |
+
+A stale latency falls back to the tier default **outright** rather than drifting
+toward it: a drifted number would be neither measured nor default and could not
+be labelled honestly.
+
+`quality.src` is the existing four-rung ladder (`app/routing/quality.py`:
+`customer` / `calibrated` / `published` / `tier_default`), now reported for
+every eligible candidate rather than only the chosen one. `cost.cached` is
+`priced` when the operator declared a `price_cached_input` for that endpoint and
+`unpriced` otherwise — see `docs/guides/onboarding-models.md`.
+
+### The identity property
+
+With `signals.enabled: true` and an empty store, the defaults
+(`tier_latency_ms` 200/500/1000 against `latency_scale_ms` 1000) make the
+normalized latency term `0.2 / 0.5 / 1.0` and availability `1.0` — **numerically
+identical** to the pre-P2a constants. Turning measurement on changes no score
+until a measurement actually exists. `signals.enabled: false` is the operator's
+escape hatch and restores the same numbers with `src: "disabled"`.
+
+### Caveats an operator should know
+
+- **Per-replica drift is real.** The signal store is per-process: each API
+  replica learns from its own traffic, so two replicas can hold different
+  latency estimates for the same model and rank the same eligible set
+  differently. This is acceptable because a signal is a *ranking preference*
+  only — it reaches the strategy, which can reorder the eligible set but can
+  never add to or remove from it, so drift cannot affect eligibility, residency,
+  or cost caps. Boot seeding from `usage_records` (last
+  `signals.seed_window_hours`) bounds the divergence. Cross-replica sharing is
+  deliberately not built.
+- **Streaming feeds no observations.** `observe_success` / `observe_error` are
+  called only from `Gateway.run()`, never from `run_stream()`. A
+  streaming-only application therefore contributes nothing to the signal and its
+  endpoints stay at `tier_default` / `neutral` indefinitely — the scoring record
+  is still emitted on the streaming path, but every term on it is a default.
+  This is deliberate: recording streaming successes without failures would bias
+  the signal, and time-to-last-token is not the same quantity as a non-streaming
+  call's latency. Absent is honest; biased would not be.
+- **Seeded availability is always `1.0`.** No code path writes
+  `usage_records.status = 'error'` — a failed request raises before
+  `record_usage` is reached, so no row is written at all. Latency seeds
+  correctly from `ok` rows; availability does not seed. After a restart a
+  badly-failing endpoint starts neutral and needs `min_samples` live
+  observations to be down-weighted again. Tracked as a backlog item.
+- **`n` is `0` on the `disabled` path** even when the store holds observations,
+  unlike `tier_default`/`neutral`, which report the true count. Also backlogged.
+- **Cached-token capture depends on the provider.** A provider that does not
+  report `usage.prompt_tokens_details.cached_tokens` yields `0`, which is
+  indistinguishable from a genuine cache miss.
+- **None of this claims routing got better.** The record says what was decided
+  and what it rested on. Whether the ranking is *right* is not measured here.
+
+### Configuration
+
+All of it lives in `config/routing.yaml` under `signals` — see that file and
+`app/config/schema.py::SignalsCfg` for the current defaults
+(`min_samples`, `half_life_s`, `staleness_s`, `seed_window_hours`,
+`latency_scale_ms`, `max_latency_norm`, `tier_latency_ms`). These are **chosen
+defaults, not values tuned against production traffic.** The config lint fails
+the boot if `tier_latency_ms` does not cover every canonical tier with a
+positive value, or if `weights` names neither `availability` nor its deprecated
+alias `capacity`.
 
 ---
 

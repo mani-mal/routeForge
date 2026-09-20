@@ -185,7 +185,12 @@ exporter — four `routeforge_*` families, bounded labels only, **no
 tenant/PII**, opt-in `observability` extra (503 without it), no bundled server;
 (2) every trace carries `sp.candidates` (chosen + rejected set) and
 `sp.routing_policy_version` (routing+pricing content hash), emitted regardless
-of `capture_io`.
+of `capture_io`; (3) since P2a, each router hop also carries `sp.scoring` — every
+**eligible** candidate's four scoring terms with, per term, the value used and
+where it came from (`measured` / `tier_default` / `neutral` / `disabled`). The
+record is sufficient to recompute that hop's ranking offline; the response
+certificate carries the chosen candidate's terms only. It says nothing about
+whether the ranking was *good* — only what it was and what it rested on.
 
 ## Configuration — everything switchable at startup
 
