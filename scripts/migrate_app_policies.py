@@ -88,6 +88,9 @@ MODEL_COLUMNS: list[tuple[str, str, str]] = [
     ("region", "VARCHAR(64)", "VARCHAR(64)"),
     ("prompt_retention", "VARCHAR(16)", "VARCHAR(16)"),
     ("accepts_raw_sensitive", "BOOLEAN", "BOOLEAN"),
+    # 2026-09-19 P2a — the endpoint's declared cached-input rate. NULL =
+    # undeclared -> bill cached tokens at price_input, i.e. today's behaviour.
+    ("price_cached_input", "DOUBLE PRECISION", "FLOAT"),
 ]
 
 # 2026-09-19 P2a cached-token accounting. Nullable with no default: an existing

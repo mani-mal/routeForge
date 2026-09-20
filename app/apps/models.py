@@ -310,6 +310,11 @@ class OnboardedModel(Base):
     quality: Mapped[float | None] = mapped_column(Float, nullable=True)
     price_input: Mapped[float] = mapped_column(Float)
     price_output: Mapped[float] = mapped_column(Float)
+    # USD/1M for prompt tokens this endpoint served from its own prompt cache.
+    # NULL = undeclared -> cached tokens bill at `price_input` (no invented
+    # discount). On-prem endpoints normally declare this EQUAL to price_input:
+    # a prefix-cache hit saves latency, not GPU amortization.
+    price_cached_input: Mapped[float | None] = mapped_column(Float, nullable=True)
     endpoint: Mapped[str] = mapped_column(String(255))
     api_key_env: Mapped[str | None] = mapped_column(String(64), nullable=True)
     context_window: Mapped[int | None] = mapped_column(Integer, nullable=True)

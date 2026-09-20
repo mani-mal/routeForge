@@ -31,6 +31,11 @@ class _OnboardedRow:
     region: str | None = None
     prompt_retention: str | None = None
     accepts_raw_sensitive: bool | None = None
+    # USD/1M for prompt tokens this endpoint served from its own prompt
+    # cache; None = undeclared -> `price_for` bills cached tokens at
+    # `price_input` (no invented discount). See app/apps/models.py::
+    # OnboardedModel.price_cached_input.
+    price_cached_input: float | None = None
 
 
 class ModelRegistry:
@@ -60,7 +65,8 @@ class ModelRegistry:
                     api_key_env=r.api_key_env, enabled=bool(r.enabled),
                     allowed_app_ids=tuple(r.allowed_app_ids) if r.allowed_app_ids else None,
                     region=r.region, prompt_retention=r.prompt_retention,
-                    accepts_raw_sensitive=r.accepts_raw_sensitive)
+                    accepts_raw_sensitive=r.accepts_raw_sensitive,
+                    price_cached_input=r.price_cached_input)
                 for r in rows}
         except Exception:
             _log.exception("registry refresh failed; keeping last-known-good")
@@ -191,6 +197,7 @@ class ModelRegistry:
         r = self._onboarded().get(slug)
         if r is not None:
             return PriceCfg(input=r.price_input, output=r.price_output,
+                            cached_input=r.price_cached_input,
                             tier=r.tier, provider=r.provider)
         raise KeyError(slug)
 

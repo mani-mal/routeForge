@@ -67,7 +67,8 @@ def _policy_dict(p) -> dict | None:
 def _onboarded_dict(m) -> dict:
     return {"slug": m.slug, "display_name": m.display_name, "provider": m.provider,
             "tier": m.tier, "quality": m.quality, "price_input": m.price_input,
-            "price_output": m.price_output, "endpoint": m.endpoint,
+            "price_output": m.price_output,
+            "price_cached_input": m.price_cached_input, "endpoint": m.endpoint,
             "api_key_env": m.api_key_env, "context_window": m.context_window,
             "enabled": m.enabled, "allowed_app_ids": m.allowed_app_ids,
             "probe_status": m.probe_status, "probe_error": m.probe_error,
@@ -252,6 +253,15 @@ class OnboardIn(BaseModel):
     api_key_env: str | None = None
     price_input: float
     price_output: float
+    # USD/1M for prompt tokens this endpoint served from its own prompt
+    # cache. None = undeclared -> price_for bills cached tokens at the full
+    # price_input rate (no invented discount). Like accepts_raw_sensitive
+    # below (not like region/prompt_retention), this field does NOT
+    # full-replace on omission: an omitted field PRESERVES the stored value
+    # and only an explicit null CLEARS it -- see `_resolved_price_cached_input`.
+    # A price silently reverting to "no discount" on an unrelated edit would
+    # overstate spend with no operator action.
+    price_cached_input: float | None = None
     quality: float | None = None
     context_window: int | None = None
     allowed_app_ids: list[str] | None = None
@@ -859,6 +869,8 @@ def _static_validate_onboard(body: OnboardIn, s) -> None:
         raise HTTPException(422, "endpoint must be an http(s) URL")
     if body.price_input < 0 or body.price_output < 0:
         raise HTTPException(422, "price must be >= 0")
+    if body.price_cached_input is not None and body.price_cached_input < 0:
+        raise HTTPException(422, "price_cached_input must be >= 0")
     # P1b: prompt_retention is a fixed enum (app/policy/enums.py, shared with
     # the YAML lint so an admin-accepted value is a value the resolver will
     # actually read as a real declaration) -- None (undeclared) is always
@@ -919,6 +931,19 @@ def _resolved_accepts_raw_sensitive(body: OnboardIn, existing) -> bool | None:
     return body.accepts_raw_sensitive
 
 
+def _resolved_price_cached_input(body: OnboardIn, existing) -> float | None:
+    """Same rule as `_resolved_accepts_raw_sensitive`, applied to the P2a
+    cached-input rate: omission preserves, explicit null clears. A price
+    quietly reverting to "no discount" on an unrelated edit (e.g. a scripted
+    display-name update written against an older body shape) would overstate
+    spend with no operator action -- fail-OPEN on cost accuracy, which
+    CLAUDE.md rule 2a's "a no-protection posture is never silent" spirit
+    rules out here too, even though this isn't a protection axis."""
+    if "price_cached_input" not in body.model_fields_set:
+        return existing.price_cached_input if existing is not None else None
+    return body.price_cached_input
+
+
 @admin_router.post("/infra/models")
 async def onboard_model(body: OnboardIn, request: Request,
                         _: str = Depends(require_admin)) -> dict:
@@ -950,6 +975,7 @@ async def onboard_model(body: OnboardIn, request: Request,
             session, body.slug, display_name=body.display_name, provider="onprem",
             tier=body.tier, endpoint=body.endpoint, api_key_env=body.api_key_env,
             price_input=body.price_input, price_output=body.price_output,
+            price_cached_input=_resolved_price_cached_input(body, existing),
             quality=body.quality, context_window=body.context_window,
             allowed_app_ids=body.allowed_app_ids, notes=body.notes,
             enabled=final_enabled, probe_status=("healthy" if ok else "unreachable"),
@@ -1004,6 +1030,7 @@ async def edit_onboarded_model(slug: str, body: OnboardIn, request: Request,
             session, slug, display_name=body.display_name, provider="onprem",
             tier=body.tier, endpoint=body.endpoint, api_key_env=body.api_key_env,
             price_input=body.price_input, price_output=body.price_output,
+            price_cached_input=_resolved_price_cached_input(body, existing),
             quality=body.quality, context_window=body.context_window,
             allowed_app_ids=body.allowed_app_ids, notes=body.notes,
             enabled=final_enabled, probe_status=("healthy" if ok else "unreachable"),

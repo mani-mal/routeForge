@@ -492,8 +492,9 @@ async def load_quality_overrides(session: AsyncSession) -> dict[str, tuple[float
 
 _ONBOARDED_FIELDS = {
     "display_name", "provider", "tier", "quality", "price_input",
-    "price_output", "endpoint", "api_key_env", "context_window", "enabled",
-    "allowed_app_ids", "probe_status", "probe_error", "notes",
+    "price_output", "price_cached_input", "endpoint", "api_key_env",
+    "context_window", "enabled", "allowed_app_ids", "probe_status",
+    "probe_error", "notes",
     "region", "prompt_retention", "accepts_raw_sensitive"}
 
 
