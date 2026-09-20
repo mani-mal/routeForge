@@ -182,7 +182,17 @@ class Gateway:
                     step="gateway", chosen=None,
                     reason=f"{cand.name} failed; retrying peer/escalating",
                     rejected=decision.rejected, est_cost_usd=decision.est_cost_usd,
-                    latency_ms=0.0, hop_index=len(records)))
+                    latency_ms=0.0, hop_index=len(records),
+                    # This hop's chosen field stays None (nothing was SERVED),
+                    # but the scoring that led to picking `cand` is still real
+                    # and otherwise permanently lost the instant this record
+                    # is appended -- no step="router" record is ever emitted
+                    # for a candidate that failed. Failover is exactly where
+                    # the availability signal matters, so keep it: the failed
+                    # candidate's name is recoverable as
+                    # `scoring["candidates"][0]["name"]` even though `.chosen`
+                    # is None here.
+                    scoring=decision.scoring.to_record() if decision.scoring else None))
                 failed_models.add(cand.name)
                 failover_attempts += 1
                 if failover_attempts > max_failover:

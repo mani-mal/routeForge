@@ -1,6 +1,9 @@
+import json
+
 import pytest
 
 from app.config.schema import PoolCandidate, SignalsCfg
+from app.routing.quality import QUALITY_SOURCES
 from app.routing.signals import SignalStore
 from app.routing.strategy import DefaultRoutingStrategy
 
@@ -47,7 +50,12 @@ def test_the_record_alone_reproduces_the_router_order(seed, quality_resolver_fac
         signals_cfg=cfg, cached_pricing={})
 
     actual = [sc.candidate.name for sc in result.ordered]
-    assert _replay(result.to_record()) == actual
+    # The property must hold on the WIRE form, not just the raw Python dict --
+    # `sp.scoring` and the response certificate both carry this record through
+    # a json.dumps/json.loads round-trip (app/obs/export.py, the HTTP
+    # response body), so pin sufficiency on what actually ships.
+    wire_record = json.loads(json.dumps(result.to_record()))
+    assert _replay(wire_record) == actual
 
 def test_the_record_carries_provenance_for_every_term(quality_resolver_factory):
     eligible = [(PoolCandidate(name="m", provider="onprem", tier="cheap"), 0.001)]
@@ -78,4 +86,5 @@ def test_the_record_contains_no_free_text(quality_resolver_factory):
     for c in rec["candidates"]:
         assert c["latency"]["src"] in allowed_srcs
         assert c["availability"]["src"] in allowed_srcs
+        assert c["quality"]["src"] in QUALITY_SOURCES
         assert c["cost"]["cached"] in {"priced", "unpriced"}

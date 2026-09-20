@@ -140,6 +140,66 @@ def test_p1b_endpoint_data_handling_names_declaration_and_provenance():
     }
 
 
+# --- P2a Task 8 (fix round 1): scoring-record wiring regression coverage ---
+# tests/routing/test_scoring_record_replay.py proves `RankResult.to_record()`
+# is REPLAYABLE offline in isolation. This section is the end-to-end proof
+# that the WIRING never drops the field on the way there: a future refactor
+# that forgets `scoring=` on a `DecisionRecord(...)` construction, or drops
+# `rec.get("scoring")` from app/obs/export.py, must fail a test here.
+
+def test_router_hop_scoring_carries_every_eligible_candidate():
+    """Placement decision 1/3: the TRACE's router-hop record carries scoring
+    for every candidate the strategy actually scored -- exactly the chosen
+    one plus every "lower score" rejection (app/routing/router.py), never
+    more, never less. Rejected-before-scoring candidates (residency/tier/
+    budget) get no entry."""
+    pipe = _pipeline(_settings())
+    out = _run(pipe, _BENIGN)
+    router_recs = [r for r in out["trace"] if r.get("step") == "router" and r.get("chosen")]
+    assert router_recs
+    rec = router_recs[-1]
+    scoring = rec.get("scoring")
+    assert scoring is not None
+    scored_names = {c["name"] for c in scoring["candidates"]}
+    lower_score_names = {r["name"] for r in rec["rejected"] if r["reason"] == "lower score"}
+    assert scored_names == {rec["chosen"]} | lower_score_names
+    for c in scoring["candidates"]:
+        assert set(c) == {"name", "score", "quality", "latency", "availability", "cost"}
+
+
+def test_response_scoring_carries_chosen_candidate_only():
+    """Placement decision 2/3: the RESPONSE certificate carries only the
+    served candidate's terms -- no `candidates` list, and its `name` is the
+    served model, matching `out["model"]`."""
+    pipe = _pipeline(_settings())
+    out = _run(pipe, _BENIGN)
+    sc = out["policy"]["scoring"]
+    assert sc is not None
+    assert "candidates" not in sc
+    assert sc["name"] == out["model"]
+    assert set(sc) == {"weights", "signals_enabled", "name", "score",
+                       "quality", "latency", "availability", "cost"}
+
+
+def test_cache_hit_response_carries_no_scoring():
+    """Placement decision 2/3 continued: a cache hit never runs the router,
+    so fabricating a scoring entry would misdescribe a decision that never
+    happened -- `policy["scoring"]` must stay `None`. Reuses the real cache
+    wiring from tests/test_semantic_cache_pipeline.py rather than
+    re-implementing it."""
+    from tests.test_semantic_cache_pipeline import _base_settings
+    from tests.test_semantic_cache_pipeline import _pipeline as _cache_pipeline
+
+    settings = _base_settings()
+    registry = make_test_registry(settings)
+    pipe, _cache = _cache_pipeline(_DeterministicLiteLLM(settings), settings, registry)
+    req = ChatRequest(messages=[Message(role="user", content=_BENIGN)])
+    asyncio.run(pipe.run("req-miss", "acme", req))        # populates the cache
+    out = asyncio.run(pipe.run("req-hit", "acme", req))    # served from cache
+    assert out["cost"]["cache_saved_usd"] > 0.0             # sanity: it really hit
+    assert out["policy"]["scoring"] is None
+
+
 def test_registry_version_changes_when_a_declaration_changes_end_to_end():
     """The version differs the instant an operator edits an endpoint's
     declared region -- a changed declaration becomes visible in the trace
@@ -335,6 +395,24 @@ def mem_provider(monkeypatch):
     return mem
 
 
+# P2a Task 8: a `RankResult.to_record()`-shaped sample, embedded in
+# `_cert_sample()`'s trace entry below so `test_export_stamps_sp_scoring_...`
+# can prove `sp.scoring` reaches the exported span exactly as serialized --
+# the same idiom `sp.candidates` uses (json.dumps, then `redact_value`
+# defensively at emit time).
+_SAMPLE_SCORING = {
+    "weights": {"quality": 1.0, "cost": 0.6, "latency": 0.3, "availability": 0.2},
+    "signals_enabled": True, "latency_scale_ms": 1000.0, "max_latency_norm": 3.0,
+    "candidates": [
+        {"name": "local-32b", "score": 0.4,
+         "quality": {"v": 0.75, "src": "tier_default"},
+         "latency": {"ms": 500.0, "src": "tier_default", "n": 0},
+         "availability": {"v": 1.0, "src": "neutral", "n": 0},
+         "cost": {"est_usd": 0.0004, "norm": 1.0, "cached": "unpriced"}},
+    ],
+}
+
+
 def _cert_sample():
     """A policy dict shaped exactly like `Pipeline._certificate`'s output,
     embedded in an otherwise-ordinary export_trace call -- mirrors
@@ -371,7 +449,10 @@ def _cert_sample():
         },
         trace=[{"step": "route", "chosen": "local-32b",
                 "reason": f"leaked SSN {_SSN} in reason text", "hop_index": 0,
-                "actual_cost_usd": 0.0004, "latency_ms": 12.0}],
+                "actual_cost_usd": 0.0004, "latency_ms": 12.0,
+                # P2a Task 8: shaped exactly like `RankResult.to_record()`'s
+                # output -- ids/enums/numbers only, never prompt content.
+                "scoring": _SAMPLE_SCORING}],
     )
 
 
@@ -404,6 +485,19 @@ def test_export_stamps_the_certificate_and_leaks_no_raw_value(mem_provider):
     # content.
     blob = "".join(str(dict(s.attributes)) + s.name for s in spans)
     assert _SSN not in blob
+
+
+def test_export_stamps_sp_scoring_on_the_router_hop_span(mem_provider):
+    """`sp.scoring` must reach the exported span exactly like `sp.candidates`
+    does (app/obs/export.py, ~line 437) -- on the router HOP's own span
+    (`serving.<step>`), not the request root, and unconditional on
+    `capture_io` since it carries only ids/enums/numbers."""
+    export_mod.export_trace(**_cert_sample())
+    otel._provider.force_flush()
+    spans = mem_provider.get_finished_spans()
+    hop = next(s for s in spans if s.name == "serving.route")
+    assert "sp.scoring" in hop.attributes
+    assert json.loads(hop.attributes["sp.scoring"]) == _SAMPLE_SCORING
 
 
 def test_export_omits_checks_when_absent(mem_provider):
