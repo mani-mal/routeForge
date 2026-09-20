@@ -15,6 +15,7 @@ from app.apps.admin_auth import SessionStore
 from app.apps.bootstrap import seed_all
 from app.apps.db import Database
 from app.apps.policy import RateLimiter
+from app.apps import store as apps_store
 from app.api.routes import router
 from app.api.ui_routes import router as ui_router
 from app.cache.store import DeterministicSemanticCache
@@ -28,6 +29,7 @@ from app.pipeline import Pipeline
 from app.policy.detectors import make_detector
 from app.policy.gate import Gate
 from app.routing.router import Router
+from app.routing.signals import SignalStore
 
 _DEFAULT_SERVER_PORT = 8080
 
@@ -103,11 +105,21 @@ def create_app() -> FastAPI:
     # onboard time); resolve_backend now just constructs it.
     backend = asyncio.run(resolve_backend(settings, registry))
     app.state.backend = backend
+    # P2a measured routing signals (app/routing/signals.py): ONE persistent,
+    # traffic-fed store shared by the Router (ranking) and the Gateway
+    # (observation), constructed here with NO I/O -- just like `registry`
+    # above. Seeded from `usage_records` in the startup event below, never
+    # here: seeding needs a real DB read, and per the comment on
+    # `app.state.db` above, no DB access may happen inside create_app's
+    # throwaway asyncio.run loop (that's the exact bug class
+    # app/gateway/backends/factory.py's resolve_backend split was fixed for).
+    signals = SignalStore(settings.routing.signals)
+    app.state.signals = signals
     # named model_router (not router) to avoid shadowing the APIRouter imported above;
     # app.include_router(router) below needs the APIRouter, not this Router instance.
-    model_router = Router(settings, registry=registry)
+    model_router = Router(settings, registry=registry, signals=signals)
     app.state.model_router = model_router
-    gateway = Gateway(settings, backend, model_router, registry)
+    gateway = Gateway(settings, backend, model_router, registry, signals=signals)
     # Step 5 (Headroom compression): local, TTL-bounded CCR store — never
     # exported to telemetry, contents never leave this process. See
     # app/compression/ccr.py and CLAUDE.md rule 6.
@@ -160,6 +172,29 @@ def create_app() -> FastAPI:
     @app.on_event("shutdown")
     async def _stop_bridge() -> None:
         await app.state.bridge.stop()
+
+    @app.on_event("startup")
+    async def _seed_signals() -> None:
+        """Seed the shared SignalStore from recent `usage_records` so a
+        freshly booted replica doesn't start blind. Runs on the REAL serving
+        loop (the ASGI lifespan startup event), not create_app's throwaway
+        asyncio.run loop -- see the comment where `signals` is constructed
+        above. Fails to the boring side: a failed or empty seed query logs a
+        warning and leaves the store empty, which reports tier_default/
+        neutral for every model -- exactly pre-P2a behaviour -- and must
+        never prevent the app from serving.
+        """
+        try:
+            async with app.state.db.session() as session:
+                rows = await apps_store.aggregate_model_signals(
+                    session, since_hours=settings.routing.signals.seed_window_hours)
+            app.state.signals.seed(rows)
+            logging.getLogger("serving.routing").info(
+                "signal store seeded models=%d", len(rows))
+        except Exception:
+            logging.getLogger("serving.routing").warning(
+                "signal store seeding failed; starting with an empty store",
+                exc_info=True)
 
     # Phase 7 Task 4: /api/traffic control state (app/api/ui_routes.py).
     app.state.traffic_running = False

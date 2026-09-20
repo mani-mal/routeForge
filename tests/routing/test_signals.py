@@ -105,6 +105,22 @@ def test_seeding_makes_a_model_measured_without_live_traffic():
     assert avail.value == pytest.approx(0.9)
 
 
+def test_seeded_last_ts_is_actually_threaded_not_defaulted():
+    """Closes a gap the Task 4 review flagged: the seeding test above uses
+    last_ts=0.0, which is indistinguishable from _ModelState's own default of
+    0.0. Seed at a real, non-zero monotonic time and prove staleness is
+    measured from THAT time, not from zero (which this store's staleness_s of
+    1000.0 would already have blown past at now=5000.0 if last_ts silently
+    stayed at the struct default)."""
+    s = _store()
+    s.seed([SeedRow(model="m", avg_latency_ms=350.0, error_rate=0.0, samples=10,
+                    last_ts=5000.0)])
+    fresh = s.latency("m", "cheap", now=5000.0)      # no elapsed time since seed
+    assert fresh.source == "measured"
+    stale = s.latency("m", "cheap", now=5000.0 + 1000.0 + 1.0)   # past staleness_s
+    assert stale.source == "tier_default"
+
+
 def test_an_unknown_tier_falls_back_without_raising():
     s = _store()
     assert s.latency("m", "no-such-tier", now=0.0).source == "tier_default"

@@ -113,6 +113,83 @@ def test_disabled_signals_restore_tier_defaults_and_say_so(quality_resolver_fact
     assert result.ordered[0].latency.value == 200.0
 
 
+def test_cost_cached_pricing_reflects_whether_cached_input_is_declared(quality_resolver_factory):
+    """Carried finding from the Task 6 review: cached_pricing/cost_cached_pricing/
+    cost_norm had zero test coverage, and the specific trap is keying the dict
+    wrong (display_name instead of name) -- which would silently leave every
+    candidate "unpriced" forever with nothing going red."""
+    eligible = [(PoolCandidate(name="priced-m", provider="onprem", tier="cheap"), 0.002),
+                (PoolCandidate(name="bare-m", provider="onprem", tier="cheap"), 0.001)]
+    cfg = SignalsCfg()
+    cached_pricing = {"priced-m": "priced", "bare-m": "unpriced"}
+
+    result = DefaultRoutingStrategy().rank(
+        eligible, ctx=None, tokens_after=0, weights=WEIGHTS,
+        quality_resolver=quality_resolver_factory({}), signals=SignalStore(cfg),
+        signals_cfg=cfg, cached_pricing=cached_pricing)
+
+    by_name = {sc.candidate.name: sc for sc in result.ordered}
+    assert by_name["priced-m"].cost_cached_pricing == "priced"
+    assert by_name["bare-m"].cost_cached_pricing == "unpriced"
+    # cost_norm: also zero-covered before this test.
+    max_cost = max(est for _c, est in eligible)
+    assert by_name["priced-m"].cost_norm == pytest.approx(0.002 / max_cost)
+    assert by_name["bare-m"].cost_norm == pytest.approx(0.001 / max_cost)
+
+
+def test_cost_cached_pricing_is_keyed_by_name_through_router_select():
+    """The keying is what matters -- run it through Router.select with a real
+    registry/pricing lookup, not just the dict plumbing. PoolCandidate has both
+    `name` and `display_name`; if the router ever built cached_pricing keyed by
+    display_name, this test would catch a candidate wrongly staying
+    "unpriced" while its declared cached_input rate went unused."""
+    import asyncio
+
+    from app.apps.db import Database
+    from app.apps import store as apps_store
+    from app.apps.registry import ModelRegistry
+    from app.config.loader import load_settings
+    from app.models import ExecutionPolicyContext
+    from app.routing.router import Router
+
+    settings = load_settings()
+
+    async def _reg_with_cached_pricing():
+        db = Database(url="sqlite+aiosqlite://")
+        await db.ensure_ready()
+        async with db.session() as s:
+            await apps_store.upsert_onboarded(
+                s, "cached-m", display_name="Cached Model (display name != slug)",
+                provider="onprem", tier="cheap", endpoint="http://cached-m/v1",
+                api_key_env=None, price_input=0.05, price_output=0.05,
+                price_cached_input=0.01, enabled=True, probe_status="healthy",
+                allowed_app_ids=None)
+            await apps_store.upsert_onboarded(
+                s, "bare-m", display_name="Bare Model (display name != slug)",
+                provider="onprem", tier="cheap", endpoint="http://bare-m/v1",
+                api_key_env=None, price_input=0.05, price_output=0.05,
+                enabled=True, probe_status="healthy", allowed_app_ids=None)
+            await s.commit()
+        reg = ModelRegistry(settings)
+        await reg.refresh(db)
+        return reg
+
+    reg = asyncio.run(_reg_with_cached_pricing())
+    pool = reg.effective_pool()
+    ctx = ExecutionPolicyContext(
+        request_id="r", tenant_id="t", sensitivity="public", onprem_only=False,
+        allowed_providers=frozenset({"onprem"}),
+        allowed_models=frozenset(c.name for c in pool),
+        max_cost_usd=0.05, max_latency_ms=15000, risk_class="low",
+        require_verification=False, detected_entities=(), redaction_map_id=None)
+
+    d = Router(settings, registry=reg).select(ctx, tokens_after=20, complexity=0.1)
+
+    by_name = {sc.candidate.name: sc for sc in d.scoring.ordered}
+    assert by_name["cached-m"].cost_cached_pricing == "priced"
+    assert by_name["bare-m"].cost_cached_pricing == "unpriced"
+
+
 def test_one_pathologically_slow_endpoint_is_clamped(quality_resolver_factory):
     eligible = [(PoolCandidate(name="awful", provider="onprem", tier="cheap"), 0.001)]
     cfg = SignalsCfg(min_samples=1, max_latency_norm=3.0)

@@ -7,9 +7,10 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import time
 import uuid
 
-from sqlalchemy import delete, select
+from sqlalchemy import case, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -20,6 +21,7 @@ from app.apps.models import (
 from app.apps.privacy import AppPrivacyProfile, SensitivityRuleView
 from app.apps.tokens import hash_token, token_prefix
 from app.policy.recognizers import CustomRecognizer
+from app.routing.signals import SeedRow
 
 
 async def resolve_application(session: AsyncSession, raw_token: str | None
@@ -101,6 +103,49 @@ async def list_usage(session: AsyncSession, *, application_id: str | None = None
     if application_id is not None:
         stmt = stmt.where(UsageRecord.application_id == application_id)
     return list((await session.execute(stmt)).scalars().all())
+
+
+async def aggregate_model_signals(session: AsyncSession, *,
+                                  since_hours: int = 24) -> list[SeedRow]:
+    """Per-model latency/error aggregates for SignalStore seeding.
+
+    Counts only rows the endpoint actually answered or failed on: `status` in
+    ('ok','error'). A 'rejected' row is the POLICY GATE doing its job, and
+    counting it as endpoint unhealth would make a strict application look like
+    broken infrastructure -- and would let a protection posture influence
+    routing preference, which CLAUDE.md rule 2a forbids.
+
+    `avg_latency_ms` is computed over 'ok' rows only (a failed call's duration
+    says nothing about serving speed); `error_rate` is computed over all
+    counted ('ok' + 'error') rows. `last_ts` is stamped with
+    `time.monotonic()` -- SignalStore's clock is monotonic, so a wall-clock
+    value here would make every seeded row instantly stale.
+    """
+    cutoff = utcnow() - dt.timedelta(hours=since_hours)
+    ok_latency = case((UsageRecord.status == "ok", UsageRecord.latency_ms))
+    errors = case((UsageRecord.status == "error", 1), else_=0)
+    stmt = (
+        select(
+            UsageRecord.model,
+            func.avg(ok_latency).label("avg_latency_ms"),
+            func.count().label("samples"),
+            func.sum(errors).label("errors"),
+        )
+        .where(UsageRecord.ts >= cutoff, UsageRecord.status.in_(("ok", "error")))
+        .group_by(UsageRecord.model)
+    )
+    rows = (await session.execute(stmt)).all()
+    now = time.monotonic()
+    return [
+        SeedRow(
+            model=r.model,
+            avg_latency_ms=float(r.avg_latency_ms or 0.0),
+            error_rate=(r.errors / r.samples) if r.samples else 0.0,
+            samples=r.samples,
+            last_ts=now,
+        )
+        for r in rows
+    ]
 
 
 # --- request snapshots (B3: shared dashboard state across API replicas) ---

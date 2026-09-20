@@ -13,6 +13,7 @@ from app.models import DecisionRecord, ExecutionPolicyContext, GenerationResult,
 from app.obs import metrics
 from app.obs.redact import redact_value
 from app.routing.router import Router, expected_output_tokens
+from app.routing.signals import SignalStore
 
 if TYPE_CHECKING:
     from app.apps.registry import ModelRegistry
@@ -40,6 +41,34 @@ def _format_upstream_error(model: str, exc: Exception) -> str:
             f"{redact_value(_scrub_endpoints(str(exc)))[:200]}")
 
 
+def counts_as_endpoint_unhealth(exc: Exception) -> bool:
+    """Does this failure say something about the ENDPOINT, or about the request?
+
+    A 4xx means the request was wrong -- an oversized prompt, a bad tool schema,
+    a missing key. Counting it against availability would let one client's bad
+    requests push traffic off a perfectly healthy endpoint, which is exactly the
+    shape of the Qwen Code retry storm (B36).
+
+    429 is the exception among 4xx: it is the endpoint refusing load, and it is
+    the closest thing to admission pressure an OpenAI-compatible endpoint can
+    express -- the one real capacity signal the protocol offers.
+
+    Anything with no status at all (connection refused, TLS failure, timeout)
+    is endpoint unhealth.
+    """
+    if isinstance(exc, ContextWindowExceeded):
+        return False
+    code = getattr(exc, "status_code", None)
+    if code is None:
+        return True
+    try:
+        code = int(code)
+    except (TypeError, ValueError):
+        return True
+    if code == 429:
+        return True
+    return not (400 <= code < 500)
+
 def _exhausted(last_error: str, overflow_errors: list[str], failures: int) -> Exception:
     """The error for a request every reachable candidate failed. When EVERY
     failure was a context-window refusal, the request itself is too large --
@@ -59,11 +88,13 @@ log = logging.getLogger("serving.gateway")
 
 class Gateway:
     def __init__(self, settings: Settings, backend: InferenceBackend,
-                 router: Router, registry: "ModelRegistry | None" = None) -> None:
+                 router: Router, registry: "ModelRegistry | None" = None,
+                 signals: "SignalStore | None" = None) -> None:
         self._s = settings
         self._backend = backend
         self._router = router
         self._reg = registry
+        self._signals = signals
 
     @property
     def router(self) -> Router:
@@ -138,6 +169,10 @@ class Gateway:
                     tools=tools, tool_choice=tool_choice, params=params)
             except Exception as exc:
                 last_error = _format_upstream_error(cand.name, exc)
+                if self._signals is not None and counts_as_endpoint_unhealth(exc):
+                    # This hop's model failed -- observe THAT model, not the
+                    # peer that succeeds on the next iteration.
+                    self._signals.observe_error(cand.name)
                 if isinstance(exc, ContextWindowExceeded):
                     overflow_errors.append(
                         redact_value(_scrub_endpoints(str(exc)))[:1000])
@@ -154,6 +189,9 @@ class Gateway:
                     raise _exhausted(
                         last_error, overflow_errors, failover_attempts) from exc
                 continue
+
+            if self._signals is not None:
+                self._signals.observe_success(cand.name, result.latency_ms)
 
             records.append(DecisionRecord(
                 step="router", chosen=cand.name,
