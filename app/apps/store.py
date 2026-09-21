@@ -107,13 +107,15 @@ async def list_usage(session: AsyncSession, *, application_id: str | None = None
 
 def _to_utc(ts: dt.datetime) -> dt.datetime:
     """SQLite may hand back a naive datetime for a `DateTime(timezone=True)`
-    column; treat naive as UTC (it was written as UTC by `_to_observation`'s
-    inverse below) rather than the local zone."""
+    column; treat naive as UTC (it was written as UTC by
+    `write_observations` below) rather than the local zone."""
     return ts if ts.tzinfo is not None else ts.replace(tzinfo=dt.timezone.utc)
+
 
 def _to_observation(row: EndpointObservation) -> Observation:
     return Observation(_to_utc(row.ts).timestamp(), row.model, row.outcome,
                        row.latency_ms, row.streamed, row.ttft_ms)
+
 
 async def write_observations(session: AsyncSession,
                              observations: list[Observation]) -> None:
@@ -123,6 +125,7 @@ async def write_observations(session: AsyncSession,
             ts=dt.datetime.fromtimestamp(o.ts, dt.timezone.utc),
             model=o.model, outcome=o.outcome, latency_ms=o.latency_ms,
             streamed=o.streamed, ttft_ms=o.ttft_ms))
+
 
 async def load_seed_observations(session: AsyncSession, *, since_hours: float,
                                  per_model_cap: int) -> list[Observation]:
@@ -148,6 +151,7 @@ async def load_seed_observations(session: AsyncSession, *, since_hours: float,
         rows.extend((await session.execute(stmt)).scalars().all())
     rows.sort(key=lambda r: (r.ts, r.id))
     return [_to_observation(r) for r in rows]
+
 
 async def prune_observations(session: AsyncSession, *,
                              older_than_hours: float) -> int:

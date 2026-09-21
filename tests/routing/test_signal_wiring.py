@@ -205,6 +205,31 @@ def test_seed_load_caps_per_model_keeping_the_most_recent_and_orders_ascending()
     assert [o.ts for o in got] == sorted(o.ts for o in got)
 
 
+def test_seed_load_breaks_identical_timestamp_ties_by_insertion_order():
+    """`SignalStore.replay` requires ascending `ts`, but is silent on ties --
+    two observations can share a `ts` (same wall-clock second). The per-model
+    query orders `(ts desc, id desc)` to grab the newest N; without an `id`
+    ascending tie-break in the final sort, a stable sort on `ts` alone would
+    leave same-`ts` rows in that id-DESCENDING order, i.e. reversed relative
+    to how they were written."""
+    db = _fresh_db()
+    now = time.time()
+    same_ts = now - 10
+    first = _obs(same_ts, model="a", latency=111.0)
+    interleaved = _obs(same_ts, model="b", latency=222.0)   # a different model, same ts
+    second = _obs(same_ts, model="a", latency=333.0)
+
+    async def go():
+        async with db.session() as s:
+            await store.write_observations(s, [first, interleaved, second])
+            await s.commit()
+            return await store.load_seed_observations(s, since_hours=1, per_model_cap=10)
+
+    got = asyncio.run(go())
+    a_latencies = [o.latency_ms for o in got if o.model == "a"]
+    assert a_latencies == [111.0, 333.0]   # insertion (id) order, not id-desc
+
+
 def test_seed_load_excludes_rows_outside_the_window():
     db = _fresh_db()
     now = time.time()

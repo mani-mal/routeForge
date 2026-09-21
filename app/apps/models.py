@@ -258,6 +258,7 @@ class EndpointObservation(Base):
     streamed: Mapped[bool] = mapped_column(Boolean, default=False)
     ttft_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+
 class RequestSnapshot(Base):
     """Durable, redaction-safe snapshot of one served request for the operator
     console (list/detail/stats/fleet + live stream rebuild). Replaces the
