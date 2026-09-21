@@ -228,6 +228,22 @@ guidance — now in `docs/reference/routing-observability.md` — is that availa
 ranking preference, and the way to take a failing endpoint out of rotation is to disable
 it.
 
+> **Update 2026-09-21 (FeasibleRouteBench, P2b-1). Still open.** The instrument now
+> exists. `scripts/feasible_bench.py --variants eval/variants/b45.yaml` scores
+> `router_cold:<variant>` and `router_warm:<variant>` against the feasible oracle for any
+> weights mapping. The first run is **simulated**: starter suite, `healthcare-sim.yaml`,
+> seed 0, suite hash `3339c773…d8199`, code `e8e8682`. It gives a **null result**. All
+> four variants (availability 0.2 / 0.0 / 1.0 / 2.0) have the same pass rate (0.909),
+> cost regret (3.2e-05 USD) and floor-miss rate (0.091) as the unvaried router, in both
+> the cold and the warm arm. The formula predicts this. No sweep call failed, so
+> availability was the same for every candidate (neutral when cold, ≈ 1.0 when warm), and
+> a constant term cannot move a ranking. The run answers neither side of the question
+> above. What would answer it is a **failure-injected** sweep: a simulated per-endpoint
+> error rate (not built; the simulated backend never errors), or a `--live` run with a
+> deliberately failing endpoint. See
+> [`docs/research/feasible-route-bench.md`](../research/feasible-route-bench.md) §5.5 and
+> the operator guide [`docs/guides/feasible-route-bench.md`](../guides/feasible-route-bench.md).
+
 **Related.** B37 (`/health` reports a dead model as available for 22 hours) and B38
 (a failed request writes no usage row, so availability never seeds — **resolved
 2026-09-21**, see below) both made a dead endpoint *less* visible to this signal than it

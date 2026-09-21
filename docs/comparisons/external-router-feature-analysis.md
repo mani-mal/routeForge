@@ -6,6 +6,14 @@
 > (`app/routing/signals.py`, also removed) describes a path that no longer exists.
 > The equivalent setting is a client-driven loop where each hop is its own request.
 
+> **Correction 2026-09-21:** `app/routing/task_mode_llm.py`, cited below (§1 and the F1
+> row) for the complexity formula and as an existing step-4 LLM classifier, was **deleted
+> 2026-09-17** in `916ef66` ("task mode is always direct; drop the LLM classifier"). No
+> step-4 classifier exists. The complexity formula `min(1.0, tokens_after / 2000)` now
+> sits inline in `app/pipeline.py` (`:905` and `:1210`), and the tier thresholds are in
+> `Router._complexity_tier` (`app/routing/router.py`). The references below are left
+> as written, for history.
+
 **Date:** 2026-08-28
 **Status:** Analysis / recommendation (no code changes yet)
 **Scope:** Compare RouteForge's routing + gateway layer against three external sources, decide

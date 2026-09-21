@@ -48,4 +48,6 @@ OpenAI-compatible API:
 
 ## Other
 
+- [`feasible-route-bench.md`](feasible-route-bench.md) — benchmark routing
+  strategies against the feasible oracle (operator-run CLI, simulated or live).
 - [`faq.md`](faq.md) — operator- and customer-facing frequently asked questions.

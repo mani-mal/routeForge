@@ -8,3 +8,4 @@
 - obs-up.sh       — start local Langfuse (Postgres/ClickHouse/Redis/MinIO)
 - smoke-obs.sh    — prove a PII request lands in Langfuse with the SSN redacted
 - smoke-compression.sh — prove Headroom compression + CCR behave (off vs on, tokens_after < tokens_before, CCR never retrieves to cloud for onprem_only)
+- feasible_bench.py — score routing strategies against the feasible oracle over a case suite and an endpoint file (simulated by default; `--live` calls real endpoints and asks first). Run with `uv run python scripts/feasible_bench.py --help`; guide: docs/guides/feasible-route-bench.md
