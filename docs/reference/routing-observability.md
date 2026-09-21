@@ -326,9 +326,10 @@ escape hatch and restores the same numbers with `src: "disabled"`.
   incremental_verify`.
 - **Seeded availability now reflects real failures (signal hardening,
   2026-09-21; was B38).** Boot seeding replays `endpoint_observations`, and a
-  failed request now writes an `error` row (`usage_records.status = "error"`,
-  plus a matching `endpoint_observations` row for non-streamed and real-token
-  streamed failures) — see §4 below and `usage_summary.error_count`.
+  failed request now writes an `error` row (`usage_records.status = "error"`)
+  and one `error` observation per failed attempt that
+  `counts_as_endpoint_unhealth`; a request-shaped 4xx is metered as an `error`
+  row but is not observed — see §4 below and `usage_summary.error_count`.
 - **`n` is `0` on the `disabled` path** even when the store holds observations,
   unlike `tier_default`/`neutral`, which report the true count. Still
   backlogged (B42) — unrelated to this slice.
@@ -402,10 +403,15 @@ overflow the oldest entry is dropped and a counter increments, logged at the nex
 A background task started in the app's lifespan (`app/main.py`, not `create_app`'s
 throwaway loop) drains the sink into the table every `signals.flush_interval_s` seconds
 (default `5.0`) in one transaction; a DB failure is logged at warning and the batch is
-dropped, never raised into serving. On shutdown, one final flush runs. Once per hour
-(loop time) it also prunes rows older than `signals.seed_window_hours`.
+dropped, never raised into serving. It also prunes rows older than
+`signals.seed_window_hours` — first shortly after boot (on its first iteration), then
+hourly (loop time); a prune failure is logged and never stops the flusher. A flusher that
+dies is logged when it dies.
 
-**A crash between flushes loses up to `flush_interval_s` of buffered observations** —
+**A graceful shutdown flushes everything buffered.** Shutdown never cancels the flusher
+mid-flush: it asks the loop to stop, waits for an in-flight write to commit (up to
+`flush_interval_s + 5` s, cancelling only as a last resort), then runs one final flush.
+**Only a crash loses observations — up to `flush_interval_s` of buffered ones** —
 they were applied to the live signal (so the in-memory ranking already reflects them)
 but never reached the table, so a subsequent boot's replay won't see them either. Small
 and bounded, not zero.

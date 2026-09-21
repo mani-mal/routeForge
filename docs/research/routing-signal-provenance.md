@@ -396,6 +396,16 @@ difference between two timestamps unchanged. So a store fed the sequence live an
 second store fed the identical sequence by replay land in the same state, modulo that one
 constant shift.
 
+**In memory the property is exact; through the database it holds up to the microsecond
+rounding of the stored `ts`.** Replaying straight from the sink reproduces every read
+exactly. Replaying from `endpoint_observations` goes through a column that keeps `ts` to
+the microsecond, so each age is off by at most that rounding — measured on a 400-row,
+~3000 s seeded history: max `ts` error `4.8e-7` s, availability error ~`1e-11`, and no
+source or sample-count difference.
+`tests/routing/test_signal_wiring.py::test_replay_through_the_table_reproduces_the_live_store`
+pins it end to end (write → load → replay into a store with a different monotonic origin,
+values compared at `rel=1e-9`).
+
 **The Hypothesis test that pins it.**
 `tests/routing/test_observations.py::test_replay_reproduces_the_live_state_up_to_a_clock_shift`
 (200 examples): random interleavings of success, error, and stream-success observations
@@ -793,9 +803,10 @@ this codebase during implementation review; none is hypothetical.
 - **A flusher crash loses at most `flush_interval_s` of observations, and the loss is
   asymmetric.** The background flusher (`app/main.py::_observation_loop`) drains the
   in-memory sink into `endpoint_observations` every `signals.flush_interval_s` seconds
-  (default 5.0), with a final flush on clean shutdown. A process crash between two
-  flushes — not a graceful shutdown, which is covered — loses whatever the sink held
-  unflushed. The loss is asymmetric with what the *live* store already knows: the
+  (default 5.0). A graceful shutdown flushes everything buffered: it stops the loop
+  without cancelling an in-flight write, then runs a final flush. Pruning runs first
+  shortly after boot, then hourly. Only a process crash between two flushes loses
+  whatever the sink held unflushed. The loss is asymmetric with what the *live* store already knows: the
   observations were already applied to the in-process `SignalStore` before being handed
   to the sink, so the crashing replica's own ranking reflected them; only a *future* boot's
   replay-seed misses them, and only for the window since the last successful flush.
