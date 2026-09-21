@@ -87,7 +87,21 @@ matrix.
    model-facing view production would show it. The harness records: grader quality, pass,
    `cost.total_usd`, the backend latency from the last `router` trace record, prompt and
    cached tokens, `served`, and `error`. Completion text is dropped unless you pass
-   `--keep-text`.
+   `--keep-text`. **The sweep disables confidence escalation** (`harness_settings` sets
+   `routing.max_escalations = 0`; no strategy reads it): with a pin, escalation clamps
+   back to the pinned tier and calls the *same* endpoint again, which would double a row's
+   spend, report the last hop's latency and grade the second answer. The runner enforces
+   one backend `generate` call per successful sweep call independently; any other count
+   is an error row (`GenerateCountMismatch`, counted as `sweep_generate_mismatches`).
+   Found by the final review's probe: with simulated confidence forced to 0.1, the
+   starter run (seed 0, b45 variants) makes 54 matrix rows and **108** generate calls at
+   `e8e8682`, and 54 rows and 54 calls at `0a92a73`, exit 0 at both.
+   Pinned by `test_runner.py::test_low_confidence_does_not_reissue_pinned_sweep_calls`.
+4a. **Empty case.** When `E(c) = ∅` nothing is swept. Instead the harness sends **one
+   unpinned probe**, `ChatRequest(model="auto")`, through the real `Pipeline.run`. The case
+   is `rejected_ok` only if the probe **raised**, the case made **0** backend calls, and
+   there is at least one exclusion reason. A probe that is served is appended to the
+   sweep's served list, which makes it a violation (exit 2).
 5. **Strategies.** Each strategy maps `(case, E(c)) -> slug | None`. Its outcome is looked
    up in the matrix. Strategies make no extra model calls.
 
@@ -107,8 +121,8 @@ the plan's brief and are the ones to cite.)
 draws `u = Random(f"{seed}:{case.id}:{slug}")`. It returns the case's passing answer if
 `u < quality[workload or default]`, otherwise the literal `SIMULATED-WRONG`. Latency is
 `mean + jitter·(2u₂−1)` from a second seeded draw, floored at 1 ms, with no sleep. Cost is
-`price_call` over the pipeline's token counts. Confidence is fixed at 1.0 so gateway
-confidence escalation never fires. It has **no failure-injection mode**. This matters for
+`price_call` over the pipeline's token counts. Confidence is fixed at 1.0, and the
+harness also turns escalation off (step 4), so gateway confidence escalation never fires. It has **no failure-injection mode**. This matters for
 B45 (§5.5).
 
 ---
@@ -155,9 +169,12 @@ makes no claim. The 12-decimal rounding exists because `|0.90 − 0.92|` evaluat
 
 **Exit codes.** `0` means ok. `1` means a load or usage error, including a gate exception
 on any case (treated as a configuration error; `matrix.jsonl` is left partial and no
-`metrics.json` is written). `2` means a policy violation or an empty-set mismatch: any
-strategy `violation_rate > 0`, any ineligible sweep-served model, any post-gate eligible
-set that is not a subset of the pre-gate set, or any empty-set mismatch.
+`metrics.json` is written). `2` means a policy violation or an integrity failure: any
+strategy `violation_rate > 0`, any ineligible sweep-served (or empty-probe-served) model,
+any post-gate eligible set that is not a subset of the pre-gate set, any empty-set
+mismatch, or any `pinned_mismatches` (a pinned call served by another endpoint, which is
+impossible by construction and so an integrity bug). The rule is the pure
+`runner._exit_code`, table-tested per trigger.
 
 **Deferred, and named in every report:** calibration (the router emits no confidence),
 policy/endpoint churn robustness, and the noninterference failure rate (owned by P1a's
@@ -167,7 +184,7 @@ harness).
 
 ## 4. Invariants, and the test that pins each
 
-All tests live under `tests/eval/`: 153 test functions, 155 collected cases, about 14 s.
+All tests live under `tests/eval/`: 164 test functions, 166 collected cases, about 20 s.
 
 | Invariant | Pinned by | Falsified? |
 |---|---|---|
@@ -176,22 +193,28 @@ All tests live under `tests/eval/`: 153 test functions, 155 collected cases, abo
 | **The oracle ignores non-eligible rows** | `test_oracle.py::TestOracleIgnoresNonEligibleRows` (a contaminating row must not turn a real floor miss into a pass, but `violations()` still flags it) | Yes |
 | **Floor misses never produce negative cost regret** | `test_oracle.py::TestFloorMiss` | Yes. A cheap failer chosen gives `floor_miss_rate = 1.0` and `cost_regret = None`, not a negative number |
 | **No spurious `-0.0` regret** | `test_oracle.py::TestNoNegativeZeroRegret` (quality = cost = latency = 2/3 checks the sign bit and the JSON text) | Yes. The first implementation produced `-0.0` (`db25203`, fixed `820bec2`) |
-| **Determinism.** Same seed gives a byte-identical `metrics.json` | `test_runner.py::test_same_seed_gives_byte_identical_metrics` (also `matrix.jsonl`). **Across processes** as well: the starter run at seed 0 with variants, under `PYTHONHASHSEED` = 1, 2 and 3, gives md5 `6ab2ee35fdfdbf8044a940114caa1363` each time, identical to an unset-hash run (re-verified for this document at `82bc968` and again at `e8e8682`) | Partially. `test_simulated.py::TestDeterminism::test_different_seed_changes_at_least_one_outcome_over_50_draws` shows the seed is not ignored |
+| **Determinism.** Same seed gives a byte-identical `metrics.json` | `test_runner.py::test_same_seed_gives_byte_identical_metrics` (also `matrix.jsonl`). **Across processes** as well: the starter run at seed 0 with variants, under `PYTHONHASHSEED` = 1, 2 and 3, gives md5 `85cae106fa1ff5723c910d83a722b562` each time at `0a92a73`, identical to an unset-hash run (it was `6ab2ee35fdfdbf8044a940114caa1363` at `82bc968` and `e8e8682`, before two keys were added to `metrics.json`; that md5 still reproduces from `e8e8682`'s tree) | Partially. `test_simulated.py::TestDeterminism::test_different_seed_changes_at_least_one_outcome_over_50_draws` shows the seed is not ignored |
 | **The warm store reads against a frozen clock** | `test_strategies.py::test_frozen_read_clock_is_stable_across_real_elapsed_time`, `…_when_the_live_clock_advances` | Yes. An earlier draft read the live clock, which broke determinism (`e7f7bee`) |
 | **Model-facing view.** The pinned call sees what production would show | `test_runner.py::test_model_facing_view_redacted_for_enforced_raw_for_passthrough`. The simulated backend never receives `078-05-1120` for an `enforced` case, and does receive it for a `passthrough` case | Yes. The passthrough arm shows the check would see the SSN if it arrived |
-| **Pinned sweep serves the pinned endpoint** | `test_runner.py::test_every_row_served_its_pinned_endpoint` | n/a (all rows must satisfy it) |
+| **Pinned sweep serves the pinned endpoint** | `test_runner.py::test_every_row_served_its_pinned_endpoint`; a mismatch exits 2 (`test_exit_code_each_trigger_alone_is_2`) | n/a (all rows must satisfy it) |
+| **One backend call per sweep call** | `test_runner.py::test_low_confidence_does_not_reissue_pinned_sweep_calls` (confidence forced to 0.1: generate calls = matrix rows, exit 0); `test_sweep_call_with_extra_generate_becomes_error_row` (escalation re-enabled behind the runner's back: every double call is a `GenerateCountMismatch` error row, and counted); `test_endpoints.py::test_confidence_escalation_is_off_and_base_untouched` | **Yes.** Before the fix the first test read 22 generate calls for 12 rows |
+| **Endpoint-file prices win** | `test_endpoints.py::test_slug_colliding_with_pricing_yaml_is_priced_from_the_file` (`azure-gpt-mid` at input 99 is priced 99, not pricing.yaml's 0.15); `test_baseline_model_slug_still_resolves` | Yes (fails on the unfixed `harness_settings`) |
 | **`onprem_only` is absolute in the sweep** | `test_runner.py::test_onprem_only_case_never_sweeps_cloud`; `test_endpoints.py` (`azure` spec excluded under `residency="onprem_only"`) | n/a |
-| **Empty set.** An expected-empty case is rejected with reasons and no sweep; a mismatch exits 2 | `test_runner.py::test_empty_set_expected_is_rejected_without_calls`, `test_empty_set_unexpected_exits_2` | Yes (flipping `expect_empty` gives exit 2) |
+| **Empty set.** An expected-empty case is refused by the real pipeline with reasons and no model call; a mismatch exits 2 | `test_runner.py::test_empty_set_expected_is_rejected_without_calls`, `test_empty_set_unexpected_exits_2`, `test_empty_set_seen_by_runner_but_served_by_pipeline_exits_2` (only the runner's `feasible_set` is blinded, the pipeline serves the probe: `rejected_ok` false, violation, exit 2) | **Yes.** Flipping `expect_empty` gives exit 2; before the probe existed, the blinded test read `rejected_ok: true` |
 | **Serving isolation.** Nothing under `app/` except `app/eval/` imports `app.eval` | `test_isolation.py::test_no_serving_module_imports_app_eval` | Yes. `test_scanner_detects_an_import` feeds the scanner a module that does import it |
 | **Live safety.** No endpoint the operator did not list, and no call without consent | `test_endpoints.py::TestHarnessSettings::test_static_yaml_pool_is_excluded`; `test_runner.py::test_cli_live_endpoint_without_live_flag_exits_1`, `test_cli_live_declined_at_prompt_makes_no_calls` (target `127.0.0.1:9`, never contacted) | Yes (the pool leak in §1.1 was the RED) |
 | **Loader rejections** (each §4 load error, including untagged PII-shaped content and a key-looking `api_key_env`) | `test_cases.py::TestLoadSuiteErrors`, `test_endpoints.py` load-error tests | per error |
 | **Variants reach the real router** | `test_strategies.py::test_availability_weight_flips_choice_between_slow_available_and_fast_flaky`. With two same-tier candidates, same price and same quality, availability weight 0 picks `fast-flaky` and weight 5 flips the choice to `slow-available` | Yes. This is the proof that the B45 instrument *can* move a ranking. §5.5 explains why it does not on the starter suite |
 
-**Known weak spot.** The "no model call" half of an empty case's `rejected_ok` is read
-from a per-case call counter. That counter only attributes calls after a sweep call has
-set the case, so on an empty case it reads 0 by construction. The load-bearing guarantee
-is structural: the sweep loop iterates over `E(c)`, which is empty. The counter adds no
-independent evidence. Recorded as a deferred review minor in the SDD ledger.
+**Formerly a weak spot, now evidence.** Until the final review, the "no model call" half
+of an empty case's `rejected_ok` was read from a per-case call counter that could only
+read 0 on an empty case (nothing set the case when nothing was swept), so it added no
+evidence. The empty-case probe (§2 step 4a) replaces that with an observation: the real
+pipeline is handed the case unpinned and must **refuse** it, with the counter now armed
+for that case. In the shipped empty-set run all four `onprem_only` cases raise
+`NoEligibleCandidate` with 0 calls (§5.7). That is the real serving path failing closed
+for `onprem_only` with no on-prem model onboarded (CLAUDE.md rules 3 and 5), observed end
+to end rather than inferred from the harness's own `feasible_set` call.
 
 ---
 
@@ -206,15 +229,24 @@ endpoints        eval/endpoints/healthcare-sim.yaml   (local-llama, azure-us, eu
 endpoints_hash   04eccd8f75060e554eac7584ee3238667cb0d61773f42551837c738c855c4d96
 variants         eval/variants/b45.yaml         (default, availability_0/1/2)
 seed             0
-git_sha          e8e8682787e4423d6ffb35193641ca7e5d2f1f6e
-routing_policy_version  a4bf5708d2db      registry_version  86294e62adea
+git_sha          0a92a73d48ecf676c65d85ed82e612433464f742
+base_routing_policy_version  a4bf5708d2db      registry_version  86294e62adea
 mode             simulated                exit 0; every policy counter 0
 ```
 
-`routing_policy_version` hashes the **stock** routing and pricing config the harness
-loaded, before the harness empties `model_pool` and without any variant weights. It
+`base_routing_policy_version` (called `routing_policy_version` in `run.json` before
+`0a92a73`) hashes the **stock** routing and pricing config the harness loaded, before the
+harness empties `model_pool`, applies endpoint-file prices and `max_escalations = 0`, and
+without any variant weights. `run.json`'s `notes` says so. It
 identifies the deployment configuration, not the endpoint universe. The endpoint universe
 is `endpoints_hash` + `registry_version`.
+
+The §5 numbers were first produced at `e8e8682` and re-run at `0a92a73`, after the final
+review's fixes. `matrix.jsonl` is byte-identical at both commits (md5
+`dda387af76f7cf2adac5333bf989e546`), and `metrics.json` differs only by two added keys
+(`policy.sweep_generate_mismatches`, per-case `empty_probe_error`), so every figure below
+holds at both. The simulated backend reports confidence 1.0, so escalation never fired
+before the fix either.
 
 The worktree venv has no Presidio, so every run here used `SP_PII_DETECTION=regex`. The
 cases set `pii_detection: regex` per app, so this sets the deployment default and not the
@@ -305,8 +337,10 @@ seeds 0–9.** This is expected here, not evidence that warm state is useless.
   `azure-us` already beats `local-llama` on estimated cost. The measured latencies
   (about 600 ms vs about 900 ms) push the same way, so a warm latency term can only
   widen a lead that already exists.
-- No sweep call failed, so every endpoint's measured availability is the same (≈ 1.0),
-  and the availability term cannot separate candidates.
+- No sweep call failed, so every endpoint's measured availability is the same, **exactly
+  1.0** (the store replays successes only, from its start state, and decay pulls toward
+  1.0; read back at `0a92a73`: `value=1.0, source=measured` for all four endpoints), and
+  the availability term cannot separate candidates.
 - The P2a signals are latency and availability only. **Quality is never measured into
   the store**, so a warm router cannot learn that `azure-us` fails FAQ 7% of the time.
 
@@ -330,8 +364,9 @@ is identical to each other and to the unvaried `router_cold` / `router_warm`.
 **Why this is null by construction.** Availability enters the score as
 `+ w.availability · availability`. A weight can change a ranking only when availability
 **differs between candidates**. In the cold arm every candidate reads the neutral prior.
-In the warm arm every candidate measured ≈ 1.0, because the simulated backend has no
-failure mode and no call failed. The term is a constant across candidates in both arms,
+In the warm arm every candidate measured **exactly 1.0**, because the simulated backend
+has no failure mode and no call failed (successes only from the store's start state, and
+decay pulls toward 1.0, so there is nothing for it to decay from). The term is a constant across candidates in both arms,
 so its magnitude cannot matter. **The run does not answer B45 in either direction.** It
 shows neither that 0.2 is too small (no dead endpoint was present to keep winning) nor
 that a larger weight overrides healthy cost and quality differences (no availability
@@ -344,13 +379,16 @@ path can flip a choice when availability differs.
 `error_rate` per endpoint, which is not built (the simulated backend never raises), or
 (b) a `--live` run with a deliberately failing endpoint in the file. Either way the result
 is reported as the regret and floor-miss curve over the availability weight. B45 stays
-open.
+open. What such an injection must get right before its result can be trusted (a
+prior-cases-only warm arm, error-row cost, production-aligned failure types, and the
+single-shot vs failover gap) is backlog **B48**.
 
 ### 5.6 Seed sensitivity (seeds 0–9, no variants)
 
 Seeds 1–9 were run at `82bc968`. The only change between `82bc968` and `e8e8682` is the header
 comment of `healthcare-sim.yaml`. Seed 0's `metrics.json` and `matrix.jsonl` are
-byte-identical at both commits.
+byte-identical at both commits. Seeds 1–9 were re-run at `0a92a73`: each `metrics.json`
+equals the `e8e8682` one once the two added keys are removed, and every run exits 0.
 
 | strategy | pass rate mean | min–max | expected from the declared quality |
 |---|---|---|---|
@@ -383,14 +421,16 @@ pass rate equally and are excluded from the floor-miss denominator.
 ```
 suite eval/suites/empty-set.jsonl   hash acb862336e156a5a5cf2e5f59c471c4ad1140cd02d4ff4ec59568e7d6ec157af
 endpoints eval/endpoints/cloud-only-sim.yaml   hash 0c00a3c02b6b676e8cc1cedd69617cc9c5dd3e04d600de4a04b441f1e0d3e806
-seed 0, git e8e8682, registry_version 2f228020d13d, exit 0
+seed 0, git 0a92a73, registry_version 2f228020d13d, exit 0
+metrics.json md5 288b58287dd864105ef37155741c1e89
 ```
 
 All four `onprem_only` cases resolve to `E(c) = ∅`, with `cloud-a` and `cloud-b` each
-rejected `residency`, `rejected_ok: yes` and 0 calls. Every strategy returns `None` with
+rejected `residency`. Each case's unpinned probe through the real pipeline raised
+`NoEligibleCandidate` (`empty_probe_error`) with 0 calls, so `rejected_ok: yes`. Every strategy returns `None` with
 violation rate 0. Every regret aggregate is `n/a`, because there are no non-empty cases.
 This is the "no on-prem model onboarded ⇒ derived reject" guarantee, observed through the
-real `feasible_set`. The two suites are kept in separate files so that the main run's exit
+real `feasible_set` **and** the real `Pipeline.run` failing closed. The two suites are kept in separate files so that the main run's exit
 code keeps its meaning.
 
 ---
@@ -466,10 +506,10 @@ settled that.
 ## 7. Reproducing it
 
 ```bash
-git checkout feat/feasible-route-bench        # code at e8e8682
+git checkout feat/feasible-route-bench        # code at 0a92a73
 uv sync --group dev
 
-# the harness suite: 153 test functions, 155 collected, ~14 s
+# the harness suite: 164 test functions, 166 collected, ~20 s
 LITELLM_LOCAL_MODEL_COST_MAP=True SP_PII_DETECTION=regex \
   uv run pytest tests/eval -o addopts="" -q
 
@@ -479,20 +519,22 @@ LITELLM_LOCAL_MODEL_COST_MAP=True SP_PII_DETECTION=regex \
     --suite eval/suites/starter.jsonl \
     --endpoints eval/endpoints/healthcare-sim.yaml \
     --variants eval/variants/b45.yaml --seed 0 --out results/fb-starter
-md5sum results/fb-starter/metrics.json       # 6ab2ee35fdfdbf8044a940114caa1363 at e8e8682
+md5sum results/fb-starter/metrics.json       # 85cae106fa1ff5723c910d83a722b562 at 0a92a73
 
 # the §5.7 run
 LITELLM_LOCAL_MODEL_COST_MAP=True SP_PII_DETECTION=regex \
   uv run python scripts/feasible_bench.py \
     --suite eval/suites/empty-set.jsonl \
     --endpoints eval/endpoints/cloud-only-sim.yaml --seed 0 --out results/fb-empty
+md5sum results/fb-empty/metrics.json         # 288b58287dd864105ef37155741c1e89 at 0a92a73
 
 # §5.6: repeat the first run with --seed 1 … 9 (drop --variants)
 ```
 
 `SP_PII_DETECTION=regex` is needed only when Presidio is not installed. Without it the
 CLI exits 1 with a message saying so. `LITELLM_LOCAL_MODEL_COST_MAP=True` stops LiteLLM
-fetching its cost map over the network at import. The `md5sum` holds only for the same
+fetching its cost map over the network at import; the CLI sets it itself when unset, so
+it matters only for the `pytest` line. The `md5sum` holds only for the same
 suite, endpoint file, variants, seed and code. Any change to them changes the stamp, and
 that is the point of the stamp.
 
@@ -530,7 +572,12 @@ variant weight validation) · `87019e9` (weight-key check moved out of the servi
 · `fb29403` (runner and CLI; YAML pool emptied) · `79be0a4` (starter suite, healthcare
 simulation, B45 variants) · `82bc968` (the production-default escalation cases alongside
 the override) · `e8e8682` (endpoint-file header: drop an untracked docs path that failed
-the docs link gate; comment only).
+the docs link gate; comment only) · `8dbfc96` (these notes and the guide) · final-review
+fixes: `847bce8` (one generate call per pinned sweep call) · `d60bb30` (pinned-served
+mismatch exits 2; `_exit_code`) · `f42e73d` (empty-case probe through the real pipeline)
+· `e3ef0f5` (file-priced colliding slugs, scratch-DB dispose on error, list-only set
+fields) · `0a92a73` (`base_routing_policy_version`, air-gap-safe CLI, tracked docstring
+path).
 
 ### Related work — TO VERIFY BEFORE CITING
 

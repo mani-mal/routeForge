@@ -29,7 +29,8 @@ LITELLM_LOCAL_MODEL_COST_MAP=True SP_PII_DETECTION=regex \
 - `SP_PII_DETECTION=regex` is needed only if Presidio is not installed. Without it, the
   CLI exits 1 and says so.
 - `LITELLM_LOCAL_MODEL_COST_MAP=True` stops LiteLLM fetching a cost map over the network
-  at import.
+  at import. The CLI sets it itself when it is unset, so an air-gapped run does not hang;
+  passing it explicitly is harmless.
 - `--out` defaults to `results/<utc timestamp>`. `results/` is gitignored, so do not
   commit run output.
 
@@ -90,13 +91,16 @@ A suite is JSONL, one case per line:
   if it finds an entity in a case that is not tagged synthetic. Use reserved values:
   SSNs `078-05-1120` or `219-09-9999`, and `@example.com` emails. Never paste real data.
 - **`expect_empty`**: `true` if the case should have no eligible endpoint. An empty case is
-  never swept. It must be rejected with at least one exclusion reason. A disagreement in
+  never swept. Instead the harness sends **one unpinned probe** through the real pipeline,
+  which must refuse it (raise) with no model call; the case must also have at least one
+  exclusion reason. A probe that is served counts as a policy violation. A disagreement in
   either direction exits 2. Keep expected-empty cases in their own suite, as the shipped
   `empty-set.jsonl` does, so that the main run's exit code keeps its meaning.
 
 **Load errors fail the whole run, before anything is called**: duplicate ids, unknown
 grader kinds, invalid regex or schema, a missing `expected` or `sample`, unknown
-`app_policy` keys, and untagged PII.
+`app_policy` keys, a list-valued `app_policy` field (`allowed_providers`,
+`allowed_regions`, ...) given as anything but a list, and untagged PII.
 
 ## 3. Writing endpoint files
 
@@ -135,8 +139,9 @@ same data-handling declarations as in
 
 A run is all one mode. A `live` entry without `--live` is a load error, and so is a
 `simulated` entry in a `--live` run. Other load errors: an unknown provider, a
-non-canonical tier and a duplicate slug. Also avoid slugs that collide with
-`config/pricing.yaml`'s model names (`azure-gpt-mid`, `bedrock-frontier`).
+non-canonical tier and a duplicate slug. A slug that is also one of
+`config/pricing.yaml`'s model names (`azure-gpt-mid`, `bedrock-frontier`) is priced from
+**your file**, not from `pricing.yaml`: the endpoint file is the whole universe of a run.
 
 ## 4. Live runs cost money
 
@@ -147,6 +152,7 @@ uv run python scripts/feasible_bench.py \
 ```
 
 A live run makes **one real call per (case, eligible endpoint)**: up to cases × endpoints.
+The sweep disables confidence escalation so that bound holds (§5).
 Before calling anything, the CLI prints `LIVE run: N cases × M endpoints ≤ K calls` and
 the endpoint list, then asks `Proceed? [y/N]`. Declining, or end of input, exits 1 with no
 calls made. `--yes` skips the prompt for non-interactive use, so only use it when you have
@@ -164,14 +170,25 @@ the gateway is built to protect, so decide where `results/` lives before you kee
 | `--parity-tol X` | maximum pass-rate gap for the headline cost claim (default 0.02) |
 | `--keep-text` | stores completion text in `matrix.jsonl` |
 
+**The sweep disables confidence escalation.** Each `(case, endpoint)` is a single-shot
+measurement: one backend call. With a pinned endpoint, the gateway's confidence
+escalation would clamp back to the same tier and call the **same** endpoint again,
+doubling the spend and grading the second answer. The harness therefore runs with
+`routing.max_escalations = 0` (the strategies do not read it), and the runner checks it
+independently: a successful sweep call that made any number of backend calls other than
+one becomes an error row (`GenerateCountMismatch`), counted as
+`sweep_generate_mismatches`.
+
 ## 6. Reading the output
 
 `<out>/` contains five files:
 
 - `run.json`: the **stamp**. It holds the suite hash, endpoint-file hash,
-  `routing_policy_version` (a hash of the *stock* routing and pricing config; it does not
-  cover your endpoint file or variants), `registry_version`, seed, git SHA, mode, CLI
-  args, the strategy list and the `router_warm` note. Quote the stamp with any number
+  `base_routing_policy_version` (the deployment's routing and pricing hash **before** the
+  harness overrides it: emptied `model_pool`, file prices, `max_escalations` 0, variant
+  weights; it does not cover your endpoint file or variants, and `notes` says so),
+  `registry_version`, seed, git SHA, mode, CLI args, the strategy list and the
+  `router_warm` note. Quote the stamp with any number
   you cite.
 - `matrix.jsonl`: one row per `(case, endpoint)`, with quality, pass, cost, latency,
   tokens, `served` and `error`. Written as it goes, so an interrupted run leaves a
@@ -207,9 +224,12 @@ In `report.md`:
 - **Worst groups.** For each strategy and metric, the worst `workload`, `placement` or
   `protection` group.
 - **Policy.** `violations_total`, `sweep_violations`, `empty_set_mismatches`,
-  `post_gate_widened` (the gate may only tighten the eligible set) and
-  `pinned_mismatches` (a pinned call served a different model than requested).
+  `post_gate_widened` (the gate may only tighten the eligible set),
+  `pinned_mismatches` (a pinned call served a different model than requested) and
+  `sweep_generate_mismatches` (a sweep call that made other than one backend call).
 - **Empty-set cases.** Each case with no eligible endpoint, with its exclusions.
+  `metrics.json` also records `empty_probe_error`, the exception type the real pipeline
+  raised for the probe (for example `NoEligibleCandidate`).
 - **Deferred metrics.** Calibration, churn robustness and noninterference. These are not
   measured by this tool.
 
@@ -219,8 +239,7 @@ In `report.md`:
 |---|---|
 | `0` | ok |
 | `1` | load or usage error: a bad suite, endpoint file or variants file, an unknown `--fixed` slug, a missing detector, a declined `--live` prompt, or **a gate exception on any case** |
-| `2` | policy violation or empty-set mismatch: any strategy with `violation_rate > 0`, any sweep call that served an ineligible model, any post-gate eligible set that is not a subset of the pre-gate set, or any `expect_empty` disagreement |
+| `2` | policy violation or integrity failure: any strategy with `violation_rate > 0`, any sweep call (or empty-set probe) that served an ineligible model, any post-gate eligible set that is not a subset of the pre-gate set, any `expect_empty` disagreement, or any `pinned_mismatches` (a pinned call served another endpoint; impossible by construction, so any occurrence is a harness integrity bug) |
 
-`pinned_mismatches > 0` by itself does not change the exit code when the model served was
-still eligible. Treat it as a benchmark-integrity failure anyway: the matrix row is an
-error row, not a measurement of the endpoint you pinned.
+`sweep_generate_mismatches` does not by itself change the exit code: those rows are
+already error rows, scored as failed calls rather than credited to the endpoint.
