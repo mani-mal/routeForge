@@ -29,6 +29,14 @@ class GraderSpec(BaseModel):
     kind: Literal["exact", "contains", "regex", "json_schema", "numeric"]
     expected: str | dict | float
     tol: float = 0.0
+    # A literal answer known to score 1.0 against this grader. Required for
+    # `regex`/`json_schema` (spec §5.1): those graders match a pattern or
+    # schema, not a literal value, so the simulated backend (Task 3) has
+    # nothing to return for `u < q` without one. `compile_grader` validates
+    # it actually passes. Unused (optional) for exact/contains/numeric,
+    # where `str(expected)` always passes and doubles as the simulated
+    # answer.
+    sample: str | None = None
 
     # Compiled by `compile_grader` at suite-load time so `grade()` never
     # recompiles per case. Never set directly by callers.
@@ -42,7 +50,10 @@ def compile_grader(spec: GraderSpec) -> None:
     the offending case's id -- on:
     - `expected` of the wrong shape for `kind`;
     - an unparseable `regex` pattern;
-    - an invalid `json_schema` document.
+    - an invalid `json_schema` document;
+    - a `regex`/`json_schema` grader with no `sample`, or a `sample` that
+      does not itself score 1.0 against the grader (spec §5.1: the
+      simulated backend needs a literal answer it can hand back).
     """
     if spec.kind in ("exact", "contains", "regex"):
         if not isinstance(spec.expected, str):
@@ -64,6 +75,15 @@ def compile_grader(spec: GraderSpec) -> None:
     elif spec.kind == "numeric":
         if isinstance(spec.expected, bool) or not isinstance(spec.expected, (int, float)):
             raise ValueError("grader kind 'numeric' requires a numeric expected value")
+
+    if spec.kind in ("regex", "json_schema"):
+        if spec.sample is None:
+            raise ValueError(
+                f"grader kind {spec.kind!r} requires a 'sample' answer that "
+                "passes its own grader")
+        if grade(spec, spec.sample) < 1.0:
+            raise ValueError(
+                f"grader kind {spec.kind!r} 'sample' does not pass its own grader")
 
 
 def grade(spec: GraderSpec, text: str) -> float:

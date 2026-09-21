@@ -46,11 +46,11 @@ class TestContainsGrader:
 
 class TestRegexGrader:
     def test_full_match_on_stripped_text(self):
-        spec = _spec(kind="regex", expected=r"\d{3}-\d{2}")
+        spec = _spec(kind="regex", expected=r"\d{3}-\d{2}", sample="123-45")
         assert grade(spec, "  123-45  ") == 1.0
 
     def test_partial_match_does_not_pass_fullmatch(self):
-        spec = _spec(kind="regex", expected=r"\d{3}-\d{2}")
+        spec = _spec(kind="regex", expected=r"\d{3}-\d{2}", sample="123-45")
         assert grade(spec, "123-45 extra") == 0.0
 
     def test_invalid_regex_rejected_at_load_not_at_grade(self):
@@ -64,15 +64,18 @@ class TestJsonSchemaGrader:
                "required": ["ok"]}
 
     def test_valid_instance_scores_one(self):
-        spec = _spec(kind="json_schema", expected=self._schema)
+        spec = _spec(kind="json_schema", expected=self._schema,
+                      sample=json.dumps({"ok": True}))
         assert grade(spec, json.dumps({"ok": True})) == 1.0
 
     def test_invalid_instance_scores_zero(self):
-        spec = _spec(kind="json_schema", expected=self._schema)
+        spec = _spec(kind="json_schema", expected=self._schema,
+                      sample=json.dumps({"ok": True}))
         assert grade(spec, json.dumps({"ok": "not-a-bool"})) == 0.0
 
     def test_non_json_text_scores_zero(self):
-        spec = _spec(kind="json_schema", expected=self._schema)
+        spec = _spec(kind="json_schema", expected=self._schema,
+                      sample=json.dumps({"ok": True}))
         assert grade(spec, "not json at all") == 0.0
 
     def test_invalid_schema_rejected_at_load(self):
@@ -215,6 +218,41 @@ class TestLoadSuiteErrors:
         path = tmp_path / "suite.jsonl"
         path.write_text(_line(
             grader={"kind": "regex", "expected": "(unclosed"},
+        ) + "\n")
+        with pytest.raises(SuiteError):
+            load_suite(str(path))
+
+    def test_regex_case_without_sample_raises_suite_error(self, tmp_path):
+        path = tmp_path / "suite.jsonl"
+        path.write_text(_line(
+            grader={"kind": "regex", "expected": r"\d{3}-\d{2}"},
+        ) + "\n")
+        with pytest.raises(SuiteError):
+            load_suite(str(path))
+
+    def test_regex_sample_failing_its_own_grader_raises_suite_error(self, tmp_path):
+        path = tmp_path / "suite.jsonl"
+        path.write_text(_line(
+            grader={"kind": "regex", "expected": r"\d{3}-\d{2}", "sample": "not-a-match"},
+        ) + "\n")
+        with pytest.raises(SuiteError):
+            load_suite(str(path))
+
+    def test_json_schema_case_without_sample_raises_suite_error(self, tmp_path):
+        path = tmp_path / "suite.jsonl"
+        path.write_text(_line(
+            grader={"kind": "json_schema",
+                    "expected": {"type": "object", "required": ["ok"]}},
+        ) + "\n")
+        with pytest.raises(SuiteError):
+            load_suite(str(path))
+
+    def test_json_schema_sample_failing_its_own_grader_raises_suite_error(self, tmp_path):
+        path = tmp_path / "suite.jsonl"
+        path.write_text(_line(
+            grader={"kind": "json_schema",
+                    "expected": {"type": "object", "required": ["ok"]},
+                    "sample": "not json"},
         ) + "\n")
         with pytest.raises(SuiteError):
             load_suite(str(path))
