@@ -354,7 +354,12 @@ async def usage_summary(session: AsyncSession, *, application_id: str | None = N
                         since: dt.datetime | None = None) -> dict:
     """Aggregate usage for the admin dashboard, optionally scoped to one
     application and/or a start time. Computed in Python (portable across
-    SQLite/Postgres) over the selected rows."""
+    SQLite/Postgres) over the selected rows.
+
+    Every spend, token, latency and distribution figure is over `ok` rows
+    only. `rejected_count` and `error_count` count their statuses beside them:
+    `error` rows are requests that failed on the backend (spec §4, B38) --
+    shown so an outage is visible, never counted as spend or served work."""
     stmt = select(UsageRecord)
     if application_id is not None:
         stmt = stmt.where(UsageRecord.application_id == application_id)
@@ -386,6 +391,7 @@ async def usage_summary(session: AsyncSession, *, application_id: str | None = N
     return {
         "count": len(ok),
         "rejected_count": sum(1 for r in rows if r.status == "rejected"),
+        "error_count": sum(1 for r in rows if r.status == "error"),
         "total_usd": total_usd,
         "baseline_usd": sum(r.baseline_usd for r in ok),
         "total_tokens": total_tokens,
@@ -409,7 +415,8 @@ async def usage_by_application(session: AsyncSession, *,
                                since: dt.datetime | None = None) -> list[dict]:
     """App-wise rollup over UsageRecord (durable store; portable Python
     aggregation across SQLite/Postgres — mirrors `usage_summary`'s style).
-    Sorted by total_usd descending."""
+    Sorted by total_usd descending. As there, everything but `rejected_count`
+    and `error_count` (backend failures, spec §4) is over `ok` rows only."""
     stmt = select(UsageRecord)
     if since is not None:
         stmt = stmt.where(UsageRecord.ts >= since)
@@ -418,12 +425,14 @@ async def usage_by_application(session: AsyncSession, *,
     for r in rows:
         a = agg.setdefault(r.application_id, {
             "application_id": r.application_id, "count": 0, "rejected_count": 0,
-            "total_usd": 0.0, "baseline_usd": 0.0, "total_tokens": 0, "onprem_count": 0,
+            "error_count": 0, "total_usd": 0.0, "baseline_usd": 0.0, "total_tokens": 0, "onprem_count": 0,
             "tier_distribution": {}, "model_distribution": {}, "sensitivity_distribution": {},
             "quality_source_distribution": {},
         })
         if r.status == "rejected":
             a["rejected_count"] += 1
+        if r.status == "error":
+            a["error_count"] += 1
         if r.status != "ok":
             continue
         a["count"] += 1

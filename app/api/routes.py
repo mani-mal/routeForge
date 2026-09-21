@@ -27,7 +27,7 @@ from app.apps.privacy import AppPrivacyProfile
 from app.errors import (
     BackendUnavailable, ContextWindowExceeded, NoEligibleCandidate, PolicyGateError,
 )
-from app.models import ChatRequest
+from app.models import ChatRequest, ExecutionPolicyContext
 from app.obs import metrics
 from app.obs.export import export_trace, resolve_capture_io
 from app.obs.redact import redacted_copy
@@ -291,6 +291,53 @@ async def _record_cancelled(request: Request, *, tenant: str, request_id: str,
             "cancelled-usage record failed (swallowed)")
 
 
+async def _record_failed(request: Request, *, tenant: str, request_id: str,
+                         started: float, model: str,
+                         ctx: ExecutionPolicyContext | None = None) -> None:
+    """Meter a request that failed on the BACKEND (spec §4, B38): one usage row
+    with `status="error"`, so an outage shows up in the console instead of
+    vanishing from every usage figure.
+
+    Written for exactly two cases: a request that ends in `BackendUnavailable`
+    (the non-streamed 502, and the keepalive stream's error frame), and a real
+    token stream whose backend raised before or during the stream. Nothing
+    else earns one: a context-window overflow is the client's request (400),
+    `NoEligibleCandidate` and policy rejections are policy outcomes, and a
+    client disconnect is already metered `cancelled`.
+
+    `model` is the last candidate attempted (or the streamed candidate); its
+    tier/provider come from the registry. Tokens and cost are zero -- nothing
+    was served -- and every spend/token/latency/budget aggregate filters on
+    `status == "ok"`, so this row moves none of them. `metrics` is untouched:
+    the caller's existing `observe_request` already counted the failure."""
+    try:
+        cand = next((c for c in request.app.state.registry.effective_pool()
+                     if c.name == model), None)
+        async with request.app.state.db.session() as session:
+            await store.record_usage(
+                session, application_id=tenant, request_id=request_id,
+                model=model,
+                provider=cand.provider if cand is not None else "-",
+                tier=cand.tier if cand is not None else "-",
+                prompt_tokens=0, completion_tokens=0, total_tokens=0,
+                cost_usd=0.0, baseline_usd=0.0,
+                latency_ms=(time.monotonic() - started) * 1000,
+                sensitivity=ctx.sensitivity if ctx is not None else "-",
+                onprem_only=bool(ctx.onprem_only) if ctx is not None else False,
+                status="error")
+            await session.commit()
+    except Exception:
+        logging.getLogger("serving.obs").exception(
+            "error-usage record failed (swallowed)")
+
+
+def _failed_model(exc: BaseException) -> str:
+    """The model an `error` row names for a `BackendUnavailable`: the last
+    candidate the gateway attempted, or "-" when it recorded none."""
+    attempted = getattr(exc, "attempted_models", ())
+    return attempted[-1] if attempted else "-"
+
+
 @router.post("/v1/chat/completions", response_model=None)
 async def chat_completions(body: ChatRequest, request: Request) -> dict | StreamingResponse:
     s = request.app.state.settings
@@ -411,7 +458,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
                         get_meta=get_meta, body=body, tenant=tenant,
                         app_policy=app_policy, app_langfuse=app_langfuse,
                         profile=profile, session_id=session_id, s=s,
-                        internals=internals, started_ns=started_ns)
+                        internals=internals, started=started, started_ns=started_ns)
                 # incremental_verify (Task 7): stream real tokens, but pipe each
                 # delta through a hold-back StreamingVerifier so no un-redacted
                 # text is ever released. Build the verifier on the request's
@@ -422,7 +469,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
                     get_meta=get_meta, body=body, tenant=tenant,
                     app_policy=app_policy, app_langfuse=app_langfuse,
                     profile=profile, session_id=session_id, s=s,
-                    internals=internals, started_ns=started_ns)
+                    internals=internals, started=started, started_ns=started_ns)
         if stream_mode is not None:
             task = asyncio.create_task(request.app.state.pipeline.run(
                 request_id, tenant, body, app_policy=app_policy, profile=profile,
@@ -461,6 +508,9 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
             logging.getLogger("serving.api").warning(
                 "request %s failed with %d: %s", request_id, mapped[0], mapped[1])
         metrics.observe_request("-", "rejected")
+        if isinstance(e, BackendUnavailable):
+            await _record_failed(request, tenant=tenant, request_id=request_id,
+                                 started=started, model=_failed_model(e))
         raise HTTPException(mapped[0], mapped[1])
     await _finalize(request, resp, body=body, tenant=tenant, app_policy=app_policy,
                     app_langfuse=app_langfuse, profile=profile,
@@ -905,6 +955,12 @@ async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
                     logging.getLogger("serving.api").warning(
                         "request %s failed with %d: %s", request_id, mapped[0], mapped[1])
                 metrics.observe_request("-", "rejected")
+            if isinstance(e, BackendUnavailable):
+                # Shielded for the same reason `_finalize` is below: a
+                # disconnect landing mid-write must not lose the row.
+                with anyio.CancelScope(shield=True):
+                    await _record_failed(request, tenant=tenant, request_id=request_id,
+                                         started=started, model=_failed_model(e))
             yield sse_error_frame(*mapped)
             yield SSE_DONE
             return
@@ -953,12 +1009,51 @@ async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
                                         started=started)
 
 
+class _WatchedDeltas:
+    """A real-token stream's deltas, iterated once, noting whether the stream
+    ended in a BACKEND failure (spec §4): any `Exception` out of the backend
+    stream except `ContextWindowExceeded` (the client's request) and
+    `PipelineRejected` (a pipeline outcome, e.g. no terminal result). A client
+    disconnect is `GeneratorExit`/`CancelledError` in the consuming generator
+    -- a `BaseException`, raised at ITS yield, never through here -- so it is
+    never mistaken for one. Only the backend fetch is watched: an error in the
+    caller's own loop body (e.g. the egress verifier) is not a backend
+    failure."""
+
+    def __init__(self, deltas: AsyncIterator[str]) -> None:
+        self._deltas = deltas
+        self.failed = False
+
+    async def __aiter__(self) -> AsyncIterator[str]:
+        try:
+            async for delta in self._deltas:
+                yield delta
+        except Exception as exc:
+            self.failed = not isinstance(exc, (ContextWindowExceeded, PipelineRejected))
+            raise
+
+
+async def _record_failed_stream(request: Request, *, tenant: str, request_id: str,
+                                started: float, get_meta: Callable[[], dict]) -> None:
+    """The `error` row for a real-token stream whose backend failed: named for
+    the router's chosen model and the gate's ctx, both known eagerly on
+    `get_meta` (`Pipeline.run_stream`). Shielded: it runs in the generator's
+    `finally`, where a disconnect's re-cancelling scope would otherwise cut
+    the write short."""
+    with anyio.CancelScope(shield=True):
+        await _record_failed(request, tenant=tenant, request_id=request_id,
+                             started=started,
+                             model=getattr(get_meta, "chosen_model", "-"),
+                             ctx=getattr(get_meta, "ctx", None))
+
+
 def _stream_unverified_response(
         request: Request, *, request_id: str,
         deltas: AsyncIterator[str], get_meta: Callable[[], dict],
         body: ChatRequest, tenant: str, app_policy: AppPolicyView,
         app_langfuse: object | None, profile: AppPrivacyProfile,
         session_id: str | None, s, internals: dict | None = None,
+        started: float,
         started_ns: int | None = None) -> StreamingResponse:
     """Live token-forwarding SSE for `stream_unverified` (real backend
     streaming). Emits an OpenAI-style role frame, forwards each `deltas` token
@@ -966,6 +1061,9 @@ def _stream_unverified_response(
     frame + `[DONE]`. `_finalize` runs in a `finally` so the DecisionRecord,
     usage row, and bus publish are recorded for EVERY streamed request --
     including a client that disconnects mid-stream (Global Constraint 2).
+    The one exception is a backend failure (`_WatchedDeltas.failed`): there is
+    no final metadata to finalize, so it is metered as an `error` row instead
+    (spec §4) and the exception propagates as before.
 
     `created` is computed once and held constant across every frame (Task 4),
     and `model` uses the app's requested model string as a stable per-frame
@@ -976,10 +1074,11 @@ def _stream_unverified_response(
 
     async def _gen() -> AsyncIterator[str]:
         meta: dict | None = None
+        watched = _WatchedDeltas(deltas)
         try:
             yield sse_frame(openai_chunk(request_id, model, role="assistant",
                                          created=created))
-            async for delta in deltas:
+            async for delta in watched:
                 yield sse_frame(openai_chunk(request_id, model, delta=delta,
                                              created=created))
             meta = get_meta()  # valid only now that `deltas` is fully drained
@@ -987,14 +1086,21 @@ def _stream_unverified_response(
                                          created=created))
             yield SSE_DONE
         finally:
-            # Best-effort finalize on EVERY exit -- normal completion and a
-            # mid-stream client disconnect alike. Accounting must not be lost.
-            await _finalize_stream(
-                request, request_id=request_id, deltas=deltas,
-                get_meta=get_meta, meta=meta, body=body, tenant=tenant,
-                app_policy=app_policy, app_langfuse=app_langfuse,
-                profile=profile, session_id=session_id, s=s,
-                internals=internals, started_ns=started_ns)
+            # A backend failure has no final metadata to finalize: meter it
+            # as `error` instead (spec §4). Every other exit -- normal
+            # completion and a mid-stream client disconnect alike -- gets the
+            # best-effort finalize. Accounting must not be lost.
+            if watched.failed:
+                await _record_failed_stream(request, tenant=tenant,
+                                            request_id=request_id, started=started,
+                                            get_meta=get_meta)
+            else:
+                await _finalize_stream(
+                    request, request_id=request_id, deltas=deltas,
+                    get_meta=get_meta, meta=meta, body=body, tenant=tenant,
+                    app_policy=app_policy, app_langfuse=app_langfuse,
+                    profile=profile, session_id=session_id, s=s,
+                    internals=internals, started_ns=started_ns)
 
     return sse_response(_gen())
 
@@ -1005,6 +1111,7 @@ def _incremental_verify_response(
         body: ChatRequest, tenant: str, app_policy: AppPolicyView,
         app_langfuse: object | None, profile: AppPrivacyProfile,
         session_id: str | None, s, internals: dict | None = None,
+        started: float,
         started_ns: int | None = None) -> StreamingResponse:
     """Live token streaming for `incremental_verify` (Task 7). Real backend
     deltas are piped through a hold-back `StreamingVerifier` before egress, so
@@ -1014,7 +1121,9 @@ def _incremental_verify_response(
     The verifier is built on the request's EFFECTIVE detector + ctx (the exact
     per-app detector the gate used, surfaced on `get_meta` by `run_stream`) so
     egress redaction matches intake. `_finalize` runs in a `finally` for EVERY
-    exit -- normal completion and a mid-stream disconnect alike -- and records
+    exit but a backend failure (metered `error` instead, as in
+    `_stream_unverified_response`) -- normal completion and a mid-stream
+    disconnect alike -- and records
     step 9 as `performed=True, reason="incremental"` (a deliberately weaker
     guarantee than the complete-response verdict; see streaming_verify.py).
     The client-visible (redacted) text is threaded into `_finalize` so the
@@ -1026,10 +1135,11 @@ def _incremental_verify_response(
     async def _gen() -> AsyncIterator[str]:
         meta: dict | None = None
         released: list[str] = []
+        watched = _WatchedDeltas(deltas)
         try:
             yield sse_frame(openai_chunk(request_id, model, role="assistant",
                                          created=created))
-            async for delta in deltas:
+            async for delta in watched:
                 out = verifier.feed(delta)
                 if out:
                     released.append(out)
@@ -1045,18 +1155,25 @@ def _incremental_verify_response(
                                          created=created))
             yield SSE_DONE
         finally:
-            # Best-effort finalize on EVERY exit. `client_text` is exactly what
-            # the client received (redacted); on a mid-stream disconnect it is
-            # the partial released prefix, which is honest.
-            await _finalize_stream(
-                request, request_id=request_id, deltas=deltas,
-                get_meta=get_meta, meta=meta, body=body, tenant=tenant,
-                app_policy=app_policy, app_langfuse=app_langfuse,
-                profile=profile, session_id=session_id, s=s,
-                internals=internals,
-                verify_performed=True, verify_reason="incremental",
-                client_text="".join(released),
-                started_ns=started_ns)
+            # A backend failure is metered `error` instead of finalized (no
+            # final metadata exists; spec §4). Otherwise best-effort finalize
+            # on EVERY exit. `client_text` is exactly what the client
+            # received (redacted); on a mid-stream disconnect it is the
+            # partial released prefix, which is honest.
+            if watched.failed:
+                await _record_failed_stream(request, tenant=tenant,
+                                            request_id=request_id, started=started,
+                                            get_meta=get_meta)
+            else:
+                await _finalize_stream(
+                    request, request_id=request_id, deltas=deltas,
+                    get_meta=get_meta, meta=meta, body=body, tenant=tenant,
+                    app_policy=app_policy, app_langfuse=app_langfuse,
+                    profile=profile, session_id=session_id, s=s,
+                    internals=internals,
+                    verify_performed=True, verify_reason="incremental",
+                    client_text="".join(released),
+                    started_ns=started_ns)
 
     return sse_response(_gen())
 

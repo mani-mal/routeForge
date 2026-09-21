@@ -92,3 +92,53 @@ def test_by_application_reconciles_with_rejected_rows(monkeypatch, tmp_path):
     assert row["count"] == scoped["count"] == 1
     assert abs(row["total_usd"] - scoped["total_usd"]) < 1e-9
     assert row["total_usd"] < 99.0
+
+
+def test_by_application_and_summary_report_error_count(monkeypatch, tmp_path):
+    """Backend-failure rows (status == "error", spec §4 / B38) are counted in
+    `error_count` on BOTH admin surfaces and in nothing else: `count`, spend
+    and tokens stay the `ok` rows' alone, even when an error row carries a
+    nonzero footprint. Same file-backed-DB seeding as the rejected-rows test
+    above."""
+    import asyncio
+
+    from fastapi.testclient import TestClient
+
+    from app.apps import store
+    from app.main import create_app
+
+    monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{tmp_path}/rf.db")
+    app = create_app()
+    app_id = "rollup-epsilon"
+
+    def _usage(request_id, status, cost, tokens):
+        return dict(application_id=app_id, request_id=request_id, model="m",
+                    provider="onprem", tier="cheap", prompt_tokens=tokens,
+                    completion_tokens=0, total_tokens=tokens, cost_usd=cost,
+                    baseline_usd=cost, latency_ms=5.0, sensitivity="public",
+                    onprem_only=True, status=status)
+
+    async def _seed():
+        async with app.state.db.session() as s:
+            await store.create_application(s, app_id=app_id, name="Epsilon")
+            await store.record_usage(s, **_usage("req-ok-1", "ok", 0.01, 15))
+            await store.record_usage(s, **_usage("req-err-1", "error", 50.0, 500))
+            await store.record_usage(s, **_usage("req-err-2", "error", 50.0, 500))
+            await store.record_usage(s, **_usage("req-can-1", "cancelled", 0.0, 0))
+            await s.commit()
+
+    asyncio.run(_seed())
+
+    client = TestClient(app)
+    _login(client)
+    per_app = {r["application_id"]: r
+               for r in client.get("/admin/usage/by-application").json()["apps"]}
+    scoped = client.get(f"/admin/usage?application_id={app_id}").json()
+
+    row = per_app[app_id]
+    assert row["error_count"] == scoped["error_count"] == 2
+    assert row["count"] == scoped["count"] == 1
+    assert row["rejected_count"] == scoped["rejected_count"] == 0
+    assert abs(row["total_usd"] - 0.01) < 1e-9
+    assert abs(scoped["total_usd"] - 0.01) < 1e-9
+    assert row["total_tokens"] == scoped["total_tokens"] == 15

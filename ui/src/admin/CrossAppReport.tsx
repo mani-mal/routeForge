@@ -11,6 +11,8 @@ interface JoinedRow {
   appId: string;
   appName: string;
   count: number;
+  // Backend failures (status "error") -- shown beside count, never in spend.
+  error_count: number;
   total_usd: number;
   baseline_usd: number;
   saved_usd: number;
@@ -40,6 +42,7 @@ function joinRows(apps: AdminApp[], usage: UsageByApp[]): JoinedRow[] {
       appId: app.id,
       appName: app.name,
       count,
+      error_count: u?.error_count ?? 0,
       total_usd,
       baseline_usd,
       saved_usd: baseline_usd - total_usd,
@@ -126,7 +129,17 @@ export function CrossAppReport() {
                 <div className="truncate text-sm font-medium text-gray-100">{row.appName}</div>
                 <div className="truncate text-xs font-mono text-gray-500">{row.appId}</div>
               </div>
-              <span className="text-sm font-mono text-gray-300">{row.count.toLocaleString()}</span>
+              <span className="text-sm font-mono text-gray-300">
+                {row.count.toLocaleString()}
+                {row.error_count > 0 && (
+                  <span
+                    className="ml-1 text-xs text-red-400"
+                    title="requests that failed on the backend (not counted in spend)"
+                  >
+                    · {row.error_count.toLocaleString()} failed
+                  </span>
+                )}
+              </span>
               <span className="text-sm font-mono text-gray-300">{formatUsd(row.total_usd)}</span>
               <span className="text-sm font-mono text-gray-300">{formatUsd(row.baseline_usd)}</span>
               <span className="text-sm font-mono text-gray-300">{formatUsd(row.saved_usd)}</span>
