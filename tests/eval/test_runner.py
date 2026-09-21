@@ -263,6 +263,22 @@ def test_every_row_served_its_pinned_endpoint(tmp_path):
     assert result_pinned_mismatches(out) == 0
 
 
+_CLEAN = {"s": {"violation_rate": 0.0}, "t": {"violation_rate": None}}
+
+
+def test_exit_code_all_clear_is_0():
+    assert runner._exit_code(0, _CLEAN, 0, 0, 0) == 0
+
+
+def test_exit_code_each_trigger_alone_is_2():
+    dirty = {**_CLEAN, "bad": {"violation_rate": 0.25}}
+    assert runner._exit_code(1, _CLEAN, 0, 0, 0) == 2  # raw violation count
+    assert runner._exit_code(0, dirty, 0, 0, 0) == 2   # a strategy's rate
+    assert runner._exit_code(0, _CLEAN, 1, 0, 0) == 2  # empty-set mismatch
+    assert runner._exit_code(0, _CLEAN, 0, 1, 0) == 2  # post-gate widening
+    assert runner._exit_code(0, _CLEAN, 0, 0, 1) == 2  # pinned served mismatch
+
+
 def result_pinned_mismatches(out) -> int:
     return json.loads((out / "metrics.json").read_text())["policy"]["pinned_mismatches"]
 

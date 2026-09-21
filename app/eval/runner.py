@@ -15,7 +15,8 @@ case:
 
 After the last case it computes the feasible-oracle metrics (`metrics.json`),
 a human report (`report.md`) and a run stamp (`run.json`). Exit codes: `0` ok,
-`1` load/usage error, `2` policy violation or empty-set mismatch.
+`1` load/usage error, `2` policy violation, empty-set mismatch, post-gate
+widening or pinned-served mismatch (`_exit_code`).
 
 `metrics.json` carries NO timestamps, paths or timings -- for a fixed `--seed`
 a simulated run's `metrics.json` is byte-identical run to run (global
@@ -459,12 +460,8 @@ async def _run_loaded(*, cases, specs, settings, registry, detector, variants,
         1 for c in case_infos
         if c.expect_empty != (not c.eligible) or (not c.eligible and not c.rejected_ok))
 
-    exit_code = 2 if (
-        total_violations > 0
-        or any((m["violation_rate"] or 0) > 0 for m in per_strategy.values())
-        or empty_mismatches > 0
-        or widened > 0
-    ) else 0
+    exit_code = _exit_code(total_violations, per_strategy, empty_mismatches,
+                           widened, pinned_mismatches)
 
     metrics = {
         "strategies": per_strategy,
@@ -506,6 +503,22 @@ async def _run_loaded(*, cases, specs, settings, registry, detector, variants,
     (out / "run.json").write_text(_dump(run_stamp), encoding="utf-8")
     (out / "report.md").write_text(_report(metrics, run_stamp), encoding="utf-8")
     return RunResult(exit_code=exit_code, out_dir=str(out), metrics=metrics)
+
+
+def _exit_code(total_violations: int, per_strategy: dict[str, dict],
+               empty_mismatches: int, widened: int, pinned_mismatches: int) -> int:
+    """`2` on any integrity failure, else `0`: a policy violation (raw count
+    or any strategy's rate), an empty-set mismatch, a gate that widened the
+    eligible set, or a pinned call served by another endpoint (impossible by
+    construction, so any occurrence is an integrity bug)."""
+    failed = (
+        total_violations > 0
+        or any((m["violation_rate"] or 0) > 0 for m in per_strategy.values())
+        or empty_mismatches > 0
+        or widened > 0
+        or pinned_mismatches > 0
+    )
+    return 2 if failed else 0
 
 
 # --------------------------------------------------------------------------
