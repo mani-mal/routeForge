@@ -7,16 +7,13 @@ tests/test_apps_store.py.
 from __future__ import annotations
 
 import asyncio
-import datetime as dt
 import time
-import uuid
 
 import pytest
 
 from app.apps.bootstrap import seed_demo_apps
 from app.apps.db import Database
 from app.apps import store
-from app.apps.models import UsageRecord, utcnow
 from app.apps.policy import AppPolicyView
 from app.compression.ccr import CCRStore
 from app.config.loader import load_settings
@@ -26,6 +23,7 @@ from app.models import ChatRequest, ExecutionPolicyContext, Message
 from app.pipeline import Pipeline, PipelineRejected
 from app.policy.detectors import make_detector
 from app.policy.gate import Gate
+from app.routing.observations import Observation
 from app.routing.router import Router
 from app.routing.signals import SignalStore
 from tests._litellm_fake import _DeterministicLiteLLM, make_test_registry
@@ -157,108 +155,84 @@ def test_router_decision_carries_the_scoring_record():
     assert d.scoring.ordered[0].candidate.name == d.chosen.name
 
 
-# -- boot seeding: app/apps/store.aggregate_model_signals -----------------
+# -- the observation log: app/apps/store.write/load_seed/prune_observations
 
 def _fresh_db() -> Database:
     return Database(url="sqlite+aiosqlite://", seed=seed_demo_apps)
 
 
-def _row(application_id, model, status, latency_ms, ts):
-    return UsageRecord(
-        id=uuid.uuid4().hex, application_id=application_id,
-        request_id=uuid.uuid4().hex, ts=ts, model=model, provider="onprem",
-        tier="cheap", prompt_tokens=1, completion_tokens=1, total_tokens=2,
-        cost_usd=0.0, baseline_usd=0.0, latency_ms=latency_ms,
-        sensitivity="public", onprem_only=False, status=status)
+def _obs(ts, model="m", outcome="ok", latency=100.0, streamed=False, ttft=None):
+    return Observation(ts, model, outcome,
+                       latency if outcome == "ok" and not streamed else None,
+                       streamed, ttft)
 
 
-def test_seed_aggregate_counts_ok_and_error_averages_latency_over_ok_only():
+def test_observations_round_trip_through_the_table():
     db = _fresh_db()
-    now = utcnow()
+    now = time.time()
+    written = [_obs(now - 30), _obs(now - 20, outcome="error"),
+               _obs(now - 10, streamed=True, ttft=42.0)]
 
     async def go():
         async with db.session() as s:
-            s.add_all([
-                _row("acme", "local-8b", "ok", 100.0, now),
-                _row("acme", "local-8b", "ok", 300.0, now),
-                _row("acme", "local-8b", "error", 999.0, now),
-            ])
+            await store.write_observations(s, written)
             await s.commit()
-            return await store.aggregate_model_signals(s, since_hours=24)
+            return await store.load_seed_observations(s, since_hours=1, per_model_cap=100)
 
-    rows = asyncio.run(go())
-    assert len(rows) == 1
-    r = rows[0]
-    assert r.model == "local-8b"
-    assert r.avg_latency_ms == pytest.approx(200.0)   # (100+300)/2, error excluded
-    assert r.samples == 3                             # 2 ok + 1 error
-    assert r.error_rate == pytest.approx(1 / 3)
+    got = asyncio.run(go())
+    assert [(o.model, o.outcome, o.latency_ms, o.streamed, o.ttft_ms) for o in got] == \
+           [(o.model, o.outcome, o.latency_ms, o.streamed, o.ttft_ms) for o in written]
+    assert [round(o.ts, 3) for o in got] == [round(o.ts, 3) for o in written]
 
 
-def test_seed_aggregate_excludes_rejected_rows():
-    """A rejection is the POLICY GATE doing its job -- not endpoint unhealth
-    (CLAUDE.md rule 2a: a protection posture must never influence routing
-    preference)."""
+def test_seed_load_caps_per_model_keeping_the_most_recent_and_orders_ascending():
     db = _fresh_db()
-    now = utcnow()
+    now = time.time()
+    rows = [_obs(now - 100 + i, model="a") for i in range(10)] + \
+           [_obs(now - 50 + i, model="b") for i in range(3)]
 
     async def go():
         async with db.session() as s:
-            s.add_all([
-                _row("acme", "local-8b", "ok", 100.0, now),
-                _row("acme", "local-8b", "rejected", 5.0, now),
-            ])
+            await store.write_observations(s, rows)
             await s.commit()
-            return await store.aggregate_model_signals(s, since_hours=24)
+            return await store.load_seed_observations(s, since_hours=1, per_model_cap=4)
 
-    rows = asyncio.run(go())
-    assert len(rows) == 1
-    r = rows[0]
-    assert r.samples == 1
-    assert r.error_rate == pytest.approx(0.0)
+    got = asyncio.run(go())
+    assert [o.model for o in got].count("a") == 4
+    assert [o.model for o in got].count("b") == 3
+    a_ts = [o.ts for o in got if o.model == "a"]
+    assert min(a_ts) == pytest.approx(now - 100 + 6, abs=1e-3)   # the 4 newest
+    assert [o.ts for o in got] == sorted(o.ts for o in got)
 
 
-def test_seed_aggregate_excludes_rows_outside_the_window():
+def test_seed_load_excludes_rows_outside_the_window():
     db = _fresh_db()
-    stale = utcnow() - dt.timedelta(hours=100)
+    now = time.time()
 
     async def go():
         async with db.session() as s:
-            s.add(_row("acme", "old-model", "ok", 50.0, stale))
+            await store.write_observations(s, [_obs(now - 7200), _obs(now - 60)])
             await s.commit()
-            return await store.aggregate_model_signals(s, since_hours=24)
+            return await store.load_seed_observations(s, since_hours=1, per_model_cap=10)
 
-    rows = asyncio.run(go())
-    assert rows == []
+    assert len(asyncio.run(go())) == 1
 
 
-def test_seed_aggregate_uses_monotonic_clock_for_last_ts():
-    """The store runs on time.monotonic(); a wall-clock timestamp would make
-    every seeded row instantly stale."""
+def test_prune_deletes_only_rows_past_the_window():
     db = _fresh_db()
-    now = utcnow()
+    now = time.time()
 
     async def go():
         async with db.session() as s:
-            s.add(_row("acme", "local-8b", "ok", 100.0, now))
+            await store.write_observations(s, [_obs(now - 7200), _obs(now - 60)])
             await s.commit()
-            return await store.aggregate_model_signals(s, since_hours=24)
+            n = await store.prune_observations(s, older_than_hours=1)
+            await s.commit()
+            left = await store.load_seed_observations(s, since_hours=24, per_model_cap=10)
+            return n, left
 
-    before = time.monotonic()
-    rows = asyncio.run(go())
-    after = time.monotonic()
-    assert len(rows) == 1
-    assert before <= rows[0].last_ts <= after
-
-
-def test_seed_aggregate_empty_when_no_rows_in_window():
-    db = _fresh_db()
-
-    async def go():
-        async with db.session() as s:
-            return await store.aggregate_model_signals(s, since_hours=24)
-
-    assert asyncio.run(go()) == []
+    n, left = asyncio.run(go())
+    assert n == 1 and len(left) == 1
 
 
 # -- app/main.py wiring: the SAME store is shared by create_app()'s Router
