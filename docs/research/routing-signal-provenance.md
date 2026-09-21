@@ -333,6 +333,124 @@ and an ordering comparison silently tolerates any monotone perturbation of the s
 
 ---
 
+## 3A. Seeding by replay (signal hardening, 2026-09-21)
+
+A follow-up slice (`docs/superpowers/specs/2026-09-21-signal-hardening-design.md`)
+replaced boot seeding's source entirely: instead of aggregating `usage_records` — a
+table that records a *different* quantity than the live signal observes — seeding now
+replays a new per-attempt log, `endpoint_observations`, written by the same sink the live
+signal already logs through. Branch `feat/signal-hardening`, commits oldest first:
+`3519dc5` (observation-writer config knobs + positivity lint) · `f8c92d2` (the
+`ObservationSink`, the wall-clock↔monotonic mapping, `observe_stream_success`,
+`SignalStore.replay`) · `6a60244` (clock seam on `RoutingStrategy.rank`, closing B40) ·
+`3286adc` (the `endpoint_observations` table; `write_observations` /
+`load_seed_observations` / `prune_observations`; deletes `aggregate_model_signals` and
+drops `usage_records` as a seeding source) · `ce626c1` (tie-break test for
+`load_seed_observations`'s ordering) · `54f1954` (wires replay into boot, the background
+flusher, the shutdown flush) · `f582181` (`Gateway.run_stream` observes availability +
+TTFT; `BackendUnavailable.attempted_models`, closing B41) · `c3782cc` (error
+`usage_records` rows + `error_count`, closing B38).
+
+### The stale-as-fresh counterexample
+
+Before this slice, `app/apps/store.py::aggregate_model_signals` stamped every seed row
+`last_ts = time.monotonic()` — *now*, at boot time, regardless of when the underlying
+`usage_records` row was actually written. A model whose most recent traffic was 23 hours
+old therefore seeded as **fresh**: the staleness cliff (`signals.staleness_s`, default
+3600s) never fired on seeded state, because every seeded row looked brand new the moment
+the process booted. Seeded availability fared the same way — its wall-clock decay is
+computed from elapsed time since the last observation, and every seeded observation
+claimed to be from the instant of boot, so it experienced zero decay.
+
+**Closed by `f8c92d2` and `54f1954`.** `f8c92d2` builds `SignalStore.replay`, which maps
+each replayed row to a monotonic time that preserves the row's **true age** relative to
+boot — `mono_i = row.ts_wall - wall_offset`, where `wall_offset = time.time() -
+time.monotonic()` is captured once at process construction — rather than stamping "now".
+`54f1954` wires that replay into the boot-seeding path in place of
+`aggregate_model_signals`, which `3286adc` deletes outright: there is no longer a code
+path that can stamp a seed row's age incorrectly, because there is no longer a separate
+aggregation step computing an age at all.
+
+### The replay-identity property
+
+**Statement (spec §3.5).** For any sequence of observations, the state reached by
+replaying the logged sequence equals the state reached by observing it live, up to a
+constant shift of the monotonic clock. Every read (`latency()`, `availability()` — value,
+source, and sample count) at the same age returns the same result whether the store got
+there by live observation or by replay.
+
+**Why it holds.** Every `SignalStore` update depends on time only through *differences*
+(`now - ts` for the staleness cliff, `Δt` for availability decay), never on an absolute
+clock reading. The replay clock (`mono_i = row.ts_wall - wall_offset`) preserves those
+differences exactly — shifting every timestamp by the same constant leaves every
+difference between two timestamps unchanged. So a store fed the sequence live and a
+second store fed the identical sequence by replay land in the same state, modulo that one
+constant shift.
+
+**The Hypothesis test that pins it.**
+`tests/routing/test_observations.py::test_replay_reproduces_the_live_state_up_to_a_clock_shift`
+(200 examples): random interleavings of success, error, and stream-success observations
+at increasing timestamps, replayed into one store and observed live into a second,
+compared on every read at several later ages.
+
+**The three falsifications (Task 2 Step 5, each applied by hand, confirmed red, then
+reverted):**
+
+| Mutation | Property expected to catch it | Result |
+|---|---|---|
+| `replay` uses `t = time.monotonic()` instead of the `ts - wall_offset` age mapping | replay identity + the stale-seed test | **caught** — `test_replay_reproduces_the_live_state_up_to_a_clock_shift` and `test_replay_honours_age_so_an_old_latency_is_stale` both failed (`2 failed, 6 deselected`) |
+| the sink is left attached during `replay`, so replay re-logs what it reads | log-equals-live | **caught** — `test_replay_logs_nothing` failed (`1 failed, 7 deselected`) |
+| `observe_stream_success` also updates the latency EWMA (mirroring `observe_success`'s math on `ttft_ms`) | stream-observation isolation | **caught** — `test_stream_success_moves_availability_and_leaves_latency_untouched` failed (`1 failed, 7 deselected`) |
+
+### The cap bound
+
+Replaying loads only the most recent `signals.max_seed_obs_per_model` rows per model
+(default 200), not the full history — an unbounded seed query was itself one of the
+defects this slice closes (noted, not yet named, at the end of P2a). The bound is
+principled, not arbitrary: with `alpha_floor = 0.1`, once a signal has seen `n >= 9`
+observations, each further update multiplies the influence of everything before it by
+`0.9`. Replaying only the last `K` observations therefore differs from replaying the full
+history by at most `0.9^(K-9) × range` of the observed values — for `K = 200` that factor
+is ~2×10⁻⁹.
+`tests/routing/test_observations.py::test_replaying_only_the_last_K_is_within_the_EWMA_bound`
+asserts this bound computed from `K` and `alpha_floor`, not a hardcoded tolerance.
+
+### The cross-replica consequence
+
+`endpoint_observations` is one table shared by every API replica — each replica's live
+traffic writes into it through its own flusher, and the seed a booting replica replays is
+drawn from the union of *all* replicas' writes, interleaved by timestamp. That is a state
+no single replica ever held live: the **live** signal store stays strictly per-process
+(P2a's stance, unchanged — see `docs/reference/routing-observability.md`'s "per-replica
+drift is real" caveat), but the **seed** a fresh or restarted replica boots with is
+cross-replica. This is intended: it is what makes a restarted replica's seed more
+informative than "whatever that one process happened to observe before it died."
+
+### B39/B41 resolved by construction, not by patch
+
+Both defects turn out to share a root cause with the stale-as-fresh one: each was a
+property of *reading `usage_records` for seeding* — a table that records a different
+quantity than the live signal observes. Once seeding reads `endpoint_observations`
+instead — the exact log the live signal writes to through its own sink — both defects
+stop being *possible*, rather than merely being patched:
+
+- **B39** (whole-trace latency blending a semantic-cache hit's ~3 ms lookup, or
+  Headroom's compression step, into a served model's seeded latency): a cache hit never
+  calls a backend, so `SignalStore` never applies an observation for it and no
+  `endpoint_observations` row is written for it. There is nothing to seed from, because
+  there was nothing to log.
+- **B41** (streaming contributing nothing): resolved directly — `Gateway.run_stream` now
+  calls `observe_stream_success` on its terminal chunk (`f582181`) — but the same
+  "resolved by construction" shape explains *why stream timing can never leak into the
+  latency EWMA*: `observe_stream_success` only ever calls the availability-update path
+  (`_apply_available`); there is no code path by which a stream's TTFT can reach
+  `latency_ms`, `latency_n`, or `latency_ts`. Pinned by
+  `test_stream_success_moves_availability_and_leaves_latency_untouched` and the third
+  falsification above — this is the same test doing double duty as both a unit pin and a
+  falsification probe.
+
+---
+
 ## 4. Provenance
 
 ### 4.1 Four values
@@ -531,6 +649,16 @@ this codebase during implementation review; none is hypothetical.
   not be. But absent is still absent, and a paper must not describe the signal as covering
   the deployment's traffic. (Backlog B41.)
 
+  > **Update 2026-09-21 (signal hardening, `f582181`) — resolved.** `Gateway.run_stream`
+  > now observes its terminal chunk as an availability-only success
+  > (`observe_stream_success`) and observes an endpoint error under the same classifier
+  > non-streaming calls use; it never touches the latency EWMA (§3A above, "B39/B41
+  > resolved by construction"). The Qwen Code / kit-gtm correction two paragraphs above
+  > stands unchanged — it was never about the streaming path, only about `tools` routing
+  > those requests through `Gateway.run()` already. What was genuinely blind, and is now
+  > fixed, was plain-chat streaming with no tools. Streaming still contributes nothing to
+  > the *latency* signal specifically — that remains a deliberate ruling, not a gap.
+
 - **Seeded availability is always neutral, because nothing ever writes
   `UsageRecord.status = "error"`.** `app/api/routes.py` writes exactly three values:
   `"ok"`, `"rejected"` and `"cancelled"`. When `pipeline.run()` raises —
@@ -543,6 +671,17 @@ this codebase during implementation review; none is hypothetical.
   always seeds at `1.0`. After a restart a badly-failing endpoint starts neutral and needs
   `min_samples` live observations to be down-weighted again. Bounded, but it means the
   boot-seeding mechanism is half as capable as the design describes. (Backlog B38.)
+
+  > **Update 2026-09-21 (signal hardening, `c3782cc`) — resolved.** A failed request now
+  > writes one `usage_records` row with `status = "error"` (`app/api/routes.py::
+  > _record_failed`), and — separately — boot seeding no longer reads `usage_records` at
+  > all; it replays `endpoint_observations`, populated by the same sink the live signal
+  > writes through. Availability now seeds correctly. One narrower gap remains, filed as
+  > backlog B47: a backend failure on a real-token stream *after* the client has already
+  > disconnected still writes no row of either kind. Also note, orthogonally: the error
+  > row's `sensitivity` field is `"-"` on the non-streamed and keepalive paths (the route
+  > doesn't hold the gate's policy context there); only the real-token stream failure path
+  > has it available and records the true value.
 
 - **The whole-trace `latency_ms` sum blends three different sources into one boot-seeded
   EWMA, not just confidence escalation.** `_finalize` sums `latency_ms` across the whole
@@ -565,6 +704,16 @@ this codebase during implementation review; none is hypothetical.
   unaffected (failed-hop records are hardcoded `latency_ms = 0.0`). Self-correcting as live
   observations accumulate. (Backlog B39, widened in the fix wave that reviewed this
   artifact.)
+
+  > **Update 2026-09-21 (signal hardening, `3286adc`) — resolved, not patched.** Boot
+  > seeding no longer averages `usage_records.latency_ms` at all — `aggregate_model_
+  > signals` is deleted, and seeding reads `endpoint_observations` instead, which holds
+  > only `Gateway.run`'s own per-hop, backend-only latency. Both blending sources named
+  > above stop being possible rather than being special-cased: a semantic-cache hit never
+  > calls a backend and so is never logged (§3A, "B39/B41 resolved by construction"), and
+  > a compression or escalation hop's latency was never something `Gateway.run`'s
+  > `observe_success` included in the first place — only `_finalize`'s whole-trace sum did,
+  > and that sum is no longer what gets seeded.
 
 - **The signals are per-replica, and no claim of global consistency is made.** The store
   is per-process; each API replica learns from its own traffic, so two replicas can hold
@@ -603,6 +752,12 @@ this codebase during implementation review; none is hypothetical.
   `time.monotonic()`), and it forced two strategy tests to observe on the real clock, but
   the seam between the two layers is unexercised for time-dependent behaviour. (Backlog B40.)
 
+  > **Update 2026-09-21 (signal hardening, `6a60244`) — resolved.** `rank` on the
+  > `RoutingStrategy` Protocol and `DefaultRoutingStrategy` gained `now: float | None =
+  > None`, forwarded to both `SignalStore` reads; `Router.select` passes nothing, so
+  > production still reads the real clock. Two new tests exercise the staleness cliff and
+  > the availability decay *through* `rank(now=...)` for the first time.
+
 - **`SignalStore` reports `samples = 0` on the `disabled` path** even when observations
   exist, unlike `tier_default` / `neutral`, which report the true count. So the record's
   own honesty convention is not uniform across its four provenance values. (Backlog B42.)
@@ -613,10 +768,28 @@ this codebase during implementation review; none is hypothetical.
   no property in this slice found a previously unknown bug. Do not let a draft imply a
   measured adequacy figure.
 
-- **This is not cold-start routing.** Boot seeding reads `usage_records` — traffic that
-  already happened. An endpoint onboarded one minute ago has no signal and reports
-  defaults, which is exactly the setting IP-8 / R8 proposes to address and this slice does
-  not.
+- **This is not cold-start routing.** Boot seeding reads recorded traffic — `usage_records`
+  as originally built, `endpoint_observations` since the 2026-09-21 signal-hardening
+  slice (§3A) — traffic that already happened, either way. An endpoint onboarded one
+  minute ago has no signal and reports defaults, which is exactly the setting IP-8 / R8
+  proposes to address and this slice does not.
+
+- **TTFT is logged, not validated as a routing signal.** `Gateway.run_stream` records
+  time-to-first-token on every streamed success and persists it in
+  `endpoint_observations.ttft_ms`, but nothing reads it back into a score — `latency()`
+  and `availability()` are the only two signals `DefaultRoutingStrategy.rank` consults,
+  and neither is computed from `ttft_ms`. It is logged for P2b to evaluate, not something
+  this slice claims works as a ranking input. (Spec §3, out of scope.)
+
+- **A flusher crash loses at most `flush_interval_s` of observations, and the loss is
+  asymmetric.** The background flusher (`app/main.py::_observation_loop`) drains the
+  in-memory sink into `endpoint_observations` every `signals.flush_interval_s` seconds
+  (default 5.0), with a final flush on clean shutdown. A process crash between two
+  flushes — not a graceful shutdown, which is covered — loses whatever the sink held
+  unflushed. The loss is asymmetric with what the *live* store already knows: the
+  observations were already applied to the in-process `SignalStore` before being handed
+  to the sink, so the crashing replica's own ranking reflected them; only a *future* boot's
+  replay-seed misses them, and only for the window since the last successful flush.
 
 - **No circuit breaker, and availability is a far weaker substitute than it looks.**
   Availability never removes a candidate, and the penalty it applies is bounded by

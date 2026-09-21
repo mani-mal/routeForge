@@ -12,6 +12,9 @@ neither touches the Improvement Plane, neither weakens a privacy invariant.
 
 3. **Per-hop scoring record** (P2a, 2026-09-19) — `sp.scoring`: each eligible
    candidate's scoring terms and, per term, where the value came from.
+4. **The observation log** (signal hardening, 2026-09-21) — `endpoint_observations`:
+   the per-attempt log every measured signal is drawn from, and what boot seeding now
+   replays instead of aggregating `usage_records`.
 
 > **Superseded 2026-09-17:** this page also documented `routing.stage_signals`, a
 > flag-gated raise-only tier bias derived from the internal agent loop's state.
@@ -300,42 +303,45 @@ escape hatch and restores the same numbers with `src: "disabled"`.
   differently. This is acceptable because a signal is a *ranking preference*
   only — it reaches the strategy, which can reorder the eligible set but can
   never add to or remove from it, so drift cannot affect eligibility, residency,
-  or cost caps. Boot seeding from `usage_records` (last
-  `signals.seed_window_hours`) bounds the divergence. Cross-replica sharing is
-  deliberately not built.
-- **Streaming feeds no observations.** `observe_success` / `observe_error` are
-  called only from `Gateway.run()`, never from `run_stream()`. A
-  streaming-only application therefore **contributes nothing to the signal**.
-  Whether its endpoints *report* a default depends on the rest of the
-  deployment: the store is keyed per **model**, not per application, so those
-  same endpoints go `measured` as soon as any *other* application sends
-  non-streaming traffic to them. It is a single-tenant or
-  streaming-only deployment whose endpoints stay at `tier_default` / `neutral`
-  indefinitely. Either way the streaming request's own scoring record is still
-  emitted; it just may carry only defaults. The omission is deliberate:
-  recording streaming successes without failures would bias the signal, and
-  time-to-last-token is not the same quantity as a non-streaming call's
-  latency. Absent is honest; biased would not be.
-- **Seeded availability is always `1.0`.** No code path writes
-  `usage_records.status = 'error'` — a failed request raises before
-  `record_usage` is reached, so no row is written at all. Latency seeds
-  correctly from `ok` rows; availability does not seed. After a restart a
-  badly-failing endpoint starts neutral and needs `min_samples` live
-  observations to be down-weighted again. Tracked as a backlog item.
+  or cost caps. Boot seeding replays the shared `endpoint_observations` log
+  (last `signals.seed_window_hours`; see §4 below) — a state no single
+  replica held live — which bounds the divergence without unifying it.
+  Cross-replica sharing of the *live* store is deliberately not built.
+- **Streaming feeds availability and TTFT, never latency (signal hardening,
+  2026-09-21; was B41).** `Gateway.run_stream` now observes a stream's
+  terminal chunk as an availability-only success (`observe_stream_success`) and
+  logs time-to-first-token — but never touches the latency EWMA, because a
+  stream's timing is a different quantity from a non-streaming call's backend
+  latency. An endpoint error before or during a stream also counts (subject to
+  the same `counts_as_endpoint_unhealth` classifier as non-streaming calls); a
+  client disconnect or a stream that ends with no terminal chunk records
+  nothing — neither is attributable to the endpoint. **Correction to an earlier
+  version of this page and of B41 itself:** it is not true that streaming
+  clients contribute nothing. Every Qwen Code / `kit-gtm` request carries
+  `tools`, which raises `StreamFallback` before `run_stream` is reached, so
+  those requests are served (and observed) by `Gateway.run()` already — live:
+  `availability n=98 measured`. What was blind, and is now fixed, is
+  plain-chat streaming with no tools, not `onprem_only`, not
+  `require_verification`, `stream_mode` in `stream_unverified |
+  incremental_verify`.
+- **Seeded availability now reflects real failures (signal hardening,
+  2026-09-21; was B38).** Boot seeding replays `endpoint_observations`, and a
+  failed request now writes an `error` row (`usage_records.status = "error"`,
+  plus a matching `endpoint_observations` row for non-streamed and real-token
+  streamed failures) — see §4 below and `usage_summary.error_count`.
 - **`n` is `0` on the `disabled` path** even when the store holds observations,
-  unlike `tier_default`/`neutral`, which report the true count. Also backlogged.
-- **A semantic-cache hit pollutes the seeded latency signal with the cache lookup's
-  latency, not the model's.** A cache hit returns a full response stamped with the
-  serving model's slug (`entry.model`) and a trace whose only latency entry is the
-  ~3 ms cache lookup (`app/pipeline.py`). That flows through the same `_finalize`
-  path and writes an `ok` `usage_records` row for that model — which
-  `aggregate_model_signals` then averages in. A model whose recent window is
-  mostly cache hits can seed at a few hundred milliseconds `measured`, n in the
-  dozens, and outrank a genuinely faster peer that has never been cache-hit.
-  Mitigated today only because `semantic_cache.enabled: false` is the shipped
-  default (`config/serving.yaml`). No code fix is proposed here — it would need a
-  cache-hit marker on `usage_records` distinguishing a cache-served row from a
-  model-served one, which is out of scope for this slice. Folded into backlog B39.
+  unlike `tier_default`/`neutral`, which report the true count. Still
+  backlogged (B42) — unrelated to this slice.
+- **A semantic-cache hit still never pollutes latency, by construction rather
+  than by luck.** A cache hit never calls a backend, so `SignalStore`'s
+  observation methods are never invoked for it and no `endpoint_observations`
+  row is written — the mechanism that could have leaked the ~3 ms cache lookup
+  into a model's latency EWMA (old B39, boot-seeding from `usage_records`) no
+  longer exists, because seeding no longer reads `usage_records` at all (see
+  §4). The whole-trace-latency blending B39 originally described is resolved
+  the same way: the seed now replays `endpoint_observations`, which records
+  only `Gateway.run`'s own backend-only latency per hop, never a
+  pipeline-wide sum.
 - **Cached-token capture depends on the provider.** A provider that does not
   report `usage.prompt_tokens_details.cached_tokens` yields `0`, which is
   indistinguishable from a genuine cache miss.
@@ -354,6 +360,96 @@ positive value, or if `weights` names neither `availability` nor its deprecated
 alias `capacity`.
 
 ---
+
+## 4. The observation log — `endpoint_observations` (signal hardening, 2026-09-21)
+
+Every observation `SignalStore` applies — success, stream success, error — is also
+handed to a small `ObservationSink` (`app/routing/observations.py`) and, from there,
+persisted to a new table, `endpoint_observations`. It is the source boot seeding now
+replays, replacing the old `usage_records`-aggregation seed. Source of truth:
+`app/routing/observations.py`, `app/apps/models.py::EndpointObservation`,
+`app/apps/store.py` (`write_observations`, `load_seed_observations`,
+`prune_observations`), `app/main.py` (the lifespan wiring).
+
+### Columns
+
+| Column | Type | Meaning |
+|---|---|---|
+| `id` | int, PK, autoincrement | |
+| `ts` | timestamptz, indexed | wall-clock UTC of the observation |
+| `model` | str(100), indexed | model slug attempted |
+| `outcome` | str(8) | `ok` \| `error` |
+| `latency_ms` | float, nullable | backend-only latency; set only for a **non-streamed** `ok` |
+| `streamed` | bool | whether the attempt was a stream |
+| `ttft_ms` | float, nullable | time to first token; set only for a **streamed** `ok`; logged, never scored |
+
+### What it never holds
+
+**No application id, request id, tenant, or content.** It records endpoint health
+only — the same bounded-label stance as `GET /metrics`. It carries no PII, so it needs
+no redaction and no residency treatment. A cache hit never calls a backend, so it never
+writes a row here — the reason a semantic-cache hit can no longer pollute a latency
+estimate (see the caveat above).
+
+### The writer: one sink, a background flusher
+
+`SignalStore` calls `sink.put(...)` exactly once per observation it applies, so the log
+can never disagree with the live signal — there is no second place deciding what counts.
+`ObservationSink.put` is on the serving path: it appends to a bounded in-memory
+`deque(maxlen=signals.max_buffer)`, never blocks, never raises, and does no I/O. On
+overflow the oldest entry is dropped and a counter increments, logged at the next flush.
+
+A background task started in the app's lifespan (`app/main.py`, not `create_app`'s
+throwaway loop) drains the sink into the table every `signals.flush_interval_s` seconds
+(default `5.0`) in one transaction; a DB failure is logged at warning and the batch is
+dropped, never raised into serving. On shutdown, one final flush runs. Once per hour
+(loop time) it also prunes rows older than `signals.seed_window_hours`.
+
+**A crash between flushes loses up to `flush_interval_s` of buffered observations** —
+they were applied to the live signal (so the in-memory ranking already reflects them)
+but never reached the table, so a subsequent boot's replay won't see them either. Small
+and bounded, not zero.
+
+### Replay seeding
+
+At boot, `load_seed_observations` loads, per model, the most recent
+`signals.max_seed_obs_per_model` rows (default `200`) within `signals.seed_window_hours`
+(default `24`), concatenates across models, and orders the combined set ascending by
+`(ts, id)`. `SignalStore.replay` then re-applies each row through the store's own
+`observe_success` / `observe_stream_success` / `observe_error` methods, with the sink
+detached (replay must not re-log what it read), at a monotonic time that preserves each
+row's **true age** relative to boot (`mono_i = row.ts_wall - wall_offset`). That is what
+closes the older stale-as-fresh defect — the previous seed stamped every row "now",
+so a 23-hour-old average looked fresh and seeded availability had experienced zero
+decay; replay ages every row correctly, so the staleness cliff and availability decay
+apply to seeded state exactly as they do to live state. A seed failure is fail-soft: it
+logs a warning, leaves the store empty, and never blocks serving.
+
+Because the log holds the union of every replica's own observations (each replica writes
+to the same table), the *seed* a replica boots with is a reconstruction of a state no
+single replica held live — the live store stays per-replica (unchanged), but the seed is
+cross-replica.
+
+### First-boot behaviour
+
+The table is new; `create_all` creates it, no `ALTER`. **First boot after this deploy
+seeds nothing** — the log is empty. Every model reports `tier_default` (latency) /
+`neutral` (availability) until it accumulates `signals.min_samples` (default `5`) live
+observations, which is a numerically identical ranking to the pre-signals formula in the
+meantime (the identity property, §3 above). This is expected, not a regression — see
+`deploy/spark/README.md` §7.
+
+### `usage_records` also gains error rows
+
+Independent of the observation log, a failed request that previously wrote **no**
+`usage_records` row at all now writes exactly one row with `status = "error"`: model =
+the last attempted candidate, tier/provider resolved from the registry, all tokens and
+cost zero, `latency_ms` = wall time to failure. `usage_summary` and
+`usage_by_application` both gain `error_count`; every other figure (spend, tokens,
+latency percentiles, budgets) is still computed over `status == "ok"` rows only, asserted
+by test rather than assumed. No `error` row is written for a context-window overflow
+(400 — the client's request, not an outage), `NoEligibleCandidate` (a policy/routing
+outcome), or a client disconnect (already `cancelled`).
 
 ## Quick verification checklist
 

@@ -114,6 +114,39 @@ the audit trail in that sweep's task report.
 
 ---
 
+> **Update 2026-09-21 (signal hardening).** A follow-up slice closes **B38**,
+> **B39**, **B40** and **B41** — each marked `✅ RESOLVED` below with the
+> resolving commit and a short "how". Boot seeding no longer aggregates
+> `usage_records`; it replays a new per-attempt log (`endpoint_observations`)
+> at each row's true age, which is also what makes B38/B39 resolvable at all
+> (a real `error` row now exists to seed from, and the replayed quantity is
+> backend-only latency, never a whole-trace sum). One new low-severity item is
+> recorded as **B47**. See
+> [`docs/research/routing-signal-provenance.md`](../research/routing-signal-provenance.md)
+> §3A for the property that makes replay safe, and
+> [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
+> for the operator-facing contract.
+
+## B47 — a backend failure on a real-token stream after the client already disconnected writes no usage row at all
+
+**Severity:** low
+**Found:** 2026-09-21, signal hardening Task 7 self-review. **Open.**
+
+On a real-token stream (`stream_unverified` / `incremental_verify`), a backend failure
+that happens **after** the client has already disconnected surfaces inside
+`_finalize_stream`'s drain-on-disconnect path, not the new `_record_failed_stream`
+(which only runs when the *consuming* generator is still live to reach its `finally`).
+That drain path only logs the failure ("drain-on-disconnect failed") — no
+`usage_records` row is written at all, neither `cancelled` nor `error`. Pre-existing
+behaviour, not introduced by this branch; the ruling that shipped B38's error-row work
+deliberately left disconnect handling on the drain path unchanged.
+
+**Fix, if picked up.** Route that failure through `_record_failed` (or
+`_record_cancelled`, since the client is already gone) from within the drain's
+exception handler.
+
+---
+
 ## B46 — `counts_as_endpoint_unhealth` is tested in the interior of every branch and at none of its boundaries
 
 **Severity:** low (coverage gap; the classifier is correct today)
@@ -196,10 +229,10 @@ ranking preference, and the way to take a failing endpoint out of rotation is to
 it.
 
 **Related.** B37 (`/health` reports a dead model as available for 22 hours) and B38
-(a failed request writes no usage row, so availability never seeds) both make a dead
-endpoint *less* visible to this signal than it should be. A breaker (CLAUDE.md step 7,
-still unimplemented) is the other answer to the same problem, and a decision on one should
-be taken with the other in view.
+(a failed request writes no usage row, so availability never seeds — **resolved
+2026-09-21**, see below) both made a dead endpoint *less* visible to this signal than it
+should be; B37 still does. A breaker (CLAUDE.md step 7, still unimplemented) is the other
+answer to the same problem, and a decision on one should be taken with the other in view.
 
 ## B44 — `test_default_strategy_matches_pre_refactor_scoring` is an ordering-only oracle and reads like a stronger guarantee than it is
 
@@ -276,10 +309,24 @@ sibling paths and slightly understates what an operator would recover by flippin
 `signals.enabled` back on. Either report the true count, or document the `0` as "consulted",
 in the type.
 
-## B41 — streaming requests feed no routing-signal observations at all
+## B41 — streaming requests feed no routing-signal observations at all  ✅ RESOLVED (2026-09-21, `f582181`)
 
 **Severity:** low (bounded, deliberate; but it silently excludes whole applications)
-**Found:** 2026-09-19, P2a Task 7 ruling. **Open by decision.**
+**Found:** 2026-09-19, P2a Task 7 ruling. **Resolved 2026-09-21 (signal hardening).**
+`Gateway.run_stream` now observes its terminal chunk as an availability-only success
+(`observe_stream_success`, `app/gateway/gateway.py`) and logs time-to-first-token,
+without touching the latency EWMA — a stream's timing is a different quantity from a
+non-streaming call's backend latency, so mixing them would still corrupt it (reason 2
+below still holds; only reason 1, "no failure path", is closed). An endpoint error
+before or during the stream is now observed too, under the same
+`counts_as_endpoint_unhealth` classifier as non-streaming calls. A client disconnect or
+a stream ending without a terminal chunk still records nothing — neither is
+attributable to the endpoint.
+
+**Correction (2026-09-21):** the claim that Qwen Code / kit-gtm contribute nothing was
+wrong — every Qwen Code request carries `tools`, which raises `StreamFallback` before
+`run_stream`, so it is served by `Gateway.run()` and was always observed (live:
+`availability n=98 measured`). Only plain-chat streaming was blind.
 
 `SignalStore.observe_success` / `observe_error` are called only from
 `Gateway.run()` (`app/gateway/gateway.py`), never from `run_stream()`. A **streaming-only
@@ -303,14 +350,22 @@ ranked; in the second, the signal never exists at all.
    same quantity as a non-streaming call's latency, and mixing the two would corrupt
    the EWMA rather than enrich it.
 
-**Fix, if picked up.** Observe streaming separately — a distinct signal (time to *first*
-token is the comparable quantity) or a distinct store keyed on `(model, mode)` — with its
-own failure path. Do not simply call `observe_success` from `_agen()`'s terminal chunk.
+**Fixed as suggested.** Streaming is observed separately: availability moves on a
+stream's terminal chunk, time-to-first-token is logged (not scored), and latency is
+never touched — exactly the shape this entry recommended, not a call to
+`observe_success` from `_agen()`'s terminal chunk.
 
-## B40 — no clock seam on `RoutingStrategy.rank`, so staleness and availability decay can't be tested through the strategy
+## B40 — no clock seam on `RoutingStrategy.rank`, so staleness and availability decay can't be tested through the strategy  ✅ RESOLVED (2026-09-21, `6a60244`)
 
 **Severity:** low (test-seam gap; production behaviour is correct)
-**Found:** 2026-09-19, P2a Task 6 review. **Open.**
+**Found:** 2026-09-19, P2a Task 6 review. **Resolved 2026-09-21 (signal hardening).**
+`rank` on both the `RoutingStrategy` Protocol and `DefaultRoutingStrategy` gained
+`now: float | None = None`, forwarded to both `SignalStore` reads; `Router.select`
+passes nothing (production still reads the real clock). Every implementation and test
+fake — the Protocol, the default strategy, and the one test spy found by grepping
+`def rank` — changed in the same commit, per this entry's own warning about
+Protocol-signature drift. Two new tests exercise the staleness cliff and the
+availability decay *through* `rank(now=...)` for the first time.
 
 `DefaultRoutingStrategy.rank` calls `signals.latency(...)` / `signals.availability(...)`
 without the `now` argument those methods accept, so both read `time.monotonic()`. Production
@@ -320,15 +375,22 @@ staleness cliff or the availability decay *through* the strategy**, only at the 
 clock-mix: they had to observe on the real clock, because observing on a synthetic one and
 reading on the real one makes every measurement look stale.
 
-**Fix.** Add `now: float | None = None` to `rank` and to the `RoutingStrategy` Protocol and
-forward it to both store calls. Protocol-signature changes in this repo have been swallowed
-as `NoEligibleCandidate` before (see the OpenAI tool-calling fix) — every implementation and
-every test fake must change in the same commit.
+**Fixed as above.** Protocol-signature drift was the risk called out here; the fix
+changed the Protocol, the one implementation, and the one test fake in the same commit.
 
-## B39 — the whole-trace `latency_ms` sum blends escalation, compression and cache latency into the boot-seeded signal, not just escalation
+## B39 — the whole-trace `latency_ms` sum blends escalation, compression and cache latency into the boot-seeded signal, not just escalation  ✅ RESOLVED (2026-09-21, `3286adc`)
 
 **Severity:** low (affects the boot seed only; self-correcting as live observations accumulate)
-**Found:** 2026-09-19, P2a Task 7 review. **Widened 2026-09-19 (fix wave), still open.**
+**Found:** 2026-09-19, P2a Task 7 review. **Widened 2026-09-19 (fix wave). Resolved
+2026-09-21 (signal hardening).** Boot seeding no longer aggregates
+`usage_records.latency_ms` at all — that table is not read for seeding any more.
+Seeding now replays `endpoint_observations` (`app/apps/store.py::load_seed_observations`
++ `SignalStore.replay`), whose `latency_ms` column is populated only from
+`Gateway.run`'s own per-hop, backend-only `observe_success` call — the exact quantity
+the live signal already used, never a trace-wide sum. A semantic-cache hit never calls a
+backend, so it never writes a row to this log either (see B41's resolution note and
+`docs/research/routing-signal-provenance.md` §3A for "B39/B41 resolved by
+construction").
 
 `app/api/routes.py::_finalize` computes the persisted usage row's latency as
 
@@ -381,11 +443,29 @@ Mitigated today only because `semantic_cache.enabled: false` is the shipped defa
 a cache-served row from a model-served one — out of scope for this fix wave, same as the
 rest of B39.
 
-## B38 — no `usage_records` row is written for a failed request, so the availability signal can never seed
+**Resolved 2026-09-21, not by marking cache hits but by no longer reading
+`usage_records` for seeding at all.** A cache hit never calls a backend, so `SignalStore`
+never applies an observation for it and no `endpoint_observations` row exists to seed
+from — the pollution path is gone, not patched. `aggregate_model_signals` itself is
+deleted (`app/apps/store.py`), so there is no `usage_records` average left to blend
+anything into.
+
+## B38 — no `usage_records` row is written for a failed request, so the availability signal can never seed  ✅ RESOLVED (2026-09-21, `c3782cc`)
 
 **Severity:** low–medium (bounded by `min_samples` after each restart; but it makes one
 documented enum value dead)
-**Found:** 2026-09-19, P2a Task 7 review. **Open by decision.**
+**Found:** 2026-09-19, P2a Task 7 review. **Resolved 2026-09-21 (signal hardening).**
+A failed request now writes exactly one `usage_records` row with `status = "error"`
+(`app/api/routes.py::_record_failed`, wired into the non-stream 502 path, the keepalive
+SSE error path, and a real-token stream whose backend fails mid-generation) — model is
+the last attempted candidate (`BackendUnavailable.attempted_models[-1]`), tokens and cost
+are zero, `latency_ms` is wall time to failure. `usage_summary` / `usage_by_application`
+gain `error_count`; every other figure (spend, tokens, budgets, latency percentiles)
+stays computed over `ok` rows only, asserted by test. Availability now seeds correctly
+from these rows via the observation-log replay (§B39's resolution), closing the "always
+seeds at 1.0" consequence below. **Not fixed by this change:** a backend failure on a
+real-token stream *after* the client already disconnected still writes no row at all —
+filed separately as B47.
 
 `app/apps/store.aggregate_model_signals` seeds the P2a signal store from rows with
 `status IN ('ok','error')`. That filter is correct against the documented status enum —
@@ -409,28 +489,20 @@ invisible to the meter.** They do not appear in the usage table, the cost dashbo
 any per-app aggregate. An application whose endpoint is down looks, in the console, like
 an application that sent no traffic.
 
-**Fix, roughly.** Meter failed requests — write an `error` row from the exception path
-with the model that was attempted, zero tokens and zero cost. That changes what
-`usage_records` *means* for budget accounting and the dashboard (does an errored request
-count against anything? how is a failover counted — one row or several?), which is a
-feature with its own review surface, not a line in a routing slice. Decide those questions
-first.
+**Fix, roughly.** ~~Meter failed requests — write an `error` row from the exception path
+with the model that was attempted, zero tokens and zero cost.~~ Done as described above.
 
-**Latent latency/samples inversion, to fix in the same pass as B38 (found in the fix
-wave, 2026-09-19).** `aggregate_model_signals` (`app/apps/store.py:125-145`) averages
-`avg_latency_ms` over `ok` rows only, correctly, but reports `samples` as
-`count(ok) + count(error)` for **both** signals it produces. If a model's window were ever
-all-`error` — impossible today only because nothing writes `status = 'error'`, i.e. B38
-itself — the `ok`-only average would compute over zero rows (SQL `AVG` of an empty/NULL
-set), coalesce to `0.0`, while `samples` would still report the full error count. E.g.
-`SeedRow(avg_latency_ms=0.0, error_rate=1.0, samples=40)` seeds as
-`SignalValue(0.0, "measured", 40)` for latency — the **strongest possible latency
-preference**, `measured` with 40 samples, for a completely dead endpoint, at the same time
-availability correctly seeds it as terrible. Whoever fixes B38 (starts writing `error`
-rows) must either key `samples` per-signal (`ok`-count for latency, `ok+error`-count for
-availability) or guard the latency average so an all-error window reports `tier_default`
-instead of a spurious `measured` zero. Do not fix B38 without also fixing this — it would
-ship the inversion live.
+**Latent latency/samples inversion, found in the fix wave, 2026-09-19. Resolved
+2026-09-21 (signal hardening) — not by patching `aggregate_model_signals`, but by
+deleting it.** The inversion this note warned about (`samples` counting `ok+error` while
+the average silently computed over `ok` rows only, so an all-error window could seed a
+dead endpoint as `measured` at `0.0` ms — the strongest possible preference for the worst
+candidate) lived entirely inside `aggregate_model_signals`, which no longer exists.
+Seeding now replays `endpoint_observations` directly: `SignalStore.replay` re-applies
+each row through the *same* `observe_success` / `observe_error` methods live traffic
+uses, so each signal's sample count comes from its own observations (an `error` row
+never contributes to the latency count, because `observe_error` never touches latency
+state) — there is no separate aggregation step left to get this wrong in.
 
 ## B37 — `/health` reports a model as available for 22 hours after its endpoint died
 
