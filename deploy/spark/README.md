@@ -342,6 +342,13 @@ docker compose -p routeforge-spark down -v              # stop and WIPE the data
 `-p routeforge-spark` on every command — the project name is what ties them to this
 stack, and it must match what you started with.
 
+**After the signal-hardening deploy, first boot seeds nothing.** `endpoint_observations`
+is a new table (`create_all` creates it; no `ALTER` needed) and it starts empty, so there
+is nothing yet for boot seeding to replay. Every model reports `latency.src:
+"tier_default"` / `availability.src: "neutral"` in `policy.scoring` for its first five
+observations (`signals.min_samples`), then flips to `measured` as live traffic accumulates
+— this is expected on the first boot after the upgrade, not a regression.
+
 **Moving the checkout** (e.g. into `~/projects/`) is safe: the database is the
 named volume `routeforge-spark_rf-db`, keyed by the project name, not the path,
 and there are no bind mounts. Stop, move, start from the new path — `up -d`

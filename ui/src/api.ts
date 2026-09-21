@@ -350,6 +350,9 @@ export interface AdminApp {
 export interface UsageSummary {
   count: number;
   rejected_count: number;
+  // Requests that failed on the backend (status "error", spec §4 / B38).
+  // Counted here only -- never in count, spend, tokens or latency.
+  error_count: number;
   total_usd: number;
   baseline_usd: number;
   total_tokens: number;
@@ -376,6 +379,7 @@ export interface UsageByApp {
   application_id: string;
   count: number;
   rejected_count: number;
+  error_count: number; // backend failures; not in count or spend (see UsageSummary)
   total_usd: number;
   baseline_usd: number;
   total_tokens: number;

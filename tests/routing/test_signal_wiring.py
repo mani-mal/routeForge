@@ -7,25 +7,23 @@ tests/test_apps_store.py.
 from __future__ import annotations
 
 import asyncio
-import datetime as dt
 import time
-import uuid
 
 import pytest
 
 from app.apps.bootstrap import seed_demo_apps
 from app.apps.db import Database
 from app.apps import store
-from app.apps.models import UsageRecord, utcnow
 from app.apps.policy import AppPolicyView
 from app.compression.ccr import CCRStore
 from app.config.loader import load_settings
-from app.errors import ContextWindowExceeded
+from app.errors import BackendUnavailable, ContextWindowExceeded
 from app.gateway.gateway import Gateway, counts_as_endpoint_unhealth
 from app.models import ChatRequest, ExecutionPolicyContext, Message
 from app.pipeline import Pipeline, PipelineRejected
 from app.policy.detectors import make_detector
 from app.policy.gate import Gate
+from app.routing.observations import Observation, ObservationSink
 from app.routing.router import Router
 from app.routing.signals import SignalStore
 from tests._litellm_fake import _DeterministicLiteLLM, make_test_registry
@@ -150,6 +148,83 @@ def test_a_rejected_request_never_reaches_the_gateway_so_never_touches_signals()
     assert store_.snapshot() == {}
 
 
+def test_backend_unavailable_carries_attempted_models_in_order():
+    """Task 6 (B41): every candidate the gateway tried before giving up is on
+    `BackendUnavailable.attempted_models`, in the order it tried them -- the
+    route will meter `attempted_models[-1]` on its `error` usage row."""
+    calls: list[str] = []
+
+    class _AlwaysFails(_DeterministicLiteLLM):
+        async def generate(self, model, messages, price, tier, hint, tools=None,
+                           tool_choice=None, params=None):
+            calls.append(model)
+            raise RuntimeError("down")
+
+    gw = Gateway(S, _AlwaysFails(S), Router(S, registry=REG), REG)
+    msgs = [Message(role="user", content="hello")]
+    with pytest.raises(BackendUnavailable) as ei:
+        asyncio.run(gw.run(_ctx({"onprem", "azure", "bedrock"}), msgs, 20, 0.1, {}))
+
+    assert ei.value.attempted_models == tuple(calls)
+    assert len(ei.value.attempted_models) >= 1
+
+
+class _FailsEveryCall(_DeterministicLiteLLM):
+    def __init__(self, s, calls: list[str]) -> None:
+        super().__init__(s)
+        self._calls = calls
+
+    async def generate(self, model, messages, price, tier, hint, tools=None,
+                       tool_choice=None, params=None):
+        self._calls.append(model)
+        raise RuntimeError("down")
+
+
+def _expected_failover_order(ctx, n: int) -> tuple[str, ...]:
+    """The router's own ranking under successive exclusion -- the order the
+    gateway must try candidates in."""
+    router, tried = Router(S, registry=REG), []
+    for _ in range(n):
+        tried.append(router.select(ctx, 20, 0.1,
+                                   exclude=frozenset(tried)).chosen.name)
+    return tuple(tried)
+
+
+def test_two_failed_candidates_are_named_in_the_order_tried():
+    """Exactly two reachable candidates, both fail: the router runs out
+    (every reachable candidate excluded) and `attempted_models` is exactly
+    those two, in the router's ranking order."""
+    ctx = _ctx({"onprem"})
+    assert ctx.allowed_models == {"local-8b", "local-32b"}
+    calls: list[str] = []
+    gw = Gateway(S, _FailsEveryCall(S, calls), Router(S, registry=REG), REG)
+    with pytest.raises(BackendUnavailable) as ei:
+        asyncio.run(gw.run(ctx, [Message(role="user", content="hello")],
+                           20, 0.1, {}))
+
+    expected = _expected_failover_order(ctx, 2)
+    assert set(expected) == {"local-8b", "local-32b"}
+    assert ei.value.attempted_models == expected == tuple(calls)
+
+
+def test_failover_budget_exhaustion_names_the_attempt_even_with_peers_left():
+    """The `failover_attempts > max_failover_attempts` branch: with a failover
+    budget of zero, the first failure ends the request although a second
+    candidate is still reachable -- and that one attempt is named."""
+    s0 = S.model_copy(update={
+        "routing": S.routing.model_copy(update={"max_failover_attempts": 0})})
+    ctx = _ctx({"onprem"})
+    calls: list[str] = []
+    gw = Gateway(s0, _FailsEveryCall(s0, calls), Router(s0, registry=REG), REG)
+    with pytest.raises(BackendUnavailable) as ei:
+        asyncio.run(gw.run(ctx, [Message(role="user", content="hello")],
+                           20, 0.1, {}))
+
+    assert len(ctx.allowed_models) == 2     # a peer remained untried
+    assert ei.value.attempted_models == _expected_failover_order(ctx, 1) == \
+        tuple(calls)
+
+
 def test_router_decision_carries_the_scoring_record():
     d = Router(S, registry=REG).select(
         _ctx({"onprem", "azure", "bedrock"}), tokens_after=20, complexity=0.1)
@@ -157,108 +232,171 @@ def test_router_decision_carries_the_scoring_record():
     assert d.scoring.ordered[0].candidate.name == d.chosen.name
 
 
-# -- boot seeding: app/apps/store.aggregate_model_signals -----------------
+# -- the observation log: app/apps/store.write/load_seed/prune_observations
 
 def _fresh_db() -> Database:
     return Database(url="sqlite+aiosqlite://", seed=seed_demo_apps)
 
 
-def _row(application_id, model, status, latency_ms, ts):
-    return UsageRecord(
-        id=uuid.uuid4().hex, application_id=application_id,
-        request_id=uuid.uuid4().hex, ts=ts, model=model, provider="onprem",
-        tier="cheap", prompt_tokens=1, completion_tokens=1, total_tokens=2,
-        cost_usd=0.0, baseline_usd=0.0, latency_ms=latency_ms,
-        sensitivity="public", onprem_only=False, status=status)
+def _obs(ts, model="m", outcome="ok", latency=100.0, streamed=False, ttft=None):
+    return Observation(ts, model, outcome,
+                       latency if outcome == "ok" and not streamed else None,
+                       streamed, ttft)
 
 
-def test_seed_aggregate_counts_ok_and_error_averages_latency_over_ok_only():
+def test_observations_round_trip_through_the_table():
     db = _fresh_db()
-    now = utcnow()
+    now = time.time()
+    written = [_obs(now - 30), _obs(now - 20, outcome="error"),
+               _obs(now - 10, streamed=True, ttft=42.0)]
 
     async def go():
         async with db.session() as s:
-            s.add_all([
-                _row("acme", "local-8b", "ok", 100.0, now),
-                _row("acme", "local-8b", "ok", 300.0, now),
-                _row("acme", "local-8b", "error", 999.0, now),
-            ])
+            await store.write_observations(s, written)
             await s.commit()
-            return await store.aggregate_model_signals(s, since_hours=24)
+            return await store.load_seed_observations(s, since_hours=1, per_model_cap=100)
+
+    got = asyncio.run(go())
+    assert [(o.model, o.outcome, o.latency_ms, o.streamed, o.ttft_ms) for o in got] == \
+           [(o.model, o.outcome, o.latency_ms, o.streamed, o.ttft_ms) for o in written]
+    assert [round(o.ts, 3) for o in got] == [round(o.ts, 3) for o in written]
+
+
+def test_seed_load_caps_per_model_keeping_the_most_recent_and_orders_ascending():
+    db = _fresh_db()
+    now = time.time()
+    rows = [_obs(now - 100 + i, model="a") for i in range(10)] + \
+           [_obs(now - 50 + i, model="b") for i in range(3)]
+
+    async def go():
+        async with db.session() as s:
+            await store.write_observations(s, rows)
+            await s.commit()
+            return await store.load_seed_observations(s, since_hours=1, per_model_cap=4)
+
+    got = asyncio.run(go())
+    assert [o.model for o in got].count("a") == 4
+    assert [o.model for o in got].count("b") == 3
+    a_ts = [o.ts for o in got if o.model == "a"]
+    assert min(a_ts) == pytest.approx(now - 100 + 6, abs=1e-3)   # the 4 newest
+    assert [o.ts for o in got] == sorted(o.ts for o in got)
+
+
+def test_seed_load_breaks_identical_timestamp_ties_by_insertion_order():
+    """`SignalStore.replay` requires ascending `ts`, but is silent on ties --
+    two observations can share a `ts` (same wall-clock second). The per-model
+    query orders `(ts desc, id desc)` to grab the newest N; without an `id`
+    ascending tie-break in the final sort, a stable sort on `ts` alone would
+    leave same-`ts` rows in that id-DESCENDING order, i.e. reversed relative
+    to how they were written."""
+    db = _fresh_db()
+    now = time.time()
+    same_ts = now - 10
+    first = _obs(same_ts, model="a", latency=111.0)
+    interleaved = _obs(same_ts, model="b", latency=222.0)   # a different model, same ts
+    second = _obs(same_ts, model="a", latency=333.0)
+
+    async def go():
+        async with db.session() as s:
+            await store.write_observations(s, [first, interleaved, second])
+            await s.commit()
+            return await store.load_seed_observations(s, since_hours=1, per_model_cap=10)
+
+    got = asyncio.run(go())
+    a_latencies = [o.latency_ms for o in got if o.model == "a"]
+    assert a_latencies == [111.0, 333.0]   # insertion (id) order, not id-desc
+
+
+def test_seed_load_excludes_rows_outside_the_window():
+    db = _fresh_db()
+    now = time.time()
+
+    async def go():
+        async with db.session() as s:
+            await store.write_observations(s, [_obs(now - 7200), _obs(now - 60)])
+            await s.commit()
+            return await store.load_seed_observations(s, since_hours=1, per_model_cap=10)
+
+    assert len(asyncio.run(go())) == 1
+
+
+def test_prune_deletes_only_rows_past_the_window():
+    db = _fresh_db()
+    now = time.time()
+
+    async def go():
+        async with db.session() as s:
+            await store.write_observations(s, [_obs(now - 7200), _obs(now - 60)])
+            await s.commit()
+            n = await store.prune_observations(s, older_than_hours=1)
+            await s.commit()
+            left = await store.load_seed_observations(s, since_hours=24, per_model_cap=10)
+            return n, left
+
+    n, left = asyncio.run(go())
+    assert n == 1 and len(left) == 1
+
+
+def test_replay_through_the_table_reproduces_the_live_store():
+    """Spec §3.5 end to end: what a live store logs, written to
+    `endpoint_observations`, loaded back and replayed into a store with a
+    different monotonic origin, reports the same signals at the same true
+    age. Values agree to rel 1e-9 rather than exactly because the table
+    stores `ts` to the microsecond (see docs/research/routing-signal-
+    provenance.md §3A)."""
+    import random
+
+    from app.config.schema import SignalsCfg
+
+    cfg = SignalsCfg(min_samples=3, half_life_s=600.0, staleness_s=1000.0)
+    sink = ObservationSink(100_000)
+    live = SignalStore(cfg, sink=sink)      # wall_offset derived from time.time()
+    rng = random.Random(20260921)
+    # ~3000 s of history ending just before "now", so every row is recent
+    # enough for the 24 h seed window.
+    t = time.monotonic() - 3100.0
+    for _ in range(400):
+        t += rng.uniform(0.5, 14.5)
+        model = rng.choice(("local-8b", "local-32b"))
+        kind = rng.random()
+        if kind < 0.6:
+            live.observe_success(model, rng.uniform(20.0, 4000.0), now=t)
+        elif kind < 0.8:
+            live.observe_stream_success(model, rng.uniform(5.0, 500.0), now=t)
+        else:
+            live.observe_error(model, streamed=rng.random() < 0.3, now=t)
+    t_end = t
+
+    db = _fresh_db()
+
+    async def go():
+        async with db.session() as s:
+            await store.write_observations(s, sink.drain())
+            await s.commit()
+            return await store.load_seed_observations(
+                s, since_hours=24, per_model_cap=10**6)
 
     rows = asyncio.run(go())
-    assert len(rows) == 1
-    r = rows[0]
-    assert r.model == "local-8b"
-    assert r.avg_latency_ms == pytest.approx(200.0)   # (100+300)/2, error excluded
-    assert r.samples == 3                             # 2 ok + 1 error
-    assert r.error_rate == pytest.approx(1 / 3)
+    assert len(rows) == 400
+    shift = 12345.0
+    booted = SignalStore(cfg, wall_offset=live.wall_offset + shift)
+    booted.replay(rows)
 
-
-def test_seed_aggregate_excludes_rejected_rows():
-    """A rejection is the POLICY GATE doing its job -- not endpoint unhealth
-    (CLAUDE.md rule 2a: a protection posture must never influence routing
-    preference)."""
-    db = _fresh_db()
-    now = utcnow()
-
-    async def go():
-        async with db.session() as s:
-            s.add_all([
-                _row("acme", "local-8b", "ok", 100.0, now),
-                _row("acme", "local-8b", "rejected", 5.0, now),
-            ])
-            await s.commit()
-            return await store.aggregate_model_signals(s, since_hours=24)
-
-    rows = asyncio.run(go())
-    assert len(rows) == 1
-    r = rows[0]
-    assert r.samples == 1
-    assert r.error_rate == pytest.approx(0.0)
-
-
-def test_seed_aggregate_excludes_rows_outside_the_window():
-    db = _fresh_db()
-    stale = utcnow() - dt.timedelta(hours=100)
-
-    async def go():
-        async with db.session() as s:
-            s.add(_row("acme", "old-model", "ok", 50.0, stale))
-            await s.commit()
-            return await store.aggregate_model_signals(s, since_hours=24)
-
-    rows = asyncio.run(go())
-    assert rows == []
-
-
-def test_seed_aggregate_uses_monotonic_clock_for_last_ts():
-    """The store runs on time.monotonic(); a wall-clock timestamp would make
-    every seeded row instantly stale."""
-    db = _fresh_db()
-    now = utcnow()
-
-    async def go():
-        async with db.session() as s:
-            s.add(_row("acme", "local-8b", "ok", 100.0, now))
-            await s.commit()
-            return await store.aggregate_model_signals(s, since_hours=24)
-
-    before = time.monotonic()
-    rows = asyncio.run(go())
-    after = time.monotonic()
-    assert len(rows) == 1
-    assert before <= rows[0].last_ts <= after
-
-
-def test_seed_aggregate_empty_when_no_rows_in_window():
-    db = _fresh_db()
-
-    async def go():
-        async with db.session() as s:
-            return await store.aggregate_model_signals(s, since_hours=24)
-
-    assert asyncio.run(go()) == []
+    seen: set[str] = set()
+    for dt in (0.5, 30.0, 700.0, 2500.0):
+        now = t_end + dt
+        for m in ("local-8b", "local-32b"):
+            for tier in ("cheap", "mid"):
+                a = live.latency(m, tier, now=now)
+                b = booted.latency(m, tier, now=now - shift)
+                assert (b.source, b.samples) == (a.source, a.samples)
+                assert b.value == pytest.approx(a.value, rel=1e-9)
+                seen.add(a.source)
+            a = live.availability(m, now=now)
+            b = booted.availability(m, now=now - shift)
+            assert (b.source, b.samples) == (a.source, a.samples)
+            assert b.value == pytest.approx(a.value, rel=1e-9)
+    assert seen == {"measured", "tier_default"}   # both sides of staleness covered
 
 
 # -- app/main.py wiring: the SAME store is shared by create_app()'s Router
@@ -290,3 +428,263 @@ def test_create_app_wires_one_shared_signal_store_into_router_and_gateway():
         # store app.state.signals points at -- proof the injected reference,
         # not a copy, is what the running pipeline actually uses.
         assert c.app.state.signals.snapshot()
+
+
+# -- Task 5: lifespan wiring -- sink, replay seed, flusher, shutdown flush --
+
+def _prewrite_observations(url: str, model: str, n: int, *, now: float | None = None
+                           ) -> None:
+    """Write `n` recent `ok` observations for `model` straight to the table,
+    via a SEPARATE `Database` on the same file URL -- never `app.state.db`,
+    and never inside `create_app`'s throwaway loop. Creates the schema on
+    first use (`Database.session()` calls `ensure_ready()`)."""
+    now = time.time() if now is None else now
+    db = Database(url=url, seed=None)
+    obs = [Observation(now - (n - i), model, "ok", 100.0 + i, False, None)
+          for i in range(n)]
+
+    async def go():
+        async with db.session() as s:
+            await store.write_observations(s, obs)
+            await s.commit()
+
+    asyncio.run(go())
+
+
+def test_boot_replays_the_log_so_a_model_is_measured_without_live_traffic(
+        tmp_path, monkeypatch):
+    """End to end through the real lifespan: rows in endpoint_observations
+    before boot -> the store reports `measured` after startup."""
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'rf.db'}"
+    monkeypatch.setenv("DATABASE_URL", url)
+    _prewrite_observations(url, "local-8b", 6)
+
+    with TestClient(create_app()) as c:
+        sig = c.app.state.signals.latency("local-8b", "cheap")
+        assert sig.source == "measured"
+        assert sig.samples == 6
+
+
+def test_a_served_request_reaches_the_table_after_a_flush(tmp_path, monkeypatch):
+    """Exit the `with` block (shutdown flush) and read the table back with a
+    fresh `Database` on the same file URL -- also exercises the final flush."""
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'rf.db'}"
+    monkeypatch.setenv("DATABASE_URL", url)
+
+    with TestClient(create_app()) as c:
+        r = c.post("/v1/chat/completions",
+                   headers={"Authorization": "Bearer demo-key"},
+                   json={"messages": [{"role": "user", "content": "hi"}]})
+        assert r.status_code == 200
+        served = list(c.app.state.signals.snapshot())   # the one model observed
+
+    async def _read():
+        db = Database(url=url, seed=None)
+        async with db.session() as s:
+            return await store.load_seed_observations(
+                s, since_hours=24, per_model_cap=1000)
+
+    rows = asyncio.run(_read())
+    assert len(rows) == 1
+    (row,) = rows
+    assert row.outcome == "ok"
+    assert row.model == served[0]
+    assert row.streamed is False
+    assert row.latency_ms is not None
+
+
+def test_flush_swallows_a_db_failure():
+    from app.main import flush_observations
+
+    sink = ObservationSink(10)
+    sink.put(Observation(time.time(), "m", "ok", 1.0, False, None))
+
+    class _BrokenDB:
+        def session(self):
+            raise RuntimeError("db down")
+
+    assert asyncio.run(flush_observations(_BrokenDB(), sink)) == 0
+
+
+def test_seed_failure_leaves_an_empty_store_and_the_app_serving(monkeypatch):
+    """Monkeypatch store.load_seed_observations to raise; the app starts,
+    the store is empty, and a request is served 200."""
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+
+    async def _boom(*a, **kw):
+        raise RuntimeError("seed boom")
+
+    monkeypatch.setattr(store, "load_seed_observations", _boom)
+
+    with TestClient(create_app()) as c:
+        assert c.app.state.signals.snapshot() == {}
+        r = c.post("/v1/chat/completions",
+                   headers={"Authorization": "Bearer demo-key"},
+                   json={"messages": [{"role": "user", "content": "hi"}]})
+        assert r.status_code == 200
+
+# -- the flusher's lifecycle: app/main.py start_observations/stop_observations.
+# Driven on a stand-in `app` (only `.state` is read) so each step can be
+# sequenced deterministically. Every wait is bounded -- a regression must fail,
+# never hang the suite.
+
+_WAIT_S = 5.0
+
+
+def _flusher_app(db, sink, *, interval: float = 0.01):
+    from types import SimpleNamespace
+    cfg = S.routing.signals.model_copy(update={"flush_interval_s": interval})
+    state = SimpleNamespace(
+        settings=SimpleNamespace(routing=SimpleNamespace(signals=cfg)),
+        db=db, observation_sink=sink)
+    return SimpleNamespace(state=state)
+
+
+def test_shutdown_during_an_in_flight_flush_does_not_lose_the_batch(monkeypatch):
+    """A shutdown that lands while the flusher awaits its DB commit must let
+    that commit finish: the batch was already drained from the sink, so
+    cancelling mid-flush would lose it for good (the final flush sees an
+    empty sink)."""
+    from contextlib import asynccontextmanager
+
+    from app import main
+
+    written: list[Observation] = []
+    events: dict[str, asyncio.Event] = {}
+
+    class _GatedSession:
+        def __init__(self) -> None:
+            self.pending: list[Observation] = []
+
+        async def commit(self) -> None:
+            events["entered"].set()
+            await events["gate"].wait()
+            written.extend(self.pending)
+
+    class _GatedDB:
+        @asynccontextmanager
+        async def session(self):
+            yield _GatedSession()
+
+    async def _fake_write(s, batch):
+        s.pending.extend(batch)
+
+    async def _fake_prune(s, *, older_than_hours):
+        return 0
+
+    monkeypatch.setattr(main.apps_store, "write_observations", _fake_write)
+    monkeypatch.setattr(main.apps_store, "prune_observations", _fake_prune)
+    sink = ObservationSink(10)
+    obs = Observation(time.time(), "m", "ok", 1.0, False, None)
+
+    async def go():
+        events["entered"] = asyncio.Event()
+        events["gate"] = asyncio.Event()
+        app = _flusher_app(_GatedDB(), sink)
+        main.start_observations(app)
+        sink.put(obs)
+        await asyncio.wait_for(events["entered"].wait(), _WAIT_S)  # flush in flight
+        stopping = asyncio.create_task(main.stop_observations(app))
+        await asyncio.sleep(0.05)       # shutdown now waits on the flusher
+        events["gate"].set()            # the DB commit completes
+        await asyncio.wait_for(stopping, _WAIT_S + 6)
+
+    asyncio.run(go())
+    assert written == [obs]
+
+
+def test_a_dead_flusher_is_logged_and_shutdown_still_flushes(monkeypatch, caplog):
+    """A flusher that died with an exception must be logged when it dies, must
+    not make shutdown raise, and must not stop the final flush."""
+    from app import main
+
+    async def _dies(app):
+        raise RuntimeError("flusher boom")
+
+    monkeypatch.setattr(main, "_observation_loop", _dies)
+    db = _fresh_db()
+    sink = ObservationSink(10)
+    obs = Observation(time.time(), "m", "ok", 7.0, False, None)
+
+    async def go():
+        app = _flusher_app(db, sink)
+        main.start_observations(app)
+        await asyncio.sleep(0.01)       # the flusher dies
+        sink.put(obs)                   # buffered after startup
+        await asyncio.wait_for(main.stop_observations(app), _WAIT_S + 6)
+        async with db.session() as s:
+            return await store.load_seed_observations(s, since_hours=1,
+                                                      per_model_cap=10)
+
+    with caplog.at_level("WARNING", logger="serving.routing"):
+        rows = asyncio.run(go())
+    assert [(o.model, o.latency_ms) for o in rows] == [("m", 7.0)]
+    assert "observation flusher died" in caplog.text
+
+
+def _prune_spy(monkeypatch, *, raises: bool):
+    from app import main
+    calls: list[float] = []
+
+    async def _spy(s, *, older_than_hours):
+        calls.append(older_than_hours)
+        if raises:
+            raise RuntimeError("prune boom")
+        return 0
+
+    monkeypatch.setattr(main.apps_store, "prune_observations", _spy)
+    return calls
+
+
+async def _until(pred, timeout: float = _WAIT_S) -> None:
+    async def poll():
+        while not pred():
+            await asyncio.sleep(0.005)
+    await asyncio.wait_for(poll(), timeout)
+
+
+def test_the_first_flusher_iteration_prunes_then_not_again_within_the_hour(
+        monkeypatch):
+    """A process living under an hour still prunes: the first iteration is due."""
+    from app import main
+
+    calls = _prune_spy(monkeypatch, raises=False)
+
+    async def go():
+        app = _flusher_app(_fresh_db(), ObservationSink(10))
+        main.start_observations(app)
+        await _until(lambda: calls)
+        await asyncio.sleep(0.1)        # ~10 more intervals
+        await asyncio.wait_for(main.stop_observations(app), _WAIT_S + 6)
+
+    asyncio.run(go())
+    assert len(calls) == 1
+
+
+def test_a_prune_failure_does_not_stop_the_flusher(monkeypatch):
+    from app import main
+
+    calls = _prune_spy(monkeypatch, raises=True)
+    sink = ObservationSink(10)
+
+    async def go():
+        app = _flusher_app(_fresh_db(), sink)
+        main.start_observations(app)
+        await _until(lambda: calls)     # the prune has failed
+        sink.put(Observation(time.time(), "m", "ok", 1.0, False, None))
+        await _until(lambda: not sink._buf)     # a later flush took it
+        assert not app.state.observation_task.done()
+        await asyncio.wait_for(main.stop_observations(app), _WAIT_S + 6)
+
+    asyncio.run(go())
+    assert len(calls) == 1

@@ -3,6 +3,7 @@ import pytest
 
 from app.config.lint import ConfigLintError, enforce, lint_settings
 from app.config.loader import load_settings
+from app.config.schema import SignalsCfg
 
 
 def test_current_config_is_clean():
@@ -247,3 +248,34 @@ def test_lint_rejects_weights_with_no_availability():
     s = copy.deepcopy(load_settings())
     s.routing.weights.pop("availability")
     assert any(e.startswith("WEIGHT_MISSING") for e in lint_settings(s))
+
+
+# --- Signals writer knobs (observation log, task 1) -------------------------
+
+def _lint_with_signals(**overrides):
+    """Helper to test signals config knobs: mirror existing test construction."""
+    s = copy.deepcopy(load_settings())
+    for k, v in overrides.items():
+        setattr(s.routing.signals, k, v)
+    return lint_settings(s)
+
+
+@pytest.mark.parametrize("field,value,code", [
+    ("flush_interval_s", 0.0, "SIGNALS_FLUSH_INTERVAL_NOT_POSITIVE"),
+    ("flush_interval_s", -1.0, "SIGNALS_FLUSH_INTERVAL_NOT_POSITIVE"),
+    ("max_buffer", 0, "SIGNALS_MAX_BUFFER_NOT_POSITIVE"),
+    ("max_seed_obs_per_model", 0, "SIGNALS_MAX_SEED_OBS_NOT_POSITIVE"),
+])
+def test_signals_writer_knobs_must_be_positive(field, value, code):
+    errs = _lint_with_signals(**{field: value})
+    assert any(e.startswith(code) for e in errs)
+
+
+def test_signals_writer_knob_defaults_pass_lint():
+    errs = _lint_with_signals()
+    assert not [e for e in errs if e.startswith("SIGNALS_")]
+
+
+def test_signals_writer_knob_defaults():
+    c = SignalsCfg()
+    assert (c.flush_interval_s, c.max_buffer, c.max_seed_obs_per_model) == (5.0, 10000, 200)

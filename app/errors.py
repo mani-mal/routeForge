@@ -20,7 +20,15 @@ class NoEligibleCandidate(ValueError):
 class BackendUnavailable(RuntimeError):
     """Every reachable tier's backend failed (timeout/connection/provider
     unreachable). Route maps -> 502. Subclasses RuntimeError for back-compat
-    with existing pytest.raises(RuntimeError) gateway callers."""
+    with existing pytest.raises(RuntimeError) gateway callers.
+
+    `attempted_models` lists the candidates the gateway tried, in order
+    (signal hardening, spec §4) -- the route meters the last one on its
+    `error` usage row."""
+
+    def __init__(self, *args, attempted_models: tuple[str, ...] = ()) -> None:
+        super().__init__(*args)
+        self.attempted_models = tuple(attempted_models)
 
 
 class ContextWindowExceeded(ValueError):

@@ -104,13 +104,19 @@ class RoutingStrategy(Protocol):
              quality_resolver: "QualityResolver",
              signals: "SignalStore",
              signals_cfg: "SignalsCfg",
-             cached_pricing: dict[str, str] | None = None) -> RankResult:
+             cached_pricing: dict[str, str] | None = None,
+             now: float | None = None) -> RankResult:
         """Order `eligible` best-first and report how each score was reached.
 
         MUST return exactly the same members it was given, only reordered -- a
         strategy ranks, it never filters-in. `eligible` is already the
         post-residency/scope/tier/budget-filtered set (see module docstring);
         `signals` can reorder it but can never add to or remove from it.
+
+        `now` is a clock seam forwarded to `signals.latency`/`signals.availability`
+        (app/routing/signals.py) -- `None` uses the real clock. It exists so
+        staleness and availability decay can be tested through the strategy
+        without sleeping (B40).
         """
         ...
 
@@ -138,14 +144,14 @@ class DefaultRoutingStrategy:
     """
 
     def rank(self, eligible, *, ctx, tokens_after, weights, quality_resolver,
-             signals, signals_cfg, cached_pricing=None) -> RankResult:
+             signals, signals_cfg, cached_pricing=None, now=None) -> RankResult:
         max_cost = max((est for _, est in eligible), default=0.0)
         scored: list[ScoredCandidate] = []
 
         for cand, est in eligible:
             q = quality_resolver.resolve(cand.name)
-            lat = signals.latency(cand.name, cand.tier)
-            avail = signals.availability(cand.name)
+            lat = signals.latency(cand.name, cand.tier, now=now)
+            avail = signals.availability(cand.name, now=now)
 
             cost_norm = est / max_cost if max_cost > 0 else 0.0
             lat_norm = min(lat.value / signals_cfg.latency_scale_ms,

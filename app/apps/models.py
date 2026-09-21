@@ -243,6 +243,22 @@ class UsageRecord(Base):
     status: Mapped[str] = mapped_column(String(16), default="ok")  # ok|rejected|error
 
 
+class EndpointObservation(Base):
+    """One backend attempt's outcome (signal hardening, spec §3.1). The
+    persisted half of the live SignalStore's input; boot seeding replays it.
+    Endpoint health only -- no tenant, request id or content, by design."""
+
+    __tablename__ = "endpoint_observations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ts: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    model: Mapped[str] = mapped_column(String(100), index=True)
+    outcome: Mapped[str] = mapped_column(String(8))          # ok | error
+    latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    streamed: Mapped[bool] = mapped_column(Boolean, default=False)
+    ttft_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
 class RequestSnapshot(Base):
     """Durable, redaction-safe snapshot of one served request for the operator
     console (list/detail/stats/fleet + live stream rebuild). Replaces the

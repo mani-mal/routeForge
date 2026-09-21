@@ -140,12 +140,12 @@ class _SpyStrategy:
         self.seen: list[tuple[PoolCandidate, float]] = []
 
     def rank(self, eligible, *, ctx, tokens_after, weights, quality_resolver,
-             signals, signals_cfg, cached_pricing=None):
+             signals, signals_cfg, cached_pricing=None, now=None):
         self.seen = list(eligible)
         return DefaultRoutingStrategy().rank(
             eligible, ctx=ctx, tokens_after=tokens_after, weights=weights,
             quality_resolver=quality_resolver, signals=signals,
-            signals_cfg=signals_cfg, cached_pricing=cached_pricing)
+            signals_cfg=signals_cfg, cached_pricing=cached_pricing, now=now)
 
 
 def test_strategy_never_sees_residency_filtered_cloud_candidate():
@@ -238,3 +238,53 @@ def test_default_strategy_returns_same_members_only_reordered():
     assert {sc.candidate.name for sc in result.ordered} == {c.name for c, _ in eligible}
     assert ({(sc.candidate.name, sc.est_cost_usd) for sc in result.ordered}
             == {(c.name, e) for c, e in eligible})
+
+
+# --- 5. clock seam (B40) -----------------------------------------------------
+
+def test_staleness_cliff_is_reachable_through_rank():
+    cfg = S.routing.signals
+    store = SignalStore(cfg)
+    router = Router(S, registry=REG)
+    ctx = _ctx({"onprem"})
+    cand = PoolCandidate(name="clock-seam-latency-m", provider="onprem", tier="cheap")
+    eligible = [(cand, 0.001)]
+
+    for k in range(cfg.min_samples):
+        store.observe_success(cand.name, 120.0, now=float(k))
+
+    fresh = DefaultRoutingStrategy().rank(
+        eligible, ctx=ctx, tokens_after=20, weights=S.routing.weights,
+        quality_resolver=router._quality, signals=store, signals_cfg=cfg,
+        now=5.0)
+    assert fresh.ordered[0].latency.source == "measured"
+
+    stale = DefaultRoutingStrategy().rank(
+        eligible, ctx=ctx, tokens_after=20, weights=S.routing.weights,
+        quality_resolver=router._quality, signals=store, signals_cfg=cfg,
+        now=4.0 + cfg.staleness_s + 1)
+    assert stale.ordered[0].latency.source == "tier_default"
+
+
+def test_availability_decay_is_reachable_through_rank():
+    cfg = S.routing.signals
+    store = SignalStore(cfg)
+    router = Router(S, registry=REG)
+    ctx = _ctx({"onprem"})
+    cand = PoolCandidate(name="clock-seam-availability-m", provider="onprem", tier="cheap")
+    eligible = [(cand, 0.001)]
+
+    for k in range(cfg.min_samples):
+        store.observe_error(cand.name, now=float(k))
+
+    soon = DefaultRoutingStrategy().rank(
+        eligible, ctx=ctx, tokens_after=20, weights=S.routing.weights,
+        quality_resolver=router._quality, signals=store, signals_cfg=cfg,
+        now=5.0)
+    later = DefaultRoutingStrategy().rank(
+        eligible, ctx=ctx, tokens_after=20, weights=S.routing.weights,
+        quality_resolver=router._quality, signals=store, signals_cfg=cfg,
+        now=5.0 + 10 * cfg.half_life_s)
+
+    assert soon.ordered[0].availability.value < later.ordered[0].availability.value
+    assert later.ordered[0].availability.value == pytest.approx(1.0, abs=1e-3)

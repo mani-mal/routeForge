@@ -88,6 +88,15 @@ def lint_settings(s: Settings) -> list[str]:
     if s.routing.signals.latency_scale_ms <= 0:
         errs.append("LATENCY_SCALE_NOT_POSITIVE "
                     f"{s.routing.signals.latency_scale_ms}")
+    # Observation-log writer knobs (signal hardening, spec §3.3/§7).
+    # All three must be positive (zero or negative breaks the writer).
+    sig = s.routing.signals
+    if sig.flush_interval_s <= 0:
+        errs.append(f"SIGNALS_FLUSH_INTERVAL_NOT_POSITIVE {sig.flush_interval_s}")
+    if sig.max_buffer < 1:
+        errs.append(f"SIGNALS_MAX_BUFFER_NOT_POSITIVE {sig.max_buffer}")
+    if sig.max_seed_obs_per_model < 1:
+        errs.append(f"SIGNALS_MAX_SEED_OBS_NOT_POSITIVE {sig.max_seed_obs_per_model}")
     # `availability` is the renamed scoring weight (was `capacity`); a
     # routing.yaml with neither key is a boot failure, not a silent 0 weight.
     if "availability" not in s.routing.weights:

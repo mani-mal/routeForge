@@ -80,6 +80,15 @@ class SignalsCfg(BaseModel):
     # EWMA smoothing floor. Early on, alpha = 1/(n+1) behaves as a running
     # mean; once n exceeds 1/alpha_floor it becomes a fixed-width EWMA.
     alpha_floor: float = 0.1
+    # Observation-log writer (signal hardening, spec §3.3/§7). The sink buffers
+    # observations in memory; a lifespan task flushes them every
+    # `flush_interval_s`. `max_buffer` bounds memory if the DB is unreachable
+    # (oldest dropped). `max_seed_obs_per_model` caps boot replay: with
+    # alpha_floor 0.1 the 200th-oldest observation weighs ~0.9**191, i.e.
+    # nothing (spec §3.5).
+    flush_interval_s: float = 5.0
+    max_buffer: int = 10000
+    max_seed_obs_per_model: int = 200
 
 
 class RoutingCfg(BaseModel):

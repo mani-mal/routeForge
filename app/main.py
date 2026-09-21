@@ -28,6 +28,7 @@ from app.memory.store import DeterministicMemoryStore
 from app.pipeline import Pipeline
 from app.policy.detectors import make_detector
 from app.policy.gate import Gate
+from app.routing.observations import ObservationSink
 from app.routing.router import Router
 from app.routing.signals import SignalStore
 
@@ -51,6 +52,114 @@ def _self_port() -> int:
         return int(raw.get("server", {}).get("port", _DEFAULT_SERVER_PORT))
     except Exception:
         return _DEFAULT_SERVER_PORT
+
+
+async def flush_observations(db, sink) -> int:
+    """Drain `sink` and persist the batch to `endpoint_observations` in one
+    transaction (spec §3.2/§3.3). Called from the background flusher loop
+    below AND from the shutdown handler -- neither may ever take the app down
+    over a DB hiccup, so any exception (including one raised by `db.session()`
+    itself, e.g. a bad connection) is logged and swallowed. Returns the number
+    of rows written (0 on an empty drain or a swallowed failure). Also logs
+    `sink.take_dropped()` when it is non-zero, independent of whether this
+    particular batch was empty."""
+    dropped = sink.take_dropped()
+    if dropped:
+        logging.getLogger("serving.routing").warning(
+            "observation sink dropped %d observations (buffer full)", dropped)
+    batch = sink.drain()
+    if not batch:
+        return 0
+    try:
+        async with db.session() as s:
+            await apps_store.write_observations(s, batch)
+            await s.commit()
+        return len(batch)
+    except Exception:
+        logging.getLogger("serving.routing").warning(
+            "observation flush failed; batch of %d observations dropped",
+            len(batch), exc_info=True)
+        return 0
+
+
+async def _observation_loop(app: FastAPI) -> None:
+    """Background flusher (spec §3.3), started by `start_observations` in the
+    startup event -- runs on the real serving loop, never `create_app`'s
+    throwaway one. Every `flush_interval_s`, flushes the sink; on the first
+    iteration and then once per hour of loop time, additionally prunes rows
+    older than `seed_window_hours` in their own session, swallowing errors so
+    a prune failure can never kill the flusher.
+
+    It is never cancelled mid-flush: shutdown sets `app.state.observation_stop`
+    and the loop exits at its next wait, so a batch already drained from the
+    sink always reaches its commit (the final flush in `stop_observations`
+    picks up whatever was buffered after that)."""
+    cfg = app.state.settings.routing.signals
+    stop: asyncio.Event = app.state.observation_stop
+    # Start "due": a process that lives less than an hour still prunes once.
+    since_prune_s = 3600.0
+    while not stop.is_set():
+        try:
+            await asyncio.wait_for(stop.wait(), cfg.flush_interval_s)
+        except asyncio.TimeoutError:
+            pass
+        if stop.is_set():
+            break   # the shutdown's final flush takes it from here
+        await flush_observations(app.state.db, app.state.observation_sink)
+        since_prune_s += cfg.flush_interval_s
+        if since_prune_s >= 3600.0:
+            since_prune_s = 0.0
+            try:
+                async with app.state.db.session() as s:
+                    n = await apps_store.prune_observations(
+                        s, older_than_hours=cfg.seed_window_hours)
+                    await s.commit()
+                logging.getLogger("serving.routing").info(
+                    "observation log pruned rows=%d", n)
+            except Exception:
+                logging.getLogger("serving.routing").warning(
+                    "observation log prune failed", exc_info=True)
+
+
+def _log_flusher_death(task: "asyncio.Task[None]") -> None:
+    """Done-callback: a flusher that died mid-life must not be silent. Normal
+    exit (stop requested) and cancellation are not deaths."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logging.getLogger("serving.routing").warning(
+            "observation flusher died; observations will be flushed only at "
+            "shutdown", exc_info=exc)
+
+
+def start_observations(app: FastAPI) -> None:
+    """Start the background flusher (`_observation_loop`) with its stop event
+    and death logging. Called from the startup event."""
+    app.state.observation_stop = asyncio.Event()
+    task = asyncio.create_task(_observation_loop(app))
+    task.add_done_callback(_log_flusher_death)
+    app.state.observation_task = task
+
+
+async def stop_observations(app: FastAPI) -> None:
+    """Graceful shutdown of the flusher, then one final flush so everything
+    buffered reaches the table. Never raises.
+
+    The loop is asked to stop (never cancelled mid-flush, which would lose a
+    batch already drained from the sink) and given `flush_interval_s + 5` s to
+    finish; cancellation is the last resort on timeout. A flusher that already
+    died with an exception is logged, not re-raised, so the final flush still
+    runs."""
+    cfg = app.state.settings.routing.signals
+    app.state.observation_stop.set()
+    try:
+        await asyncio.wait_for(app.state.observation_task,
+                               timeout=cfg.flush_interval_s + 5)
+    except (Exception, asyncio.CancelledError):
+        logging.getLogger("serving.routing").warning(
+            "observation flusher did not stop cleanly", exc_info=True)
+    await flush_observations(app.state.db, app.state.observation_sink)
 
 
 def create_app() -> FastAPI:
@@ -108,12 +217,19 @@ def create_app() -> FastAPI:
     # P2a measured routing signals (app/routing/signals.py): ONE persistent,
     # traffic-fed store shared by the Router (ranking) and the Gateway
     # (observation), constructed here with NO I/O -- just like `registry`
-    # above. Seeded from `usage_records` in the startup event below, never
-    # here: seeding needs a real DB read, and per the comment on
-    # `app.state.db` above, no DB access may happen inside create_app's
-    # throwaway asyncio.run loop (that's the exact bug class
-    # app/gateway/backends/factory.py's resolve_backend split was fixed for).
-    signals = SignalStore(settings.routing.signals)
+    # above. `sink` is the in-process half of the observation log (signal
+    # hardening spec §3.2/§3.3): every observation the store applies is
+    # handed to it on the serving path (no I/O, never blocks, never raises),
+    # and the background flusher started in the startup event below drains it
+    # into `endpoint_observations`. Seeded by REPLAYING that table -- not by
+    # aggregating `usage_records` -- in the startup event below, never here:
+    # seeding needs a real DB read, and per the comment on `app.state.db`
+    # above, no DB access may happen inside create_app's throwaway asyncio.run
+    # loop (that's the exact bug class app/gateway/backends/factory.py's
+    # resolve_backend split was fixed for).
+    sink = ObservationSink(settings.routing.signals.max_buffer)
+    app.state.observation_sink = sink
+    signals = SignalStore(settings.routing.signals, sink=sink)
     app.state.signals = signals
     # named model_router (not router) to avoid shadowing the APIRouter imported above;
     # app.include_router(router) below needs the APIRouter, not this Router instance.
@@ -175,26 +291,45 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def _seed_signals() -> None:
-        """Seed the shared SignalStore from recent `usage_records` so a
-        freshly booted replica doesn't start blind. Runs on the REAL serving
-        loop (the ASGI lifespan startup event), not create_app's throwaway
-        asyncio.run loop -- see the comment where `signals` is constructed
-        above. Fails to the boring side: a failed or empty seed query logs a
-        warning and leaves the store empty, which reports tier_default/
-        neutral for every model -- exactly pre-P2a behaviour -- and must
-        never prevent the app from serving.
+        """Seed the shared SignalStore by REPLAYING the observation log
+        (`endpoint_observations`, app/routing/observations.py, spec §3.4) --
+        NOT by aggregating `usage_records` (pre-signal-hardening behaviour) --
+        so a freshly booted replica doesn't start blind. Each row is replayed
+        through the store's own observe_* methods at its TRUE age, so
+        staleness and availability decay apply to seeded state exactly as to
+        live state (that's what closes the stale-as-fresh defect). Runs on
+        the REAL serving loop (the ASGI lifespan startup event), not
+        create_app's throwaway asyncio.run loop -- see the comment where
+        `signals`/`sink` are constructed above. Fails to the boring side: a
+        failed or empty seed query logs a warning and leaves the store empty,
+        which reports tier_default/neutral for every model -- exactly
+        pre-P2a behaviour -- and must never prevent the app from serving.
+
+        The background flusher is started AFTER this block, unconditionally
+        (whether or not seeding succeeded), so live traffic still reaches the
+        table even on a seed failure.
         """
+        cfg = settings.routing.signals
         try:
             async with app.state.db.session() as session:
-                rows = await apps_store.aggregate_model_signals(
-                    session, since_hours=settings.routing.signals.seed_window_hours)
-            app.state.signals.seed(rows)
+                obs = await apps_store.load_seed_observations(
+                    session, since_hours=cfg.seed_window_hours,
+                    per_model_cap=cfg.max_seed_obs_per_model)
+            app.state.signals.replay(obs)
             logging.getLogger("serving.routing").info(
-                "signal store seeded models=%d", len(rows))
+                "signal store seeded observations=%d models=%d",
+                len(obs), len({o.model for o in obs}))
         except Exception:
             logging.getLogger("serving.routing").warning(
                 "signal store seeding failed; starting with an empty store",
                 exc_info=True)
+        start_observations(app)
+
+    @app.on_event("shutdown")
+    async def _stop_observations() -> None:
+        """Stop the flusher gracefully and flush what is buffered
+        (`stop_observations`); never raises."""
+        await stop_observations(app)
 
     # Phase 7 Task 4: /api/traffic control state (app/api/ui_routes.py).
     app.state.traffic_running = False

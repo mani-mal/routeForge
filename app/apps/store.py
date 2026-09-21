@@ -7,21 +7,21 @@ from __future__ import annotations
 
 import datetime as dt
 import os
-import time
 import uuid
 
-from sqlalchemy import case, delete, func, select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.apps.models import (
     Application, AppPolicy, AppRecognizer, AppSensitivityRule, AppToken,
-    ModelQuality, OnboardedModel, RequestSnapshot, UsageRecord, utcnow,
+    EndpointObservation, ModelQuality, OnboardedModel, RequestSnapshot,
+    UsageRecord, utcnow,
 )
 from app.apps.privacy import AppPrivacyProfile, SensitivityRuleView
 from app.apps.tokens import hash_token, token_prefix
 from app.policy.recognizers import CustomRecognizer
-from app.routing.signals import SeedRow
+from app.routing.observations import Observation
 
 
 async def resolve_application(session: AsyncSession, raw_token: str | None
@@ -105,47 +105,62 @@ async def list_usage(session: AsyncSession, *, application_id: str | None = None
     return list((await session.execute(stmt)).scalars().all())
 
 
-async def aggregate_model_signals(session: AsyncSession, *,
-                                  since_hours: int = 24) -> list[SeedRow]:
-    """Per-model latency/error aggregates for SignalStore seeding.
+def _to_utc(ts: dt.datetime) -> dt.datetime:
+    """SQLite may hand back a naive datetime for a `DateTime(timezone=True)`
+    column; treat naive as UTC (it was written as UTC by
+    `write_observations` below) rather than the local zone."""
+    return ts if ts.tzinfo is not None else ts.replace(tzinfo=dt.timezone.utc)
 
-    Counts only rows the endpoint actually answered or failed on: `status` in
-    ('ok','error'). A 'rejected' row is the POLICY GATE doing its job, and
-    counting it as endpoint unhealth would make a strict application look like
-    broken infrastructure -- and would let a protection posture influence
-    routing preference, which CLAUDE.md rule 2a forbids.
 
-    `avg_latency_ms` is computed over 'ok' rows only (a failed call's duration
-    says nothing about serving speed); `error_rate` is computed over all
-    counted ('ok' + 'error') rows. `last_ts` is stamped with
-    `time.monotonic()` -- SignalStore's clock is monotonic, so a wall-clock
-    value here would make every seeded row instantly stale.
-    """
+def _to_observation(row: EndpointObservation) -> Observation:
+    return Observation(_to_utc(row.ts).timestamp(), row.model, row.outcome,
+                       row.latency_ms, row.streamed, row.ttft_ms)
+
+
+async def write_observations(session: AsyncSession,
+                             observations: list[Observation]) -> None:
+    """Persist a batch of endpoint observations (caller commits)."""
+    for o in observations:
+        session.add(EndpointObservation(
+            ts=dt.datetime.fromtimestamp(o.ts, dt.timezone.utc),
+            model=o.model, outcome=o.outcome, latency_ms=o.latency_ms,
+            streamed=o.streamed, ttft_ms=o.ttft_ms))
+
+
+async def load_seed_observations(session: AsyncSession, *, since_hours: float,
+                                 per_model_cap: int) -> list[Observation]:
+    """The replay set for `SignalStore.replay` (spec §3.4): per model, the
+    most recent `per_model_cap` rows within the window, concatenated and
+    sorted ascending by `ts` (tie-break `id`) -- `replay` requires ascending
+    order. Two queries per model (distinct models, then a capped desc select
+    per model) rather than a window function, to stay portable across
+    SQLite/Postgres."""
     cutoff = utcnow() - dt.timedelta(hours=since_hours)
-    ok_latency = case((UsageRecord.status == "ok", UsageRecord.latency_ms))
-    errors = case((UsageRecord.status == "error", 1), else_=0)
-    stmt = (
-        select(
-            UsageRecord.model,
-            func.avg(ok_latency).label("avg_latency_ms"),
-            func.count().label("samples"),
-            func.sum(errors).label("errors"),
+    models = (await session.execute(
+        select(EndpointObservation.model).distinct()
+        .where(EndpointObservation.ts >= cutoff))).scalars().all()
+    rows: list[EndpointObservation] = []
+    for model in models:
+        stmt = (
+            select(EndpointObservation)
+            .where(EndpointObservation.model == model,
+                  EndpointObservation.ts >= cutoff)
+            .order_by(EndpointObservation.ts.desc(), EndpointObservation.id.desc())
+            .limit(per_model_cap)
         )
-        .where(UsageRecord.ts >= cutoff, UsageRecord.status.in_(("ok", "error")))
-        .group_by(UsageRecord.model)
-    )
-    rows = (await session.execute(stmt)).all()
-    now = time.monotonic()
-    return [
-        SeedRow(
-            model=r.model,
-            avg_latency_ms=float(r.avg_latency_ms or 0.0),
-            error_rate=(r.errors / r.samples) if r.samples else 0.0,
-            samples=r.samples,
-            last_ts=now,
-        )
-        for r in rows
-    ]
+        rows.extend((await session.execute(stmt)).scalars().all())
+    rows.sort(key=lambda r: (r.ts, r.id))
+    return [_to_observation(r) for r in rows]
+
+
+async def prune_observations(session: AsyncSession, *,
+                             older_than_hours: float) -> int:
+    """Delete observation rows older than the window (caller commits).
+    Returns the number of rows deleted."""
+    cutoff = utcnow() - dt.timedelta(hours=older_than_hours)
+    result = await session.execute(
+        delete(EndpointObservation).where(EndpointObservation.ts < cutoff))
+    return result.rowcount
 
 
 # --- request snapshots (B3: shared dashboard state across API replicas) ---
@@ -339,7 +354,12 @@ async def usage_summary(session: AsyncSession, *, application_id: str | None = N
                         since: dt.datetime | None = None) -> dict:
     """Aggregate usage for the admin dashboard, optionally scoped to one
     application and/or a start time. Computed in Python (portable across
-    SQLite/Postgres) over the selected rows."""
+    SQLite/Postgres) over the selected rows.
+
+    Every spend, token, latency and distribution figure is over `ok` rows
+    only. `rejected_count` and `error_count` count their statuses beside them:
+    `error` rows are requests that failed on the backend (spec §4, B38) --
+    shown so an outage is visible, never counted as spend or served work."""
     stmt = select(UsageRecord)
     if application_id is not None:
         stmt = stmt.where(UsageRecord.application_id == application_id)
@@ -371,6 +391,7 @@ async def usage_summary(session: AsyncSession, *, application_id: str | None = N
     return {
         "count": len(ok),
         "rejected_count": sum(1 for r in rows if r.status == "rejected"),
+        "error_count": sum(1 for r in rows if r.status == "error"),
         "total_usd": total_usd,
         "baseline_usd": sum(r.baseline_usd for r in ok),
         "total_tokens": total_tokens,
@@ -394,7 +415,8 @@ async def usage_by_application(session: AsyncSession, *,
                                since: dt.datetime | None = None) -> list[dict]:
     """App-wise rollup over UsageRecord (durable store; portable Python
     aggregation across SQLite/Postgres — mirrors `usage_summary`'s style).
-    Sorted by total_usd descending."""
+    Sorted by total_usd descending. As there, everything but `rejected_count`
+    and `error_count` (backend failures, spec §4) is over `ok` rows only."""
     stmt = select(UsageRecord)
     if since is not None:
         stmt = stmt.where(UsageRecord.ts >= since)
@@ -403,12 +425,14 @@ async def usage_by_application(session: AsyncSession, *,
     for r in rows:
         a = agg.setdefault(r.application_id, {
             "application_id": r.application_id, "count": 0, "rejected_count": 0,
-            "total_usd": 0.0, "baseline_usd": 0.0, "total_tokens": 0, "onprem_count": 0,
+            "error_count": 0, "total_usd": 0.0, "baseline_usd": 0.0, "total_tokens": 0, "onprem_count": 0,
             "tier_distribution": {}, "model_distribution": {}, "sensitivity_distribution": {},
             "quality_source_distribution": {},
         })
         if r.status == "rejected":
             a["rejected_count"] += 1
+        if r.status == "error":
+            a["error_count"] += 1
         if r.status != "ok":
             continue
         a["count"] += 1

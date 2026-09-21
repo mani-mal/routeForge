@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from typing import TYPE_CHECKING
 
 from typing import AsyncIterator
@@ -69,18 +70,21 @@ def counts_as_endpoint_unhealth(exc: Exception) -> bool:
         return True
     return not (400 <= code < 500)
 
-def _exhausted(last_error: str, overflow_errors: list[str], failures: int) -> Exception:
+def _exhausted(last_error: str, overflow_errors: list[str], failures: int,
+                attempted: list[str]) -> Exception:
     """The error for a request every reachable candidate failed. When EVERY
     failure was a context-window refusal, the request itself is too large --
     the client's error, so it surfaces as `ContextWindowExceeded` (400) with
     the upstream reason kept whole (its token counts are the actionable part,
     so it is not cut to the 200-char log form). Any other failure in the mix
-    keeps it an outage (502)."""
+    keeps it an outage (502), and carries `attempted_models` -- the candidates
+    tried, in order (signal hardening, spec §4) -- so the route can meter the
+    last one on its `error` usage row."""
     if overflow_errors and len(overflow_errors) == failures:
         return ContextWindowExceeded(overflow_errors[-1])
     return BackendUnavailable(
         "backend failed on all reachable candidates for this request "
-        f"(last error: {last_error})")
+        f"(last error: {last_error})", attempted_models=tuple(attempted))
 
 
 log = logging.getLogger("serving.gateway")
@@ -132,6 +136,7 @@ class Gateway:
         # max_failover_attempts; residency is preserved because exclude only ever
         # removes candidates (see Router.select).
         failed_models: set[str] = set()
+        attempted: list[str] = []
         last_error = ""
         overflow_errors: list[str] = []
         failover_attempts = 0
@@ -158,9 +163,11 @@ class Gateway:
                 # Every reachable candidate has now been excluded by prior
                 # failures -> exhausted, not a genuine no-candidate reject.
                 if failed_models:
-                    raise _exhausted(last_error, overflow_errors, failover_attempts) from exc
+                    raise _exhausted(
+                        last_error, overflow_errors, failover_attempts, attempted) from exc
                 raise
             cand = decision.chosen
+            attempted.append(cand.name)
             price = (self._reg.price_for(cand.name) if self._reg
                      else self._s.pricing.models[cand.name])
             try:
@@ -197,7 +204,7 @@ class Gateway:
                 failover_attempts += 1
                 if failover_attempts > max_failover:
                     raise _exhausted(
-                        last_error, overflow_errors, failover_attempts) from exc
+                        last_error, overflow_errors, failover_attempts, attempted) from exc
                 continue
 
             if self._signals is not None:
@@ -243,6 +250,14 @@ class Gateway:
         can't retry a partially-emitted response) and NO verify record (step 9 is
         waived on this path -- the pipeline records that in its metadata).
 
+        The stream observes availability (spec §5): a terminal chunk logs an
+        `ok` observation (TTFT measured, latency state untouched -- stream
+        timing is not the quantity the latency EWMA holds); a backend
+        exception that `counts_as_endpoint_unhealth` logs an `error`
+        observation. A client disconnect (`GeneratorExit`/`CancelledError`,
+        both `BaseException`) and a stream that ends without a terminal chunk
+        are NOT observed -- neither is attributable to the endpoint.
+
         Ordering contract: the returned `records` list is COMPLETE only after the
         returned iterator is fully consumed. The router record's `actual_cost_usd`
         and `latency_ms` are unknown until the terminal `StreamChunk(final=...)`
@@ -269,15 +284,25 @@ class Gateway:
         metrics.observe_routing_decision(cand.tier, escalated=False)
 
         async def _agen() -> AsyncIterator[StreamChunk]:
+            t0 = time.perf_counter()
+            ttft_ms: float | None = None
             try:
                 async for chunk in self._backend.generate_stream(
                         cand.name, messages, price, cand.tier, hint,
                         tools=tools, tool_choice=tool_choice, params=params):
+                    if ttft_ms is None and chunk.delta is not None:
+                        ttft_ms = (time.perf_counter() - t0) * 1000.0
                     if chunk.final is not None:
                         record.actual_cost_usd = chunk.final.cost_usd
                         record.latency_ms = chunk.final.latency_ms
+                        if self._signals is not None:
+                            # Availability only -- a stream's timing is not the
+                            # quantity the latency EWMA holds (spec §5).
+                            self._signals.observe_stream_success(cand.name, ttft_ms)
                     yield chunk
             except Exception as exc:
+                if self._signals is not None and counts_as_endpoint_unhealth(exc):
+                    self._signals.observe_error(cand.name, streamed=True)
                 error = _format_upstream_error(cand.name, exc)
                 log.warning("backend stream failed request=%s model=%s: %s",
                             ctx.request_id, cand.name, error)

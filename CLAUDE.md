@@ -190,7 +190,10 @@ of `capture_io`; (3) since P2a, each router hop also carries `sp.scoring` — ev
 where it came from (`measured` / `tier_default` / `neutral` / `disabled`). The
 record is sufficient to recompute that hop's ranking offline; the response
 certificate carries the chosen candidate's terms only. It says nothing about
-whether the ranking was *good* — only what it was and what it rested on.
+whether the ranking was *good* — only what it was and what it rested on. Boot
+seeding replays the per-attempt `endpoint_observations` log (endpoint health
+only — no tenant or content), so a seeded signal is a reconstruction, across
+replicas, of what the live stores saw, at its true age.
 
 ## Configuration — everything switchable at startup
 
