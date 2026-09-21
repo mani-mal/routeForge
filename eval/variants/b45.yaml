@@ -1,0 +1,39 @@
+# Weight variants for backlog B45 (docs/backlog/bugs.md): is
+# `weights.availability: 0.2` large enough for a dead endpoint to reliably
+# lose to a healthy peer? Availability enters the step-6 score as an
+# additive term `+ w.availability * availability` -- moving a model from
+# perfectly healthy to completely dead changes its score by exactly
+# `w.availability` and no more (docs/backlog/bugs.md B45).
+#
+# `quality`/`cost`/`latency` stay at the shipped config/routing.yaml values
+# in every variant below -- only `availability` moves, so any
+# regret/floor-miss/pass-rate difference between variants isolates that one
+# term's effect (`router_cold:<name>` / `router_warm:<name>` in the report).
+#
+#   default          -- the shipped config/routing.yaml weights, unchanged
+#   availability_0    -- availability weight zeroed (no penalty at all)
+#   availability_1    -- availability weight raised to 1.0 (on par with quality)
+#   availability_2    -- availability weight raised to 2.0 (dominates quality)
+default:
+  quality: 1.0
+  cost: 0.6
+  latency: 0.3
+  availability: 0.2
+
+availability_0:
+  quality: 1.0
+  cost: 0.6
+  latency: 0.3
+  availability: 0.0
+
+availability_1:
+  quality: 1.0
+  cost: 0.6
+  latency: 0.3
+  availability: 1.0
+
+availability_2:
+  quality: 1.0
+  cost: 0.6
+  latency: 0.3
+  availability: 2.0

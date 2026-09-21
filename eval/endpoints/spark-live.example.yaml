@@ -1,0 +1,50 @@
+# EXAMPLE --live endpoint file for the RouteForge DGX Spark (see the
+# routeforge-dgx-spark-deploy memory note / .claude/skills/inference-backends).
+# "<spark>" is a LITERAL PLACEHOLDER, never a real host or IP -- this file is
+# NEVER run live by the test suite (a test may only assert it loads with
+# live=True). To actually use it:
+#
+#   1. cp eval/endpoints/spark-live.example.yaml eval/endpoints/spark-live.yaml
+#   2. replace every "<spark>" below with the Spark's real hostname/IP
+#   3. export SP_ONPREM_API_KEY=...   (the onprem provider's key, not this file)
+#   4. uv run python scripts/feasible_bench.py \
+#        --suite eval/suites/starter.jsonl \
+#        --endpoints eval/endpoints/spark-live.yaml --live
+#
+# All three models are served through the Spark's single OpenAI-compatible
+# endpoint (one vLLM/Dynamo server, model selected by name) -- provider
+# "onprem", price $0/1M (a GPU's cost is amortized infrastructure, not a
+# per-token bill, per config/pricing.yaml's own convention for on-prem rows).
+endpoints:
+  - slug: qwen3.8-27b
+    provider: onprem
+    tier: mid
+    price: {input: 0, output: 0}
+    region: us
+    prompt_retention: none
+    accepts_raw_sensitive: true
+    live:
+      endpoint: "http://<spark>:8000/v1"
+      api_key_env: SP_ONPREM_API_KEY
+
+  - slug: nemotron-3.5-lightning
+    provider: onprem
+    tier: frontier
+    price: {input: 0, output: 0}
+    region: us
+    prompt_retention: none
+    accepts_raw_sensitive: true
+    live:
+      endpoint: "http://<spark>:8000/v1"
+      api_key_env: SP_ONPREM_API_KEY
+
+  - slug: "llama3.2:latest"
+    provider: onprem
+    tier: cheap
+    price: {input: 0, output: 0}
+    region: us
+    prompt_retention: none
+    accepts_raw_sensitive: true
+    live:
+      endpoint: "http://<spark>:8000/v1"
+      api_key_env: SP_ONPREM_API_KEY
