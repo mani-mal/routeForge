@@ -85,20 +85,16 @@ def _mean(xs: list[float]) -> float | None:
     aggregate must not read as "zero regret"."""
     return sum(xs) / len(xs) if xs else None
 
-def case_oracle(rows: list[MatrixRow]) -> dict:
-    """The feasible oracle for one case (spec §6), from that case's own
-    sweep rows (every row must share one `case_id`; `rows` must be
-    non-empty -- an empty case is never swept, so it never reaches here).
+def _oracle_raw(rows: list[MatrixRow]) -> dict:
+    """The feasible-oracle arithmetic (spec §6), **unrounded**. Internal.
 
-    Returns `{"q_star", "c_star", "l_star", "passing", "infeasible_at_floor"}`:
-    - `q_star`: `max` quality across *all* rows (passing or not).
-    - `passing`: sorted slugs of rows with `passed=True` -- `P(c)`.
-    - `c_star` / `l_star`: `min` cost / latency over `passing` rows, or
-      `None` if `passing` is empty. A passing row's `latency_ms` is not
-      expected to be `None` (only error rows have `latency_ms=None`, and
-      error rows are never `passed=True`), but `l_star` still degrades to
-      `None` rather than raising if it happens.
-    - `infeasible_at_floor`: `True` iff `passing` is empty (`P(c) = {}`).
+    `case_oracle` (the public function) wraps this with `_round_value` for
+    external callers. `strategy_metrics` calls this directly and diffs its
+    result against each row's own (also unrounded) fields -- never against
+    an oracle already rounded to 12 dp. Rounding `q_star`/`c_star`/`l_star`
+    *before* subtracting a chosen row's exact value can manufacture a
+    spurious nonzero -- even a `-0.0` -- regret out of what is, in exact
+    arithmetic, an identical value (fix-round-1 finding 2).
     """
     if not rows:
         raise ValueError("case_oracle requires at least one row")
@@ -116,13 +112,35 @@ def case_oracle(rows: list[MatrixRow]) -> dict:
     latencies = [row.latency_ms for row in passing_rows if row.latency_ms is not None]
     l_star = min(latencies) if latencies else None
 
-    return _round_value({
+    return {
         "q_star": q_star,
         "c_star": c_star,
         "l_star": l_star,
         "passing": passing,
         "infeasible_at_floor": len(passing) == 0,
-    })
+    }
+
+def case_oracle(rows: list[MatrixRow]) -> dict:
+    """The feasible oracle for one case (spec §6), from that case's own
+    sweep rows (every row must share one `case_id`; `rows` must be
+    non-empty -- an empty case is never swept, so it never reaches here).
+    **Every row passed in is treated as eligible** -- this function has no
+    notion of `E(c)` (it isn't given a `CaseInfo`), so a caller that wants
+    the oracle restricted to `E(c)` (spec §6: `q*`, `P`, `c*`, `l*` are all
+    defined over `E(c)`) must filter `rows` to eligible endpoints first.
+    `strategy_metrics` does exactly this.
+
+    Returns `{"q_star", "c_star", "l_star", "passing", "infeasible_at_floor"}`:
+    - `q_star`: `max` quality across *all* rows (passing or not).
+    - `passing`: sorted slugs of rows with `passed=True` -- `P(c)`.
+    - `c_star` / `l_star`: `min` cost / latency over `passing` rows, or
+      `None` if `passing` is empty. A passing row's `latency_ms` is not
+      expected to be `None` (only error rows have `latency_ms=None`, and
+      error rows are never `passed=True`), but `l_star` still degrades to
+      `None` rather than raising if it happens.
+    - `infeasible_at_floor`: `True` iff `passing` is empty (`P(c) = {}`).
+    """
+    return _round_value(_oracle_raw(rows))
 
 def strategy_metrics(
     cases: list[CaseInfo], rows: list[MatrixRow], choices: list[Choice], strategy: str,
@@ -134,8 +152,10 @@ def strategy_metrics(
     - `violation_rate`: share of `cases` whose choice names an endpoint not
       in that case's `eligible` set (including a non-`None` choice on an
       empty case), plus a choice naming an eligible endpoint with no
-      matching sweep row -- "should not happen" (brief ruling), but counted
-      as a violation rather than crashing.
+      matching sweep row, plus a non-empty case with no recorded `Choice`
+      at all for `strategy` -- all "should not happen" (brief ruling /
+      fix-round-1 finding 4), but counted as violations rather than
+      crashing.
     - `pass_rate`, `quality_regret`, `cost_regret`, `latency_regret`,
       `floor_miss_rate`: as spec §6 points 2-4, computed over non-empty
       cases only (an empty case has no quality/cost/latency notion). A
@@ -186,23 +206,41 @@ def strategy_metrics(
         if mismatch:
             empty_mismatches += 1
 
+        has_choice_record = case.case_id in choice_by_case
         choice = choice_by_case.get(case.case_id)
         chosen_endpoint = choice.endpoint if choice is not None else None
 
         if actual_empty:
             # A correct choice on an empty case is None; anything else
-            # names an endpoint outside E(c) = {} by construction.
+            # names an endpoint outside E(c) = {} by construction. A
+            # missing Choice record is also correct here (nothing to
+            # record) -- the harness-bug rule below applies only to
+            # non-empty cases.
             if chosen_endpoint is not None:
                 violations_count += 1
             continue
 
-        case_rows = rows_by_case.get(case.case_id, [])
-        oracle = case_oracle(case_rows) if case_rows else None
+        # Spec §6: q*, P, c*, l* are all defined over E(c). A row for an
+        # endpoint outside case.eligible must never contaminate the oracle
+        # (fix-round-1 finding 3) -- it is still flagged, but only via
+        # violations() / the missing-row check below, never by skewing q*.
+        case_rows = [
+            row for row in rows_by_case.get(case.case_id, [])
+            if row.endpoint in case.eligible
+        ]
+        oracle = _oracle_raw(case_rows) if case_rows else None
         if oracle is not None and oracle["infeasible_at_floor"]:
             infeasible_count += 1
 
         row: MatrixRow | None = None
-        if chosen_endpoint is not None:
+        if not has_choice_record:
+            # A non-empty case with no Choice record at all for this
+            # strategy is a harness bug -- the runner is expected to
+            # record one Choice per (case, strategy) it ran. Distinct from
+            # an explicit Choice(endpoint=None), which is a legitimate "no
+            # choice" and stays violation-free (below).
+            violations_count += 1
+        elif chosen_endpoint is not None:
             if chosen_endpoint not in case.eligible:
                 violations_count += 1
             else:
@@ -267,25 +305,40 @@ def grouped(
         for key, group_cases in sorted(values.items())
     }
 
-_WORST_GROUP_METRICS = ("quality_regret", "cost_regret", "latency_regret")
+# Only these three tags are considered for grouping (fix-round-1 finding
+# 5): they're the ones spec §9's starter suite uses to characterise a case
+# (workload / placement / protection posture). Other tags -- e.g.
+# `synthetic`, a loader-only marker -- must never become a reported "worst
+# group" dimension.
+_WORST_GROUP_TAGS = ("workload", "placement", "protection")
+
+# Spec §6 points 2-4: quality regret (point 2, plus pass rate), cost
+# regret (point 3, plus floor-miss rate), latency regret (point 4). Higher
+# is worse for every metric except pass_rate, where lower is worse.
+_HIGHER_IS_WORSE = ("quality_regret", "cost_regret", "latency_regret", "floor_miss_rate")
+_LOWER_IS_WORSE = ("pass_rate",)
+_WORST_GROUP_METRICS = _HIGHER_IS_WORSE + _LOWER_IS_WORSE
 
 def worst_groups(
     cases: list[CaseInfo], rows: list[MatrixRow], choices: list[Choice], strategy: str,
 ) -> dict:
-    """The worst (highest-regret) group per regret metric (spec §6 point
-    6), across every tag and every value of that tag among `cases`.
+    """The worst group per spec §6 points 2-4's metrics --
+    `quality_regret`, `cost_regret`, `latency_regret`, `floor_miss_rate`
+    (higher is worse for all four), and `pass_rate` (lower is worse) --
+    across every value of `workload` / `placement` / `protection` among
+    `cases`. No other tag is considered, even if `cases` carry one (e.g.
+    `synthetic`).
 
     Returns `{"quality_regret": (tag, value, metric_value) | None, ...}`
-    for `quality_regret`, `cost_regret`, `latency_regret`. A metric with no
-    group reporting a defined (non-`None`) value maps to `None`. Ties keep
-    the first found under sorted (tag, value) iteration -- deterministic.
+    for each of the five metrics above. A metric with no group reporting a
+    defined (non-`None`) value maps to `None`. Ties keep the first found
+    under sorted (tag, value) iteration -- deterministic.
     """
-    tag_names = sorted({key for case in cases for key in case.tags})
     worst: dict[str, tuple[str, str, float] | None] = {
         metric: None for metric in _WORST_GROUP_METRICS
     }
 
-    for tag in tag_names:
+    for tag in _WORST_GROUP_TAGS:
         groups = grouped(cases, rows, choices, strategy, tag)
         for value, metrics in groups.items():
             for metric in _WORST_GROUP_METRICS:
@@ -293,7 +346,12 @@ def worst_groups(
                 if metric_value is None:
                     continue
                 current = worst[metric]
-                if current is None or metric_value > current[2]:
+                if current is None:
+                    worst[metric] = (tag, value, metric_value)
+                elif metric in _LOWER_IS_WORSE:
+                    if metric_value < current[2]:
+                        worst[metric] = (tag, value, metric_value)
+                elif metric_value > current[2]:
                     worst[metric] = (tag, value, metric_value)
 
     return _round_value(worst)
@@ -316,6 +374,12 @@ def headline(
     strictly positive `reference` mean cost (a zero or undefined reference
     cost makes a percentage saving meaningless). `saving_pct` is `None`
     whenever `comparable` is `False`.
+
+    The parity check rounds the absolute difference to 12 dp before
+    comparing to `parity_tol` (fix-round-1 finding 1): e.g. 45/50 vs 46/50
+    at `parity_tol=0.02` is exactly at the boundary mathematically, but
+    `abs(0.9 - 0.92)` is `0.020000000000000018` in floating point --
+    spuriously failing "<=" for a case spec §6 says must pass.
     """
     router_metrics = metrics_by_strategy[router]
     reference_metrics = metrics_by_strategy[reference]
@@ -328,7 +392,7 @@ def headline(
     comparable = (
         router_pass_rate is not None
         and reference_pass_rate is not None
-        and abs(router_pass_rate - reference_pass_rate) <= parity_tol
+        and round(abs(router_pass_rate - reference_pass_rate), 12) <= parity_tol
         and reference_cost is not None
         and reference_cost > 0
     )
