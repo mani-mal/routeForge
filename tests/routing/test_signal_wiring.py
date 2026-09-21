@@ -408,3 +408,159 @@ def test_seed_failure_leaves_an_empty_store_and_the_app_serving(monkeypatch):
                    headers={"Authorization": "Bearer demo-key"},
                    json={"messages": [{"role": "user", "content": "hi"}]})
         assert r.status_code == 200
+
+# -- the flusher's lifecycle: app/main.py start_observations/stop_observations.
+# Driven on a stand-in `app` (only `.state` is read) so each step can be
+# sequenced deterministically. Every wait is bounded -- a regression must fail,
+# never hang the suite.
+
+_WAIT_S = 5.0
+
+
+def _flusher_app(db, sink, *, interval: float = 0.01):
+    from types import SimpleNamespace
+    cfg = S.routing.signals.model_copy(update={"flush_interval_s": interval})
+    state = SimpleNamespace(
+        settings=SimpleNamespace(routing=SimpleNamespace(signals=cfg)),
+        db=db, observation_sink=sink)
+    return SimpleNamespace(state=state)
+
+
+def test_shutdown_during_an_in_flight_flush_does_not_lose_the_batch(monkeypatch):
+    """A shutdown that lands while the flusher awaits its DB commit must let
+    that commit finish: the batch was already drained from the sink, so
+    cancelling mid-flush would lose it for good (the final flush sees an
+    empty sink)."""
+    from contextlib import asynccontextmanager
+
+    from app import main
+
+    written: list[Observation] = []
+    events: dict[str, asyncio.Event] = {}
+
+    class _GatedSession:
+        def __init__(self) -> None:
+            self.pending: list[Observation] = []
+
+        async def commit(self) -> None:
+            events["entered"].set()
+            await events["gate"].wait()
+            written.extend(self.pending)
+
+    class _GatedDB:
+        @asynccontextmanager
+        async def session(self):
+            yield _GatedSession()
+
+    async def _fake_write(s, batch):
+        s.pending.extend(batch)
+
+    async def _fake_prune(s, *, older_than_hours):
+        return 0
+
+    monkeypatch.setattr(main.apps_store, "write_observations", _fake_write)
+    monkeypatch.setattr(main.apps_store, "prune_observations", _fake_prune)
+    sink = ObservationSink(10)
+    obs = Observation(time.time(), "m", "ok", 1.0, False, None)
+
+    async def go():
+        events["entered"] = asyncio.Event()
+        events["gate"] = asyncio.Event()
+        app = _flusher_app(_GatedDB(), sink)
+        main.start_observations(app)
+        sink.put(obs)
+        await asyncio.wait_for(events["entered"].wait(), _WAIT_S)  # flush in flight
+        stopping = asyncio.create_task(main.stop_observations(app))
+        await asyncio.sleep(0.05)       # shutdown now waits on the flusher
+        events["gate"].set()            # the DB commit completes
+        await asyncio.wait_for(stopping, _WAIT_S + 6)
+
+    asyncio.run(go())
+    assert written == [obs]
+
+
+def test_a_dead_flusher_is_logged_and_shutdown_still_flushes(monkeypatch, caplog):
+    """A flusher that died with an exception must be logged when it dies, must
+    not make shutdown raise, and must not stop the final flush."""
+    from app import main
+
+    async def _dies(app):
+        raise RuntimeError("flusher boom")
+
+    monkeypatch.setattr(main, "_observation_loop", _dies)
+    db = _fresh_db()
+    sink = ObservationSink(10)
+    obs = Observation(time.time(), "m", "ok", 7.0, False, None)
+
+    async def go():
+        app = _flusher_app(db, sink)
+        main.start_observations(app)
+        await asyncio.sleep(0.01)       # the flusher dies
+        sink.put(obs)                   # buffered after startup
+        await asyncio.wait_for(main.stop_observations(app), _WAIT_S + 6)
+        async with db.session() as s:
+            return await store.load_seed_observations(s, since_hours=1,
+                                                      per_model_cap=10)
+
+    with caplog.at_level("WARNING", logger="serving.routing"):
+        rows = asyncio.run(go())
+    assert [(o.model, o.latency_ms) for o in rows] == [("m", 7.0)]
+    assert "observation flusher died" in caplog.text
+
+
+def _prune_spy(monkeypatch, *, raises: bool):
+    from app import main
+    calls: list[float] = []
+
+    async def _spy(s, *, older_than_hours):
+        calls.append(older_than_hours)
+        if raises:
+            raise RuntimeError("prune boom")
+        return 0
+
+    monkeypatch.setattr(main.apps_store, "prune_observations", _spy)
+    return calls
+
+
+async def _until(pred, timeout: float = _WAIT_S) -> None:
+    async def poll():
+        while not pred():
+            await asyncio.sleep(0.005)
+    await asyncio.wait_for(poll(), timeout)
+
+
+def test_the_first_flusher_iteration_prunes_then_not_again_within_the_hour(
+        monkeypatch):
+    """A process living under an hour still prunes: the first iteration is due."""
+    from app import main
+
+    calls = _prune_spy(monkeypatch, raises=False)
+
+    async def go():
+        app = _flusher_app(_fresh_db(), ObservationSink(10))
+        main.start_observations(app)
+        await _until(lambda: calls)
+        await asyncio.sleep(0.1)        # ~10 more intervals
+        await asyncio.wait_for(main.stop_observations(app), _WAIT_S + 6)
+
+    asyncio.run(go())
+    assert len(calls) == 1
+
+
+def test_a_prune_failure_does_not_stop_the_flusher(monkeypatch):
+    from app import main
+
+    calls = _prune_spy(monkeypatch, raises=True)
+    sink = ObservationSink(10)
+
+    async def go():
+        app = _flusher_app(_fresh_db(), sink)
+        main.start_observations(app)
+        await _until(lambda: calls)     # the prune has failed
+        sink.put(Observation(time.time(), "m", "ok", 1.0, False, None))
+        await _until(lambda: not sink._buf)     # a later flush took it
+        assert not app.state.observation_task.done()
+        await asyncio.wait_for(main.stop_observations(app), _WAIT_S + 6)
+
+    asyncio.run(go())
+    assert len(calls) == 1

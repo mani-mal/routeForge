@@ -83,16 +83,28 @@ async def flush_observations(db, sink) -> int:
 
 
 async def _observation_loop(app: FastAPI) -> None:
-    """Background flusher (spec §3.3), started in the startup event and
-    cancelled in the shutdown event -- runs on the real serving loop, never
-    `create_app`'s throwaway one. Every `flush_interval_s`, flushes the sink;
-    once per hour of loop time, additionally prunes rows older than
-    `seed_window_hours` in their own session, swallowing errors so a prune
-    failure can never kill the flusher."""
+    """Background flusher (spec §3.3), started by `start_observations` in the
+    startup event -- runs on the real serving loop, never `create_app`'s
+    throwaway one. Every `flush_interval_s`, flushes the sink; on the first
+    iteration and then once per hour of loop time, additionally prunes rows
+    older than `seed_window_hours` in their own session, swallowing errors so
+    a prune failure can never kill the flusher.
+
+    It is never cancelled mid-flush: shutdown sets `app.state.observation_stop`
+    and the loop exits at its next wait, so a batch already drained from the
+    sink always reaches its commit (the final flush in `stop_observations`
+    picks up whatever was buffered after that)."""
     cfg = app.state.settings.routing.signals
-    since_prune_s = 0.0
-    while True:
-        await asyncio.sleep(cfg.flush_interval_s)
+    stop: asyncio.Event = app.state.observation_stop
+    # Start "due": a process that lives less than an hour still prunes once.
+    since_prune_s = 3600.0
+    while not stop.is_set():
+        try:
+            await asyncio.wait_for(stop.wait(), cfg.flush_interval_s)
+        except asyncio.TimeoutError:
+            pass
+        if stop.is_set():
+            break   # the shutdown's final flush takes it from here
         await flush_observations(app.state.db, app.state.observation_sink)
         since_prune_s += cfg.flush_interval_s
         if since_prune_s >= 3600.0:
@@ -107,6 +119,47 @@ async def _observation_loop(app: FastAPI) -> None:
             except Exception:
                 logging.getLogger("serving.routing").warning(
                     "observation log prune failed", exc_info=True)
+
+
+def _log_flusher_death(task: "asyncio.Task[None]") -> None:
+    """Done-callback: a flusher that died mid-life must not be silent. Normal
+    exit (stop requested) and cancellation are not deaths."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logging.getLogger("serving.routing").warning(
+            "observation flusher died; observations will be flushed only at "
+            "shutdown", exc_info=exc)
+
+
+def start_observations(app: FastAPI) -> None:
+    """Start the background flusher (`_observation_loop`) with its stop event
+    and death logging. Called from the startup event."""
+    app.state.observation_stop = asyncio.Event()
+    task = asyncio.create_task(_observation_loop(app))
+    task.add_done_callback(_log_flusher_death)
+    app.state.observation_task = task
+
+
+async def stop_observations(app: FastAPI) -> None:
+    """Graceful shutdown of the flusher, then one final flush so everything
+    buffered reaches the table. Never raises.
+
+    The loop is asked to stop (never cancelled mid-flush, which would lose a
+    batch already drained from the sink) and given `flush_interval_s + 5` s to
+    finish; cancellation is the last resort on timeout. A flusher that already
+    died with an exception is logged, not re-raised, so the final flush still
+    runs."""
+    cfg = app.state.settings.routing.signals
+    app.state.observation_stop.set()
+    try:
+        await asyncio.wait_for(app.state.observation_task,
+                               timeout=cfg.flush_interval_s + 5)
+    except (Exception, asyncio.CancelledError):
+        logging.getLogger("serving.routing").warning(
+            "observation flusher did not stop cleanly", exc_info=True)
+    await flush_observations(app.state.db, app.state.observation_sink)
 
 
 def create_app() -> FastAPI:
@@ -270,21 +323,13 @@ def create_app() -> FastAPI:
             logging.getLogger("serving.routing").warning(
                 "signal store seeding failed; starting with an empty store",
                 exc_info=True)
-        app.state.observation_task = asyncio.create_task(_observation_loop(app))
+        start_observations(app)
 
     @app.on_event("shutdown")
     async def _stop_observations() -> None:
-        """Cancel the background flusher and perform one final flush so the
-        last buffered batch isn't lost on a clean shutdown. Must never raise:
-        `flush_observations` already swallows DB errors (spec §3.3), and
-        cancellation of our own task only ever raises `CancelledError`."""
-        task = app.state.observation_task
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-        await flush_observations(app.state.db, app.state.observation_sink)
+        """Stop the flusher gracefully and flush what is buffered
+        (`stop_observations`); never raises."""
+        await stop_observations(app)
 
     # Phase 7 Task 4: /api/traffic control state (app/api/ui_routes.py).
     app.state.traffic_running = False
