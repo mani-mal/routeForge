@@ -267,6 +267,60 @@ def result_pinned_mismatches(out) -> int:
     return json.loads((out / "metrics.json").read_text())["policy"]["pinned_mismatches"]
 
 
+def test_low_confidence_does_not_reissue_pinned_sweep_calls(tmp_path, monkeypatch):
+    """The sweep is one generate call per (case, endpoint). A low-confidence
+    answer must not trigger the gateway's confidence escalation, which with a
+    pin clamps to the same tier and calls the SAME endpoint again."""
+    real_generate = SimulatedBackend.generate
+    calls = {"n": 0}
+
+    async def low_confidence(self, *args, **kwargs):
+        calls["n"] += 1
+        result = await real_generate(self, *args, **kwargs)
+        return result.model_copy(update={"confidence": 0.1})
+
+    monkeypatch.setattr(SimulatedBackend, "generate", low_confidence)
+    suite, eps = _write_inputs(tmp_path)
+    out = tmp_path / "out"
+    result = _run(suite, eps, out)
+    rows = _jsonl(out / "matrix.jsonl")
+    assert rows
+    assert calls["n"] == len(rows)
+    assert result.exit_code == 0
+    assert all(r["error"] is None for r in rows)
+    assert result.metrics["policy"]["sweep_generate_mismatches"] == 0
+
+
+def test_sweep_call_with_extra_generate_becomes_error_row(tmp_path, monkeypatch):
+    """The runner's own invariant, independent of harness_settings: a
+    successful sweep call that made != 1 backend generate call is an error
+    row and is counted."""
+    from app.eval import endpoints as endpoints_mod
+    real_harness_settings = endpoints_mod.harness_settings
+
+    def escalating(base, specs):
+        settings = real_harness_settings(base, specs)
+        settings.routing.max_escalations = 1  # undo the fix, runner must catch it
+        return settings
+
+    real_generate = SimulatedBackend.generate
+
+    async def low_confidence(self, *args, **kwargs):
+        result = await real_generate(self, *args, **kwargs)
+        return result.model_copy(update={"confidence": 0.1})
+
+    monkeypatch.setattr(runner, "harness_settings", escalating)
+    monkeypatch.setattr(SimulatedBackend, "generate", low_confidence)
+    suite, eps = _write_inputs(tmp_path)
+    out = tmp_path / "out"
+    result = _run(suite, eps, out)
+    rows = _jsonl(out / "matrix.jsonl")
+    bad = [r for r in rows if r["error"] and "GenerateCountMismatch" in r["error"]]
+    assert bad
+    assert result.metrics["policy"]["sweep_generate_mismatches"] == len(bad)
+    assert all(r["passed"] is False and r["cost_usd"] == 0.0 for r in bad)
+
+
 # --------------------------------------------------------------------------
 # 7. keep-text
 # --------------------------------------------------------------------------

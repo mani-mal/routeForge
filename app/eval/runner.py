@@ -95,6 +95,9 @@ DEFERRED_METRICS = (
 )
 
 
+GENERATE_COUNT_MISMATCH = "GenerateCountMismatch"
+
+
 class BenchError(Exception):
     """A load/usage error: the run stops with exit code 1."""
 
@@ -188,8 +191,14 @@ async def _sweep_one(pipeline: Pipeline, backend: _CountingBackend, case: Case,
                      endpoint: str, app_policy, *, keep_text: bool
                      ) -> tuple[MatrixRow, dict, str | None, int | None]:
     """One pinned call. Returns `(row, jsonl_row, served, tokens_after)` --
-    `served` is `None` when the call raised (nothing was served)."""
+    `served` is `None` when the call raised (nothing was served).
+
+    A pinned sweep call is a single-shot measurement: exactly one backend
+    `generate` call. A successful call that made any other number (e.g. a
+    confidence escalation re-issuing the pin) is scored as an error row
+    (`GENERATE_COUNT_MISMATCH`), never graded on whichever answer came last."""
     backend.set_case(case)
+    calls_before = backend.calls.get(case.id, 0)
     request = ChatRequest(
         model=endpoint, messages=[Message.model_validate(m) for m in case.messages])
     served: str | None = None
@@ -214,6 +223,11 @@ async def _sweep_one(pipeline: Pipeline, backend: _CountingBackend, case: Case,
             # The pinned call must serve the pin (spec §5 step 2). Anything
             # else is scored as a failed call, never credited to `endpoint`.
             error = f"ServedMismatch: pinned {endpoint!r} but served {served!r}"
+        else:
+            generate_calls = backend.calls.get(case.id, 0) - calls_before
+            if generate_calls != 1:
+                error = (f"{GENERATE_COUNT_MISMATCH}: pinned call to {endpoint!r} "
+                         f"made {generate_calls} generate calls, expected 1")
 
     if error is None:
         quality = grade(case.grader, text)
@@ -340,6 +354,7 @@ async def _run_loaded(*, cases, specs, settings, registry, detector, variants,
     choices: list[Choice] = []
     sweep_served: list[tuple[str, str]] = []
     pinned_mismatches = 0
+    generate_mismatches = 0
     widened = 0
 
     with open(out / "matrix.jsonl", "w", encoding="utf-8") as matrix_f, \
@@ -379,6 +394,8 @@ async def _run_loaded(*, cases, specs, settings, registry, detector, variants,
                     sweep_served.append((case.id, served))
                     if served != endpoint:
                         pinned_mismatches += 1
+                if row.error is not None and row.error.startswith(GENERATE_COUNT_MISMATCH):
+                    generate_mismatches += 1
                 if tokens_seen is None and tokens_after is not None:
                     tokens_seen = tokens_after
 
@@ -461,6 +478,7 @@ async def _run_loaded(*, cases, specs, settings, registry, detector, variants,
             "empty_set_mismatches": empty_mismatches,
             "post_gate_widened": widened,
             "pinned_mismatches": pinned_mismatches,
+            "sweep_generate_mismatches": generate_mismatches,
         },
         "cases": case_summaries,
         "exit_code": exit_code,
@@ -554,7 +572,7 @@ def _report(metrics: dict, run: dict) -> str:
     policy = metrics["policy"]
     lines += ["## Policy", ""]
     for key in ("violations_total", "sweep_violations", "empty_set_mismatches",
-                "post_gate_widened", "pinned_mismatches"):
+                "post_gate_widened", "pinned_mismatches", "sweep_generate_mismatches"):
         lines.append(f"- **{key}**: {_fmt(policy[key])}")
     lines.append("")
 

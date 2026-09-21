@@ -231,6 +231,16 @@ class TestHarnessSettings:
 
         assert asyncio.run(_run()) == ["azure-us"]
 
+    def test_confidence_escalation_is_off_and_base_untouched(self, tmp_path):
+        """The sweep is one generate call per (case, endpoint): with a pin,
+        escalation would re-call the same endpoint."""
+        assert BASE_SETTINGS.routing.max_escalations > 0  # stock config escalates
+        path = _write(tmp_path, {"endpoints": [_sim_entry()]})
+        specs, _ = load_endpoints(path, live=False, tiers=TIERS)
+        settings = harness_settings(BASE_SETTINGS, specs)
+        assert settings.routing.max_escalations == 0
+        assert BASE_SETTINGS.routing.max_escalations > 0
+
     def test_unknown_provider_raises_and_names_known_providers(self, tmp_path):
         path = _write(tmp_path, {"endpoints": [_sim_entry(provider="totally-unknown-cloud")]})
         specs, _ = load_endpoints(path, live=False, tiers=TIERS)

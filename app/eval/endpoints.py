@@ -210,6 +210,11 @@ def harness_settings(base: Settings, specs: list[EndpointSpec]) -> Settings:
     # swept with no simulated profile, or, under `--live`, called for real
     # although the operator never listed it.
     settings.routing.model_pool = []
+    # The sweep is a single-shot measurement per endpoint: one generate call
+    # per (case, endpoint). With a pin, confidence escalation clamps back to
+    # the pinned tier and calls the SAME endpoint again (doubling spend and
+    # grading the second answer). Router strategies don't read this field.
+    settings.routing.max_escalations = 0
     return settings
 
 
