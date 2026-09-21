@@ -49,13 +49,18 @@ class Case(BaseModel):
         """Build the `AppPolicyView` the pipeline consumes -- via the same
         constructor production uses, never a hand-assembled context.
 
-        Raises `ValueError` on a key `AppPolicyView` doesn't have."""
+        Raises `ValueError` on a key `AppPolicyView` doesn't have, or on a
+        set-valued field given as anything but a list (or null)."""
         converted: dict = {}
         for key, value in self.app_policy.items():
             if key not in _APP_POLICY_FIELDS:
                 raise ValueError(f"unknown app_policy key: {key}")
             if key in _SET_FIELDS and isinstance(value, list):
                 converted[key] = frozenset(value)
+            elif key in _SET_FIELDS and value is not None:
+                # A bare string would otherwise pass through and be matched
+                # character by character (or not at all) downstream.
+                raise ValueError(f"{key} must be a list")
             else:
                 converted[key] = value
         return AppPolicyView(**converted)

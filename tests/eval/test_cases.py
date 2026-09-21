@@ -185,6 +185,20 @@ class TestLoadSuiteErrors:
         with pytest.raises(SuiteError):
             load_suite(str(path))
 
+    def test_set_field_given_as_bare_string_raises_suite_error(self, tmp_path):
+        path = tmp_path / "suite.jsonl"
+        path.write_text(_line(id="bare", app_policy={"allowed_providers": "onprem"}) + "\n")
+        with pytest.raises(SuiteError) as exc_info:
+            load_suite(str(path))
+        assert "allowed_providers must be a list" in str(exc_info.value)
+        assert "bare" in str(exc_info.value)
+
+    def test_set_field_null_is_accepted(self, tmp_path):
+        path = tmp_path / "suite.jsonl"
+        path.write_text(_line(app_policy={"allowed_providers": None}) + "\n")
+        cases, _ = load_suite(str(path))
+        assert cases[0].policy_view().allowed_providers is None
+
     def test_missing_expected_raises_suite_error(self, tmp_path):
         path = tmp_path / "suite.jsonl"
         path.write_text(_line(grader={"kind": "exact"}) + "\n")

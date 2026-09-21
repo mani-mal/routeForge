@@ -27,7 +27,7 @@ from pydantic import BaseModel, ValidationError, model_validator
 from app.apps.db import Database
 from app.apps.registry import ModelRegistry
 from app.apps.store import upsert_onboarded
-from app.config.schema import Settings
+from app.config.schema import PriceCfg, Settings
 
 
 class EndpointFileError(ValueError):
@@ -183,8 +183,11 @@ def harness_settings(base: Settings, specs: list[EndpointSpec]) -> Settings:
     """Build the harness's own `Settings` (spec §3/§4.2): a deep copy of
     `base` -- `base` is never mutated -- with every provider named in `specs`
     enabled, semantic cache + memory switched off so the sweep measures
-    endpoints, not caches, and the static YAML `routing.model_pool` emptied so
-    the endpoint file alone defines which endpoints exist.
+    endpoints, not caches, the static YAML `routing.model_pool` emptied so
+    the endpoint file alone defines which endpoints exist (and prices them,
+    even where a slug is also a `pricing.yaml` model), and confidence
+    escalation off (`max_escalations = 0`) so each sweep call is exactly one
+    generate call.
 
     A provider named in `specs` must already be declared in
     `base.serving.providers` (e.g. `onprem`/`azure`/`bedrock` in a stock
@@ -210,6 +213,19 @@ def harness_settings(base: Settings, specs: list[EndpointSpec]) -> Settings:
     # swept with no simulated profile, or, under `--live`, called for real
     # although the operator never listed it.
     settings.routing.model_pool = []
+    # For the same reason, a spec slug that is also a `pricing.yaml` model
+    # (e.g. `azure-gpt-mid`) must be priced from the endpoint file:
+    # `ModelRegistry.price_for` checks `pricing.models` first, so the stock
+    # price would silently win over the one the file declares. The entry is
+    # REPLACED with the file's price rather than dropped, because
+    # `pricing.baseline_model` must still resolve (`Pipeline._baseline`
+    # indexes `pricing.models` by it) when a file reuses that slug.
+    for spec in specs:
+        if spec.slug in settings.pricing.models:
+            settings.pricing.models[spec.slug] = PriceCfg(
+                input=spec.price.input, output=spec.price.output,
+                cached_input=spec.price.cached_input,
+                tier=spec.tier, provider=spec.provider)
     # The sweep is a single-shot measurement per endpoint: one generate call
     # per (case, endpoint). With a pin, confidence escalation clamps back to
     # the pinned tier and calls the SAME endpoint again (doubling spend and
@@ -229,42 +245,49 @@ async def build_registry(
     db = Database(url="sqlite+aiosqlite://")
     await db.ensure_ready()
 
-    async with db.session() as session:
-        for spec in specs:
-            endpoint = spec.live.endpoint if spec.live is not None else f"sim://{spec.slug}"
-            api_key_env = spec.live.api_key_env if spec.live is not None else None
-            await upsert_onboarded(
-                session, spec.slug,
-                display_name=spec.slug,
-                provider=spec.provider,
-                tier=spec.tier,
-                quality=spec.quality,
-                price_input=spec.price.input,
-                price_output=spec.price.output,
-                price_cached_input=spec.price.cached_input,
-                endpoint=endpoint,
-                api_key_env=api_key_env,
-                enabled=True,
-                probe_status="healthy",
-                region=spec.region,
-                prompt_retention=spec.prompt_retention,
-                accepts_raw_sensitive=spec.accepts_raw_sensitive,
-            )
-        await session.commit()
+    # Any failure after the scratch DB exists (upsert, refresh, the loaded-
+    # rows check) disposes it before re-raising -- never leak it.
+    try:
+        async with db.session() as session:
+            for spec in specs:
+                endpoint = spec.live.endpoint if spec.live is not None else f"sim://{spec.slug}"
+                api_key_env = spec.live.api_key_env if spec.live is not None else None
+                await upsert_onboarded(
+                    session, spec.slug,
+                    display_name=spec.slug,
+                    provider=spec.provider,
+                    tier=spec.tier,
+                    quality=spec.quality,
+                    price_input=spec.price.input,
+                    price_output=spec.price.output,
+                    price_cached_input=spec.price.cached_input,
+                    endpoint=endpoint,
+                    api_key_env=api_key_env,
+                    enabled=True,
+                    probe_status="healthy",
+                    region=spec.region,
+                    prompt_retention=spec.prompt_retention,
+                    accepts_raw_sensitive=spec.accepts_raw_sensitive,
+                )
+            await session.commit()
 
-    registry = ModelRegistry(settings)
-    await registry.refresh(db)
+        registry = ModelRegistry(settings)
+        await registry.refresh(db)
 
-    # `ModelRegistry.refresh` swallows any exception and keeps last-known-good
-    # (app/apps/registry.py) -- exactly right for a live deployment, but a
-    # scratch registry that silently fails to load must not produce an
-    # empty (or partial) benchmark without saying so. Assert every row we
-    # just wrote actually made it into the effective pool.
-    loaded = {c.name for c in registry.effective_pool()}
-    missing = [spec.slug for spec in specs if spec.slug not in loaded]
-    if missing:
-        raise EndpointFileError(
-            missing[0],
-            f"scratch registry refresh did not load: {missing}")
+        # `ModelRegistry.refresh` swallows any exception and keeps last-known-good
+        # (app/apps/registry.py) -- exactly right for a live deployment, but a
+        # scratch registry that silently fails to load must not produce an
+        # empty (or partial) benchmark without saying so. Assert every row we
+        # just wrote actually made it into the effective pool.
+        loaded = {c.name for c in registry.effective_pool()}
+        missing = [spec.slug for spec in specs if spec.slug not in loaded]
+        if missing:
+            raise EndpointFileError(
+                missing[0],
+                f"scratch registry refresh did not load: {missing}")
+
+    except BaseException:
+        await db.dispose()
+        raise
 
     return registry, db

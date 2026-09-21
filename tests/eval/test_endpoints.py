@@ -241,6 +241,40 @@ class TestHarnessSettings:
         assert settings.routing.max_escalations == 0
         assert BASE_SETTINGS.routing.max_escalations > 0
 
+    def test_slug_colliding_with_pricing_yaml_is_priced_from_the_file(self, tmp_path):
+        """`ModelRegistry.price_for` checks `pricing.models` first; a spec
+        slug that is also a stock pricing.yaml model must still be priced
+        from the endpoint file."""
+        assert "azure-gpt-mid" in BASE_SETTINGS.pricing.models
+        path = _write(tmp_path, {"endpoints": [_sim_entry(
+            slug="azure-gpt-mid", provider="azure", tier="mid",
+            price={"input": 99, "output": 98})]})
+        specs, _ = load_endpoints(path, live=False, tiers=TIERS)
+        settings = harness_settings(BASE_SETTINGS, specs)
+        assert BASE_SETTINGS.pricing.models["azure-gpt-mid"].input != 99  # base untouched
+
+        async def _run():
+            registry, db = await build_registry(settings, specs)
+            try:
+                return registry.price_for("azure-gpt-mid")
+            finally:
+                await db.dispose()
+
+        price = asyncio.run(_run())
+        assert price.input == 99
+        assert price.output == 98
+
+    def test_baseline_model_slug_still_resolves(self, tmp_path):
+        """Reusing the pricing baseline's slug replaces its price (the file
+        wins) but keeps `pricing.baseline_model` resolvable."""
+        baseline = BASE_SETTINGS.pricing.baseline_model
+        path = _write(tmp_path, {"endpoints": [_sim_entry(
+            slug=baseline, provider=BASE_SETTINGS.pricing.models[baseline].provider,
+            tier="frontier", price={"input": 7, "output": 7})]})
+        specs, _ = load_endpoints(path, live=False, tiers=TIERS)
+        settings = harness_settings(BASE_SETTINGS, specs)
+        assert settings.pricing.models[baseline].input == 7
+
     def test_unknown_provider_raises_and_names_known_providers(self, tmp_path):
         path = _write(tmp_path, {"endpoints": [_sim_entry(provider="totally-unknown-cloud")]})
         specs, _ = load_endpoints(path, live=False, tiers=TIERS)
@@ -320,6 +354,16 @@ class TestBuildRegistry:
 
         monkeypatch.setattr(ModelRegistry, "refresh", _noop_refresh)
 
+        from app.apps.db import Database
+        disposed: list[bool] = []
+        real_dispose = Database.dispose
+
+        async def _tracking_dispose(self):
+            disposed.append(True)
+            await real_dispose(self)
+
+        monkeypatch.setattr(Database, "dispose", _tracking_dispose)
+
         path = _write(tmp_path, {"endpoints": [_sim_entry()]})
         specs, _ = load_endpoints(path, live=False, tiers=TIERS)
         settings = harness_settings(BASE_SETTINGS, specs)
@@ -329,3 +373,4 @@ class TestBuildRegistry:
                 await build_registry(settings, specs)
 
         asyncio.run(_run())
+        assert disposed == [True]  # the scratch DB is not leaked on error
