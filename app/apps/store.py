@@ -9,6 +9,7 @@ import datetime as dt
 import os
 import time
 import uuid
+from dataclasses import dataclass
 
 from sqlalchemy import case, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,7 +22,19 @@ from app.apps.models import (
 from app.apps.privacy import AppPrivacyProfile, SensitivityRuleView
 from app.apps.tokens import hash_token, token_prefix
 from app.policy.recognizers import CustomRecognizer
-from app.routing.signals import SeedRow
+
+
+@dataclass(frozen=True)
+class SeedRow:
+    """Local to this module now that `SignalStore.seed` is gone (signal
+    hardening Task 2/4): only `aggregate_model_signals` below still produces
+    these, pending Task 4's removal of this function in favour of replaying
+    the observation log."""
+    model: str
+    avg_latency_ms: float
+    error_rate: float
+    samples: int
+    last_ts: float
 
 
 async def resolve_application(session: AsyncSession, raw_token: str | None

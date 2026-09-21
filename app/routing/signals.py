@@ -1,4 +1,4 @@
-"""Measured per-model routing signals (P2a).
+"""Measured per-model routing signals (P2a; signal hardening).
 
 Two signals, both in-process and both PREFERENCES:
 
@@ -15,7 +15,9 @@ is the one authority on eligibility; this store is injected into the step-6
 The store is per-process. Each API replica learns from its own traffic, so two
 replicas can hold slightly different estimates for the same model. That is
 acceptable for a ranking preference -- it cannot affect eligibility, cost caps
-or residency -- and boot seeding from `usage_records` bounds the divergence.
+or residency -- and boot seeding, which now REPLAYS the observation log
+(`app/routing/observations.py`, spec §3.4) rather than aggregating
+`usage_records`, bounds the divergence.
 
 Every method takes an injectable `now` so decay is testable without sleeping.
 """
@@ -23,8 +25,13 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING, Iterable
 
 from app.config.schema import SignalsCfg
+from app.routing.observations import Observation
+
+if TYPE_CHECKING:
+    from app.routing.observations import ObservationSink
 
 
 @dataclass(frozen=True)
@@ -32,15 +39,6 @@ class SignalValue:
     value: float      # milliseconds for latency; [0,1] for availability
     source: str       # "measured" | "tier_default" | "neutral" | "disabled"
     samples: int      # observations behind `value`; reported even when unused
-
-
-@dataclass(frozen=True)
-class SeedRow:
-    model: str
-    avg_latency_ms: float
-    error_rate: float
-    samples: int
-    last_ts: float
 
 
 @dataclass(frozen=True)
@@ -54,13 +52,30 @@ class _ModelState:
 
 
 class SignalStore:
-    def __init__(self, cfg: SignalsCfg) -> None:
+    def __init__(self, cfg: SignalsCfg, *, sink: "ObservationSink | None" = None,
+                 wall_offset: float | None = None) -> None:
         self._cfg = cfg
         self._state: dict[str, _ModelState] = {}
+        self._sink = sink
+        # Maps this process's monotonic clock to wall time (wall = mono +
+        # offset). The log stores wall time; replay maps it back with the
+        # BOOTING process's offset, which preserves every age exactly.
+        self._wall_offset = (time.time() - time.monotonic()
+                             if wall_offset is None else wall_offset)
+
+    @property
+    def wall_offset(self) -> float:
+        return self._wall_offset
 
     # -- internals --------------------------------------------------------
     def _now(self, now: float | None) -> float:
         return time.monotonic() if now is None else now
+
+    def _log(self, t: float, model: str, outcome: str, *, latency_ms=None,
+             streamed=False, ttft_ms=None) -> None:
+        if self._sink is not None:
+            self._sink.put(Observation(t + self._wall_offset, model, outcome,
+                                       latency_ms, streamed, ttft_ms))
 
     def _alpha(self, n: int) -> float:
         """Running mean while samples are few, fixed-width EWMA thereafter."""
@@ -80,6 +95,16 @@ class SignalStore:
         return 1.0 - (1.0 - st.availability) * (0.5 ** (dt / self._cfg.half_life_s))
 
     # -- observation ------------------------------------------------------
+    def _apply_available(self, st: _ModelState, t: float) -> _ModelState:
+        """The availability-success update, shared by `observe_success` and
+        `observe_stream_success` so the rule exists exactly once."""
+        base = self._decayed_availability(st, t)
+        a_av = self._alpha(st.availability_n)
+        return replace(
+            st,
+            availability=min(1.0, base + a_av * (1.0 - base)),
+            availability_n=st.availability_n + 1, availability_ts=t)
+
     def observe_success(self, model: str, latency_ms: float, *,
                         now: float | None = None) -> None:
         t = self._now(now)
@@ -87,15 +112,25 @@ class SignalStore:
         a_lat = self._alpha(st.latency_n)
         new_lat = (latency_ms if st.latency_n == 0
                    else st.latency_ms + a_lat * (latency_ms - st.latency_ms))
-        base = self._decayed_availability(st, t)
-        a_av = self._alpha(st.availability_n)
+        st = self._apply_available(st, t)
         self._state[model] = replace(
-            st,
-            latency_ms=new_lat, latency_n=st.latency_n + 1, latency_ts=t,
-            availability=min(1.0, base + a_av * (1.0 - base)),
-            availability_n=st.availability_n + 1, availability_ts=t)
+            st, latency_ms=new_lat, latency_n=st.latency_n + 1, latency_ts=t)
+        self._log(t, model, "ok", latency_ms=latency_ms)
 
-    def observe_error(self, model: str, *, now: float | None = None) -> None:
+    def observe_stream_success(self, model: str, ttft_ms: float | None, *,
+                               now: float | None = None) -> None:
+        """A streamed call finished successfully. Availability-only: stream
+        timing (queueing, client backpressure, chunk cadence) is not
+        comparable to the non-streamed backend latency the EWMA tracks, so
+        TTFT is logged for observability but never enters `latency_ms`
+        (spec §5)."""
+        t = self._now(now)
+        st = self._state.get(model, _ModelState())
+        self._state[model] = self._apply_available(st, t)
+        self._log(t, model, "ok", streamed=True, ttft_ms=ttft_ms)
+
+    def observe_error(self, model: str, *, streamed: bool = False,
+                      now: float | None = None) -> None:
         """An endpoint-side failure. Latency is NOT updated -- the duration of a
         failed call says nothing about how fast the endpoint serves."""
         t = self._now(now)
@@ -106,6 +141,7 @@ class SignalStore:
             st,
             availability=max(0.0, base + a_av * (0.0 - base)),
             availability_n=st.availability_n + 1, availability_ts=t)
+        self._log(t, model, "error", streamed=streamed)
 
     # -- reads ------------------------------------------------------------
     def _tier_default(self, tier: str) -> float:
@@ -137,14 +173,24 @@ class SignalStore:
         return SignalValue(min(1.0, max(0.0, v)), "measured", st.availability_n)
 
     # -- lifecycle --------------------------------------------------------
-    def seed(self, rows) -> None:
-        """Populate from aggregated `usage_records` at boot. Replaces state for
-        each named model; models absent from `rows` are left untouched."""
-        for r in rows:
-            self._state[r.model] = _ModelState(
-                latency_ms=r.avg_latency_ms, latency_n=r.samples, latency_ts=r.last_ts,
-                availability=min(1.0, max(0.0, 1.0 - r.error_rate)),
-                availability_n=r.samples, availability_ts=r.last_ts)
+    def replay(self, observations: Iterable[Observation]) -> None:
+        """Rebuild state from the observation log (spec §3.4). Each row is
+        applied through the SAME observe_* method that produced it, at its
+        TRUE age (mono = wall - this process's offset), with the sink
+        detached so replay never re-logs what it reads. Rows must be in
+        ascending `ts` order."""
+        sink, self._sink = self._sink, None
+        try:
+            for o in observations:
+                t = o.ts - self._wall_offset
+                if o.outcome == "error":
+                    self.observe_error(o.model, streamed=o.streamed, now=t)
+                elif o.streamed:
+                    self.observe_stream_success(o.model, o.ttft_ms, now=t)
+                else:
+                    self.observe_success(o.model, float(o.latency_ms or 0.0), now=t)
+        finally:
+            self._sink = sink
 
     def snapshot(self) -> dict[str, dict]:
         return {m: {"latency_ms": st.latency_ms, "latency_n": st.latency_n,
