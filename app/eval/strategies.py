@@ -18,7 +18,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from app.config.schema import PoolCandidate, Settings
+from app.config.schema import PoolCandidate, RoutingCfg, Settings, SignalsCfg
 from app.errors import NoEligibleCandidate
 from app.eval.cases import Case
 from app.models import ExecutionPolicyContext
@@ -124,10 +124,55 @@ def router_variant(base_settings: Settings, weights: dict[str, float],
     (the instrument for backlog B45's `router_weights:<name>`). Deep-copies
     `base_settings` -- weights are read live off `Settings` (see
     `interfaces.md`), so a variant needs its own `Settings` object, never a
-    mutation of the one other strategies share."""
+    mutation of the one other strategies share.
+
+    `weights` is copied (`dict(weights)`, never aliased into the variant's
+    `Settings`) and run through the REAL `RoutingCfg` validation --
+    `RoutingCfg.model_validate`, not a bare attribute assignment, so
+    `_rename_capacity_weight` (app/config/schema.py) actually runs: the
+    legacy `capacity` -> `availability` alias is honored, and a `weights`
+    mapping missing one of `quality`/`cost`/`latency`/`availability` raises a
+    clear `pydantic.ValidationError` right here, at variant-construction
+    time -- not a bare `KeyError` the first time `DefaultRoutingStrategy.rank`
+    reads the missing key mid-sweep.
+    """
     settings = copy.deepcopy(base_settings)
-    settings.routing.weights = weights
+    settings.routing = RoutingCfg.model_validate(
+        {**settings.routing.model_dump(), "weights": dict(weights)})
     return router(settings, registry, signals)
+
+
+class _FrozenReadSignalStore(SignalStore):
+    """A `SignalStore` whose `now=None` reads always resolve to a FIXED
+    monotonic anchor instead of the live clock.
+
+    `Router.select` never overrides `now` -- every read inside
+    `DefaultRoutingStrategy.rank` goes through `now=None`
+    (`app/routing/strategy.py`). Reading a warm store against the live clock
+    makes a replayed signal's value a function of how long it happens to take
+    between `warm_signals` building the store and something scoring it --
+    e.g. availability's wall-clock decay (`half_life_s`) keeps moving even a
+    single `time.sleep()` between two reads, and once real elapsed time
+    exceeds `staleness_s` a measured latency silently reverts to
+    `tier_default`. Either makes the harness's `--seed`
+    byte-identical-`metrics.json` guarantee false: the same seed, run twice,
+    could score differently depending on wall-clock timing alone. Freezing
+    the read clock at the anchor makes every `now=None` read against this
+    store -- now, or an hour from now -- return the exact same value: a pure
+    function of the replayed rows, never of when they happen to be read.
+
+    `Router.select` itself is untouched -- this is an eval-only subclass, and
+    only `now=None` reads are affected; an explicit `now=` (as
+    `tests/routing/test_signal_wiring.py` uses for the live/booted-store
+    comparison) still passes straight through.
+    """
+
+    def __init__(self, cfg: SignalsCfg, frozen_now: float, **kwargs) -> None:
+        super().__init__(cfg, **kwargs)
+        self._frozen_now = frozen_now
+
+    def _now(self, now: float | None) -> float:
+        return self._frozen_now if now is None else now
 
 
 def warm_signals(settings: Settings, rows: Iterable["MatrixRow"],
@@ -142,23 +187,50 @@ def warm_signals(settings: Settings, rows: Iterable["MatrixRow"],
     Never streamed -- the harness's simulated/live backends never stream
     (spec §5.1/§5.2).
 
-    `Router.select` has no `now` override, so it always reads signals against
-    the REAL wall clock (`now=None`). For a replayed observation to read as
-    `measured` rather than decayed back to neutral / gone stale, its
-    reconstructed monotonic time must land close to whenever the caller next
-    evaluates a router strategy against this store -- so rows are anchored to
-    THIS process's `time.monotonic()` right now, spaced 1 s apart ascending,
-    the last row landing at (`now` - `wall_offset`). Call this immediately
-    before evaluating `router(...)`/`router_variant(...)` against the
-    returned store, the way the runner's sweep-then-score sequencing already
-    does; `wall_offset` (default 0.0) lets a caller push the whole batch
-    further into the past (e.g. to exercise staleness) without changing row
-    order or spacing.
+    Returns a `_FrozenReadSignalStore`: `Router.select` has no `now`
+    override, so without freezing, reads happen against the REAL wall clock
+    and the "warm" effect would depend on exactly when it's scored relative
+    to when this function ran (see that class's docstring, and the harness's
+    determinism requirement -- byte-identical `metrics.json` for a fixed
+    `--seed`). The read clock is frozen at THIS process's `time.monotonic()`
+    right now -- call this once, immediately before scoring, and every
+    subsequent `now=None` read reproduces exactly what it would have read the
+    instant replay finished, however much real time actually elapses before
+    (or between) those reads.
+
+    Rows are anchored to that SAME `time.monotonic()` reading, spaced 1 s
+    apart ascending, the last row landing at (`now` - `wall_offset`) -- i.e.
+    `wall_offset` (default 0.0) is the age, in seconds, of the most recent
+    row AS SEEN FROM the frozen read clock (which itself does not move with
+    `wall_offset`). A `wall_offset` of 0 is "replay just finished" (every row
+    reads as fresh as `SignalStore.replay` can make it); a `wall_offset` past
+    `staleness_s`/several `half_life_s` periods deliberately makes a "warm"
+    store's signals decay back to indistinguishable from a freshly
+    -constructed, never-replayed one -- without changing row order or
+    spacing. (An earlier draft anchored the frozen read clock to `now -
+    wall_offset` too, which made `wall_offset` cancel out of the reads
+    entirely -- the read and the rows always aged together, so staleness
+    could never actually be exercised. Keeping the read anchor fixed at
+    `now` while only the rows move is what makes `wall_offset` a genuine
+    staleness knob.)
+
+    The 1 s synthetic spacing between rows is a modeling simplification worth
+    knowing about: in a long sweep (many rows), the FIRST row replayed is,
+    by construction, `len(rows) - 1` synthetic seconds "older" than the
+    last -- so an early error in a long sweep decays (partially recovers
+    availability) measurably more than the same error placed near the end,
+    purely as an artifact of sweep position, not of any real elapsed time.
+    Short sweeps (a handful of rows per model, the common case) keep this
+    negligible; a very large per-model row count would not.
     """
-    store = SignalStore(settings.routing.signals)
     materialized = list(rows)
     n = len(materialized)
     mono_now = time.monotonic()
+    # The frozen read anchor is fixed at `mono_now` regardless of
+    # `wall_offset` -- only the replayed rows' reconstructed mono times move
+    # with it, so `wall_offset` is the read/write age GAP, not a shift that
+    # cancels itself out (see the docstring above).
+    store = _FrozenReadSignalStore(settings.routing.signals, frozen_now=mono_now)
     observations = [
         Observation(
             ts=(mono_now - wall_offset - (n - 1 - i)) + store.wall_offset,

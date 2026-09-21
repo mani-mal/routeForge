@@ -11,7 +11,9 @@ docs/superpowers/specs/2026-09-21-feasible-route-bench-design.md §5 step 3.
 from __future__ import annotations
 
 import asyncio
+import time
 
+import pydantic
 import pytest
 import yaml
 
@@ -244,41 +246,124 @@ class TestRouter:
 # reach the router (spec §5 step 3 / task-5 brief Step 1).
 # --------------------------------------------------------------------------
 
+_HOT_WEIGHTS = {"quality": 1.0, "cost": 0.6, "latency": 0.3, "availability": 5.0}
+_COLD_WEIGHTS = {**_HOT_WEIGHTS, "availability": 0.0}
+
+
+def _slow_fast_setup(tmp_path):
+    """Two same-tier, same-price candidates differing only in measured
+    latency/availability once warmed: `slow-available` (5 successes,
+    `latency_ms=900`) and `fast-flaky` (5 errors). `min_samples` defaults to
+    5, so exactly 5 rows per model is the minimum that reports both signals
+    as `measured` rather than `neutral`/`tier_default`. Shared by every
+    router_variant/warm_signals test below."""
+    settings, registry, case, ctx, eligible = _build(tmp_path, [
+        _entry("slow-available", price_input=0.08, price_output=0.08),
+        _entry("fast-flaky", price_input=0.08, price_output=0.08),
+    ])
+    inp = _strategy_input(case, ctx, eligible)
+    assert {c.name for c in inp.eligible} == {"slow-available", "fast-flaky"}
+    rows = (
+        [MatrixRow(case_id=f"warm-{i}", endpoint="slow-available",
+                   quality=1.0, passed=True, cost_usd=0.0001, latency_ms=900.0)
+         for i in range(5)]
+        + [MatrixRow(case_id=f"warm-{i}", endpoint="fast-flaky",
+                     quality=0.0, passed=False, cost_usd=0.0001,
+                     latency_ms=None, error="BackendUnavailable")
+           for i in range(5)]
+    )
+    return settings, registry, inp, rows
+
+
 class TestRouterVariantAndWarmSignals:
     def test_availability_weight_flips_choice_between_slow_available_and_fast_flaky(
             self, tmp_path):
-        settings, registry, case, ctx, eligible = _build(tmp_path, [
-            _entry("slow-available", price_input=0.08, price_output=0.08),
-            _entry("fast-flaky", price_input=0.08, price_output=0.08),
-        ])
-        inp = _strategy_input(case, ctx, eligible)
-        assert {c.name for c in inp.eligible} == {"slow-available", "fast-flaky"}
-
-        # min_samples defaults to 5: exactly 5 rows per model so both
-        # signals report as "measured", not "neutral"/"tier_default".
-        rows = (
-            [MatrixRow(case_id=f"warm-{i}", endpoint="slow-available",
-                       quality=1.0, passed=True, cost_usd=0.0001,
-                       latency_ms=900.0)
-             for i in range(5)]
-            + [MatrixRow(case_id=f"warm-{i}", endpoint="fast-flaky",
-                         quality=0.0, passed=False, cost_usd=0.0001,
-                         latency_ms=None, error="BackendUnavailable")
-               for i in range(5)]
-        )
+        settings, registry, inp, rows = _slow_fast_setup(tmp_path)
         signals = warm_signals(settings, rows)
 
-        base_weights = {"quality": 1.0, "cost": 0.6, "latency": 0.3,
-                        "availability": 0.0}
-        cold_avail = router_variant(settings, base_weights, registry, signals)(inp)
+        cold_avail = router_variant(settings, _COLD_WEIGHTS, registry, signals)(inp)
         assert cold_avail == "fast-flaky"
 
-        hot_weights = {**base_weights, "availability": 5.0}
-        hot_avail = router_variant(settings, hot_weights, registry, signals)(inp)
+        hot_avail = router_variant(settings, _HOT_WEIGHTS, registry, signals)(inp)
         assert hot_avail == "slow-available"
 
         # `router_variant` must not mutate the base Settings weights.
-        assert settings.routing.weights != hot_weights
+        assert settings.routing.weights != _HOT_WEIGHTS
+
+    def test_frozen_read_clock_is_stable_across_real_elapsed_time(self, tmp_path):
+        """Fix round 1, item 1(a): scoring the same warm store twice, with a
+        real sleep between, must give identical choices and identical
+        availability values -- not the live-clock drift the reviewer
+        measured (0.0015386 -> 0.0015773 over 50 ms) before the read clock
+        was frozen."""
+        settings, registry, inp, rows = _slow_fast_setup(tmp_path)
+        signals = warm_signals(settings, rows)
+
+        first_choice = router_variant(settings, _HOT_WEIGHTS, registry, signals)(inp)
+        first_slow = signals.availability("slow-available")
+        first_fast = signals.availability("fast-flaky")
+
+        time.sleep(0.05)
+
+        second_choice = router_variant(settings, _HOT_WEIGHTS, registry, signals)(inp)
+        second_slow = signals.availability("slow-available")
+        second_fast = signals.availability("fast-flaky")
+
+        assert first_choice == second_choice == "slow-available"
+        assert (first_slow.value, first_slow.source) == (second_slow.value, second_slow.source)
+        assert (first_fast.value, first_fast.source) == (second_fast.value, second_fast.source)
+
+    def test_frozen_read_clock_is_stable_when_the_live_clock_advances(self, tmp_path, monkeypatch):
+        """Same guarantee as above, exercised via a `time.monotonic`
+        monkeypatch instead of a real sleep -- faster, and pins that the
+        frozen store genuinely never consults the live clock for a `now=None`
+        read, rather than merely tolerating a 50 ms gap."""
+        settings, registry, inp, rows = _slow_fast_setup(tmp_path)
+        signals = warm_signals(settings, rows)
+        before = router_variant(settings, _HOT_WEIGHTS, registry, signals)(inp)
+        before_value = signals.availability("fast-flaky").value
+
+        real_monotonic = time.monotonic
+        monkeypatch.setattr(time, "monotonic", lambda: real_monotonic() + 10_000.0)
+
+        after = router_variant(settings, _HOT_WEIGHTS, registry, signals)(inp)
+        after_value = signals.availability("fast-flaky").value
+
+        assert before == after == "slow-available"
+        assert before_value == after_value
+
+    def test_large_wall_offset_makes_warm_reproduce_cold(self, tmp_path):
+        """Fix round 1, item 1(b): a store built with `wall_offset` pushed
+        well past `staleness_s` decays the availability flip away -- warm
+        scoring reproduces a plain, never-replayed `SignalStore`'s choice.
+        Guards `wall_offset`'s meaning (an actual staleness knob) and warm
+        -vs-cold distinctness (a *small*/default `wall_offset` still differs
+        from cold, so this isn't trivially true for every `wall_offset`)."""
+        settings, registry, inp, rows = _slow_fast_setup(tmp_path)
+
+        fresh_signals = warm_signals(settings, rows)
+        fresh_choice = router_variant(settings, _HOT_WEIGHTS, registry, fresh_signals)(inp)
+        assert fresh_choice == "slow-available"   # the warm effect, pinned again for contrast
+
+        far_past = 10 * settings.routing.signals.staleness_s
+        stale_signals = warm_signals(settings, rows, wall_offset=far_past)
+        stale_choice = router_variant(settings, _HOT_WEIGHTS, registry, stale_signals)(inp)
+
+        cold_signals = SignalStore(settings.routing.signals)
+        cold_choice = router_variant(settings, _HOT_WEIGHTS, registry, cold_signals)(inp)
+
+        assert stale_choice == cold_choice
+        # The flip itself: `fast-flaky`'s near-zero availability decayed back
+        # to (essentially) neutral, and `slow-available`'s measured latency
+        # went stale back to tier_default -- the two candidates score
+        # identically to how an unreplayed store would see them, not merely
+        # "happen to pick the same slug." Pinning the numbers (not just the
+        # final choice) is what actually distinguishes "the flip disappeared"
+        # from "the flip disappeared to coincidentally land on the same slug
+        # anyway" (`fresh_choice` above is ALSO `slow-available`, by tie
+        # -break order, so the choice alone doesn't prove the signals decayed).
+        assert stale_signals.availability("fast-flaky").value == pytest.approx(1.0, abs=1e-6)
+        assert stale_signals.latency("slow-available", "cheap").source == "tier_default"
 
     def test_warm_signals_replays_through_signalstore_replay(self, tmp_path, monkeypatch):
         """No shortcutting via direct observe_* calls -- `replay` is the only
@@ -305,3 +390,46 @@ class TestRouterVariantAndWarmSignals:
         assert obs[0].outcome == "ok"
         assert obs[0].latency_ms == 250.0
         assert obs[0].streamed is False
+
+
+# --------------------------------------------------------------------------
+# router_variant weight validation -- fix round 1, item 2. `weights` must go
+# through the real `RoutingCfg` validation (the `capacity` -> `availability`
+# rename, and a required-key check), erroring clearly at variant-construction
+# time rather than `KeyError`ing deep inside `DefaultRoutingStrategy.rank`.
+# --------------------------------------------------------------------------
+
+class TestRouterVariantWeightValidation:
+    def test_legacy_capacity_key_is_renamed_like_a_real_routing_yaml(self, tmp_path):
+        settings, registry, case, ctx, eligible = _build(tmp_path, [
+            _entry("cheap-model", price_input=0.01, price_output=0.01),
+            _entry("other-model", price_input=0.02, price_output=0.02),
+        ])
+        inp = _strategy_input(case, ctx, eligible)
+        signals = SignalStore(settings.routing.signals)
+
+        capacity_weights = {"quality": 1.0, "cost": 0.6, "latency": 0.3,
+                            "capacity": 0.2}
+        via_capacity = router_variant(settings, capacity_weights, registry, signals)(inp)
+
+        availability_weights = {"quality": 1.0, "cost": 0.6, "latency": 0.3,
+                                "availability": 0.2}
+        via_availability = router_variant(settings, availability_weights, registry, signals)(inp)
+
+        # Same routing decision either way -- `capacity` really did become
+        # `availability`, not a silently-ignored extra key.
+        assert via_capacity == via_availability
+
+    def test_weights_missing_a_required_key_raises_at_construction_not_in_rank(
+            self, tmp_path):
+        settings, registry, case, ctx, eligible = _build(tmp_path, [
+            _entry("cheap-model", price_input=0.01, price_output=0.01),
+        ])
+        inp = _strategy_input(case, ctx, eligible)
+        signals = SignalStore(settings.routing.signals)
+
+        incomplete_weights = {"quality": 1.0, "cost": 0.6, "latency": 0.3}
+        # missing "availability" -- must fail HERE, not the first time a
+        # returned strategy is called.
+        with pytest.raises(pydantic.ValidationError, match="availability"):
+            router_variant(settings, incomplete_weights, registry, signals)
