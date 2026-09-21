@@ -3,12 +3,20 @@ replay identity (§3.5): replaying the log reproduces the live state up to a
 constant clock shift."""
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from hypothesis import given, settings, strategies as st
 
+from app.config.loader import load_settings
 from app.config.schema import SignalsCfg
+from app.gateway.backends.base import StreamChunk
+from app.gateway.gateway import Gateway
+from app.models import ExecutionPolicyContext, GenerationResult, Message
 from app.routing.observations import Observation, ObservationSink
+from app.routing.router import Router
 from app.routing.signals import SignalStore
+from tests._litellm_fake import make_test_registry
 
 CFG = SignalsCfg(min_samples=3, half_life_s=100.0, staleness_s=1000.0)
 
@@ -148,3 +156,171 @@ def test_replaying_only_the_last_K_is_within_the_EWMA_bound():
     a = full.latency("m", "cheap", now=1000.0).value
     b = tail.latency("m", "cheap", now=1000.0).value
     assert abs(a - b) <= bound
+
+
+# -- Task 6: Gateway.run_stream observes availability -----------------------
+#
+# A minimal InferenceBackend stand-in whose generate_stream is fully
+# scripted: how many deltas to yield, whether/when to raise, and whether to
+# emit the terminal chunk at all. Exercises Gateway.run_stream directly
+# (not through the Pipeline), matching the brief's "drive Gateway.run_stream
+# directly" instruction.
+
+GS = load_settings()
+GREG = make_test_registry(GS)
+
+
+class _Status(Exception):
+    """A status-coded failure, matching the pattern in
+    tests/routing/test_signal_wiring.py -- counts_as_endpoint_unhealth reads
+    `.status_code`."""
+
+    def __init__(self, code):
+        super().__init__(f"http {code}")
+        self.status_code = code
+
+
+class _ScriptedStreamBackend:
+    """generate_stream yields `deltas`, optionally raising `exc` at delta
+    index `raise_at` (raising before any delta at all when `raise_at == 0`
+    and `deltas` is empty), then emits the terminal chunk unless
+    `emit_final=False`."""
+
+    name = "scripted"
+
+    def __init__(self, *, deltas: tuple[str, ...] = ("hi",), raise_at=None,
+                exc: Exception | None = None, emit_final: bool = True) -> None:
+        self._deltas = deltas
+        self._raise_at = raise_at
+        self._exc = exc if exc is not None else RuntimeError("boom")
+        self._emit_final = emit_final
+
+    async def generate(self, *a, **kw):
+        raise NotImplementedError
+
+    async def generate_stream(self, model, messages, price, tier, hint,
+                              tools=None, tool_choice=None, params=None):
+        for i, d in enumerate(self._deltas):
+            if self._raise_at is not None and i == self._raise_at:
+                raise self._exc
+            yield StreamChunk(delta=d)
+        if self._raise_at is not None and self._raise_at >= len(self._deltas):
+            raise self._exc
+        if self._emit_final:
+            yield StreamChunk(final=GenerationResult(
+                model=model, text="".join(self._deltas), tokens_in=1,
+                tokens_out=1, latency_ms=1.0, cost_usd=0.0001,
+                confidence=None, tool_calls=[]))
+
+    async def health(self):
+        raise NotImplementedError
+
+
+def _stream_ctx():
+    providers = frozenset({"onprem", "azure", "bedrock"})
+    return ExecutionPolicyContext(
+        request_id="r", tenant_id="t", sensitivity="public", onprem_only=False,
+        allowed_providers=providers,
+        allowed_models=frozenset(c.name for c in GREG.effective_pool()
+                                 if c.provider in providers),
+        max_cost_usd=0.05, max_latency_ms=15000, risk_class="low",
+        require_verification=False, detected_entities=(), redaction_map_id=None)
+
+
+def _stream_gateway(backend, sink):
+    store_ = SignalStore(CFG, sink=sink)
+    gw = Gateway(GS, backend, Router(GS, registry=GREG), GREG, signals=store_)
+    return gw, store_
+
+
+def _run_stream(gw):
+    async def go():
+        stream, _records = await gw.run_stream(
+            _stream_ctx(), [Message(role="user", content="hi")], 20, 0.1, {})
+        async for _ in stream:
+            pass
+    asyncio.run(go())
+
+
+def test_stream_terminal_chunk_observes_availability_with_ttft_latency_untouched():
+    sink = ObservationSink(100)
+    gw, store_ = _stream_gateway(
+        _ScriptedStreamBackend(deltas=("Hi", " there")), sink)
+
+    _run_stream(gw)
+
+    obs = sink.drain()
+    assert len(obs) == 1
+    o = obs[0]
+    assert o.outcome == "ok"
+    assert o.streamed is True
+    assert o.ttft_ms is not None and o.ttft_ms >= 0
+    assert o.latency_ms is None
+    model = next(iter(store_.snapshot()))
+    assert store_.snapshot()[model]["latency_n"] == 0  # never non-streamed
+
+
+def test_stream_error_before_first_chunk_observes_once_and_propagates():
+    sink = ObservationSink(100)
+    gw, store_ = _stream_gateway(
+        _ScriptedStreamBackend(deltas=(), raise_at=0, exc=_Status(503)), sink)
+
+    with pytest.raises(_Status):
+        _run_stream(gw)
+
+    obs = sink.drain()
+    assert len(obs) == 1
+    assert obs[0].outcome == "error"
+    assert obs[0].streamed is True
+
+
+def test_stream_error_after_two_deltas_observes_once():
+    sink = ObservationSink(100)
+    gw, store_ = _stream_gateway(
+        _ScriptedStreamBackend(deltas=("a", "b", "c"), raise_at=2,
+                               exc=_Status(503)), sink)
+
+    with pytest.raises(_Status):
+        _run_stream(gw)
+
+    obs = sink.drain()
+    assert len(obs) == 1
+    assert obs[0].outcome == "error"
+    assert obs[0].streamed is True
+
+
+def test_stream_error_excluded_by_counts_as_endpoint_unhealth_is_not_observed():
+    sink = ObservationSink(100)
+    gw, store_ = _stream_gateway(
+        _ScriptedStreamBackend(deltas=(), raise_at=0, exc=_Status(400)), sink)
+
+    with pytest.raises(_Status):
+        _run_stream(gw)
+
+    assert sink.drain() == []
+
+
+def test_stream_consumer_disconnect_is_not_observed():
+    sink = ObservationSink(100)
+    gw, store_ = _stream_gateway(
+        _ScriptedStreamBackend(deltas=("a", "b", "c")), sink)
+
+    async def go():
+        stream, _records = await gw.run_stream(
+            _stream_ctx(), [Message(role="user", content="hi")], 20, 0.1, {})
+        first = await stream.__anext__()
+        assert first.delta == "a"
+        await stream.aclose()
+
+    asyncio.run(go())
+    assert sink.drain() == []
+
+
+def test_stream_without_terminal_chunk_is_not_observed():
+    sink = ObservationSink(100)
+    gw, store_ = _stream_gateway(
+        _ScriptedStreamBackend(deltas=("a", "b"), emit_final=False), sink)
+
+    _run_stream(gw)
+
+    assert sink.drain() == []

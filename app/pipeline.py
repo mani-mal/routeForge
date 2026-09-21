@@ -1248,6 +1248,11 @@ class Pipeline:
         # for the `stream_unverified` caller (Task 6).
         get_meta.detector = egress_det   # type: ignore[attr-defined]
         get_meta.ctx = ctx        # type: ignore[attr-defined]
+        # The router's chosen model, known eagerly (records[0] is the
+        # step="router" DecisionRecord run_stream always returns) -- the
+        # route meters it on a streamed failure (spec §4), before any delta
+        # (or a terminal result) exists.
+        get_meta.chosen_model = records[0].chosen   # type: ignore[attr-defined]
         return _deltas(), get_meta
 
     def _assemble_stream_meta(self, request_id: str, ctx: ExecutionPolicyContext,

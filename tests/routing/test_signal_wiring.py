@@ -17,7 +17,7 @@ from app.apps import store
 from app.apps.policy import AppPolicyView
 from app.compression.ccr import CCRStore
 from app.config.loader import load_settings
-from app.errors import ContextWindowExceeded
+from app.errors import BackendUnavailable, ContextWindowExceeded
 from app.gateway.gateway import Gateway, counts_as_endpoint_unhealth
 from app.models import ChatRequest, ExecutionPolicyContext, Message
 from app.pipeline import Pipeline, PipelineRejected
@@ -146,6 +146,27 @@ def test_a_rejected_request_never_reaches_the_gateway_so_never_touches_signals()
             app_policy=AppPolicyView(allowed_models=frozenset({"local-32b"}))))
 
     assert store_.snapshot() == {}
+
+
+def test_backend_unavailable_carries_attempted_models_in_order():
+    """Task 6 (B41): every candidate the gateway tried before giving up is on
+    `BackendUnavailable.attempted_models`, in the order it tried them -- the
+    route will meter `attempted_models[-1]` on its `error` usage row."""
+    calls: list[str] = []
+
+    class _AlwaysFails(_DeterministicLiteLLM):
+        async def generate(self, model, messages, price, tier, hint, tools=None,
+                           tool_choice=None, params=None):
+            calls.append(model)
+            raise RuntimeError("down")
+
+    gw = Gateway(S, _AlwaysFails(S), Router(S, registry=REG), REG)
+    msgs = [Message(role="user", content="hello")]
+    with pytest.raises(BackendUnavailable) as ei:
+        asyncio.run(gw.run(_ctx({"onprem", "azure", "bedrock"}), msgs, 20, 0.1, {}))
+
+    assert ei.value.attempted_models == tuple(calls)
+    assert len(ei.value.attempted_models) >= 1
 
 
 def test_router_decision_carries_the_scoring_record():

@@ -146,6 +146,33 @@ async def _drain_capture(pipeline: Pipeline, content: str, app_policy):
     return collected, get_meta()
 
 
+def test_get_meta_chosen_model_is_set_eagerly_before_any_delta(monkeypatch):
+    """Task 6 (B41 groundwork): `get_meta.chosen_model` is available
+    immediately after `run_stream` returns -- before a single delta is
+    consumed -- so a streamed failure (Task 7) can meter it. It matches the
+    model the stream actually served, surfaced post-drain as `meta["model"]`."""
+    from app.gateway.backends import litellm_backend
+
+    monkeypatch.setattr(
+        litellm_backend, "acompletion",
+        make_streaming_acompletion(["a", "b"]))
+
+    s = _settings()
+    pipe = _pipeline(s)
+
+    async def _run():
+        req = ChatRequest(messages=[Message(role="user", content="hi there")])
+        deltas, get_meta = await pipe.run_stream(
+            "req-1", "demo", req, app_policy=AppPolicyView(residency="any"))
+        chosen_before = get_meta.chosen_model   # set before ANY delta is drained
+        assert chosen_before
+        async for _ in deltas:
+            pass
+        assert get_meta()["model"] == chosen_before
+
+    asyncio.run(_run())
+
+
 def test_get_meta_before_stream_consumed_raises(monkeypatch):
     from app.gateway.backends import litellm_backend
 
