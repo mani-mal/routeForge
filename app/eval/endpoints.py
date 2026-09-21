@@ -182,8 +182,9 @@ def load_endpoints(
 def harness_settings(base: Settings, specs: list[EndpointSpec]) -> Settings:
     """Build the harness's own `Settings` (spec §3/§4.2): a deep copy of
     `base` -- `base` is never mutated -- with every provider named in `specs`
-    enabled, and semantic cache + memory switched off so the sweep measures
-    endpoints, not caches.
+    enabled, semantic cache + memory switched off so the sweep measures
+    endpoints, not caches, and the static YAML `routing.model_pool` emptied so
+    the endpoint file alone defines which endpoints exist.
 
     A provider named in `specs` must already be declared in
     `base.serving.providers` (e.g. `onprem`/`azure`/`bedrock` in a stock
@@ -203,6 +204,12 @@ def harness_settings(base: Settings, specs: list[EndpointSpec]) -> Settings:
         cfg.enabled = True
     settings.serving.semantic_cache.enabled = False
     settings.serving.memory.enabled = False
+    # The endpoint file is the WHOLE endpoint universe of a run. The
+    # deployment's static YAML pool (e.g. `azure-gpt-mid`) would otherwise
+    # rejoin the effective pool the moment its provider is enabled above --
+    # swept with no simulated profile, or, under `--live`, called for real
+    # although the operator never listed it.
+    settings.routing.model_pool = []
     return settings
 
 

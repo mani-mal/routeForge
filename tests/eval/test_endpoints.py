@@ -211,6 +211,26 @@ class TestHarnessSettings:
         assert base.serving.semantic_cache.enabled is True
         assert base.serving.memory.enabled is True
 
+    def test_static_yaml_pool_is_excluded(self, tmp_path):
+        """Enabling `azure` for a file endpoint must not pull the
+        deployment's own YAML azure models into the harness pool."""
+        assert BASE_SETTINGS.routing.model_pool  # the stock pool is non-empty
+        path = _write(tmp_path, {"endpoints": [
+            _sim_entry(slug="azure-us", provider="azure", tier="mid")]})
+        specs, _ = load_endpoints(path, live=False, tiers=TIERS)
+        settings = harness_settings(BASE_SETTINGS, specs)
+        assert settings.routing.model_pool == []
+        assert BASE_SETTINGS.routing.model_pool  # base untouched
+
+        async def _run():
+            registry, db = await build_registry(settings, specs)
+            try:
+                return sorted(c.name for c in registry.effective_pool())
+            finally:
+                await db.dispose()
+
+        assert asyncio.run(_run()) == ["azure-us"]
+
     def test_unknown_provider_raises_and_names_known_providers(self, tmp_path):
         path = _write(tmp_path, {"endpoints": [_sim_entry(provider="totally-unknown-cloud")]})
         specs, _ = load_endpoints(path, live=False, tiers=TIERS)
