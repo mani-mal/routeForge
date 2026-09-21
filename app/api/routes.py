@@ -1018,7 +1018,13 @@ class _WatchedDeltas:
     -- a `BaseException`, raised at ITS yield, never through here -- so it is
     never mistaken for one. Only the backend fetch is watched: an error in the
     caller's own loop body (e.g. the egress verifier) is not a backend
-    failure."""
+    failure.
+
+    `failed` alone over-reports: the pipeline's `_deltas()` also runs its own
+    post-stream work (`_assemble_stream_meta`) inside this iteration, after
+    the backend stream has ended and the gateway has already observed it
+    `ok`. Callers therefore meter `error` only when `failed` AND the pipeline
+    did not flag `get_meta.backend_completed` (`_backend_failed`)."""
 
     def __init__(self, deltas: AsyncIterator[str]) -> None:
         self._deltas = deltas
@@ -1031,6 +1037,13 @@ class _WatchedDeltas:
         except Exception as exc:
             self.failed = not isinstance(exc, (ContextWindowExceeded, PipelineRejected))
             raise
+
+
+def _backend_failed(watched: _WatchedDeltas, get_meta: Callable[[], dict]) -> bool:
+    """A real-token stream is metered `error` only for a BACKEND failure: the
+    watched iteration raised, and the backend stream had not already ended
+    normally (`Pipeline.run_stream` sets `get_meta.backend_completed`)."""
+    return watched.failed and not getattr(get_meta, "backend_completed", False)
 
 
 async def _record_failed_stream(request: Request, *, tenant: str, request_id: str,
@@ -1061,7 +1074,7 @@ def _stream_unverified_response(
     frame + `[DONE]`. `_finalize` runs in a `finally` so the DecisionRecord,
     usage row, and bus publish are recorded for EVERY streamed request --
     including a client that disconnects mid-stream (Global Constraint 2).
-    The one exception is a backend failure (`_WatchedDeltas.failed`): there is
+    The one exception is a backend failure (`_backend_failed`): there is
     no final metadata to finalize, so it is metered as an `error` row instead
     (spec §4) and the exception propagates as before.
 
@@ -1090,7 +1103,7 @@ def _stream_unverified_response(
             # as `error` instead (spec §4). Every other exit -- normal
             # completion and a mid-stream client disconnect alike -- gets the
             # best-effort finalize. Accounting must not be lost.
-            if watched.failed:
+            if _backend_failed(watched, get_meta):
                 await _record_failed_stream(request, tenant=tenant,
                                             request_id=request_id, started=started,
                                             get_meta=get_meta)
@@ -1160,7 +1173,7 @@ def _incremental_verify_response(
             # on EVERY exit. `client_text` is exactly what the client
             # received (redacted); on a mid-stream disconnect it is the
             # partial released prefix, which is honest.
-            if watched.failed:
+            if _backend_failed(watched, get_meta):
                 await _record_failed_stream(request, tenant=tenant,
                                             request_id=request_id, started=started,
                                             get_meta=get_meta)

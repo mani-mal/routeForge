@@ -173,6 +173,39 @@ def test_real_token_stream_backend_failure_writes_one_error_row(monkeypatch, mod
 # --------------------------------------------------------------------------- #
 # 4. no error row: overflow, no eligible candidate, policy rejection, disconnect
 # --------------------------------------------------------------------------- #
+def test_pipeline_error_after_a_completed_backend_stream_writes_no_error_row(
+        monkeypatch):
+    """The backend stream finished (the gateway already observed it `ok`);
+    the pipeline then fails assembling its own final metadata. That is a
+    pipeline bug, not a backend failure: it must never be metered `error`."""
+    from app.pipeline import Pipeline
+
+    boomed: list[bool] = []
+
+    def _boom(self, *a, **kw):
+        boomed.append(True)
+        raise RuntimeError("assemble boom")
+
+    async def _streams_fine(model, call):
+        async def _gen():
+            yield _FakeStreamChunk(content="all ")
+            yield _FakeStreamChunk(content="good")
+            yield _FakeStreamChunk(empty_choices=True,
+                                   usage={"prompt_tokens": 5, "completion_tokens": 2})
+        return _gen()
+
+    monkeypatch.setattr(litellm_backend, "_acompletion", _streams_fine)
+    monkeypatch.setattr(Pipeline, "_assemble_stream_meta", _boom)
+    with _client() as c:
+        app = onboard(c, "err-post-stream", stream_mode="stream_unverified")
+        with c.stream("POST", "/v1/chat/completions", headers=app.headers,
+                      json={**HELLO, "stream": True}) as r:
+            assert r.status_code == 200
+            "".join(r.iter_text())
+        assert boomed, "the backend stream never completed"
+        assert _rows(c, "error") == [], [(x.status, x.model) for x in _rows(c)]
+
+
 def test_context_window_overflow_writes_no_error_row(monkeypatch):
     async def _overflow(model, call):
         raise ContextWindowExceeded(f"{model}: maximum context length exceeded")

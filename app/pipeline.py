@@ -1223,6 +1223,9 @@ class Pipeline:
                     yield chunk.delta
                 if chunk.final is not None:
                     result = chunk.final
+            # The backend stream ended normally: anything raised from here on
+            # is a pipeline outcome, not a backend failure (spec §4).
+            get_meta.backend_completed = True   # type: ignore[attr-defined]
             if result is None:
                 raise PipelineRejected("stream ended without a final result")
             meta.update(self._assemble_stream_meta(
@@ -1253,6 +1256,10 @@ class Pipeline:
         # route meters it on a streamed failure (spec §4), before any delta
         # (or a terminal result) exists.
         get_meta.chosen_model = records[0].chosen   # type: ignore[attr-defined]
+        # Set True by `_deltas()` once the backend stream has ended normally,
+        # so the route never meters a later pipeline error (e.g. assembling
+        # the final metadata) as a backend failure.
+        get_meta.backend_completed = False   # type: ignore[attr-defined]
         return _deltas(), get_meta
 
     def _assemble_stream_meta(self, request_id: str, ctx: ExecutionPolicyContext,
