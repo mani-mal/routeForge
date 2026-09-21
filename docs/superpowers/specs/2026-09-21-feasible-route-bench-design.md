@@ -154,12 +154,12 @@ For strategy `s` choosing `s(c)`:
 
 | # | Metric | Definition |
 |---|---|---|
-| 1 | Policy-violation rate | share of cases with `s(c) ∉ E(c)`; for the router also any sweep call that served a non-eligible slug. **Must be 0; any non-zero value makes the CLI exit 2.** |
+| 1 | Policy-violation rate | share of cases with `s(c) ∉ E(c)` (a missing choice record or a choice with no matrix row also counts); separately, any sweep call that served a non-eligible slug. **Must be 0; any non-zero strategy violation rate or sweep violation makes the CLI exit 2.** |
 | 2 | Quality regret | mean `q*(c) − q(c,s(c))`; plus pass rate |
-| 3 | Cost regret | mean `cost(c,s(c)) − c*(c)` over cases where `s(c) ∈ P(c)`; plus **floor-miss rate** = share of cases with `P ≠ ∅` and `s(c) ∉ P` |
+| 3 | Cost regret | mean `cost(c,s(c)) − c*(c)` over cases where `s(c) ∈ P(c)`; plus **floor-miss rate** = among cases with `P ≠ ∅`, the share where `s(c) ∉ P` (denominator: cases with `P ≠ ∅` only) |
 | 4 | Latency regret | same shape as cost regret |
 | 5 | Empty-set handling | per `expect_empty` case: rejected with ≥1 exclusion reason and no model call; mismatches counted |
-| 6 | Worst group | metrics 2–4 per value of each tag; the worst group per metric named |
+| 6 | Worst group | metrics 2–4 (incl. pass rate and floor-miss rate) per value of the tags `workload`, `placement`, `protection`; the worst group per metric named |
 
 Cost and latency regret are **never averaged over floor misses** — a cheap wrong answer must not
 look like a saving.
