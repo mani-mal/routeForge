@@ -400,11 +400,30 @@ async def _run_loaded(*, cases, specs, settings, registry, detector, variants,
                 if tokens_seen is None and tokens_after is not None:
                     tokens_seen = tokens_after
 
+            # An empty case is not swept, but the REAL pipeline must be seen
+            # to refuse it: one unpinned probe. It must raise (fail closed,
+            # CLAUDE.md rule 5) with no model call. If it is served instead,
+            # the served endpoint is outside the (empty) eligible set -> a
+            # violation.
+            probe_error: str | None = None
+            if not post_names:
+                backend.set_case(case)
+                try:
+                    probe = await pipeline.run(
+                        f"{case.id}:empty-probe", TENANT_ID,
+                        ChatRequest(model="auto", messages=messages),
+                        app_policy=app_policy, profile=PROFILE)
+                except Exception as exc:
+                    probe_error = type(exc).__name__
+                else:
+                    sweep_served.append((case.id, probe["model"]))
+
             calls = backend.calls.get(case.id, 0)
             info = CaseInfo(
                 case_id=case.id, eligible=tuple(post_names),
                 expect_empty=case.expect_empty,
-                rejected_ok=(not post_names and len(post.rejected) >= 1 and calls == 0),
+                rejected_ok=(not post_names and probe_error is not None
+                             and calls == 0 and len(post.rejected) >= 1),
                 tags=dict(case.tags))
             case_infos.append(info)
             case_summaries.append({
@@ -413,6 +432,7 @@ async def _run_loaded(*, cases, specs, settings, registry, detector, variants,
                 "post_gate_widened": extra,
                 "rejected": sorted([r.name, r.code] for r in post.rejected),
                 "rejected_ok": info.rejected_ok, "calls": calls,
+                "empty_probe_error": probe_error,
             })
 
             if tokens_seen is None:  # nothing succeeded: count the model-facing text

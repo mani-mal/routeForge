@@ -211,6 +211,34 @@ def test_empty_set_expected_is_rejected_without_calls(tmp_path):
             assert c["endpoint"] is None
 
 
+def test_empty_set_seen_by_runner_but_served_by_pipeline_exits_2(tmp_path, monkeypatch):
+    """`rejected_ok` must rest on the REAL pipeline refusing the case, not on
+    the runner's own `feasible_set` call. Blind only the runner's copy (the
+    pipeline's router keeps the real one): the runner sees an empty set, the
+    unpinned empty-probe is served, so the case is NOT rejected_ok and the
+    served probe is a violation -> exit 2."""
+    from app.policy.feasible import FeasibleSet, Rejection
+    real_feasible_set = runner.feasible_set
+
+    def blinded(settings, registry, ctx_or_policy, **kwargs):
+        real = real_feasible_set(settings, registry, ctx_or_policy, **kwargs)
+        fake_rejections = tuple(
+            Rejection(name=c.name, provider=c.provider, tier=c.tier,
+                      display_name=None, reason="blinded by test", code="test")
+            for c in real.eligible)
+        return FeasibleSet(eligible=(), rejected=real.rejected + fake_rejections)
+
+    monkeypatch.setattr(runner, "feasible_set", blinded)
+    cases = [_case("faq-1", "What is the capital of France?", expect_empty=True)]
+    suite, eps = _write_inputs(tmp_path, cases)
+    result = _run(suite, eps, tmp_path / "out")
+    assert result.exit_code == 2
+    summary = {c["case_id"]: c for c in result.metrics["cases"]}["faq-1"]
+    assert summary["eligible_post"] == []
+    assert summary["rejected_ok"] is False
+    assert result.metrics["policy"]["violations_total"] >= 1
+
+
 def test_empty_set_unexpected_exits_2(tmp_path):
     cases = [_case("onprem-empty", "Where is Paris?", residency="onprem_only",
                    expect_empty=False)]
