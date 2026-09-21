@@ -23,7 +23,7 @@ from app.models import ChatRequest, ExecutionPolicyContext, Message
 from app.pipeline import Pipeline, PipelineRejected
 from app.policy.detectors import make_detector
 from app.policy.gate import Gate
-from app.routing.observations import Observation
+from app.routing.observations import Observation, ObservationSink
 from app.routing.router import Router
 from app.routing.signals import SignalStore
 from tests._litellm_fake import _DeterministicLiteLLM, make_test_registry
@@ -289,3 +289,101 @@ def test_create_app_wires_one_shared_signal_store_into_router_and_gateway():
         # store app.state.signals points at -- proof the injected reference,
         # not a copy, is what the running pipeline actually uses.
         assert c.app.state.signals.snapshot()
+
+
+# -- Task 5: lifespan wiring -- sink, replay seed, flusher, shutdown flush --
+
+def _prewrite_observations(url: str, model: str, n: int, *, now: float | None = None
+                           ) -> None:
+    """Write `n` recent `ok` observations for `model` straight to the table,
+    via a SEPARATE `Database` on the same file URL -- never `app.state.db`,
+    and never inside `create_app`'s throwaway loop. Creates the schema on
+    first use (`Database.session()` calls `ensure_ready()`)."""
+    now = time.time() if now is None else now
+    db = Database(url=url, seed=None)
+    obs = [Observation(now - (n - i), model, "ok", 100.0 + i, False, None)
+          for i in range(n)]
+
+    async def go():
+        async with db.session() as s:
+            await store.write_observations(s, obs)
+            await s.commit()
+
+    asyncio.run(go())
+
+
+def test_boot_replays_the_log_so_a_model_is_measured_without_live_traffic(
+        tmp_path, monkeypatch):
+    """End to end through the real lifespan: rows in endpoint_observations
+    before boot -> the store reports `measured` after startup."""
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'rf.db'}"
+    monkeypatch.setenv("DATABASE_URL", url)
+    _prewrite_observations(url, "local-8b", 6)
+
+    with TestClient(create_app()) as c:
+        sig = c.app.state.signals.latency("local-8b", "cheap")
+        assert sig.source == "measured"
+        assert sig.samples == 6
+
+
+def test_a_served_request_reaches_the_table_after_a_flush(tmp_path, monkeypatch):
+    """Exit the `with` block (shutdown flush) and read the table back with a
+    fresh `Database` on the same file URL -- also exercises the final flush."""
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'rf.db'}"
+    monkeypatch.setenv("DATABASE_URL", url)
+
+    with TestClient(create_app()) as c:
+        r = c.post("/v1/chat/completions",
+                   headers={"Authorization": "Bearer demo-key"},
+                   json={"messages": [{"role": "user", "content": "hi"}]})
+        assert r.status_code == 200
+
+    async def _read():
+        db = Database(url=url, seed=None)
+        async with db.session() as s:
+            return await store.load_seed_observations(
+                s, since_hours=24, per_model_cap=1000)
+
+    rows = asyncio.run(_read())
+    assert any(o.outcome == "ok" for o in rows)
+
+
+def test_flush_swallows_a_db_failure():
+    from app.main import flush_observations
+
+    sink = ObservationSink(10)
+    sink.put(Observation(time.time(), "m", "ok", 1.0, False, None))
+
+    class _BrokenDB:
+        def session(self):
+            raise RuntimeError("db down")
+
+    assert asyncio.run(flush_observations(_BrokenDB(), sink)) == 0
+
+
+def test_seed_failure_leaves_an_empty_store_and_the_app_serving(monkeypatch):
+    """Monkeypatch store.load_seed_observations to raise; the app starts,
+    the store is empty, and a request is served 200."""
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+
+    async def _boom(*a, **kw):
+        raise RuntimeError("seed boom")
+
+    monkeypatch.setattr(store, "load_seed_observations", _boom)
+
+    with TestClient(create_app()) as c:
+        assert c.app.state.signals.snapshot() == {}
+        r = c.post("/v1/chat/completions",
+                   headers={"Authorization": "Bearer demo-key"},
+                   json={"messages": [{"role": "user", "content": "hi"}]})
+        assert r.status_code == 200
