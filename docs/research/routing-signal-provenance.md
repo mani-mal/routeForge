@@ -185,6 +185,15 @@ covered by `tests/routing/test_signal_wiring.py`.
    preference, which is adjacent to the cross-axis inference CLAUDE.md rule 2a forbids.
    This is the one place P2a touches P1a's noninterference argument, and it resolves the
    same way: protection must not leak into any other axis, including a ranking one.
+
+   > **Update 2026-09-21 (signal hardening, `3286adc`).** `aggregate_model_signals` is
+   > deleted; there is no boot-seeding path left that filters on `status` at all. Boot
+   > seeding now replays `endpoint_observations`, a log the live gateway writes to
+   > directly — a rejection never reaches it in the first place, because the policy gate
+   > rejects a request before the router or gateway is ever called, so no
+   > `SignalStore.observe_*` method is invoked for it. The ruling this bullet states
+   > (a rejection must not look like endpoint unhealth) is therefore now enforced by the
+   > same construction argument as B39/B41, not by a query-time filter. See §3A.
 2. **A client-caused error does not count** — `counts_as_endpoint_unhealth`
    (`app/gateway/gateway.py`), the only one of the three that is a classifier.
    `ContextWindowExceeded` and any upstream 4xx mean the *request* was wrong. An
@@ -791,6 +800,18 @@ this codebase during implementation review; none is hypothetical.
   to the sink, so the crashing replica's own ranking reflected them; only a *future* boot's
   replay-seed misses them, and only for the window since the last successful flush.
 
+- **The error rows the meter now writes carry no sensitivity label on two of their three
+  paths.** `_record_failed` (`app/api/routes.py`) takes an optional `ctx` and, when none
+  is passed, stamps the `usage_records` row's `sensitivity` field `"-"` (and
+  `onprem_only=False`) rather than the request's real value. That happens on the
+  non-streamed 502 path and the keepalive-stream SSE-error path — both call sites in the
+  main exception handlers don't have the gate's `ExecutionPolicyContext` in scope at the
+  point the failure is caught. Only the real-token-stream failure path
+  (`_record_failed_stream`) passes `ctx=get_meta.ctx` and records the true sensitivity.
+  So a per-sensitivity breakdown of error rows (e.g. "how many restricted-tier requests
+  failed") undercounts on two of the three failure paths today; it is not something this
+  slice claims to support uniformly.
+
 - **No circuit breaker, and availability is a far weaker substitute than it looks.**
   Availability never removes a candidate, and the penalty it applies is bounded by
   `w.availability` — `0.2` with the shipped weights. **A dead endpoint may still rank
@@ -875,7 +896,12 @@ over the network at import and pytest wedges in D-state on an offline machine. N
 that `pyproject`'s `addopts="-q"` plus an explicit `-q` yields `-qq`, which suppresses the
 summary line — hence `-o addopts=""` wherever a count is wanted.
 
-**Layout.**
+**Layout.** *(As of `feat/p2a-routing-signal-measurement`, the checkout the reproduction
+steps above target — this table predates the 2026-09-21 signal-hardening slice and
+describes what P2a's mutation-testing run actually used, not current `main`.
+`aggregate_model_signals` and `SeedRow` are deleted on `main`; see §3A for their
+replacements, `app/apps/store.py::load_seed_observations` +
+`SignalStore.replay`/`app/routing/observations.py`.)*
 
 | File | Contents |
 |---|---|

@@ -451,6 +451,12 @@ by test rather than assumed. No `error` row is written for a context-window over
 (400 — the client's request, not an outage), `NoEligibleCandidate` (a policy/routing
 outcome), or a client disconnect (already `cancelled`).
 
+**The error row's `sensitivity` is only reliable on one of its three write paths.** A
+non-streamed request's 502 and a keepalive stream's SSE error frame both write
+`sensitivity: "-"` (the route has no gate context in scope at that failure point); only a
+real-token stream's mid-generation failure records the request's true sensitivity. Don't
+build a per-sensitivity error breakdown from these rows without accounting for that gap.
+
 ## Quick verification checklist
 
 ```bash
