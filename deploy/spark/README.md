@@ -114,6 +114,43 @@ docker compose -p routeforge-spark -f deploy/spark/docker-compose.yml exec db \
 docker compose -p routeforge-spark -f deploy/spark/docker-compose.yml restart api
 ```
 
+### Langfuse login (only with the overlay)
+
+Langfuse has its **own** login, separate from the console's. It seeds one user on
+its first boot from `deploy/compose/langfuse.yml`:
+
+| | |
+|---|---|
+| URL | `http://<spark>:${LANGFUSE_PORT}` (`3002` on a box where open-webui holds `3000`) |
+| Email | `demo@example.com` |
+| Password | `demodemo` |
+
+That user owns the shared `Provisioned Project` and every per-app project
+RouteForge provisions (e.g. `kit-gtm-app`), so it sees every trace.
+
+- **The console's "Langfuse trace ↗" link does not sign you in.** RouteForge
+  passes no session to Langfuse; the link (built from `LANGFUSE_PUBLIC_URL`, which
+  must be the *browser* URL, not the in-network `LANGFUSE_HOST`) lands on the
+  Langfuse sign-in page, and after signing in you reach the trace. The session
+  then lasts ~30 days in that browser.
+- Like the console admin, the seed runs only when the user doesn't exist, so
+  editing `LANGFUSE_INIT_USER_PASSWORD` after the first boot changes nothing.
+  Change the password in Langfuse (*Settings → Account*) instead.
+- `demodemo` is a demo credential committed to this repo. Fine behind the LAN
+  firewall in *Exposure notes*; change it before the port is reachable from
+  anywhere else.
+
+Verify from the Spark without a browser (NextAuth credentials flow):
+
+```bash
+J=$(mktemp); B=http://127.0.0.1:3002
+C=$(curl -s -c $J -b $J $B/api/auth/csrf | python3 -c 'import sys,json;print(json.load(sys.stdin)["csrfToken"])')
+curl -s -o /dev/null -c $J -b $J -X POST $B/api/auth/callback/credentials \
+  --data-urlencode "csrfToken=$C" --data-urlencode email=demo@example.com \
+  --data-urlencode password=demodemo --data-urlencode json=true
+curl -s -b $J $B/api/auth/session; rm -f $J     # a "user" object means the login works
+```
+
 ## 5. Bring your own model server, then onboard it
 
 **Outside routeForge** — this stack starts no inference and never will (hard
@@ -166,6 +203,115 @@ Onboarding is **probe-gated**: routeForge does `GET {endpoint}/models` and
 requires your `slug` in the response. Unreachable, or slug absent → the row is
 saved **disabled** with `probe_status: "unreachable"`. It takes effect with no
 restart.
+
+### Worked example: a second vLLM model (Nemotron 3.5 Lightning, 2026-09-21)
+
+This box serves two vLLM containers side by side from the same image:
+`vllm-qwen38` on `:8000` and `vllm-nemotron` on `:8001`. What it took:
+
+**1. Check the download is really complete.** A Hugging Face pull that was
+interrupted leaves empty `blobs/*.incomplete` files. Those are harmless once a
+later pull finishes, but they are no proof it did. Check that every shard the
+index names exists:
+
+```bash
+cd ~/.cache/huggingface/hub/models--nvidia--NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4/snapshots/*/
+python3 -c 'import json,os;f=set(json.load(open("model.safetensors.index.json"))["weight_map"].values());print(len(f),"shards, missing:",[x for x in f if not os.path.exists(x)])'
+```
+
+**2. Serve it.** The `vllm/vllm-openai` image's entrypoint is already
+`vllm serve`, so the model id is the **first argument**. Writing `serve <model>`
+again fails with `unrecognized arguments: <model>`. Reuse the Qwen container's
+API key so one `api_key_env` covers both endpoints:
+
+```bash
+umask 077
+docker inspect vllm-qwen38 --format '{{range .Config.Env}}{{println .}}{{end}}' \
+  | grep '^VLLM_API_KEY=' > ~/.vllm-nemotron.env
+echo HF_HUB_OFFLINE=1 >> ~/.vllm-nemotron.env
+
+docker run -d --name vllm-nemotron --gpus all --ipc host --restart unless-stopped \
+  -p 0.0.0.0:8001:8000 --env-file ~/.vllm-nemotron.env \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  vllm/vllm-openai:v0.29.0-aarch64 \
+  nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4 --host 0.0.0.0 --port 8000 \
+  --served-model-name nemotron-3.5-lightning \
+  --gpu-memory-utilization 0.25 --max-model-len 131072 --max-num-seqs 8 \
+  --moe-backend marlin --kv-cache-dtype fp8 --enable-prefix-caching \
+  --mamba-backend flashinfer --mamba-cache-mode align \
+  --reasoning-parser nemotron_v3 --tool-call-parser qwen3_coder --enable-auto-tool-choice
+```
+
+- `-p 0.0.0.0:…` rather than `-p 8001:8000`: naming `0.0.0.0` stops Docker from
+  also binding `[::]` on the public IPv6 address (see *Exposure notes*).
+- **Memory on GB10 is unified and shared by everything.** vLLM's
+  `--gpu-memory-utilization` is a share of the *whole* 121 GiB. Qwen at `0.55`
+  plus Nemotron at `0.25` left about 9 GB free for the OS, the stack and
+  anything else. The second server must fit in what `free -g` reports as
+  *available* at startup, or vLLM refuses to start.
+- It loads in about 4 minutes. Wait for `Application startup complete` in
+  `docker logs vllm-nemotron`.
+- The model card's DGX Spark recipe adds DSpark speculative decoding. That needs
+  a separate drafter checkpoint (`…-NVFP4-DSpark`), which was not downloaded, so
+  the command above runs without it.
+
+**3. Test it directly before onboarding** (from the Spark):
+
+```bash
+K=$(sed -n 's/^VLLM_API_KEY=//p' ~/.vllm-nemotron.env)
+curl -s -H "Authorization: Bearer $K" http://127.0.0.1:8001/v1/models      # id = the slug to onboard
+curl -s -H "Authorization: Bearer $K" -H 'content-type: application/json' \
+  http://127.0.0.1:8001/v1/chat/completions \
+  -d '{"model":"nemotron-3.5-lightning","messages":[{"role":"user","content":"Capital of France? One word."}]}'
+```
+
+This is a reasoning model. Its thinking comes back in `message.reasoning`,
+separate from `content`, but it is metered as completion tokens: a one-sentence
+answer cost about 670 of them and 10 s.
+
+**4. Onboard it.** Use slug `nemotron-3.5-lightning`, endpoint
+`http://<spark>:8001/v1`, `api_key_env: SP_ONPREM_API_KEY` (the *name* of the
+variable, never the key), tier `cheap`, price `0/0`.
+
+**5. Let an app use it. There are two allowlists, and both must include the
+model.** They are checked independently (`app/policy/feasible.py`):
+
+| Allowlist | Where | Effect if it excludes the model |
+|---|---|---|
+| the model's allowed apps (`allowed_app_ids`) | Infrastructure → the model | app can't use it |
+| the app's allowed models (`allowed_models`) | Applications → *app* → Settings → **2 Placement → edit → "models"** (comma-separated; empty = all) | app can't use it |
+
+Setting only the first one is the easy mistake: the app still gets
+*"requested model … is not permitted or unavailable"*, and its `/v1/models` list
+won't show the model. The Placement row summarises the second one as
+"N models pinned".
+
+**6. Know what a client's `model` field does.** A named model is **pinned**: the
+request goes to that model or fails, and the router doesn't choose. Only
+`"model": "auto"` is routed (`app/policy/gate.py`). So a client like Qwen Code
+keeps using whatever model it names until you change its config, whatever you
+onboard.
+
+**7. Verify through RouteForge.** Use a temporary app token, and revoke it
+afterwards:
+
+```bash
+# (JAR = an admin cookie jar, as above)
+R=$(curl -s -b "$JAR" -X POST http://localhost:8080/admin/applications/<app>/tokens \
+      -H 'content-type: application/json' -d '{"name":"smoke (temporary)"}')
+TOK=$(echo "$R" | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+TID=$(echo "$R" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+curl -s -H "Authorization: Bearer $TOK" http://localhost:8080/v1/models
+curl -s -H "Authorization: Bearer $TOK" -H 'content-type: application/json' \
+  http://localhost:8080/v1/chat/completions \
+  -d '{"model":"nemotron-3.5-lightning","messages":[{"role":"user","content":"Say hi."}]}'
+curl -s -b "$JAR" -X POST http://localhost:8080/admin/tokens/$TID/revoke
+```
+
+The response's `policy.scoring` shows the router's view of the model. A new
+model starts at `latency.src: "tier_default", n: 0` and switches to `measured`
+once it has served non-streamed requests. Streamed requests don't feed the
+signal yet (backlog B41).
 
 ## 6. Register an application and make a call
 
