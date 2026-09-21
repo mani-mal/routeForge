@@ -1,6 +1,7 @@
-# Simulated endpoints reproducing the §14 table of
-# docs/new/RouteForge-Priorities-1-3-LLM-Handoff.md (four illustrative
-# healthcare endpoints), for use with eval/suites/starter.jsonl. See
+# Simulated endpoints reproducing the §14 table of the Priorities 1-3 LLM
+# handoff (RouteForge-Priorities-1-3-LLM-Handoff.md, not tracked in the repo;
+# four illustrative healthcare endpoints), for use with
+# eval/suites/starter.jsonl. See
 # docs/superpowers/specs/2026-09-21-feasible-route-bench-design.md §9.
 #
 # §14 table (illustrative):
