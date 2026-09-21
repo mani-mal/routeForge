@@ -13,8 +13,14 @@
 #
 # All three models are served through the Spark's single OpenAI-compatible
 # endpoint (one vLLM/Dynamo server, model selected by name) -- provider
-# "onprem", price $0/1M (a GPU's cost is amortized infrastructure, not a
-# per-token bill, per config/pricing.yaml's own convention for on-prem rows).
+# "onprem", price $0/1M, matching docs/guides/onboarding-models.md's own
+# onboarding example (`"price_input": 0, "price_output": 0` for a freshly
+# onboarded on-prem endpoint -- see that doc's (b2) and its onboarding
+# JSON example). Contrast eval/endpoints/healthcare-sim.yaml, where
+# local-llama is deliberately given a NON-zero price: that file is
+# reproducing the illustrative §14 table's $0.08/request cost, not a real
+# GPU-amortization quote -- two different scenarios (a priced illustrative
+# example vs. a freshly-onboarded real endpoint), not a contradiction.
 endpoints:
   - slug: qwen3.8-27b
     provider: onprem

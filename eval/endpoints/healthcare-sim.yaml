@@ -28,6 +28,12 @@
 # (region eu) is excluded by an app's allowed_regions: [us]; general-us
 # (prompt_retention retained) is excluded by require_no_retention -- neither
 # is ever swept for a claim case, only rejected with a reason.
+#
+# NOTE local-llama's non-zero price here is intentional and specific to
+# THIS illustrative profile (reproducing §14's $0.08/request), not a claim
+# about real on-prem economics -- contrast eval/endpoints/spark-live.example.yaml,
+# where a freshly onboarded real on-prem endpoint prices at $0/1M, matching
+# docs/guides/onboarding-models.md's own onboarding example.
 endpoints:
   - slug: local-llama
     provider: onprem

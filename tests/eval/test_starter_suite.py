@@ -42,7 +42,7 @@ def _run(suite, eps, out, **kwargs):
 
 def test_starter_suite_loads_and_covers_the_three_workloads():
     cases, digest = load_suite(STARTER_SUITE)
-    assert len(cases) == 20
+    assert len(cases) == 22
     assert digest  # sha256 hex, non-empty
     ids = [c.id for c in cases]
     assert len(ids) == len(set(ids)), "duplicate case ids"
@@ -52,7 +52,7 @@ def test_starter_suite_loads_and_covers_the_three_workloads():
         by_workload.setdefault(case.tags.get("workload"), []).append(case)
 
     assert len(by_workload["faq"]) == 8
-    assert len(by_workload["claim_summary"]) == 8
+    assert len(by_workload["claim_summary"]) == 10
     assert len(by_workload["onprem_required"]) == 4
 
     for case in cases:
@@ -67,11 +67,31 @@ def test_starter_suite_loads_and_covers_the_three_workloads():
     claim_graders = {c.grader.kind for c in by_workload["claim_summary"]}
     assert claim_graders == {"contains", "regex", "json_schema"}
 
-    # every claim case carries synthetic PII, correctly tagged
+    # every claim case carries synthetic PII, correctly tagged, and the same
+    # allowed_regions/require_no_retention requirements -- override and
+    # escalated cases differ ONLY in escalate_residency_on_detection.
     for case in by_workload["claim_summary"]:
         assert case.tags.get("synthetic") is True
         assert case.app_policy.get("allowed_regions") == ["us"]
         assert case.app_policy.get("require_no_retention") is True
+
+    # override path (tags.placement == "us_only"): explicitly declares
+    # escalate_residency_on_detection: false.
+    override_claims = [c for c in by_workload["claim_summary"]
+                       if c.tags.get("placement") == "us_only"]
+    assert len(override_claims) == 8
+    for case in override_claims:
+        assert case.app_policy.get("escalate_residency_on_detection") is False
+
+    # production-default path (tags.placement == "escalated"): the field is
+    # left UNSET, so it inherits the real default (true) -- config/policy.yaml's
+    # sensitivity_rules then escalates a detected SSN to onprem_only
+    # (CLAUDE.md rule 8's "hospital persona").
+    escalated_claims = [c for c in by_workload["claim_summary"]
+                        if c.tags.get("placement") == "escalated"]
+    assert len(escalated_claims) == 2
+    for case in escalated_claims:
+        assert "escalate_residency_on_detection" not in case.app_policy
 
 
 def test_empty_set_suite_loads_four_expect_empty_onprem_cases():
@@ -135,13 +155,32 @@ def test_starter_run_against_healthcare_sim_is_clean(tmp_path):
     # (onprem-preferring, redaction-driven) and retention exclude them
     # respectively, regardless of which strategy is scored.
     claim_cases = [c for c in result.metrics["cases"] if c["case_id"].startswith("claim-")]
-    assert len(claim_cases) == 8
+    assert len(claim_cases) == 10
     for c in claim_cases:
         assert "european" not in c["eligible_post"]
         assert "general-us" not in c["eligible_post"]
-        # both same-tier endpoints from the §14 table ARE eligible, so
-        # cheapest/best_published_quality/router have a real choice to make.
+
+    # override cases (claim-001..008, escalate_residency_on_detection: false):
+    # both same-tier §14 endpoints ARE eligible, so cheapest /
+    # best_published_quality / router have a real choice to make.
+    override_ids = {f"claim-{n:03d}" for n in range(1, 9)}
+    override_cases = [c for c in claim_cases if c["case_id"] in override_ids]
+    assert len(override_cases) == 8
+    for c in override_cases:
         assert set(c["eligible_post"]) == {"local-llama", "azure-us"}
+
+    # escalated cases (claim-009/010, the field left unset -- production
+    # DEFAULT): config/policy.yaml's sensitivity_rules escalates the detected
+    # SSN straight to residency: onprem_only, so ONLY local-llama is
+    # eligible -- the same claim content, the opposite eligible set, side by
+    # side with the override cases above.
+    escalated_ids = {"claim-009", "claim-010"}
+    escalated_cases = [c for c in claim_cases if c["case_id"] in escalated_ids]
+    assert len(escalated_cases) == 2
+    for c in escalated_cases:
+        assert c["eligible_post"] == ["local-llama"]
+        assert any(name == "azure-us" and code == "residency"
+                   for name, code in c["rejected"])
 
     # on-prem-required cases: only the on-prem endpoint is ever eligible.
     onprem_cases = [c for c in result.metrics["cases"]
