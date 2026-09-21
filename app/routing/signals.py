@@ -178,17 +178,23 @@ class SignalStore:
         applied through the SAME observe_* method that produced it, at its
         TRUE age (mono = wall - this process's offset), with the sink
         detached so replay never re-logs what it reads. Rows must be in
-        ascending `ts` order."""
+        ascending `ts` order. A malformed row -- an unknown outcome, or a
+        non-streamed `ok` with no latency -- is skipped, never guessed at (a
+        guessed 0 ms sample would bias routing toward that model)."""
         sink, self._sink = self._sink, None
         try:
             for o in observations:
+                if o.outcome not in ("ok", "error"):
+                    continue
+                if o.outcome == "ok" and not o.streamed and o.latency_ms is None:
+                    continue
                 t = o.ts - self._wall_offset
                 if o.outcome == "error":
                     self.observe_error(o.model, streamed=o.streamed, now=t)
                 elif o.streamed:
                     self.observe_stream_success(o.model, o.ttft_ms, now=t)
                 else:
-                    self.observe_success(o.model, float(o.latency_ms or 0.0), now=t)
+                    self.observe_success(o.model, float(o.latency_ms), now=t)
         finally:
             self._sink = sink
 

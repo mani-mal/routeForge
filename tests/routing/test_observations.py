@@ -68,6 +68,16 @@ def test_replay_logs_nothing():
     assert sink.drain() == []
 
 
+def test_replay_skips_malformed_rows():
+    """An unknown outcome, or a non-streamed `ok` with no latency, is skipped:
+    never read as a success (and never as a 0 ms sample that would bias
+    routing toward the model)."""
+    s = _live()
+    s.replay([Observation(1_000_010.0, "m", "timeout", None, False, None),
+              Observation(1_000_011.0, "m", "ok", None, False, None)])
+    assert s.snapshot() == {}
+
+
 # -- stream success is availability-only --------------------------------
 
 def test_stream_success_moves_availability_and_leaves_latency_untouched():
