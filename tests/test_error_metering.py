@@ -294,6 +294,12 @@ def test_real_token_stream_client_disconnect_writes_no_error_row(monkeypatch):
         failed.append(kw["model"])
 
     monkeypatch.setattr(routes, "_record_failed", spy_record_failed)
+    finalized: list[str] = []
+
+    async def spy_finalize_stream(request, **kw):
+        finalized.append(kw["request_id"])
+
+    monkeypatch.setattr(routes, "_finalize_stream", spy_finalize_stream)
 
     async def deltas():
         yield "one "
@@ -320,6 +326,7 @@ def test_real_token_stream_client_disconnect_writes_no_error_row(monkeypatch):
 
         c.portal.call(go)
     assert failed == []
+    assert finalized == ["req-sdisc"]   # the disconnect took the finalize path
 
 
 # --------------------------------------------------------------------------- #

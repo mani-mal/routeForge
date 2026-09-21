@@ -169,6 +169,62 @@ def test_backend_unavailable_carries_attempted_models_in_order():
     assert len(ei.value.attempted_models) >= 1
 
 
+class _FailsEveryCall(_DeterministicLiteLLM):
+    def __init__(self, s, calls: list[str]) -> None:
+        super().__init__(s)
+        self._calls = calls
+
+    async def generate(self, model, messages, price, tier, hint, tools=None,
+                       tool_choice=None, params=None):
+        self._calls.append(model)
+        raise RuntimeError("down")
+
+
+def _expected_failover_order(ctx, n: int) -> tuple[str, ...]:
+    """The router's own ranking under successive exclusion -- the order the
+    gateway must try candidates in."""
+    router, tried = Router(S, registry=REG), []
+    for _ in range(n):
+        tried.append(router.select(ctx, 20, 0.1,
+                                   exclude=frozenset(tried)).chosen.name)
+    return tuple(tried)
+
+
+def test_two_failed_candidates_are_named_in_the_order_tried():
+    """Exactly two reachable candidates, both fail: the router runs out
+    (every reachable candidate excluded) and `attempted_models` is exactly
+    those two, in the router's ranking order."""
+    ctx = _ctx({"onprem"})
+    assert ctx.allowed_models == {"local-8b", "local-32b"}
+    calls: list[str] = []
+    gw = Gateway(S, _FailsEveryCall(S, calls), Router(S, registry=REG), REG)
+    with pytest.raises(BackendUnavailable) as ei:
+        asyncio.run(gw.run(ctx, [Message(role="user", content="hello")],
+                           20, 0.1, {}))
+
+    expected = _expected_failover_order(ctx, 2)
+    assert set(expected) == {"local-8b", "local-32b"}
+    assert ei.value.attempted_models == expected == tuple(calls)
+
+
+def test_failover_budget_exhaustion_names_the_attempt_even_with_peers_left():
+    """The `failover_attempts > max_failover_attempts` branch: with a failover
+    budget of zero, the first failure ends the request although a second
+    candidate is still reachable -- and that one attempt is named."""
+    s0 = S.model_copy(update={
+        "routing": S.routing.model_copy(update={"max_failover_attempts": 0})})
+    ctx = _ctx({"onprem"})
+    calls: list[str] = []
+    gw = Gateway(s0, _FailsEveryCall(s0, calls), Router(s0, registry=REG), REG)
+    with pytest.raises(BackendUnavailable) as ei:
+        asyncio.run(gw.run(ctx, [Message(role="user", content="hello")],
+                           20, 0.1, {}))
+
+    assert len(ctx.allowed_models) == 2     # a peer remained untried
+    assert ei.value.attempted_models == _expected_failover_order(ctx, 1) == \
+        tuple(calls)
+
+
 def test_router_decision_carries_the_scoring_record():
     d = Router(S, registry=REG).select(
         _ctx({"onprem", "azure", "bedrock"}), tokens_after=20, complexity=0.1)
@@ -281,6 +337,68 @@ def test_prune_deletes_only_rows_past_the_window():
     assert n == 1 and len(left) == 1
 
 
+def test_replay_through_the_table_reproduces_the_live_store():
+    """Spec §3.5 end to end: what a live store logs, written to
+    `endpoint_observations`, loaded back and replayed into a store with a
+    different monotonic origin, reports the same signals at the same true
+    age. Values agree to rel 1e-9 rather than exactly because the table
+    stores `ts` to the microsecond (see docs/research/routing-signal-
+    provenance.md §3A)."""
+    import random
+
+    from app.config.schema import SignalsCfg
+
+    cfg = SignalsCfg(min_samples=3, half_life_s=600.0, staleness_s=1000.0)
+    sink = ObservationSink(100_000)
+    live = SignalStore(cfg, sink=sink)      # wall_offset derived from time.time()
+    rng = random.Random(20260921)
+    # ~3000 s of history ending just before "now", so every row is recent
+    # enough for the 24 h seed window.
+    t = time.monotonic() - 3100.0
+    for _ in range(400):
+        t += rng.uniform(0.5, 14.5)
+        model = rng.choice(("local-8b", "local-32b"))
+        kind = rng.random()
+        if kind < 0.6:
+            live.observe_success(model, rng.uniform(20.0, 4000.0), now=t)
+        elif kind < 0.8:
+            live.observe_stream_success(model, rng.uniform(5.0, 500.0), now=t)
+        else:
+            live.observe_error(model, streamed=rng.random() < 0.3, now=t)
+    t_end = t
+
+    db = _fresh_db()
+
+    async def go():
+        async with db.session() as s:
+            await store.write_observations(s, sink.drain())
+            await s.commit()
+            return await store.load_seed_observations(
+                s, since_hours=24, per_model_cap=10**6)
+
+    rows = asyncio.run(go())
+    assert len(rows) == 400
+    shift = 12345.0
+    booted = SignalStore(cfg, wall_offset=live.wall_offset + shift)
+    booted.replay(rows)
+
+    seen: set[str] = set()
+    for dt in (0.5, 30.0, 700.0, 2500.0):
+        now = t_end + dt
+        for m in ("local-8b", "local-32b"):
+            for tier in ("cheap", "mid"):
+                a = live.latency(m, tier, now=now)
+                b = booted.latency(m, tier, now=now - shift)
+                assert (b.source, b.samples) == (a.source, a.samples)
+                assert b.value == pytest.approx(a.value, rel=1e-9)
+                seen.add(a.source)
+            a = live.availability(m, now=now)
+            b = booted.availability(m, now=now - shift)
+            assert (b.source, b.samples) == (a.source, a.samples)
+            assert b.value == pytest.approx(a.value, rel=1e-9)
+    assert seen == {"measured", "tier_default"}   # both sides of staleness covered
+
+
 # -- app/main.py wiring: the SAME store is shared by create_app()'s Router
 # and Gateway, and boot seeding runs on the real serving loop -----------
 
@@ -366,6 +484,7 @@ def test_a_served_request_reaches_the_table_after_a_flush(tmp_path, monkeypatch)
                    headers={"Authorization": "Bearer demo-key"},
                    json={"messages": [{"role": "user", "content": "hi"}]})
         assert r.status_code == 200
+        served = list(c.app.state.signals.snapshot())   # the one model observed
 
     async def _read():
         db = Database(url=url, seed=None)
@@ -374,7 +493,12 @@ def test_a_served_request_reaches_the_table_after_a_flush(tmp_path, monkeypatch)
                 s, since_hours=24, per_model_cap=1000)
 
     rows = asyncio.run(_read())
-    assert any(o.outcome == "ok" for o in rows)
+    assert len(rows) == 1
+    (row,) = rows
+    assert row.outcome == "ok"
+    assert row.model == served[0]
+    assert row.streamed is False
+    assert row.latency_ms is not None
 
 
 def test_flush_swallows_a_db_failure():

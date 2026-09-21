@@ -93,6 +93,16 @@ def test_stream_success_moves_availability_and_leaves_latency_untouched():
     assert after["availability_n"] == before["availability_n"] + 1
 
 
+def test_stream_success_does_not_refresh_latency_freshness():
+    """A stream success is availability-only, so it must not make an old
+    latency EWMA look fresh again: past staleness_s it is tier_default."""
+    s = _live()
+    for t in range(CFG.min_samples):
+        s.observe_success("m", 90.0, now=float(t))
+    s.observe_stream_success("m", 40.0, now=CFG.staleness_s + 10)
+    assert s.latency("m", "cheap", now=CFG.staleness_s + 11).source == "tier_default"
+
+
 # -- replay identity (spec §3.5) ----------------------------------------
 
 _kind = st.sampled_from(["ok", "error", "stream_ok", "stream_error"])
