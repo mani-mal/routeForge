@@ -91,15 +91,6 @@ class SignalsCfg(BaseModel):
     max_seed_obs_per_model: int = 200
 
 
-# The four scoring terms `DefaultRoutingStrategy.rank` reads by literal key
-# (app/routing/strategy.py). A `weights` dict missing one of these currently
-# KeyErrors deep inside `rank` on the first scored request -- pulled forward
-# to `RoutingCfg` construction time instead (`_rename_capacity_weight` below),
-# so a bad `routing.yaml` or a hand-built weights mapping (e.g.
-# `app/eval/strategies.py::router_variant`) fails clearly and immediately.
-_REQUIRED_WEIGHT_KEYS = ("quality", "cost", "latency", "availability")
-
-
 class RoutingCfg(BaseModel):
     tiers: list[str]
     score_on: str
@@ -154,11 +145,6 @@ class RoutingCfg(BaseModel):
         explicit `availability` wins over a stale `capacity` alias) and the
         `capacity` key is dropped. `app/routing/strategy.py` reads
         `weights["availability"]` only.
-
-        After the rename, every key in `_REQUIRED_WEIGHT_KEYS` must be
-        present -- a missing one raises here (a clear `ValidationError` at
-        construction) rather than a bare `KeyError` the first time
-        `DefaultRoutingStrategy.rank` reads it mid-request.
         """
         if not isinstance(data, dict):
             return data
@@ -175,11 +161,6 @@ class RoutingCfg(BaseModel):
                     "routing.yaml: weights.capacity is deprecated; rename it "
                     "to weights.availability (the old term never affected "
                     "ranking)")
-        missing = [k for k in _REQUIRED_WEIGHT_KEYS if k not in weights]
-        if missing:
-            raise ValueError(
-                f"routing.weights is missing required key(s) {missing} "
-                f"(required: {list(_REQUIRED_WEIGHT_KEYS)})")
         data = {**data, "weights": weights}
         return data
 

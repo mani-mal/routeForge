@@ -118,6 +118,14 @@ def router(settings: Settings, registry: "ModelRegistry",
     return _router
 
 
+# The four scoring terms `DefaultRoutingStrategy.rank` reads by literal key
+# (app/routing/strategy.py). Eval-local: the serving path's own required-key
+# behavior for `routing.yaml` stays entirely in the existing boot-time
+# `CONFIG_LINT: WEIGHT_MISSING` rule (app/config/lint.py) -- this harness
+# never changes what a real deployment's boot accepts or rejects.
+_REQUIRED_WEIGHT_KEYS = ("quality", "cost", "latency", "availability")
+
+
 def router_variant(base_settings: Settings, weights: dict[str, float],
                    registry: "ModelRegistry", signals: SignalStore) -> Strategy:
     """`router`, but scored with an alternative `routing.weights` mapping
@@ -130,15 +138,29 @@ def router_variant(base_settings: Settings, weights: dict[str, float],
     `Settings`) and run through the REAL `RoutingCfg` validation --
     `RoutingCfg.model_validate`, not a bare attribute assignment, so
     `_rename_capacity_weight` (app/config/schema.py) actually runs: the
-    legacy `capacity` -> `availability` alias is honored, and a `weights`
-    mapping missing one of `quality`/`cost`/`latency`/`availability` raises a
-    clear `pydantic.ValidationError` right here, at variant-construction
-    time -- not a bare `KeyError` the first time `DefaultRoutingStrategy.rank`
-    reads the missing key mid-sweep.
+    legacy `capacity` -> `availability` alias is honored exactly as it is for
+    a real `routing.yaml` load.
+
+    A `weights` mapping still missing one of `_REQUIRED_WEIGHT_KEYS` after
+    that rename raises a clear `ValueError` (naming the missing key(s)) right
+    here, at variant-construction time -- not a bare `KeyError` the first
+    time `DefaultRoutingStrategy.rank` reads it mid-sweep. This check is
+    intentionally local to the harness, not added to `RoutingCfg` itself: a
+    schema-level required-key validator would run during `load_settings()`
+    too, raising a `pydantic.ValidationError` for an incomplete `routing.yaml`
+    *before* `app/config/lint.py`'s `enforce()` gets a chance to print its own
+    aggregated, named `CONFIG_LINT: WEIGHT_MISSING` violation -- duplicating
+    that lint rule and making it unreachable from a real boot. The harness
+    must not change serving-path behavior, so the check stays here.
     """
     settings = copy.deepcopy(base_settings)
     settings.routing = RoutingCfg.model_validate(
         {**settings.routing.model_dump(), "weights": dict(weights)})
+    missing = [k for k in _REQUIRED_WEIGHT_KEYS if k not in settings.routing.weights]
+    if missing:
+        raise ValueError(
+            f"router_variant: weights is missing required key(s) {missing} "
+            f"(required: {list(_REQUIRED_WEIGHT_KEYS)})")
     return router(settings, registry, signals)
 
 

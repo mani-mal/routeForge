@@ -393,10 +393,15 @@ class TestRouterVariantAndWarmSignals:
 
 
 # --------------------------------------------------------------------------
-# router_variant weight validation -- fix round 1, item 2. `weights` must go
-# through the real `RoutingCfg` validation (the `capacity` -> `availability`
-# rename, and a required-key check), erroring clearly at variant-construction
-# time rather than `KeyError`ing deep inside `DefaultRoutingStrategy.rank`.
+# router_variant weight validation -- fix round 1, item 2 (revised in fix
+# round 2: the required-key check moved from `RoutingCfg` itself to
+# `router_variant`, so a real `routing.yaml` boot's `CONFIG_LINT:
+# WEIGHT_MISSING` behavior is untouched -- app/config/schema.py is reverted
+# to its Task-5-start state; only app/eval/strategies.py owns this check).
+# `weights` still goes through the real `RoutingCfg` validation for the
+# `capacity` -> `availability` rename, then a local required-key check
+# errors clearly at variant-construction time rather than `KeyError`ing deep
+# inside `DefaultRoutingStrategy.rank`.
 # --------------------------------------------------------------------------
 
 class TestRouterVariantWeightValidation:
@@ -430,6 +435,9 @@ class TestRouterVariantWeightValidation:
 
         incomplete_weights = {"quality": 1.0, "cost": 0.6, "latency": 0.3}
         # missing "availability" -- must fail HERE, not the first time a
-        # returned strategy is called.
-        with pytest.raises(pydantic.ValidationError, match="availability"):
+        # returned strategy is called. A plain ValueError from
+        # router_variant itself (not a pydantic.ValidationError from
+        # RoutingCfg) -- this check is eval-local, per fix round 2.
+        with pytest.raises(ValueError, match="availability") as exc_info:
             router_variant(settings, incomplete_weights, registry, signals)
+        assert not isinstance(exc_info.value, pydantic.ValidationError)
