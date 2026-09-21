@@ -16,15 +16,22 @@ Writes `matrix.jsonl`, `choices.jsonl`, `metrics.json`, `report.md` and
 `run.json` into `--out` (default `results/<utc timestamp>`).
 
 Exit codes: 0 ok; 1 load/usage error (or a declined live run); 2 policy
-violation or empty-set mismatch.
+violation, empty-set mismatch, post-gate widening or pinned-served mismatch.
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+# BEFORE any `app.*` import: litellm (imported transitively) fetches its model
+# cost map over the network at import time unless this is set -- an
+# air-gapped run would hang there, and "no network call in simulated mode"
+# would be false. setdefault: an operator's explicit value still wins.
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:

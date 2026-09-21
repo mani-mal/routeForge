@@ -127,7 +127,7 @@ def test_end_to_end_writes_all_five_files_and_every_strategy(tmp_path):
     assert "None" not in report
     assert "same sweep" in report
     run = json.loads((out / "run.json").read_text())
-    for key in ("suite_hash", "endpoints_hash", "routing_policy_version",
+    for key in ("suite_hash", "endpoints_hash", "base_routing_policy_version",
                 "registry_version", "seed", "git_sha", "mode", "args"):
         assert key in run, key
     assert run["mode"] == "simulated"
@@ -448,3 +448,24 @@ def test_cli_live_declined_at_prompt_makes_no_calls(tmp_path):
     assert "live-a" in proc.stdout
     assert "calls" in proc.stdout
     assert not (out / "matrix.jsonl").exists()
+
+
+def test_cli_sets_local_cost_map_before_importing_app():
+    """Air-gapped runs must not hang on litellm's import-time cost-map fetch:
+    the CLI sets LITELLM_LOCAL_MODEL_COST_MAP before any `app.*` import."""
+    env = {k: v for k, v in os.environ.items() if k != "LITELLM_LOCAL_MODEL_COST_MAP"}
+    code = (
+        "import builtins, os, runpy\n"
+        "real_import = builtins.__import__\n"
+        "seen = {}\n"
+        "def spy(name, *a, **kw):\n"
+        "    if name.startswith('app') and 'v' not in seen:\n"
+        "        seen['v'] = os.environ.get('LITELLM_LOCAL_MODEL_COST_MAP')\n"
+        "    return real_import(name, *a, **kw)\n"
+        "builtins.__import__ = spy\n"
+        f"runpy.run_path({str(REPO_ROOT / 'scripts' / 'feasible_bench.py')!r}, run_name='not_main')\n"
+        "print(seen.get('v'))\n")
+    proc = subprocess.run([sys.executable, "-c", code], cwd=REPO_ROOT, env=env,
+                          capture_output=True, text=True, timeout=RUN_TIMEOUT_S)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip().splitlines()[-1] == "True"

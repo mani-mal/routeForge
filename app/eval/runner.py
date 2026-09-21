@@ -89,6 +89,12 @@ WARM_NOTE = (
     "every row swept so far, up to and including the case being scored -- so "
     "it is optimistic by construction: it has seen this case's own outcomes.")
 
+BASE_RPV_NOTE = (
+    "base_routing_policy_version is the deployment's routing+pricing hash BEFORE "
+    "the harness overrides (emptied model_pool, endpoint-file prices, "
+    "max_escalations 0, and any --variants weights); it identifies the base "
+    "config, not the exact settings the sweep ran under.")
+
 DEFERRED_METRICS = (
     "calibration (the router emits no confidence)",
     "policy/endpoint churn robustness",
@@ -508,7 +514,7 @@ async def _run_loaded(*, cases, specs, settings, registry, detector, variants,
     run_stamp = {
         **stamp,
         "finished_at": _now(),
-        "routing_policy_version": settings.routing_policy_version,
+        "base_routing_policy_version": settings.routing_policy_version,
         "registry_version": registry.registry_version(),
         "seed": seed,
         "git_sha": _git_sha(),
@@ -518,7 +524,8 @@ async def _run_loaded(*, cases, specs, settings, registry, detector, variants,
         "endpoints": sorted(s.slug for s in specs),
         "n_cases": len(cases),
         "exit_code": exit_code,
-        "notes": {"router_warm": WARM_NOTE},
+        "notes": {"router_warm": WARM_NOTE,
+                  "base_routing_policy_version": BASE_RPV_NOTE},
     }
     (out / "run.json").write_text(_dump(run_stamp), encoding="utf-8")
     (out / "report.md").write_text(_report(metrics, run_stamp), encoding="utf-8")
@@ -559,8 +566,9 @@ def _fmt(value) -> str:
 def _report(metrics: dict, run: dict) -> str:
     lines: list[str] = ["# FeasibleRouteBench report", ""]
     lines += ["## Run", ""]
-    for key in ("mode", "seed", "suite_hash", "endpoints_hash", "routing_policy_version",
-                "registry_version", "git_sha", "n_cases", "started_at", "finished_at"):
+    for key in ("mode", "seed", "suite_hash", "endpoints_hash",
+                "base_routing_policy_version", "registry_version", "git_sha", "n_cases",
+                "started_at", "finished_at"):
         lines.append(f"- **{key}**: {_fmt(run.get(key))}")
     lines.append(f"- **endpoints**: {', '.join(run['endpoints']) or 'n/a'}")
     lines.append(f"- **completion text kept (--keep-text)**: {_fmt(run['keep_text'])}")
