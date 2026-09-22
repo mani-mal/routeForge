@@ -17,6 +17,7 @@ from app.errors import BackendUnavailable, ContextWindowExceeded
 from app.gateway.gateway import Gateway
 from app.models import Message
 from app.routing.router import Router
+from tests.conftest import v1_error
 from tests.onboarding.harness import conformance_client, onboard
 from tests.test_gateway_lateral_failover import S, _ctx, _DeterministicLiteLLM, _onprem, _reg
 
@@ -40,7 +41,7 @@ def test_context_overflow_is_a_400_with_the_upstream_reason(client, monkeypatch)
                     json={"messages": [{"role": "user", "content": "hello"}],
                           "max_tokens": 16000})
     assert r.status_code == 400
-    detail = r.json()["detail"]
+    detail = v1_error(r)["message"]
     assert detail.startswith("request exceeds the model's context window")
     assert "maximum context length is 262144 tokens" in detail
     assert "251905 input tokens" in detail
@@ -83,7 +84,8 @@ def test_streamed_agent_turn_reports_overflow_as_400_error_frame(monkeypatch):
     data = [e for e in body.split("\n\n") if e.startswith("data: ")]
     assert data[-1] == "data: [DONE]"
     err = json.loads(data[-2][6:])
-    assert err["error"]["code"] == 400
+    assert err["error"]["code"] == "context_length_exceeded"
+    assert err["error"]["type"] == "invalid_request_error"
     assert err["error"]["message"].startswith("request exceeds the model's context window")
 
 

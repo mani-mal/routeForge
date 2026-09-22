@@ -11,8 +11,8 @@ Codes come in two kinds, and the difference is deliberate:
   `model_not_found`, `rate_limit_exceeded`, `insufficient_quota`,
   `invalid_value` -- which clients already branch on.
 * RouteForge's own -- `no_eligible_model`, `response_failed_verification`,
-  `streaming_not_supported`, `backend_unavailable`, `policy_unavailable` --
-  for conditions OpenAI has no equivalent for.
+  `streaming_not_supported`, `backend_unavailable`, `policy_unavailable`,
+  `internal_error` -- for conditions OpenAI has no equivalent for.
 
 A code is never invented to impersonate an OpenAI condition that did not
 occur: a policy rejection is not dressed up as a quota error.

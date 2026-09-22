@@ -59,6 +59,16 @@ def client() -> TestClient:
     return TestClient(create_app())
 
 
+def v1_error(response) -> dict:
+    """The inner `error` object of a /v1 failure body (B49 envelope).
+
+    One place for tests to ask, so the next envelope change is one edit.
+    """
+    body = response.json()
+    assert "error" in body, f"not an OpenAI error envelope: {body!r}"
+    return body["error"]
+
+
 @pytest.fixture
 def compression_on_pipeline() -> Pipeline:
     """Same Pipeline app/main.py builds, but with context_optimization forced

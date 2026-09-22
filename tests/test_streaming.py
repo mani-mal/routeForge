@@ -18,6 +18,7 @@ import pytest
 
 from app.gateway.backends import litellm_backend
 from tests._litellm_fake import make_response
+from tests.conftest import v1_error
 from tests.test_admin_api import _login
 
 _LONG_TEXT = ("The quick brown fox jumps over the lazy dog. " * 4).strip()
@@ -154,7 +155,7 @@ def test_stream_without_app_override_still_400s(client):
                           "messages": [{"role": "user", "content": "hi"}],
                           "stream": True})
     assert r.status_code == 400
-    assert "streaming is not supported" in r.json()["detail"]
+    assert "streaming is not supported" in v1_error(r)["message"]
 
 
 def test_stream_with_invalid_token_still_400s_not_401(client):

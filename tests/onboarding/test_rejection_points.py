@@ -2,6 +2,7 @@
 driving them through /v1/chat/completions: daily budget exhausted, max_rpm,
 required-verification failure, and a revoked token."""
 from app.apps import store
+from tests.conftest import v1_error
 from tests.onboarding.harness import conformance_client, onboard
 
 _HI = {"messages": [{"role": "user", "content": "hi"}]}
@@ -23,7 +24,7 @@ def test_daily_budget_exhausted_is_429_and_named():
         c.portal.call(spend)
         r = app.chat(_HI)
     assert r.status_code == 429
-    assert "daily budget exceeded" in r.json()["detail"]
+    assert "daily budget exceeded" in v1_error(r)["message"]
 
 
 def test_rate_limit_is_429_after_max_rpm():
@@ -31,7 +32,7 @@ def test_rate_limit_is_429_after_max_rpm():
         app = onboard(c, "rp-rpm", max_rpm=1)
         assert app.chat(_HI).status_code == 200
         r = app.chat(_HI)
-    assert r.status_code == 429 and "rate limit" in r.json()["detail"]
+    assert r.status_code == 429 and "rate limit" in v1_error(r)["message"]
 
 
 def test_required_verification_failure_is_422_not_the_raw_answer(monkeypatch):
@@ -46,8 +47,8 @@ def test_required_verification_failure_is_422_not_the_raw_answer(monkeypatch):
         # (config/policy.yaml sensitivity_rules: US_SSN -> require_verification: true).
         r = app.chat({"messages": [{"role": "user", "content": "my ssn is 482-73-1946"}]})
     assert r.status_code == 422
-    assert r.json()["detail"].startswith("response failed verification")
-    assert "UNVERIFIABLE" not in r.text.replace(r.json()["detail"], "")
+    assert v1_error(r)["message"].startswith("response failed verification")
+    assert "UNVERIFIABLE" not in r.text.replace(v1_error(r)["message"], "")
 
 
 def test_revoked_token_is_401():

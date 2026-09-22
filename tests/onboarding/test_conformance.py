@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pytest
 
+from tests.conftest import v1_error
 from tests.onboarding.clients import CLIENTS, STREAM_CLIENTS
 from tests.onboarding.harness import (
     add_model, conformance_client, disable_seeded_models, install_dual_fake, onboard,
@@ -102,11 +103,11 @@ def test_real_client_is_served_or_told_why(client_name, recipe, setup, dual_fake
     if expected is not None:
         assert r.status_code == expected, r.text
         if expected == 400:
-            assert "stream_mode" in r.json().get("detail", ""), r.text
+            assert "stream_mode" in v1_error(r).get("message", ""), r.text
     if r.status_code == 200:
         return
     assert r.status_code in (400, 422, 429), r.text
-    detail = r.json().get("detail", "")
+    detail = v1_error(r).get("message", "")
     assert any(w in _hint_text(detail) for w in HINT_WORDS), \
         f"unactionable rejection: {detail!r}"
 

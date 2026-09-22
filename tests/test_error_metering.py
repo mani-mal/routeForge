@@ -33,6 +33,7 @@ from app.gateway.backends import litellm_backend
 from app.main import create_app
 from app.models import ChatRequest, Message
 from tests._litellm_fake import _FakeStreamChunk
+from tests.conftest import v1_error
 from tests.onboarding.harness import disable_seeded_models, onboard
 
 DEMO = {"Authorization": "Bearer demo-key"}
@@ -117,7 +118,9 @@ def test_keepalive_stream_backend_failure_writes_one_error_row(monkeypatch):
         assert body.startswith(": keepalive")  # the keepalive path really ran
         data = [e for e in body.split("\n\n") if e.startswith("data: ")]
         assert data[-1] == "data: [DONE]"
-        assert json.loads(data[-2][6:])["error"]["code"] == 502
+        err = json.loads(data[-2][6:])["error"]
+        assert err["code"] == "backend_unavailable"
+        assert err["type"] == "server_error"
 
         errors = _rows(c, "error")
         assert len(errors) == 1
@@ -237,7 +240,7 @@ def test_no_eligible_candidate_writes_no_error_row(monkeypatch):
         app = onboard(c, "err-no-candidate", residency="onprem_only")
         r = app.chat(HELLO)
         assert r.status_code == 422, r.text
-        assert "no model is available" in r.json()["detail"]
+        assert "no model is available" in v1_error(r)["message"]
         assert attempted == []
         assert _rows(c, "error") == []
 
