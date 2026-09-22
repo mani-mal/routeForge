@@ -76,7 +76,7 @@ A strategy now yields an **attempt order** rather than one choice.
 |---|---|---|
 | `router_cold` | empty | no-measurement baseline |
 | `router_online` | only the attempts **this arm made** on cases `0…k−1` (incl. its failovers), applied in order through `observe_success` / `observe_error`, errors counted only when `counts_unhealth` | **the reported arm** — what production would learn: no leakage, no information production wouldn't have |
-| `router_warm_prior` | every matrix row of cases `0…k−1` (all eligible endpoints) via `warm_signals` | full-information upper bound |
+| `router_warm_prior` | every matrix row of cases `0…k−1` (all eligible endpoints) via `warm_signals` | full-information **reference** (amended 2026-09-22: not an upper bound — it wasted more attempts than `router_online` in 7 runs, because more information about a failing endpoint can also delay a return after recovery) |
 
 - The previous `router_warm` (which replayed the current case's rows) is **removed** — it leaks
   the scored outcome (B48 (a)).
