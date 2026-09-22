@@ -1,5 +1,7 @@
 import pytest
 
+from tests.conftest import v1_error
+
 _AUTH = {"Authorization": "Bearer demo-key"}
 _MSG = {"messages": [{"role": "user", "content": "hello"}]}
 
@@ -12,7 +14,7 @@ def test_genuine_gate_failure_is_503(client, monkeypatch):
     monkeypatch.setattr(Gate, "evaluate", boom)
     r = client.post("/v1/chat/completions", headers=_AUTH, json=_MSG)
     assert r.status_code == 503
-    assert r.json()["detail"] == "policy evaluation unavailable"
+    assert v1_error(r)["message"] == "policy evaluation unavailable"
 
 
 def test_no_eligible_candidate_is_422(client, monkeypatch):
@@ -23,7 +25,7 @@ def test_no_eligible_candidate_is_422(client, monkeypatch):
     monkeypatch.setattr(Router, "select", empty)
     r = client.post("/v1/chat/completions", headers=_AUTH, json=_MSG)
     assert r.status_code == 422
-    assert "no model is available" in r.json()["detail"]
+    assert "no model is available" in v1_error(r)["message"]
 
 
 def test_backend_failure_is_502(client, monkeypatch):
@@ -34,4 +36,37 @@ def test_backend_failure_is_502(client, monkeypatch):
     monkeypatch.setattr(litellm_backend, "acompletion", always_fail)
     r = client.post("/v1/chat/completions", headers=_AUTH, json=_MSG)
     assert r.status_code == 502
-    assert r.json()["detail"].startswith("no backend could serve this request")
+    assert v1_error(r)["message"].startswith("no backend could serve this request")
+
+
+def test_v1_errors_use_the_openai_envelope(client, monkeypatch) -> None:
+    """Every /v1 failure body is {"error": {message, type, param, code}} (B49)."""
+    r = client.post("/v1/chat/completions",
+                    headers={"Authorization": "Bearer rf_live_nope"},
+                    json={"model": "any", "messages": [{"role": "user", "content": "hi"}]})
+    assert r.status_code == 401
+    body = r.json()
+    assert "detail" not in body
+    err = body["error"]
+    assert set(err) == {"message", "type", "param", "code"}
+    assert err["code"] == "invalid_api_key"
+    assert err["type"] == "invalid_request_error"
+    assert err["param"] is None
+    assert err["message"] == "invalid or missing API token"
+
+
+def test_admin_errors_keep_the_detail_shape(client) -> None:
+    """The console reads `detail`; /admin is deliberately not converted."""
+    r = client.get("/admin/infra/models")
+    assert r.status_code in (401, 403)
+    assert "detail" in r.json() and "error" not in r.json()
+
+
+def test_api_errors_keep_the_detail_shape(client) -> None:
+    """Spec §5 invariant 3 names /admin/* AND /api/* -- the console's own
+    surface is admin-cookie-gated (`Depends(require_admin)` on the whole
+    `/api` router), so an unauthenticated call errors the same way and must
+    stay `detail`-shaped too, not the /v1/* OpenAI envelope."""
+    r = client.get("/api/stats")
+    assert r.status_code in (401, 403)
+    assert "detail" in r.json() and "error" not in r.json()

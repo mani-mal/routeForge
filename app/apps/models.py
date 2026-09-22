@@ -334,6 +334,12 @@ class OnboardedModel(Base):
     endpoint: Mapped[str] = mapped_column(String(255))
     api_key_env: Mapped[str | None] = mapped_column(String(64), nullable=True)
     context_window: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Where `context_window` came from: "operator" (a human typed it) or
+    # "probed" (read from the endpoint's own /v1/models max_model_len). NULL
+    # when context_window is NULL. Same honesty as the P1b data-handling
+    # declarations: a number RouteForge inferred must not look like one the
+    # operator asserted. (B50)
+    context_window_source: Mapped[str | None] = mapped_column(String(16), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     allowed_app_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
     # P1b endpoint data-handling declarations (docs/superpowers/specs/

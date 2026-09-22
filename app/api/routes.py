@@ -16,6 +16,13 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.api.history import summarize
+from app.api.openai_errors import (
+    CODE_BACKEND_UNAVAILABLE, CODE_CONTEXT_LENGTH_EXCEEDED, CODE_INSUFFICIENT_QUOTA,
+    CODE_INTERNAL_ERROR, CODE_INVALID_API_KEY, CODE_INVALID_VALUE, CODE_MODEL_NOT_FOUND,
+    CODE_NO_ELIGIBLE_MODEL, CODE_POLICY_UNAVAILABLE, CODE_RATE_LIMIT_EXCEEDED,
+    CODE_RESPONSE_FAILED_VERIFICATION, CODE_STREAMING_NOT_SUPPORTED, TYPE_INSUFFICIENT_QUOTA,
+    ApiError,
+)
 from app.api.streaming import (
     SSE_DONE, SSE_KEEPALIVE, chunk_text, openai_chunk, sse_error_frame, sse_frame,
     sse_response,
@@ -171,17 +178,28 @@ async def list_models(request: Request) -> dict:
     """OpenAI model list, scoped to the calling application: exactly the ids it
     may send as `model` on /v1/chat/completions. App-token authenticated and
     fail closed, like inference. `created` is 0: onboarding time is not part of
-    the OpenAI contract clients rely on."""
+    the OpenAI contract clients rely on. Each entry also carries `max_model_len`
+    (vLLM's own field name, the one clients already read) when the model's real
+    context window is known (B50) -- omitted entirely, never null or 0, when
+    unknown."""
     auth = await _authenticate(request)
     if auth is None:
-        raise HTTPException(401, "invalid or missing API token")
+        raise ApiError(401, "invalid or missing API token", code=CODE_INVALID_API_KEY)
     tenant, app_policy, _ = auth
     registry = request.app.state.registry
     await registry.ensure_loaded(request.app.state.db)
     models = requestable_models(request.app.state.settings, registry, tenant, app_policy)
-    return {"object": "list",
-            "data": [{"id": c.name, "object": "model", "created": 0,
-                      "owned_by": c.provider} for c in models]}
+    data = []
+    for c in models:
+        entry = {"id": c.name, "object": "model", "created": 0,
+                 "owned_by": c.provider}
+        # vLLM's field name: the one clients already read. Omitted entirely
+        # when unknown -- a guessed context window overflows the request it
+        # was meant to size (B50).
+        if c.context_window:
+            entry["max_model_len"] = c.context_window
+        data.append(entry)
+    return {"object": "list", "data": data}
 
 
 def _resolve_stream_mode(body: ChatRequest, app_policy: AppPolicyView, s) -> str | None:
@@ -199,29 +217,35 @@ def _resolve_stream_mode(body: ChatRequest, app_policy: AppPolicyView, s) -> str
         return None
     mode = app_policy.stream_mode
     if mode in (None, STREAM_MODES[0]) and s.serving.reject_stream_requests:
-        raise HTTPException(400, _STREAM_REJECT)
+        raise ApiError(400, _STREAM_REJECT, code=CODE_STREAMING_NOT_SUPPORTED)
     return None if mode in (None, STREAM_MODES[0]) else mode
 
 
-def _error_status_detail(exc: BaseException) -> tuple[int, str] | None:
-    """The (status, detail) the HTTP path returns for a serving exception. One
-    mapping, used by the plain HTTP path and by the keepalive stream's error
-    frame, so the two can never drift."""
+def _error_status_detail(exc: BaseException) -> tuple[int, str, str | None] | None:
+    """The (status, detail, openai_code) the HTTP path returns for a serving
+    exception. One mapping, used by the plain HTTP path and by the keepalive
+    stream's error frame, so the two can never drift -- including the code the
+    client branches on (B49)."""
     if isinstance(exc, PipelineRejected):
         message = str(exc)
-        prefix = ("model request rejected: " if message.startswith("requested model")
+        rejected_model = message.startswith("requested model")
+        prefix = ("model request rejected: " if rejected_model
                   else "response failed verification: ")
-        return 422, f"{prefix}{message}"
+        code = (CODE_MODEL_NOT_FOUND if rejected_model
+                else CODE_RESPONSE_FAILED_VERIFICATION)
+        return 422, f"{prefix}{message}", code
     if isinstance(exc, ContextWindowExceeded):
         return 400, (f"request exceeds the model's context window: {exc} -- "
                      "shorten the conversation (compact or summarise the history) "
-                     "or lower max_tokens")
+                     "or lower max_tokens"), CODE_CONTEXT_LENGTH_EXCEEDED
     if isinstance(exc, NoEligibleCandidate):
-        return 422, f"no model is available for this request's policy: {exc}"
+        return (422, f"no model is available for this request's policy: {exc}",
+                CODE_NO_ELIGIBLE_MODEL)
     if isinstance(exc, BackendUnavailable):
-        return 502, f"no backend could serve this request: {exc}"
+        return (502, f"no backend could serve this request: {exc}",
+                CODE_BACKEND_UNAVAILABLE)
     if isinstance(exc, PolicyGateError):
-        return 503, "policy evaluation unavailable"
+        return 503, "policy evaluation unavailable", CODE_POLICY_UNAVAILABLE
     return None
 
 
@@ -353,8 +377,8 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
         # backwards compatible even for this edge case.
         metrics.observe_request("-", "unauthorized")
         if body.stream and s.serving.reject_stream_requests:
-            raise HTTPException(400, _STREAM_REJECT)
-        raise HTTPException(401, "invalid or missing API token")
+            raise ApiError(400, _STREAM_REJECT, code=CODE_STREAMING_NOT_SUPPORTED)
+        raise ApiError(401, "invalid or missing API token", code=CODE_INVALID_API_KEY)
     tenant, app_policy, app_langfuse = auth
     stream_mode = _resolve_stream_mode(body, app_policy, s)
 
@@ -363,7 +387,8 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
     # budget rejection is recorded as a usage row so it shows in the dashboard.
     if not request.app.state.rate_limiter.allow(tenant, app_policy.max_rpm):
         metrics.observe_request("-", "rate_limited")
-        raise HTTPException(429, "rate limit exceeded for this application")
+        raise ApiError(429, "rate limit exceeded for this application",
+                       code=CODE_RATE_LIMIT_EXCEEDED)
     if app_policy.max_spend_usd_per_day is not None:
         try:
             async with request.app.state.db.session() as session:
@@ -384,7 +409,8 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
                 logging.getLogger("serving.obs").exception(
                     "rejected-usage record failed (swallowed)")
             metrics.observe_request("-", "budget_exceeded")
-            raise HTTPException(429, "daily budget exceeded for this application")
+            raise ApiError(429, "daily budget exceeded for this application",
+                           code=CODE_INSUFFICIENT_QUOTA, type=TYPE_INSUFFICIENT_QUOTA)
 
     # Read the opaque workflow-correlation id once, up front: the streaming
     # branch below returns before the old (post-pipeline) read site, and every
@@ -503,7 +529,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
             logging.getLogger("serving.api").exception(
                 "unhandled error for %s", request_id)
             metrics.observe_request("-", "error")
-            raise HTTPException(500, "internal error")
+            raise ApiError(500, "internal error", code=CODE_INTERNAL_ERROR)
         if mapped[0] >= 500:
             logging.getLogger("serving.api").warning(
                 "request %s failed with %d: %s", request_id, mapped[0], mapped[1])
@@ -511,7 +537,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
         if isinstance(e, BackendUnavailable):
             await _record_failed(request, tenant=tenant, request_id=request_id,
                                  started=started, model=_failed_model(e))
-        raise HTTPException(mapped[0], mapped[1])
+        raise ApiError(mapped[0], mapped[1], code=mapped[2])
     await _finalize(request, resp, body=body, tenant=tenant, app_policy=app_policy,
                     app_langfuse=app_langfuse, profile=profile,
                     session_id=session_id, s=s, request_id=request_id,
@@ -949,7 +975,7 @@ async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
                 logging.getLogger("serving.api").exception(
                     "unhandled error for %s after stream opened", request_id)
                 metrics.observe_request("-", "error")
-                mapped = (500, "internal error")
+                mapped = (500, "internal error", CODE_INTERNAL_ERROR)
             else:
                 if mapped[0] >= 500:
                     logging.getLogger("serving.api").warning(
@@ -1281,10 +1307,11 @@ async def feedback(body: FeedbackIn, request: Request) -> dict:
     error)."""
     auth = await _authenticate(request)
     if auth is None:
-        raise HTTPException(401, "invalid or missing API token")
+        raise ApiError(401, "invalid or missing API token", code=CODE_INVALID_API_KEY)
     tenant, app_policy, app_langfuse = auth
     if body.score_name not in SCORE_NAMES:
-        raise HTTPException(422, f"unknown score_name: {body.score_name!r}")
+        raise ApiError(422, f"unknown score_name: {body.score_name!r}",
+                       code=CODE_INVALID_VALUE)
     await ensure_score_config(app_langfuse, body.score_name)  # best-effort, never raises
     stored = await post_score(app_langfuse, body.trace_id, body.score_name,
                               body.value, body.comment)

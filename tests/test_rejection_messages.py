@@ -1,3 +1,4 @@
+from tests.conftest import v1_error
 from tests.onboarding.clients import qwen_code_turn
 from tests.onboarding.harness import (
     add_model, conformance_client, disable_seeded_models, onboard,
@@ -5,7 +6,7 @@ from tests.onboarding.harness import (
 
 
 def _detail(r):
-    return r.json()["detail"]
+    return v1_error(r)["message"]
 
 
 def test_onprem_only_with_no_onprem_model_names_residency_and_onboarding():

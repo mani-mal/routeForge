@@ -22,6 +22,8 @@ from collections.abc import AsyncIterator
 
 from fastapi.responses import StreamingResponse
 
+from app.api.openai_errors import error_payload
+
 SSE_DONE = "data: [DONE]\n\n"
 
 # SSE comment line: ignored by every SSE/OpenAI client parser, but it is bytes
@@ -29,12 +31,19 @@ SSE_DONE = "data: [DONE]\n\n"
 SSE_KEEPALIVE = ": keepalive\n\n"
 
 
-def sse_error_frame(status: int, detail: str) -> str:
+def sse_error_frame(status: int, detail: str, code: str | None = None,
+                    type: str | None = None) -> str:
     """A failure after the SSE response already started (status 200 is on the
     wire). OpenAI SDK stream parsers raise APIError on a data frame carrying an
-    `error` object; `code` mirrors the HTTP status the non-stream path returns."""
-    return sse_frame({"error": {"message": detail, "type": "routeforge_error",
-                                "code": status}})
+    `error` object.
+
+    Shares `error_payload` with the non-streamed path (B49), so the same
+    exception describes itself identically whether or not the response had
+    already started. `type`/`code` used to be the constant "routeforge_error"
+    and the integer HTTP status; they are now the same OpenAI values the HTTP
+    body carries.
+    """
+    return sse_frame(error_payload(status, detail, code=code, type=type))
 
 
 def openai_chunk(request_id: str, model: str, *, delta: str | None = None,

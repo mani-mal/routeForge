@@ -91,6 +91,10 @@ MODEL_COLUMNS: list[tuple[str, str, str]] = [
     # 2026-09-19 P2a — the endpoint's declared cached-input rate. NULL =
     # undeclared -> bill cached tokens at price_input, i.e. today's behaviour.
     ("price_cached_input", "DOUBLE PRECISION", "FLOAT"),
+    # 2026-09-22 B50 — where context_window came from: "operator" | "probed".
+    # NULL on every existing row, which reads as "unknown provenance" and
+    # changes no stored context_window.
+    ("context_window_source", "VARCHAR(16)", "VARCHAR(16)"),
 ]
 
 # 2026-09-19 P2a cached-token accounting. Nullable with no default: an existing

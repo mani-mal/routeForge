@@ -45,7 +45,8 @@ Field reference (`OnboardIn`):
 | `price_output` | float | yes | USD per 1M output tokens. |
 | `price_cached_input` | float \| null | no | USD per 1M prompt tokens this endpoint served from its **own** prompt cache — see (b2). `null`/omitted = undeclared, which bills cached tokens at the full `price_input` rate. |
 | `quality` | float \| null | no | Optional published quality score; falls back to the tier-default quality ladder if omitted. |
-| `context_window` | int \| null | no | |
+| `context_window` | int \| null | no | See [`context_window` and `context_window_source`](#b1-context_window-and-context_window_source) below. |
+| `context_window_source` | str \| null | **response only — never send it** | Not part of `OnboardIn`; returned by `GET`/`POST`/`PUT /admin/infra/models` as `"operator"` \| `"probed"` \| `null`. See (b1). |
 | `allowed_app_ids` | list[str] \| null | no | App-scoping — see (d). |
 | `notes` | str \| null | no | Free text. |
 | `enabled` | bool | no (default `true`) | Admin intent — see (c) for how this combines with the probe. |
@@ -57,6 +58,53 @@ Edit an onboarded model with `PUT /admin/infra/models/{slug}` (same body,
 full replace — it re-probes on every edit). Remove one with
 `DELETE /admin/infra/models/{slug}`. List all onboarded rows with
 `GET /admin/infra/models`. All four endpoints require admin auth.
+
+## (b1) `context_window` and `context_window_source`
+
+`context_window` is the model's context length in tokens. It is captured
+automatically, published on `GET /v1/models` as `max_model_len` (see
+[`api-reference.md`](../reference/api-reference.md#get-v1models)), and is
+**never enforced** by routeForge — an oversized request still fails upstream
+(B36).
+
+- **Captured from the endpoint itself, on onboard and on edit.** The same
+  probe that checks your `slug` is served also reads that entry's
+  `max_model_len` from the upstream `GET {endpoint}/models` response. This
+  runs on **both** `POST /admin/infra/models` and `PUT
+  /admin/infra/models/{slug}` — every edit re-probes and can pick up a
+  changed value.
+- **An operator-typed value always wins over the probe.** Send an explicit
+  `context_window` in the body and it is stored as given; the probed number
+  is discarded for that write.
+- **Never guessed.** An endpoint that doesn't publish `max_model_len` (or
+  publishes something unusable — missing, `null`, a non-numeric value, zero
+  or negative) leaves `context_window` unknown (`null`). routeForge never
+  invents a default, and an unusable `max_model_len` does not fail the probe
+  itself — reachability and context capture are independent checks.
+- **Zero or negative is rejected, not stored.** An explicit `context_window`
+  of `0` or less in the request body is a `422` (`context_window must be >=
+  1, or omit/null for unknown`) — an operator typo shouldn't silently persist
+  as a nonsense row.
+- **`context_window_source` records where the stored number came from** —
+  `"operator"` (a human typed it), `"probed"` (routeForge's own probe
+  supplied it), or `null` when `context_window` itself is `null`. It is
+  **response-only**: `GET`/`POST`/`PUT /admin/infra/models` return it, but it
+  is never part of the `OnboardIn` request body and sending it has no effect.
+  Provenance is decided by the **value that ends up stored**, not by whether
+  the field was present on the request — the console's edit form re-submits
+  the whole row on every save, so a value that matches what the probe would
+  have produced (this probe's result, or the existing row's already-`"probed"`
+  value when this probe learned nothing new) is still recorded `"probed"`,
+  even though the field was technically present in the PUT body. Only a
+  value that differs from both is recorded `"operator"`. Typing the exact
+  number the endpoint reports is honestly `"probed"`, not `"operator"` — the
+  column says where the number came from, not who pressed save.
+- **There is no re-probe loop.** The probe runs only on onboard and on edit —
+  stated plainly: **the value is only as fresh as the last onboard or edit.**
+  If the operator reconfigures the upstream server with a different
+  `--max-model-len` (or equivalent), routeForge keeps the old number until
+  someone re-saves this model through the admin API or console. There is no
+  background job that notices the drift.
 
 ## (b2) `price_cached_input` — the cached-prompt-token rate
 

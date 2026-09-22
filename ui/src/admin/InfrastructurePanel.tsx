@@ -140,11 +140,16 @@ function ModelFields({
   onChange,
   apps,
   lockSlug = false,
+  contextWindowSource = null,
 }: {
   fields: ModelFormFields;
   onChange: (f: ModelFormFields) => void;
   apps: AdminApp[];
   lockSlug?: boolean;
+  // B50: the stored row's `context_window_source`, so the edit form can show
+  // the number came from the endpoint rather than an operator. Undefined/null
+  // on the onboard form (nothing stored yet) — no hint there.
+  contextWindowSource?: string | null;
 }) {
   const set = (patch: Partial<ModelFormFields>) => onChange({ ...fields, ...patch });
   return (
@@ -197,8 +202,21 @@ function ModelFields({
           <input type="number" step="any" min={0} value={fields.quality} onChange={(e) => set({ quality: e.target.value })} placeholder="(none)" className={inputCls} />
         </label>
         <label className="flex flex-col gap-1 text-xs text-gray-500">
-          context window (optional)
-          <input type="number" step="1" min={0} value={fields.contextWindow} onChange={(e) => set({ contextWindow: e.target.value })} placeholder="(none)" className={inputCls} />
+          {contextWindowSource === "probed" ? "context window (from endpoint)" : "context window (optional)"}
+          <input
+            type="number"
+            step="1"
+            min={1}
+            value={fields.contextWindow}
+            onChange={(e) => set({ contextWindow: e.target.value })}
+            placeholder="(none)"
+            title={
+              contextWindowSource === "probed"
+                ? "Read from the endpoint's /v1/models (max_model_len). Type a value to override it."
+                : undefined
+            }
+            className={inputCls}
+          />
         </label>
       </div>
 
@@ -467,7 +485,13 @@ function ModelRow({
         <tr className="border-b border-edge/60 last:border-0">
           <td colSpan={7} className="pb-3">
             <form onSubmit={save} className="flex flex-col gap-3 rounded-md border border-edge bg-ink/40 p-3">
-              <ModelFields fields={fields} onChange={setFields} apps={apps} lockSlug />
+              <ModelFields
+                fields={fields}
+                onChange={setFields}
+                apps={apps}
+                lockSlug
+                contextWindowSource={model.context_window_source}
+              />
               <div className="flex items-center gap-3">
                 <button
                   type="submit"

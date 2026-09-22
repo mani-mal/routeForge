@@ -36,6 +36,10 @@ class _OnboardedRow:
     # `price_input` (no invented discount). See app/apps/models.py::
     # OnboardedModel.price_cached_input.
     price_cached_input: float | None = None
+    # Real context window in tokens, when known (B50). None means unknown --
+    # never a guessed default. An operator's explicit value wins over a
+    # probed one; `effective_pool()` carries it onto the candidate untouched.
+    context_window: int | None = None
 
 
 class ModelRegistry:
@@ -66,7 +70,8 @@ class ModelRegistry:
                     allowed_app_ids=tuple(r.allowed_app_ids) if r.allowed_app_ids else None,
                     region=r.region, prompt_retention=r.prompt_retention,
                     accepts_raw_sensitive=r.accepts_raw_sensitive,
-                    price_cached_input=r.price_cached_input)
+                    price_cached_input=r.price_cached_input,
+                    context_window=r.context_window)
                 for r in rows}
         except Exception:
             _log.exception("registry refresh failed; keeping last-known-good")
@@ -157,7 +162,8 @@ class ModelRegistry:
                     name=r.slug, provider=r.provider, tier=r.tier,
                     display_name=r.display_name, quality=r.quality,
                     region=region, prompt_retention=retention,
-                    accepts_raw_sensitive=raw, data_handling_source=src))
+                    accepts_raw_sensitive=raw, data_handling_source=src,
+                    context_window=r.context_window))
         return pool
 
     def registry_version(self) -> str:

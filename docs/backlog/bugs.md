@@ -166,10 +166,21 @@ onboarded model).
   model that fails a workload is not preferred for it.
 - Measure any change with FeasibleRouteBench live before adopting it.
 
-## B50 — `/v1/models` doesn't report each model's context limit, so clients hand-set it
+## B50 — `/v1/models` doesn't report each model's context limit, so clients hand-set it  ✅ RESOLVED (2026-09-22, `76b2206`)
 
 **Severity:** low (improvement, not a defect)
-**Found:** 2026-09-22, reported from a Qwen Code session on the Spark. **Open.**
+**Found:** 2026-09-22, reported from a Qwen Code session on the Spark.
+**Resolved 2026-09-22** on `fix/b49-b50-openai-client-compat` (design
+`docs/superpowers/specs/2026-09-22-openai-client-compat-design.md` §4; code `4f87a1a` …
+`76b2206`). The onboarding probe now captures the endpoint's own `max_model_len` on
+onboard and on edit, storing it on `context_window` with a new `context_window_source`
+column (`"operator"` \| `"probed"` \| `null`, provenance decided by the stored value, not
+by whether the field was sent — an operator value always wins and a probed number is
+never guessed). `GET /v1/models` publishes it as `max_model_len`, omitted (never guessed)
+when unknown; routeForge still does not enforce it (an oversized request still fails
+upstream, B36). Documented in full in
+[`docs/reference/api-reference.md`](../reference/api-reference.md#get-v1models) and
+[`docs/guides/onboarding-models.md`](../guides/onboarding-models.md#b1-context_window-and-context_window_source).
 
 `GET /v1/models` (`app/api/routes.py:169`) returns only `id`, `object`, `created` and
 `owned_by`. A client such as Qwen Code therefore can't learn a model's real context window
@@ -191,10 +202,20 @@ and the onboarding probe already calls that endpoint.
 3. Test: a probe against a fake upstream reporting `max_model_len` stores it; an operator
    value is not overwritten; `/v1/models` includes it only when known.
 
-## B49 — non-streamed errors aren't in the OpenAI error format, so clients show only "API error"
+## B49 — non-streamed errors aren't in the OpenAI error format, so clients show only "API error"  ✅ RESOLVED (2026-09-22, `7faeeb3`)
 
 **Severity:** low–medium (improvement; every client loses the actionable message)
-**Found:** 2026-09-22, reported from a Qwen Code session on the Spark. **Open.**
+**Found:** 2026-09-22, reported from a Qwen Code session on the Spark.
+**Resolved 2026-09-22** on `fix/b49-b50-openai-client-compat` (design
+`docs/superpowers/specs/2026-09-22-openai-client-compat-design.md` §3; code `de3824b` …
+`7faeeb3`). Every `/v1/*` failure — both the plain HTTP path and the SSE error frame —
+now renders `{"error": {"message", "type", "param", "code"}}` from one shared mapping
+(`app/api/openai_errors.py`), so the two paths can't drift and an OpenAI SDK client's
+`except openai.BadRequestError as e: e.code` now reads a real code
+(`context_length_exceeded`, etc.) instead of finding nothing. `/admin/*` and `/api/*`
+are unchanged (`{"detail": ...}`, the console still reads it). Full code table,
+which codes are OpenAI's vs RouteForge's own, and the SSE wire-shape change, are in
+[`docs/reference/api-reference.md`](../reference/api-reference.md#errors).
 
 When a request fails before any response has started, the route raises
 `HTTPException(status, detail)` (`app/api/routes.py`, `_error_status_detail`), and FastAPI's

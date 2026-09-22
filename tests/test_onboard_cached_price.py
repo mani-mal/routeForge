@@ -13,6 +13,7 @@ is a small {slug, enabled, probe_status, probe_error, warnings} dict, not the fu
 row) -- this file follows that same established pattern rather than inventing a
 different response shape.
 """
+from app.apps.probe import ProbeResult
 
 _ADMIN = {"email": "admin@routeforge.local", "password": "changeme"}
 
@@ -33,7 +34,7 @@ def _login(client):
 
 
 async def _ok(*a, **k):
-    return True, "ok"
+    return ProbeResult(True, "ok")
 
 
 def _row(client, slug):

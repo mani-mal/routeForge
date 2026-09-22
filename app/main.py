@@ -5,11 +5,18 @@ import uuid
 from pathlib import Path
 
 import yaml
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exception_handlers import (
+    http_exception_handler, request_validation_exception_handler,
+)
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.admin_routes import admin_router
 from app.api.bus import DecisionBus
+from app.api.openai_errors import CODE_INVALID_REQUEST, error_payload
 from app.api.pg_bridge import PgDecisionBridge
 from app.apps.admin_auth import SessionStore
 from app.apps.bootstrap import seed_all
@@ -337,6 +344,33 @@ def create_app() -> FastAPI:
     app.include_router(router)
     app.include_router(ui_router)
     app.include_router(admin_router)
+
+    # B49: OpenAI-shaped errors on /v1/* only. /admin/* and /api/* keep
+    # FastAPI's {"detail": ...} -- the console reads it. Handlers are
+    # app-level in FastAPI, so the surface is selected by path here.
+    @app.exception_handler(StarletteHTTPException)
+    async def _http_exception_handler(request: Request, exc: StarletteHTTPException):
+        if not request.url.path.startswith("/v1/"):
+            return await http_exception_handler(request, exc)
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=error_payload(exc.status_code, str(exc.detail),
+                                  code=getattr(exc, "openai_code", None),
+                                  type=getattr(exc, "openai_type", None)),
+            headers=getattr(exc, "headers", None))
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation_handler(request: Request, exc: RequestValidationError):
+        if not request.url.path.startswith("/v1/"):
+            return await request_validation_exception_handler(request, exc)
+        first = exc.errors()[0] if exc.errors() else {}
+        loc = ".".join(str(p) for p in first.get("loc", ()) if p != "body")
+        message = first.get("msg", "invalid request body")
+        return JSONResponse(
+            status_code=422,
+            content=error_payload(422, f"{loc}: {message}" if loc else message,
+                                  code=CODE_INVALID_REQUEST))
+
     # Dev convenience: allow the Vite dev server to call the API directly.
     # Production serves the UI same-origin, where CORS is a no-op.
     app.add_middleware(

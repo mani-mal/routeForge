@@ -7,6 +7,7 @@ import json
 
 import pytest
 
+from tests.conftest import v1_error
 from tests.onboarding.harness import conformance_client, onboard
 
 _TURN = {"stream": True, "messages": [{"role": "user", "content": "summarise the repo"}],
@@ -72,7 +73,7 @@ def test_fast_policy_rejection_keeps_its_http_status():
                       allowed_models=["no-such-model"])
         r = c.post("/v1/chat/completions", headers=app.headers, json=_TURN)
     assert r.status_code == 422
-    assert "allowed_models" in r.json()["detail"]
+    assert "allowed_models" in v1_error(r)["message"]
 
 
 def test_late_failure_after_stream_opened_is_an_sse_error_frame(monkeypatch):
@@ -88,7 +89,8 @@ def test_late_failure_after_stream_opened_is_an_sse_error_frame(monkeypatch):
     data = [e for e in _events(body) if e.startswith("data: ")]
     err = json.loads(data[-2][6:])
     assert data[-1] == "data: [DONE]"
-    assert err["error"]["code"] == 502
+    assert err["error"]["code"] == "backend_unavailable"
+    assert err["error"]["type"] == "server_error"
     assert err["error"]["message"].startswith("no backend could serve this request")
 
 
@@ -130,7 +132,7 @@ def test_late_mapped_error_is_rejected_not_error(monkeypatch):
     data = [e for e in _events(body) if e.startswith("data: ")]
     err = json.loads(data[-2][6:])
     assert data[-1] == "data: [DONE]"
-    assert err["error"]["code"] == 502
+    assert err["error"]["code"] == "backend_unavailable"
     assert err["error"]["message"].startswith("no backend could serve this request")
     assert ("-", "rejected") in calls
 
