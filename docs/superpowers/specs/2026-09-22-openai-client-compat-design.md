@@ -209,13 +209,56 @@ On both write paths (`POST /admin/infra/models`, `PUT /admin/infra/models/{slug}
 
 This deliberately does **not** copy the omission-preserving treatment used for
 `price_cached_input` and `accepts_raw_sensitive`. `context_window` is full-replace on omission
-today, the console always resubmits the whole body, and the rule above already gives the
-operator the last word on every write that carries their value. Adding a third preservation
-semantic would buy nothing and cost a reader's understanding.
+today, and adding a third preservation semantic would cost a reader's understanding.
+
+**Amended 2026-09-22, after the Task 5 review.** The rule above, alone, destroys the very
+provenance this column exists to record. The console pre-fills its edit form with whatever the
+row holds and resubmits the entire body on every save — so a *probed* number is sent straight
+back as an explicit value on the next PUT, and the naive rule relabels it `"operator"` although
+no human typed it. After one edit of any model, `context_window_source` would read `"operator"`
+almost everywhere, which is exactly the false assertion the column was added to prevent.
+
+So provenance is decided by the **value**, not by whether the field was populated:
+
+- the submitted value equals what RouteForge would have stored by itself — the freshly probed
+  `max_model_len`, or (when this probe learned nothing) the existing row's value whose source was
+  already `"probed"` — → source stays `"probed"`.
+- the submitted value differs from both → source `"operator"`. A human changed it.
+- no submitted value, a probed one → `"probed"`. Neither → NULL.
+
+An operator who deliberately types the exact number the endpoint reports is recorded as
+`"probed"`. That is correct, not a rounding error: the stored value *is* the endpoint's own
+answer, and the column describes where the number came from, not who pressed save.
+
+**Zero is refused, not stored.** `context_window` has no lower bound today, so a body carrying
+`0` would be stored verbatim and labelled `"operator"`. Zero is never a valid context window.
+It is rejected with a 422 by the same static validation that already guards prices — an operator
+error deserves an error, not a silently persisted nonsense row. (`/v1/models` would omit it
+anyway, since the publish check is truthiness, but junk should not reach the database in the
+first place.)
 
 **The value is only as fresh as the last onboard or edit.** There is no re-probe loop, so a
 model reconfigured upstream with a different `--max-model-len` keeps the old number until an
 operator re-saves it. Stated in the guide, not papered over.
+
+### 4.2a What an unmigrated database actually does
+
+*Added 2026-09-22 after the Task 5 review found the first draft of this warning overstated.*
+
+The migration note must describe the real failure, because an operator plans around it:
+
+- **The admin API breaks loudly.** `GET`/`POST`/`PUT /admin/infra/models` call the store
+  directly with no exception handling, so a missing column surfaces as a raw database error and
+  a 500. Onboarding and editing are unusable until the column exists.
+- **The serving path degrades quietly, and fail-closed.** `ModelRegistry.refresh` wraps its load
+  in `try/except` and keeps last-known-good. On a freshly rolled process there is no
+  last-known-good, so the onboarded pool reads as empty — and by the existing "no on-prem model
+  onboarded ⇒ derived reject" rule, `onprem_only` requests are **rejected**, never silently sent
+  to cloud. Apps that permit cloud are unaffected.
+
+So: on-prem serving does stop, but by refusing requests rather than by crashing them, and the
+admin API is where the error is visible. "Fails every read and takes routing down" is the wrong
+shape to hand an operator — it implies request-path 500s they would go looking for and not find.
 
 ### 4.3 Carrying it to the listing
 
