@@ -927,11 +927,15 @@ you edit, and keep it.
 
 - [ ] **Step 5: Add the migration**
 
-In `scripts/migrate_app_policies.py`, append to `MODEL_COLUMNS` following the existing
-`(name, (pg_type, sqlite_type))` shape:
+In `scripts/migrate_app_policies.py`, append to `MODEL_COLUMNS` (declared at ~:87 as
+`list[tuple[str, str, str]]` — a flat `(name, pg_type, sqlite_type)` triple, **not** a nested
+tuple), following the existing entries' comment style:
 
 ```python
-    ("context_window_source", ("VARCHAR(16)", "VARCHAR(16)")),
+    # 2026-09-22 B50 — where context_window came from: "operator" | "probed".
+    # NULL on every existing row, which reads as "unknown provenance" and
+    # changes no stored context_window.
+    ("context_window_source", "VARCHAR(16)", "VARCHAR(16)"),
 ```
 
 In `docs/reference/per-app-config.md`'s migration section, add a dated row:
