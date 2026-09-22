@@ -206,12 +206,10 @@ def warm_signals(settings: Settings, rows: Iterable["MatrixRow"],
 
     One `Observation` per row: `ok` (no `error`) contributes a success with
     its `latency_ms`; `error` contributes a failure ONLY when
-    `row.counts_unhealth is True` -- production only ever calls
-    `SignalStore.observe_error` when `counts_as_endpoint_unhealth(exc)` is
-    true (`app/gateway/gateway.py`), so an error row that does NOT count as
-    endpoint-unhealth (a 4xx that says the request was wrong, or one whose
-    root exception the runner couldn't reach -- see
-    `app/eval/runner.py::_root_cause`) is skipped entirely: neither a
+    `row.counts_unhealth is True`, matching production's own
+    `SignalStore.observe_error` gate (`app/gateway/gateway.py`) -- any other
+    error row (`counts_unhealth` `False` or `None`; see
+    `app/eval/runner.py::_backend_exception`) is skipped entirely: neither a
     success nor a failure observation (spec §6 / B48c). Never streamed --
     the harness's simulated/live backends never stream (spec §5.1/§5.2).
 

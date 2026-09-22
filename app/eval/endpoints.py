@@ -267,37 +267,21 @@ def harness_settings(base: Settings, specs: list[EndpointSpec]) -> Settings:
     # the pinned tier and calls the SAME endpoint again (doubling spend and
     # grading the second answer). Router strategies don't read this field.
     settings.routing.max_escalations = 0
-    # The sweep is a single-shot measurement per endpoint (spec §4): the
-    # gateway itself must make exactly one attempt and propagate that
-    # attempt's own exception, never retry a peer -- a pinned request has
-    # only one candidate anyway (`app/policy/feasible.py` restricts the pool
-    # to `ctx.requested_model`), so failover always excludes it and finds an
-    # empty pool, and WITHOUT this override `Gateway._exhausted` would chain
-    # `BackendUnavailable` from a freshly-raised `NoEligibleCandidate`
-    # instead of the real backend exception -- unrecoverable via
-    # `app/eval/runner.py::_root_cause`, silently losing
-    # `MatrixRow.failure_latency_ms` and misreading every failure's
-    # `counts_unhealth` as True regardless of its real status code (B48c fix
-    # round 1). The deployment's OWN failover is not discarded -- it is
-    # modelled explicitly in strategy-level scoring (spec §5's
-    # failover-aware attempt chains), not executed by this gateway; see
-    # `deployment_failover_cap` below for the value that scoring reads.
+    # The sweep gateway makes exactly one attempt per call (spec §4, B48c fix
+    # round 1): a pinned request has only one candidate anyway, so any
+    # failover would just chain the gateway's exhaustion error off a
+    # freshly-raised NoEligibleCandidate instead of the real backend
+    # exception -- see `app/eval/runner.py::_backend_exception`. The
+    # deployment's own failover is modelled in strategy-level scoring
+    # instead (`deployment_failover_cap`, below), not executed here.
     settings.routing.max_failover_attempts = 0
     return settings
 
 
 def deployment_failover_cap(base: Settings) -> int:
-    """The deployment's OWN `max_failover_attempts`, read from `base`
-    BEFORE `harness_settings` zeroes it for the sweep (B48c fix round 1).
-
-    `harness_settings` sets the sweep gateway's `max_failover_attempts` to 0
-    so each `(case, endpoint)` sweep call is a single-shot measurement whose
-    exception the runner can always unwrap to the real backend failure (see
-    `harness_settings`'s docstring). But the deployment's real failover
-    behavior still needs modelling somewhere -- spec §5's failover-aware
-    strategy scoring reads the ACTUAL configured cap (attempt count `1 +
-    cap`) from this function, called on the harness's pre-override `base`
-    `Settings`, never on the zeroed `harness_settings(...)` result."""
+    """The deployment's own `max_failover_attempts`, read from `base` BEFORE
+    `harness_settings` zeroes it for the sweep (B48c fix round 1) -- Tasks
+    4/5's failover-aware scoring caps attempts at `1 + deployment_failover_cap(base)`."""
     return base.routing.max_failover_attempts
 
 

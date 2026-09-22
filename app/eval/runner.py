@@ -38,6 +38,7 @@ import yaml
 from app.apps.privacy import AppPrivacyProfile
 from app.compression.ccr import CCRStore
 from app.config.loader import load_settings
+from app.errors import BackendUnavailable, ContextWindowExceeded
 from app.eval.cases import Case, SuiteError, load_suite
 from app.eval.endpoints import (
     EndpointFileError,
@@ -194,42 +195,27 @@ def _trace_step(resp: dict, step: str) -> list[dict]:
     return [rec for rec in resp.get("trace", []) if rec.get("step") == step]
 
 
-def _root_cause(exc: BaseException) -> BaseException:
-    """Walk `__cause__` then `__context__` to the deepest exception still
-    reachable from `exc` (spec §4: "the real `counts_as_endpoint_unhealth(exc)`
-    on the exception the sweep call raised").
+# The only two exception types `Gateway._exhausted` returns and
+# `Gateway.run` raises `from` the failing attempt -- see `_backend_exception`.
+_GATEWAY_EXHAUSTED_TYPES = (BackendUnavailable, ContextWindowExceeded)
 
-    `_sweep_one` catches whatever `Pipeline.run` propagates -- for a backend
-    failure that is `app/gateway/gateway.py::Gateway.run`'s own
-    `_exhausted(...)`, raised `from exc`, so `__cause__` is the original
-    backend exception (e.g. `SimulatedEndpointFailure`) directly, one hop
-    down.
 
-    A PINNED sweep call only ever has ONE candidate (the pin,
-    `app/policy/feasible.py` restricts the pool to `ctx.requested_model`),
-    so on ANY failover the gateway's retry loop would exclude that one
-    candidate, find an empty pool, and raise a fresh `NoEligibleCandidate`
-    instead -- `_exhausted(...) from` THAT, never the original backend
-    exception, which `counts_as_endpoint_unhealth` would then misread (no
-    `status_code` -> always True) and whose `failure_latency_ms` would be
-    lost entirely. `harness_settings` (`app/eval/endpoints.py`, B48c fix
-    round 1) forecloses this by setting `max_failover_attempts = 0`: the
-    gateway's very first failure already exceeds the cap, so `_exhausted`
-    always chains directly from the real backend exception and this
-    function's walk terminates on it after exactly one hop. The multi-hop
-    walk (`__cause__` then `__context__`, with a cycle guard) stays general
-    -- e.g. it still unwraps whatever `PolicyGateError`-style wrapping a
-    future caller might introduce -- but under the harness's own settings it
-    is never actually asked to reach past `BackendUnavailable`/
-    `ContextWindowExceeded`'s immediate cause."""
-    current = exc
-    seen = {id(current)}
-    while True:
-        nxt = current.__cause__ if current.__cause__ is not None else current.__context__
-        if nxt is None or id(nxt) in seen:
-            return current
-        current = nxt
-        seen.add(id(current))
+def _backend_exception(exc: BaseException) -> BaseException | None:
+    """The real backend exception behind `exc`, or `None` when `exc` makes no
+    endpoint claim at all (B48c fix round 2; spec §4).
+
+    Exactly one hop, via `__cause__` only, and only when `exc` is itself one
+    of `Gateway._exhausted`'s two return types (`app/gateway/gateway.py`),
+    always raised `from` the attempt that triggered exhaustion -- never
+    `__context__`, and never deeper: a live backend's own internal exception
+    chaining (e.g. `openai`/`litellm` wrapping) is not ours to walk, and
+    doing so previously overshot the exception `counts_as_endpoint_unhealth`
+    is meant to classify. Anything else (`PipelineRejected`,
+    `NoEligibleCandidate`, `PolicyGateError`, ...) never reached gateway
+    exhaustion and says nothing about endpoint health."""
+    if isinstance(exc, _GATEWAY_EXHAUSTED_TYPES) and exc.__cause__ is not None:
+        return exc.__cause__
+    return None
 
 
 async def _sweep_one(pipeline: Pipeline, backend: _CountingBackend, case: Case,
@@ -256,14 +242,21 @@ async def _sweep_one(pipeline: Pipeline, backend: _CountingBackend, case: Case,
     prompt_tokens = cached_tokens = None
     counts_unhealth: bool | None = None
     failure_latency_ms: float | None = None
+    error_class: str | None = None
     try:
         resp = await pipeline.run(f"{case.id}:{endpoint}", TENANT_ID, request,
                                   app_policy=app_policy, profile=PROFILE)
     except Exception as exc:  # spec §8: an error row, never dropped
         error: str | None = f"{type(exc).__name__}: {exc}"
-        root_exc = _root_cause(exc)
-        counts_unhealth = counts_as_endpoint_unhealth(root_exc)
-        failure_latency_ms = getattr(root_exc, "failure_latency_ms", None)
+        backend_exc = _backend_exception(exc)
+        if backend_exc is not None:
+            counts_unhealth = counts_as_endpoint_unhealth(backend_exc)
+            failure_latency_ms = getattr(backend_exc, "failure_latency_ms", None)
+            error_class = type(backend_exc).__name__
+        else:
+            # `exc` never reached gateway exhaustion (spec §4 / fix round 2):
+            # not an endpoint verdict, so False, not a guess.
+            counts_unhealth = False
     else:
         error = None
         served = resp["model"]
@@ -295,12 +288,14 @@ async def _sweep_one(pipeline: Pipeline, backend: _CountingBackend, case: Case,
                     passed=error is None and quality >= case.quality_floor,
                     cost_usd=cost, latency_ms=latency, error=error,
                     counts_unhealth=counts_unhealth,
-                    failure_latency_ms=failure_latency_ms)
+                    failure_latency_ms=failure_latency_ms,
+                    error_class=error_class)
     line = {
         "case_id": case.id, "endpoint": endpoint, "served": served,
         "quality": row.quality, "passed": row.passed, "cost_usd": row.cost_usd,
         "latency_ms": row.latency_ms, "prompt_tokens": prompt_tokens,
         "cached_prompt_tokens": cached_tokens, "error": error,
+        "error_class": row.error_class,
         "counts_unhealth": row.counts_unhealth,
         "failure_latency_ms": row.failure_latency_ms,
     }

@@ -36,15 +36,14 @@ from dataclasses import dataclass
 class MatrixRow:
     """One `(case, endpoint)` sweep outcome (spec §7 `matrix.jsonl`).
 
-    `counts_unhealth` and `failure_latency_ms` are spec §4 additions
-    (failure injection, B48): both `None` on success. On a failed sweep call
-    the runner sets `counts_unhealth` to the real
-    `app/gateway/gateway.py::counts_as_endpoint_unhealth` verdict on the
-    exception the call raised (unwrapped to the deepest reachable cause --
-    see `app/eval/runner.py::_root_cause`), and `failure_latency_ms` to that
-    exception's own `failure_latency_ms` attribute when present (the
-    simulated backend's injected-failure latency), else `None`. This module
-    stays pure -- it only carries the two fields; it never computes them."""
+    `counts_unhealth`/`failure_latency_ms`/`error_class` are spec §4
+    additions (failure injection, B48): all `None` on success. On a failed
+    sweep call the runner sets them from the real backend exception when one
+    is reachable (only one hop below the gateway's own exhaustion error --
+    see `app/eval/runner.py::_backend_exception`), else `counts_unhealth`
+    is `False` (not an endpoint verdict) and the other two stay `None`.
+    This module stays pure -- it only carries the fields; it never computes
+    them."""
 
     case_id: str
     endpoint: str
@@ -55,6 +54,7 @@ class MatrixRow:
     error: str | None = None
     counts_unhealth: bool | None = None    # None on success (spec §4)
     failure_latency_ms: float | None = None  # None on success or when unknown
+    error_class: str | None = None  # the classified backend exception's class name
 
 @dataclass(frozen=True)
 class CaseInfo:

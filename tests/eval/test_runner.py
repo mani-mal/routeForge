@@ -18,6 +18,7 @@ from pathlib import Path
 
 import yaml
 
+from app.errors import BackendUnavailable, ContextWindowExceeded, NoEligibleCandidate
 from app.eval import runner
 from app.eval.runner import run_bench
 from app.eval.simulated import SimulatedBackend
@@ -374,21 +375,54 @@ def test_sweep_call_with_extra_generate_becomes_error_row(tmp_path, monkeypatch)
 
 
 # --------------------------------------------------------------------------
-# 6b. matrix rows record endpoint-unhealth (B48c, Task 2 + fix round 1)
+# 6b. matrix rows record endpoint-unhealth (B48c, Task 2 + fix rounds 1-2)
 # --------------------------------------------------------------------------
 #
-# A PINNED sweep call only ever has one candidate (the pin). Without
-# `harness_settings` zeroing `max_failover_attempts` (B48c fix round 1),
-# the gateway's retry loop would exclude that one candidate after its first
-# failure and call `Router.select` again, which finds an empty pool and
-# raises `NoEligibleCandidate` -- `Gateway._exhausted(...)` would then chain
-# `from` THAT exception, not the original backend one, so
-# `app/eval/runner.py::_root_cause` could never reach the real backend
-# exception. `harness_settings` now sets `max_failover_attempts = 0` so the
-# gateway's very FIRST failure already exceeds the cap and `_exhausted`
-# chains directly from the real backend exception -- these tests run
-# through the SHIPPED harness defaults (no per-test override) and prove
-# both `counts_unhealth` and `failure_latency_ms` come out correctly.
+# `harness_settings` zeroes `max_failover_attempts` (fix round 1) so a
+# pinned sweep call's gateway exhaustion always chains directly from the
+# real backend exception; `_backend_exception` (fix round 2) then unwraps
+# exactly that one hop. These tests run through the shipped harness
+# defaults (no per-test override) end to end.
+
+class TestBackendExceptionUnitLevel:
+    """Hand-built exception chains -- fix round 2, reviewer-probed cases."""
+
+    def test_stops_one_hop_below_gateway_exhaustion_never_follows_context(self):
+        """A `BadRequestError`-shaped cause (status_code=400) whose OWN
+        `__context__` is some deeper, status-less exception (e.g. what a real
+        `openai`/`litellm` internal re-raise sets) must be read directly --
+        never walked past into `__context__`, which would misclassify a 4xx
+        as endpoint-unhealth (True) via a status-less wrapper."""
+        deep_context = Exception("httpx.HTTPStatusError-shaped, no status_code")
+        bad_request = Exception("bad request")
+        bad_request.status_code = 400
+        bad_request.__context__ = deep_context
+        outer = BackendUnavailable("exhausted", attempted_models=("m",))
+        outer.__cause__ = bad_request
+
+        backend_exc = runner._backend_exception(outer)
+
+        assert backend_exc is bad_request
+        assert runner.counts_as_endpoint_unhealth(backend_exc) is False
+
+    def test_context_window_exceeded_is_exempt(self):
+        original = ContextWindowExceeded("prompt too large for this model")
+        outer = ContextWindowExceeded("prompt too large for this model")
+        outer.__cause__ = original
+
+        backend_exc = runner._backend_exception(outer)
+
+        assert backend_exc is original
+        assert runner.counts_as_endpoint_unhealth(backend_exc) is False
+
+    def test_non_exhaustion_exception_yields_no_endpoint_verdict(self):
+        """A bare `NoEligibleCandidate` -- e.g. the pipeline never reached
+        the gateway's own exhaustion at all -- carries no endpoint verdict."""
+        assert runner._backend_exception(NoEligibleCandidate("no candidates")) is None
+
+    def test_gateway_exhaustion_with_no_cause_yields_no_endpoint_verdict(self):
+        assert runner._backend_exception(BackendUnavailable("exhausted")) is None
+
 
 def test_outage_row_records_endpoint_unhealth_and_failure_latency(tmp_path):
     endpoints = [_endpoint("local-a", outages=[{"from": 0, "to": 10}],
@@ -402,7 +436,24 @@ def test_outage_row_records_endpoint_unhealth_and_failure_latency(tmp_path):
     assert row["error"] is not None
     assert row["counts_unhealth"] is True
     assert row["failure_latency_ms"] == 250.0
+    assert row["error_class"] == "SimulatedEndpointFailure"
     assert result.metrics["strategies"]["cheapest"]["violation_rate"] == 0.0
+
+
+def test_flake_row_records_endpoint_unhealth(tmp_path):
+    """The independent `error_rate` flake path (status_code=503, spec §3) --
+    distinct injection mechanism from an outage, same endpoint-unhealth
+    verdict."""
+    endpoints = [_endpoint("local-a", error_rate=1.0)]
+    cases = [_case("faq-1", "What is the capital of France?")]
+    suite, eps = _write_inputs(tmp_path, cases, endpoints)
+    _run(suite, eps, tmp_path / "out")
+    rows = _jsonl(tmp_path / "out" / "matrix.jsonl")
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["error"] is not None
+    assert row["counts_unhealth"] is True
+    assert row["error_class"] == "SimulatedEndpointFailure"
 
 
 def test_400_status_backend_failure_does_not_count_as_unhealth(tmp_path, monkeypatch):
@@ -426,6 +477,30 @@ def test_400_status_backend_failure_does_not_count_as_unhealth(tmp_path, monkeyp
     assert row["error"] is not None
     assert row["counts_unhealth"] is False
     assert row["failure_latency_ms"] is None
+    assert row["error_class"] == "Exception"
+
+
+def test_non_gateway_pipeline_failure_is_not_an_endpoint_verdict(tmp_path, monkeypatch):
+    """B48c fix round 2: a pipeline failure that never reached gateway
+    exhaustion (`PipelineRejected`, `NoEligibleCandidate`, `PolicyGateError`,
+    ...) is not a statement about endpoint health -- `counts_unhealth` must
+    be `False`, not the pre-fix-round-2 default of `True`."""
+    from app.pipeline import Pipeline, PipelineRejected
+
+    async def rejected(self, *args, **kwargs):
+        raise PipelineRejected("blocked by a fake output-controls failure")
+
+    monkeypatch.setattr(Pipeline, "run", rejected)
+    cases = [_case("faq-1", "What is the capital of France?")]
+    suite, eps = _write_inputs(tmp_path, cases, [_endpoint("local-a")])
+    _run(suite, eps, tmp_path / "out")
+    rows = _jsonl(tmp_path / "out" / "matrix.jsonl")
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["error"] is not None and "PipelineRejected" in row["error"]
+    assert row["counts_unhealth"] is False
+    assert row["failure_latency_ms"] is None
+    assert row["error_class"] is None
 
 
 # --------------------------------------------------------------------------
