@@ -401,6 +401,7 @@ def test_edit_omitting_region_and_retention_still_clears_them(client, monkeypatc
     row = next(m for m in client.get("/admin/infra/models").json()
                if m["slug"] == "declared-model")
     assert row["region"] is None
+    assert row["prompt_retention"] is None
 
 
 # --- B50: published context limits (probed vs operator-supplied) -----------
@@ -486,4 +487,63 @@ def test_unknown_context_window_stays_null(client, monkeypatch):
                if m["slug"] == "qwen-unknown")
     assert row["context_window"] is None
     assert row["context_window_source"] is None
-    assert row["prompt_retention"] is None
+
+
+def test_onboard_zero_context_window_422(client, monkeypatch):
+    """Zero is never a valid context window -- refused, not stored (design
+    §4.2)."""
+    monkeypatch.setattr("app.api.admin_routes.probe_endpoint", _probe_with(131072))
+    _login(client)
+    r = client.post("/admin/infra/models",
+                     json={**_BODY, "slug": "qwen-zero", "context_window": 0})
+    assert r.status_code == 422
+    assert "context_window" in r.text
+
+
+def test_console_roundtrip_keeps_probed_source(client, monkeypatch):
+    """The console pre-fills its edit form from the stored row and resubmits
+    the whole body on every save. When the resubmitted value happens to equal
+    the (re)probed limit, source must stay "probed" -- not flip to "operator"
+    just because the field arrived populated (design §4.2, amended after Task
+    5 review round 1)."""
+    monkeypatch.setattr("app.api.admin_routes.probe_endpoint", _probe_with(131072))
+    _login(client)
+    assert client.post("/admin/infra/models",
+                        json={**_BODY, "slug": "qwen-roundtrip"}).status_code == 200
+
+    row = next(m for m in client.get("/admin/infra/models").json()
+               if m["slug"] == "qwen-roundtrip")
+    assert row["context_window"] == 131072
+    assert row["context_window_source"] == "probed"
+
+    # Console round-trip: GET pre-filled the form with 131072, and the PUT
+    # resubmits that same value unchanged.
+    r = client.put("/admin/infra/models/qwen-roundtrip",
+                    json={**_BODY, "slug": "qwen-roundtrip", "context_window": 131072})
+    assert r.status_code == 200, r.text
+
+    row = next(m for m in client.get("/admin/infra/models").json()
+               if m["slug"] == "qwen-roundtrip")
+    assert row["context_window"] == 131072
+    assert row["context_window_source"] == "probed"
+
+
+def test_console_roundtrip_keeps_probed_source_when_reprobe_learns_nothing(client, monkeypatch):
+    """Same round-trip, but the re-probe on the second save learns nothing
+    (e.g. the endpoint stopped publishing max_model_len). The resubmitted
+    value still matches the EXISTING row's own probed value, so source stays
+    "probed" rather than falling to "operator" for lack of a fresh probe."""
+    monkeypatch.setattr("app.api.admin_routes.probe_endpoint", _probe_with(131072))
+    _login(client)
+    assert client.post("/admin/infra/models",
+                        json={**_BODY, "slug": "qwen-roundtrip2"}).status_code == 200
+
+    monkeypatch.setattr("app.api.admin_routes.probe_endpoint", _probe_with(None))
+    r = client.put("/admin/infra/models/qwen-roundtrip2",
+                    json={**_BODY, "slug": "qwen-roundtrip2", "context_window": 131072})
+    assert r.status_code == 200, r.text
+
+    row = next(m for m in client.get("/admin/infra/models").json()
+               if m["slug"] == "qwen-roundtrip2")
+    assert row["context_window"] == 131072
+    assert row["context_window_source"] == "probed"

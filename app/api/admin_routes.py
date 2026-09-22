@@ -872,6 +872,12 @@ def _static_validate_onboard(body: OnboardIn, s) -> None:
         raise HTTPException(422, "price must be >= 0")
     if body.price_cached_input is not None and body.price_cached_input < 0:
         raise HTTPException(422, "price_cached_input must be >= 0")
+    # B50: zero (or negative) is never a valid context window -- refuse it
+    # here rather than store it verbatim and label it "operator" (design
+    # §4.2). `/v1/models` would omit a falsy value anyway, but junk should
+    # not reach the database in the first place.
+    if body.context_window is not None and body.context_window < 1:
+        raise HTTPException(422, "context_window must be >= 1, or omit/null for unknown")
     # P1b: prompt_retention is a fixed enum (app/policy/enums.py, shared with
     # the YAML lint so an admin-accepted value is a value the resolver will
     # actually read as a real declaration) -- None (undeclared) is always
@@ -945,22 +951,38 @@ def _resolved_price_cached_input(body: OnboardIn, existing) -> float | None:
     return body.price_cached_input
 
 
-def _resolved_context_window(body: OnboardIn, probed: int | None) -> tuple[int | None, str | None]:
-    """`context_window` and its source (B50, design §4.2).
+def _resolved_context_window(
+        body: OnboardIn, probed: int | None, existing) -> tuple[int | None, str | None]:
+    """`context_window` and its source (B50, design §4.2, amended after Task 5
+    review round 1).
 
-    An explicit value always wins and is never overwritten by a later probe --
-    the operator knows things RouteForge cannot read off an endpoint (a proxy
-    that truncates, a deliberately conservative budget). Only when they supply
-    none does the probed value land. Deliberately NOT omission-preserving like
-    `price_cached_input`: context_window is full-replace today, the console
-    always resubmits the whole body, and this rule already gives the operator
-    the last word on every write that carries their value.
+    Provenance is decided by the **value**, not by whether the field was
+    populated. The console pre-fills its edit form from the stored row and
+    resubmits the whole body on every save, so a naive "populated -> operator"
+    rule relabels a probed number as human-entered the moment anyone next
+    saves the model -- destroying the exact honesty this column exists to
+    record.
+
+    So: a submitted value that equals what RouteForge would have stored by
+    itself -- the freshly probed `max_model_len`, or (when this probe learned
+    nothing) the existing row's own value whose source was already `"probed"`
+    -- stays `"probed"`. Any other submitted value is `"operator"`: a human
+    actually changed it, even if by coincidence they typed the exact number
+    the endpoint reports (the column records where the number came from, not
+    who pressed save). No submitted value falls back to the probe; neither
+    present leaves both NULL.
     """
-    if body.context_window is not None:
-        return body.context_window, "operator"
-    if probed is not None:
-        return probed, "probed"
-    return None, None
+    if body.context_window is None:
+        if probed is not None:
+            return probed, "probed"
+        return None, None
+    if body.context_window == probed:
+        return body.context_window, "probed"
+    if (probed is None and existing is not None
+            and existing.context_window_source == "probed"
+            and body.context_window == existing.context_window):
+        return body.context_window, "probed"
+    return body.context_window, "operator"
 
 
 @admin_router.post("/infra/models")
@@ -991,7 +1013,8 @@ async def onboard_model(body: OnboardIn, request: Request,
         # and onprem_only fail-closed depend on that), but a reachable model can
         # still be turned off on request.
         final_enabled = body.enabled and ok
-        context_window, context_window_source = _resolved_context_window(body, _probe.max_model_len)
+        context_window, context_window_source = _resolved_context_window(
+            body, _probe.max_model_len, existing)
         await store.upsert_onboarded(
             session, body.slug, display_name=body.display_name, provider="onprem",
             tier=body.tier, endpoint=body.endpoint, api_key_env=body.api_key_env,
@@ -1049,7 +1072,8 @@ async def edit_onboarded_model(slug: str, body: OnboardIn, request: Request,
         ok, detail = _probe.ok, _probe.detail
         # Same intent-AND-probe rule as onboard_model — see comment there.
         final_enabled = body.enabled and ok
-        context_window, context_window_source = _resolved_context_window(body, _probe.max_model_len)
+        context_window, context_window_source = _resolved_context_window(
+            body, _probe.max_model_len, existing)
         await store.upsert_onboarded(
             session, slug, display_name=body.display_name, provider="onprem",
             tier=body.tier, endpoint=body.endpoint, api_key_env=body.api_key_env,

@@ -1199,13 +1199,26 @@ B50 (published context limits) adds one more column to `onboarded_models`:
 ALTER TABLE onboarded_models ADD COLUMN context_window_source VARCHAR(16);
 ```
 
-- `onboarded_models.context_window_source` — `"operator"` when a human typed
-  `context_window`, `"probed"` when it was read from the endpoint's own
-  `/v1/models` `max_model_len`, `NULL` when `context_window` itself is `NULL`.
-  An explicit operator value always wins and a later re-probe never overwrites
-  it. **Run this `ALTER` before rolling the image** — the new image reads
-  `context_window_source` on every onboarded-model read, so an unmigrated
-  database fails those reads, which takes on-prem routing down. Same trap the
+- `onboarded_models.context_window_source` — `"probed"` when the stored value
+  is what RouteForge itself would have recorded (the freshly probed
+  `max_model_len`, or, when this probe learned nothing, the existing row's
+  own already-`"probed"` value), `"operator"` when the submitted value
+  differs from that — a human actually changed it — and `NULL` when
+  `context_window` itself is `NULL`. Provenance follows the *value*, not
+  whether the field was populated, because the console resubmits the whole
+  row on every save: keying it on presence would relabel a probed number
+  `"operator"` the moment anyone next edits the model. **Run this `ALTER`
+  before rolling the image.** What actually breaks on a database still
+  missing it: `GET`/`POST`/`PUT /admin/infra/models` call the store directly
+  with no exception handling, so onboarding and editing a model surface a
+  raw database error (500) until the column exists — the admin API breaks
+  loudly. The serving path does not crash: `ModelRegistry.refresh` wraps its
+  load in `try/except` and keeps last-known-good, but a freshly rolled
+  process has none, so the onboarded pool reads empty and, by the existing
+  "no on-prem model onboarded ⇒ derived reject" rule, `onprem_only` requests
+  are **rejected**, never silently sent to cloud — apps that permit cloud
+  are unaffected. So on-prem serving does stop, but by refusing requests,
+  not by 500ing them; the visible error is on the admin API. Same trap the
   last two deploys hit.
 
 > **A deployment still on pre-P1a code now needs twelve `ALTER`s before the image
