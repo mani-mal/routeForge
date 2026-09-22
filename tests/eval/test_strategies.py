@@ -269,7 +269,8 @@ def _slow_fast_setup(tmp_path):
          for i in range(5)]
         + [MatrixRow(case_id=f"warm-{i}", endpoint="fast-flaky",
                      quality=0.0, passed=False, cost_usd=0.0001,
-                     latency_ms=None, error="BackendUnavailable")
+                     latency_ms=None, error="BackendUnavailable",
+                     counts_unhealth=True)
            for i in range(5)]
     )
     return settings, registry, inp, rows
@@ -390,6 +391,39 @@ class TestRouterVariantAndWarmSignals:
         assert obs[0].outcome == "ok"
         assert obs[0].latency_ms == 250.0
         assert obs[0].streamed is False
+
+    def test_warm_signals_skips_error_rows_that_do_not_count_as_unhealth(self, tmp_path):
+        """B48c: an error row with `counts_unhealth=False` (e.g. the root
+        exception was a 4xx -- the request was wrong, not the endpoint) must
+        leave availability completely untouched, not merely unpenalized --
+        `warm_signals` must not even call `observe_error` for it. A row with
+        `counts_unhealth=True` still lowers availability exactly as before."""
+        settings, registry, case, ctx, eligible = _build(tmp_path, [
+            _entry("only-model"),
+        ])
+
+        healthy_error_row = MatrixRow(
+            case_id="c1", endpoint="only-model", quality=0.0, passed=False,
+            cost_usd=0.0, latency_ms=None, error="BadRequest: oversized prompt",
+            counts_unhealth=False)
+        skipped_signals = warm_signals(settings, [healthy_error_row])
+        assert "only-model" not in skipped_signals.snapshot()
+
+        unreachable_root_row = MatrixRow(
+            case_id="c1", endpoint="only-model", quality=0.0, passed=False,
+            cost_usd=0.0, latency_ms=None, error="NoEligibleCandidate: exhausted",
+            counts_unhealth=None)
+        also_skipped = warm_signals(settings, [unreachable_root_row])
+        assert "only-model" not in also_skipped.snapshot()
+
+        unhealth_row = MatrixRow(
+            case_id="c1", endpoint="only-model", quality=0.0, passed=False,
+            cost_usd=0.0, latency_ms=None, error="BackendUnavailable: down",
+            counts_unhealth=True)
+        counted_signals = warm_signals(settings, [unhealth_row])
+        state = counted_signals.snapshot()["only-model"]
+        assert state["availability_n"] == 1
+        assert state["availability"] < 1.0
 
 
 # --------------------------------------------------------------------------

@@ -205,9 +205,15 @@ def warm_signals(settings: Settings, rows: Iterable["MatrixRow"],
     governs the real boot-seed path governs this one.
 
     One `Observation` per row: `ok` (no `error`) contributes a success with
-    its `latency_ms`; `error` (any non-None `error`) contributes a failure.
-    Never streamed -- the harness's simulated/live backends never stream
-    (spec §5.1/§5.2).
+    its `latency_ms`; `error` contributes a failure ONLY when
+    `row.counts_unhealth is True` -- production only ever calls
+    `SignalStore.observe_error` when `counts_as_endpoint_unhealth(exc)` is
+    true (`app/gateway/gateway.py`), so an error row that does NOT count as
+    endpoint-unhealth (a 4xx that says the request was wrong, or one whose
+    root exception the runner couldn't reach -- see
+    `app/eval/runner.py::_root_cause`) is skipped entirely: neither a
+    success nor a failure observation (spec §6 / B48c). Never streamed --
+    the harness's simulated/live backends never stream (spec §5.1/§5.2).
 
     Returns a `_FrozenReadSignalStore`: `Router.select` has no `now`
     override, so without freezing, reads happen against the REAL wall clock
@@ -263,6 +269,7 @@ def warm_signals(settings: Settings, rows: Iterable["MatrixRow"],
             ttft_ms=None,
         )
         for i, row in enumerate(materialized)
+        if row.error is None or row.counts_unhealth is True
     ]
     store.replay(observations)
     return store

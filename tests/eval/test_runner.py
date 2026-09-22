@@ -34,14 +34,22 @@ _BASE_STRATEGIES = ("cheapest", "best_published_quality", "router_cold", "router
 # --------------------------------------------------------------------------
 
 def _endpoint(slug, *, provider="onprem", tier="cheap", price=0.1, quality=0.9,
-              region="us", retention="none", raw_ok=True, latency=100.0) -> dict:
+              region="us", retention="none", raw_ok=True, latency=100.0,
+              outages=None, error_rate=0.0, failure_latency_ms=None) -> dict:
+    simulated = {"quality": {"default": quality},
+                 "latency_ms": {"mean": latency, "jitter": 20}}
+    if outages:
+        simulated["outages"] = outages
+    if error_rate:
+        simulated["error_rate"] = error_rate
+    if failure_latency_ms is not None:
+        simulated["failure_latency_ms"] = failure_latency_ms
     return {
         "slug": slug, "provider": provider, "tier": tier,
         "price": {"input": price, "output": price},
         "region": region, "prompt_retention": retention,
         "accepts_raw_sensitive": raw_ok,
-        "simulated": {"quality": {"default": quality},
-                      "latency_ms": {"mean": latency, "jitter": 20}},
+        "simulated": simulated,
     }
 
 
@@ -363,6 +371,72 @@ def test_sweep_call_with_extra_generate_becomes_error_row(tmp_path, monkeypatch)
     assert bad
     assert result.metrics["policy"]["sweep_generate_mismatches"] == len(bad)
     assert all(r["passed"] is False and r["cost_usd"] == 0.0 for r in bad)
+
+
+# --------------------------------------------------------------------------
+# 6b. matrix rows record endpoint-unhealth (B48c, Task 2)
+# --------------------------------------------------------------------------
+#
+# A PINNED sweep call only ever has one candidate (the pin). After its first
+# failure the gateway's retry loop excludes it and calls `Router.select`
+# again, which finds an empty pool and raises `NoEligibleCandidate` --
+# `Gateway._exhausted(...)` then chains `from` THAT exception, not the
+# original backend one, so `app/eval/runner.py::_root_cause` cannot reach
+# the real backend exception under the default `max_failover_attempts` (2).
+# These tests force `max_failover_attempts=0` so the gateway's very FIRST
+# failure already exceeds the cap and `_exhausted` chains directly from the
+# real backend exception -- the one shape where the original is reachable.
+# This is a genuine limitation of the pinned-sweep design (not a test
+# artifact): under the shipped default, `counts_unhealth` still comes out
+# correct (the unreachable `NoEligibleCandidate` fallback happens to read as
+# unhealth = True, same as a real outage would), but `failure_latency_ms`
+# is not recoverable, and a 4xx-shaped failure's root would read as
+# unhealth = True too, when it should be False. See task-2-report.md.
+
+def _no_failover(base, specs):
+    from app.eval import endpoints as endpoints_mod
+    settings = endpoints_mod.harness_settings(base, specs)
+    settings.routing.max_failover_attempts = 0
+    return settings
+
+
+def test_outage_row_records_endpoint_unhealth_and_failure_latency(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "harness_settings", _no_failover)
+    endpoints = [_endpoint("local-a", outages=[{"from": 0, "to": 10}],
+                           failure_latency_ms=250.0)]
+    cases = [_case("faq-1", "What is the capital of France?")]
+    suite, eps = _write_inputs(tmp_path, cases, endpoints)
+    result = _run(suite, eps, tmp_path / "out")
+    rows = _jsonl(tmp_path / "out" / "matrix.jsonl")
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["error"] is not None
+    assert row["counts_unhealth"] is True
+    assert row["failure_latency_ms"] == 250.0
+    assert result.metrics["strategies"]["cheapest"]["violation_rate"] == 0.0
+
+
+def test_400_status_backend_failure_does_not_count_as_unhealth(tmp_path, monkeypatch):
+    """A 4xx (other than 429) says the request was wrong, not the endpoint
+    (`counts_as_endpoint_unhealth`) -- proven here through the REAL pipeline
+    + simulated backend, not a mock of the exception-unwrapping itself."""
+    monkeypatch.setattr(runner, "harness_settings", _no_failover)
+
+    async def bad_request(self, *args, **kwargs):
+        exc = Exception("simulated bad request")
+        exc.status_code = 400
+        raise exc
+
+    monkeypatch.setattr(SimulatedBackend, "generate", bad_request)
+    cases = [_case("faq-1", "What is the capital of France?")]
+    suite, eps = _write_inputs(tmp_path, cases, [_endpoint("local-a")])
+    _run(suite, eps, tmp_path / "out")
+    rows = _jsonl(tmp_path / "out" / "matrix.jsonl")
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["error"] is not None
+    assert row["counts_unhealth"] is False
+    assert row["failure_latency_ms"] is None
 
 
 # --------------------------------------------------------------------------

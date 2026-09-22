@@ -69,7 +69,7 @@ from app.eval.strategies import (
 )
 from app.gateway.backends.base import count_tokens
 from app.gateway.backends.factory import make_backend
-from app.gateway.gateway import Gateway
+from app.gateway.gateway import Gateway, counts_as_endpoint_unhealth
 from app.models import ChatRequest, Message
 from app.pipeline import Pipeline
 from app.policy.detectors import make_detector
@@ -194,6 +194,39 @@ def _trace_step(resp: dict, step: str) -> list[dict]:
     return [rec for rec in resp.get("trace", []) if rec.get("step") == step]
 
 
+def _root_cause(exc: BaseException) -> BaseException:
+    """Walk `__cause__` then `__context__` to the deepest exception still
+    reachable from `exc` (spec §4: "the real `counts_as_endpoint_unhealth(exc)`
+    on the exception the sweep call raised").
+
+    `_sweep_one` catches whatever `Pipeline.run` propagates -- for a
+    backend failure that is `app/gateway/gateway.py::Gateway.run`'s own
+    `_exhausted(...)`, raised `from exc`, so `__cause__` usually IS the
+    original backend exception (e.g. `SimulatedEndpointFailure`) directly.
+
+    But a PINNED sweep call only ever has ONE candidate (the pin), so after
+    its first failure the gateway's retry loop excludes it and calls
+    `Router.select(..., exclude={pinned})` again, which finds an empty pool
+    and raises `NoEligibleCandidate` -- `_exhausted(...) from` THAT
+    exception, not the original backend one. In that (default
+    `max_failover_attempts >= 1`) shape, the original backend exception is
+    unreachable from here: this function still returns the deepest node it
+    CAN reach (`NoEligibleCandidate`, which carries no `status_code`, so
+    `counts_as_endpoint_unhealth` reads it as unhealth = True). Only when
+    the gateway's very first failure already exceeds
+    `settings.routing.max_failover_attempts` -- e.g. `max_failover_attempts
+    == 0` -- does `_exhausted` chain directly from the real backend
+    exception, making it reachable here."""
+    current = exc
+    seen = {id(current)}
+    while True:
+        nxt = current.__cause__ if current.__cause__ is not None else current.__context__
+        if nxt is None or id(nxt) in seen:
+            return current
+        current = nxt
+        seen.add(id(current))
+
+
 async def _sweep_one(pipeline: Pipeline, backend: _CountingBackend, case: Case,
                      endpoint: str, app_policy, index: int, *, keep_text: bool
                      ) -> tuple[MatrixRow, dict, str | None, int | None]:
@@ -216,11 +249,16 @@ async def _sweep_one(pipeline: Pipeline, backend: _CountingBackend, case: Case,
     tokens_after: int | None = None
     text: str | None = None
     prompt_tokens = cached_tokens = None
+    counts_unhealth: bool | None = None
+    failure_latency_ms: float | None = None
     try:
         resp = await pipeline.run(f"{case.id}:{endpoint}", TENANT_ID, request,
                                   app_policy=app_policy, profile=PROFILE)
     except Exception as exc:  # spec §8: an error row, never dropped
         error: str | None = f"{type(exc).__name__}: {exc}"
+        root_exc = _root_cause(exc)
+        counts_unhealth = counts_as_endpoint_unhealth(root_exc)
+        failure_latency_ms = getattr(root_exc, "failure_latency_ms", None)
     else:
         error = None
         served = resp["model"]
@@ -250,12 +288,16 @@ async def _sweep_one(pipeline: Pipeline, backend: _CountingBackend, case: Case,
 
     row = MatrixRow(case_id=case.id, endpoint=endpoint, quality=quality,
                     passed=error is None and quality >= case.quality_floor,
-                    cost_usd=cost, latency_ms=latency, error=error)
+                    cost_usd=cost, latency_ms=latency, error=error,
+                    counts_unhealth=counts_unhealth,
+                    failure_latency_ms=failure_latency_ms)
     line = {
         "case_id": case.id, "endpoint": endpoint, "served": served,
         "quality": row.quality, "passed": row.passed, "cost_usd": row.cost_usd,
         "latency_ms": row.latency_ms, "prompt_tokens": prompt_tokens,
         "cached_prompt_tokens": cached_tokens, "error": error,
+        "counts_unhealth": row.counts_unhealth,
+        "failure_latency_ms": row.failure_latency_ms,
     }
     if keep_text:
         line["text"] = text

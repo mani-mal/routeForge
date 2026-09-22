@@ -34,7 +34,17 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class MatrixRow:
-    """One `(case, endpoint)` sweep outcome (spec §7 `matrix.jsonl`)."""
+    """One `(case, endpoint)` sweep outcome (spec §7 `matrix.jsonl`).
+
+    `counts_unhealth` and `failure_latency_ms` are spec §4 additions
+    (failure injection, B48): both `None` on success. On a failed sweep call
+    the runner sets `counts_unhealth` to the real
+    `app/gateway/gateway.py::counts_as_endpoint_unhealth` verdict on the
+    exception the call raised (unwrapped to the deepest reachable cause --
+    see `app/eval/runner.py::_root_cause`), and `failure_latency_ms` to that
+    exception's own `failure_latency_ms` attribute when present (the
+    simulated backend's injected-failure latency), else `None`. This module
+    stays pure -- it only carries the two fields; it never computes them."""
 
     case_id: str
     endpoint: str
@@ -43,6 +53,8 @@ class MatrixRow:
     cost_usd: float
     latency_ms: float | None      # None when error
     error: str | None = None
+    counts_unhealth: bool | None = None    # None on success (spec §4)
+    failure_latency_ms: float | None = None  # None on success or when unknown
 
 @dataclass(frozen=True)
 class CaseInfo:
