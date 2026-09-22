@@ -11,11 +11,14 @@ The strongest guard here is `_validate_openai`: it parses our response with the
 REAL `openai` SDK model, exactly as a client does — so any future drift from
 the OpenAI shape fails a test instead of a customer's agent.
 """
+import json
+
 import pytest
 
 from tests._litellm_fake import (
     CALLS, make_recording_acompletion, make_response,
 )
+from tests.conftest import v1_error
 from app.gateway.backends import litellm_backend
 
 _AUTH = {"Authorization": "Bearer demo-key"}
@@ -165,3 +168,124 @@ def test_tools_request_is_redacted_before_egress(client, monkeypatch):
     assert r.status_code == 200
     wire_text = "".join(str(m.get("content") or "") for m in CALLS[-1]["messages"])
     assert "482-73-1946" not in wire_text  # redacted before egress
+
+
+# --- B49: the OpenAI SDK contract on the error envelope ---
+#
+# These are the tests that would have caught B49: nothing above drives a
+# genuine OpenAI SDK client, so nothing above would have noticed that a
+# failure rendered as FastAPI's bare `{"detail": ...}` instead of the shape
+# the SDK parses. Qwen Code -- a real OpenAI-SDK client -- showed the user
+# only "API error" for exactly this reason.
+
+
+def _sdk(client, token: str):
+    """A real OpenAI SDK client speaking to the in-process app.
+
+    `TestClient` is an `httpx.Client` subclass and `openai.OpenAI` accepts an
+    `http_client`, so this is the genuine SDK parse path -- the same code that
+    turned RouteForge's 400 into a bare "API error" for Qwen Code (B49).
+    """
+    openai = pytest.importorskip("openai")
+    oc = openai.OpenAI(base_url="http://testserver/v1", api_key=token,
+                       http_client=client, max_retries=0)
+    oc._client = client  # route SDK traffic through the TestClient transport
+    return oc
+
+
+def test_sdk_reads_context_overflow_code(client, monkeypatch) -> None:
+    """The complaint itself (B49): the OpenAI SDK must surface `.code` and
+    `.type` off a 400, not a bare "API error" (Qwen Code)."""
+    openai = pytest.importorskip("openai")
+    from litellm import ContextWindowExceededError
+
+    async def _overflow(**kwargs):
+        raise ContextWindowExceededError(
+            message=("OpenAIException - This model's maximum context length is "
+                     "8192 tokens. Please shorten your messages."),
+            model=kwargs.get("model", "m"), llm_provider="openai")
+
+    monkeypatch.setattr(litellm_backend, "acompletion", _overflow)
+
+    with pytest.raises(openai.BadRequestError) as ei:
+        _sdk(client, "demo-key").chat.completions.create(
+            model="auto", messages=[{"role": "user", "content": "hi"}])
+    assert ei.value.code == "context_length_exceeded"
+    assert ei.value.type == "invalid_request_error"
+    # `.message` is the SDK's own "Error code: 400 - {...}" wrapper; the
+    # RouteForge text lives on the parsed body.
+    assert "shorten the conversation" in ei.value.body["message"]
+
+
+def test_sdk_reads_auth_failure_code(client) -> None:
+    """A bad token must read as `openai.AuthenticationError` with
+    `code == "invalid_api_key"`, not a bare 401."""
+    openai = pytest.importorskip("openai")
+    with pytest.raises(openai.AuthenticationError) as ei:
+        _sdk(client, "rf_live_nope").chat.completions.create(
+            model="any", messages=[{"role": "user", "content": "hi"}])
+    assert ei.value.code == "invalid_api_key"
+
+
+def test_streamed_and_plain_errors_agree(client, monkeypatch) -> None:
+    """A failure describes itself identically whether or not the response had
+    already started (B49 design §3.4)."""
+    from app.errors import NoEligibleCandidate
+    from tests.onboarding.harness import conformance_client, onboard
+    from tests.test_stream_keepalive import _fast_keepalive, _slow_run
+
+    with conformance_client() as c:
+        plain_app = onboard(c, "parity-plain")
+        stream_app = onboard(c, "parity-stream", stream_mode="verified_then_stream")
+
+        _slow_run(monkeypatch, c, delay=0.0,
+                  exc=NoEligibleCandidate("no candidates after residency filter: test"))
+        plain = plain_app.chat({"messages": [{"role": "user", "content": "hi"}]})
+        assert plain.status_code == 422
+        plain_err = v1_error(plain)
+
+        _fast_keepalive(c)
+        _slow_run(monkeypatch, c, delay=0.2,
+                  exc=NoEligibleCandidate("no candidates after residency filter: test"))
+        with c.stream("POST", "/v1/chat/completions", headers=stream_app.headers,
+                      json={"stream": True,
+                            "messages": [{"role": "user", "content": "hi"}]}) as r:
+            assert r.status_code == 200
+            body = "".join(r.iter_text())
+
+    data = [e for e in body.split("\n\n") if e.startswith("data: ")]
+    assert data[-1] == "data: [DONE]"
+    stream_err = json.loads(data[-2][6:])["error"]
+
+    assert plain_err["type"] == stream_err["type"] == "invalid_request_error"
+    assert plain_err["code"] == stream_err["code"] == "no_eligible_model"
+
+
+def test_backend_error_message_still_scrubs_endpoints(client, monkeypatch) -> None:
+    """The envelope adds no text and reads no new source, so it cannot widen a
+    leak -- pinned, because it renders a message that used to be opaque."""
+    async def refuse(**kwargs):
+        raise RuntimeError("Cannot connect to http://10.1.2.3:8000/v1")
+
+    monkeypatch.setattr(litellm_backend, "acompletion", refuse)
+    r = client.post("/v1/chat/completions", headers=_AUTH,
+                    json={"messages": [{"role": "user", "content": "hello"}]})
+    assert r.status_code == 502
+    message = v1_error(r)["message"]
+    assert "<endpoint>" in message
+    assert "10.1.2.3" not in message
+    assert "http://" not in message
+
+
+def test_plain_http_exception_on_v1_still_renders_an_envelope(client) -> None:
+    """A raise that names no code gets a status-derived type and a null code.
+
+    Uses GET on the POST-only /v1/chat/completions route (405), which is
+    raised by Starlette before any RouteForge code runs -- nothing on this
+    path could have remembered to opt in to the mapping."""
+    r = client.get("/v1/chat/completions")
+    assert r.status_code == 405
+    err = v1_error(r)
+    assert set(err) == {"message", "type", "param", "code"}
+    assert err["code"] is None
+    assert err["type"] == "invalid_request_error"
