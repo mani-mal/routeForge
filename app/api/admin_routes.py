@@ -967,10 +967,11 @@ def _resolved_context_window(
     itself -- the freshly probed `max_model_len`, or (when this probe learned
     nothing) the existing row's own value whose source was already `"probed"`
     -- stays `"probed"`. Any other submitted value is `"operator"`: a human
-    actually changed it, even if by coincidence they typed the exact number
-    the endpoint reports (the column records where the number came from, not
-    who pressed save). No submitted value falls back to the probe; neither
-    present leaves both NULL.
+    changed it to something RouteForge would not itself have produced. Typing
+    the exact number the endpoint reports is recorded as `"probed"`, not
+    `"operator"` -- the column records where the number came from, not who
+    pressed save. No submitted value falls back to the probe; neither present
+    leaves both NULL.
     """
     if body.context_window is None:
         if probed is not None:
