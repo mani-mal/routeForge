@@ -227,8 +227,12 @@ inbound streaming (`server.reject_stream_requests`), sending `"stream": true`
 still returns:
 
 ```
-400  {"detail": "streaming is not supported for this application"}
+400
+{"error": {"message": "streaming is not supported for this application: set the application's stream_mode (verified_then_stream, stream_unverified or incremental_verify)",
+           "type": "invalid_request_error", "param": null, "code": "streaming_not_supported"}}
 ```
+
+(All `/v1/*` errors use this envelope — see [Errors](#errors) below.)
 
 Output verification (step 9) needs the **complete** response, which token
 streaming can't provide without a partial-leak window — which is why streaming is
@@ -248,9 +252,19 @@ When a request waits for a complete, verified answer — such as a tool turn, `v
 If an error occurs after the SSE stream has opened (status 200 is on the wire), the error is conveyed as an SSE frame:
 
 ```
-data: {"error": {"message": "<detail>", "type": "routeforge_error", "code": <http-status>}}
+data: {"error": {"message": "<detail>", "type": "<openai-type>", "param": null, "code": "<openai-code>"}}
 data: [DONE]
 ```
+
+**This shape changed (B49).** The frame used to carry the constant `"type":
+"routeforge_error"` and `"code": <http-status>` (the integer status, e.g. `502`).
+It now shares the exact same `(type, code)` mapping the non-streamed HTTP body
+uses (see [Errors](#errors) below) — `type` is a real OpenAI error type
+(`invalid_request_error`, `rate_limit_error`, `insufficient_quota`,
+`server_error`) and `code` is a string code (e.g. `"context_length_exceeded"`),
+never an integer. A failure now renders identically whether or not the
+response had already started streaming. Anything parsing the old frame shape
+by field type must be updated.
 
 The message text is identical to what the HTTP error response would contain. Clients that parse SSE will raise an `APIError` on the error frame.
 
@@ -286,23 +300,70 @@ The session id is used for **trace and console grouping only**. Persistent memor
 
 ## Errors
 
+**Every failure on `/v1/*` renders in the OpenAI error envelope (B49):**
+
+```json
+{"error": {"message": "...", "type": "invalid_request_error", "param": null, "code": "context_length_exceeded"}}
+```
+
+The HTTP status is unchanged from before this shape existed; only the body
+changed. `param` is always present and `null` — routeForge never attributes a
+failure to one request field. The OpenAI Python SDK reads `code`/`type` off
+the inner `error` object, so `openai.BadRequestError.code` is exactly the
+string in the table below — this is what let a real OpenAI-SDK client (the
+origin of this fix) show a real message instead of "API error".
+
+**`/admin/*` and `/api/*` are not affected** — those keep FastAPI's
+`{"detail": ...}` shape, unchanged, because the admin console reads `detail`
+directly. This envelope is `/v1/*` only.
+
 Every error the inference endpoint can return:
 
-| Status | `detail` message | Cause |
-|---|---|---|
-| `400` | `streaming is not supported for this application: set the application's stream_mode (verified_then_stream, stream_unverified or incremental_verify)` | You sent `stream: true` and your app has no `stream_mode`; set one, or send `stream: false`. |
-| `401` | `invalid or missing API token` | Missing/unknown/revoked token, or the application is disabled. **Fail closed.** |
-| `422` | *(FastAPI validation error)* | Malformed body — e.g. missing `messages`. Extra unknown fields do **not** cause this. |
-| `422` | `no model is available for this request's policy: no candidates after residency filter: <counts and fixes>` | Nothing survived placement or app scope; the detail lists each reason and the field to change. |
-| `400` | `request exceeds the model's context window: <model>: This model's maximum context length is … -- shorten the conversation …` | Prompt + `max_tokens` is larger than every tried model's context window. Compact or summarise the history, or lower `max_tokens`. Returned only when **every** candidate refused for this reason; retrying the same request will fail the same way. |
-| `422` | `no model is available for this request's policy: no candidates after budget filter: cheapest candidate … estimated at $X … over the per-request cap $Y …` | Raise the app's `max_cost_usd_per_request`, lower `max_tokens`, or lower the model's price. The router has already tried cheaper allowed tiers. |
-| `422` | `model request rejected: requested model '<model>' is not permitted or unavailable: <gate>` | The pinned `model` failed the named gate; `GET /v1/models` lists what this app can pin. |
-| `422` | `response failed verification: <detail>` | Output leakage / verification failed. |
-| `429` | `rate limit exceeded for this application` | Over your `max_rpm`. |
-| `429` | `daily budget exceeded for this application` | Over your `max_spend_usd_per_day`. |
-| `500` | `internal error` | Unexpected server-side failure. |
-| `502` | `no backend could serve this request: … (last error: <model>: <ErrorType>: <message>)` | Every candidate failed upstream; the last upstream error is included. A context-window refusal mixed with any other failure stays `502`. |
-| `503` | `policy evaluation unavailable` | **Fail-closed:** the privacy gate itself errored. |
+| Status | `error.message` | `code` | Cause |
+|---|---|---|---|
+| `400` | `streaming is not supported for this application: set the application's stream_mode (verified_then_stream, stream_unverified or incremental_verify)` | `streaming_not_supported` | You sent `stream: true` and your app has no `stream_mode`; set one, or send `stream: false`. |
+| `401` | `invalid or missing API token` | `invalid_api_key` | Missing/unknown/revoked token, or the application is disabled. **Fail closed.** |
+| `422` | *(FastAPI validation error, e.g. `messages: field required`)* | `invalid_request` | Malformed body — e.g. missing `messages`. Extra unknown fields do **not** cause this. |
+| `422` | `no model is available for this request's policy: no candidates after residency filter: <counts and fixes>` | `no_eligible_model` | Nothing survived placement or app scope; the detail lists each reason and the field to change. |
+| `400` | `request exceeds the model's context window: <model>: This model's maximum context length is … -- shorten the conversation …` | `context_length_exceeded` | Prompt + `max_tokens` is larger than every tried model's context window. Compact or summarise the history, or lower `max_tokens`. Returned only when **every** candidate refused for this reason; retrying the same request will fail the same way. |
+| `422` | `no model is available for this request's policy: no candidates after budget filter: cheapest candidate … estimated at $X … over the per-request cap $Y …` | `no_eligible_model` | Raise the app's `max_cost_usd_per_request`, lower `max_tokens`, or lower the model's price. The router has already tried cheaper allowed tiers. |
+| `422` | `model request rejected: requested model '<model>' is not permitted or unavailable: <gate>` | `model_not_found` | The pinned `model` failed the named gate; `GET /v1/models` lists what this app can pin. |
+| `422` | `response failed verification: <detail>` | `response_failed_verification` | Output leakage / verification failed. |
+| `422` | `unknown score_name: <name>` (`POST /v1/feedback` only) | `invalid_value` | `score_name` is not one of the recognized names. |
+| `429` | `rate limit exceeded for this application` | `rate_limit_exceeded` | Over your `max_rpm`. |
+| `429` | `daily budget exceeded for this application` | `insufficient_quota` | Over your `max_spend_usd_per_day`. |
+| `500` | `internal error` | `internal_error` | Unexpected server-side failure. |
+| `502` | `no backend could serve this request: … (last error: <model>: <ErrorType>: <message>)` | `backend_unavailable` | Every candidate failed upstream; the last upstream error is included. A context-window refusal mixed with any other failure stays `502`. |
+| `503` | `policy evaluation unavailable` | `policy_unavailable` | **Fail-closed:** the privacy gate itself errored. |
+
+**Which codes are whose.** `context_length_exceeded`, `invalid_api_key`,
+`model_not_found`, `rate_limit_exceeded`, `insufficient_quota` and
+`invalid_value` are **OpenAI's own codes** — the ones a client's existing
+`except openai.BadRequestError` branches already look for. `no_eligible_model`,
+`response_failed_verification`, `streaming_not_supported`,
+`backend_unavailable`, `policy_unavailable` and `internal_error` are
+**routeForge's own** — conditions OpenAI has no equivalent for. routeForge
+never reuses an OpenAI code for a condition OpenAI does not have (a policy
+rejection is never dressed up as `insufficient_quota`, for example). An
+`HTTPException` raised on `/v1/*` with no code registered for it still renders
+a valid envelope: `type` falls back to the status class
+(4xx → `invalid_request_error`, 5xx → `server_error`) and `code: null` — this
+should not currently be reachable for any status in the table above, but the
+fallback exists so a future addition can't ship without a valid envelope.
+
+**Client-side example** (the OpenAI Python SDK):
+
+```python
+import openai
+
+client = openai.OpenAI(base_url="http://<host>:<port>/v1", api_key="rf_live_...")
+try:
+    client.chat.completions.create(model="auto", messages=[...])
+except openai.BadRequestError as e:
+    if e.code == "context_length_exceeded":
+        # shorten the conversation and retry
+        ...
+```
 
 Things that surprise people:
 
@@ -329,12 +390,27 @@ onboarding restrictions, and drops disabled models.
 
 ```json
 {"object": "list",
- "data": [{"id": "qwen3.8-27b", "object": "model", "created": 0, "owned_by": "onprem"}]}
+ "data": [{"id": "qwen3.8-27b", "object": "model", "created": 0, "owned_by": "onprem",
+           "max_model_len": 131072}]}
 ```
 
 A request whose content raises residency (for example PII under an
 `onprem_only` rule) can narrow the choice further than this list. `created` is
 always `0`. Omitting `model` still lets RouteForge route.
+
+**`max_model_len` (B50).** An onboarded (on-prem) model's context window, in
+tokens — vLLM's own field name, used here because it's the one clients
+already read. Present only when known and **omitted entirely** (never `null`
+or `0`) when it is not — a static cloud pool entry from `pricing.yaml`/
+`routing.yaml` has no such column and always omits it. The value is captured
+from the endpoint's own `GET /models` (`max_model_len`) when the endpoint
+onboards or is edited, or set explicitly by the operator; it is **never
+guessed**, and **routeForge does not enforce it** — publishing the number
+does not stop an oversized request from being sent. An oversized request
+still fails upstream and returns as this endpoint's own `400
+context_length_exceeded` (B36; see [Errors](#errors) above). See
+[`onboarding-models.md`](../guides/onboarding-models.md) for how the value is
+captured and kept current.
 
 ---
 

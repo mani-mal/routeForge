@@ -472,6 +472,11 @@ export type OnboardedModel = {
   endpoint: string; api_key_env: string | null;
   price_input: number; price_output: number;
   quality: number | null; context_window: number | null;
+  // B50: where `context_window` came from — "operator" (a human typed it),
+  // "probed" (captured from the endpoint's own `max_model_len` on onboard or
+  // edit), or null when context_window is null. Server-derived only — never
+  // part of OnboardIn, never sent by the client.
+  context_window_source: string | null;
   enabled: boolean; allowed_app_ids: string[] | null;
   probe_status: string; probe_error: string | null; notes: string | null;
   // P1b endpoint data-handling declarations (design §2), returned raw (the
