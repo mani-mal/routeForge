@@ -401,4 +401,89 @@ def test_edit_omitting_region_and_retention_still_clears_them(client, monkeypatc
     row = next(m for m in client.get("/admin/infra/models").json()
                if m["slug"] == "declared-model")
     assert row["region"] is None
+
+
+# --- B50: published context limits (probed vs operator-supplied) -----------
+
+def _probe_with(max_model_len: int | None):
+    async def _p(endpoint, slug, api_key_env):
+        return ProbeResult(True, "ok", max_model_len)
+    return _p
+
+
+def test_probed_context_window_is_stored(client, monkeypatch):
+    """A probe that learns the limit fills the column and says where it came from."""
+    monkeypatch.setattr("app.api.admin_routes.probe_endpoint", _probe_with(131072))
+    _login(client)
+    r = client.post("/admin/infra/models",
+                     json={**_BODY, "slug": "qwen"})  # no context_window
+    assert r.status_code == 200, r.text
+
+    row = next(m for m in client.get("/admin/infra/models").json()
+               if m["slug"] == "qwen")
+    assert row["context_window"] == 131072
+    assert row["context_window_source"] == "probed"
+
+
+def test_operator_value_beats_the_probe_on_post(client, monkeypatch):
+    monkeypatch.setattr("app.api.admin_routes.probe_endpoint", _probe_with(131072))
+    _login(client)
+    r = client.post("/admin/infra/models",
+                     json={**_BODY, "slug": "qwen-explicit", "context_window": 8192})
+    assert r.status_code == 200, r.text
+
+    row = next(m for m in client.get("/admin/infra/models").json()
+               if m["slug"] == "qwen-explicit")
+    assert row["context_window"] == 8192
+    assert row["context_window_source"] == "operator"
+
+
+def test_operator_value_beats_the_probe_on_put(client, monkeypatch):
+    # The console always resubmits the whole body, so this is the common path.
+    monkeypatch.setattr("app.api.admin_routes.probe_endpoint", _probe_with(131072))
+    _login(client)
+    assert client.post("/admin/infra/models",
+                        json={**_BODY, "slug": "qwen-put"}).status_code == 200
+
+    r = client.put("/admin/infra/models/qwen-put",
+                    json={**_BODY, "slug": "qwen-put", "context_window": 8192})
+    assert r.status_code == 200, r.text
+
+    row = next(m for m in client.get("/admin/infra/models").json()
+               if m["slug"] == "qwen-put")
+    assert row["context_window"] == 8192
+    assert row["context_window_source"] == "operator"
+
+
+def test_reprobe_does_not_overwrite_an_operator_value(client, monkeypatch):
+    """The operator's number survives a later edit that re-probes a different
+    limit. An explicit value always wins (design §4.2)."""
+    monkeypatch.setattr("app.api.admin_routes.probe_endpoint", _probe_with(131072))
+    _login(client)
+    assert client.post(
+        "/admin/infra/models",
+        json={**_BODY, "slug": "qwen-reprobe", "context_window": 8192}).status_code == 200
+
+    monkeypatch.setattr("app.api.admin_routes.probe_endpoint", _probe_with(4096))
+    r = client.put("/admin/infra/models/qwen-reprobe",
+                    json={**_BODY, "slug": "qwen-reprobe", "context_window": 8192})
+    assert r.status_code == 200, r.text
+
+    row = next(m for m in client.get("/admin/infra/models").json()
+               if m["slug"] == "qwen-reprobe")
+    assert row["context_window"] == 8192
+    assert row["context_window_source"] == "operator"
+
+
+def test_unknown_context_window_stays_null(client, monkeypatch):
+    monkeypatch.setattr("app.api.admin_routes.probe_endpoint", _probe_with(None))
+    _login(client)
+    r = client.post("/admin/infra/models",
+                     json={**_BODY, "slug": "qwen-unknown"})
+    assert r.status_code == 200, r.text
+
+    row = next(m for m in client.get("/admin/infra/models").json()
+               if m["slug"] == "qwen-unknown")
+    assert row["context_window"] is None
+    assert row["context_window_source"] is None
     assert row["prompt_retention"] is None

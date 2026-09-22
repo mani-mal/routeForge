@@ -1192,10 +1192,27 @@ ALTER TABLE usage_records    ADD COLUMN cached_prompt_tokens INTEGER; -- 2026-09
   provider does not report it (indistinguishable from a genuine cache miss).
   Nullable in the model, written as `0` on every new row.
 
-> **A deployment still on pre-P1a code now needs eleven `ALTER`s before the image
+B50 (published context limits) adds one more column to `onboarded_models`:
+
+```sql
+-- 2026-09-22 (B50): where an onboarded model's context window came from
+ALTER TABLE onboarded_models ADD COLUMN context_window_source VARCHAR(16);
+```
+
+- `onboarded_models.context_window_source` — `"operator"` when a human typed
+  `context_window`, `"probed"` when it was read from the endpoint's own
+  `/v1/models` `max_model_len`, `NULL` when `context_window` itself is `NULL`.
+  An explicit operator value always wins and a later re-probe never overwrites
+  it. **Run this `ALTER` before rolling the image** — the new image reads
+  `context_window_source` on every onboarded-model read, so an unmigrated
+  database fails those reads, which takes on-prem routing down. Same trap the
+  last two deploys hit.
+
+> **A deployment still on pre-P1a code now needs twelve `ALTER`s before the image
 > is rolled:** P1a's 4 on `app_policies`, P1b's 5 (2 on `app_policies`, 3 on
-> `onboarded_models`), and P2a's 2 (1 on `onboarded_models`, 1 on
-> `usage_records`). `scripts/migrate_app_policies.py` applies all of them and is
+> `onboarded_models`), P2a's 2 (1 on `onboarded_models`, 1 on
+> `usage_records`), and B50's 1 (on `onboarded_models`).
+> `scripts/migrate_app_policies.py` applies all of them and is
 > idempotent — it skips a table that is absent and a column that already exists,
 > so running it repeatedly is safe. **It has been exercised against SQLite only.
 > Run it against a restored Postgres snapshot first; the Spark and DGX both run

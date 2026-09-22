@@ -70,6 +70,7 @@ def _onboarded_dict(m) -> dict:
             "price_output": m.price_output,
             "price_cached_input": m.price_cached_input, "endpoint": m.endpoint,
             "api_key_env": m.api_key_env, "context_window": m.context_window,
+            "context_window_source": m.context_window_source,
             "enabled": m.enabled, "allowed_app_ids": m.allowed_app_ids,
             "probe_status": m.probe_status, "probe_error": m.probe_error,
             "notes": m.notes, "updated_at": _iso(m.updated_at),
@@ -944,6 +945,24 @@ def _resolved_price_cached_input(body: OnboardIn, existing) -> float | None:
     return body.price_cached_input
 
 
+def _resolved_context_window(body: OnboardIn, probed: int | None) -> tuple[int | None, str | None]:
+    """`context_window` and its source (B50, design §4.2).
+
+    An explicit value always wins and is never overwritten by a later probe --
+    the operator knows things RouteForge cannot read off an endpoint (a proxy
+    that truncates, a deliberately conservative budget). Only when they supply
+    none does the probed value land. Deliberately NOT omission-preserving like
+    `price_cached_input`: context_window is full-replace today, the console
+    always resubmits the whole body, and this rule already gives the operator
+    the last word on every write that carries their value.
+    """
+    if body.context_window is not None:
+        return body.context_window, "operator"
+    if probed is not None:
+        return probed, "probed"
+    return None, None
+
+
 @admin_router.post("/infra/models")
 async def onboard_model(body: OnboardIn, request: Request,
                         _: str = Depends(require_admin)) -> dict:
@@ -972,12 +991,14 @@ async def onboard_model(body: OnboardIn, request: Request,
         # and onprem_only fail-closed depend on that), but a reachable model can
         # still be turned off on request.
         final_enabled = body.enabled and ok
+        context_window, context_window_source = _resolved_context_window(body, _probe.max_model_len)
         await store.upsert_onboarded(
             session, body.slug, display_name=body.display_name, provider="onprem",
             tier=body.tier, endpoint=body.endpoint, api_key_env=body.api_key_env,
             price_input=body.price_input, price_output=body.price_output,
             price_cached_input=_resolved_price_cached_input(body, existing),
-            quality=body.quality, context_window=body.context_window,
+            quality=body.quality, context_window=context_window,
+            context_window_source=context_window_source,
             allowed_app_ids=body.allowed_app_ids, notes=body.notes,
             enabled=final_enabled, probe_status=("healthy" if ok else "unreachable"),
             probe_error=(None if ok else detail),
@@ -1028,12 +1049,14 @@ async def edit_onboarded_model(slug: str, body: OnboardIn, request: Request,
         ok, detail = _probe.ok, _probe.detail
         # Same intent-AND-probe rule as onboard_model — see comment there.
         final_enabled = body.enabled and ok
+        context_window, context_window_source = _resolved_context_window(body, _probe.max_model_len)
         await store.upsert_onboarded(
             session, slug, display_name=body.display_name, provider="onprem",
             tier=body.tier, endpoint=body.endpoint, api_key_env=body.api_key_env,
             price_input=body.price_input, price_output=body.price_output,
             price_cached_input=_resolved_price_cached_input(body, existing),
-            quality=body.quality, context_window=body.context_window,
+            quality=body.quality, context_window=context_window,
+            context_window_source=context_window_source,
             allowed_app_ids=body.allowed_app_ids, notes=body.notes,
             enabled=final_enabled, probe_status=("healthy" if ok else "unreachable"),
             probe_error=(None if ok else detail),
