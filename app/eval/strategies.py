@@ -1,12 +1,32 @@
 """Baseline and router selection strategies for FeasibleRouteBench (spec §5
-step 3).
+step 3; failover-aware attempt orders and signal arms, B48 spec §5-§6).
 
-A strategy is `Callable[[StrategyInput], str | None]`: given a case's already
--computed eligible set (never re-derived here -- global constraint "no
-eligibility bypass"), it picks the endpoint slug to look up in the sweep
-matrix, or `None` when it makes no choice (empty eligible set, or the router
-finds nothing feasible). No strategy makes a model call; every outcome is a
-matrix lookup the runner performs afterwards.
+Two shapes live here:
+
+- **`Strategy`** = `Callable[[StrategyInput], str | None]` -- the P2b-1
+  single choice (`cheapest`, `best_published_quality`, `fixed`, `router`,
+  `router_variant`). The runner no longer scores these; they stay as the
+  single-choice reference the attempt forms' first element must agree with.
+- **`AttemptStrategy`** = `Callable[[StrategyInput, Callable[[str], bool]],
+  tuple[str, ...]]` -- the failover-aware form the runner scores. The second
+  argument, `failed(slug) -> bool`, is the runner's matrix lookup ("did this
+  endpoint's sweep call on THIS case fail?"). The strategy returns the
+  attempts it would have made, in order, stopping at the first attempt that
+  does not fail or at `max_attempts` (`attempt_cap(base_settings)` = `1 +`
+  the DEPLOYMENT's `max_failover_attempts`, read before `harness_settings`
+  zeroes it); `()` is "no choice". This mirrors `Gateway.run`'s failover loop.
+
+Given a case's already-computed eligible set (never re-derived here -- global
+constraint "no eligibility bypass"), no strategy makes a model call; every
+outcome is a matrix lookup the runner performs.
+
+Router signal arms (B48 spec §6): `router_cold` (an empty store),
+`OnlineArm` (`router_online`: only this arm's own attempts on cases `< k`,
+applied after each case is scored) and `warm_prior_signals`
+(`router_warm_prior`: every matrix row of cases `< k`). Both non-cold arms
+read on one synthetic case clock -- case `k` is scored at `t_k = k *
+seconds_per_case` (spec §6, amended). No arm replays the case being scored;
+`warm_signals` stays as a generic replay primitive only.
 
 Offline harness code only -- never imported by the serving path.
 """
@@ -14,13 +34,14 @@ from __future__ import annotations
 
 import copy
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from app.config.schema import PoolCandidate, RoutingCfg, Settings, SignalsCfg
 from app.errors import NoEligibleCandidate
 from app.eval.cases import Case
+from app.eval.endpoints import deployment_failover_cap
 from app.models import ExecutionPolicyContext
 from app.routing.observations import Observation
 from app.routing.pricing import price_call
@@ -44,6 +65,33 @@ class StrategyInput:
 
 
 Strategy = Callable[[StrategyInput], str | None]
+AttemptStrategy = Callable[[StrategyInput, Callable[[str], bool]], tuple[str, ...]]
+
+
+def attempt_cap(base_settings: Settings) -> int:
+    """Attempts per case: `1 + deployment_failover_cap(base_settings)` --
+    the gateway's own bound (`failover_attempts > max_failover_attempts`
+    exhausts). `base_settings` is the DEPLOYMENT's settings, never the
+    harness's (which sets `max_failover_attempts=0` so each sweep call is
+    single-shot)."""
+    return 1 + deployment_failover_cap(base_settings)
+
+
+def take_attempts(order: Iterable[str], failed: Callable[[str], bool],
+                  max_attempts: int) -> tuple[str, ...]:
+    """Walk `order`, attempting each slug until one does not fail or
+    `max_attempts` attempts have been made. The baselines' failover: their
+    own ranking IS their retry order."""
+    if max_attempts < 1:
+        raise ValueError(f"max_attempts must be >= 1, got {max_attempts}")
+    chain: list[str] = []
+    for slug in order:
+        if len(chain) >= max_attempts:
+            break
+        chain.append(slug)
+        if not failed(slug):
+            break
+    return tuple(chain)
 
 
 def _est_cost(registry: "ModelRegistry", cand: PoolCandidate,
@@ -57,16 +105,37 @@ def _est_cost(registry: "ModelRegistry", cand: PoolCandidate,
                       completion_tokens=output_tokens)
 
 
+def _cheapest_order(registry: "ModelRegistry", inp: StrategyInput) -> list[str]:
+    """Every eligible slug, lowest estimated cost first; ties by slug."""
+    ranked = sorted(inp.eligible,
+                    key=lambda c: (_est_cost(registry, c, inp.tokens_after,
+                                             inp.output_tokens), c.name))
+    return [c.name for c in ranked]
+
+
+def _best_quality_order(registry: "ModelRegistry", resolver: QualityResolver,
+                        inp: StrategyInput) -> list[str]:
+    """Every eligible slug, highest resolved quality first; ties by the
+    `cheapest` cost estimate, then slug."""
+    def key(c: PoolCandidate):
+        q = resolver.resolve(c.name).score
+        return (-q, _est_cost(registry, c, inp.tokens_after, inp.output_tokens), c.name)
+    return [c.name for c in sorted(inp.eligible, key=key)]
+
+
 def cheapest(registry: "ModelRegistry") -> Strategy:
     """Lowest estimated cost among eligible; ties broken by slug."""
     def _cheapest(inp: StrategyInput) -> str | None:
-        if not inp.eligible:
-            return None
-        best = min(inp.eligible,
-                   key=lambda c: (_est_cost(registry, c, inp.tokens_after,
-                                            inp.output_tokens), c.name))
-        return best.name
+        order = _cheapest_order(registry, inp)
+        return order[0] if order else None
     return _cheapest
+
+
+def cheapest_attempts(registry: "ModelRegistry", max_attempts: int) -> AttemptStrategy:
+    """`cheapest` with failover: next cheapest after each failed attempt."""
+    def _cheapest_attempts(inp: StrategyInput, failed: Callable[[str], bool]):
+        return take_attempts(_cheapest_order(registry, inp), failed, max_attempts)
+    return _cheapest_attempts
 
 
 def best_published_quality(registry: "ModelRegistry", settings: Settings) -> Strategy:
@@ -76,13 +145,20 @@ def best_published_quality(registry: "ModelRegistry", settings: Settings) -> Str
     resolver = QualityResolver(settings, registry=registry)
 
     def _best_published_quality(inp: StrategyInput) -> str | None:
-        if not inp.eligible:
-            return None
-        def key(c: PoolCandidate):
-            q = resolver.resolve(c.name).score
-            return (-q, _est_cost(registry, c, inp.tokens_after, inp.output_tokens), c.name)
-        return min(inp.eligible, key=key).name
+        order = _best_quality_order(registry, resolver, inp)
+        return order[0] if order else None
     return _best_published_quality
+
+
+def best_published_quality_attempts(registry: "ModelRegistry", settings: Settings,
+                                    max_attempts: int) -> AttemptStrategy:
+    """`best_published_quality` with failover: next best after each failure."""
+    resolver = QualityResolver(settings, registry=registry)
+
+    def _best_attempts(inp: StrategyInput, failed: Callable[[str], bool]):
+        return take_attempts(_best_quality_order(registry, resolver, inp),
+                             failed, max_attempts)
+    return _best_attempts
 
 
 def fixed(slug: str, fallback: Strategy) -> Strategy:
@@ -94,6 +170,18 @@ def fixed(slug: str, fallback: Strategy) -> Strategy:
             return slug
         return fallback(inp)
     return _fixed
+
+
+def fixed_attempts(slug: str, registry: "ModelRegistry",
+                   max_attempts: int) -> AttemptStrategy:
+    """`slug` first when it is eligible, then `cheapest`'s order over the
+    rest (B48 spec §5); when `slug` is not eligible, `cheapest`'s order
+    alone (the runner records `fallback_used` from `attempts[0] != slug`)."""
+    def _fixed_attempts(inp: StrategyInput, failed: Callable[[str], bool]):
+        rest = [s for s in _cheapest_order(registry, inp) if s != slug]
+        pinned = [slug] if any(c.name == slug for c in inp.eligible) else []
+        return take_attempts(pinned + rest, failed, max_attempts)
+    return _fixed_attempts
 
 
 def router(settings: Settings, registry: "ModelRegistry",
@@ -116,6 +204,43 @@ def router(settings: Settings, registry: "ModelRegistry",
             return None
         return decision.chosen.name
     return _router
+
+
+def _router_chain(rt: Router, inp: StrategyInput, failed: Callable[[str], bool],
+                  max_attempts: int) -> tuple[str, ...]:
+    """`Gateway.run`'s failover loop over the REAL `Router.select`: re-select
+    with every already-failed slug in `exclude` until an attempt does not
+    fail, `max_attempts` attempts are made, or `NoEligibleCandidate` (every
+    reachable candidate excluded) ends the chain. Every attempt before the
+    last failed, so `exclude` is exactly the chain so far."""
+    if max_attempts < 1:
+        raise ValueError(f"max_attempts must be >= 1, got {max_attempts}")
+    complexity = min(1.0, inp.tokens_after / 2000)
+    chain: list[str] = []
+    while len(chain) < max_attempts:
+        try:
+            decision = rt.select(inp.ctx, inp.tokens_after, complexity,
+                                 exclude=frozenset(chain),
+                                 output_tokens=inp.output_tokens)
+        except NoEligibleCandidate:
+            break
+        slug = decision.chosen.name
+        chain.append(slug)
+        if not failed(slug):
+            break
+    return tuple(chain)
+
+
+def router_attempts(settings: Settings, registry: "ModelRegistry",
+                    signals: SignalStore, max_attempts: int) -> AttemptStrategy:
+    """`router` with the gateway's failover (see `_router_chain`). `signals`
+    is read, never written -- the cold arm passes an empty store; the online
+    arm is `OnlineArm`."""
+    rt = Router(settings, registry=registry, signals=signals)
+
+    def _router_attempts(inp: StrategyInput, failed: Callable[[str], bool]):
+        return _router_chain(rt, inp, failed, max_attempts)
+    return _router_attempts
 
 
 # The four scoring terms `DefaultRoutingStrategy.rank` reads by literal key
@@ -153,6 +278,12 @@ def router_variant(base_settings: Settings, weights: dict[str, float],
     that lint rule and making it unreachable from a real boot. The harness
     must not change serving-path behavior, so the check stays here.
     """
+    return router(variant_settings(base_settings, weights), registry, signals)
+
+
+def variant_settings(base_settings: Settings, weights: dict[str, float]) -> Settings:
+    """A deep copy of `base_settings` with `routing.weights` replaced by a
+    copy of `weights`, validated as `router_variant` documents."""
     settings = copy.deepcopy(base_settings)
     settings.routing = RoutingCfg.model_validate(
         {**settings.routing.model_dump(), "weights": dict(weights)})
@@ -161,7 +292,15 @@ def router_variant(base_settings: Settings, weights: dict[str, float],
         raise ValueError(
             f"router_variant: weights is missing required key(s) {missing} "
             f"(required: {list(_REQUIRED_WEIGHT_KEYS)})")
-    return router(settings, registry, signals)
+    return settings
+
+
+def router_variant_attempts(base_settings: Settings, weights: dict[str, float],
+                            registry: "ModelRegistry", signals: SignalStore,
+                            max_attempts: int) -> AttemptStrategy:
+    """`router_attempts` scored with alternative weights (`variant_settings`)."""
+    return router_attempts(variant_settings(base_settings, weights), registry,
+                           signals, max_attempts)
 
 
 class _FrozenReadSignalStore(SignalStore):
@@ -196,6 +335,18 @@ class _FrozenReadSignalStore(SignalStore):
     def _now(self, now: float | None) -> float:
         return self._frozen_now if now is None else now
 
+    @property
+    def frozen_now(self) -> float:
+        return self._frozen_now
+
+    def advance_read_clock(self, to: float) -> None:
+        """Move the frozen read anchor forward to `to` (never backwards --
+        the monotonic clock this stands in for cannot run back)."""
+        if to < self._frozen_now:
+            raise ValueError(
+                f"read clock cannot move backwards ({self._frozen_now} -> {to})")
+        self._frozen_now = to
+
 
 def warm_signals(settings: Settings, rows: Iterable["MatrixRow"],
                  wall_offset: float = 0.0) -> SignalStore:
@@ -205,9 +356,13 @@ def warm_signals(settings: Settings, rows: Iterable["MatrixRow"],
     governs the real boot-seed path governs this one.
 
     One `Observation` per row: `ok` (no `error`) contributes a success with
-    its `latency_ms`; `error` (any non-None `error`) contributes a failure.
-    Never streamed -- the harness's simulated/live backends never stream
-    (spec §5.1/§5.2).
+    its `latency_ms`; `error` contributes a failure ONLY when
+    `row.counts_unhealth is True`, matching production's own
+    `SignalStore.observe_error` gate (`app/gateway/gateway.py`) -- any other
+    error row (`counts_unhealth` `False` or `None`; see
+    `app/eval/runner.py::_backend_exception`) is skipped entirely: neither a
+    success nor a failure observation (spec §6 / B48c). Never streamed --
+    the harness's simulated/live backends never stream (spec §5.1/§5.2).
 
     Returns a `_FrozenReadSignalStore`: `Router.select` has no `now`
     override, so without freezing, reads happen against the REAL wall clock
@@ -245,8 +400,11 @@ def warm_signals(settings: Settings, rows: Iterable["MatrixRow"],
     Short sweeps (a handful of rows per model, the common case) keep this
     negligible; a very large per-model row count would not.
     """
-    materialized = list(rows)
-    n = len(materialized)
+    # Filter FIRST, then assign timestamps: a skipped row must not consume a
+    # 1 s slot, or the last APPLIED observation would sit older than
+    # `wall_offset` says (B48 Task 2 review note).
+    applied = [row for row in rows if _counts_as_observation(row)]
+    n = len(applied)
     mono_now = time.monotonic()
     # The frozen read anchor is fixed at `mono_now` regardless of
     # `wall_offset` -- only the replayed rows' reconstructed mono times move
@@ -262,7 +420,243 @@ def warm_signals(settings: Settings, rows: Iterable["MatrixRow"],
             streamed=False,
             ttft_ms=None,
         )
-        for i, row in enumerate(materialized)
+        for i, row in enumerate(applied)
     ]
     store.replay(observations)
     return store
+
+
+def _counts_as_observation(row: "MatrixRow") -> bool:
+    """A success, or an error production's `counts_as_endpoint_unhealth`
+    would have counted (`counts_unhealth is True`); anything else -- a 4xx,
+    or a failure with no endpoint verdict -- is no observation at all."""
+    return row.error is None or row.counts_unhealth is True
+
+
+
+
+# Synthetic case clock shared by `warm_prior_signals` and `OnlineArm` (B48
+# spec §6, amended 2026-09-22): case `k` happens at `t_k = k *
+# seconds_per_case`; its observations sit at `t_k + j * _SUBSTEP_S`, `j`
+# counting the observations APPLIED within that case, and case `k` is scored
+# by reading at `t_k` -- so every observation applied before it is `< t_k`.
+# Decay therefore depends on case count and `seconds_per_case`, never wall
+# time -- and no live clock is read, so a seeded run is byte-identical.
+_SUBSTEP_S = 0.001
+DEFAULT_SECONDS_PER_CASE = 30.0
+
+
+def check_seconds_per_case(seconds_per_case: float) -> float:
+    """`seconds_per_case` as a float, or `ValueError` unless it is `> 0`."""
+    value = float(seconds_per_case)
+    if not value > 0:
+        raise ValueError(f"seconds_per_case must be > 0, got {seconds_per_case!r}")
+    return value
+
+
+def min_seconds_per_case(n_substeps: int) -> float:
+    """The largest `seconds_per_case` value at which `_case_time` is
+    guaranteed to refuse a case needing `n_substeps` applied observations
+    (final review F3): `_case_time` refuses sub-step `j` once `j *
+    _SUBSTEP_S >= seconds_per_case`, so a case that may apply up to
+    `n_substeps` observations (one per endpoint swept, or one per attempt an
+    online arm makes) needs `seconds_per_case > n_substeps * _SUBSTEP_S`. The
+    runner calls this once `len(specs)` and `max_attempts` are both known, so
+    a too-small `--seconds-per-case` fails fast at load time (exit 1) instead
+    of mid-run."""
+    return _SUBSTEP_S * n_substeps
+
+
+def case_read_time(case_index: int, seconds_per_case: float) -> float:
+    """`t_k`: when case `k` is scored on the synthetic case clock."""
+    return case_index * seconds_per_case
+
+
+def _case_time(case_index: int, j: int, seconds_per_case: float) -> float:
+    """The `j`-th applied observation of case `case_index`: `t_k + j ms`.
+    Refuses a sub-step that would reach the next case's `t_{k+1}`."""
+    offset = j * _SUBSTEP_S
+    if offset >= seconds_per_case:
+        raise ValueError(
+            f"observation {j} of case {case_index} would reach the next case at "
+            f"seconds_per_case={seconds_per_case} ({_SUBSTEP_S * 1000:g} ms sub-steps)")
+    return case_read_time(case_index, seconds_per_case) + offset
+
+
+class LeakageError(RuntimeError):
+    """A signal arm was about to score case `k` holding an observation from
+    case `k` or later (B48 global constraint "no leakage")."""
+
+
+def warm_prior_signals(settings: Settings, rows_before_case: Iterable["MatrixRow"],
+                       *, case_index: Mapping[str, int], scoring_case: int,
+                       seconds_per_case: float) -> _FrozenReadSignalStore:
+    """`router_warm_prior`'s store (B48 spec §6): every matrix row of cases
+    `< k` -- all eligible endpoints, not just the ones any strategy tried --
+    a full-information reference (not an upper bound). The runner passes only
+    prior rows.
+
+    Rows are replayed through `SignalStore.replay` (the same path as
+    `warm_signals`), counting an error only when `counts_unhealth` is true,
+    on the synthetic case clock: a row of case `i` sits at `_case_time(i, j,
+    seconds_per_case)`, `j` = its position among that case's APPLIED rows.
+    The read clock is frozen at `t_k = scoring_case * seconds_per_case`
+    (spec §6, amended) -- production reads at "now", and time passes between
+    requests even when nothing is observed.
+
+    `case_index` maps `case_id` -> suite position and `scoring_case` is the
+    case about to be scored; both are required, so the leak guard cannot be
+    skipped: any row at or after `scoring_case` raises `LeakageError`
+    instead of being replayed."""
+    seconds_per_case = check_seconds_per_case(seconds_per_case)
+    per_case: dict[int, int] = {}
+    observations: list[Observation] = []
+    last_t = float("-inf")
+    for row in rows_before_case:
+        idx = case_index[row.case_id]
+        if idx >= scoring_case:
+            raise LeakageError(
+                f"row {row.case_id}/{row.endpoint} is case {idx}, not before "
+                f"scoring case {scoring_case}")
+        if not _counts_as_observation(row):
+            continue
+        if row.error is None and row.latency_ms is None:
+            raise ValueError(
+                f"success row {row.case_id}/{row.endpoint} has no latency_ms")
+        j = per_case.get(idx, 0)
+        per_case[idx] = j + 1
+        t = _case_time(idx, j, seconds_per_case)
+        if t < last_t:
+            raise ValueError(
+                f"rows are not in case order: {row.case_id} (case {idx}) after t={last_t}")
+        last_t = t
+        observations.append(Observation(
+            ts=t, model=row.endpoint,
+            outcome="error" if row.error is not None else "ok",
+            latency_ms=None if row.error is not None else row.latency_ms,
+            streamed=False, ttft_ms=None))
+    # wall_offset=0.0: the synthetic clock IS the log clock, so replay's
+    # `ts - wall_offset` is exact (no per-process float rounding).
+    store = _FrozenReadSignalStore(
+        settings.routing.signals,
+        frozen_now=case_read_time(scoring_case, seconds_per_case), wall_offset=0.0)
+    store.replay(observations)
+    return store
+
+
+@dataclass(frozen=True)
+class AppliedObservation:
+    """One observation `OnlineArm` applied to its store."""
+
+    case_index: int
+    endpoint: str
+    outcome: str      # "ok" | "error"
+    t: float          # synthetic case-clock time (`_case_time`)
+
+
+class OnlineArm:
+    """`router_online` (B48 spec §6) -- the reported arm: what production
+    would learn. Its store holds ONLY the attempts this arm itself made on
+    cases `0..k-1` (failovers included), applied in attempt order through
+    the real `observe_success` / `observe_error`, an error counted only when
+    `counts_unhealth` is true (the gateway's `counts_as_endpoint_unhealth`
+    gate). No other arm's attempts, no unattempted endpoint's row.
+
+    Protocol per case `k`: `choose(inp, failed, case_index=k)` FIRST, then
+    `observe(k, attempts, rows_by_endpoint)` with the chain `choose`
+    returned -- so case `k` is always scored before anything from it is
+    known. `case_index` is required: `choose` raises `LeakageError` when
+    case `k` has already been observed (`k <= ` the last observed case),
+    and `observe` rejects a case index that does not strictly increase.
+
+    Reads: `choose` first advances the frozen read clock to `t_k = k *
+    seconds_per_case` (spec §6, amended) and scores there; every applied
+    observation is `< t_k`.
+
+    Difference from production, stated: the gateway calls `observe_error`
+    mid-request, so within one request the failed model's signal has
+    already moved when the next hop is selected. Here a case's observations
+    land after its whole chain is chosen. The failed model is in `exclude`
+    for every later hop of that chain either way, so its own signal cannot
+    change that chain's remaining picks."""
+
+    def __init__(self, settings: Settings, registry: "ModelRegistry",
+                 max_attempts: int, weights: dict[str, float] | None = None, *,
+                 seconds_per_case: float) -> None:
+        if max_attempts < 1:
+            raise ValueError(f"max_attempts must be >= 1, got {max_attempts}")
+        scored = settings if weights is None else variant_settings(settings, weights)
+        self._max_attempts = max_attempts
+        self._seconds_per_case = check_seconds_per_case(seconds_per_case)
+        self._store = _FrozenReadSignalStore(scored.routing.signals, frozen_now=0.0,
+                                             wall_offset=0.0)
+        self._router = Router(scored, registry=registry, signals=self._store)
+        self._last_case: int | None = None
+        self._applied: list[AppliedObservation] = []
+
+    @property
+    def signals(self) -> SignalStore:
+        return self._store
+
+    @property
+    def applied(self) -> tuple[AppliedObservation, ...]:
+        return tuple(self._applied)
+
+    @property
+    def read_clock(self) -> float:
+        return self._store.frozen_now
+
+    @property
+    def seconds_per_case(self) -> float:
+        return self._seconds_per_case
+
+    def choose(self, inp: StrategyInput, failed: Callable[[str], bool], *,
+               case_index: int) -> tuple[str, ...]:
+        if self._last_case is not None and case_index <= self._last_case:
+            raise LeakageError(
+                f"scoring case {case_index} after case {self._last_case} was "
+                "already observed")
+        self._store.advance_read_clock(case_read_time(case_index, self._seconds_per_case))
+        return _router_chain(self._router, inp, failed, self._max_attempts)
+
+    def observe(self, case_index: int, attempts: tuple[str, ...],
+                rows_by_endpoint: Mapping[str, "MatrixRow"]) -> None:
+        if self._last_case is not None and case_index <= self._last_case:
+            raise ValueError(
+                f"observe(case {case_index}) after case {self._last_case}: "
+                "cases must be observed once each, in order")
+        if len(attempts) > self._max_attempts:
+            raise ValueError(
+                f"case {case_index}: {len(attempts)} attempts exceed "
+                f"max_attempts={self._max_attempts}")
+        if len(set(attempts)) != len(attempts):
+            raise ValueError(f"case {case_index}: repeated attempt in {attempts}")
+        rows: list["MatrixRow"] = []
+        for pos, slug in enumerate(attempts):   # validate the whole chain first
+            row = rows_by_endpoint.get(slug)
+            if row is None:
+                raise ValueError(f"no matrix row for attempt {slug!r} in case {case_index}")
+            if row.error is None:
+                if pos != len(attempts) - 1:
+                    raise ValueError(
+                        f"attempt {slug!r} served case {case_index} but is not "
+                        "the last attempt of the chain")
+                if row.latency_ms is None:
+                    raise ValueError(
+                        f"success row {row.case_id}/{slug} has no latency_ms")
+            rows.append(row)
+        self._last_case = case_index
+        j = 0
+        for slug, row in zip(attempts, rows):
+            if row.error is None:
+                t = _case_time(case_index, j, self._seconds_per_case)
+                self._store.observe_success(slug, float(row.latency_ms), now=t)
+            elif row.counts_unhealth is True:
+                t = _case_time(case_index, j, self._seconds_per_case)
+                self._store.observe_error(slug, now=t)
+            else:
+                continue
+            j += 1
+            self._applied.append(AppliedObservation(
+                case_index, slug, "ok" if row.error is None else "error", t))
+            self._store.advance_read_clock(t)

@@ -44,6 +44,8 @@ Shipped inputs:
 | `eval/endpoints/cloud-only-sim.yaml` | two cloud endpoints and no on-prem, to pair with `empty-set.jsonl` |
 | `eval/endpoints/spark-live.example.yaml` | example `--live` file (`<spark>` is a placeholder) |
 | `eval/variants/b45.yaml` | routing-weight variants for backlog B45 |
+| `eval/suites/outage.jsonl` | 30 public FAQ cases for the outage scenario (B45) |
+| `eval/endpoints/outage-sim.yaml` | two same-tier endpoints; the cheaper one is down for cases 10–19, the other flakes at 5% |
 
 ## 2. Writing cases
 
@@ -117,6 +119,10 @@ endpoints:
     simulated:
       quality: {claim_summary: 0.92, faq: 0.95, default: 0.90}   # 'default' is required
       latency_ms: {mean: 900, jitter: 100}
+      # optional failure injection (all three default to "never fails"):
+      outages: [{from: 10, to: 19}]   # inclusive case indices (0-based, suite order): every call fails
+      error_rate: 0.05                # independent per-(case, endpoint) failure probability
+      failure_latency_ms: 1000        # latency charged for a failed attempt; default latency_ms.mean
 ```
 
 Each entry becomes an onboarded, enabled row in the scratch registry. The fields are the
@@ -130,7 +136,17 @@ same data-handling declarations as in
   pipeline's real token counts. **The quality numbers are your assumptions, and the pass
   rates you get back mostly reproduce them.** A simulated run tests eligibility, strategy
   wiring and cost/latency trade-offs *under those assumptions*. It does not measure any
-  model. There is no failure injection: a simulated endpoint never errors.
+  model.
+  - **Failure injection (simulated only).** `outages` lists inclusive ranges of **case
+    indices**, counted from 0 in suite file order, not times. Every call in a range fails
+    the way a refused connection does (no status code). `error_rate` makes each
+    `(case, endpoint)` call fail independently with that probability, as an HTTP 503,
+    drawn from the seed. An outage is checked first, so it always fails. A failed attempt
+    costs 0 and takes `failure_latency_ms` (default: `latency_ms.mean`). Both kinds count
+    as endpoint unhealth, as production's `counts_as_endpoint_unhealth` decides. Load
+    errors: `from > to`, a negative index, `error_rate` outside `[0, 1]`, or a
+    non-positive `failure_latency_ms`. Without these fields a simulated endpoint never
+    errors.
 - **`live`**: `{endpoint: "http://host:8000/v1", api_key_env: SP_ONPREM_API_KEY}`.
   **`api_key_env` is the name of an environment variable, never the key itself.** The
   loader rejects values that look like keys: anything containing `sk-`, containing
@@ -165,7 +181,8 @@ the gateway is built to protect, so decide where `results/` lives before you kee
 | Flag | Effect |
 |---|---|
 | `--seed N` | simulation seed (default 0). The same seed and inputs give a byte-identical `metrics.json` |
-| `--variants FILE` | YAML mapping `name -> {quality, cost, latency, availability}`. Adds `router_cold:<name>` and `router_warm:<name>`. Every weight key is required, and a bad file exits 1 |
+| `--variants FILE` | YAML mapping `name -> {quality, cost, latency, availability}`. Adds `router_cold:<name>`, `router_online:<name>` and `router_warm_prior:<name>`. Every weight key is required, and a bad file exits 1 |
+| `--seconds-per-case S` | spacing of the synthetic case clock (default 30, must be > 0): case `k` happens at `k × S` seconds. It drives availability decay (900 s half-life) and latency staleness in the online and warm-prior arms, so their numbers depend on it (§6). Recorded in `run.json` |
 | `--fixed SLUG` | adds `fixed:<slug>`: always that endpoint when it is eligible, otherwise `cheapest` (recorded as `fallback_used`) |
 | `--parity-tol X` | maximum pass-rate gap for the headline cost claim (default 0.02) |
 | `--keep-text` | stores completion text in `matrix.jsonl` |
@@ -179,6 +196,12 @@ independently: a successful sweep call that made any number of backend calls oth
 one becomes an error row (`GenerateCountMismatch`), counted as
 `sweep_generate_mismatches`.
 
+**The sweep also disables gateway failover** (`routing.max_failover_attempts = 0`), for
+the same reason: one row is one attempt. Failover is modelled in scoring instead (§6).
+The number of attempts a strategy may make is `1 +` **your deployment's**
+`max_failover_attempts` (3 with the shipped `routing.yaml`), recorded as `attempt_cap` in
+`run.json`.
+
 ## 6. Reading the output
 
 `<out>/` contains five files:
@@ -187,13 +210,17 @@ one becomes an error row (`GenerateCountMismatch`), counted as
   `base_routing_policy_version` (the deployment's routing and pricing hash **before** the
   harness overrides it: emptied `model_pool`, file prices, `max_escalations` 0, variant
   weights; it does not cover your endpoint file or variants, and `notes` says so),
-  `registry_version`, seed, git SHA, mode, CLI args, the strategy list and the
-  `router_warm` note. Quote the stamp with any number
-  you cite.
+  `registry_version`, seed, git SHA, mode, CLI args, `seconds_per_case`, `attempt_cap`,
+  the strategy list and `notes` explaining each arm, the case clock and the units. Quote
+  the stamp, including `seconds_per_case`, with any number you cite.
 - `matrix.jsonl`: one row per `(case, endpoint)`, with quality, pass, cost, latency,
-  tokens, `served` and `error`. Written as it goes, so an interrupted run leaves a
-  readable partial matrix and no `metrics.json`.
-- `choices.jsonl`: one row per `(case, strategy)`.
+  tokens, `served` and `error`. A failed row also has `counts_unhealth` (whether
+  production would count it against the endpoint), `failure_latency_ms` and
+  `error_class`. Written as it goes, so an interrupted run leaves a readable partial
+  matrix and no `metrics.json`.
+- `choices.jsonl`: one row per `(case, strategy)`: the `attempts` in order, the
+  `endpoint` that served (null if none did), and the chain's `quality`, `passed`,
+  `cost_usd`, `latency_ms`, `wasted_attempts` and `exhausted`.
 - `metrics.json`: per-strategy metrics, per-group metrics, worst groups, the headline,
   policy counters and per-case eligibility (pre-gate and post-gate sets, exclusions with
   reason codes).
@@ -201,8 +228,18 @@ one becomes an error row (`GenerateCountMismatch`), counted as
 
 In `report.md`:
 
-- **Strategies.** `cheapest`, `best_published_quality`, `router_cold`, `router_warm`,
-  plus `fixed:<slug>` and the variant forms when requested.
+- **How to read this.** A short block at the top that restates the rules below for this
+  run, including its `seconds_per_case`.
+- **Strategies.** `cheapest`, `best_published_quality`, `router_cold`, `router_online`,
+  `router_warm_prior`, plus `fixed:<slug>` and the variant forms when requested. Each
+  strategy is scored on an **attempt chain**, the way production fails over. It tries
+  its first choice; if that call fails, it tries the next (the router re-selects with the
+  failed endpoints excluded; the baselines take their own next-ranked endpoint), for up
+  to `attempt_cap` attempts, and stops at the first call that succeeds. The chain's cost
+  is the sum over its attempts (a failed attempt costs 0). Its latency is each failed
+  attempt's failure latency plus the served call's latency. A chain where every attempt
+  failed is **exhausted** (production's 502) and scores quality 0. A chain with no
+  attempts at all is "no choice" (production's 422 for a policy-empty request).
   - `violation_rate` must be 0.
   - `pass_rate` is the share of cases where the choice met the floor.
   - `quality_regret` is the mean gap to the best quality any eligible endpoint achieved.
@@ -212,18 +249,35 @@ In `report.md`:
   - `floor_miss_rate` is the share of cases that had a passing endpoint but where the
     choice missed it.
 
+  - `wasted_attempts` is the mean number of failed attempts per case, and
+    `exhausted_rate` is the share of cases where every attempt failed.
+
   Always read cost regret next to floor-miss rate. `n/a` means there was no data, not
-  zero.
-- **`router_warm` is optimistic by construction.** Its signal store has replayed every row
-  swept so far, *including the case being scored*. It is an upper bound on what the
-  current signals could learn, not a forecast. The report says so at the top.
-- **Headline.** `router_warm` cost vs `best_published_quality` cost, shown only when their
+  zero. A failed attempt whose latency is unknown (possible only in a live run) counts
+  as 0 ms.
+- **The three router arms.**
+  - `router_cold` has an empty signal store: the no-measurement baseline.
+  - `router_online` is **the reported arm**. Before scoring a case, its store holds only
+    the attempts this arm itself made on *earlier* cases, including its failovers. That
+    is what production would have learned, and nothing more.
+  - `router_warm_prior` has replayed every matrix row of every earlier case, for every
+    endpoint. It is a full-information reference, not a forecast, and not a guaranteed
+    upper bound: it also sees the failures of endpoints the online arm is not using.
+
+  Both warm arms count a failure only when production would (`counts_unhealth`), and
+  both read their store at the case's clock time. Their numbers depend on the suite's
+  case order and on `--seconds-per-case`. The old `router_warm` arm is gone: it replayed
+  the scored case's own rows, which leaks the outcome it is scored on.
+- **Headline.** `router_online` cost vs `best_published_quality` cost, shown only when their
   pass rates are within `--parity-tol`. Otherwise the report says "not comparable" and
   makes no claim. On small suites, whether the headline is comparable at all changes from
   seed to seed, so run several seeds before you believe it.
 - **Worst groups.** For each strategy and metric, the worst `workload`, `placement` or
   `protection` group.
-- **Policy.** `violations_total`, `sweep_violations`, `empty_set_mismatches`,
+- **Policy.** `violations_total` counts **attempts** (every attempt outside the case's
+  eligible set, plus sweep calls), while each strategy's `violation_rate` is per **case**.
+  A chain that repeats an endpoint, or records attempts after the one that served, is
+  also a violation. Also listed: `sweep_violations`, `empty_set_mismatches`,
   `post_gate_widened` (the gate may only tighten the eligible set),
   `pinned_mismatches` (a pinned call served a different model than requested) and
   `sweep_generate_mismatches` (a sweep call that made other than one backend call).
@@ -233,13 +287,49 @@ In `report.md`:
 - **Deferred metrics.** Calibration, churn robustness and noninterference. These are not
   measured by this tool.
 
+### 6.1 Reading B45 from `report.md`
+
+Backlog B45 asks whether `weights.availability` (0.2 in `config/routing.yaml`) is large
+enough for a dead endpoint to lose. To read it:
+
+1. Run a suite in which some endpoint fails, with the variants file and each spacing:
+
+   ```bash
+   export SP_PII_DETECTION=regex    # only if Presidio is not installed (see §1)
+   for spc in 1 30 300; do
+     uv run python scripts/feasible_bench.py --suite eval/suites/outage.jsonl \
+       --endpoints eval/endpoints/outage-sim.yaml --variants eval/variants/b45.yaml \
+       --seed 0 --seconds-per-case $spc --out results/b45-s0-$spc
+   done
+   ```
+
+   Repeat for several seeds. On the starter suite nothing fails, so every availability
+   variant is identical by construction.
+2. In each report's **Strategies** table, compare the `router_online:<variant>` rows, and
+   only those: `wasted_attempts` (lower means fewer requests sent to the dead endpoint),
+   `mean_chosen_cost` and `cost_regret` (what the higher weight costs), and
+   `latency_regret`. The report gives chains and totals, not scores. To see the router's
+   per-case score terms, run `scripts/b45_score_probe.py` (its docstring gives the
+   command).
+3. If `router_online:default` equals `router_online:availability_0` on every column, the
+   shipped weight changed nothing in that run. For per-case detail, `choices.jsonl`'s
+   `attempts[0]` per case shows where each variant sent its first attempt, and so when it
+   switched away from the failing endpoint and when it came back.
+4. Quote `seconds_per_case` and the seed with every number. The same scenario gives
+   different answers at 1 s, 30 s and 300 s per case, because availability recovers on
+   clock time.
+
+The first answer, simulated, is in
+[`docs/research/feasible-route-bench.md`](../research/feasible-route-bench.md) §9. Changing
+the production weight is a decision for the owner, not something this tool does.
+
 ## 7. Exit codes
 
 | Code | Meaning |
 |---|---|
 | `0` | ok |
-| `1` | load or usage error: a bad suite, endpoint file or variants file, an unknown `--fixed` slug, a missing detector, a declined `--live` prompt, or **a gate exception on any case** |
-| `2` | policy violation or integrity failure: any strategy with `violation_rate > 0`, any sweep call (or empty-set probe) that served an ineligible model, any post-gate eligible set that is not a subset of the pre-gate set, any `expect_empty` disagreement, or any `pinned_mismatches` (a pinned call served another endpoint; impossible by construction, so any occurrence is a harness integrity bug) |
+| `1` | load or usage error: a bad suite, endpoint file or variants file, an unknown `--fixed` slug, a missing detector, a declined `--live` prompt, a `--seconds-per-case` too small for this run's endpoint count or attempt cap, or **a gate exception on any case** |
+| `2` | policy violation or integrity failure: any strategy with `violation_rate > 0`, any sweep call (or empty-set probe) that served an ineligible model, any post-gate eligible set that is not a subset of the pre-gate set, any `expect_empty` disagreement, any `pinned_mismatches` (a pinned call served another endpoint; impossible by construction, so any occurrence is a harness integrity bug), or a signal arm's own leak guard firing (`LeakageError` -- an arm was asked to score a case out of order; also a harness integrity bug) |
 
 `sweep_generate_mismatches` does not by itself change the exit code: those rows are
 already error rows, scored as failed calls rather than credited to the endpoint.

@@ -22,7 +22,7 @@ from collections.abc import Collection
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.apps.db import Database
 from app.apps.registry import ModelRegistry
@@ -47,9 +47,33 @@ class LatencyProfile(BaseModel):
     jitter: float = 0.0
 
 
+class OutageSpan(BaseModel):
+    """An inclusive, 0-based **case-index** range (suite file order) during
+    which every call to the endpoint fails (spec §3). `from_`'s YAML key is
+    `from` (a Python keyword); `populate_by_name=True` also lets tests
+    construct one by keyword argument `from_=...`."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    from_: int = Field(alias="from")
+    to: int
+
+    @model_validator(mode="after")
+    def _check_range(self) -> "OutageSpan":
+        if self.from_ < 0:
+            raise ValueError(f"outage 'from' = {self.from_!r} must be >= 0")
+        if self.to < self.from_:
+            raise ValueError(
+                f"outage 'to' = {self.to!r} must be >= 'from' = {self.from_!r}")
+        return self
+
+
 class SimProfile(BaseModel):
     quality: dict[str, float]
     latency_ms: LatencyProfile
+    outages: list[OutageSpan] = []
+    error_rate: float = 0.0
+    failure_latency_ms: float | None = None
 
     @model_validator(mode="after")
     def _check_quality(self) -> "SimProfile":
@@ -59,6 +83,17 @@ class SimProfile(BaseModel):
             if not (0.0 <= value <= 1.0):
                 raise ValueError(
                     f"simulated.quality[{workload!r}] = {value!r} is out of [0,1]")
+        return self
+
+    @model_validator(mode="after")
+    def _check_failure_fields(self) -> "SimProfile":
+        if not (0.0 <= self.error_rate <= 1.0):
+            raise ValueError(
+                f"simulated.error_rate = {self.error_rate!r} is out of [0,1]")
+        if self.failure_latency_ms is not None and self.failure_latency_ms <= 0:
+            raise ValueError(
+                f"simulated.failure_latency_ms = {self.failure_latency_ms!r} "
+                "must be > 0")
         return self
 
 
@@ -185,9 +220,10 @@ def harness_settings(base: Settings, specs: list[EndpointSpec]) -> Settings:
     enabled, semantic cache + memory switched off so the sweep measures
     endpoints, not caches, the static YAML `routing.model_pool` emptied so
     the endpoint file alone defines which endpoints exist (and prices them,
-    even where a slug is also a `pricing.yaml` model), and confidence
-    escalation off (`max_escalations = 0`) so each sweep call is exactly one
-    generate call.
+    even where a slug is also a `pricing.yaml` model), confidence escalation
+    off (`max_escalations = 0`) so each sweep call is exactly one generate
+    call, and gateway failover off (`max_failover_attempts = 0`, B48c fix
+    round 1) so each sweep call is exactly one gateway attempt too.
 
     A provider named in `specs` must already be declared in
     `base.serving.providers` (e.g. `onprem`/`azure`/`bedrock` in a stock
@@ -231,7 +267,22 @@ def harness_settings(base: Settings, specs: list[EndpointSpec]) -> Settings:
     # the pinned tier and calls the SAME endpoint again (doubling spend and
     # grading the second answer). Router strategies don't read this field.
     settings.routing.max_escalations = 0
+    # The sweep gateway makes exactly one attempt per call (spec §4, B48c fix
+    # round 1): a pinned request has only one candidate anyway, so any
+    # failover would just chain the gateway's exhaustion error off a
+    # freshly-raised NoEligibleCandidate instead of the real backend
+    # exception -- see `app/eval/runner.py::_backend_exception`. The
+    # deployment's own failover is modelled in strategy-level scoring
+    # instead (`deployment_failover_cap`, below), not executed here.
+    settings.routing.max_failover_attempts = 0
     return settings
+
+
+def deployment_failover_cap(base: Settings) -> int:
+    """The deployment's own `max_failover_attempts`, read from `base` BEFORE
+    `harness_settings` zeroes it for the sweep (B48c fix round 1) -- Tasks
+    4/5's failover-aware scoring caps attempts at `1 + deployment_failover_cap(base)`."""
+    return base.routing.max_failover_attempts
 
 
 async def build_registry(

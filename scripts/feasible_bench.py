@@ -5,7 +5,7 @@ oracle (docs/superpowers/specs/2026-09-21-feasible-route-bench-design.md).
     uv run python scripts/feasible_bench.py \\
         --suite eval/suites/starter.jsonl \\
         --endpoints eval/endpoints/healthcare-sim.yaml \\
-        --variants eval/variants/b45.yaml --seed 0
+        --variants eval/variants/b45.yaml --seed 0 --seconds-per-case 30
 
 Simulated by default: no network call is made. `--live` calls the real
 endpoints in the endpoint file (every eligible endpoint, for every case) and
@@ -41,6 +41,7 @@ from app.config.loader import load_settings  # noqa: E402
 from app.eval.cases import SuiteError, load_suite  # noqa: E402
 from app.eval.endpoints import EndpointFileError, load_endpoints  # noqa: E402
 from app.eval.runner import run_bench  # noqa: E402
+from app.eval.strategies import DEFAULT_SECONDS_PER_CASE  # noqa: E402
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -64,6 +65,11 @@ def _parser() -> argparse.ArgumentParser:
                    help="also score fixed:<slug> (falls back to cheapest when ineligible)")
     p.add_argument("--parity-tol", type=float, default=0.02,
                    help="max pass-rate gap for the headline cost claim (default 0.02)")
+    p.add_argument("--seconds-per-case", type=float,
+                   default=DEFAULT_SECONDS_PER_CASE,
+                   help="synthetic case-clock spacing: case k is scored at "
+                        "k x this many seconds; drives signal decay "
+                        f"(default {DEFAULT_SECONDS_PER_CASE:g}; must be > 0)")
     return p
 
 
@@ -102,7 +108,8 @@ def main(argv: list[str] | None = None) -> int:
     result = asyncio.run(run_bench(
         args.suite, args.endpoints, out_dir=out, seed=args.seed, live=args.live,
         keep_text=args.keep_text, variants_path=args.variants,
-        parity_tol=args.parity_tol, fixed=args.fixed))
+        parity_tol=args.parity_tol, fixed=args.fixed,
+        seconds_per_case=args.seconds_per_case))
     if result.exit_code != 1:
         print(f"feasible_bench: results in {result.out_dir} (exit {result.exit_code})")
     return result.exit_code

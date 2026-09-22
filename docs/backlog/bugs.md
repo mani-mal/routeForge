@@ -185,12 +185,44 @@ is the numeric status, not OpenAI's string codes.
    whose `.code == "context_length_exceeded"` and whose message is RouteForge's text. Add it to
    `tests/test_openai_compat.py` (the `consumer-contract-tests` skill covers this boundary).
 
-## B48 — FeasibleRouteBench failure injection for B45: four things it must get right first
+## B48 — FeasibleRouteBench failure injection for B45: four things it must get right first  ✅ RESOLVED (2026-09-22, `8344b21`)
 
 **Severity:** evaluation-validity prerequisite (no product defect; nothing on the serving
 path changes)
 **Found:** 2026-09-21, FeasibleRouteBench (P2b-1) final whole-branch review.
-**Open.**
+**Resolved 2026-09-22** on `feat/b48-failure-injection` (spec `73b7af6`, §6 amended
+`153a0d4`; code `290b555` … `8344b21`). Nothing on the serving path or in `config/`
+changed. Every requirement is met, and each has a test that fails when it is broken
+(research notes §9.7):
+
+- **Failure injection.** Simulated endpoint profiles gain `outages` (inclusive
+  case-index ranges), `error_rate` (seeded HTTP-503 flakes) and `failure_latency_ms`
+  (`290b555`).
+- **(a) Leakage.** `router_warm` is **removed**. The reported arm is now
+  `router_online`: its store holds only the attempts this arm made on earlier cases. A
+  prior-cases-only `router_warm_prior` is kept as a full-information reference. Both arms
+  refuse to score a case they have already seen (`LeakageError`). The falsification: an
+  injected leak trips the no-leak check, and a leaking arm avoids a dead endpoint one
+  case early (`1a6712b`, `8344b21`).
+- **(b) Error-row cost.** Strategies are scored on failover chains. Cost is the sum over
+  attempts, and latency includes each failed attempt's failure latency. So a strategy that
+  picks a dead endpoint pays for the failover and can no longer look cheaper (`a543abb`).
+- **(c) Production-aligned failures.** Injected failures pass
+  `counts_as_endpoint_unhealth`. A matrix row records that predicate's verdict on the
+  backend exception, taken exactly one hop below the gateway's own exhaustion exception.
+  The sweep makes one attempt (`max_failover_attempts = 0`). Both warm arms count an
+  error only when the verdict is true (`f446c91`, `b32abb1`, `3a3364e`).
+- **(d) The single-shot vs failover gap.** It is **modelled**, not just stated. Router
+  arms re-run the real `Router.select(…, exclude=…)`, capped at 1 + the deployment's
+  `max_failover_attempts` (3 attempts). The new metrics are `wasted_attempts` and
+  `exhausted_rate`. An empty chain is "no choice" (production's 422); an all-failed
+  chain is exhausted (production's 502) (`a543abb`, `1a6712b`, `8344b21`).
+- **Found on the way:** a 1 s-per-case synthetic clock would stop availability from ever
+  recovering within a suite. The fix is a case clock (`--seconds-per-case`, default 30),
+  and B45 is reported at 1, 30 and 300 s per case (`153a0d4`, `8344b21`).
+
+See [`docs/research/feasible-route-bench.md`](../research/feasible-route-bench.md) §9 and
+the operator guide. The original write-up follows, for history.
 
 B45 can only be answered by a sweep in which endpoints actually fail (the first simulated
 run is null by construction, see the B45 update). Adding failure injection to the harness
@@ -347,6 +379,55 @@ it.
 > can be trusted is **B48**. See
 > [`docs/research/feasible-route-bench.md`](../research/feasible-route-bench.md) §5.5 and
 > the operator guide [`docs/guides/feasible-route-bench.md`](../guides/feasible-route-bench.md).
+
+> **Update 2026-09-22 (B48 resolved; first real answer, simulated). Still open, pending a
+> live run.**
+>
+> **The run.** Failure injection now exists (B48). A designed outage scenario was run
+> with the online router arm across seeds 0–9 and 1, 30 and 300 s per case: 30 runs, all
+> exit 0, no violations.
+>
+> - Suite: `eval/suites/outage.jsonl`, hash `78e1be2b…9969`.
+> - Endpoints: `eval/endpoints/outage-sim.yaml`, hash `bdb74978…f7d6`. Two equal-quality
+>   `cheap` endpoints; the 4× cheaper one is down for cases 10–19.
+> - Code: `8344b21`.
+>
+> **The answer for this simulation is no.** At `availability: 0.2`,
+> `router_online:default` sent the first attempt of every outage case to the dead
+> endpoint. Its attempt chains are identical, case by case, to weight 0 in all 30 runs.
+> Failover still served the requests, so the cost of 0.2 here is one wasted attempt plus
+> the failed call's latency (1000 ms, a **designed** value in the endpoint file) on every
+> request during the outage.
+>
+> **Why.** The formula predicts this. The availability term can take back at most `w`,
+> and the dead endpoint's score lead (mostly cost) is 0.42–0.54. In general, with equal quality and
+> latency, a fully dead endpoint loses at `w = 0.2` only if its price is more than about
+> **2/3 of its peer's**.
+>
+> **Higher weights** (mean over seeds, wasted attempts per 30-case run, weight 0 = 10.5):
+>
+> - `w = 2`: 5.5 at 1 s/case (+39% mean chosen cost), 5.7 at 30 s (+35%), no change at
+>   300 s. Latency regret improves from 326 ms to 217/221 ms.
+> - `w = 1`: saves 0.6 attempts at 1 s/case at +44% cost, with latency regret worse
+>   (381 ms), because it sticks to the pricier endpoint after recovery. It saves 0.5
+>   attempts at 30 s at +2%, and nothing at 300 s.
+>
+> Both lag the outage by several failures. All of their extra cost comes after the outage
+> ends: they keep the recovered, 4× cheaper endpoint out of rotation (about a minute of
+> clock time at `w = 1`). The saving scales with the designed failure latency, and the
+> cost with the designed price ratio (0.25).
+>
+> **Recommendation to the owner, not a config change:** keep 0.2 as a ranking
+> preference. Treat "take a dead endpoint out" as a breaker question (step 7, not built)
+> or operator disable, not as a weight to raise. Revisit only after a live run.
+> **Changing `weights.availability` is the owner's decision;** `config/routing.yaml` is
+> untouched.
+>
+> **Limits.** This is one designed scenario with simulated failures. Outages are indexed
+> by case, not time. The outage was one-sided: the healthy peer drew no flakes at seed 0
+> and 14 in total across seeds 1–9. No live run has been made. Full result, formula,
+> switch points and limits:
+> [`docs/research/feasible-route-bench.md`](../research/feasible-route-bench.md) §9.
 
 **Related.** B37 (`/health` reports a dead model as available for 22 hours) and B38
 (a failed request writes no usage row, so availability never seeds — **resolved
