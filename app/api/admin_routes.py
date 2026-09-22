@@ -965,7 +965,8 @@ async def onboard_model(body: OnboardIn, request: Request,
             for aid in body.allowed_app_ids:
                 if await store.get_application(session, aid) is None:
                     raise HTTPException(422, f"unknown application {aid!r}")
-        ok, detail = await probe_endpoint(body.endpoint, body.slug, body.api_key_env)
+        _probe = await probe_endpoint(body.endpoint, body.slug, body.api_key_env)
+        ok, detail = _probe.ok, _probe.detail
         # `enabled` is explicit admin intent, ANDed with probe result: an
         # unreachable model can NEVER end up enabled (registry.has_healthy_onprem()
         # and onprem_only fail-closed depend on that), but a reachable model can
@@ -1023,7 +1024,8 @@ async def edit_onboarded_model(slug: str, body: OnboardIn, request: Request,
             for aid in body.allowed_app_ids:
                 if await store.get_application(session, aid) is None:
                     raise HTTPException(422, f"unknown application {aid!r}")
-        ok, detail = await probe_endpoint(body.endpoint, slug, body.api_key_env)
+        _probe = await probe_endpoint(body.endpoint, slug, body.api_key_env)
+        ok, detail = _probe.ok, _probe.detail
         # Same intent-AND-probe rule as onboard_model — see comment there.
         final_enabled = body.enabled and ok
         await store.upsert_onboarded(

@@ -6,6 +6,7 @@ probe is persisted but never routable (registry.has_healthy_onprem() keys on
 `enabled`). Static validation (tier/endpoint/price/duplicate/unknown app id)
 runs before the probe so a bad request never touches the network.
 """
+from app.apps.probe import ProbeResult
 
 _ADMIN = {"email": "admin@routeforge.local", "password": "changeme"}
 
@@ -17,11 +18,11 @@ def _login(client):
 
 
 async def _ok(*a, **k):
-    return True, "ok"
+    return ProbeResult(True, "ok")
 
 
 async def _fail(*a, **k):
-    return False, "boom"
+    return ProbeResult(False, "boom")
 
 
 _BODY = {

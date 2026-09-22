@@ -53,8 +53,10 @@ def test_unroutable_policy_saves_with_a_warning(admin):
 def test_price_that_blocks_agent_turns_warns_on_onboarding(admin, monkeypatch):
     import app.api.admin_routes as ar
 
+    from app.apps.probe import ProbeResult
+
     async def ok_probe(*a, **k):
-        return True, ""
+        return ProbeResult(True, "")
 
     monkeypatch.setattr(ar, "probe_endpoint", ok_probe)
     r = admin.post("/admin/infra/models", json={
