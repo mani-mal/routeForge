@@ -21,16 +21,31 @@ from app.apps.policy import AppPolicyView
 from app.config.loader import load_settings
 from app.errors import NoEligibleCandidate
 from app.eval.cases import Case
-from app.eval.endpoints import build_registry, harness_settings, load_endpoints
+from app.eval.endpoints import (
+    build_registry,
+    deployment_failover_cap,
+    harness_settings,
+    load_endpoints,
+)
 from app.eval.graders import GraderSpec
-from app.eval.oracle import MatrixRow
+from app.eval.oracle import MatrixRow, attempt_outcome
 from app.eval.strategies import (
+    LeakageError,
+    OnlineArm,
     StrategyInput,
+    attempt_cap,
     best_published_quality,
+    best_published_quality_attempts,
     cheapest,
+    cheapest_attempts,
     fixed,
+    fixed_attempts,
     router,
+    router_attempts,
     router_variant,
+    router_variant_attempts,
+    take_attempts,
+    warm_prior_signals,
     warm_signals,
 )
 from app.gateway.backends.base import count_tokens
@@ -475,3 +490,423 @@ class TestRouterVariantWeightValidation:
         with pytest.raises(ValueError, match="availability") as exc_info:
             router_variant(settings, incomplete_weights, registry, signals)
         assert not isinstance(exc_info.value, pydantic.ValidationError)
+
+
+# ==========================================================================
+# B48 Task 4 -- attempt orders, the online router arm, the prior-only warm
+# arm (spec 2026-09-22 §5-§6). Every chain is checked against the rule it
+# encodes: failover on failure only, capped at 1 + the DEPLOYMENT's
+# max_failover_attempts, router chains = repeated real Router.select with
+# exclude, and no arm scoring case k holds an observation from case >= k.
+# ==========================================================================
+
+_AVAIL_OFF = {"quality": 1.0, "cost": 0.6, "latency": 0.3, "availability": 0.0}
+_AVAIL_HOT = {"quality": 1.0, "cost": 0.6, "latency": 0.3, "availability": 5.0}
+
+
+def _ok(case_id, endpoint, latency_ms=100.0):
+    return MatrixRow(case_id=case_id, endpoint=endpoint, quality=1.0, passed=True,
+                     cost_usd=0.0001, latency_ms=latency_ms)
+
+
+def _err(case_id, endpoint, *, counts_unhealth=True):
+    return MatrixRow(case_id=case_id, endpoint=endpoint, quality=0.0, passed=False,
+                     cost_usd=0.0, latency_ms=None, error="BackendUnavailable",
+                     counts_unhealth=counts_unhealth, failure_latency_ms=100.0)
+
+
+def _failing(*slugs):
+    dead = set(slugs)
+    return lambda slug: slug in dead
+
+
+def _four_priced(tmp_path):
+    return _build(tmp_path, [
+        _entry("a-model", price_input=0.01, price_output=0.01, quality=0.5),
+        _entry("b-model", price_input=0.02, price_output=0.02, quality=0.9),
+        _entry("c-model", price_input=0.03, price_output=0.03, quality=0.7),
+        _entry("d-model", price_input=0.04, price_output=0.04, quality=0.6),
+    ])
+
+
+class TestAttemptCap:
+    def test_cap_comes_from_the_deployment_not_the_harness(self, tmp_path):
+        settings, *_ = _four_priced(tmp_path)
+        # The harness zeroes failover for its single-shot sweep; the cap
+        # must still be the deployment's 1 + max_failover_attempts.
+        assert settings.routing.max_failover_attempts == 0
+        assert deployment_failover_cap(BASE_SETTINGS) == 2
+        assert attempt_cap(BASE_SETTINGS) == 3
+        assert attempt_cap(settings) == 1   # what reading the wrong object gives
+
+    def test_take_attempts_stops_at_first_success_and_at_the_cap(self):
+        assert take_attempts(["x", "y", "z"], _failing("x"), 3) == ("x", "y")
+        assert take_attempts(["x", "y", "z"], _failing(), 3) == ("x",)
+        assert take_attempts(["w", "x", "y", "z"], _failing("w", "x", "y", "z"), 3) \
+            == ("w", "x", "y")
+        assert take_attempts([], _failing(), 3) == ()
+        with pytest.raises(ValueError):
+            take_attempts(["x"], _failing(), 0)
+
+
+class TestBaselineAttemptOrders:
+    def test_cheapest_fails_over_in_cost_order(self, tmp_path):
+        _settings, registry, case, ctx, eligible = _four_priced(tmp_path)
+        inp = _strategy_input(case, ctx, eligible)
+        strat = cheapest_attempts(registry, attempt_cap(BASE_SETTINGS))
+        assert strat(inp, _failing()) == ("a-model",)
+        assert strat(inp, _failing("a-model")) == ("a-model", "b-model")
+        # First element agrees with the single-choice baseline.
+        assert strat(inp, _failing())[0] == cheapest(registry)(inp)
+
+    def test_best_quality_fails_over_in_quality_order(self, tmp_path):
+        settings, registry, case, ctx, eligible = _four_priced(tmp_path)
+        inp = _strategy_input(case, ctx, eligible)
+        strat = best_published_quality_attempts(registry, settings, attempt_cap(BASE_SETTINGS))
+        assert strat(inp, _failing("b-model")) == ("b-model", "c-model")
+        assert strat(inp, _failing())[0] == best_published_quality(registry, settings)(inp)
+
+    def test_fixed_then_cheapest_order_without_repeating_the_pin(self, tmp_path):
+        _settings, registry, case, ctx, eligible = _four_priced(tmp_path)
+        inp = _strategy_input(case, ctx, eligible)
+        cap = attempt_cap(BASE_SETTINGS)
+        assert fixed_attempts("c-model", registry, cap)(inp, _failing("c-model", "a-model")) \
+            == ("c-model", "a-model", "b-model")
+        # Pin not eligible -> cheapest's order alone.
+        assert fixed_attempts("not-onboarded", registry, cap)(inp, _failing("a-model")) \
+            == ("a-model", "b-model")
+
+    def test_cap_three_failing_candidates_is_exhausted_after_three(self, tmp_path):
+        _settings, registry, case, ctx, eligible = _four_priced(tmp_path)
+        inp = _strategy_input(case, ctx, eligible)
+        all_dead = _failing("a-model", "b-model", "c-model", "d-model")
+        chain = cheapest_attempts(registry, attempt_cap(BASE_SETTINGS))(inp, all_dead)
+        assert chain == ("a-model", "b-model", "c-model")
+        rows = {s: _err(case.id, s) for s in ("a-model", "b-model", "c-model", "d-model")}
+        out = attempt_outcome(rows, chain)
+        assert out["exhausted"] is True and out["attempts"] == 3
+
+    def test_empty_eligible_is_no_choice(self, tmp_path):
+        settings, registry, case, ctx, _ = _four_priced(tmp_path)
+        inp = StrategyInput(case=case, ctx=ctx, eligible=(), tokens_after=5,
+                            output_tokens=64)
+        cap = attempt_cap(BASE_SETTINGS)
+        assert cheapest_attempts(registry, cap)(inp, _failing()) == ()
+        assert best_published_quality_attempts(registry, settings, cap)(inp, _failing()) == ()
+        assert fixed_attempts("a-model", registry, cap)(inp, _failing()) == ()
+
+
+def _direct_chain(settings, registry, signals, inp, failed, cap):
+    """The gateway's loop written out by hand against a fresh Router."""
+    rt = Router(settings, registry=registry, signals=signals)
+    complexity = min(1.0, inp.tokens_after / 2000)
+    chain = []
+    while len(chain) < cap:
+        try:
+            d = rt.select(inp.ctx, inp.tokens_after, complexity,
+                          exclude=frozenset(chain), output_tokens=inp.output_tokens)
+        except NoEligibleCandidate:
+            break
+        chain.append(d.chosen.name)
+        if not failed(d.chosen.name):
+            break
+    return tuple(chain)
+
+
+class TestRouterAttemptChains:
+    @pytest.mark.parametrize("dead", [(), ("a-model",), ("a-model", "b-model"),
+                                      ("a-model", "b-model", "c-model", "d-model")])
+    def test_chain_equals_repeated_direct_router_select(self, tmp_path, dead):
+        settings, registry, case, ctx, eligible = _four_priced(tmp_path)
+        inp = _strategy_input(case, ctx, eligible)
+        signals = SignalStore(settings.routing.signals)
+        cap = attempt_cap(BASE_SETTINGS)
+        got = router_attempts(settings, registry, signals, cap)(inp, _failing(*dead))
+        assert got == _direct_chain(settings, registry, signals, inp, _failing(*dead), cap)
+        assert 1 <= len(got) <= cap
+        assert len(set(got)) == len(got)            # exclude: never retried
+        assert all(s in dead for s in got[:-1])     # failover on failure only
+
+    def test_all_failing_router_chain_is_capped(self, tmp_path):
+        settings, registry, case, ctx, eligible = _four_priced(tmp_path)
+        inp = _strategy_input(case, ctx, eligible)
+        chain = router_attempts(settings, registry, SignalStore(settings.routing.signals),
+                                attempt_cap(BASE_SETTINGS))(
+            inp, _failing("a-model", "b-model", "c-model", "d-model"))
+        assert len(chain) == 3
+
+    def test_no_eligible_candidate_ends_the_chain(self, tmp_path):
+        settings, registry, case, ctx, eligible = _build(tmp_path, [
+            _entry("only-model")])
+        inp = _strategy_input(case, ctx, eligible)
+        chain = router_attempts(settings, registry, SignalStore(settings.routing.signals),
+                                attempt_cap(BASE_SETTINGS))(inp, _failing("only-model"))
+        assert chain == ("only-model",)
+
+    def test_variant_chain_uses_the_variant_weights(self, tmp_path):
+        settings, registry, inp, rows = _slow_fast_setup(tmp_path)
+        signals = warm_signals(settings, rows)
+        cap = attempt_cap(BASE_SETTINGS)
+        assert router_variant_attempts(settings, _COLD_WEIGHTS, registry, signals, cap)(
+            inp, _failing("fast-flaky")) == ("fast-flaky", "slow-available")
+        assert router_variant_attempts(settings, _HOT_WEIGHTS, registry, signals, cap)(
+            inp, _failing("fast-flaky")) == ("slow-available",)
+
+
+# --------------------------------------------------------------------------
+# The online arm. Scenario: two same-tier, same-price endpoints; `dead`
+# (the one the cold router picks first) fails every case with an endpoint
+# -unhealth error, `live` always serves.
+# --------------------------------------------------------------------------
+
+def _two_endpoint_setup(tmp_path):
+    settings, registry, case, ctx, eligible = _build(tmp_path, [
+        _entry("a-model", price_input=0.08, price_output=0.08),
+        _entry("b-model", price_input=0.08, price_output=0.08),
+    ])
+    inp = _strategy_input(case, ctx, eligible)
+    cold_first = router_attempts(settings, registry, SignalStore(settings.routing.signals),
+                                 1)(inp, _failing())[0]
+    dead = cold_first
+    live = "b-model" if dead == "a-model" else "a-model"
+    return settings, registry, inp, dead, live
+
+
+def _case_rows(k, dead, live, *, dead_counts_unhealth=True):
+    cid = f"case-{k}"
+    return {dead: _err(cid, dead, counts_unhealth=dead_counts_unhealth),
+            live: _ok(cid, live, latency_ms=150.0)}
+
+
+def _assert_no_leak(arm: OnlineArm, k: int) -> None:
+    """The no-leakage invariant, checked two independent ways: the arm's
+    applied-observation log, and the store's own recorded timestamps (case
+    `i` observations sit in [i, i + 1) on the case clock)."""
+    assert all(o.case_index < k for o in arm.applied), \
+        f"case {k} scored with observations from {sorted({o.case_index for o in arm.applied})}"
+    for model, st in arm.signals._state.items():
+        assert st.availability_ts < k, f"{model} availability_ts {st.availability_ts} >= {k}"
+        if st.latency_n:
+            assert st.latency_ts < k, f"{model} latency_ts {st.latency_ts} >= {k}"
+    if arm.applied:   # an empty store's anchor (0.0) reads nothing
+        assert arm.read_clock < k
+
+
+def _run_online(settings, registry, inp, dead, live, n_cases, *, weights=None,
+                leak=False, check=True, dead_counts_unhealth=True):
+    arm = OnlineArm(settings, registry, attempt_cap(BASE_SETTINGS), weights=weights)
+    chains = []
+    for k in range(n_cases):
+        rows = _case_rows(k, dead, live, dead_counts_unhealth=dead_counts_unhealth)
+        def failed(s, rows=rows):
+            return rows[s].error is not None
+        if leak:
+            # The injected leak: learn case k's outcome, THEN score case k.
+            arm.observe(k, (dead, live), rows)
+        if check:
+            _assert_no_leak(arm, k)
+        chain = arm.choose(inp, failed)
+        chains.append(chain)
+        if not leak:
+            arm.observe(k, chain, rows)
+    return arm, chains
+
+
+class TestOnlineArm:
+    def test_no_leakage_when_scoring_each_case(self, tmp_path):
+        settings, registry, inp, dead, live = _two_endpoint_setup(tmp_path)
+        _run_online(settings, registry, inp, dead, live, 8, weights=_AVAIL_HOT)
+
+    def test_injected_leak_is_caught(self, tmp_path):
+        """Falsification: observing case k before scoring it must trip the
+        same check that passes above -- the check is not vacuous."""
+        settings, registry, inp, dead, live = _two_endpoint_setup(tmp_path)
+        with pytest.raises(AssertionError, match="case 0 scored with observations"):
+            _run_online(settings, registry, inp, dead, live, 8, weights=_AVAIL_HOT,
+                        leak=True)
+
+    def test_injected_leak_is_caught_by_the_builtin_guard(self, tmp_path):
+        settings, registry, inp, dead, live = _two_endpoint_setup(tmp_path)
+        arm = OnlineArm(settings, registry, attempt_cap(BASE_SETTINGS))
+        rows = _case_rows(0, dead, live)
+        assert arm.choose(inp, lambda s: rows[s].error is not None, case_index=0)
+        arm.observe(0, (dead, live), rows)
+        with pytest.raises(LeakageError):
+            arm.choose(inp, lambda s: rows[s].error is not None, case_index=0)
+        # The next case is fine.
+        arm.choose(inp, lambda s: rows[s].error is not None, case_index=1)
+
+    def test_the_leak_changes_outcomes(self, tmp_path):
+        """Why the invariant matters: a leaking arm learns `dead` is down one
+        case early (min_samples=5 errors reached before scoring case 4), so
+        it skips the dead endpoint on case 4; the honest arm pays one more
+        wasted attempt there."""
+        settings, registry, inp, dead, live = _two_endpoint_setup(tmp_path)
+        _, honest = _run_online(settings, registry, inp, dead, live, 6, weights=_AVAIL_HOT)
+        _, leaky = _run_online(settings, registry, inp, dead, live, 6, weights=_AVAIL_HOT,
+                               leak=True, check=False)
+        assert honest[:5] == [(dead, live)] * 5
+        assert honest[5] == (live,)
+        assert leaky[4] == (live,)
+        assert honest != leaky
+
+    def test_availability_drops_after_unhealth_failures_only(self, tmp_path):
+        settings, registry, inp, dead, live = _two_endpoint_setup(tmp_path)
+        arm, _ = _run_online(settings, registry, inp, dead, live, 5, weights=_AVAIL_HOT)
+        av = arm.signals.availability(dead)
+        assert av.source == "measured" and av.value < 0.1
+        assert arm.signals.availability(live).value == 1.0
+
+        arm2, chains2 = _run_online(settings, registry, inp, dead, live, 5,
+                                    weights=_AVAIL_HOT, dead_counts_unhealth=False)
+        assert dead not in arm2.signals.snapshot()
+        assert arm2.signals.availability(dead).value == 1.0
+        assert all(c == (dead, live) for c in chains2)   # never learns to avoid it
+        assert {o.endpoint for o in arm2.applied} == {live}
+
+    def test_observations_follow_attempt_order_on_the_case_clock(self, tmp_path):
+        settings, registry, inp, dead, live = _two_endpoint_setup(tmp_path)
+        arm, _ = _run_online(settings, registry, inp, dead, live, 2)
+        assert [(o.case_index, o.endpoint, o.outcome, o.t) for o in arm.applied] == [
+            (0, dead, "error", 0.0), (0, live, "ok", 0.001),
+            (1, dead, "error", 1.0), (1, live, "ok", 1.001)]
+        assert arm.read_clock == 1.001
+
+    def test_skipped_attempts_do_not_advance_the_clock(self, tmp_path):
+        settings, registry, _inp, dead, live = _two_endpoint_setup(tmp_path)
+        arm = OnlineArm(settings, registry, attempt_cap(BASE_SETTINGS))
+        arm.observe(0, (dead, live), _case_rows(0, dead, live, dead_counts_unhealth=False))
+        assert [(o.endpoint, o.t) for o in arm.applied] == [(live, 0.0)]
+        arm.observe(3, (dead,), {dead: _err("case-3", dead, counts_unhealth=False)})
+        assert arm.read_clock == 0.0
+
+    def test_observe_rejects_out_of_order_and_malformed_chains(self, tmp_path):
+        settings, registry, _inp, dead, live = _two_endpoint_setup(tmp_path)
+        arm = OnlineArm(settings, registry, attempt_cap(BASE_SETTINGS))
+        arm.observe(2, (dead, live), _case_rows(2, dead, live))
+        with pytest.raises(ValueError):
+            arm.observe(2, (live,), _case_rows(2, dead, live))
+        with pytest.raises(ValueError):
+            arm.observe(1, (live,), _case_rows(1, dead, live))
+        with pytest.raises(ValueError, match="not the last attempt"):
+            arm.observe(3, (live, dead), _case_rows(3, dead, live))
+        with pytest.raises(ValueError, match="no matrix row"):
+            arm.observe(4, ("ghost",), _case_rows(4, dead, live))
+
+    def test_online_choose_equals_router_chain_over_its_own_store(self, tmp_path):
+        settings, registry, inp, dead, live = _two_endpoint_setup(tmp_path)
+        arm, _ = _run_online(settings, registry, inp, dead, live, 3)
+        failed = _failing(dead)
+        assert arm.choose(inp, failed) == _direct_chain(
+            settings, registry, arm.signals, inp, failed, attempt_cap(BASE_SETTINGS))
+
+
+# --------------------------------------------------------------------------
+# The prior-only warm arm.
+# --------------------------------------------------------------------------
+
+class TestWarmPriorSignals:
+    def _rows(self, dead, live, n):
+        rows = []
+        for k in range(n):
+            r = _case_rows(k, dead, live)
+            rows += [r[dead], r[live]]
+        return rows
+
+    def test_prior_rows_only_and_the_read_clock(self, tmp_path):
+        settings, registry, inp, dead, live = _two_endpoint_setup(tmp_path)
+        index = {f"case-{k}": k for k in range(10)}
+        store = warm_prior_signals(settings, self._rows(dead, live, 5),
+                                   case_index=index, scoring_case=5)
+        assert store.frozen_now == pytest.approx(4.001)
+        assert all(st.availability_ts < 5 for st in store._state.values())
+        assert store.availability(dead).value < 0.1
+        assert router_attempts(settings, registry, store, attempt_cap(BASE_SETTINGS))(
+            inp, _failing(dead)) == (live,)
+
+    def test_rows_from_the_scored_case_raise(self, tmp_path):
+        """Falsification: handing the scored case's own rows to the prior arm
+        is refused, not silently replayed."""
+        settings, _registry, _inp, dead, live = _two_endpoint_setup(tmp_path)
+        index = {f"case-{k}": k for k in range(10)}
+        with pytest.raises(LeakageError):
+            warm_prior_signals(settings, self._rows(dead, live, 6),
+                               case_index=index, scoring_case=5)
+
+    def test_empty_prior_is_a_cold_store(self, tmp_path):
+        settings, *_ = _two_endpoint_setup(tmp_path)
+        store = warm_prior_signals(settings, [])
+        assert store.snapshot() == {} and store.frozen_now == 0.0
+
+    def test_non_unhealth_errors_are_skipped_without_consuming_a_slot(self, tmp_path):
+        settings, _registry, _inp, dead, live = _two_endpoint_setup(tmp_path)
+        rows = [_err("case-0", dead, counts_unhealth=False), _ok("case-0", live)]
+        store = warm_prior_signals(settings, rows)
+        assert dead not in store.snapshot()
+        assert store.frozen_now == 0.0   # live's success took slot j=0
+
+    def test_scoring_case_requires_case_index(self, tmp_path):
+        settings, *_ = _two_endpoint_setup(tmp_path)
+        with pytest.raises(ValueError):
+            warm_prior_signals(settings, [], scoring_case=3)
+
+
+class TestWarmSignalsSlotFix:
+    def test_skipped_rows_do_not_consume_timestamp_slots(self, tmp_path, monkeypatch):
+        """Task 2 review note: the last APPLIED row lands at the anchor
+        (wall_offset=0), even when later rows were skipped."""
+        settings, _registry, _inp, dead, live = _two_endpoint_setup(tmp_path)
+        seen = []
+        orig = SignalStore.replay
+        monkeypatch.setattr(SignalStore, "replay",
+                            lambda self, obs: (seen.extend(obs), orig(self, obs))[1])
+        store = warm_signals(settings, [_ok("c0", live), _err("c0", dead, counts_unhealth=False),
+                                        _err("c1", dead, counts_unhealth=None)])
+        assert len(seen) == 1
+        assert seen[0].ts - store.wall_offset == pytest.approx(store.frozen_now, abs=1e-6)
+
+
+# --------------------------------------------------------------------------
+# No-failure invariant (spec §8.5).
+# --------------------------------------------------------------------------
+
+class TestNoFailureInvariant:
+    def test_availability_is_exactly_one_and_weight_variants_agree(self, tmp_path):
+        settings, registry, inp, a, b = _two_endpoint_setup(tmp_path)
+        cap = attempt_cap(BASE_SETTINGS)
+        n = 8
+
+        def rows_for(k):
+            return {a: _ok(f"case-{k}", a, latency_ms=900.0),
+                    b: _ok(f"case-{k}", b, latency_ms=100.0)}
+
+        per_variant_chains = {}
+        for name, weights in {"off": _AVAIL_OFF, "hot": _AVAIL_HOT, "base": None}.items():
+            arm = OnlineArm(settings, registry, cap, weights=weights)
+            chains = []
+            for k in range(n):
+                rows = rows_for(k)
+                chain = arm.choose(inp, lambda s, rows=rows: rows[s].error is not None,
+                                   case_index=k)
+                chains.append(chain)
+                arm.observe(k, chain, rows)
+            for slug in (a, b):
+                assert arm.signals.availability(slug).value == 1.0
+            per_variant_chains[name] = chains
+        assert per_variant_chains["off"] == per_variant_chains["hot"] \
+            == per_variant_chains["base"]
+
+        # Warm-prior: every endpoint's rows, both variants agree, avail 1.0.
+        prior = [r for k in range(n) for r in rows_for(k).values()]
+        store = warm_prior_signals(settings, prior)
+        for slug in (a, b):
+            assert store.availability(slug).value == 1.0
+        warm_chains = {name: router_variant_attempts(settings, w, registry, store, cap)(
+                           inp, _failing())
+                       for name, w in {"off": _AVAIL_OFF, "hot": _AVAIL_HOT}.items()}
+        assert warm_chains["off"] == warm_chains["hot"]
+        # And the cold arm.
+        cold = SignalStore(settings.routing.signals)
+        assert router_variant_attempts(settings, _AVAIL_OFF, registry, cold, cap)(
+            inp, _failing()) == router_variant_attempts(
+            settings, _AVAIL_HOT, registry, cold, cap)(inp, _failing())
