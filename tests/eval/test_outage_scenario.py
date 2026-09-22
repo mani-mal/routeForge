@@ -75,7 +75,9 @@ def test_outage_run_is_deterministic_clean_and_moves_the_online_variants(tmp_pat
     # B45's instrument is live: the availability weight changes what the
     # online router does during the outage (direction NOT asserted).
     assert len(set(wasted.values())) > 1, wasted
-    # The full-information arm is an upper bound at the shipped weights.
+    # The full-information arm is a full-information reference (not an upper
+    # bound: across seeds it sometimes wastes more at weights 1.0/2.0); at the
+    # shipped weights on this seed it wastes no more than router_online.
     assert strategies["router_warm_prior"]["wasted_attempts"] <= \
         strategies["router_online"]["wasted_attempts"]
     # The cold arm cannot learn: every availability variant is identical.

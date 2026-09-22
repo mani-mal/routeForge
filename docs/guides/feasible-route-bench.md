@@ -295,6 +295,7 @@ enough for a dead endpoint to lose. To read it:
 1. Run a suite in which some endpoint fails, with the variants file and each spacing:
 
    ```bash
+   export SP_PII_DETECTION=regex    # only if Presidio is not installed (see §1)
    for spc in 1 30 300; do
      uv run python scripts/feasible_bench.py --suite eval/suites/outage.jsonl \
        --endpoints eval/endpoints/outage-sim.yaml --variants eval/variants/b45.yaml \
@@ -307,7 +308,9 @@ enough for a dead endpoint to lose. To read it:
 2. In each report's **Strategies** table, compare the `router_online:<variant>` rows, and
    only those: `wasted_attempts` (lower means fewer requests sent to the dead endpoint),
    `mean_chosen_cost` and `cost_regret` (what the higher weight costs), and
-   `latency_regret`.
+   `latency_regret`. The report gives chains and totals, not scores. To see the router's
+   per-case score terms, run `scripts/b45_score_probe.py` (its docstring gives the
+   command).
 3. If `router_online:default` equals `router_online:availability_0` on every column, the
    shipped weight changed nothing in that run. For per-case detail, `choices.jsonl`'s
    `attempts[0]` per case shows where each variant sent its first attempt, and so when it

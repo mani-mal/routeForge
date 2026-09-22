@@ -480,7 +480,8 @@ def warm_prior_signals(settings: Settings, rows_before_case: Iterable["MatrixRow
                        seconds_per_case: float) -> _FrozenReadSignalStore:
     """`router_warm_prior`'s store (B48 spec §6): every matrix row of cases
     `< k` -- all eligible endpoints, not just the ones any strategy tried --
-    the full-information upper bound. The runner passes only prior rows.
+    a full-information reference (not an upper bound). The runner passes only
+    prior rows.
 
     Rows are replayed through `SignalStore.replay` (the same path as
     `warm_signals`), counting an error only when `counts_unhealth` is true,

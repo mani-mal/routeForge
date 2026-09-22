@@ -9,3 +9,4 @@
 - smoke-obs.sh    — prove a PII request lands in Langfuse with the SSN redacted
 - smoke-compression.sh — prove Headroom compression + CCR behave (off vs on, tokens_after < tokens_before, CCR never retrieves to cloud for onprem_only)
 - feasible_bench.py — score routing strategies against the feasible oracle over a case suite and an endpoint file (simulated by default; `--live` calls real endpoints and asks first). Run with `uv run python scripts/feasible_bench.py --help`; guide: docs/guides/feasible-route-bench.md
+- b45_score_probe.py — print `router_online`'s first-hop score terms per case on the B45 outage scenario (reproduces the per-case scores quoted in docs/research/feasible-route-bench.md §9.5; observes only)

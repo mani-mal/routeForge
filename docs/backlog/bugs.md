@@ -396,17 +396,26 @@ it.
 > `router_online:default` sent the first attempt of every outage case to the dead
 > endpoint. Its attempt chains are identical, case by case, to weight 0 in all 30 runs.
 > Failover still served the requests, so the cost of 0.2 here is one wasted attempt plus
-> the failed call's latency on every request during the outage.
+> the failed call's latency (1000 ms, a **designed** value in the endpoint file) on every
+> request during the outage.
 >
 > **Why.** The formula predicts this. The availability term can take back at most `w`,
-> and the dead endpoint's cost lead is 0.42–0.54. In general, with equal quality and
+> and the dead endpoint's score lead (mostly cost) is 0.42–0.54. In general, with equal quality and
 > latency, a fully dead endpoint loses at `w = 0.2` only if its price is more than about
 > **2/3 of its peer's**.
 >
-> **Higher weights.** Weights 1.0 and 2.0 cut wasted attempts at 1 s and 30 s per case
-> (at 2.0: 10.5 → about 5.5 per 30-case run), at 35–44% higher mean chosen cost. They do
-> nothing at 300 s per case. They lag the outage by several failures, and they keep a
-> recovered endpoint out of rotation for about a minute of clock time (at 1.0).
+> **Higher weights** (mean over seeds, wasted attempts per 30-case run, weight 0 = 10.5):
+>
+> - `w = 2`: 5.5 at 1 s/case (+39% mean chosen cost), 5.7 at 30 s (+35%), no change at
+>   300 s. Latency regret improves from 326 ms to 217/221 ms.
+> - `w = 1`: saves 0.6 attempts at 1 s/case at +44% cost, with latency regret worse
+>   (381 ms), because it sticks to the pricier endpoint after recovery. It saves 0.5
+>   attempts at 30 s at +2%, and nothing at 300 s.
+>
+> Both lag the outage by several failures. All of their extra cost comes after the outage
+> ends: they keep the recovered, 4× cheaper endpoint out of rotation (about a minute of
+> clock time at `w = 1`). The saving scales with the designed failure latency, and the
+> cost with the designed price ratio (0.25).
 >
 > **Recommendation to the owner, not a config change:** keep 0.2 as a ranking
 > preference. Treat "take a dead endpoint out" as a breaker question (step 7, not built)

@@ -20,7 +20,7 @@ sentence that claims a result.
 
 The honest one-line summary: **this slice builds the instrument and checks that it is
 calibrated. It does not yet produce a finding about routing quality.** The first B45
-result is null, and that null is predicted by the scoring formula (§5.5). The router
+result is null, and that null is predicted by the scoring formula (§5.5; superseded by §9). The router
 comparison mostly measures a tier-targeting rule, not the scorer (§5.3).
 
 **Update 2026-09-22 (§9).** With failure injection built (B48), a designed outage scenario
@@ -609,7 +609,7 @@ that is the point of the stamp.
 |---|---|
 | Design (binding) | `docs/superpowers/specs/2026-09-21-feasible-route-bench-design.md` |
 | Plan | `docs/superpowers/plans/2026-09-21-feasible-route-bench.md` |
-| Per-task briefs, reports, rulings | `.superpowers/sdd/2026-09-21-feasible-route-bench/` |
+| Per-task briefs, reports, rulings | `.superpowers/sdd/2026-09-21-feasible-route-bench/` (local working files, not in the repository) |
 | Operator guide | [`docs/guides/feasible-route-bench.md`](../guides/feasible-route-bench.md) |
 | The question B45 asks | [`docs/backlog/bugs.md`](../backlog/bugs.md) B45; [`routing-signal-provenance.md`](routing-signal-provenance.md) §2.5 |
 | Source of the §14 example | `docs/new/RouteForge-Priorities-1-3-LLM-Handoff.md` §12–21 (not tracked in this branch) |
@@ -641,7 +641,9 @@ orders, online arm, prior-only warm arm) · `153a0d4` (spec §6 amended: the cas
 `router_warm` removed, outage scenario). Design:
 `docs/superpowers/specs/2026-09-22-feasible-bench-failure-injection-design.md`; plan:
 `docs/superpowers/plans/2026-09-22-feasible-bench-failure-injection.md`; per-task reports
-and review rulings: `.superpowers/sdd/2026-09-22-feasible-bench-failure-injection/`.
+and review rulings: `.superpowers/sdd/2026-09-22-feasible-bench-failure-injection/` (local
+working files, not in the repository). The score probe that §9.5 quotes is committed:
+`scripts/b45_score_probe.py`.
 
 ### Related work — TO VERIFY BEFORE CITING
 
@@ -783,7 +785,9 @@ very call it is being scored on. The falsification is in `test_strategies.py::Te
 - `test_injected_leak_is_caught` runs the same loop with a leak injected (case `k` is
   observed before it is scored). It trips that same check (`AssertionError: case 0 scored
   with observations from [0]`), which shows the check is not vacuous. The Task 4 mutation
-  M2 did the same by patching the leak into the passing test.
+  M2 did the same by patching the leak into the passing test: it failed with
+  `AssertionError: case 0 scored with observations from [0]` (mutation run at `1a6712b`,
+  then reverted).
 - `test_the_leak_changes_outcomes` uses two endpoints, one dead, with a high availability
   weight. The honest arm fails over `(dead, live)` on cases 0–4 and avoids the dead
   endpoint from case 5, once it has 5 counted failures (`min_samples`). The leaking arm
@@ -801,7 +805,9 @@ runner tests trip both guards (`test_runner.py::test_runner_out_of_order_online_
 `counts_unhealth = false` the dead endpoint never enters the store, and the arm never
 learns to avoid it: `test_availability_drops_after_unhealth_failures_only` and
 `test_strategies.py::test_non_unhealth_errors_are_skipped_without_consuming_a_slot`. The
-Task 4 mutation M3, which counted every error, fails the first of these.
+Task 4 mutation M3, which counted every error (`elif True`), fails the first of these: the
+dead endpoint then appears in the snapshot, with availability 0.0015 (mutation run at
+`1a6712b`, then reverted).
 
 **One difference from production.** The gateway calls `observe_error` in the middle of a
 request, so the next hop is selected after the failed model's signal has moved. Here a
@@ -813,7 +819,9 @@ endpoint the online arm is not using, which lowers that endpoint's availability 
 In the outage runs it wasted **more** attempts than `router_online` in some runs:
 availability 1.0 at seed 2 (1 s/case) and seeds 2 and 6 (30 s/case), and availability
 2.0 at seed 6 (1 s/case) and seeds 2, 3 and 6 (30 s/case). Call it a full-information
-arm, never an upper bound.
+reference, never an upper bound. The spec was amended to say so (`92be40c`, 2026-09-22),
+and the arm notes in `run.json` / `report.md` and the code docstrings now read
+"full-information reference (not an upper bound)".
 
 ### 9.4 The case clock, and why `seconds_per_case` matters
 
@@ -930,9 +938,13 @@ request during the outage**.
 `1.0·q − 0.6·cost_norm − 0.3·lat_norm + w·availability`, where
 `cost_norm = est_cost / max est_cost in the set` and
 `lat_norm = latency_ms / 1000`. Latency is measured once an endpoint has 5 samples;
-before that it is the cheap-tier default of 200 ms. The values below were read from an
-instrumented re-run of seed 0 at `8344b21` (the router's own `ScoredCandidate` terms at
-each case's first hop):
+before that it is the cheap-tier default of 200 ms. **Where the score values come from.**
+Every per-case score, lead, availability and margin quoted in this section was printed by
+`scripts/b45_score_probe.py` (the router's own `ScoredCandidate` terms at each
+`router_online` first hop; §9.8 gives the command). Each value is labelled with its run:
+seed 0 at 1, 30 or 300 s/case, or seed 4 at 30 s/case. The run's `metrics.json` is
+byte-identical to the unprobed run's (§9.8). The bullets below are **seed 0, 1 s/case**
+(cases 10 and 15 read the same at every spacing):
 
 - Before the outage, `fast-cheap` has `cost_norm` 0.25 and a measured latency of about
   298 ms, so its non-availability score is 0.9 − 0.15 − 0.0895 = **0.6605**. `steady`
@@ -959,7 +971,8 @@ the backlog's original B45 demonstration (a dead endpoint at +0.38 ranked above 
 peer at +0.04).
 
 **Switch points (seed 0, `router_online`, first hop).** "Switch" means the first attempt
-moves from `fast-cheap` to `steady`.
+moves from `fast-cheap` to `steady`. Each column's scores come from the probe run at seed 0
+and that column's spacing.
 
 | weight | 1 s/case | 30 s/case | 300 s/case |
 |---|---|---|---|
@@ -969,7 +982,7 @@ moves from `fast-cheap` to `steady`.
 
 Each cell reads from the traces as follows.
 
-- **Stickiness is a clock-time constant, not a case count.** Once the router stops
+- **Stickiness is a clock-time constant, not a case count** (seed 0, 1 s/case). Once the router stops
   sending traffic to `fast-cheap`, it can only come back when decay lifts
   `fast-cheap`'s availability. At `w = 1` that means rising from 0.432 to above about
   0.459, the point where it overtakes `steady` (score 1.119). That takes about
@@ -977,18 +990,18 @@ Each cell reads from the traces as follows.
   is about 62 cases, longer than the rest of the suite. At 30 s/case it is 2 cases. In
   production terms, `w = 1` keeps a recovered endpoint out of rotation for about a
   minute of wall time, whatever the request rate.
-- **The return at case 20 (`w = 2`, 1 s) is a coincidence, not a recognition of
+- **The return at case 20 (`w = 2`, seed 0, 1 s) is a coincidence, not a recognition of
   recovery.** The margin is **7×10⁻⁶** score units (2.1222154 vs 2.1222083). It came
   from `steady`'s latency EWMA creeping from 586.5 to 592.6 ms plus 1 s of decay. Case 20
   just happens to be the first healthy case.
-- **The latency flip.** At `w = 2` and 30 s, `steady`'s latency flips to measured on its
+- **The latency flip** (seed 0, 30 s/case). At `w = 2`, `steady`'s latency flips to measured on its
   5th sample. That raises the non-availability lead from about 0.42 to 0.535, and
   `fast-cheap` wins case 15 (2.1655 vs 2.1256) **while still down**: a wasted attempt
   caused by the latency flip, not by availability. This is production's `min_samples`
   behaviour. An unmeasured candidate reads its tier default (200 ms here), which is
   optimistic for a 600 ms endpoint. Once measured, the healthy peer looks worse, and the
   dead endpoint looks relatively better.
-- **At 300 s,** decay between cases (factor 0.794) holds `fast-cheap`'s deficit to 0.268
+- **At 300 s** (seed 0, 300 s/case), decay between cases (factor 0.794) holds `fast-cheap`'s deficit to 0.268
   after 10 failures (the limit from §9.4 is 0.278). At `w = 2` the penalty is 0.536,
   against a lead of 0.538: the score misses by 0.0018 at case 20 at seed 0. At seeds 1
   and 6 it crosses once, **at case 20, after the outage ended**, which is a switch that
@@ -996,8 +1009,9 @@ Each cell reads from the traces as follows.
 
 **Across seeds.**
 
-- Every seed and every spacing shows the same qualitative picture as seed 0. The
-  weight-0/0.2 rows are identical.
+- **For weight 0 and 0.2**, every seed and every spacing shows the same picture as
+  seed 0: the two rows are identical, and every outage case's first attempt goes to the
+  dead endpoint. For weights 1.0 and 2.0, switch points and returns vary by seed (below).
 - `w = 2` roughly halves the wasted attempts at 1 s and 30 s per case, and pays for it
   with 35–39% higher mean chosen cost.
 - `w = 1` is the worst of the variants at 1 s/case. It switches late in the outage and
@@ -1006,12 +1020,34 @@ Each cell reads from the traces as follows.
   regret (381 ms) is worse than weight 0 (326 ms).
 - At 30 s/case, `w = 1` saves at most one attempt per run. At 5 of 10 seeds (4, 5, 7, 8,
   9) it never switches at all. At those seeds `steady` flaked inside the outage, so its
-  own measured availability fell too: at seed 4, one flake in its first 5 samples puts
-  it at 0.81. The availability term is **relative**, and a healthy peer's small-sample
+  own measured availability fell too: at seed 4 (30 s/case, probe run), one flake in its
+  first 5 samples puts it at 0.81 at case 15, where `fast-cheap` still leads by 0.220. The availability term is **relative**, and a healthy peer's small-sample
   availability is noisy.
 - Pass-rate differences between variants (0.950 vs 0.943–0.947) come from the declared
   simulated qualities (`fast-cheap` FAQ 0.97, `steady` 0.95). They are an input, not a
   finding (§6.1).
+
+**Both sides of a larger weight** (mean over seeds 0–9, `router_online`, against weight 0;
+from `choices.jsonl`, per-case chain cost and latency differences):
+
+- **The benefit is latency.** Every attempt a larger weight keeps off the dead endpoint
+  saves that attempt's failure latency. At `w = 2`, latency regret is **217 ms** at 1 s and
+  **221 ms** at 30 s per case, against **326 ms** at weight 0. Inside the outage it saves
+  about 5,400 ms (1 s) and 5,000 ms (30 s) per 30-case run. Quality does not change: failover
+  served those cases anyway.
+- **The cost is all after recovery.** Inside the outage the extra cost is **exactly 0** for
+  every weight: a failed attempt costs 0, and failover already served those cases on
+  `steady`. The whole mean-chosen-cost increase (for example +35–39% at `w = 2`) comes
+  from cases after the outage ends (cases 0–9 are identical for every weight, at every
+seed and spacing), where the router sticks to
+  `steady`, the endpoint that costs 4× as much. Those cases also give back latency: about
+  +2,000 to +2,400 ms per run at `w = 2`, about 300 ms per case served on `steady`, which
+  the net 217/221 ms already includes. At `w = 1` and 1 s/case, the stick costs more than
+  the outage saves: +2,700 ms outside, −1,000 ms inside, so latency regret is 381 ms.
+- **Both sides scale with designed values.** The saving scales with the failure latency
+  (1000 ms, declared). The cost scales with the price ratio (0.25, declared) and with how
+  long the router sticks, which is set by clock time. A cheaper failure (a fast connection
+  refusal) or a smaller price gap moves the balance. These runs measure one point.
 
 **Recommendation to the owner (a recommendation, not a config change; `config/` is
 untouched on this branch).** The simulated evidence says:
@@ -1019,15 +1055,18 @@ untouched on this branch).** The simulated evidence says:
 1. `weights.availability: 0.2` cannot move traffic off a dead endpoint that undercuts its
    peer by more than a third. Operators should not expect it to.
 2. No single weight tried is good across time scales. The weights large enough to act
-   (1.0 and 2.0 here) raised mean chosen cost by 35–44% in the runs where they moved the
-   most traffic (`w = 2` at 1 s and 30 s, and `w = 1` at 1 s). It helps only when requests
-   arrive seconds to tens of seconds apart. Its effect lags the outage by several
-   failures, and it keeps a recovered endpoint out for roughly a minute. The weight
-   needed at all depends on the price ratio of the specific pair (`w > 0.6·(1 − p)` at
-   availability 0).
+   (1.0 and 2.0 here) buy a latency saving during the outage (up to about 1 s per avoided
+   attempt, as designed here), and pay for it after recovery by sticking to the pricier
+   endpoint: +35–44% mean chosen cost in the runs where they moved the most traffic
+   (`w = 2` at 1 s and 30 s, and `w = 1` at 1 s). They help only when requests arrive
+   seconds to tens of seconds apart. Their effect lags the outage by several failures,
+   and they keep a recovered endpoint out for roughly a minute. The weight needed at all
+   depends on the price ratio of the specific pair (`w > 0.6·(1 − p)` at availability 0).
 3. So the lever for a dead endpoint is failover, which already absorbs the quality loss
    here, plus the step-7 breaker that is not built yet, or disabling the endpoint. It is
-   not a larger availability weight.
+   not a larger availability weight. That is a judgement on this evidence. An owner who
+   values the outage-time latency saving above the post-recovery cost could reasonably
+   choose otherwise.
 
 **Recommended:** keep 0.2 for now, as a ranking preference. Decide the breaker question
 with B45 in view (B45 "Related"). Revisit the weight only after a live run. Changing
@@ -1075,9 +1114,9 @@ with B45 in view (B45 "Related"). Revisit the weight only after a live run. Chan
 | The sweep makes one attempt, and the scoring cap is the deployment's | `test_endpoints.py::test_gateway_failover_is_off_and_base_untouched`, `TestDeploymentFailoverCap`; `test_strategies.py::TestAttemptCap` | Yes: `attempt_cap(harness settings)` is 1, which is pinned to show what the wrong settings object would give |
 | Failover scoring matches hand-computed chains, including an exhausted chain and the cap | `test_oracle.py::TestAttemptOutcome`, `TestFailoverAwareStrategyMetrics`; `test_strategies.py::test_cap_three_failing_candidates_is_exhausted_after_three`, `test_all_failing_router_chain_is_capped` | n/a (hand-computed) |
 | A dead endpoint never makes a strategy look cheaper (B48 (b)) | `test_oracle.py::test_dead_first_is_not_cheaper_than_live_first_b48b` | n/a |
-| Router attempt order = repeated real `Router.select(…, exclude=…)` | `test_strategies.py::TestRouterAttemptChains` | Yes: mutation M4 (`exclude=frozenset()`) repeats an endpoint |
-| No leakage in `router_online` or `router_warm_prior` | `TestOnlineArm::test_no_leakage_when_scoring_each_case`; `TestWarmPriorSignals::test_rows_from_the_scored_case_raise`; runner-level guard tests | **Yes**: `test_injected_leak_is_caught`, `test_the_leak_changes_outcomes`, mutation M2 |
-| Warm arms count only unhealth errors (B48 (c)) | `test_availability_drops_after_unhealth_failures_only`, `test_warm_signals_skips_error_rows_that_do_not_count_as_unhealth`, `test_non_unhealth_errors_are_skipped_without_consuming_a_slot` | Yes: mutation M3 |
+| Router attempt order = repeated real `Router.select(…, exclude=…)` | `test_strategies.py::TestRouterAttemptChains` | Yes: mutation M4 (`exclude=frozenset()`) failed the test, with the chain repeating `b-model` (run at `1a6712b`, then reverted) |
+| No leakage in `router_online` or `router_warm_prior` | `TestOnlineArm::test_no_leakage_when_scoring_each_case`; `TestWarmPriorSignals::test_rows_from_the_scored_case_raise`; runner-level guard tests | **Yes**: `test_injected_leak_is_caught`, `test_the_leak_changes_outcomes`, mutation M2 (`AssertionError: case 0 scored with observations from [0]`) |
+| Warm arms count only unhealth errors (B48 (c)) | `test_availability_drops_after_unhealth_failures_only`, `test_warm_signals_skips_error_rows_that_do_not_count_as_unhealth`, `test_non_unhealth_errors_are_skipped_without_consuming_a_slot` | Yes: mutation M3 (every error counted: the dead endpoint appears in the snapshot, availability 0.0015) |
 | Violations are checked on every attempt; repeats, trailing entries and endpoint ≠ served are violations | `test_oracle.py` (ineligible second attempt, violation after a success, the ruling-D tests); `test_runner.py` (entries after the served attempt exit 2) | Yes: each test injects the defect |
 | **No-failure invariant.** With no failures, availability is exactly 1.0 in every arm and every weight variant gives identical outcomes | `test_strategies.py::TestNoFailureInvariant`; `test_starter_suite.py::test_starter_run_against_healthcare_sim_is_clean` | n/a. §5.1 re-reads it at `8344b21`: starter figures unchanged |
 | The outage scenario is deterministic, and its online availability variants differ | `test_outage_scenario.py::test_outage_run_is_deterministic_clean_and_moves_the_online_variants` | The test asserts only **that** the variants differ, never in which direction (Task 5 ruling) |
@@ -1101,12 +1140,20 @@ LITELLM_LOCAL_MODEL_COST_MAP=True SP_PII_DETECTION=regex \
     --variants eval/variants/b45.yaml \
     --seed 0 --seconds-per-case 30 --out /tmp/fb-outage-s0-30
 md5sum /tmp/fb-outage-s0-30/metrics.json      # 53cc513f24785d505b52359aa8a3bce1 at 8344b21
+
+# the per-case score values quoted in §9.5 (seed 0 at 1, 30 and 300 s/case; seed 4 at 30)
+SP_PII_DETECTION=regex uv run python scripts/b45_score_probe.py \
+    --seed 0 --seconds-per-case 1 --out /tmp/b45-probe-s0-1
+# ... --seed 0 --seconds-per-case 30, --seed 0 --seconds-per-case 300, --seed 4 --seconds-per-case 30
+md5sum /tmp/b45-probe-s0-1/metrics.json        # 5409472979c3ed0f08288ed063fe69da: same as the unprobed run
 ```
 
 Write the output outside the repository, or under the gitignored `results/`. Run output
 is not committed. The first attempt of each chain is in `choices.jsonl` (`attempts[0]`
-per `strategy`, `case_id`), and switch points are read from there. The per-case score
-terms quoted in §9.5 come from a scratch instrumented re-run of the same code (the
-router's `ScoredCandidate` terms at each `router_online` first hop). They are
-reproducible, but not part of the shipped outputs: `choices.jsonl` records chains, not
-scores.
+per `strategy`, `case_id`), and switch points are read from there. `choices.jsonl` records
+chains, not scores, so the per-case score terms quoted in §9.5 come from
+`scripts/b45_score_probe.py`. It wraps `OnlineArm.choose` and
+`DefaultRoutingStrategy.rank` to log the router's own `ScoredCandidate` terms at each
+`router_online` first hop, and changes nothing else. Its `metrics.json` md5s at seed 0
+(1/30/300 s: `54094729…`, `53cc513f…`, `b08300c2…`) and seed 4 at 30 s (`887409b9…`)
+equal the unprobed runs in §9.5.

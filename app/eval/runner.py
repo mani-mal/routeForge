@@ -107,7 +107,7 @@ ARM_NOTES = {
     "router_warm_prior": (
         "router_warm_prior replays every matrix row of every earlier case "
         "(all eligible endpoints) before scoring a case: a full-information "
-        "upper bound, never the reported number."),
+        "reference (not an upper bound), never the reported number."),
     "case_order": (
         "router_online and router_warm_prior depend on the suite's case order: "
         "a case is scored with what earlier cases taught the arm, and outages "
@@ -746,7 +746,8 @@ def _report(metrics: dict, run: dict) -> str:
     lines += ["", "## How to read this", ""]
     lines.append("- **B45 (is the availability weight large enough?) is read from "
                  "`router_online:<variant>`** -- never from `router_warm_prior`, "
-                 "which is a full-information upper bound, nor `router_cold`.")
+                 "which is a full-information reference (not an upper bound), "
+                 "nor `router_cold`.")
     lines += [f"- {text}" for text in ARM_NOTES.values()]
     lines.append(f"- This run used **seconds_per_case = {_fmt(run['seconds_per_case'])}**; "
                  "the online and warm-prior arms' numbers change with it and with "
