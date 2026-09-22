@@ -81,9 +81,15 @@ A strategy now yields an **attempt order** rather than one choice.
 - The previous `router_warm` (which replayed the current case's rows) is **removed** — it leaks
   the scored outcome (B48 (a)).
 - `warm_signals` counts an error row only when `counts_unhealth` is true (B48 (c)).
-- Both non-cold arms read against a frozen clock anchored at the last applied observation
-  (existing `_FrozenReadSignalStore` pattern); observations are spaced 1 s apart by case order
-  (documented: decay depends on case count, not wall time).
+- **Case clock (amended 2026-09-22 after Task 4 review).** Both non-cold arms use one synthetic
+  clock: case `k` happens at `t = k × seconds_per_case` (observations within a case at 1 ms
+  sub-steps). When scoring case `k`, both arms **read at `t_k`** (every applied observation is
+  `< t_k`) — production reads at "now", and time passes between requests even when nothing is
+  observed. `seconds_per_case` is a run parameter (`--seconds-per-case`, default 30, recorded in
+  `run.json`). Reason: at 1 s per case the 900 s availability half-life means an endpoint that
+  recovers after an outage is never retried within a suite (~2,700 cases to recover), which would
+  bias B45 against high availability weights for a reason production does not share. **B45 is
+  reported across `seconds_per_case` ∈ {1, 30, 300}**, not at one value.
 - Weight variants: `router_online:<name>` and `router_warm_prior:<name>` (and `router_cold:<name>`).
   **B45's answer is read from `router_online:<name>`.**
 
