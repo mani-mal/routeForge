@@ -181,9 +181,18 @@ zero**. Anything else — missing, null, a string, zero, negative — is `None`.
 ever guessed.** An endpoint that publishes nothing keeps `context_window` unknown, and unknown
 is reported as absent, never as a number.
 
-`probe_endpoint` still never raises: a malformed upstream payload yields `max_model_len=None`,
-not a failed probe. Reachability and context-limit capture are independent — a probe that
-cannot parse the number is still a successful probe.
+`probe_endpoint` still never raises, and **parsing the context limit can never turn a good probe
+into a failed one**. Reachability and context capture are independent: if the slug is among the
+served ids, the probe succeeds whatever `max_model_len` says or fails to say.
+
+*Corrected 2026-09-22, before implementation.* An earlier draft of this section claimed a
+malformed upstream payload "yields `max_model_len=None`, not a failed probe". That is wrong about
+the existing code and would have been wrong to build: a payload whose `data` is not a list of
+model objects means RouteForge cannot confirm the slug is served at all, which is exactly the
+condition the probe exists to detect, and it correctly fails today. The real invariant is
+narrower and is the one tested: **a reachable endpoint that serves the slug but publishes a
+missing, null, zero, negative or unparseable `max_model_len` is still a successful probe**, with
+the limit left unknown.
 
 ### 4.2 Operator value wins, and the source is recorded
 
@@ -267,7 +276,9 @@ same honesty the P1b data-handling declarations follow (`data_handling_source`).
 10. A probe whose entry has no `max_model_len`, or a non-numeric or non-positive one, stores
     NULL — asserted per bad-value case, and no default appears anywhere.
 11. `GET /v1/models` includes `max_model_len` when known and omits the key when not.
-12. A malformed upstream `/models` payload still yields a successful probe.
+12. A reachable endpoint serving the slug with an unusable `max_model_len` still yields a
+    successful probe (`ok=True`, limit unknown). A payload that does not let RouteForge confirm
+    the slug is served remains a **failed** probe, as it is today.
 13. `probe_endpoint`'s HTTP parsing gets its first direct test (it is stubbed out everywhere
     today), via `httpx.MockTransport`.
 

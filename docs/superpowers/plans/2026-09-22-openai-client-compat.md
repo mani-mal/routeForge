@@ -681,12 +681,28 @@ async def test_probe_without_max_model_len_still_succeeds() -> None:
 
 
 @pytest.mark.anyio
-async def test_probe_survives_a_malformed_payload() -> None:
-    """A garbage body is not a failed probe -- and never raises."""
+@pytest.mark.parametrize("bad", [None, 0, -1, "very long", {"nested": 1}])
+async def test_unusable_max_model_len_does_not_fail_the_probe(bad) -> None:
+    """Parsing the limit can never turn a good probe into a failed one.
+
+    The slug IS served, so reachability is established; only the context
+    limit is unusable, and unknown is a legitimate answer (design §4.1).
+    """
+    ...  # payload = {"data": [{"id": "qwen", "max_model_len": bad}]}
+    res = await probe_endpoint("http://example.com/v1", "qwen", None)
+    assert res.ok is True
+    assert res.max_model_len is None
+
+
+@pytest.mark.anyio
+async def test_a_payload_that_hides_the_slug_is_still_a_failure() -> None:
+    """Regression guard, NOT a new behaviour: a body RouteForge cannot read
+    the served ids out of means it cannot confirm the model is served, which
+    is the condition this probe exists to detect. It must keep failing."""
     ...  # payload = {"data": "not-a-list"}
     res = await probe_endpoint("http://example.com/v1", "qwen", None)
+    assert res.ok is False
     assert res.max_model_len is None
-    assert isinstance(res.detail, str)
 
 
 @pytest.mark.anyio
@@ -699,6 +715,29 @@ async def test_probe_failure_reports_not_ok() -> None:
 Read `app/apps/probe.py` and the repo's existing async-test convention (check whether other
 tests use `@pytest.mark.anyio`, `@pytest.mark.asyncio`, or `asyncio.run`) and follow it — do not
 introduce a new async test style.
+
+**Injecting the mock transport.** `probe_endpoint` builds `httpx.AsyncClient(timeout=5)` inline.
+**Do not add a `transport=` parameter to the production signature to make it testable** — that
+leaks a test concern into a production interface. Patch the class instead, capturing the real one
+first so the lambda does not recurse:
+
+```python
+@pytest.fixture
+def mock_upstream(monkeypatch):
+    """Point `probe_endpoint`'s inline AsyncClient at a canned response."""
+    def _install(payload: object, status: int = 200) -> None:
+        transport = httpx.MockTransport(
+            lambda request: httpx.Response(status, json=payload))
+        real = httpx.AsyncClient
+        monkeypatch.setattr(
+            httpx, "AsyncClient",
+            lambda **kw: real(transport=transport, **kw))
+    return _install
+```
+
+Verify the probe still sends its `Authorization` header — add one test that asserts the header
+reaches the transport when `api_key_env` names a set environment variable, and that **no header
+is sent when the variable is unset**. Use an obviously fake value; never a real key.
 
 - [ ] **Step 2: Run to verify they fail**
 
