@@ -31,3 +31,6 @@ ui/tsconfig.tsbuildinfo
 # Local
 *.log
 scratch-nat-spike/
+
+# FeasibleRouteBench output (scripts/feasible_bench.py)
+results/

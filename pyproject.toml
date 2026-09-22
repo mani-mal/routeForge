@@ -29,6 +29,11 @@ dependencies = [
   # stored every per-app Langfuse secret key in CLEARTEXT behind one log line.
   # Secrets-at-rest must not depend on which detector an operator installed.
   "cryptography>=42",
+  # FeasibleRouteBench's json_schema grader (app/eval/graders.py) validates a
+  # completion's parsed JSON against a case's schema. Previously arrived only
+  # as a transitive of litellm/openai; declared directly so the eval harness
+  # doesn't depend on that staying true.
+  "jsonschema>=4.20",
 ]
 
 [dependency-groups]

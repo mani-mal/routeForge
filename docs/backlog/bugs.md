@@ -127,6 +127,49 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
+## B48 — FeasibleRouteBench failure injection for B45: four things it must get right first
+
+**Severity:** evaluation-validity prerequisite (no product defect; nothing on the serving
+path changes)
+**Found:** 2026-09-21, FeasibleRouteBench (P2b-1) final whole-branch review.
+**Open.**
+
+B45 can only be answered by a sweep in which endpoints actually fail (the first simulated
+run is null by construction, see the B45 update). Adding failure injection to the harness
+is the obvious next step, and done naively it would produce a confident wrong answer.
+Before any failure-injected B45 result is quoted, the harness must:
+
+- **(a) Add a prior-cases-only warm arm.** Today's `router_warm` replays every row swept so
+  far **including the current case's own rows**, so it has seen this case's outcomes on
+  every eligible endpoint. With failures injected, that is outcome leakage that inflates
+  exactly the availability effect B45 measures: the warm router would "learn" that an
+  endpoint is failing from the very call it is being scored on. A warm arm that replays
+  only cases strictly before the one being scored (or a disjoint prior sweep) is needed,
+  and it is the one to report.
+- **(b) Fix error-row $0 cost in the cost aggregates.** An error row has `cost_usd = 0.0`,
+  and `mean_chosen_cost` counts a chosen error row as 0.0. A strategy that keeps choosing
+  a dead endpoint would look *cheaper*, which skews `mean_chosen_cost` and the headline
+  saving. Error rows need their own treatment (excluded, or charged the attempted call)
+  before a failing endpoint can appear in the matrix.
+- **(c) Inject only exceptions production counts as endpoint unhealth.** Injected
+  exceptions must be types `app/gateway/gateway.py::counts_as_endpoint_unhealth` accepts
+  (no status, 5xx, 429), or the pipeline's own signal store will not record them as
+  availability failures. `strategies.warm_signals` currently counts **any** error row as
+  a failure; its error counting must be aligned with `counts_as_endpoint_unhealth`, or the
+  warm arm and production disagree on what a failure is.
+- **(d) State the single-shot vs failover modelling gap.** The oracle scores each
+  `(case, endpoint)` as a single shot (the sweep disables escalation and a pinned call
+  cannot fail over). Production fails over (`max_failover_attempts`): a request whose
+  first choice fails is usually still served, at extra latency and a wasted call. The
+  oracle therefore overstates the quality cost of picking a failing endpoint and ignores
+  the latency/cost of the failover. Either model failover in the scoring, or state the gap
+  next to every failure-injected result.
+
+Related: B45 (the question), B46 (`counts_as_endpoint_unhealth` boundary coverage),
+[`docs/research/feasible-route-bench.md`](../research/feasible-route-bench.md) §5.5 and §6.4.
+
+---
+
 ## B47 — a backend failure on a real-token stream after the client already disconnected writes no usage row at all
 
 **Severity:** low
@@ -227,6 +270,25 @@ injected endpoint failures and report the regret curve. Until then the honest op
 guidance — now in `docs/reference/routing-observability.md` — is that availability is a
 ranking preference, and the way to take a failing endpoint out of rotation is to disable
 it.
+
+> **Update 2026-09-21 (FeasibleRouteBench, P2b-1). Still open.** The instrument now
+> exists. `scripts/feasible_bench.py --variants eval/variants/b45.yaml` scores
+> `router_cold:<variant>` and `router_warm:<variant>` against the feasible oracle for any
+> weights mapping. The first run is **simulated**: starter suite, `healthcare-sim.yaml`,
+> seed 0, suite hash `3339c773…d8199`, code `e8e8682` (re-verified at `0a92a73`: every
+> figure unchanged). It gives a **null result**. All
+> four variants (availability 0.2 / 0.0 / 1.0 / 2.0) have the same pass rate (0.909),
+> cost regret (3.2e-05 USD) and floor-miss rate (0.091) as the unvaried router, in both
+> the cold and the warm arm. The formula predicts this. No sweep call failed, so
+> availability was the same for every candidate (neutral when cold, **exactly 1.0** when
+> warm: the replayed rows are successes only, from the store's start state, and decay
+> pulls toward 1.0), and a constant term cannot move a ranking. The run answers neither side of the question
+> above. What would answer it is a **failure-injected** sweep: a simulated per-endpoint
+> error rate (not built; the simulated backend never errors), or a `--live` run with a
+> deliberately failing endpoint. What that injection must get right before its result
+> can be trusted is **B48**. See
+> [`docs/research/feasible-route-bench.md`](../research/feasible-route-bench.md) §5.5 and
+> the operator guide [`docs/guides/feasible-route-bench.md`](../guides/feasible-route-bench.md).
 
 **Related.** B37 (`/health` reports a dead model as available for 22 hours) and B38
 (a failed request writes no usage row, so availability never seeds — **resolved
