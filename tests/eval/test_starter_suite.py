@@ -127,9 +127,12 @@ def test_spark_live_example_loads_only_with_live_true():
     assert digest
     assert {s.slug for s in specs} == {
         "qwen3.8-27b", "nemotron-3.5-lightning", "llama3.2:latest"}
+    ports = {"qwen3.8-27b": 8000, "nemotron-3.5-lightning": 8001,
+             "llama3.2:latest": 11434}
     for spec in specs:
         assert spec.live is not None
-        assert spec.live.endpoint == "http://<spark>:8000/v1"
+        assert spec.live.endpoint == f"http://<spark>:{ports[spec.slug]}/v1"
+        assert spec.tier == "cheap"
         assert spec.simulated is None
 
 

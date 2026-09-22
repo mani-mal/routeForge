@@ -1157,3 +1157,85 @@ chains, not scores, so the per-case score terms quoted in §9.5 come from
 `router_online` first hop, and changes nothing else. Its `metrics.json` md5s at seed 0
 (1/30/300 s: `54094729…`, `53cc513f…`, `b08300c2…`) and seed 4 at 30 s (`887409b9…`)
 equal the unprobed runs in §9.5.
+
+---
+
+## 10. First live run on the DGX Spark (2026-09-22)
+
+**What this is:** the first `--live` FeasibleRouteBench run against real on-prem endpoints: the
+starter suite (22 cases) × the three models onboarded on the owner's DGX Spark, one seed. **It is
+a signal, not a quotable result** (see §10.4). No endpoint failed, so it **does not answer B45**
+live; it did surface a routing defect, filed as backlog **B51**.
+
+### 10.1 Setup and stamp
+
+| Field | Value |
+|---|---|
+| Source | `d9906f8` (exported to `~/projects/routeForge/feasible-bench/` on the Spark; `run.json` shows `git_sha: unknown` because the export has no `.git` — the commit is recorded in that directory's `SOURCE_COMMIT`) |
+| Suite | `eval/suites/starter.jsonl`, `suite_hash` `3339c773…d8199` |
+| Endpoints | a local file mirroring the live registry, identical in content to the corrected `eval/endpoints/spark-live.example.yaml` with `<spark>` = `127.0.0.1`; `endpoints_hash` `d96737d8…31d3`; `registry_version` `81da53fced52` |
+| Routing config | `base_routing_policy_version` `a4bf5708d2db` |
+| Run | `--live --seed 0 --seconds-per-case 30`, `attempt_cap` 3, 66 calls, 2026-09-22 17:11–17:25 UTC, exit 0 |
+| Execution | a throwaway container from the deployed API image (for its Python environment only), `--network host`, `PYTHONPATH` pointed at the export; the running API, its database and the deployed checkout were not touched |
+| Outputs | on the Spark only: `feasible-bench/results/live-starter-20260922T171117Z/` (completion text not kept) |
+
+All three endpoints are `onprem`, tier `cheap`, priced $0 — exactly as onboarded — so every case's
+feasible set is all three models.
+
+### 10.2 Per-endpoint outcomes (the sweep)
+
+| Endpoint | Passed | Errors | Mean latency | Median latency | Failed on |
+|---|---|---|---|---|---|
+| `qwen3.8-27b` | 21/22 | 0 | 16.2 s | 6.9 s | 1 on-prem case |
+| `nemotron-3.5-lightning` | 18/22 | 0 | 18.4 s | 12.3 s | 3 claim summaries, 1 on-prem |
+| `llama3.2:latest` | 9/22 | 0 | 3.6 s | 2.4 s | all 10 claim summaries, 3 on-prem |
+
+Every model passed all 8 FAQ cases. The claim summaries separate them: Qwen 10/10, Nemotron 7/10,
+Llama 0/10.
+
+### 10.3 Strategies
+
+| Strategy | Pass rate | Endpoint picked (first attempt) |
+|---|---|---|
+| `router_cold` | 0.955 | Qwen ×22 |
+| `router_online` | **0.636** | Qwen ×12, Nemotron **×5**, Llama **×5** |
+| `router_warm_prior` | 0.955 | Qwen ×22 |
+| `cheapest`, `best_published_quality` | 0.409 | Llama ×22 |
+
+`violations_total` 0, `wasted_attempts` 0 for every arm (no failures), headline **not comparable**
+(pass rates differ and the reference cost is $0).
+
+**Reading it correctly:**
+
+- **`router_cold`'s 95% is a tie-break, not a judgement.** All three candidates are the same price
+  ($0), the same tier, and have no measured quality (tier default for every onboarded model), and
+  an empty store gives them the same latency default. The router has nothing that distinguishes
+  them; Qwen wins the tie. The baselines break the same tie toward Llama, hence 41%.
+- **`router_online`'s drop is the finding (B51).** Its store measures latency from its own calls. A
+  measured Qwen (≈16 s) competes against unmeasured peers scored at the `cheap` tier default of
+  200 ms (`config/routing.yaml:23`) — ~80× faster on paper — so the arm moves traffic to them. It
+  sent **exactly** `min_samples` (5) requests to each unmeasured model before their real latency
+  counted; after that, every model is slower than the `max_latency_norm` cap (3 s), they tie on
+  latency, and the arm returns to Qwen. With no quality signal, some of that warm-up traffic landed
+  on Llama for claim summaries it fails every time. **Mechanism inferred** from the pick counts
+  matching `min_samples` exactly and from the config; not traced call by call.
+- **`router_warm_prior` stayed on Qwen** because it replays every earlier row for all three models,
+  so all are measured early, all hit the latency cap, and the tie-break holds.
+
+### 10.4 Limits
+
+- One seed, 22 cases, live latencies (possibly affected by concurrent Qwen Code use on the same
+  GPU). A signal to investigate, not a result to quote.
+- No endpoint failed, so availability and failover were not exercised: **B45 remains unanswered
+  live.** Answering it needs a real outage (e.g. stopping one model's server mid-run — only with
+  the owner's agreement, since the same servers serve Qwen Code).
+- Quality is deterministic-grader pass/fail on synthetic cases; the claim-summary gap reflects
+  these graders, not a general capability ranking.
+
+### 10.5 Consequences
+
+- Backlog **B51**: the optimistic unmeasured-latency default and the latency cap make every restart
+  or onboarding pay ~5 requests per model of quality-blind exploration. Fix directions are listed
+  there; the durable one is a measured quality signal (P2b-2 → P2b-3).
+- The example endpoint file shipped in P2b-1 put all three models on `:8000` with three different
+  tiers; it is corrected (per-model ports, all `cheap`), and its test now pins the ports.

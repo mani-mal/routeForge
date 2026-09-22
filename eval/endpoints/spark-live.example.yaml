@@ -11,8 +11,13 @@
 #        --suite eval/suites/starter.jsonl \
 #        --endpoints eval/endpoints/spark-live.yaml --live
 #
-# All three models are served through the Spark's single OpenAI-compatible
-# endpoint (one vLLM/Dynamo server, model selected by name) -- provider
+# Each model has its OWN OpenAI-compatible server on the Spark (corrected
+# 2026-09-22 after the first live run; the earlier version put all three on
+# :8000): qwen3.8-27b -> vLLM on :8000, nemotron-3.5-lightning -> a second
+# vLLM on :8001, llama3.2:latest -> ollama on :11434 (no bearer key). All
+# three are onboarded in the live registry as tier `cheap`, so they are
+# `cheap` here too -- a benchmark should mirror the deployment it measures.
+# Provider
 # "onprem", price $0/1M, matching docs/guides/onboarding-models.md's own
 # onboarding example (`"price_input": 0, "price_output": 0` for a freshly
 # onboarded on-prem endpoint -- see that doc's (b2) and its onboarding
@@ -24,7 +29,7 @@
 endpoints:
   - slug: qwen3.8-27b
     provider: onprem
-    tier: mid
+    tier: cheap
     price: {input: 0, output: 0}
     region: us
     prompt_retention: none
@@ -35,13 +40,13 @@ endpoints:
 
   - slug: nemotron-3.5-lightning
     provider: onprem
-    tier: frontier
+    tier: cheap
     price: {input: 0, output: 0}
     region: us
     prompt_retention: none
     accepts_raw_sensitive: true
     live:
-      endpoint: "http://<spark>:8000/v1"
+      endpoint: "http://<spark>:8001/v1"
       api_key_env: SP_ONPREM_API_KEY
 
   - slug: "llama3.2:latest"
@@ -52,5 +57,4 @@ endpoints:
     prompt_retention: none
     accepts_raw_sensitive: true
     live:
-      endpoint: "http://<spark>:8000/v1"
-      api_key_env: SP_ONPREM_API_KEY
+      endpoint: "http://<spark>:11434/v1"

@@ -127,6 +127,45 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
+## B51 — unmeasured models look ~80× faster than measured reasoning models, so every restart or onboarding pays a quality-blind warm-up
+
+**Severity:** medium (routing quality; no privacy or eligibility impact — a signal can only reorder)
+**Found:** 2026-09-22, first live FeasibleRouteBench run on the Spark
+([`docs/research/feasible-route-bench.md`](../research/feasible-route-bench.md) §10). **Open.**
+
+Two P2a signal defaults interact badly with slow reasoning models:
+
+1. **Optimistic unmeasured latency.** Until a model has `signals.min_samples` (5) observations,
+   the router scores it at the tier default — `tier_latency_ms.cheap: 200` ms
+   (`config/routing.yaml:23`). On the Spark the three `cheap` models actually take 3.6 s
+   (Llama), 16.2 s (Qwen) and 18.4 s (Nemotron) mean. A measured model therefore looks
+   ~80× slower than any unmeasured peer, and the router shifts traffic to unmeasured models until
+   each has 5 samples.
+2. **The latency cap flattens them afterwards.** `max_latency_norm: 3.0` caps the latency term at
+   3 s. Every model here is slower than that, so once measured they all score the same on latency
+   and latency stops distinguishing them at all.
+
+**Observed** (live run, seed 0, 22 cases, one run — a signal, not a quotable result): the
+learning arm `router_online` sent **exactly 5** requests to each unmeasured model (Nemotron 5,
+Llama 5) before returning to Qwen, and its pass rate fell to 64% versus 95% without
+measurements, because some of that warm-up traffic landed on Llama, which failed every claim
+summary. The mechanism is **inferred** from the pick counts matching `min_samples` exactly and
+from the config values above; it has not been traced call by call.
+
+**Why it matters in production.** Every API restart (the signal store replays the observation log,
+but a model with < 5 logged observations is still unmeasured) and every newly onboarded model
+costs ~5 requests per model of latency-driven exploration that ignores whether the model can do
+the task. There is no measured quality signal to hold it back (quality is a tier default for every
+onboarded model).
+
+**Fix directions (owner decision; none built):**
+- Seed an unmeasured model's latency from its onboarding probe (the probe already makes a real
+  call) instead of the tier default, or make the tier default pessimistic rather than optimistic.
+- Revisit `max_latency_norm` for deployments whose models are all multi-second.
+- The durable fix is a real quality signal (P2b-2 outcome records → P2b-3 learning), so a fast
+  model that fails a workload is not preferred for it.
+- Measure any change with FeasibleRouteBench live before adopting it.
+
 ## B50 — `/v1/models` doesn't report each model's context limit, so clients hand-set it
 
 **Severity:** low (improvement, not a defect)
