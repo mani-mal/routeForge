@@ -13,7 +13,7 @@ failure:
 - an **outage**: every call in an `OutageSpan` (a case-index range) fails,
   connection-refused shape (`status_code=None`);
 - a **flake**: an independent per-call draw against `error_rate`, upstream
-  4xx-refusal shape (`status_code=503`).
+  5xx-refusal shape (`status_code=503`).
 Outage is checked before the flake draw. A failed call still records its
 messages in `received` -- the model was contacted before it failed.
 

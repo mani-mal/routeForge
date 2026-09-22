@@ -17,8 +17,11 @@ case:
 
 After the last case it computes the feasible-oracle metrics (`metrics.json`),
 a human report (`report.md`) and a run stamp (`run.json`). Exit codes: `0` ok,
-`1` load/usage error, `2` policy violation, empty-set mismatch, post-gate
-widening or pinned-served mismatch (`_exit_code`).
+`1` load/usage error (including a `seconds_per_case` too small for this run's
+endpoint count or attempt cap -- `strategies.min_seconds_per_case`), `2`
+policy violation, empty-set mismatch, post-gate widening, pinned-served
+mismatch (`_exit_code`), or a signal arm's own leak guard firing
+(`strategies.LeakageError`, an integrity bug -- `run_bench`).
 
 `metrics.json` carries NO timestamps, paths or timings -- for a fixed `--seed`
 a simulated run's `metrics.json` is byte-identical run to run (global
@@ -40,7 +43,7 @@ import yaml
 from app.apps.privacy import AppPrivacyProfile
 from app.compression.ccr import CCRStore
 from app.config.loader import load_settings
-from app.errors import BackendUnavailable, ContextWindowExceeded
+from app.errors import BackendUnavailable, ContextWindowExceeded, NoEligibleCandidate
 from app.eval.cases import Case, SuiteError, load_suite
 from app.eval.endpoints import (
     EndpointFileError,
@@ -64,6 +67,7 @@ from app.eval.simulated import SimulatedBackend
 from app.eval.strategies import (
     DEFAULT_SECONDS_PER_CASE,
     AttemptStrategy,
+    LeakageError,
     OnlineArm,
     StrategyInput,
     attempt_cap,
@@ -71,6 +75,7 @@ from app.eval.strategies import (
     check_seconds_per_case,
     cheapest_attempts,
     fixed_attempts,
+    min_seconds_per_case,
     router_attempts,
     variant_settings,
     warm_prior_signals,
@@ -239,7 +244,7 @@ _GATEWAY_EXHAUSTED_TYPES = (BackendUnavailable, ContextWindowExceeded)
 
 def _backend_exception(exc: BaseException) -> BaseException | None:
     """The real backend exception behind `exc`, or `None` when `exc` makes no
-    endpoint claim at all (B48c fix round 2; spec §4).
+    endpoint claim at all (B48c fix round 2; final review F1).
 
     Exactly one hop, via `__cause__` only, and only when `exc` is itself one
     of `Gateway._exhausted`'s two return types (`app/gateway/gateway.py`),
@@ -249,8 +254,16 @@ def _backend_exception(exc: BaseException) -> BaseException | None:
     doing so previously overshot the exception `counts_as_endpoint_unhealth`
     is meant to classify. Anything else (`PipelineRejected`,
     `NoEligibleCandidate`, `PolicyGateError`, ...) never reached gateway
-    exhaustion and says nothing about endpoint health."""
-    if isinstance(exc, _GATEWAY_EXHAUSTED_TYPES) and exc.__cause__ is not None:
+    exhaustion and says nothing about endpoint health.
+
+    One `__cause__` shape is a false positive rather than a deeper chain:
+    `Gateway.run` also raises `_exhausted(...) from exc` when a `failed_models`
+    exclusion makes `Router.select` itself raise `NoEligibleCandidate` (every
+    reachable candidate already excluded) -- that cause is the router saying
+    "no candidate left", not a backend's verdict on the last one it tried, so
+    it is treated the same as no cause at all."""
+    if (isinstance(exc, _GATEWAY_EXHAUSTED_TYPES) and exc.__cause__ is not None
+            and not isinstance(exc.__cause__, NoEligibleCandidate)):
         return exc.__cause__
     return None
 
@@ -370,6 +383,17 @@ async def run_bench(suite_path: str, endpoints_path: str, *, out_dir: str,
         # The deployment's failover cap, read from `base` -- the harness
         # settings zero it so each sweep call is single-shot (ruling C).
         max_attempts = attempt_cap(base)
+        # A case may apply up to one sub-step per endpoint swept (matrix rows)
+        # or per attempt an online arm makes, whichever is larger -- fail fast
+        # here (final review F3) rather than let `_case_time` raise mid-run.
+        n_substeps = max(len(specs), max_attempts)
+        floor = min_seconds_per_case(n_substeps)
+        if not seconds_per_case > floor:
+            raise BenchError(
+                f"seconds_per_case={seconds_per_case} is too small for this run: "
+                f"{n_substeps} sub-step(s) may be applied within one case "
+                f"(max(len(endpoints)={len(specs)}, attempt_cap={max_attempts})), "
+                f"so seconds_per_case must be > {floor}")
         variants = _load_variants(variants_path)
         slugs = {s.slug for s in specs}
         if fixed is not None and fixed not in slugs:
@@ -397,14 +421,23 @@ async def run_bench(suite_path: str, endpoints_path: str, *, out_dir: str,
         print(f"feasible_bench: load error: {exc}", file=sys.stderr)
         return RunResult(exit_code=1, out_dir=out_dir, metrics={})
     try:
-        return await _run_loaded(
-            cases=cases, specs=specs, settings=settings, registry=registry,
-            detector=detector, variant_cfgs=variant_cfgs,
-            max_attempts=max_attempts, seconds_per_case=seconds_per_case,
-            out_dir=out_dir, seed=seed,
-            live=live, keep_text=keep_text, parity_tol=parity_tol, fixed=fixed,
-            stamp={"suite_hash": suite_hash, "endpoints_hash": endpoints_hash,
-                   "args": args, "started_at": started})
+        try:
+            return await _run_loaded(
+                cases=cases, specs=specs, settings=settings, registry=registry,
+                detector=detector, variant_cfgs=variant_cfgs,
+                max_attempts=max_attempts, seconds_per_case=seconds_per_case,
+                out_dir=out_dir, seed=seed,
+                live=live, keep_text=keep_text, parity_tol=parity_tol, fixed=fixed,
+                stamp={"suite_hash": suite_hash, "endpoints_hash": endpoints_hash,
+                       "args": args, "started_at": started})
+        except LeakageError as exc:
+            # A signal arm's own leak guard fired (B48 global "no leakage"
+            # constraint) -- a harness integrity bug, not a policy violation
+            # (final review F2): report it the same way a load error is
+            # reported, distinct wording, exit code 2 like every other
+            # integrity failure (`_exit_code`).
+            print(f"feasible_bench: integrity error: {exc}", file=sys.stderr)
+            return RunResult(exit_code=2, out_dir=out_dir, metrics={})
     finally:
         await db.dispose()
 

@@ -328,8 +328,8 @@ the production weight is a decision for the owner, not something this tool does.
 | Code | Meaning |
 |---|---|
 | `0` | ok |
-| `1` | load or usage error: a bad suite, endpoint file or variants file, an unknown `--fixed` slug, a missing detector, a declined `--live` prompt, or **a gate exception on any case** |
-| `2` | policy violation or integrity failure: any strategy with `violation_rate > 0`, any sweep call (or empty-set probe) that served an ineligible model, any post-gate eligible set that is not a subset of the pre-gate set, any `expect_empty` disagreement, or any `pinned_mismatches` (a pinned call served another endpoint; impossible by construction, so any occurrence is a harness integrity bug) |
+| `1` | load or usage error: a bad suite, endpoint file or variants file, an unknown `--fixed` slug, a missing detector, a declined `--live` prompt, a `--seconds-per-case` too small for this run's endpoint count or attempt cap, or **a gate exception on any case** |
+| `2` | policy violation or integrity failure: any strategy with `violation_rate > 0`, any sweep call (or empty-set probe) that served an ineligible model, any post-gate eligible set that is not a subset of the pre-gate set, any `expect_empty` disagreement, any `pinned_mismatches` (a pinned call served another endpoint; impossible by construction, so any occurrence is a harness integrity bug), or a signal arm's own leak guard firing (`LeakageError` -- an arm was asked to score a case out of order; also a harness integrity bug) |
 
 `sweep_generate_mismatches` does not by itself change the exit code: those rows are
 already error rows, scored as failed calls rather than credited to the endpoint.

@@ -454,6 +454,19 @@ def check_seconds_per_case(seconds_per_case: float) -> float:
     return value
 
 
+def min_seconds_per_case(n_substeps: int) -> float:
+    """The largest `seconds_per_case` value at which `_case_time` is
+    guaranteed to refuse a case needing `n_substeps` applied observations
+    (final review F3): `_case_time` refuses sub-step `j` once `j *
+    _SUBSTEP_S >= seconds_per_case`, so a case that may apply up to
+    `n_substeps` observations (one per endpoint swept, or one per attempt an
+    online arm makes) needs `seconds_per_case > n_substeps * _SUBSTEP_S`. The
+    runner calls this once `len(specs)` and `max_attempts` are both known, so
+    a too-small `--seconds-per-case` fails fast at load time (exit 1) instead
+    of mid-run."""
+    return _SUBSTEP_S * n_substeps
+
+
 def case_read_time(case_index: int, seconds_per_case: float) -> float:
     """`t_k`: when case `k` is scored on the synthetic case clock."""
     return case_index * seconds_per_case

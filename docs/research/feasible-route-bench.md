@@ -962,7 +962,7 @@ byte-identical to the unprobed run's (§9.8). The bullets below are **seed 0, 1 
 
 **The general statement.** Take two candidates with equal quality and equal latency
 terms, where the dead one costs a fraction `p` of its peer's estimated cost (the peer is
-the set maximum). The dead one's lead is `0.6·(1 − p)`. It loses at weight `w` only if
+the set maximum) and the peer's availability reads 1.0. The dead one's lead is `0.6·(1 − p)`. It loses at weight `w` only if
 `w·(1 − availability) > 0.6·(1 − p)`. Even when it is perfectly dead, that requires
 `p > 1 − w/0.6`. **At `w = 0.2`, a dead endpoint loses only if its price is more than
 about 67% (2/3) of its peer's**, a cost-norm gap under 1/3. In this scenario `p = 0.25`.

@@ -296,10 +296,11 @@ def test_online_arm_is_built_on_harness_settings_with_the_deployment_cap(
     assert built == [([], 3, {"seconds_per_case": 7.5})]
 
 
-def test_runner_out_of_order_online_call_trips_the_leak_guard(tmp_path, monkeypatch):
+def test_runner_out_of_order_online_call_trips_the_leak_guard(tmp_path, monkeypatch, capsys):
     """Ruling B: were the runner to score a case it has already observed,
-    the arm's own guard fires (the run does not silently leak)."""
-    from app.eval.strategies import LeakageError
+    the arm's own guard fires (the run does not silently leak) -- caught and
+    reported by `run_bench` itself (final review F2): exit code 2, an
+    `integrity error` line on stderr, no exception escapes."""
     real = runner.OnlineArm
 
     class OutOfOrder(real):
@@ -309,17 +310,13 @@ def test_runner_out_of_order_online_call_trips_the_leak_guard(tmp_path, monkeypa
 
     monkeypatch.setattr(runner, "OnlineArm", OutOfOrder)
     suite, eps = _write_inputs(tmp_path, _OUTAGE_CASES, _OUTAGE_ENDPOINTS)
-    try:
-        _run(suite, eps, tmp_path / "out")
-    except LeakageError:
-        pass
-    else:
-        raise AssertionError("an out-of-order online call was not refused")
+    result = _run(suite, eps, tmp_path / "out")
+    assert result.exit_code == 2
+    assert "feasible_bench: integrity error:" in capsys.readouterr().err
 
 
 def test_runner_passing_the_scored_cases_rows_to_warm_prior_is_refused(
-        tmp_path, monkeypatch):
-    from app.eval.strategies import LeakageError
+        tmp_path, monkeypatch, capsys):
     real = runner.warm_prior_signals
 
     def leaky(settings, rows, *, case_index, scoring_case, seconds_per_case):
@@ -330,12 +327,9 @@ def test_runner_passing_the_scored_cases_rows_to_warm_prior_is_refused(
 
     monkeypatch.setattr(runner, "warm_prior_signals", leaky)
     suite, eps = _write_inputs(tmp_path, _OUTAGE_CASES, _OUTAGE_ENDPOINTS)
-    try:
-        _run(suite, eps, tmp_path / "out")
-    except LeakageError:
-        pass
-    else:
-        raise AssertionError("prior rows of the scored case were not refused")
+    result = _run(suite, eps, tmp_path / "out")
+    assert result.exit_code == 2
+    assert "feasible_bench: integrity error:" in capsys.readouterr().err
 
 
 def test_nonpositive_seconds_per_case_exits_1(tmp_path):
@@ -344,6 +338,19 @@ def test_nonpositive_seconds_per_case_exits_1(tmp_path):
         out = tmp_path / f"out{bad}"
         assert _run(suite, eps, out, seconds_per_case=bad).exit_code == 1
         assert not out.exists()
+
+
+def test_seconds_per_case_too_small_for_endpoint_count_exits_1(tmp_path, capsys):
+    """Final review F3: a positive but tiny `seconds_per_case` leaves no room
+    for this run's sub-step observations (one per endpoint swept or per
+    attempt an online arm makes) -- caught at load time, before any case
+    runs, rather than raised mid-run by `strategies._case_time`."""
+    suite, eps = _write_inputs(tmp_path)
+    out = tmp_path / "out"
+    result = _run(suite, eps, out, seconds_per_case=0.001)
+    assert result.exit_code == 1
+    assert not out.exists()
+    assert "seconds_per_case" in capsys.readouterr().err
 
 
 # --------------------------------------------------------------------------
@@ -576,6 +583,17 @@ class TestBackendExceptionUnitLevel:
 
     def test_gateway_exhaustion_with_no_cause_yields_no_endpoint_verdict(self):
         assert runner._backend_exception(BackendUnavailable("exhausted")) is None
+
+    def test_exhaustion_caused_by_no_eligible_candidate_yields_no_endpoint_verdict(self):
+        """`Gateway.run` raises `_exhausted(...) from exc` when a
+        `failed_models` exclusion makes `Router.select` itself raise
+        `NoEligibleCandidate` (every reachable candidate already excluded).
+        That cause is the router saying "no candidate left", not a verdict
+        on the last backend it tried -- final review F1."""
+        outer = BackendUnavailable("exhausted", attempted_models=("m",))
+        outer.__cause__ = NoEligibleCandidate("no candidates")
+
+        assert runner._backend_exception(outer) is None
 
 
 def test_outage_row_records_endpoint_unhealth_and_failure_latency(tmp_path):
