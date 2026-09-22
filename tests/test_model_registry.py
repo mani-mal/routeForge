@@ -216,3 +216,18 @@ def test_registry_version_changes_when_a_model_is_added():
             price_input=0.1, price_output=0.1, endpoint="http://x/v1",
             enabled=True)})).registry_version()
     assert v_empty != v_one
+
+
+def test_effective_pool_carries_context_window():
+    """B50: a known context window reaches the PoolCandidate untouched; an
+    unknown one stays None, never a guess."""
+    reg = _run(_reg_with({
+        "known-ctx": dict(display_name="K", provider="onprem", tier="mid",
+            price_input=0.1, price_output=0.1, endpoint="http://k/v1",
+            enabled=True, context_window=8192),
+        "unknown-ctx": dict(display_name="U", provider="onprem", tier="mid",
+            price_input=0.1, price_output=0.1, endpoint="http://u/v1",
+            enabled=True, context_window=None)}))
+    by_name = {c.name: c for c in reg.effective_pool()}
+    assert by_name["known-ctx"].context_window == 8192
+    assert by_name["unknown-ctx"].context_window is None

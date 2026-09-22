@@ -6,9 +6,12 @@ exactly the set of ids this app may send as `model` on /v1/chat/completions:
 the same placement and allowlist rules the pipeline enforces on a pinned
 model, so a listed id is never rejected for policy and an unlisted one is.
 """
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 
+from app.apps import store
 from app.apps.policy import AppPolicyView
 from app.config.loader import load_settings
 from app.main import create_app
@@ -93,3 +96,31 @@ def test_cloud_models_listed_only_when_residency_allows():
     assert names(AppPolicyView(residency="onprem_only")) == {"local-8b", "local-32b"}
     assert names(AppPolicyView(residency="any",
                                allowed_providers=frozenset({"azure"}))) == {"azure-gpt-mid"}
+
+
+def _set_context_window(client: TestClient, slug: str, context_window: int | None) -> None:
+    """Update one onboarded row's context_window and refresh the app's live
+    registry, the same way `POST/PUT /admin/infra/models` does."""
+    async def go():
+        async with client.app.state.db.session() as session:
+            await store.upsert_onboarded(session, slug, context_window=context_window)
+            await session.commit()
+        await client.app.state.registry.refresh(client.app.state.db)
+    asyncio.run(go())
+
+
+def test_models_list_publishes_max_model_len(client):
+    """A known context window reaches the client under vLLM's own field name,
+    which is the name clients already read (B50)."""
+    _set_context_window(client, "local-8b", 131072)
+    r = client.get("/v1/models", headers=_DEMO)
+    entry = next(m for m in r.json()["data"] if m["id"] == "local-8b")
+    assert entry["max_model_len"] == 131072
+
+
+def test_models_list_omits_unknown_max_model_len(client):
+    """Unknown is absent, never a guess and never zero."""
+    _set_context_window(client, "local-32b", None)
+    r = client.get("/v1/models", headers=_DEMO)
+    entry = next(m for m in r.json()["data"] if m["id"] == "local-32b")
+    assert "max_model_len" not in entry

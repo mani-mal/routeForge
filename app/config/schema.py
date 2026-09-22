@@ -36,6 +36,12 @@ class PoolCandidate(BaseModel):
     # field -> "model" | "provider_default" | "unknown". Populated only by
     # effective_pool()'s resolution; empty on a raw/unresolved PoolCandidate.
     data_handling_source: dict[str, str] = Field(default_factory=dict)
+    # The model's real context window in tokens, when known. Populated for
+    # onboarded rows from the endpoint's own `max_model_len` or the operator's
+    # value (B50); always None for static YAML cloud entries, which declare
+    # none. Published on GET /v1/models, never used to gate a request --
+    # RouteForge still does not pre-check prompt size (see B36).
+    context_window: int | None = None
 
 
 class PromptOptCfg(BaseModel):

@@ -178,7 +178,10 @@ async def list_models(request: Request) -> dict:
     """OpenAI model list, scoped to the calling application: exactly the ids it
     may send as `model` on /v1/chat/completions. App-token authenticated and
     fail closed, like inference. `created` is 0: onboarding time is not part of
-    the OpenAI contract clients rely on."""
+    the OpenAI contract clients rely on. Each entry also carries `max_model_len`
+    (vLLM's own field name, the one clients already read) when the model's real
+    context window is known (B50) -- omitted entirely, never null or 0, when
+    unknown."""
     auth = await _authenticate(request)
     if auth is None:
         raise ApiError(401, "invalid or missing API token", code=CODE_INVALID_API_KEY)
@@ -186,9 +189,17 @@ async def list_models(request: Request) -> dict:
     registry = request.app.state.registry
     await registry.ensure_loaded(request.app.state.db)
     models = requestable_models(request.app.state.settings, registry, tenant, app_policy)
-    return {"object": "list",
-            "data": [{"id": c.name, "object": "model", "created": 0,
-                      "owned_by": c.provider} for c in models]}
+    data = []
+    for c in models:
+        entry = {"id": c.name, "object": "model", "created": 0,
+                 "owned_by": c.provider}
+        # vLLM's field name: the one clients already read. Omitted entirely
+        # when unknown -- a guessed context window overflows the request it
+        # was meant to size (B50).
+        if c.context_window:
+            entry["max_model_len"] = c.context_window
+        data.append(entry)
+    return {"object": "list", "data": data}
 
 
 def _resolve_stream_mode(body: ChatRequest, app_policy: AppPolicyView, s) -> str | None:
