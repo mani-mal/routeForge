@@ -339,3 +339,32 @@ def test_plain_http_exception_on_v1_still_renders_an_envelope(client) -> None:
     assert set(err) == {"message", "type", "param", "code"}
     assert err["code"] is None
     assert err["type"] == "invalid_request_error"
+
+
+def test_request_validation_error_renders_openai_envelope_and_keeps_422(client) -> None:
+    """The `RequestValidationError` half of B49: a malformed body must still
+    render the OpenAI envelope shape, and the status must stay FastAPI's
+    422 -- spec §3.2 is explicit that this is *not* changed to OpenAI's 400,
+    which would be a behaviour change beyond rendering."""
+    r = client.post("/v1/chat/completions", headers=_AUTH,
+                    json={"messages": "not-a-list"})
+    assert r.status_code == 422
+    err = v1_error(r)
+    assert set(err) == {"message", "type", "param", "code"}
+    assert err["code"] == "invalid_request"
+    assert err["type"] == "invalid_request_error"
+    assert err["param"] is None
+    assert "messages" in err["message"]
+
+
+def test_request_validation_error_does_not_echo_the_rejected_value(client) -> None:
+    """FastAPI's default handler echoes the rejected input (`exc.errors()`
+    includes `input`); ours emits only `loc` + `msg`. That is a real privacy
+    improvement -- an invalid field can carry sensitive text -- and nothing
+    currently stops a future edit from regressing it back to leaking the
+    value, so pin it with a distinctive marker."""
+    r = client.post("/v1/chat/completions", headers=_AUTH,
+                    json={"messages": [{"role": "user", "content": "hi"}],
+                          "max_tokens": "supersecretvalue"})
+    assert r.status_code == 422
+    assert "supersecretvalue" not in r.text

@@ -16,7 +16,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.admin_routes import admin_router
 from app.api.bus import DecisionBus
-from app.api.openai_errors import error_payload
+from app.api.openai_errors import CODE_INVALID_REQUEST, error_payload
 from app.api.pg_bridge import PgDecisionBridge
 from app.apps.admin_auth import SessionStore
 from app.apps.bootstrap import seed_all
@@ -369,7 +369,7 @@ def create_app() -> FastAPI:
         return JSONResponse(
             status_code=422,
             content=error_payload(422, f"{loc}: {message}" if loc else message,
-                                  code="invalid_request"))
+                                  code=CODE_INVALID_REQUEST))
 
     # Dev convenience: allow the Vite dev server to call the API directly.
     # Production serves the UI same-origin, where CORS is a no-op.

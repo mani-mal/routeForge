@@ -925,6 +925,29 @@ Call it in both `onboard_model` and `edit_onboarded_model`, passing the probe's
 Note the probe runs **before** the row is written in both handlers — confirm the ordering when
 you edit, and keep it.
 
+**Amended 2026-09-22, after the Task 5 review round 1 (see spec §4.2, commit `3e85d98`).** The
+`_resolved_context_window` shown above — "any populated value wins, full stop" — is superseded.
+It looks safe but destroys the provenance the column exists to record: the console's edit form
+pre-fills from the stored row and resubmits the whole body on every save, so a *probed* number
+comes back as an explicit `body.context_window` and the naive rule relabels it `"operator"`
+although no human typed it. One edit of any onboarded model and every probed value in the fleet
+reads as operator-asserted.
+
+The shipped rule instead keys provenance on the **value**, not on whether the field was
+populated: a submitted value that equals what RouteForge would itself have produced — the
+freshly probed `max_model_len`, or (when this probe learned nothing new) an existing row's own
+value whose stored source was already `"probed"` — stays `"probed"`. Any other submitted value is
+`"operator"`. This means the real signature takes a third parameter, `existing`, so the function
+can compare against the row's prior source:
+
+```python
+def _resolved_context_window(
+        body: OnboardIn, probed: int | None, existing) -> tuple[int | None, str | None]:
+```
+
+See `app/api/admin_routes.py`'s `_resolved_context_window` for the shipped implementation and
+docstring; do not reintroduce the two-parameter version above.
+
 - [ ] **Step 5: Add the migration**
 
 In `scripts/migrate_app_policies.py`, append to `MODEL_COLUMNS` (declared at ~:87 as

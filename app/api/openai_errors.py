@@ -12,7 +12,8 @@ Codes come in two kinds, and the difference is deliberate:
   `invalid_value` -- which clients already branch on.
 * RouteForge's own -- `no_eligible_model`, `response_failed_verification`,
   `streaming_not_supported`, `backend_unavailable`, `policy_unavailable`,
-  `internal_error` -- for conditions OpenAI has no equivalent for.
+  `internal_error`, `invalid_request` -- for conditions OpenAI has no
+  equivalent for.
 
 A code is never invented to impersonate an OpenAI condition that did not
 occur: a policy rejection is not dressed up as a quota error.
@@ -40,6 +41,7 @@ CODE_STREAMING_NOT_SUPPORTED = "streaming_not_supported"
 CODE_BACKEND_UNAVAILABLE = "backend_unavailable"
 CODE_POLICY_UNAVAILABLE = "policy_unavailable"
 CODE_INTERNAL_ERROR = "internal_error"
+CODE_INVALID_REQUEST = "invalid_request"
 
 
 def error_type_for_status(status: int) -> str:

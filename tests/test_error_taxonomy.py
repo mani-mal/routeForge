@@ -60,3 +60,13 @@ def test_admin_errors_keep_the_detail_shape(client) -> None:
     r = client.get("/admin/infra/models")
     assert r.status_code in (401, 403)
     assert "detail" in r.json() and "error" not in r.json()
+
+
+def test_api_errors_keep_the_detail_shape(client) -> None:
+    """Spec §5 invariant 3 names /admin/* AND /api/* -- the console's own
+    surface is admin-cookie-gated (`Depends(require_admin)` on the whole
+    `/api` router), so an unauthenticated call errors the same way and must
+    stay `detail`-shaped too, not the /v1/* OpenAI envelope."""
+    r = client.get("/api/stats")
+    assert r.status_code in (401, 403)
+    assert "detail" in r.json() and "error" not in r.json()

@@ -37,8 +37,8 @@ class _OnboardedRow:
     # OnboardedModel.price_cached_input.
     price_cached_input: float | None = None
     # Real context window in tokens, when known (B50). None means unknown --
-    # never a guessed default. Task 5's own value wins over a probed one;
-    # `effective_pool()` carries it onto the candidate untouched.
+    # never a guessed default. An operator's explicit value wins over a
+    # probed one; `effective_pool()` carries it onto the candidate untouched.
     context_window: int | None = None
 
 

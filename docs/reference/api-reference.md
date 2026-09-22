@@ -341,8 +341,9 @@ Every error the inference endpoint can return:
 `invalid_value` are **OpenAI's own codes** — the ones a client's existing
 `except openai.BadRequestError` branches already look for. `no_eligible_model`,
 `response_failed_verification`, `streaming_not_supported`,
-`backend_unavailable`, `policy_unavailable` and `internal_error` are
-**routeForge's own** — conditions OpenAI has no equivalent for. routeForge
+`backend_unavailable`, `policy_unavailable`, `internal_error` and
+`invalid_request` are **routeForge's own** — conditions OpenAI has no
+equivalent for. routeForge
 never reuses an OpenAI code for a condition OpenAI does not have (a policy
 rejection is never dressed up as `insufficient_quota`, for example). An
 `HTTPException` raised on `/v1/*` with no code registered for it still renders

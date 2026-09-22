@@ -206,7 +206,7 @@ function ModelFields({
           <input
             type="number"
             step="1"
-            min={0}
+            min={1}
             value={fields.contextWindow}
             onChange={(e) => set({ contextWindow: e.target.value })}
             placeholder="(none)"

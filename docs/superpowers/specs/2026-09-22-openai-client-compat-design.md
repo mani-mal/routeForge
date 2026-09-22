@@ -285,9 +285,15 @@ before the image is rolled**, following the repo's established practice: appende
 `MODEL_COLUMNS` in `scripts/migrate_app_policies.py` and to the migration table in
 `docs/reference/per-app-config.md`.
 
-Failure mode if skipped: every onboarded-model read fails, which takes on-prem routing down.
-This is the same trap the last two deploys hit, so it goes in the PR description and the release
-note, not only in a doc.
+Failure mode if skipped (see §4.2a, which corrects an earlier overstatement of this): the admin
+API breaks loudly — `GET`/`POST`/`PUT /admin/infra/models` hit the missing column as a raw
+database error and a 500, so onboarding and editing are unusable. The serving path degrades
+quietly and fail-closed instead of failing every read: `ModelRegistry.refresh` keeps
+last-known-good, but a freshly rolled process has none, so the onboarded pool reads empty and
+`onprem_only` requests are **rejected** by the existing "no on-prem model onboarded ⇒ derived
+reject" rule — never silently sent to cloud. Cloud-capable apps are unaffected. This is the same
+trap the last two deploys hit, so it goes in the PR description and the release note, not only in
+a doc.
 
 ### 4.5 Console
 
