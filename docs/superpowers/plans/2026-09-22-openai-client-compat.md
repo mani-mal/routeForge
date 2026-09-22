@@ -1035,9 +1035,17 @@ git commit -m "feat(api): publish max_model_len on GET /v1/models (B50)"
 **Files:**
 - Modify: `ui/src/api.ts` (~:474 `OnboardedModel` type)
 - Modify: `ui/src/admin/InfrastructurePanel.tsx` (the context-window input, ~:199-202)
-- Create: `docs/reference/openai-error-format.md`
+- Modify: `docs/reference/api-reference.md` — **the existing owner of all of this**: the `Errors`
+  table (~:287-305), the 400 example (~:230), the SSE error-frame section (~:246-257), and the
+  `GET /v1/models` section (~:321)
 - Modify: `docs/guides/onboarding-models.md` (field table ~:37-52)
 - Modify: `docs/backlog/bugs.md` (B49, B50)
+
+**Plan correction (controller ruling, logged in the ledger).** An earlier draft of this task
+created a new `docs/reference/openai-error-format.md`. It must not: `api-reference.md` already
+documents the error table, the SSE frame shape and `/v1/models`, and a second reference beside it
+would be two owners of one concern — the drift class this repo's config lint exists to prevent.
+Every doc change below lands **in `api-reference.md`**.
 
 **Interfaces:**
 - Consumes from Tasks 5–6: `context_window_source` on the admin model payload;
@@ -1064,16 +1072,33 @@ Run the repo's UI build/lint (check `ui/package.json`; typically `npm run build`
 Expected: clean. If `npm ci` fails in this environment, report that and move on — the type
 change is small and reviewable, and a broken UI toolchain is not this task's problem to solve.
 
-- [ ] **Step 4: Write the error-format reference**
+- [ ] **Step 4: Update the API reference**
 
-Create `docs/reference/openai-error-format.md` covering: the envelope shape; the full status →
-`type`, exception → `code` table from spec §3.3; **which codes are OpenAI's and which are
-RouteForge's own**, and that RouteForge never reuses an OpenAI code for a condition OpenAI does
-not have; that `/admin/*` and `/api/*` keep `{"detail": ...}`; and that the SSE frame now carries
-the same `type`/`code` (a wire change from `"routeforge_error"` and an integer status).
+Four edits in `docs/reference/api-reference.md`, all of which are **wrong on `main` after this
+branch** and must be corrected together:
 
-Add a client-side example showing `except openai.BadRequestError as e: e.code ==
-"context_length_exceeded"`.
+1. **The `Errors` table (~:287-305).** Its header is `| Status | `detail` message | Cause |`. Retitle
+   the message column and add a `code` column, filling in the code every row now carries (spec
+   §3.3). Introduce the table with the envelope shape:
+   ```json
+   {"error": {"message": "...", "type": "invalid_request_error", "param": null, "code": "context_length_exceeded"}}
+   ```
+2. **The 400 example (~:230)** still shows `400 {"detail": "streaming is not supported for this
+   application"}`. Rewrite it as the envelope with `code: "streaming_not_supported"`.
+3. **The SSE error-frame section (~:246-257)** still documents
+   `{"error": {"message": "<detail>", "type": "routeforge_error", "code": <http-status>}}`.
+   Correct it to the real `type`/`code`, and say plainly that this changed — `type` was the
+   constant `routeforge_error` and `code` was the integer status.
+4. **The `GET /v1/models` section (~:321)** gains `max_model_len`: what it is, that it is vLLM's
+   field name, that it is omitted when unknown and never guessed, and that RouteForge does not
+   enforce it (an oversized request still fails upstream — B36).
+
+Add a short client-side example showing
+`except openai.BadRequestError as e: e.code == "context_length_exceeded"`.
+
+Also state, once, **which codes are OpenAI's and which are RouteForge's own**, and that
+RouteForge never reuses an OpenAI code for a condition OpenAI does not have; and that `/admin/*`
+and `/api/*` keep `{"detail": ...}`.
 
 - [ ] **Step 5: Update the onboarding guide**
 
