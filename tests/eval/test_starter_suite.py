@@ -11,6 +11,7 @@ that file is only ever loaded with `live=True`, never run.
 from __future__ import annotations
 
 import asyncio
+import json
 
 from app.config.loader import load_settings
 from app.eval.cases import load_suite
@@ -146,10 +147,31 @@ def test_starter_run_against_healthcare_sim_is_clean(tmp_path):
     for name, m in result.metrics["strategies"].items():
         assert m["violation_rate"] == 0.0, name
 
-    # b45 variants are present as both cold and warm router strategies
-    for variant in ("default", "availability_0", "availability_1", "availability_2"):
-        assert f"router_cold:{variant}" in result.metrics["strategies"]
-        assert f"router_warm:{variant}" in result.metrics["strategies"]
+    # b45 variants are present for every router arm
+    variants = ("default", "availability_0", "availability_1", "availability_2")
+    arms = ("router_cold", "router_online", "router_warm_prior")
+    for arm in arms:
+        for variant in variants:
+            assert f"{arm}:{variant}" in result.metrics["strategies"]
+    assert not any(n == "router_warm" or n.startswith("router_warm:")
+                   for n in result.metrics["strategies"])
+
+    # No-failure invariant (B48 spec §8.5): nothing fails in this profile,
+    # so availability is exactly 1.0 everywhere and every availability
+    # variant within an arm makes the SAME attempt chains (weights other
+    # than availability are identical across b45.yaml's variants).
+    matrix = [json.loads(line) for line in
+              (tmp_path / "out" / "matrix.jsonl").read_text().splitlines()]
+    assert all(r["error"] is None for r in matrix)
+    choices = [json.loads(line) for line in
+               (tmp_path / "out" / "choices.jsonl").read_text().splitlines()]
+    for arm in arms:
+        chains = {v: [(c["case_id"], c["attempts"]) for c in choices
+                      if c["strategy"] == f"{arm}:{v}"] for v in variants}
+        assert all(chains[v] == chains["default"] for v in variants), arm
+        assert all(json.dumps(result.metrics["strategies"][f"{arm}:{v}"], sort_keys=True)
+                   == json.dumps(result.metrics["strategies"][f"{arm}:default"],
+                                 sort_keys=True) for v in variants), arm
 
     # european / general-us are never eligible for a claim case -- residency
     # (onprem-preferring, redaction-driven) and retention exclude them

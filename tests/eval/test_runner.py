@@ -27,7 +27,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SSN = "078-05-1120"
 RUN_TIMEOUT_S = 120
 
-_BASE_STRATEGIES = ("cheapest", "best_published_quality", "router_cold", "router_warm")
+_BASE_STRATEGIES = ("cheapest", "best_published_quality", "router_cold", "router_online",
+                    "router_warm_prior")
 
 
 # --------------------------------------------------------------------------
@@ -125,7 +126,8 @@ def test_end_to_end_writes_all_five_files_and_every_strategy(tmp_path):
         assert (out / name).is_file(), name
     metrics = json.loads((out / "metrics.json").read_text())
     expected = set(_BASE_STRATEGIES) | {
-        "fixed:local-b", "router_cold:avail0", "router_warm:avail0"}
+        "fixed:local-b", "router_cold:avail0", "router_online:avail0",
+        "router_warm_prior:avail0"}
     assert set(metrics["strategies"]) == expected
     for name, m in metrics["strategies"].items():
         assert m["violation_rate"] == 0.0, name
@@ -134,13 +136,28 @@ def test_end_to_end_writes_all_five_files_and_every_strategy(tmp_path):
     assert len(choices) == len(expected) * len(DEFAULT_CASES)
     report = (out / "report.md").read_text()
     assert "None" not in report
-    assert "same sweep" in report
+    assert "router_warm" not in report.replace("router_warm_prior", "")
+    assert "B45" in report and "`router_online:<variant>`" in report
+    assert "counts as 0 ms" in report
+    assert "violations_total` counts attempts" in report
+    assert "seconds_per_case = 30" in report
+    assert "wasted_attempts" in report and "exhausted_rate" in report
     run = json.loads((out / "run.json").read_text())
     for key in ("suite_hash", "endpoints_hash", "base_routing_policy_version",
-                "registry_version", "seed", "git_sha", "mode", "args"):
+                "registry_version", "seed", "git_sha", "mode", "args",
+                "seconds_per_case", "attempt_cap"):
         assert key in run, key
     assert run["mode"] == "simulated"
-    assert "same sweep" in run["notes"]["router_warm"]
+    assert run["seconds_per_case"] == 30.0
+    assert run["attempt_cap"] == 3      # 1 + the deployment's max_failover_attempts
+    assert set(run["notes"]) >= {"router_cold", "router_online", "router_warm_prior",
+                                 "case_order", "case_clock"}
+    assert "router_warm" not in run["notes"]
+    for name, m in metrics["strategies"].items():
+        assert "wasted_attempts" in m and "exhausted_rate" in m, name
+    for c in choices:
+        assert isinstance(c["attempts"], list)
+        assert c["endpoint"] == (c["attempts"][-1] if c["attempts"] else None)
     assert result.metrics == metrics
 
 
@@ -173,7 +190,8 @@ def test_same_seed_gives_byte_identical_metrics(tmp_path):
 # --------------------------------------------------------------------------
 
 def test_injected_ineligible_choice_exits_2(tmp_path, monkeypatch):
-    monkeypatch.setattr(runner, "cheapest", lambda registry: (lambda inp: "not-eligible"))
+    monkeypatch.setattr(runner, "cheapest_attempts",
+                        lambda registry, cap: (lambda inp, failed: ("not-eligible",)))
     suite, eps = _write_inputs(tmp_path)
     out = tmp_path / "out"
     result = _run(suite, eps, out)
@@ -185,11 +203,147 @@ def test_injected_ineligible_choice_exits_2(tmp_path, monkeypatch):
 def test_cloud_choice_on_onprem_case_exits_2(tmp_path, monkeypatch):
     """A realistic violation: a strategy that always picks the cloud
     endpoint -- eligible for most cases, never for the onprem_only one."""
-    monkeypatch.setattr(runner, "cheapest", lambda registry: (lambda inp: "cloud-c"))
+    monkeypatch.setattr(runner, "cheapest_attempts",
+                        lambda registry, cap: (lambda inp, failed: ("cloud-c",)))
     suite, eps = _write_inputs(tmp_path)
     result = _run(suite, eps, tmp_path / "out")
     assert result.exit_code == 2
     assert result.metrics["strategies"]["cheapest"]["violation_rate"] > 0
+
+
+def test_entries_after_the_served_attempt_exit_2(tmp_path, monkeypatch):
+    """Ruling D: a chain that keeps going after a success contradicts the
+    gateway's loop. Every attempt is eligible (violations_total stays 0) but
+    the per-case violation rate fails the run."""
+    monkeypatch.setattr(runner, "cheapest_attempts",
+                        lambda registry, cap: (lambda inp, failed: ("local-a", "local-b")))
+    cases = [_case("faq-1", "What is the capital of France?")]
+    suite, eps = _write_inputs(tmp_path, cases)
+    result = _run(suite, eps, tmp_path / "out")
+    assert result.exit_code == 2
+    assert result.metrics["policy"]["violations_total"] == 0
+    assert result.metrics["strategies"]["cheapest"]["violation_rate"] == 1.0
+
+
+# --------------------------------------------------------------------------
+# 3b. failover-aware scoring end to end (B48 spec §5-§6, rulings A-E)
+# --------------------------------------------------------------------------
+
+_OUTAGE_ENDPOINTS = [
+    # cheaper, down for cases 0-1; the cost term prefers it when healthy
+    _endpoint("cheap-a", price=0.1, quality=0.9, latency=300,
+              outages=[{"from": 0, "to": 1}], failure_latency_ms=40.0),
+    _endpoint("steady-b", price=0.5, quality=0.9, latency=600),
+]
+_OUTAGE_CASES = [_case(f"faq-{i}", "What is the capital of France?") for i in range(4)]
+
+
+def test_failover_chains_record_attempts_and_served_endpoint(tmp_path):
+    suite, eps = _write_inputs(tmp_path, _OUTAGE_CASES, _OUTAGE_ENDPOINTS)
+    out = tmp_path / "out"
+    result = _run(suite, eps, out)
+    assert result.exit_code == 0
+    by = {(c["case_id"], c["strategy"]): c for c in _jsonl(out / "choices.jsonl")}
+    down = by[("faq-0", "cheapest")]
+    assert down["attempts"] == ["cheap-a", "steady-b"]
+    assert down["endpoint"] == "steady-b"          # the SERVED endpoint
+    assert down["wasted_attempts"] == 1 and down["exhausted"] is False
+    up = by[("faq-2", "cheapest")]
+    assert up["attempts"] == ["cheap-a"] and up["endpoint"] == "cheap-a"
+    cold = by[("faq-0", "router_cold")]
+    assert cold["attempts"] == ["cheap-a", "steady-b"]
+    m = result.metrics["strategies"]["cheapest"]
+    assert m["wasted_attempts"] == 0.5 and m["exhausted_rate"] == 0.0
+
+
+def test_failed_reads_only_the_scored_cases_rows(tmp_path, monkeypatch):
+    """Ruling E: `failed(slug)` is case k's matrix row for `slug` -- cheap-a
+    is down on cases 0-1 and up on 2-3, whatever other cases say."""
+    seen: dict[str, dict[str, bool]] = {}
+
+    def probing(registry, cap):
+        def strat(inp, failed):
+            seen[inp.case.id] = {c.name: failed(c.name) for c in inp.eligible}
+            return ()
+        return strat
+
+    monkeypatch.setattr(runner, "cheapest_attempts", probing)
+    suite, eps = _write_inputs(tmp_path, _OUTAGE_CASES, _OUTAGE_ENDPOINTS)
+    _run(suite, eps, tmp_path / "out")
+    assert seen == {
+        "faq-0": {"cheap-a": True, "steady-b": False},
+        "faq-1": {"cheap-a": True, "steady-b": False},
+        "faq-2": {"cheap-a": False, "steady-b": False},
+        "faq-3": {"cheap-a": False, "steady-b": False},
+    }
+
+
+def test_online_arm_is_built_on_harness_settings_with_the_deployment_cap(
+        tmp_path, monkeypatch):
+    """Ruling C: harness settings (emptied model_pool -- no stock model can
+    enter a chain) and max_attempts = 1 + the deployment's failover cap."""
+    built = []
+    real = runner.OnlineArm
+
+    class Spy(real):
+        def __init__(self, settings, registry, max_attempts, weights=None, **kw):
+            built.append((settings.routing.model_pool, max_attempts, kw))
+            super().__init__(settings, registry, max_attempts, weights, **kw)
+
+    monkeypatch.setattr(runner, "OnlineArm", Spy)
+    suite, eps = _write_inputs(tmp_path, _OUTAGE_CASES, _OUTAGE_ENDPOINTS)
+    assert _run(suite, eps, tmp_path / "out", seconds_per_case=7.5).exit_code == 0
+    assert built == [([], 3, {"seconds_per_case": 7.5})]
+
+
+def test_runner_out_of_order_online_call_trips_the_leak_guard(tmp_path, monkeypatch):
+    """Ruling B: were the runner to score a case it has already observed,
+    the arm's own guard fires (the run does not silently leak)."""
+    from app.eval.strategies import LeakageError
+    real = runner.OnlineArm
+
+    class OutOfOrder(real):
+        def choose(self, inp, failed, *, case_index):
+            # re-score the previous (already observed) case
+            return super().choose(inp, failed, case_index=max(case_index - 1, 0))
+
+    monkeypatch.setattr(runner, "OnlineArm", OutOfOrder)
+    suite, eps = _write_inputs(tmp_path, _OUTAGE_CASES, _OUTAGE_ENDPOINTS)
+    try:
+        _run(suite, eps, tmp_path / "out")
+    except LeakageError:
+        pass
+    else:
+        raise AssertionError("an out-of-order online call was not refused")
+
+
+def test_runner_passing_the_scored_cases_rows_to_warm_prior_is_refused(
+        tmp_path, monkeypatch):
+    from app.eval.strategies import LeakageError
+    real = runner.warm_prior_signals
+
+    def leaky(settings, rows, *, case_index, scoring_case, seconds_per_case):
+        # pretend the runner scored one case late: its rows now include k-1's
+        return real(settings, rows, case_index=case_index,
+                    scoring_case=max(scoring_case - 1, 0),
+                    seconds_per_case=seconds_per_case)
+
+    monkeypatch.setattr(runner, "warm_prior_signals", leaky)
+    suite, eps = _write_inputs(tmp_path, _OUTAGE_CASES, _OUTAGE_ENDPOINTS)
+    try:
+        _run(suite, eps, tmp_path / "out")
+    except LeakageError:
+        pass
+    else:
+        raise AssertionError("prior rows of the scored case were not refused")
+
+
+def test_nonpositive_seconds_per_case_exits_1(tmp_path):
+    suite, eps = _write_inputs(tmp_path)
+    for bad in (0, -5.0):
+        out = tmp_path / f"out{bad}"
+        assert _run(suite, eps, out, seconds_per_case=bad).exit_code == 1
+        assert not out.exists()
 
 
 # --------------------------------------------------------------------------
@@ -552,9 +706,19 @@ def _cli(*args, stdin: str | None = None) -> subprocess.CompletedProcess:
 def test_cli_simulated_run_exits_0(tmp_path):
     suite, eps = _write_inputs(tmp_path)
     out = tmp_path / "cli-out"
-    proc = _cli("--suite", suite, "--endpoints", eps, "--out", str(out), "--seed", "3")
+    proc = _cli("--suite", suite, "--endpoints", eps, "--out", str(out), "--seed", "3",
+                "--seconds-per-case", "300")
     assert proc.returncode == 0, proc.stderr
     assert (out / "metrics.json").is_file()
+    assert json.loads((out / "run.json").read_text())["seconds_per_case"] == 300.0
+
+
+def test_cli_nonpositive_seconds_per_case_exits_1(tmp_path):
+    suite, eps = _write_inputs(tmp_path)
+    proc = _cli("--suite", suite, "--endpoints", eps, "--out", str(tmp_path / "o"),
+                "--seconds-per-case", "0")
+    assert proc.returncode == 1
+    assert "seconds_per_case" in proc.stderr
 
 
 def _live_endpoints(tmp_path) -> str:

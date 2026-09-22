@@ -484,22 +484,22 @@ class TestGroupedAndWorstGroups:
 class TestHeadline:
     def test_comparable_when_pass_rates_are_close(self):
         metrics_by_strategy = {
-            "router_warm": {"pass_rate": 0.90, "mean_chosen_cost": 0.03},
+            "router_online": {"pass_rate": 0.90, "mean_chosen_cost": 0.03},
             "best_published_quality": {"pass_rate": 0.91, "mean_chosen_cost": 0.10},
         }
         result = headline(
-            metrics_by_strategy, router="router_warm",
+            metrics_by_strategy, router="router_online",
             reference="best_published_quality", parity_tol=0.02)
         assert result["comparable"] is True
         assert result["saving_pct"] == pytest.approx((0.10 - 0.03) / 0.10 * 100)
 
     def test_not_comparable_when_pass_rates_diverge(self):
         metrics_by_strategy = {
-            "router_warm": {"pass_rate": 0.60, "mean_chosen_cost": 0.03},
+            "router_online": {"pass_rate": 0.60, "mean_chosen_cost": 0.03},
             "best_published_quality": {"pass_rate": 0.95, "mean_chosen_cost": 0.10},
         }
         result = headline(
-            metrics_by_strategy, router="router_warm",
+            metrics_by_strategy, router="router_online",
             reference="best_published_quality", parity_tol=0.02)
         assert result["comparable"] is False
         assert result["saving_pct"] is None
@@ -508,22 +508,22 @@ class TestHeadline:
 
     def test_not_comparable_when_reference_cost_is_zero(self):
         metrics_by_strategy = {
-            "router_warm": {"pass_rate": 0.90, "mean_chosen_cost": 0.03},
+            "router_online": {"pass_rate": 0.90, "mean_chosen_cost": 0.03},
             "reference": {"pass_rate": 0.90, "mean_chosen_cost": 0.0},
         }
         result = headline(
-            metrics_by_strategy, router="router_warm",
+            metrics_by_strategy, router="router_online",
             reference="reference", parity_tol=0.02)
         assert result["comparable"] is False
         assert result["saving_pct"] is None
 
     def test_not_comparable_when_a_pass_rate_is_undefined(self):
         metrics_by_strategy = {
-            "router_warm": {"pass_rate": None, "mean_chosen_cost": 0.03},
+            "router_online": {"pass_rate": None, "mean_chosen_cost": 0.03},
             "reference": {"pass_rate": 0.90, "mean_chosen_cost": 0.10},
         }
         result = headline(
-            metrics_by_strategy, router="router_warm",
+            metrics_by_strategy, router="router_online",
             reference="reference", parity_tol=0.02)
         assert result["comparable"] is False
         assert result["saving_pct"] is None
@@ -537,11 +537,11 @@ class TestHeadline:
         reference_pass_rate = 46 / 50
         assert abs(router_pass_rate - reference_pass_rate) > 0.02  # the float trap
         metrics_by_strategy = {
-            "router_warm": {"pass_rate": router_pass_rate, "mean_chosen_cost": 0.03},
+            "router_online": {"pass_rate": router_pass_rate, "mean_chosen_cost": 0.03},
             "reference": {"pass_rate": reference_pass_rate, "mean_chosen_cost": 0.10},
         }
         result = headline(
-            metrics_by_strategy, router="router_warm",
+            metrics_by_strategy, router="router_online",
             reference="reference", parity_tol=0.02)
         assert result["comparable"] is True
         assert result["saving_pct"] == pytest.approx((0.10 - 0.03) / 0.10 * 100)
@@ -739,3 +739,41 @@ class TestFailoverAwareStrategyMetrics:
         assert m["wasted_attempts"] == pytest.approx(1.0)
         assert m["latency_regret"] is None
         assert violations([self.CASE], [_choice("c1", "s", "european")], []) == 1
+
+    # ------------------------------------------------------------------
+    # Ruling D: `Choice.endpoint` is the chain's SERVED endpoint, and a
+    # chain record that contradicts itself is a violation (one per case).
+    # ------------------------------------------------------------------
+
+    def test_endpoint_not_the_served_one_is_a_violation(self):
+        wrong = [_choice("c1", "s", "dead", attempts=("dead", "ok"))]
+        m = strategy_metrics([self.CASE], self.ROWS, wrong, "s")
+        assert m["violation_rate"] == 1.0
+        assert m["quality_regret"] == pytest.approx(0.9)   # scored as no choice
+
+    def test_exhausted_chain_claiming_an_endpoint_is_a_violation(self):
+        wrong = [_choice("c1", "s", "dead2", attempts=("dead", "dead2"))]
+        assert strategy_metrics([self.CASE], self.ROWS, wrong, "s")["violation_rate"] == 1.0
+
+    def test_served_endpoint_recorded_is_clean(self):
+        right = [_choice("c1", "s", "ok", attempts=("dead", "dead2", "ok"))]
+        m = strategy_metrics([self.CASE], self.ROWS, right, "s")
+        assert m["violation_rate"] == 0.0
+        assert m["wasted_attempts"] == pytest.approx(2.0)
+
+    def test_repeated_endpoint_in_chain_is_a_violation(self):
+        repeated = [_choice("c1", "s", "ok", attempts=("dead", "dead", "ok"))]
+        m = strategy_metrics([self.CASE], self.ROWS, repeated, "s")
+        assert m["violation_rate"] == 1.0
+
+    def test_eligible_entries_after_the_served_one_are_a_violation(self):
+        trailing = [_choice("c1", "s", "ok", attempts=("ok", "dead"))]
+        m = strategy_metrics([self.CASE], self.ROWS, trailing, "s")
+        assert m["violation_rate"] == 1.0
+        # all attempts are eligible, so the raw per-attempt count stays 0 --
+        # the per-case rate is what fails the run (exit 2)
+        assert violations([self.CASE], trailing, sweep_served=[]) == 0
+
+    def test_several_defects_in_one_case_count_once(self):
+        bad = [_choice("c1", "s", "dead", attempts=("ok", "ok", "european"))]
+        assert strategy_metrics([self.CASE], self.ROWS, bad, "s")["violation_rate"] == 1.0

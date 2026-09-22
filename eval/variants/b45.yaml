@@ -8,7 +8,9 @@
 # `quality`/`cost`/`latency` stay at the shipped config/routing.yaml values
 # in every variant below -- only `availability` moves, so any
 # regret/floor-miss/pass-rate difference between variants isolates that one
-# term's effect (`router_cold:<name>` / `router_warm:<name>` in the report).
+# term's effect (`router_cold:<name>` / `router_online:<name>` /
+# `router_warm_prior:<name>` in the report). B45 is read from
+# `router_online:<name>`; eval/endpoints/outage-sim.yaml is the scenario.
 #
 #   default          -- the shipped config/routing.yaml weights, unchanged
 #   availability_0    -- availability weight zeroed (no penalty at all)

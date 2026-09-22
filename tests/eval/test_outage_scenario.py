@@ -1,0 +1,84 @@
+"""End-to-end run of the shipped B48 outage scenario (spec 2026-09-22 §7-§8):
+`eval/suites/outage.jsonl` x `eval/endpoints/outage-sim.yaml` x
+`eval/variants/b45.yaml`, simulated, seed 0.
+
+What is asserted is what the design guarantees, not a B45 answer: the run is
+deterministic and clean, the outage really moves `router_online`'s
+availability variants apart at the default case clock (30 s per case), and
+the full-information `router_warm_prior` arm wastes no more attempts than
+`router_online` at the shipped weights. WHICH variant wastes fewer attempts
+is the scenario's finding and is reported, not asserted here (controller
+ruling H: the scenario must not be tuned to force a direction).
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+
+from app.eval.cases import load_suite
+from app.eval.endpoints import load_endpoints
+from app.eval.runner import run_bench
+from app.config.loader import load_settings
+
+OUTAGE_SUITE = "eval/suites/outage.jsonl"
+OUTAGE_SIM = "eval/endpoints/outage-sim.yaml"
+B45_VARIANTS = "eval/variants/b45.yaml"
+AVAILABILITY_VARIANTS = ("default", "availability_0", "availability_1", "availability_2")
+RUN_TIMEOUT_S = 300
+
+
+def _run(out, **kwargs):
+    return asyncio.run(asyncio.wait_for(
+        run_bench(OUTAGE_SUITE, OUTAGE_SIM, out_dir=str(out),
+                  variants_path=B45_VARIANTS, seed=0, **kwargs),
+        timeout=RUN_TIMEOUT_S))
+
+
+def test_outage_files_load_as_designed():
+    cases, _ = load_suite(OUTAGE_SUITE)
+    assert len(cases) == 30
+    assert all(c.app_policy.get("residency") == "any" for c in cases)
+    assert all(c.tags.get("workload") == "faq" and not c.expect_empty for c in cases)
+    specs, _ = load_endpoints(OUTAGE_SIM, live=False, tiers=load_settings().routing.tiers)
+    by = {s.slug: s for s in specs}
+    assert set(by) == {"fast-cheap", "steady"}
+    assert {s.tier for s in specs} == {"cheap"} and {s.provider for s in specs} == {"onprem"}
+    fast, steady = by["fast-cheap"], by["steady"]
+    assert fast.price.input < steady.price.input
+    assert [(o.from_, o.to) for o in fast.simulated.outages] == [(10, 19)]
+    assert steady.simulated.error_rate == 0.05 and not steady.simulated.outages
+
+
+def test_outage_run_is_deterministic_clean_and_moves_the_online_variants(tmp_path):
+    a = _run(tmp_path / "a")
+    b = _run(tmp_path / "b")
+    assert a.exit_code == 0 and b.exit_code == 0
+    assert (tmp_path / "a" / "metrics.json").read_bytes() == \
+        (tmp_path / "b" / "metrics.json").read_bytes()
+
+    m = a.metrics
+    assert m["policy"]["violations_total"] == 0
+    for name, s in m["strategies"].items():
+        assert s["violation_rate"] == 0.0, name
+
+    # The outage happened: fast-cheap failed on exactly cases 10-19.
+    matrix = [json.loads(line) for line in
+              (tmp_path / "a" / "matrix.jsonl").read_text().splitlines()]
+    down = sorted(r["case_id"] for r in matrix
+                  if r["endpoint"] == "fast-cheap" and r["error"] is not None)
+    assert down == [f"outage-faq-{i:03d}" for i in range(10, 20)]
+    assert all(r["counts_unhealth"] for r in matrix if r["error"] is not None)
+
+    strategies = m["strategies"]
+    wasted = {v: strategies[f"router_online:{v}"]["wasted_attempts"]
+              for v in AVAILABILITY_VARIANTS}
+    # B45's instrument is live: the availability weight changes what the
+    # online router does during the outage (direction NOT asserted).
+    assert len(set(wasted.values())) > 1, wasted
+    # The full-information arm is an upper bound at the shipped weights.
+    assert strategies["router_warm_prior"]["wasted_attempts"] <= \
+        strategies["router_online"]["wasted_attempts"]
+    # The cold arm cannot learn: every availability variant is identical.
+    cold = {json.dumps(strategies[f"router_cold:{v}"], sort_keys=True)
+            for v in AVAILABILITY_VARIANTS}
+    assert len(cold) == 1

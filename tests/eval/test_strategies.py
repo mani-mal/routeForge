@@ -681,20 +681,23 @@ def _case_rows(k, dead, live, *, dead_counts_unhealth=True):
 def _assert_no_leak(arm: OnlineArm, k: int) -> None:
     """The no-leakage invariant, checked two independent ways: the arm's
     applied-observation log, and the store's own recorded timestamps (case
-    `i` observations sit in [i, i + 1) on the case clock)."""
+    `i` observations sit in [t_i, t_{i+1}) on the case clock, t_i = i *
+    seconds_per_case)."""
+    t_k = k * arm.seconds_per_case
     assert all(o.case_index < k for o in arm.applied), \
         f"case {k} scored with observations from {sorted({o.case_index for o in arm.applied})}"
     for model, st in arm.signals._state.items():
-        assert st.availability_ts < k, f"{model} availability_ts {st.availability_ts} >= {k}"
+        assert st.availability_ts < t_k, f"{model} availability_ts {st.availability_ts} >= {t_k}"
         if st.latency_n:
-            assert st.latency_ts < k, f"{model} latency_ts {st.latency_ts} >= {k}"
+            assert st.latency_ts < t_k, f"{model} latency_ts {st.latency_ts} >= {t_k}"
     if arm.applied:   # an empty store's anchor (0.0) reads nothing
-        assert arm.read_clock < k
+        assert arm.read_clock < t_k
 
 
 def _run_online(settings, registry, inp, dead, live, n_cases, *, weights=None,
-                leak=False, check=True, dead_counts_unhealth=True):
-    arm = OnlineArm(settings, registry, attempt_cap(BASE_SETTINGS), weights=weights)
+                leak=False, check=True, dead_counts_unhealth=True, seconds_per_case=1.0):
+    arm = OnlineArm(settings, registry, attempt_cap(BASE_SETTINGS), weights=weights,
+                    seconds_per_case=seconds_per_case)
     chains = []
     for k in range(n_cases):
         rows = _case_rows(k, dead, live, dead_counts_unhealth=dead_counts_unhealth)
@@ -702,10 +705,12 @@ def _run_online(settings, registry, inp, dead, live, n_cases, *, weights=None,
             return rows[s].error is not None
         if leak:
             # The injected leak: learn case k's outcome, THEN score case k.
+            # The built-in guard refuses case k once it is observed, so the
+            # leaking caller must also lie about the index (k + 1).
             arm.observe(k, (dead, live), rows)
         if check:
             _assert_no_leak(arm, k)
-        chain = arm.choose(inp, failed)
+        chain = arm.choose(inp, failed, case_index=k + 1 if leak else k)
         chains.append(chain)
         if not leak:
             arm.observe(k, chain, rows)
@@ -727,7 +732,7 @@ class TestOnlineArm:
 
     def test_injected_leak_is_caught_by_the_builtin_guard(self, tmp_path):
         settings, registry, inp, dead, live = _two_endpoint_setup(tmp_path)
-        arm = OnlineArm(settings, registry, attempt_cap(BASE_SETTINGS))
+        arm = OnlineArm(settings, registry, attempt_cap(BASE_SETTINGS), seconds_per_case=1.0)
         rows = _case_rows(0, dead, live)
         assert arm.choose(inp, lambda s: rows[s].error is not None, case_index=0)
         arm.observe(0, (dead, live), rows)
@@ -735,6 +740,25 @@ class TestOnlineArm:
             arm.choose(inp, lambda s: rows[s].error is not None, case_index=0)
         # The next case is fine.
         arm.choose(inp, lambda s: rows[s].error is not None, case_index=1)
+
+    def test_case_index_is_required(self, tmp_path):
+        settings, registry, inp, dead, live = _two_endpoint_setup(tmp_path)
+        arm = OnlineArm(settings, registry, attempt_cap(BASE_SETTINGS), seconds_per_case=1.0)
+        with pytest.raises(TypeError):
+            arm.choose(inp, _failing())   # no case_index: refused, not unguarded
+
+    def test_guard_compares_against_the_last_observed_case_not_applied(self, tmp_path):
+        """A case whose attempts applied NOTHING (every error is a 4xx-shaped
+        non-unhealth failure) is still observed: re-scoring it must raise,
+        although the applied-observation log never mentions it."""
+        settings, registry, inp, dead, live = _two_endpoint_setup(tmp_path)
+        arm = OnlineArm(settings, registry, attempt_cap(BASE_SETTINGS), seconds_per_case=1.0)
+        rows = {dead: _err("case-0", dead, counts_unhealth=False)}
+        arm.choose(inp, _failing(dead), case_index=0)
+        arm.observe(0, (dead,), rows)
+        assert arm.applied == ()
+        with pytest.raises(LeakageError):
+            arm.choose(inp, _failing(dead), case_index=0)
 
     def test_the_leak_changes_outcomes(self, tmp_path):
         """Why the invariant matters: a leaking arm learns `dead` is down one
@@ -772,9 +796,37 @@ class TestOnlineArm:
             (1, dead, "error", 1.0), (1, live, "ok", 1.001)]
         assert arm.read_clock == 1.001
 
+    def test_case_clock_uses_seconds_per_case_and_reads_at_t_k(self, tmp_path):
+        """Spec §6 (amended): case k happens at t_k = k * seconds_per_case,
+        1 ms sub-steps within a case, and case k is scored reading at t_k."""
+        settings, registry, inp, dead, live = _two_endpoint_setup(tmp_path)
+        arm, _ = _run_online(settings, registry, inp, dead, live, 2, seconds_per_case=30.0)
+        assert [(o.case_index, o.t) for o in arm.applied] == [
+            (0, 0.0), (0, 0.001), (1, 30.0), (1, 30.001)]
+        arm.choose(inp, _failing(dead), case_index=4)
+        assert arm.read_clock == 120.0
+        assert all(o.t < 120.0 for o in arm.applied)
+
+    def test_read_time_moves_availability_decay(self, tmp_path):
+        """Reading at t_k (not at the last observation) is what lets a
+        failed endpoint recover while nothing is observed about it."""
+        settings, registry, inp, dead, live = _two_endpoint_setup(tmp_path)
+        arm, _ = _run_online(settings, registry, inp, dead, live, 5, weights=_AVAIL_HOT,
+                             seconds_per_case=300.0)
+        arm.choose(inp, _failing(dead), case_index=5)
+        early = arm.signals.availability(dead).value
+        arm.choose(inp, _failing(dead), case_index=50)
+        assert arm.signals.availability(dead).value > early
+
+    def test_seconds_per_case_must_be_positive(self, tmp_path):
+        settings, registry, *_ = _two_endpoint_setup(tmp_path)
+        for bad in (0, -1.0):
+            with pytest.raises(ValueError):
+                OnlineArm(settings, registry, 3, seconds_per_case=bad)
+
     def test_skipped_attempts_do_not_advance_the_clock(self, tmp_path):
         settings, registry, _inp, dead, live = _two_endpoint_setup(tmp_path)
-        arm = OnlineArm(settings, registry, attempt_cap(BASE_SETTINGS))
+        arm = OnlineArm(settings, registry, attempt_cap(BASE_SETTINGS), seconds_per_case=1.0)
         arm.observe(0, (dead, live), _case_rows(0, dead, live, dead_counts_unhealth=False))
         assert [(o.endpoint, o.t) for o in arm.applied] == [(live, 0.0)]
         arm.observe(3, (dead,), {dead: _err("case-3", dead, counts_unhealth=False)})
@@ -782,7 +834,7 @@ class TestOnlineArm:
 
     def test_observe_rejects_out_of_order_and_malformed_chains(self, tmp_path):
         settings, registry, _inp, dead, live = _two_endpoint_setup(tmp_path)
-        arm = OnlineArm(settings, registry, attempt_cap(BASE_SETTINGS))
+        arm = OnlineArm(settings, registry, attempt_cap(BASE_SETTINGS), seconds_per_case=1.0)
         arm.observe(2, (dead, live), _case_rows(2, dead, live))
         with pytest.raises(ValueError):
             arm.observe(2, (live,), _case_rows(2, dead, live))
@@ -792,12 +844,22 @@ class TestOnlineArm:
             arm.observe(3, (live, dead), _case_rows(3, dead, live))
         with pytest.raises(ValueError, match="no matrix row"):
             arm.observe(4, ("ghost",), _case_rows(4, dead, live))
+        with pytest.raises(ValueError, match="repeated attempt"):
+            arm.observe(5, (dead, dead), _case_rows(5, dead, live))
+        with pytest.raises(ValueError, match="exceed max_attempts"):
+            arm.observe(5, (dead, live, "c", "d"), _case_rows(5, dead, live))
+        no_latency = {live: MatrixRow(case_id="case-5", endpoint=live, quality=1.0,
+                                      passed=True, cost_usd=0.0, latency_ms=None)}
+        with pytest.raises(ValueError, match="no latency_ms"):
+            arm.observe(5, (live,), no_latency)
+        # A rejected chain changed nothing: case 5 can still be observed.
+        arm.observe(5, (live,), _case_rows(5, dead, live))
 
     def test_online_choose_equals_router_chain_over_its_own_store(self, tmp_path):
         settings, registry, inp, dead, live = _two_endpoint_setup(tmp_path)
         arm, _ = _run_online(settings, registry, inp, dead, live, 3)
         failed = _failing(dead)
-        assert arm.choose(inp, failed) == _direct_chain(
+        assert arm.choose(inp, failed, case_index=3) == _direct_chain(
             settings, registry, arm.signals, inp, failed, attempt_cap(BASE_SETTINGS))
 
 
@@ -817,8 +879,8 @@ class TestWarmPriorSignals:
         settings, registry, inp, dead, live = _two_endpoint_setup(tmp_path)
         index = {f"case-{k}": k for k in range(10)}
         store = warm_prior_signals(settings, self._rows(dead, live, 5),
-                                   case_index=index, scoring_case=5)
-        assert store.frozen_now == pytest.approx(4.001)
+                                   case_index=index, scoring_case=5, seconds_per_case=1.0)
+        assert store.frozen_now == 5.0            # read at t_k, not at the last row
         assert all(st.availability_ts < 5 for st in store._state.values())
         assert store.availability(dead).value < 0.1
         assert router_attempts(settings, registry, store, attempt_cap(BASE_SETTINGS))(
@@ -831,24 +893,45 @@ class TestWarmPriorSignals:
         index = {f"case-{k}": k for k in range(10)}
         with pytest.raises(LeakageError):
             warm_prior_signals(settings, self._rows(dead, live, 6),
-                               case_index=index, scoring_case=5)
+                               case_index=index, scoring_case=5, seconds_per_case=1.0)
+
+    def test_rows_sit_on_the_case_clock_and_the_read_is_t_k(self, tmp_path):
+        settings, _registry, _inp, dead, live = _two_endpoint_setup(tmp_path)
+        index = {f"case-{k}": k for k in range(10)}
+        store = warm_prior_signals(settings, self._rows(dead, live, 3),
+                                   case_index=index, scoring_case=3, seconds_per_case=30.0)
+        assert store.frozen_now == 90.0
+        assert store._state[dead].availability_ts == 60.0      # case 2, j=0
+        assert store._state[live].availability_ts == pytest.approx(60.001)
 
     def test_empty_prior_is_a_cold_store(self, tmp_path):
         settings, *_ = _two_endpoint_setup(tmp_path)
-        store = warm_prior_signals(settings, [])
+        store = warm_prior_signals(settings, [], case_index={}, scoring_case=0,
+                                   seconds_per_case=30.0)
         assert store.snapshot() == {} and store.frozen_now == 0.0
 
     def test_non_unhealth_errors_are_skipped_without_consuming_a_slot(self, tmp_path):
         settings, _registry, _inp, dead, live = _two_endpoint_setup(tmp_path)
         rows = [_err("case-0", dead, counts_unhealth=False), _ok("case-0", live)]
-        store = warm_prior_signals(settings, rows)
+        store = warm_prior_signals(settings, rows, case_index={"case-0": 0},
+                                   scoring_case=1, seconds_per_case=1.0)
         assert dead not in store.snapshot()
-        assert store.frozen_now == 0.0   # live's success took slot j=0
+        assert store._state[live].availability_ts == 0.0   # live's success took slot j=0
 
-    def test_scoring_case_requires_case_index(self, tmp_path):
+    def test_leak_guard_arguments_are_required(self, tmp_path):
         settings, *_ = _two_endpoint_setup(tmp_path)
-        with pytest.raises(ValueError):
-            warm_prior_signals(settings, [], scoring_case=3)
+        with pytest.raises(TypeError):
+            warm_prior_signals(settings, [], seconds_per_case=1.0)
+        with pytest.raises(TypeError):
+            warm_prior_signals(settings, [], case_index={}, seconds_per_case=1.0)
+
+    def test_success_row_without_latency_raises(self, tmp_path):
+        settings, _registry, _inp, _dead, live = _two_endpoint_setup(tmp_path)
+        row = MatrixRow(case_id="case-0", endpoint=live, quality=1.0, passed=True,
+                        cost_usd=0.0, latency_ms=None)
+        with pytest.raises(ValueError, match="no latency_ms"):
+            warm_prior_signals(settings, [row], case_index={"case-0": 0},
+                               scoring_case=1, seconds_per_case=1.0)
 
 
 class TestWarmSignalsSlotFix:
@@ -882,7 +965,7 @@ class TestNoFailureInvariant:
 
         per_variant_chains = {}
         for name, weights in {"off": _AVAIL_OFF, "hot": _AVAIL_HOT, "base": None}.items():
-            arm = OnlineArm(settings, registry, cap, weights=weights)
+            arm = OnlineArm(settings, registry, cap, weights=weights, seconds_per_case=30.0)
             chains = []
             for k in range(n):
                 rows = rows_for(k)
@@ -898,7 +981,9 @@ class TestNoFailureInvariant:
 
         # Warm-prior: every endpoint's rows, both variants agree, avail 1.0.
         prior = [r for k in range(n) for r in rows_for(k).values()]
-        store = warm_prior_signals(settings, prior)
+        store = warm_prior_signals(settings, prior,
+                                   case_index={f"case-{k}": k for k in range(n)},
+                                   scoring_case=n, seconds_per_case=30.0)
         for slug in (a, b):
             assert store.availability(slug).value == 1.0
         warm_chains = {name: router_variant_attempts(settings, w, registry, store, cap)(

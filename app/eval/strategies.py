@@ -1,31 +1,32 @@
 """Baseline and router selection strategies for FeasibleRouteBench (spec §5
 step 3; failover-aware attempt orders and signal arms, B48 spec §5-§6).
 
-Two shapes live here while the runner migrates (B48 Task 5 replaces its call
-sites):
+Two shapes live here:
 
 - **`Strategy`** = `Callable[[StrategyInput], str | None]` -- the P2b-1
-  single choice. Kept only because `app/eval/runner.py` still calls it.
+  single choice (`cheapest`, `best_published_quality`, `fixed`, `router`,
+  `router_variant`). The runner no longer scores these; they stay as the
+  single-choice reference the attempt forms' first element must agree with.
 - **`AttemptStrategy`** = `Callable[[StrategyInput, Callable[[str], bool]],
-  tuple[str, ...]]` -- the failover-aware form. The second argument,
-  `failed(slug) -> bool`, is the runner's matrix lookup ("did this endpoint's
-  sweep call on this case fail?"). The strategy returns the attempts it would
-  have made, in order, stopping at the first attempt that does not fail or at
-  `max_attempts` (`attempt_cap(base_settings)` = `1 +` the DEPLOYMENT's
-  `max_failover_attempts`, read before `harness_settings` zeroes it); `()` is
-  "no choice". This mirrors `Gateway.run`'s failover loop.
+  tuple[str, ...]]` -- the failover-aware form the runner scores. The second
+  argument, `failed(slug) -> bool`, is the runner's matrix lookup ("did this
+  endpoint's sweep call on THIS case fail?"). The strategy returns the
+  attempts it would have made, in order, stopping at the first attempt that
+  does not fail or at `max_attempts` (`attempt_cap(base_settings)` = `1 +`
+  the DEPLOYMENT's `max_failover_attempts`, read before `harness_settings`
+  zeroes it); `()` is "no choice". This mirrors `Gateway.run`'s failover loop.
 
 Given a case's already-computed eligible set (never re-derived here -- global
 constraint "no eligibility bypass"), no strategy makes a model call; every
 outcome is a matrix lookup the runner performs.
 
 Router signal arms (B48 spec §6): `router_cold` (an empty store),
-`OnlineArm` (only this arm's own attempts on cases `< k`, applied after each
-case is scored) and `warm_prior_signals` (every matrix row of cases `< k`).
-The old `router_warm` arm -- which replayed the CURRENT case's rows before
-scoring it -- leaked the scored outcome; nothing here builds it (the runner's
-own construction goes when Task 5 rewires it), and `warm_signals` stays as
-the replay primitive.
+`OnlineArm` (`router_online`: only this arm's own attempts on cases `< k`,
+applied after each case is scored) and `warm_prior_signals`
+(`router_warm_prior`: every matrix row of cases `< k`). Both non-cold arms
+read on one synthetic case clock -- case `k` is scored at `t_k = k *
+seconds_per_case` (spec §6, amended). No arm replays the case being scored;
+`warm_signals` stays as a generic replay primitive only.
 
 Offline harness code only -- never imported by the serving path.
 """
@@ -432,20 +433,41 @@ def _counts_as_observation(row: "MatrixRow") -> bool:
     return row.error is None or row.counts_unhealth is True
 
 
+
+
 # Synthetic case clock shared by `warm_prior_signals` and `OnlineArm` (B48
-# spec §6): case `k`'s observations sit at `k + j * _SUBSTEP_S` seconds, `j`
-# counting the observations APPLIED within that case. Decay therefore depends
-# on case count, never wall time -- and no live clock is read, so a seeded run
-# is byte-identical.
+# spec §6, amended 2026-09-22): case `k` happens at `t_k = k *
+# seconds_per_case`; its observations sit at `t_k + j * _SUBSTEP_S`, `j`
+# counting the observations APPLIED within that case, and case `k` is scored
+# by reading at `t_k` -- so every observation applied before it is `< t_k`.
+# Decay therefore depends on case count and `seconds_per_case`, never wall
+# time -- and no live clock is read, so a seeded run is byte-identical.
 _SUBSTEP_S = 0.001
-_MAX_OBS_PER_CASE = 999   # keeps every sub-step strictly inside [k, k + 1)
+DEFAULT_SECONDS_PER_CASE = 30.0
 
 
-def _case_time(case_index: int, j: int) -> float:
-    if j > _MAX_OBS_PER_CASE:
+def check_seconds_per_case(seconds_per_case: float) -> float:
+    """`seconds_per_case` as a float, or `ValueError` unless it is `> 0`."""
+    value = float(seconds_per_case)
+    if not value > 0:
+        raise ValueError(f"seconds_per_case must be > 0, got {seconds_per_case!r}")
+    return value
+
+
+def case_read_time(case_index: int, seconds_per_case: float) -> float:
+    """`t_k`: when case `k` is scored on the synthetic case clock."""
+    return case_index * seconds_per_case
+
+
+def _case_time(case_index: int, j: int, seconds_per_case: float) -> float:
+    """The `j`-th applied observation of case `case_index`: `t_k + j ms`.
+    Refuses a sub-step that would reach the next case's `t_{k+1}`."""
+    offset = j * _SUBSTEP_S
+    if offset >= seconds_per_case:
         raise ValueError(
-            f"more than {_MAX_OBS_PER_CASE + 1} observations in case {case_index}")
-    return case_index + j * _SUBSTEP_S
+            f"observation {j} of case {case_index} would reach the next case at "
+            f"seconds_per_case={seconds_per_case} ({_SUBSTEP_S * 1000:g} ms sub-steps)")
+    return case_read_time(case_index, seconds_per_case) + offset
 
 
 class LeakageError(RuntimeError):
@@ -454,44 +476,42 @@ class LeakageError(RuntimeError):
 
 
 def warm_prior_signals(settings: Settings, rows_before_case: Iterable["MatrixRow"],
-                       *, case_index: Mapping[str, int] | None = None,
-                       scoring_case: int | None = None) -> _FrozenReadSignalStore:
+                       *, case_index: Mapping[str, int], scoring_case: int,
+                       seconds_per_case: float) -> _FrozenReadSignalStore:
     """`router_warm_prior`'s store (B48 spec §6): every matrix row of cases
     `< k` -- all eligible endpoints, not just the ones any strategy tried --
     the full-information upper bound. The runner passes only prior rows.
 
     Rows are replayed through `SignalStore.replay` (the same path as
     `warm_signals`), counting an error only when `counts_unhealth` is true,
-    on the synthetic case clock (`_case_time`): a row of case `i` sits at
-    `i + j * 1 ms`, `j` = its position among that case's APPLIED rows. The
-    read clock is frozen at the last applied observation (0.0 when none).
+    on the synthetic case clock: a row of case `i` sits at `_case_time(i, j,
+    seconds_per_case)`, `j` = its position among that case's APPLIED rows.
+    The read clock is frozen at `t_k = scoring_case * seconds_per_case`
+    (spec §6, amended) -- production reads at "now", and time passes between
+    requests even when nothing is observed.
 
-    `case_index` maps `case_id` -> suite position; without it, positions are
-    the order in which case ids first appear in `rows_before_case` (which
-    drifts from the suite index when an earlier case contributed no rows --
-    pass the mapping when that matters). `scoring_case` (requires
-    `case_index`) is the case about to be scored: any row at or after it
-    raises `LeakageError` instead of being replayed."""
-    if scoring_case is not None and case_index is None:
-        raise ValueError("scoring_case requires case_index")
-    first_seen: dict[str, int] = {}
+    `case_index` maps `case_id` -> suite position and `scoring_case` is the
+    case about to be scored; both are required, so the leak guard cannot be
+    skipped: any row at or after `scoring_case` raises `LeakageError`
+    instead of being replayed."""
+    seconds_per_case = check_seconds_per_case(seconds_per_case)
     per_case: dict[int, int] = {}
     observations: list[Observation] = []
-    last_t = 0.0
+    last_t = float("-inf")
     for row in rows_before_case:
-        if case_index is not None:
-            idx = case_index[row.case_id]
-        else:
-            idx = first_seen.setdefault(row.case_id, len(first_seen))
-        if scoring_case is not None and idx >= scoring_case:
+        idx = case_index[row.case_id]
+        if idx >= scoring_case:
             raise LeakageError(
                 f"row {row.case_id}/{row.endpoint} is case {idx}, not before "
                 f"scoring case {scoring_case}")
         if not _counts_as_observation(row):
             continue
+        if row.error is None and row.latency_ms is None:
+            raise ValueError(
+                f"success row {row.case_id}/{row.endpoint} has no latency_ms")
         j = per_case.get(idx, 0)
         per_case[idx] = j + 1
-        t = _case_time(idx, j)
+        t = _case_time(idx, j, seconds_per_case)
         if t < last_t:
             raise ValueError(
                 f"rows are not in case order: {row.case_id} (case {idx}) after t={last_t}")
@@ -503,8 +523,9 @@ def warm_prior_signals(settings: Settings, rows_before_case: Iterable["MatrixRow
             streamed=False, ttft_ms=None))
     # wall_offset=0.0: the synthetic clock IS the log clock, so replay's
     # `ts - wall_offset` is exact (no per-process float rounding).
-    store = _FrozenReadSignalStore(settings.routing.signals, frozen_now=last_t,
-                                   wall_offset=0.0)
+    store = _FrozenReadSignalStore(
+        settings.routing.signals,
+        frozen_now=case_read_time(scoring_case, seconds_per_case), wall_offset=0.0)
     store.replay(observations)
     return store
 
@@ -530,27 +551,29 @@ class OnlineArm:
     Protocol per case `k`: `choose(inp, failed, case_index=k)` FIRST, then
     `observe(k, attempts, rows_by_endpoint)` with the chain `choose`
     returned -- so case `k` is always scored before anything from it is
-    known. `choose` raises `LeakageError` when given `case_index` and the
-    store already holds an observation from case `k` or later; `observe`
-    rejects a case index that does not strictly increase.
+    known. `case_index` is required: `choose` raises `LeakageError` when
+    case `k` has already been observed (`k <= ` the last observed case),
+    and `observe` rejects a case index that does not strictly increase.
+
+    Reads: `choose` first advances the frozen read clock to `t_k = k *
+    seconds_per_case` (spec §6, amended) and scores there; every applied
+    observation is `< t_k`.
 
     Difference from production, stated: the gateway calls `observe_error`
     mid-request, so within one request the failed model's signal has
     already moved when the next hop is selected. Here a case's observations
     land after its whole chain is chosen. The failed model is in `exclude`
     for every later hop of that chain either way, so its own signal cannot
-    change that chain's remaining picks.
-
-    Reads use the frozen-read-clock pattern (`_FrozenReadSignalStore`),
-    anchored at the last APPLIED observation on the synthetic case clock
-    (`_case_time`; 1 s per case)."""
+    change that chain's remaining picks."""
 
     def __init__(self, settings: Settings, registry: "ModelRegistry",
-                 max_attempts: int, weights: dict[str, float] | None = None) -> None:
+                 max_attempts: int, weights: dict[str, float] | None = None, *,
+                 seconds_per_case: float) -> None:
         if max_attempts < 1:
             raise ValueError(f"max_attempts must be >= 1, got {max_attempts}")
         scored = settings if weights is None else variant_settings(settings, weights)
         self._max_attempts = max_attempts
+        self._seconds_per_case = check_seconds_per_case(seconds_per_case)
         self._store = _FrozenReadSignalStore(scored.routing.signals, frozen_now=0.0,
                                              wall_offset=0.0)
         self._router = Router(scored, registry=registry, signals=self._store)
@@ -569,13 +592,17 @@ class OnlineArm:
     def read_clock(self) -> float:
         return self._store.frozen_now
 
+    @property
+    def seconds_per_case(self) -> float:
+        return self._seconds_per_case
+
     def choose(self, inp: StrategyInput, failed: Callable[[str], bool], *,
-               case_index: int | None = None) -> tuple[str, ...]:
-        if (case_index is not None and self._applied
-                and self._applied[-1].case_index >= case_index):
+               case_index: int) -> tuple[str, ...]:
+        if self._last_case is not None and case_index <= self._last_case:
             raise LeakageError(
-                f"scoring case {case_index} with an observation from case "
-                f"{self._applied[-1].case_index} already applied")
+                f"scoring case {case_index} after case {self._last_case} was "
+                "already observed")
+        self._store.advance_read_clock(case_read_time(case_index, self._seconds_per_case))
         return _router_chain(self._router, inp, failed, self._max_attempts)
 
     def observe(self, case_index: int, attempts: tuple[str, ...],
@@ -584,9 +611,14 @@ class OnlineArm:
             raise ValueError(
                 f"observe(case {case_index}) after case {self._last_case}: "
                 "cases must be observed once each, in order")
-        self._last_case = case_index
-        j = 0
-        for pos, slug in enumerate(attempts):
+        if len(attempts) > self._max_attempts:
+            raise ValueError(
+                f"case {case_index}: {len(attempts)} attempts exceed "
+                f"max_attempts={self._max_attempts}")
+        if len(set(attempts)) != len(attempts):
+            raise ValueError(f"case {case_index}: repeated attempt in {attempts}")
+        rows: list["MatrixRow"] = []
+        for pos, slug in enumerate(attempts):   # validate the whole chain first
             row = rows_by_endpoint.get(slug)
             if row is None:
                 raise ValueError(f"no matrix row for attempt {slug!r} in case {case_index}")
@@ -595,10 +627,18 @@ class OnlineArm:
                     raise ValueError(
                         f"attempt {slug!r} served case {case_index} but is not "
                         "the last attempt of the chain")
-                t = _case_time(case_index, j)
+                if row.latency_ms is None:
+                    raise ValueError(
+                        f"success row {row.case_id}/{slug} has no latency_ms")
+            rows.append(row)
+        self._last_case = case_index
+        j = 0
+        for slug, row in zip(attempts, rows):
+            if row.error is None:
+                t = _case_time(case_index, j, self._seconds_per_case)
                 self._store.observe_success(slug, float(row.latency_ms), now=t)
             elif row.counts_unhealth is True:
-                t = _case_time(case_index, j)
+                t = _case_time(case_index, j, self._seconds_per_case)
                 self._store.observe_error(slug, now=t)
             else:
                 continue

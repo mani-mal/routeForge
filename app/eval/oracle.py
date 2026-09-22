@@ -270,7 +270,11 @@ def strategy_metrics(
       matching sweep row, plus a non-empty case with no recorded `Choice`
       at all for `strategy` -- all "should not happen" (brief ruling /
       fix-round-1 finding 4), but counted as violations rather than
-      crashing.
+      crashing. For an explicit `attempts` chain it is also a violation
+      when the chain repeats an endpoint, records entries after the served
+      attempt, or `Choice.endpoint` is not the chain's served endpoint
+      (`None` when exhausted). At most one violation per case: this is a
+      per-case rate, unlike `violations()`'s per-attempt count.
     - `pass_rate`, `quality_regret`, `cost_regret`, `latency_regret`,
       `floor_miss_rate`: as spec §6 points 2-4, computed over non-empty
       cases only (an empty case has no quality/cost/latency notion), from
@@ -379,10 +383,21 @@ def strategy_metrics(
                 if endpoint in case.eligible
                 and (case.case_id, endpoint) in rows_by_case_endpoint
             }
-            if len(case_rows_by_endpoint) != len(set(chain)):
+            if (len(case_rows_by_endpoint) != len(set(chain))
+                    or len(set(chain)) != len(chain)):
+                # an attempt outside E(c) / with no sweep row, or the same
+                # endpoint attempted twice (the gateway excludes a failed one)
                 violations_count += 1
             else:
-                outcome = _attempt_outcome_raw(case_rows_by_endpoint, chain)
+                candidate = _attempt_outcome_raw(case_rows_by_endpoint, chain)
+                if choice.attempts and (candidate["attempts"] != len(chain)
+                                        or choice.endpoint != candidate["served"]):
+                    # entries recorded after the served attempt, or a
+                    # `Choice.endpoint` that is not the chain's served one
+                    # (ruling D) -- the record contradicts itself
+                    violations_count += 1
+                else:
+                    outcome = candidate
 
         served_row = (rows_by_case_endpoint[(case.case_id, outcome["served"])]
                       if outcome["served"] is not None else None)
