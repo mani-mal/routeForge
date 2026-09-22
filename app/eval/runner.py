@@ -199,24 +199,29 @@ def _root_cause(exc: BaseException) -> BaseException:
     reachable from `exc` (spec §4: "the real `counts_as_endpoint_unhealth(exc)`
     on the exception the sweep call raised").
 
-    `_sweep_one` catches whatever `Pipeline.run` propagates -- for a
-    backend failure that is `app/gateway/gateway.py::Gateway.run`'s own
-    `_exhausted(...)`, raised `from exc`, so `__cause__` usually IS the
-    original backend exception (e.g. `SimulatedEndpointFailure`) directly.
+    `_sweep_one` catches whatever `Pipeline.run` propagates -- for a backend
+    failure that is `app/gateway/gateway.py::Gateway.run`'s own
+    `_exhausted(...)`, raised `from exc`, so `__cause__` is the original
+    backend exception (e.g. `SimulatedEndpointFailure`) directly, one hop
+    down.
 
-    But a PINNED sweep call only ever has ONE candidate (the pin), so after
-    its first failure the gateway's retry loop excludes it and calls
-    `Router.select(..., exclude={pinned})` again, which finds an empty pool
-    and raises `NoEligibleCandidate` -- `_exhausted(...) from` THAT
-    exception, not the original backend one. In that (default
-    `max_failover_attempts >= 1`) shape, the original backend exception is
-    unreachable from here: this function still returns the deepest node it
-    CAN reach (`NoEligibleCandidate`, which carries no `status_code`, so
-    `counts_as_endpoint_unhealth` reads it as unhealth = True). Only when
-    the gateway's very first failure already exceeds
-    `settings.routing.max_failover_attempts` -- e.g. `max_failover_attempts
-    == 0` -- does `_exhausted` chain directly from the real backend
-    exception, making it reachable here."""
+    A PINNED sweep call only ever has ONE candidate (the pin,
+    `app/policy/feasible.py` restricts the pool to `ctx.requested_model`),
+    so on ANY failover the gateway's retry loop would exclude that one
+    candidate, find an empty pool, and raise a fresh `NoEligibleCandidate`
+    instead -- `_exhausted(...) from` THAT, never the original backend
+    exception, which `counts_as_endpoint_unhealth` would then misread (no
+    `status_code` -> always True) and whose `failure_latency_ms` would be
+    lost entirely. `harness_settings` (`app/eval/endpoints.py`, B48c fix
+    round 1) forecloses this by setting `max_failover_attempts = 0`: the
+    gateway's very first failure already exceeds the cap, so `_exhausted`
+    always chains directly from the real backend exception and this
+    function's walk terminates on it after exactly one hop. The multi-hop
+    walk (`__cause__` then `__context__`, with a cycle guard) stays general
+    -- e.g. it still unwraps whatever `PolicyGateError`-style wrapping a
+    future caller might introduce -- but under the harness's own settings it
+    is never actually asked to reach past `BackendUnavailable`/
+    `ContextWindowExceeded`'s immediate cause."""
     current = exc
     seen = {id(current)}
     while True:

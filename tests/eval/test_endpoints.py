@@ -17,6 +17,7 @@ from app.config.loader import load_settings
 from app.eval.endpoints import (
     EndpointFileError,
     build_registry,
+    deployment_failover_cap,
     harness_settings,
     load_endpoints,
 )
@@ -303,6 +304,20 @@ class TestHarnessSettings:
         assert settings.routing.max_escalations == 0
         assert BASE_SETTINGS.routing.max_escalations > 0
 
+    def test_gateway_failover_is_off_and_base_untouched(self, tmp_path):
+        """B48c fix round 1: the sweep is a single-shot measurement per
+        endpoint -- the gateway itself must make exactly one attempt so a
+        failed sweep call's exception is the real backend exception, not a
+        `NoEligibleCandidate` from a doomed retry against a pinned pool of
+        one. The deployment's OWN failover is modelled in strategy-level
+        scoring instead (`deployment_failover_cap`, below), not discarded."""
+        assert BASE_SETTINGS.routing.max_failover_attempts > 0  # stock config fails over
+        path = _write(tmp_path, {"endpoints": [_sim_entry()]})
+        specs, _ = load_endpoints(path, live=False, tiers=TIERS)
+        settings = harness_settings(BASE_SETTINGS, specs)
+        assert settings.routing.max_failover_attempts == 0
+        assert BASE_SETTINGS.routing.max_failover_attempts > 0
+
     def test_slug_colliding_with_pricing_yaml_is_priced_from_the_file(self, tmp_path):
         """`ModelRegistry.price_for` checks `pricing.models` first; a spec
         slug that is also a stock pricing.yaml model must still be priced
@@ -345,6 +360,29 @@ class TestHarnessSettings:
         message = str(exc_info.value)
         assert "totally-unknown-cloud" in message
         assert "onprem" in message
+
+
+# --------------------------------------------------------------------------
+# deployment_failover_cap (B48c fix round 1)
+# --------------------------------------------------------------------------
+
+class TestDeploymentFailoverCap:
+    def test_returns_the_deployments_own_configured_value(self):
+        """`config/routing.yaml`'s `max_failover_attempts` (2) -- the value
+        Tasks 4/5's failover-aware scoring caps attempts at (`1 + cap`)."""
+        assert deployment_failover_cap(BASE_SETTINGS) == 2
+
+    def test_reads_base_not_the_harness_zeroed_settings(self, tmp_path):
+        """`harness_settings` zeroes `max_failover_attempts` for the sweep
+        gateway (single-shot measurement); `deployment_failover_cap` must be
+        called on `base` -- the value BEFORE that override -- never on
+        `harness_settings(...)`'s result, and must not itself mutate `base`."""
+        path = _write(tmp_path, {"endpoints": [_sim_entry()]})
+        specs, _ = load_endpoints(path, live=False, tiers=TIERS)
+        swept_settings = harness_settings(BASE_SETTINGS, specs)
+        assert swept_settings.routing.max_failover_attempts == 0
+        assert deployment_failover_cap(BASE_SETTINGS) == 2
+        assert BASE_SETTINGS.routing.max_failover_attempts == 2
 
 
 # --------------------------------------------------------------------------

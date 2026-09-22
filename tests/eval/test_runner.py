@@ -374,34 +374,23 @@ def test_sweep_call_with_extra_generate_becomes_error_row(tmp_path, monkeypatch)
 
 
 # --------------------------------------------------------------------------
-# 6b. matrix rows record endpoint-unhealth (B48c, Task 2)
+# 6b. matrix rows record endpoint-unhealth (B48c, Task 2 + fix round 1)
 # --------------------------------------------------------------------------
 #
-# A PINNED sweep call only ever has one candidate (the pin). After its first
-# failure the gateway's retry loop excludes it and calls `Router.select`
-# again, which finds an empty pool and raises `NoEligibleCandidate` --
-# `Gateway._exhausted(...)` then chains `from` THAT exception, not the
-# original backend one, so `app/eval/runner.py::_root_cause` cannot reach
-# the real backend exception under the default `max_failover_attempts` (2).
-# These tests force `max_failover_attempts=0` so the gateway's very FIRST
-# failure already exceeds the cap and `_exhausted` chains directly from the
-# real backend exception -- the one shape where the original is reachable.
-# This is a genuine limitation of the pinned-sweep design (not a test
-# artifact): under the shipped default, `counts_unhealth` still comes out
-# correct (the unreachable `NoEligibleCandidate` fallback happens to read as
-# unhealth = True, same as a real outage would), but `failure_latency_ms`
-# is not recoverable, and a 4xx-shaped failure's root would read as
-# unhealth = True too, when it should be False. See task-2-report.md.
+# A PINNED sweep call only ever has one candidate (the pin). Without
+# `harness_settings` zeroing `max_failover_attempts` (B48c fix round 1),
+# the gateway's retry loop would exclude that one candidate after its first
+# failure and call `Router.select` again, which finds an empty pool and
+# raises `NoEligibleCandidate` -- `Gateway._exhausted(...)` would then chain
+# `from` THAT exception, not the original backend one, so
+# `app/eval/runner.py::_root_cause` could never reach the real backend
+# exception. `harness_settings` now sets `max_failover_attempts = 0` so the
+# gateway's very FIRST failure already exceeds the cap and `_exhausted`
+# chains directly from the real backend exception -- these tests run
+# through the SHIPPED harness defaults (no per-test override) and prove
+# both `counts_unhealth` and `failure_latency_ms` come out correctly.
 
-def _no_failover(base, specs):
-    from app.eval import endpoints as endpoints_mod
-    settings = endpoints_mod.harness_settings(base, specs)
-    settings.routing.max_failover_attempts = 0
-    return settings
-
-
-def test_outage_row_records_endpoint_unhealth_and_failure_latency(tmp_path, monkeypatch):
-    monkeypatch.setattr(runner, "harness_settings", _no_failover)
+def test_outage_row_records_endpoint_unhealth_and_failure_latency(tmp_path):
     endpoints = [_endpoint("local-a", outages=[{"from": 0, "to": 10}],
                            failure_latency_ms=250.0)]
     cases = [_case("faq-1", "What is the capital of France?")]
@@ -419,8 +408,8 @@ def test_outage_row_records_endpoint_unhealth_and_failure_latency(tmp_path, monk
 def test_400_status_backend_failure_does_not_count_as_unhealth(tmp_path, monkeypatch):
     """A 4xx (other than 429) says the request was wrong, not the endpoint
     (`counts_as_endpoint_unhealth`) -- proven here through the REAL pipeline
-    + simulated backend, not a mock of the exception-unwrapping itself."""
-    monkeypatch.setattr(runner, "harness_settings", _no_failover)
+    + simulated backend, not a mock of the exception-unwrapping itself, and
+    through the shipped `harness_settings` defaults (no override)."""
 
     async def bad_request(self, *args, **kwargs):
         exc = Exception("simulated bad request")
