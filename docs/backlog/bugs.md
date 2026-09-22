@@ -127,6 +127,64 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
+## B50 — `/v1/models` doesn't report each model's context limit, so clients hand-set it
+
+**Severity:** low (improvement, not a defect)
+**Found:** 2026-09-22, reported from a Qwen Code session on the Spark. **Open.**
+
+`GET /v1/models` (`app/api/routes.py:169`) returns only `id`, `object`, `created` and
+`owned_by`. A client such as Qwen Code therefore can't learn a model's real context window
+and relies on a hand-set number. Hand-set too high, the conversation overflows and the
+request fails (B36's 400). Hand-set too low, context is wasted.
+
+RouteForge already has a place for the number: onboarded models carry a `context_window`
+column (`app/apps/models.py`), shown in the console, but nothing fills it automatically and
+nothing reads it. The upstream server usually knows it: vLLM's own `/v1/models` returns
+`max_model_len` (e.g. `131072` for `nemotron-3.5-lightning`, `262144` for `qwen3.8-27b`),
+and the onboarding probe already calls that endpoint.
+
+**Fix, roughly.**
+1. On onboarding and on every re-probe, read `max_model_len` from the upstream `/v1/models`
+   entry matching the slug and store it in `context_window`, unless the operator set a value
+   by hand (an explicit value wins; record which source it came from).
+2. Return it from RouteForge's `/v1/models` as `max_model_len` (vLLM's field name, which
+   clients already understand), omitted when unknown — never a guessed default.
+3. Test: a probe against a fake upstream reporting `max_model_len` stores it; an operator
+   value is not overwritten; `/v1/models` includes it only when known.
+
+## B49 — non-streamed errors aren't in the OpenAI error format, so clients show only "API error"
+
+**Severity:** low–medium (improvement; every client loses the actionable message)
+**Found:** 2026-09-22, reported from a Qwen Code session on the Spark. **Open.**
+
+When a request fails before any response has started, the route raises
+`HTTPException(status, detail)` (`app/api/routes.py`, `_error_status_detail`), and FastAPI's
+default handler returns `{"detail": "..."}`. OpenAI SDK clients read `error.message` /
+`error.code` from an `{"error": {...}}` body; finding none, Qwen Code shows only
+**"API error"** — even when RouteForge's message says exactly what to do, as B36's context
+overflow does ("request exceeds the model's context window … shorten the conversation").
+
+The streamed path is already closer: `sse_error_frame` (`app/api/streaming.py:32`) sends
+`{"error": {"message", "type": "routeforge_error", "code": <HTTP status int>}}` — but `code`
+is the numeric status, not OpenAI's string codes.
+
+**Fix, roughly.**
+1. Register an exception handler for the `/v1/*` routes that renders every error as
+   `{"error": {"message": ..., "type": ..., "param": null, "code": ...}}`, keeping the HTTP
+   status. Admin routes (`/admin/*`) keep their current shape — the console reads `detail`.
+2. Map the known cases to OpenAI's codes: context overflow (`ContextWindowExceeded`) →
+   `code: "context_length_exceeded"`, `type: "invalid_request_error"`; a rejected pinned model /
+   no eligible model → `model_not_found`-style or `invalid_request_error`; 401 →
+   `invalid_api_key`; 429 (budget / rate limit) → `rate_limit_exceeded`; 502 / 503 →
+   `type: "server_error"`. Use the same mapping for `sse_error_frame` so streamed and
+   non-streamed errors can't drift (one mapping, as `_error_status_detail` already is).
+3. Pass the upstream reason through where it is safe (B36 already keeps the context-overflow
+   reason whole); never include PII or endpoint URLs (the existing `_scrub_endpoints`
+   redaction still applies).
+4. Test against the OpenAI Python SDK: a context-overflow request raises `BadRequestError`
+   whose `.code == "context_length_exceeded"` and whose message is RouteForge's text. Add it to
+   `tests/test_openai_compat.py` (the `consumer-contract-tests` skill covers this boundary).
+
 ## B48 — FeasibleRouteBench failure injection for B45: four things it must get right first
 
 **Severity:** evaluation-validity prerequisite (no product defect; nothing on the serving
