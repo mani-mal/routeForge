@@ -24,6 +24,18 @@ treated as 0 (ruling, task-4 brief); a choice naming an endpoint outside
 scored as quality 0 for regret purposes so one bad case cannot silently
 distort the aggregate.
 
+**Failover-aware scoring (B48 spec §5).** A strategy yields an *attempt
+chain*, not one choice. `attempt_outcome` walks the chain: an error row
+(`MatrixRow.error` set) is a failed attempt that costs 0 and adds its
+`failure_latency_ms` (0.0 when unknown); the first non-error row serves
+and ends the chain -- failover is on errors only, never on quality. A
+chain where every attempt fails is **exhausted** (production's 502):
+quality 0, nothing served. The oracle is **unchanged** -- still the best
+eligible endpoint's successful single call -- and regret is computed from
+the chain's outcome, so a strategy whose first pick is dead pays that
+attempt's latency (and wasted attempt), not quality 0, unless every
+attempt fails. Every recorded attempt must be in `E(c)`.
+
 Every float in every dict this module returns is rounded to 12 decimal
 places before it is handed back, so two runs over identical inputs produce
 byte-identical output (determinism ruling, task-4 brief).
@@ -68,11 +80,26 @@ class CaseInfo:
 
 @dataclass(frozen=True)
 class Choice:
-    """One `(case, strategy)` decision (spec §7 `choices.jsonl`)."""
+    """One `(case, strategy)` decision (spec §7 `choices.jsonl`).
+
+    `attempts` is the attempt chain in order (B48 spec §5); `endpoint` is
+    the **served** endpoint -- the chain's first successful attempt -- or
+    `None` (no choice, or an exhausted chain). An empty `attempts` means
+    a legacy single choice: scored as the chain `(endpoint,)` (or `()`
+    when `endpoint` is `None`)."""
 
     case_id: str
     strategy: str
-    endpoint: str | None          # None when the strategy made no choice (empty set)
+    endpoint: str | None          # served endpoint; None when nothing was served
+    attempts: tuple[str, ...] = ()
+
+
+def _attempt_chain(choice: Choice) -> tuple[str, ...]:
+    """The chain to score for `choice`: its `attempts`, or the legacy
+    single-choice chain `(endpoint,)` when `attempts` is empty."""
+    if choice.attempts:
+        return tuple(choice.attempts)
+    return (choice.endpoint,) if choice.endpoint is not None else ()
 
 def _round_value(value):
     """Round every float leaf in `value` to 12 dp; recurse through dict,
@@ -96,6 +123,82 @@ def _mean(xs: list[float]) -> float | None:
     """`None` (undefined), never 0.0, when `xs` is empty -- an unpopulated
     aggregate must not read as "zero regret"."""
     return sum(xs) / len(xs) if xs else None
+
+def attempt_outcome(
+    rows_by_endpoint: dict[str, MatrixRow], attempts: tuple[str, ...],
+) -> dict:
+    """The outcome of one attempt chain on one case (B48 spec §5), rounded
+    like every other dict this module hands back. See
+    `_attempt_outcome_raw` for the full definition; `strategy_metrics`
+    uses the unrounded form and rounds once at its own output (the same
+    unrounded-internal pattern as `_oracle_raw` / `case_oracle`)."""
+    return _round_value(_attempt_outcome_raw(rows_by_endpoint, attempts))
+
+def _attempt_outcome_raw(
+    rows_by_endpoint: dict[str, MatrixRow], attempts: tuple[str, ...],
+) -> dict:
+    """The outcome of one attempt chain on one case (B48 spec §5),
+    **unrounded**. Internal.
+
+    `rows_by_endpoint` maps endpoint slug to that case's sweep row; every
+    slug in `attempts` up to and including the first success must be
+    present (`KeyError` otherwise -- `strategy_metrics` checks this, and
+    eligibility, before calling). `attempts` is scored **exactly as given**:
+    no attempt cap is applied here (the cap, `1 +
+    max_failover_attempts`, is the strategy's job). Walking the chain in
+    order:
+
+    - an error row (`error` set) is a failed attempt: cost 0, latency
+      `failure_latency_ms` (0.0 when unknown);
+    - the first non-error row serves and ends the chain -- any later
+      entries are not attempts and are not scored (failover is on error
+      only; a below-floor answer is served, not retried).
+
+    Returns `{"served", "quality", "cost_usd", "latency_ms", "attempts",
+    "wasted_attempts", "exhausted"}`:
+    - `served`: the serving endpoint, or `None`;
+    - `quality`: the served row's quality, 0.0 if nothing was served;
+    - `cost_usd`: sum of attempt costs (failed attempts cost 0);
+    - `latency_ms`: sum of failed attempts' latencies plus the served
+      row's latency; for an exhausted chain the failed latencies alone;
+      `None` for an empty chain or a served row with no latency;
+    - `attempts`: attempts made (through the first success);
+    - `wasted_attempts`: failed attempts;
+    - `exhausted`: `True` iff at least one attempt was made and none
+      succeeded. An empty chain is "no choice", not exhausted.
+    """
+    served: MatrixRow | None = None
+    made = 0
+    wasted = 0
+    cost = 0.0
+    failed_latency = 0.0
+    for endpoint in attempts:
+        row = rows_by_endpoint[endpoint]
+        made += 1
+        if row.error is not None:
+            wasted += 1          # a failed attempt costs 0 (spec §5)
+            failed_latency += (row.failure_latency_ms
+                               if row.failure_latency_ms is not None else 0.0)
+            continue
+        served = row
+        cost += row.cost_usd
+        break
+
+    if served is not None:
+        latency = (failed_latency + served.latency_ms
+                   if served.latency_ms is not None else None)
+    else:
+        latency = failed_latency if made else None
+
+    return {
+        "served": served.endpoint if served is not None else None,
+        "quality": served.quality if served is not None else 0.0,
+        "cost_usd": cost,
+        "latency_ms": latency,
+        "attempts": made,
+        "wasted_attempts": wasted,
+        "exhausted": made > 0 and served is None,
+    }
 
 def _oracle_raw(rows: list[MatrixRow]) -> dict:
     """The feasible-oracle arithmetic (spec §6), **unrounded**. Internal.
@@ -161,24 +264,32 @@ def strategy_metrics(
 
     Returns:
     - `n_cases`: `len(cases)`.
-    - `violation_rate`: share of `cases` whose choice names an endpoint not
-      in that case's `eligible` set (including a non-`None` choice on an
-      empty case), plus a choice naming an eligible endpoint with no
+    - `violation_rate`: share of `cases` whose attempt chain names **any**
+      endpoint not in that case's `eligible` set (including any attempt on
+      an empty case), plus a chain naming an eligible endpoint with no
       matching sweep row, plus a non-empty case with no recorded `Choice`
       at all for `strategy` -- all "should not happen" (brief ruling /
       fix-round-1 finding 4), but counted as violations rather than
       crashing.
     - `pass_rate`, `quality_regret`, `cost_regret`, `latency_regret`,
       `floor_miss_rate`: as spec §6 points 2-4, computed over non-empty
-      cases only (an empty case has no quality/cost/latency notion). A
-      `None` choice, or a violating choice, scores quality 0 for the
-      regret computation and never contributes to cost/latency regret
-      (those are computed only when the choice itself passed).
-    - `mean_chosen_cost`: mean, over non-empty cases, of the chosen
-      endpoint's `cost_usd` (0.0 for an error row, a `None` choice, or a
-      violating choice) -- not itself one of spec §6's five metrics, but
-      needed by `headline`'s saving-percentage calculation, which only
-      receives this function's output.
+      cases only (an empty case has no quality/cost/latency notion), from
+      the chain's `attempt_outcome` (B48 spec §5): a case passes iff the
+      *served* row passed; quality is the served row's (0 if exhausted);
+      cost regret uses the chain's summed cost and latency regret its
+      summed latency (failed attempts' latency plus the served call's).
+      An empty chain, an exhausted chain, or a violating chain scores
+      quality 0 and never contributes to cost/latency regret (those are
+      computed only when the served outcome passed).
+    - `mean_chosen_cost`: mean, over non-empty cases, of the chain's
+      failover-aware cost (sum of attempt costs; failed attempts, an
+      empty chain, and a violating chain cost 0.0) -- not itself one of
+      spec §6's five metrics, but needed by `headline`'s saving-percentage
+      calculation, which only receives this function's output.
+    - `wasted_attempts`: mean, over non-empty cases, of the chain's failed
+      attempts (B48 spec §5).
+    - `exhausted_rate`: share of non-empty cases whose chain was exhausted
+      (at least one attempt, none succeeded).
     - `infeasible_at_floor`: count of non-empty cases where `P(c) = {}`.
       Strategy-independent (an oracle property of the case), exposed here
       per-strategy for convenient reporting.
@@ -210,6 +321,8 @@ def strategy_metrics(
     cost_regrets: list[float] = []
     latency_regrets: list[float] = []
     chosen_costs: list[float] = []
+    wasted_counts: list[float] = []
+    exhausted_flags: list[float] = []
 
     for case in cases:
         actual_empty = len(case.eligible) == 0
@@ -220,15 +333,14 @@ def strategy_metrics(
 
         has_choice_record = case.case_id in choice_by_case
         choice = choice_by_case.get(case.case_id)
-        chosen_endpoint = choice.endpoint if choice is not None else None
+        chain = _attempt_chain(choice) if choice is not None else ()
 
         if actual_empty:
-            # A correct choice on an empty case is None; anything else
-            # names an endpoint outside E(c) = {} by construction. A
-            # missing Choice record is also correct here (nothing to
-            # record) -- the harness-bug rule below applies only to
-            # non-empty cases.
-            if chosen_endpoint is not None:
+            # A correct chain on an empty case is empty; any attempt names
+            # an endpoint outside E(c) = {} by construction. A missing
+            # Choice record is also correct here (nothing to record) --
+            # the harness-bug rule below applies only to non-empty cases.
+            if chain:
                 violations_count += 1
             continue
 
@@ -244,41 +356,59 @@ def strategy_metrics(
         if oracle is not None and oracle["infeasible_at_floor"]:
             infeasible_count += 1
 
-        row: MatrixRow | None = None
+        # Failover-aware outcome (B48 spec §5). A violating chain -- any
+        # attempt outside E(c), or an eligible attempt with no sweep row --
+        # is scored exactly like "no choice" (quality 0, cost 0, no
+        # attempts, not exhausted) so one bad case cannot silently distort
+        # the aggregate; the violation itself is what fails the run.
+        outcome = _attempt_outcome_raw({}, ())
         if not has_choice_record:
             # A non-empty case with no Choice record at all for this
             # strategy is a harness bug -- the runner is expected to
             # record one Choice per (case, strategy) it ran. Distinct from
-            # an explicit Choice(endpoint=None), which is a legitimate "no
-            # choice" and stays violation-free (below).
+            # an explicit Choice(endpoint=None) with no attempts, which is
+            # a legitimate "no choice" and stays violation-free (below).
             violations_count += 1
-        elif chosen_endpoint is not None:
-            if chosen_endpoint not in case.eligible:
+        elif chain:
+            # Every recorded attempt must be in E(c) and have a sweep row
+            # -- including any recorded past the served one (spec §5:
+            # "any attempt outside E(c) is a violation").
+            case_rows_by_endpoint = {
+                endpoint: rows_by_case_endpoint[(case.case_id, endpoint)]
+                for endpoint in chain
+                if endpoint in case.eligible
+                and (case.case_id, endpoint) in rows_by_case_endpoint
+            }
+            if len(case_rows_by_endpoint) != len(set(chain)):
                 violations_count += 1
             else:
-                row = rows_by_case_endpoint.get((case.case_id, chosen_endpoint))
-                if row is None:
-                    violations_count += 1
+                outcome = _attempt_outcome_raw(case_rows_by_endpoint, chain)
 
-        chosen_quality = row.quality if row is not None else 0.0
-        chosen_passed = row.passed if row is not None else False
-        chosen_cost = row.cost_usd if row is not None else 0.0
+        served_row = (rows_by_case_endpoint[(case.case_id, outcome["served"])]
+                      if outcome["served"] is not None else None)
+        chosen_passed = served_row.passed if served_row is not None else False
+        chosen_cost = outcome["cost_usd"]
+        chosen_latency = outcome["latency_ms"]
 
         q_star = oracle["q_star"] if oracle is not None else 0.0
-        quality_regrets.append(q_star - chosen_quality)
+        quality_regrets.append(q_star - outcome["quality"])
         pass_flags.append(1.0 if chosen_passed else 0.0)
         chosen_costs.append(chosen_cost)
+        wasted_counts.append(float(outcome["wasted_attempts"]))
+        exhausted_flags.append(1.0 if outcome["exhausted"] else 0.0)
 
         if oracle is not None and oracle["passing"]:
             floor_miss_flags.append(0.0 if chosen_passed else 1.0)
             if chosen_passed:
+                # Only a served, passing outcome reaches here, so an
+                # exhausted chain's (failure-only) latency never enters
+                # latency regret.
                 c_star = oracle["c_star"]
                 if c_star is not None:
                     cost_regrets.append(chosen_cost - c_star)
                 l_star = oracle["l_star"]
-                if (row is not None and row.latency_ms is not None
-                        and l_star is not None):
-                    latency_regrets.append(row.latency_ms - l_star)
+                if chosen_latency is not None and l_star is not None:
+                    latency_regrets.append(chosen_latency - l_star)
 
     violation_rate = violations_count / n_cases if n_cases else None
 
@@ -293,6 +423,8 @@ def strategy_metrics(
         "infeasible_at_floor": infeasible_count,
         "empty_set_mismatches": empty_mismatches,
         "mean_chosen_cost": _mean(chosen_costs),
+        "wasted_attempts": _mean(wasted_counts),
+        "exhausted_rate": _mean(exhausted_flags),
     })
 
 def grouped(
@@ -429,8 +561,10 @@ def violations(
     otherwise CLI exit code 2").
 
     Counts:
-    - every `choice` naming an endpoint outside that case's `eligible` set
-      (a non-`None` choice on an empty case always counts, since `E(c)` is
+    - every **attempt** in every `choice`'s chain (B48 spec §5; a legacy
+      choice with empty `attempts` is the chain `(endpoint,)`) naming an
+      endpoint outside that case's `eligible` set -- one per offending
+      attempt (any attempt on an empty case always counts, since `E(c)` is
       empty);
     - every `(case_id, endpoint)` in `sweep_served` -- the calls the sweep
       actually made -- naming an endpoint outside that case's `eligible`
@@ -443,8 +577,9 @@ def violations(
     count = 0
     for choice in choices:
         eligible = eligible_by_case.get(choice.case_id, set())
-        if choice.endpoint is not None and choice.endpoint not in eligible:
-            count += 1
+        for endpoint in _attempt_chain(choice):
+            if endpoint not in eligible:
+                count += 1
     for case_id, endpoint in sweep_served:
         eligible = eligible_by_case.get(case_id, set())
         if endpoint not in eligible:

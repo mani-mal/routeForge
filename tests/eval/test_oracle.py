@@ -17,6 +17,7 @@ from app.eval.oracle import (
     CaseInfo,
     Choice,
     MatrixRow,
+    attempt_outcome,
     case_oracle,
     grouped,
     headline,
@@ -38,8 +39,19 @@ def _case(case_id, eligible=(), expect_empty=False, rejected_ok=False, tags=None
         rejected_ok=rejected_ok, tags=tags or {})
 
 
-def _choice(case_id, strategy, endpoint) -> Choice:
-    return Choice(case_id=case_id, strategy=strategy, endpoint=endpoint)
+def _choice(case_id, strategy, endpoint, attempts=()) -> Choice:
+    return Choice(case_id=case_id, strategy=strategy, endpoint=endpoint,
+                  attempts=tuple(attempts))
+
+
+def _dead(case_id, endpoint, failure_latency_ms=None) -> MatrixRow:
+    """An injected-failure error row (B48 spec §4): quality 0, not passed,
+    cost 0, latency None; `failure_latency_ms` None means "unknown"."""
+    return MatrixRow(
+        case_id=case_id, endpoint=endpoint, quality=0.0, passed=False,
+        cost_usd=0.0, latency_ms=None, error="ConnectionError: injected",
+        counts_unhealth=True, failure_latency_ms=failure_latency_ms,
+        error_class="ConnectionError")
 
 
 # ---------------------------------------------------------------------------
@@ -569,3 +581,161 @@ class TestRoundingAndValidation:
         choices = [_choice("c1", "s", "ghost")]
         metrics = strategy_metrics([case], rows=[], choices=choices, strategy="s")
         assert metrics["violation_rate"] == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Failover-aware scoring (B48 spec §5): a strategy yields an attempt chain
+# ---------------------------------------------------------------------------
+
+class TestAttemptOutcome:
+    """`attempt_outcome` against hand-computed chains. Failover happens only
+    on an error row; the first non-error row serves (even below floor)."""
+
+    ROWS = {
+        "dead": _dead("c1", "dead", failure_latency_ms=120.0),
+        "dead2": _dead("c1", "dead2", failure_latency_ms=None),  # unknown -> 0.0
+        "dead3": _dead("c1", "dead3", failure_latency_ms=30.0),
+        "ok": _row("c1", "ok", 0.9, True, 0.04, 500.0),
+        "weak": _row("c1", "weak", 0.5, False, 0.01, 200.0),
+    }
+
+    def test_dead_then_ok_serves_ok_and_pays_the_failed_latency(self):
+        out = attempt_outcome(self.ROWS, ("dead", "ok"))
+        assert out == {
+            "served": "ok", "quality": 0.9, "cost_usd": 0.04,
+            "latency_ms": 120.0 + 500.0, "attempts": 2,
+            "wasted_attempts": 1, "exhausted": False,
+        }
+
+    def test_all_dead_is_exhausted_with_summed_failure_latency(self):
+        out = attempt_outcome(self.ROWS, ("dead", "dead2", "dead3"))
+        assert out == {
+            "served": None, "quality": 0.0, "cost_usd": 0.0,
+            "latency_ms": 120.0 + 0.0 + 30.0, "attempts": 3,
+            "wasted_attempts": 3, "exhausted": True,
+        }
+
+    def test_uses_exactly_the_given_list_no_cap_applied(self):
+        # The attempt cap (1 + max_failover_attempts) is the caller's job:
+        # a 4-long all-dead chain is scored as 4 attempts, not truncated.
+        out = attempt_outcome(self.ROWS, ("dead", "dead2", "dead3", "dead"))
+        assert out["attempts"] == 4
+        assert out["wasted_attempts"] == 4
+        assert out["latency_ms"] == 120.0 + 0.0 + 30.0 + 120.0
+        assert out["exhausted"] is True
+
+    def test_chain_stops_at_the_first_success(self):
+        out = attempt_outcome(self.ROWS, ("ok", "dead"))
+        assert out["served"] == "ok"
+        assert out["attempts"] == 1
+        assert out["wasted_attempts"] == 0
+        assert out["latency_ms"] == 500.0
+
+    def test_a_below_floor_success_serves_no_failover_on_quality(self):
+        out = attempt_outcome(self.ROWS, ("dead", "weak", "ok"))
+        assert out["served"] == "weak"
+        assert out["quality"] == 0.5
+        assert out["cost_usd"] == 0.01
+        assert out["latency_ms"] == 120.0 + 200.0
+        assert out["attempts"] == 2
+
+    def test_empty_chain_is_no_choice_not_exhausted(self):
+        out = attempt_outcome(self.ROWS, ())
+        assert out == {
+            "served": None, "quality": 0.0, "cost_usd": 0.0,
+            "latency_ms": None, "attempts": 0,
+            "wasted_attempts": 0, "exhausted": False,
+        }
+
+
+class TestFailoverAwareStrategyMetrics:
+    """Case c1: eligible {dead, dead2, ok}. Oracle (unchanged, over single
+    successful calls): q* = 0.9, P = {ok}, c* = 0.04, l* = 500."""
+
+    ROWS = [
+        _dead("c1", "dead", failure_latency_ms=120.0),
+        _dead("c1", "dead2", failure_latency_ms=80.0),
+        _row("c1", "ok", 0.9, True, 0.04, 500.0),
+    ]
+    CASE = _case("c1", eligible=("dead", "dead2", "ok"))
+
+    def test_failover_to_ok_pays_latency_not_quality(self):
+        choices = [_choice("c1", "s", "ok", attempts=("dead", "ok"))]
+        m = strategy_metrics([self.CASE], self.ROWS, choices, "s")
+        assert m["violation_rate"] == 0.0
+        assert m["quality_regret"] == pytest.approx(0.0)
+        assert m["pass_rate"] == 1.0
+        assert m["floor_miss_rate"] == 0.0
+        assert m["cost_regret"] == pytest.approx(0.0)
+        # (120 failed + 500 served) - l* 500
+        assert m["latency_regret"] == pytest.approx(120.0)
+        assert m["mean_chosen_cost"] == pytest.approx(0.04)
+        assert m["wasted_attempts"] == pytest.approx(1.0)
+        assert m["exhausted_rate"] == 0.0
+
+    def test_exhausted_chain_scores_quality_zero_and_no_latency_regret(self):
+        choices = [_choice("c1", "s", None, attempts=("dead", "dead2"))]
+        m = strategy_metrics([self.CASE], self.ROWS, choices, "s")
+        assert m["violation_rate"] == 0.0
+        assert m["quality_regret"] == pytest.approx(0.9)
+        assert m["pass_rate"] == 0.0
+        assert m["floor_miss_rate"] == 1.0
+        assert m["cost_regret"] is None
+        assert m["latency_regret"] is None
+        assert m["mean_chosen_cost"] == pytest.approx(0.0)
+        assert m["wasted_attempts"] == pytest.approx(2.0)
+        assert m["exhausted_rate"] == 1.0
+
+    def test_wasted_and_exhausted_are_means_over_non_empty_cases(self):
+        cases = [
+            self.CASE,
+            _case("c2", eligible=("x",)),
+            _case("c3", eligible=(), expect_empty=True, rejected_ok=True),
+        ]
+        rows = self.ROWS + [_row("c2", "x", 0.9, True, 0.02, 100.0)]
+        choices = [
+            _choice("c1", "s", None, attempts=("dead", "dead2")),
+            _choice("c2", "s", "x", attempts=("x",)),
+            _choice("c3", "s", None),
+        ]
+        m = strategy_metrics(cases, rows, choices, "s")
+        assert m["wasted_attempts"] == pytest.approx((2 + 0) / 2)
+        assert m["exhausted_rate"] == pytest.approx(0.5)
+
+    def test_ineligible_second_attempt_is_a_violation(self):
+        choices = [_choice("c1", "s", None, attempts=("dead", "european"))]
+        m = strategy_metrics([self.CASE], self.ROWS, choices, "s")
+        assert m["violation_rate"] == 1.0
+        assert m["quality_regret"] == pytest.approx(0.9)
+        assert m["cost_regret"] is None
+        assert violations([self.CASE], choices, sweep_served=[]) == 1
+
+    def test_violation_after_a_success_is_still_counted(self):
+        # Every recorded attempt is checked, even one past the served one.
+        choices = [_choice("c1", "s", "ok", attempts=("ok", "european"))]
+        m = strategy_metrics([self.CASE], self.ROWS, choices, "s")
+        assert m["violation_rate"] == 1.0
+        assert violations([self.CASE], choices, sweep_served=[]) == 1
+
+    def test_dead_first_is_not_cheaper_than_live_first_b48b(self):
+        # Pre-B48 a strategy "choosing" a dead endpoint scored cost 0 and
+        # looked cheapest. Failover-aware cost counts what was served.
+        dead_first = [_choice("c1", "dead_first", "ok", attempts=("dead", "ok"))]
+        live_first = [_choice("c1", "live_first", "ok", attempts=("ok",))]
+        m_dead = strategy_metrics([self.CASE], self.ROWS, dead_first, "dead_first")
+        m_live = strategy_metrics([self.CASE], self.ROWS, live_first, "live_first")
+        assert m_dead["mean_chosen_cost"] >= m_live["mean_chosen_cost"]
+        assert m_dead["mean_chosen_cost"] == pytest.approx(0.04)
+
+    def test_empty_attempts_falls_back_to_endpoint(self):
+        legacy = [_choice("c1", "s", "ok")]
+        explicit = [_choice("c1", "s", "ok", attempts=("ok",))]
+        assert (strategy_metrics([self.CASE], self.ROWS, legacy, "s")
+                == strategy_metrics([self.CASE], self.ROWS, explicit, "s"))
+        # A legacy single choice of a dead endpoint is a one-attempt
+        # exhausted chain (quality 0, no latency regret).
+        m = strategy_metrics([self.CASE], self.ROWS, [_choice("c1", "s", "dead")], "s")
+        assert m["exhausted_rate"] == 1.0
+        assert m["wasted_attempts"] == pytest.approx(1.0)
+        assert m["latency_regret"] is None
+        assert violations([self.CASE], [_choice("c1", "s", "european")], []) == 1
