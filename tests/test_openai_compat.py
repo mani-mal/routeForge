@@ -227,6 +227,56 @@ def test_sdk_reads_auth_failure_code(client) -> None:
     assert ei.value.code == "invalid_api_key"
 
 
+def test_sdk_reads_rate_limit_code() -> None:
+    """max_rpm exceeded -> `openai.RateLimitError` with `code ==
+    "rate_limit_exceeded"` and `type == "rate_limit_error"`. Setup mirrors
+    tests/onboarding/test_rejection_points.py::test_rate_limit_is_429_after_max_rpm."""
+    openai = pytest.importorskip("openai")
+    from tests.onboarding.harness import conformance_client, onboard
+
+    with conformance_client() as c:
+        app = onboard(c, "sdk-rate-limit", max_rpm=1)
+        token = app.headers["Authorization"].removeprefix("Bearer ")
+        oc = _sdk(c, token)
+        oc.chat.completions.create(model="auto", messages=[{"role": "user", "content": "hi"}])
+        with pytest.raises(openai.RateLimitError) as ei:
+            oc.chat.completions.create(model="auto", messages=[{"role": "user", "content": "hi"}])
+    assert ei.value.code == "rate_limit_exceeded"
+    assert ei.value.type == "rate_limit_error"
+
+
+def test_sdk_reads_daily_budget_code() -> None:
+    """Daily budget exhausted is also a 429, but a DIFFERENT `type` --
+    "insufficient_quota", not "rate_limit_error" -- the one pair in the whole
+    mapping that shares a status and deliberately differs on `type`, so a
+    single 429 test would let the two collapse into each other unnoticed.
+    Setup mirrors tests/onboarding/test_rejection_points.py::
+    test_daily_budget_exhausted_is_429_and_named."""
+    openai = pytest.importorskip("openai")
+    from app.apps import store
+    from tests.onboarding.harness import conformance_client, onboard
+
+    with conformance_client() as c:
+        app = onboard(c, "sdk-daily-budget", max_spend_usd_per_day=0.5)
+
+        async def spend():
+            async with c.app.state.db.session() as session:
+                await store.record_usage(
+                    session, application_id="sdk-daily-budget", request_id="seed",
+                    model="local-8b", provider="onprem", tier="cheap", prompt_tokens=1,
+                    completion_tokens=1, total_tokens=2, cost_usd=1.0, baseline_usd=1.0,
+                    latency_ms=1.0, sensitivity="public", onprem_only=False, status="ok")
+                await session.commit()
+
+        c.portal.call(spend)
+        token = app.headers["Authorization"].removeprefix("Bearer ")
+        with pytest.raises(openai.RateLimitError) as ei:
+            _sdk(c, token).chat.completions.create(
+                model="auto", messages=[{"role": "user", "content": "hi"}])
+    assert ei.value.code == "insufficient_quota"
+    assert ei.value.type == "insufficient_quota"
+
+
 def test_streamed_and_plain_errors_agree(client, monkeypatch) -> None:
     """A failure describes itself identically whether or not the response had
     already started (B49 design §3.4)."""
