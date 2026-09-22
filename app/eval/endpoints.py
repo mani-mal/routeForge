@@ -22,7 +22,7 @@ from collections.abc import Collection
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.apps.db import Database
 from app.apps.registry import ModelRegistry
@@ -47,9 +47,33 @@ class LatencyProfile(BaseModel):
     jitter: float = 0.0
 
 
+class OutageSpan(BaseModel):
+    """An inclusive, 0-based **case-index** range (suite file order) during
+    which every call to the endpoint fails (spec §3). `from_`'s YAML key is
+    `from` (a Python keyword); `populate_by_name=True` also lets tests
+    construct one by keyword argument `from_=...`."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    from_: int = Field(alias="from")
+    to: int
+
+    @model_validator(mode="after")
+    def _check_range(self) -> "OutageSpan":
+        if self.from_ < 0:
+            raise ValueError(f"outage 'from' = {self.from_!r} must be >= 0")
+        if self.to < self.from_:
+            raise ValueError(
+                f"outage 'to' = {self.to!r} must be >= 'from' = {self.from_!r}")
+        return self
+
+
 class SimProfile(BaseModel):
     quality: dict[str, float]
     latency_ms: LatencyProfile
+    outages: list[OutageSpan] = []
+    error_rate: float = 0.0
+    failure_latency_ms: float | None = None
 
     @model_validator(mode="after")
     def _check_quality(self) -> "SimProfile":
@@ -59,6 +83,17 @@ class SimProfile(BaseModel):
             if not (0.0 <= value <= 1.0):
                 raise ValueError(
                     f"simulated.quality[{workload!r}] = {value!r} is out of [0,1]")
+        return self
+
+    @model_validator(mode="after")
+    def _check_failure_fields(self) -> "SimProfile":
+        if not (0.0 <= self.error_rate <= 1.0):
+            raise ValueError(
+                f"simulated.error_rate = {self.error_rate!r} is out of [0,1]")
+        if self.failure_latency_ms is not None and self.failure_latency_ms <= 0:
+            raise ValueError(
+                f"simulated.failure_latency_ms = {self.failure_latency_ms!r} "
+                "must be > 0")
         return self
 
 

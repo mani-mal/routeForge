@@ -88,6 +88,28 @@ class TestLoadEndpointsValid:
         specs, _ = load_endpoints(path, live=False, tiers=TIERS)
         assert specs[0].price.cached_input is None
 
+    def test_failure_fields_default(self, tmp_path):
+        path = _write(tmp_path, {"endpoints": [_sim_entry()]})
+        specs, _ = load_endpoints(path, live=False, tiers=TIERS)
+        assert specs[0].simulated.outages == []
+        assert specs[0].simulated.error_rate == 0.0
+        assert specs[0].simulated.failure_latency_ms is None
+
+    def test_loads_outages_error_rate_and_failure_latency(self, tmp_path):
+        entry = _sim_entry(simulated={
+            "quality": {"default": 0.9},
+            "latency_ms": {"mean": 900, "jitter": 100},
+            "outages": [{"from": 3, "to": 7}],
+            "error_rate": 0.2,
+            "failure_latency_ms": 500,
+        })
+        path = _write(tmp_path, {"endpoints": [entry]})
+        specs, _ = load_endpoints(path, live=False, tiers=TIERS)
+        profile = specs[0].simulated
+        assert [(span.from_, span.to) for span in profile.outages] == [(3, 7)]
+        assert profile.error_rate == 0.2
+        assert profile.failure_latency_ms == 500
+
 
 # --------------------------------------------------------------------------
 # load_endpoints -- errors
@@ -158,6 +180,46 @@ class TestLoadEndpointsErrors:
         entry = _sim_entry(simulated={
             "quality": {"default": 1.5},
             "latency_ms": {"mean": 900},
+        })
+        path = _write(tmp_path, {"endpoints": [entry]})
+        with pytest.raises(EndpointFileError):
+            load_endpoints(path, live=False, tiers=TIERS)
+
+    def test_outage_to_before_from_raises(self, tmp_path):
+        entry = _sim_entry(simulated={
+            "quality": {"default": 0.9},
+            "latency_ms": {"mean": 900},
+            "outages": [{"from": 5, "to": 2}],
+        })
+        path = _write(tmp_path, {"endpoints": [entry]})
+        with pytest.raises(EndpointFileError):
+            load_endpoints(path, live=False, tiers=TIERS)
+
+    def test_outage_negative_from_raises(self, tmp_path):
+        entry = _sim_entry(simulated={
+            "quality": {"default": 0.9},
+            "latency_ms": {"mean": 900},
+            "outages": [{"from": -1, "to": 2}],
+        })
+        path = _write(tmp_path, {"endpoints": [entry]})
+        with pytest.raises(EndpointFileError):
+            load_endpoints(path, live=False, tiers=TIERS)
+
+    def test_error_rate_out_of_range_raises(self, tmp_path):
+        entry = _sim_entry(simulated={
+            "quality": {"default": 0.9},
+            "latency_ms": {"mean": 900},
+            "error_rate": 1.5,
+        })
+        path = _write(tmp_path, {"endpoints": [entry]})
+        with pytest.raises(EndpointFileError):
+            load_endpoints(path, live=False, tiers=TIERS)
+
+    def test_failure_latency_ms_not_positive_raises(self, tmp_path):
+        entry = _sim_entry(simulated={
+            "quality": {"default": 0.9},
+            "latency_ms": {"mean": 900},
+            "failure_latency_ms": 0,
         })
         path = _write(tmp_path, {"endpoints": [entry]})
         with pytest.raises(EndpointFileError):

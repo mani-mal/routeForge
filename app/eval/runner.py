@@ -126,10 +126,10 @@ class _CountingBackend:
         self._case_id: str | None = None
         self.calls: dict[str, int] = {}
 
-    def set_case(self, case: Case) -> None:
+    def set_case(self, case: Case, index: int) -> None:
         self._case_id = case.id
         if hasattr(self._inner, "set_case"):
-            self._inner.set_case(case)
+            self._inner.set_case(case, index)
 
     async def generate(self, *args, **kwargs):
         if self._case_id is not None:
@@ -195,7 +195,7 @@ def _trace_step(resp: dict, step: str) -> list[dict]:
 
 
 async def _sweep_one(pipeline: Pipeline, backend: _CountingBackend, case: Case,
-                     endpoint: str, app_policy, *, keep_text: bool
+                     endpoint: str, app_policy, index: int, *, keep_text: bool
                      ) -> tuple[MatrixRow, dict, str | None, int | None]:
     """One pinned call. Returns `(row, jsonl_row, served, tokens_after)` --
     `served` is `None` when the call raised (nothing was served).
@@ -203,8 +203,12 @@ async def _sweep_one(pipeline: Pipeline, backend: _CountingBackend, case: Case,
     A pinned sweep call is a single-shot measurement: exactly one backend
     `generate` call. A successful call that made any other number (e.g. a
     confidence escalation re-issuing the pin) is scored as an error row
-    (`GENERATE_COUNT_MISMATCH`), never graded on whichever answer came last."""
-    backend.set_case(case)
+    (`GENERATE_COUNT_MISMATCH`), never graded on whichever answer came last.
+
+    `index` is the case's 0-based position in the suite (spec §3): the
+    simulated backend's outage spans are indexed by suite order, not wall
+    time."""
+    backend.set_case(case, index)
     calls_before = backend.calls.get(case.id, 0)
     request = ChatRequest(
         model=endpoint, messages=[Message.model_validate(m) for m in case.messages])
@@ -366,7 +370,7 @@ async def _run_loaded(*, cases, specs, settings, registry, detector, variants,
 
     with open(out / "matrix.jsonl", "w", encoding="utf-8") as matrix_f, \
             open(out / "choices.jsonl", "w", encoding="utf-8") as choices_f:
-        for case in cases:
+        for index, case in enumerate(cases):
             app_policy = case.policy_view()
             messages = [Message.model_validate(m) for m in case.messages]
             pre = feasible_set(settings, registry, app_policy, tenant_id=TENANT_ID)
@@ -393,7 +397,8 @@ async def _run_loaded(*, cases, specs, settings, registry, detector, variants,
             tokens_seen: int | None = None
             for endpoint in post_names:
                 row, line, served, tokens_after = await _sweep_one(
-                    pipeline, backend, case, endpoint, app_policy, keep_text=keep_text)
+                    pipeline, backend, case, endpoint, app_policy, index,
+                    keep_text=keep_text)
                 rows.append(row)
                 matrix_f.write(json.dumps(line, sort_keys=True) + "\n")
                 matrix_f.flush()
@@ -413,7 +418,7 @@ async def _run_loaded(*, cases, specs, settings, registry, detector, variants,
             # violation.
             probe_error: str | None = None
             if not post_names:
-                backend.set_case(case)
+                backend.set_case(case, index)
                 try:
                     probe = await pipeline.run(
                         f"{case.id}:empty-probe", TENANT_ID,

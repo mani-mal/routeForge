@@ -10,18 +10,21 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from pydantic import ValidationError
 
 from app.config.schema import PriceCfg
 from app.eval.cases import Case
-from app.eval.endpoints import EndpointSpec, LatencyProfile, SimProfile
+from app.eval.endpoints import EndpointSpec, LatencyProfile, OutageSpan, SimProfile
 from app.eval.graders import GraderSpec
-from app.eval.simulated import SimulatedBackend
+from app.eval.simulated import SimulatedBackend, SimulatedEndpointFailure
 from app.gateway.backends.base import count_tokens
+from app.gateway.gateway import counts_as_endpoint_unhealth
 from app.models import Message
 from app.routing.pricing import price_call
 
 
-def _endpoint(slug="local-llama", quality=None, mean=900.0, jitter=100.0) -> EndpointSpec:
+def _endpoint(slug="local-llama", quality=None, mean=900.0, jitter=100.0,
+              outages=None, error_rate=0.0, failure_latency_ms=None) -> EndpointSpec:
     return EndpointSpec(
         slug=slug,
         provider="onprem",
@@ -30,6 +33,9 @@ def _endpoint(slug="local-llama", quality=None, mean=900.0, jitter=100.0) -> End
         simulated=SimProfile(
             quality=quality or {"default": 0.9},
             latency_ms=LatencyProfile(mean=mean, jitter=jitter),
+            outages=outages or [],
+            error_rate=error_rate,
+            failure_latency_ms=failure_latency_ms,
         ),
     )
 
@@ -49,8 +55,8 @@ _MESSAGES = [Message(role="user", content="Is the claim approved?")]
 
 
 def _generate(backend: SimulatedBackend, case: Case, model="local-llama",
-              messages=None, price=None):
-    backend.set_case(case)
+              messages=None, price=None, index=0):
+    backend.set_case(case, index)
     return asyncio.run(backend.generate(
         model, messages or _MESSAGES, price or _PRICE, "cheap", {}))
 
@@ -191,15 +197,166 @@ class TestErrorPaths:
 
     def test_generate_unknown_model_raises(self):
         backend = SimulatedBackend([_endpoint()], seed=5)
-        backend.set_case(_case())
+        backend.set_case(_case(), 0)
         with pytest.raises(ValueError):
             asyncio.run(backend.generate("not-onboarded", _MESSAGES, _PRICE, "cheap", {}))
 
     def test_generate_stream_raises_not_implemented(self):
         backend = SimulatedBackend([_endpoint()], seed=5)
-        backend.set_case(_case())
+        backend.set_case(_case(), 0)
         with pytest.raises(NotImplementedError):
             backend.generate_stream("local-llama", _MESSAGES, _PRICE, "cheap", {})
+
+
+class TestOutages:
+    def test_raises_on_every_index_in_span_inclusive(self):
+        endpoint = _endpoint(outages=[OutageSpan(**{"from": 2, "to": 4})])
+        backend = SimulatedBackend([endpoint], seed=1)
+        for index in (2, 3, 4):
+            with pytest.raises(SimulatedEndpointFailure):
+                _generate(backend, _case(case_id=f"c{index}"), index=index)
+
+    def test_does_not_raise_outside_span(self):
+        endpoint = _endpoint(outages=[OutageSpan(**{"from": 2, "to": 4})])
+        backend = SimulatedBackend([endpoint], seed=1)
+        for index in (0, 1, 5, 6):
+            _generate(backend, _case(case_id=f"c{index}"), index=index)  # does not raise
+
+    def test_outage_failure_has_no_status_code(self):
+        endpoint = _endpoint(outages=[OutageSpan(**{"from": 0, "to": 0})])
+        backend = SimulatedBackend([endpoint], seed=1)
+        with pytest.raises(SimulatedEndpointFailure) as exc_info:
+            _generate(backend, _case(), index=0)
+        assert exc_info.value.status_code is None
+
+    def test_outage_checked_before_flake_draw(self):
+        # error_rate=0.0 would never flake on its own -- an outage inside a
+        # zero-error-rate endpoint must still raise.
+        endpoint = _endpoint(outages=[OutageSpan(**{"from": 0, "to": 0})], error_rate=0.0)
+        backend = SimulatedBackend([endpoint], seed=1)
+        with pytest.raises(SimulatedEndpointFailure):
+            _generate(backend, _case(), index=0)
+
+    def test_failed_call_is_still_recorded_in_received(self):
+        endpoint = _endpoint(outages=[OutageSpan(**{"from": 0, "to": 0})])
+        backend = SimulatedBackend([endpoint], seed=1)
+        case = _case(case_id="claim-fail")
+        with pytest.raises(SimulatedEndpointFailure):
+            _generate(backend, case, index=0)
+        assert backend.received[("claim-fail", "local-llama")] == _MESSAGES
+
+
+class TestErrorRate:
+    def test_zero_error_rate_never_flakes(self):
+        endpoint = _endpoint(error_rate=0.0)
+        backend = SimulatedBackend([endpoint], seed=1)
+        for i in range(50):
+            _generate(backend, _case(case_id=f"c{i}"), index=i)  # never raises
+
+    def test_full_error_rate_always_flakes(self):
+        endpoint = _endpoint(error_rate=1.0)
+        backend = SimulatedBackend([endpoint], seed=1)
+        for i in range(50):
+            with pytest.raises(SimulatedEndpointFailure):
+                _generate(backend, _case(case_id=f"c{i}"), index=i)
+
+    def test_flake_failure_has_status_code_503(self):
+        endpoint = _endpoint(error_rate=1.0)
+        backend = SimulatedBackend([endpoint], seed=1)
+        with pytest.raises(SimulatedEndpointFailure) as exc_info:
+            _generate(backend, _case(), index=0)
+        assert exc_info.value.status_code == 503
+
+
+class TestFailurePatternDeterminism:
+    def test_same_seed_gives_same_failure_pattern_over_50_cases(self):
+        endpoint = _endpoint(error_rate=0.5)
+        b1 = SimulatedBackend([endpoint], seed=42)
+        b2 = SimulatedBackend([endpoint], seed=42)
+        pattern1, pattern2 = [], []
+        for i in range(50):
+            for backend, pattern in ((b1, pattern1), (b2, pattern2)):
+                try:
+                    _generate(backend, _case(case_id=f"c{i}"), index=i)
+                except SimulatedEndpointFailure:
+                    pattern.append(True)
+                else:
+                    pattern.append(False)
+        assert pattern1 == pattern2
+
+    def test_different_seed_gives_different_failure_pattern_over_50_cases(self):
+        endpoint = _endpoint(error_rate=0.5)
+        ba = SimulatedBackend([endpoint], seed=1)
+        bb = SimulatedBackend([endpoint], seed=2)
+        pattern_a, pattern_b = [], []
+        for i in range(50):
+            for backend, pattern in ((ba, pattern_a), (bb, pattern_b)):
+                try:
+                    _generate(backend, _case(case_id=f"c{i}"), index=i)
+                except SimulatedEndpointFailure:
+                    pattern.append(True)
+                else:
+                    pattern.append(False)
+        assert pattern_a != pattern_b
+
+
+class TestCountsAsEndpointUnhealth:
+    def test_outage_failure_counts_as_unhealth(self):
+        endpoint = _endpoint(outages=[OutageSpan(**{"from": 0, "to": 0})])
+        backend = SimulatedBackend([endpoint], seed=1)
+        with pytest.raises(SimulatedEndpointFailure) as exc_info:
+            _generate(backend, _case(), index=0)
+        assert counts_as_endpoint_unhealth(exc_info.value) is True
+
+    def test_flake_failure_counts_as_unhealth(self):
+        endpoint = _endpoint(error_rate=1.0)
+        backend = SimulatedBackend([endpoint], seed=1)
+        with pytest.raises(SimulatedEndpointFailure) as exc_info:
+            _generate(backend, _case(), index=0)
+        assert counts_as_endpoint_unhealth(exc_info.value) is True
+
+
+class TestFailureLatency:
+    def test_default_failure_latency_is_profile_mean(self):
+        endpoint = _endpoint(mean=750.0, outages=[OutageSpan(**{"from": 0, "to": 0})])
+        backend = SimulatedBackend([endpoint], seed=1)
+        with pytest.raises(SimulatedEndpointFailure) as exc_info:
+            _generate(backend, _case(), index=0)
+        assert exc_info.value.failure_latency_ms == 750.0
+
+    def test_explicit_failure_latency_overrides_mean(self):
+        endpoint = _endpoint(mean=750.0, failure_latency_ms=42.0,
+                              outages=[OutageSpan(**{"from": 0, "to": 0})])
+        backend = SimulatedBackend([endpoint], seed=1)
+        with pytest.raises(SimulatedEndpointFailure) as exc_info:
+            _generate(backend, _case(), index=0)
+        assert exc_info.value.failure_latency_ms == 42.0
+
+
+class TestFailureFieldValidation:
+    def test_outage_from_greater_than_to_raises(self):
+        with pytest.raises(ValidationError):
+            OutageSpan(**{"from": 5, "to": 2})
+
+    def test_outage_negative_from_raises(self):
+        with pytest.raises(ValidationError):
+            OutageSpan(**{"from": -1, "to": 2})
+
+    def test_error_rate_above_one_raises(self):
+        with pytest.raises(ValidationError):
+            _endpoint(error_rate=1.5)
+
+    def test_error_rate_below_zero_raises(self):
+        with pytest.raises(ValidationError):
+            _endpoint(error_rate=-0.1)
+
+    def test_failure_latency_ms_zero_raises(self):
+        with pytest.raises(ValidationError):
+            _endpoint(failure_latency_ms=0.0)
+
+    def test_failure_latency_ms_negative_raises(self):
+        with pytest.raises(ValidationError):
+            _endpoint(failure_latency_ms=-5.0)
 
 
 class TestHealth:
