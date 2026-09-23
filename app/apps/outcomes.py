@@ -136,16 +136,29 @@ def _attempts(trace: list[dict]) -> list[str]:
 def _verify_mode(entry: dict | None) -> str | None:
     """Map a `step == "verify"` trace entry to one of `VERIFY_MODES`, or
     `None` when no verify entry exists at all (unreachable on a real `ok`
-    response, defensive for a hand-built fixture)."""
+    response, defensive for a hand-built fixture).
+
+    Reason prefixes are checked BEFORE `required`. On the real streaming
+    paths (`app/pipeline.py` `run_stream`, ~line 1166) `onprem_only`/
+    `require_verification` requests are floored out before any unverified
+    stream starts, so the record `run_stream` builds always carries
+    `required=False` (see `app/pipeline.py` ~1286 and
+    `app/api/routes.py::_finalize_stream`'s `verify_reason`/`verify_performed`
+    overwrite, ~1275-1278) -- `stream_unverified`'s
+    `reason="waived: stream_unverified"` and `incremental_verify`'s
+    `reason="incremental"` are BOTH `required=False` in every real row. If
+    `required` were checked first, every real `waived_stream`/`incremental`
+    outcome would be misrecorded `not_required`, losing the distinction the
+    column exists to carry."""
     if entry is None:
         return None
-    if not entry.get("required"):
-        return "not_required"
     reason = entry.get("reason") or ""
     if reason.startswith("waived"):
         return "waived_stream"
     if reason == "incremental":
         return "incremental"
+    if not entry.get("required"):
+        return "not_required"
     if not entry.get("passed"):
         return "failed"
     return "verified"
@@ -164,10 +177,16 @@ def build_ok_outcome(resp: dict, *, request_id: str, application_id: str,
     `resp["choices"]`, `resp["raw_completion"]`, `resp["sanitized_prompt"]`,
     or any `reason` field.
 
-    `complexity` is left `None`: it is computed inside `Pipeline.run`
-    (`comp.tokens_after / 2000`) but never placed on `resp`, so it is not a
-    content-free key this function can read -- a later task may thread it
-    through separately.
+    `complexity` is read off `outcome_ctx.get("complexity")` (`None` when
+    absent): it is computed inside `Pipeline.run` (`comp.tokens_after /
+    2000`) but never placed on `resp`, so it is not a content-free key this
+    function can read off `resp` itself -- a later task threads it into
+    `outcome_ctx` instead (e.g. by adding it alongside `outcome_context`'s
+    other fields) and it flows through here unchanged.
+
+    `eligible` falls back to `[chosen]` only when a chosen model exists
+    (i.e. some router hop actually served one); with no scoring AND no
+    chosen model it is `[]`, never `[None]`.
     """
     trace = resp.get("trace") or []
     usage = resp.get("usage") or {}
@@ -202,7 +221,7 @@ def build_ok_outcome(resp: dict, *, request_id: str, application_id: str,
         "workload": workload,
         "workload_source": workload_source,
         "tier_target": tier_target,
-        "complexity": None,
+        "complexity": outcome_ctx.get("complexity"),
         "prompt_tokens_bucket": prompt_bucket(prompt_tokens),
         "sensitivity": outcome_ctx.get("sensitivity"),
         "risk_class": outcome_ctx.get("risk_class"),
@@ -239,10 +258,12 @@ def build_failure_outcome(*, status: str, request_id: str, application_id: str,
     the caller collected before the failure -- and leaves everything that
     presumes a served response (`chosen`, `scoring`, `eligible`,
     `prompt_tokens`/`completion_tokens`, `cost_usd`, the `verify_*` fields,
-    `tier_target`, `complexity`, `prompt_tokens_bucket`) null or empty.
-    `rejected` is normalized through the same `{name, code}`-only rule
-    `build_ok_outcome` uses, regardless of what shape the caller's entries
-    carry.
+    `tier_target`, `prompt_tokens_bucket`) null or empty. `complexity` is
+    read off `outcome_ctx.get("complexity")` like `build_ok_outcome` --
+    known the moment the gate/compression ran, independent of whether the
+    request went on to fail. `rejected` is normalized through the same
+    `{name, code}`-only rule `build_ok_outcome` uses, regardless of what
+    shape the caller's entries carry.
     """
     return {
         "request_id": request_id,
@@ -255,7 +276,7 @@ def build_failure_outcome(*, status: str, request_id: str, application_id: str,
         "workload": workload,
         "workload_source": workload_source,
         "tier_target": None,
-        "complexity": None,
+        "complexity": outcome_ctx.get("complexity"),
         "prompt_tokens_bucket": None,
         "sensitivity": outcome_ctx.get("sensitivity"),
         "risk_class": outcome_ctx.get("risk_class"),

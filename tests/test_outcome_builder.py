@@ -273,7 +273,9 @@ def test_build_ok_outcome_escalation_last_chosen_wins():
 
 
 def test_build_ok_outcome_verify_not_required():
-    trace = [_router_hop("m"), _verify(required=False)]
+    # Plain not-required record: required=False, a reason that is neither
+    # a "waived*" nor "incremental" marker.
+    trace = [_router_hop("m"), _verify(required=False, reason="not required")]
     row = build_ok_outcome(
         _resp(trace), request_id="r", application_id="a",
         outcome_ctx=outcome_context(_ctx()), routing_policy_version="rpv",
@@ -282,7 +284,13 @@ def test_build_ok_outcome_verify_not_required():
 
 
 def test_build_ok_outcome_verify_waived_stream():
-    trace = [_router_hop("m"), _verify(performed=False, reason="waived: stream_unverified")]
+    # REAL shape (app/pipeline.py run_stream ~1286 + routes.py
+    # _finalize_stream's overwrite ~1275-1278): stream_unverified always
+    # records required=False alongside the "waived: ..." reason -- the
+    # reason prefix must win over `required` for this to classify right.
+    trace = [_router_hop("m"),
+             _verify(required=False, performed=False,
+                     reason="waived: stream_unverified")]
     row = build_ok_outcome(
         _resp(trace), request_id="r", application_id="a",
         outcome_ctx=outcome_context(_ctx()), routing_policy_version="rpv",
@@ -291,7 +299,10 @@ def test_build_ok_outcome_verify_waived_stream():
 
 
 def test_build_ok_outcome_verify_incremental():
-    trace = [_router_hop("m"), _verify(performed=True, reason="incremental")]
+    # REAL shape: incremental_verify also always records required=False
+    # (same run_stream floor) alongside reason="incremental".
+    trace = [_router_hop("m"),
+             _verify(required=False, performed=True, reason="incremental")]
     row = build_ok_outcome(
         _resp(trace), request_id="r", application_id="a",
         outcome_ctx=outcome_context(_ctx()), routing_policy_version="rpv",
@@ -326,6 +337,28 @@ def test_build_ok_outcome_circuit_bypass_true_if_any_hop():
         outcome_ctx=outcome_context(_ctx()), routing_policy_version="rpv",
         workload=None, workload_source="none")
     assert row["circuit_bypass"] is True
+
+
+def test_build_ok_outcome_reads_complexity_from_outcome_ctx():
+    # complexity is not a resp key (Pipeline.run computes it as a local
+    # variable and never places it on resp) -- it flows through outcome_ctx
+    # instead, so a later task's caller can add it there.
+    trace = [_router_hop("m"), _verify()]
+    ctx = outcome_context(_ctx())
+    ctx["complexity"] = 0.37
+    row = build_ok_outcome(
+        _resp(trace), request_id="r", application_id="a", outcome_ctx=ctx,
+        routing_policy_version="rpv", workload=None, workload_source="none")
+    assert row["complexity"] == 0.37
+
+
+def test_build_ok_outcome_complexity_absent_is_none():
+    trace = [_router_hop("m"), _verify()]
+    row = build_ok_outcome(
+        _resp(trace), request_id="r", application_id="a",
+        outcome_ctx=outcome_context(_ctx()), routing_policy_version="rpv",
+        workload=None, workload_source="none")
+    assert row["complexity"] is None
 
 
 # --- privacy ---------------------------------------------------------------
@@ -390,6 +423,16 @@ def test_build_failure_outcome_defaults_are_null_or_empty():
     assert row["tier_target"] is None
     assert row["complexity"] is None
     assert row["prompt_tokens_bucket"] is None
+
+
+def test_build_failure_outcome_reads_complexity_from_outcome_ctx():
+    ctx = outcome_context(_ctx())
+    ctx["complexity"] = 0.81
+    row = build_failure_outcome(
+        status="backend_failed", request_id="req-6", application_id="app-1",
+        outcome_ctx=ctx, routing_policy_version="rpv-1",
+        endpoint_registry_version=None, workload=None, workload_source="none")
+    assert row["complexity"] == 0.81
 
 
 def test_statuses_constant():
