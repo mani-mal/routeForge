@@ -22,6 +22,14 @@ produces the operator-facing `reason` string the console already renders:
 | 4 | the app's allowed_tiers / allowed_models| `app_scope`     | "not permitted for application" |
 | 5 | the request's pinned `model`            | `not_requested` | "not requested model" |
 | 6 | the registry's per-model gates          | `model_scope`   | "not permitted for application" / "disabled by admin" |
+| 7 | an open circuit (step-7 breaker)        | `circuit_open`  | "excluded · circuit open" |
+
+Stage 7 runs LAST, after every policy stage above it, so that every policy
+reason wins over it and `circuit_open` only ever labels a candidate that is
+otherwise fully policy-eligible -- see `candidate_rejection`'s docstring for
+why that ordering is what makes the router's all-open bypass
+(`app/routing/router.py::select`) safe: dropping stage 7 can only ever restore
+exactly the policy-eligible set, never widen it.
 
 The order is load-bearing, not stylistic: placement runs first so an excluded
 cloud model under `onprem_only` always reads "residency" rather than a softer
@@ -98,6 +106,9 @@ PRIOR_FAILURE = "prior_failure"
 APP_SCOPE = "app_scope"
 NOT_REQUESTED = "not_requested"
 MODEL_SCOPE = "model_scope"
+# Stage 7 (LAST) -- see `candidate_rejection`'s docstring for why it runs
+# after every policy stage.
+CIRCUIT_OPEN = "circuit_open"
 # Stage 2 -- one code per data-handling rule (P1b design §4/§6). These join
 # `sp.candidates`' rejected set, so the certificate answers "why not that
 # endpoint" in the compliance officer's vocabulary rather than the router's.
@@ -112,6 +123,7 @@ REASON_APP = "not permitted for application"
 REASON_PRIOR_FAILURE = "excluded · prior failure"
 REASON_NOT_REQUESTED = "not requested model"
 REASON_DISABLED = "disabled by admin"
+REASON_CIRCUIT_OPEN = "excluded · circuit open"
 # Stage 2's reasons carry a parameterised tail (what was required, what the
 # endpoint declared) -- an operator cannot act on "excluded · region" alone.
 # `app/routing/router.py::_fix_hint` therefore matches these by PREFIX.
@@ -392,8 +404,9 @@ def candidate_rejection(c: PoolCandidate, *, allowed_providers: frozenset[str] |
                         exclude: frozenset[str],
                         registry: "ModelRegistry | None",
                         tenant_id: str,
-                        data_handling: DataHandling) -> Rejection | None:
-    """The six stages, in order, for one candidate. `None` means eligible.
+                        data_handling: DataHandling,
+                        open_circuits: frozenset[str] = frozenset()) -> Rejection | None:
+    """The seven stages, in order, for one candidate. `None` means eligible.
 
     `data_handling` is REQUIRED, with no default. A default would make stage 2
     silently absent for any caller that forgot it -- a policy that appears
@@ -427,6 +440,12 @@ def candidate_rejection(c: PoolCandidate, *, allowed_providers: frozenset[str] |
     if (c.provider == "onprem" and registry is not None
             and not registry.is_enabled(c.name)):
         return _rejection(c, REASON_DISABLED, MODEL_SCOPE)
+    # Stage 7: a circuit the step-7 breaker holds open (app/gateway/breaker.py).
+    # LAST, after every policy stage: it only ever labels a candidate policy
+    # fully admitted, so dropping it can only shrink the set, and the router's
+    # all-open bypass restores exactly the policy-eligible set.
+    if c.name in open_circuits:
+        return _rejection(c, REASON_CIRCUIT_OPEN, CIRCUIT_OPEN)
     return None
 
 
@@ -436,13 +455,19 @@ def feasible_set(settings: Settings, registry: "ModelRegistry | None",
                  exclude: frozenset[str] = frozenset(),
                  allowed_providers: frozenset[str] | None = None,
                  onprem_only: bool | None = None,
-                 data_handling: DataHandling | None = None) -> FeasibleSet:
+                 data_handling: DataHandling | None = None,
+                 open_circuits: frozenset[str] = frozenset()) -> FeasibleSet:
     """Every candidate this request may reach, and every one it may not.
 
     `ctx_or_policy` is whichever authority the caller holds: an
     `ExecutionPolicyContext` (the router, after the gate) or an `AppPolicyView`
     (the gate itself, and `GET /v1/models`). `None` means no per-app policy at
     all -- the internal/direct pipeline paths.
+
+    `open_circuits` is stage 7 -- see the module docstring's table and
+    `candidate_rejection`. Names the step-7 breaker currently holds open;
+    defaults to empty, so every caller that does not yet pass a breaker's
+    `open_set()` (every caller before Task 4) behaves exactly as before.
 
     `allowed_providers`/`onprem_only` let `build_context` pass the placement it
     has already resolved (residency may have been *tightened* by a detected
@@ -501,7 +526,7 @@ def feasible_set(settings: Settings, registry: "ModelRegistry | None",
             c, allowed_providers=providers, onprem_only=onprem,
             in_scope=in_scope, requested_model=requested_model,
             exclude=exclude, registry=registry, tenant_id=tenant_id,
-            data_handling=data_handling)
+            data_handling=data_handling, open_circuits=open_circuits)
         if r is None:
             eligible.append(c)
         else:

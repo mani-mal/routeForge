@@ -25,6 +25,7 @@ from app.apps.registry import ModelRegistry
 from app.config.loader import load_settings
 from app.errors import NoEligibleCandidate
 from app.policy.context import build_context, requestable_models
+from app.policy.feasible import feasible_set
 from app.routing.router import Router
 
 # Both cloud providers on, so residency/app-scope exclusions have something
@@ -306,3 +307,40 @@ def test_an_empty_pool_says_so_rather_than_listing_rejections():
     with pytest.raises(NoEligibleCandidate) as exc:
         Router(settings, registry=reg).select(ctx, tokens_after=20, complexity=0.1)
     assert "the model pool is empty" in str(exc.value)
+
+
+# --- 7. circuit_open (step-7 breaker) -- stage 7, LAST -----------------------
+
+def test_open_circuit_candidate_is_rejected_as_circuit_open():
+    reg = _registry()
+    policy = AppPolicyView()
+    ctx = _ctx(reg, policy)
+
+    result = feasible_set(S, reg, ctx, tenant_id="acme",
+                          open_circuits=frozenset({"local-8b"}))
+    assert "local-8b" not in {c.name for c in result.eligible}
+    rejected = {r.name: r.code for r in result.rejected}
+    assert rejected["local-8b"] == "circuit_open"
+
+
+def test_placement_excluded_and_open_circuit_reads_residency_not_circuit_open():
+    """A candidate that is BOTH placement-excluded (a cloud model under
+    onprem_only) and named in `open_circuits` must read `residency` --
+    policy reasons win, since circuit_open is the LAST stage (stage 7)."""
+    reg = _registry()
+    ctx = _ctx(reg, AppPolicyView(residency="onprem_only"))
+
+    result = feasible_set(S, reg, ctx, tenant_id="acme",
+                          open_circuits=frozenset({"azure-gpt-mid"}))
+    rejected = {r.name: r.code for r in result.rejected}
+    assert rejected["azure-gpt-mid"] == "residency"
+
+
+def test_open_circuits_defaults_to_empty_set_no_change():
+    reg = _registry()
+    policy = AppPolicyView()
+    ctx = _ctx(reg, policy)
+
+    default = feasible_set(S, reg, ctx, tenant_id="acme")
+    explicit = feasible_set(S, reg, ctx, tenant_id="acme", open_circuits=frozenset())
+    assert default == explicit

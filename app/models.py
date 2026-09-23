@@ -226,6 +226,9 @@ class DecisionRecord(BaseModel):
     # scored, and inventing terms for them would be exactly the overstatement
     # P2a exists to remove.
     scoring: dict | None = None
+    # Step-7 breaker: True when every candidate policy admitted was held open
+    # and the router tried one anyway (app/routing/router.py::select).
+    circuit_bypass: bool = False
 
 
 class VerificationRecord(BaseModel):

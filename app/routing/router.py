@@ -75,6 +75,7 @@ class RoutingDecision:
     quality_score: float = 0.0
     quality_source: str = "tier_default"
     scoring: "RankResult | None" = None
+    circuit_bypass: bool = False
 
 
 class Router:
@@ -120,7 +121,36 @@ class Router:
     def select(self, ctx: ExecutionPolicyContext, tokens_after: int,
                complexity: float, min_tier: str | None = None,
                exclude: frozenset[str] = frozenset(),
-               output_tokens: int | None = None) -> RoutingDecision:
+               output_tokens: int | None = None,
+               open_circuits: frozenset[str] = frozenset()) -> RoutingDecision:
+        """Choose a candidate for this call. `exclude` are models already tried
+        and failed on this request (lateral failover); `open_circuits` are
+        models the step-7 breaker currently holds open. They are removed LAST
+        (feasible_set stage 7). If that leaves no candidate -- every candidate
+        policy admits is open -- select again without them and mark the
+        decision `circuit_bypass`: trying an endpoint that may have recovered
+        is never worse than today's no-breaker behaviour, and the retry can
+        only restore candidates policy already admitted."""
+        try:
+            return self._select(ctx, tokens_after, complexity, min_tier, exclude,
+                                output_tokens, open_circuits)
+        except NoEligibleCandidate:
+            if not open_circuits:
+                raise
+        # The retry raises its own NoEligibleCandidate when the empty set was
+        # policy's doing (test_no_eligible_for_policy_reasons_still_raises) --
+        # that is correct and is allowed to propagate uncaught.
+        d = self._select(ctx, tokens_after, complexity, min_tier, exclude,
+                         output_tokens, frozenset())
+        d.circuit_bypass = True
+        d.reason += "; circuit bypass: every eligible candidate is open"
+        return d
+
+    def _select(self, ctx: ExecutionPolicyContext, tokens_after: int,
+               complexity: float, min_tier: str | None,
+               exclude: frozenset[str],
+               output_tokens: int | None,
+               open_circuits: frozenset[str]) -> RoutingDecision:
         out_tokens = (output_tokens if output_tokens is not None
                       else expected_output_tokens(self._s, None))
         # 1. eligibility: residency/placement, prior failures, the app's own
@@ -129,7 +159,7 @@ class Router:
         #    this step used to re-derive the same decision the policy gate had
         #    already made, and the two could disagree.
         feasible = feasible_set(self._s, self._reg, ctx, tenant_id=ctx.tenant_id,
-                                exclude=exclude)
+                                exclude=exclude, open_circuits=open_circuits)
         allowed = list(feasible.eligible)
         rejected: list[RejectedCandidate] = [
             RejectedCandidate(name=r.name, provider=r.provider, tier=r.tier,
