@@ -178,3 +178,42 @@ def test_post_score_returns_false_on_non_2xx():
             await client.aclose()
 
     assert asyncio.run(go()) is False
+
+
+# --- non-finite numeric values are refused at the boundary -------------------
+# Python's json (and so Starlette's request.json()) accepts the non-standard
+# `NaN`/`Infinity` literals, so the body is built by hand: a NaN/inf score must
+# be a 422 before anything reaches Langfuse or the local outcome_feedback table.
+
+import pytest  # noqa: E402
+
+from tests.conftest import v1_error  # noqa: E402
+
+
+@pytest.mark.parametrize("literal", ["NaN", "Infinity", "-Infinity"])
+def test_feedback_rejects_non_finite_value(client, monkeypatch, literal):
+    import app.api.routes as routes_mod
+
+    app_id, token = _make_app(client, f"fbnan{literal.lower().strip('-')}"
+                              f"{'n' if literal.startswith('-') else ''}",
+                              with_langfuse=True)
+    posted, written = [], []
+
+    async def _post(*a, **kw):
+        posted.append(a)
+        return True
+
+    async def _write(*a, **kw):
+        written.append(kw)
+        return True
+
+    monkeypatch.setattr(routes_mod, "post_score", _post)
+    monkeypatch.setattr(routes_mod, "_write_feedback_safe", _write)
+    body = ('{"trace_id": "' + "e" * 32 + '", "request_id": "req-x", '
+            '"score_name": "route_correct", "value": ' + literal + '}')
+    r = client.post("/v1/feedback", content=body,
+                    headers={"Authorization": f"Bearer {token}",
+                             "Content-Type": "application/json"})
+    assert r.status_code == 422, r.text
+    assert v1_error(r)["code"] == "invalid_value"
+    assert posted == [] and written == []
