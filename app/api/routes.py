@@ -11,6 +11,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable
 
 import anyio
+from fastapi.encoders import jsonable_encoder
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -25,6 +26,7 @@ from app.api.openai_errors import (
 )
 from app.api.streaming import (
     SSE_DONE, SSE_KEEPALIVE, chunk_text, openai_chunk, sse_error_frame, sse_frame,
+    usage_chunk,
     sse_response,
 )
 from app.apps import store
@@ -494,6 +496,26 @@ async def _record_exception_outcome(request: Request, exc: BaseException, *,
         workload=workload, workload_source=workload_source)
 
 
+def _stream_usage(body: ChatRequest, usage: object) -> dict | None:
+    """The usage object for the OpenAI terminal usage frame (B53), or None
+    when the client did not ask for one.
+
+    Only `stream_options.include_usage is True` asks: without it OpenAI sends
+    no usage frame, so neither do we and the stream stays byte-identical to
+    before. `stream_options` is read from the request's extras and is never
+    forwarded upstream (the backend always requests usage for its own
+    metering, independently). The value is RouteForge's own accounting --
+    `resp["usage"]`, JSON-encoded exactly as the non-stream body encodes it --
+    so a client sees the same numbers whether or not it streamed. None when
+    no usage exists (nothing to report is better than a guessed zero)."""
+    opts = (body.model_extra or {}).get("stream_options")
+    if not (isinstance(opts, dict) and opts.get("include_usage") is True):
+        return None
+    if usage is None:
+        return None
+    return jsonable_encoder(usage)
+
+
 @router.post("/v1/chat/completions", response_model=None)
 async def chat_completions(body: ChatRequest, request: Request) -> dict | StreamingResponse:
     s = request.app.state.settings
@@ -698,7 +720,8 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
     # complete response, never streamed unverified/incrementally.
     message = resp["choices"][0]["message"]
     return sse_response(chunk_text(request_id, resp["model"], message["content"] or "",
-                                   tool_calls=message.get("tool_calls")))
+                                   tool_calls=message.get("tool_calls"),
+                                   usage=_stream_usage(body, resp.get("usage"))))
 
 
 def _full_capture_io(body: ChatRequest, resp: dict, prompt: str, completion: str,
@@ -1171,7 +1194,8 @@ async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
                             workload=workload, workload_source=workload_source)
         message = resp["choices"][0]["message"]
         async for frame in chunk_text(request_id, resp["model"], message["content"] or "",
-                                      tool_calls=message.get("tool_calls")):
+                                      tool_calls=message.get("tool_calls"),
+                                      usage=_stream_usage(body, resp.get("usage"))):
             yield frame
     finally:
         # Snapshot before cancel: task.cancel() doesn't flip done() right
@@ -1301,6 +1325,10 @@ def _stream_unverified_response(
             meta = get_meta()  # valid only now that `deltas` is fully drained
             yield sse_frame(openai_chunk(request_id, model, finish_reason="stop",
                                          created=created))
+            usage = _stream_usage(body, meta.get("usage") if meta else None)
+            if usage is not None:   # B53: only when the client asked for it
+                yield sse_frame(usage_chunk(request_id, model, usage,
+                                            created=created))
             yield SSE_DONE
         finally:
             # A backend failure has no final metadata to finalize: meter it
@@ -1375,6 +1403,10 @@ def _incremental_verify_response(
             meta = get_meta()  # valid only now that `deltas` is fully drained
             yield sse_frame(openai_chunk(request_id, model, finish_reason="stop",
                                          created=created))
+            usage = _stream_usage(body, meta.get("usage") if meta else None)
+            if usage is not None:   # B53: only when the client asked for it
+                yield sse_frame(usage_chunk(request_id, model, usage,
+                                            created=created))
             yield SSE_DONE
         finally:
             # A backend failure is metered `error` instead of finalized (no
