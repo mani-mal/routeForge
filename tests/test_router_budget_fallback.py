@@ -30,8 +30,15 @@ def test_over_budget_target_tier_falls_back_to_cheaper_allowed_tier():
 
 def test_fallback_never_goes_below_the_risk_floor():
     s, reg, ctx = _ctx(risk_class="medium")        # risk floor mid
-    with pytest.raises(NoEligibleCandidate, match="no candidates after budget filter"):
+    with pytest.raises(NoEligibleCandidate, match="no candidates after budget filter") as exc_info:
         Router(s, registry=reg).select(ctx, 2000, 1.0, output_tokens=100)
+    # P2b-2 Task 3: the budget raise's candidates have no stable code of
+    # their own (that's a `feasible_set` stage concept) -- carried as
+    # (name, None).
+    rejected = exc_info.value.rejected
+    assert rejected
+    assert all(code is None for _name, code in rejected)
+    assert {name for name, _code in rejected} == {"local-32b"}
 
 
 def test_fallback_never_goes_below_escalation_min_tier():

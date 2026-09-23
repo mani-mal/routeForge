@@ -5,6 +5,7 @@ import logging
 import time
 from typing import AsyncIterator, Callable, TYPE_CHECKING
 
+from app.apps.outcomes import outcome_context
 from app.cache.store import CacheEntry, DeterministicSemanticCache
 from app.config.schema import ContextOptimizationCfg, PoolCandidate, Settings
 from app.errors import PolicyGateError
@@ -726,6 +727,13 @@ class Pipeline:
             raise
         except Exception as e:
             raise PolicyGateError("policy evaluation failed") from e
+        # P2b-2 (Task 3): the content-free outcome-record context, set right
+        # after `ctx` exists so it is populated even when the request later
+        # fails at routing (NoEligibleCandidate) -- app/apps/outcomes.py's
+        # failure builder needs it either way. `complexity` is folded in once
+        # compression has run, below.
+        if internals is not None:
+            internals["outcome_ctx"] = outcome_context(ctx)
         self._publish_telemetry_views(internals, reps)
         policy_mode = self._policy_mode_stamp(eff)
         # The egress axis, read once and handed to every consumer that returns
@@ -903,6 +911,8 @@ class Pipeline:
         else:
             comp = compress(san_messages, ctx, self._co_cfg_provider(), ccr=self._ccr)
         complexity = min(1.0, comp.tokens_after / 2000)
+        if internals is not None:
+            internals["outcome_ctx"]["complexity"] = complexity
 
         hint = {k: getattr(request, k) for k in ("mock_confidence", "mock_fail")
                 if hasattr(request, k)}
@@ -1139,6 +1149,11 @@ class Pipeline:
             raise
         except Exception as e:
             raise PolicyGateError("policy evaluation failed") from e
+        # P2b-2 (Task 3): same content-free outcome-record context as run(),
+        # set right after `ctx` exists so it survives a later routing
+        # failure. `complexity` is folded in once compression has run, below.
+        if internals is not None:
+            internals["outcome_ctx"] = outcome_context(ctx)
         self._publish_telemetry_views(internals, reps)
         policy_mode = self._policy_mode_stamp(eff)
         # Same egress axis run() reads, selecting the detector `incremental_
@@ -1208,6 +1223,8 @@ class Pipeline:
             san_messages = recall.messages + san_messages
         comp = compress(san_messages, ctx, self._co_cfg_provider(), ccr=self._ccr)
         complexity = min(1.0, comp.tokens_after / 2000)
+        if internals is not None:
+            internals["outcome_ctx"]["complexity"] = complexity
         hint = {k: getattr(request, k) for k in ("mock_confidence", "mock_fail")
                 if hasattr(request, k)}
         stream, records = await self._gateway.run_stream(
