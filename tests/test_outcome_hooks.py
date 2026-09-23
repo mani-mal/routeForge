@@ -486,3 +486,160 @@ def test_stream_workload_header_is_stored(monkeypatch):
             "".join(r.iter_text())
         row = _only(c)
         assert row.workload == "chat.support"
+
+
+# --------------------------------------------------------------------------- #
+# 12. final-review fixes: verify_failed attribution, request id shape,
+#     context-overflow attempts, cache hits, failure-row privacy
+# --------------------------------------------------------------------------- #
+def test_verify_failed_row_is_attributed_to_the_served_model(monkeypatch):
+    """Final review #1: step 9 refuses a response a model already produced,
+    so the verify_failed row names that model and its verification."""
+    _failing_verify(monkeypatch)
+    with _client() as c:
+        r = c.post("/v1/chat/completions", headers=DEMO, json=HELLO)
+        assert r.status_code == 422, r.text
+        row = _only(c)
+        assert row.status == "verify_failed"
+        assert row.chosen is not None
+        assert row.attempts == [row.chosen]
+        assert row.chosen in row.eligible
+        assert row.scoring is not None
+        assert row.tier_target in ("cheap", "mid", "frontier")
+        assert row.verify_required is True
+        assert row.verify_performed is True
+        assert row.verify_passed is False
+        assert row.verify_mode == "failed"
+        assert row.prompt_tokens > 0 and row.completion_tokens > 0
+        assert row.prompt_tokens_bucket == "<1k"
+        assert row.cache_hit is False
+
+
+def test_keepalive_verify_failed_row_is_attributed(monkeypatch):
+    _failing_verify(monkeypatch)
+    real = litellm_backend.acompletion
+
+    async def _slow(**kw):
+        await asyncio.sleep(0.15)
+        return await real(**kw)
+
+    monkeypatch.setattr(litellm_backend, "acompletion", _slow)
+    with _client() as c:
+        app = onboard(c, "oc-keepalive-verify2", stream_mode="verified_then_stream")
+        _fast_keepalive(c)
+        with c.stream("POST", "/v1/chat/completions", headers=app.headers,
+                      json={**HELLO, "stream": True}) as r:
+            "".join(r.iter_text())
+        row = _only(c)
+        assert row.status == "verify_failed"
+        assert row.chosen is not None and row.attempts == [row.chosen]
+        assert row.verify_mode == "failed"
+
+
+def test_verify_failed_row_carries_no_request_content(monkeypatch):
+    """The HTTP privacy check on a FAILURE row: an SSN and an e-mail in the
+    request, and in the (stubbed) verify reason, reach no column."""
+    import app.pipeline as pipeline_mod
+
+    def _verify(det, ctx, text, **kw):
+        return text, VerificationRecord(required=True, performed=True, passed=False,
+                                        reason=f"leak {SSN} {EMAIL}")
+
+    monkeypatch.setattr(pipeline_mod, "verify", _verify)
+    with _client() as c:
+        r = c.post("/v1/chat/completions", headers=DEMO, json={"messages": [
+            {"role": "user", "content": f"My SSN is {SSN}, email {EMAIL}"}]})
+        assert r.status_code == 422, r.text
+        row = _only(c)
+        assert row.status == "verify_failed"
+        dumped = json.dumps(_columns(row), default=str)
+        assert SSN not in dumped
+        assert EMAIL not in dumped
+        assert "My SSN" not in dumped
+        assert "leak" not in dumped
+        assert row.detected_entity_types, row.detected_entity_types
+
+
+def test_no_eligible_row_carries_no_request_content(monkeypatch):
+    _with_azure_enabled(monkeypatch)
+    with _client() as c:
+        disable_seeded_models(c)
+        app = onboard(c, "oc-no-candidate-pii", residency="onprem_only")
+        r = app.chat({"messages": [
+            {"role": "user", "content": f"My SSN is {SSN}, email {EMAIL}"}]})
+        assert r.status_code == 422, r.text
+        row = _only(c)
+        assert row.status == "no_eligible"
+        dumped = json.dumps(_columns(row), default=str)
+        assert SSN not in dumped
+        assert EMAIL not in dumped
+
+
+def test_request_id_is_full_uuid_hex():
+    """Final review #2: the response id is the outcomes primary key, retained
+    for 90 days -- 128 random bits, not 32."""
+    import re
+    with _client() as c:
+        r = c.post("/v1/chat/completions", headers=DEMO, json=HELLO)
+        assert r.status_code == 200, r.text
+        rid = r.json()["id"]
+        assert re.fullmatch(r"req-[0-9a-f]{32}", rid), rid
+        assert _only(c).request_id == rid
+
+
+def test_context_overflow_row_names_the_attempted_models(monkeypatch):
+    attempted: list[str] = []
+
+    async def _overflow(model, call):
+        attempted.append(model)
+        raise ContextWindowExceeded(f"{model}: maximum context length exceeded")
+
+    monkeypatch.setattr(litellm_backend, "_acompletion", _overflow)
+    with _client() as c:
+        r = c.post("/v1/chat/completions", headers=DEMO, json=HELLO)
+        assert r.status_code == 400, r.text
+        row = _only(c)
+        assert row.status == "context_overflow"
+        assert row.attempts, "context_overflow must name the models tried"
+        assert len(row.attempts) == len(attempted)
+
+
+def test_semantic_cache_hit_writes_cache_hit_row_with_no_chosen(monkeypatch):
+    monkeypatch.setenv("SP_SEMANTIC_CACHE", "on")
+    with _client() as c:
+        first = c.post("/v1/chat/completions", headers=DEMO, json=HELLO)
+        second = c.post("/v1/chat/completions", headers=DEMO, json=HELLO)
+        assert first.status_code == 200 and second.status_code == 200
+        rows = {r.request_id: r for r in _outcomes(c)}
+        miss, hit = rows[first.json()["id"]], rows[second.json()["id"]]
+        assert miss.cache_hit is False and miss.chosen is not None
+        assert hit.cache_hit is True, second.json().get("trace")
+        assert hit.chosen is None
+        assert hit.attempts == []
+        assert hit.status == "ok"
+
+
+def test_failover_row_first_decision_is_the_failed_attempt(monkeypatch):
+    """Final review #4 through the real gateway: after a failover, scoring/
+    eligible/tier_target describe the decision that picked the FAILED first
+    attempt; `chosen` is the peer that served."""
+    real = litellm_backend._acompletion
+    failed: list[str] = []
+
+    async def _first_fails(model, call):
+        if not failed:
+            failed.append(model)
+            raise RuntimeError("connection refused")
+        return await real(model, call)
+
+    monkeypatch.setattr(litellm_backend, "_acompletion", _first_fails)
+    with _client() as c:
+        r = c.post("/v1/chat/completions", headers=DEMO, json=HELLO)
+        assert r.status_code == 200, r.text
+        row = _only(c)
+        assert len(row.attempts) == 2, row.attempts
+        assert row.chosen == row.attempts[-1] == r.json()["model"]
+        # the first decision ranked the failed model first
+        assert row.scoring["candidates"][0]["name"] == failed[0] == row.attempts[0]
+        assert failed[0] in row.eligible
+        assert row.tier_target in ("cheap", "mid", "frontier")

@@ -133,6 +133,19 @@ def outcome_context(ctx) -> dict:
 
 # --- trace parsing (build_ok_outcome helpers) --------------------------
 
+def outcome_trace(records, vrec) -> list[dict]:
+    """The content-free trace a `verify_failed` outcome row is built from:
+    each gateway DecisionRecord and the VerificationRecord, dumped WITHOUT
+    any free-text `reason` (the record's own and every rejected candidate's).
+    What remains is ids, enums, numbers and scoring provenance -- enough for
+    `trace_features` to read, nothing a leak could ride on. Takes the
+    pydantic records (duck-typed on `model_dump`) so the stash never holds a
+    reason string even transiently."""
+    dropped = {"reason": True, "rejected": {"__all__": {"reason"}}}
+    return ([r.model_dump(exclude=dropped) for r in records]
+            + [vrec.model_dump(exclude={"reason"})])
+
+
 def _router_hops(trace: list[dict]) -> list[dict]:
     return [e for e in trace if e.get("step") == "router"]
 

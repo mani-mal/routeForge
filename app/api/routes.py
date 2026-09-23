@@ -436,17 +436,24 @@ async def _record_failure_outcome(request: Request, status: str, *, tenant: str,
     """Build and write a failed request's outcome row. Content-free: the
     gate's `outcome_ctx` (ids, enums, entity TYPES), the candidate names
     tried, and the `{name, code}` of each policy rejection -- never the
-    exception's message."""
+    exception's message. A `verify_failed` row is attributed from the
+    reason-free trace `Pipeline.run` stashed in `internals["outcome_trace"]`
+    before refusing the response (a model was served; step 9 refused it)."""
     try:
         s = s if s is not None else request.app.state.settings
+        internals = internals or {}
+        served: dict = {}
+        if status == "verify_failed" and internals.get("outcome_trace") is not None:
+            served = {"trace": internals["outcome_trace"],
+                      **(internals.get("outcome_usage") or {})}
         row = build_failure_outcome(
             status=status, request_id=request_id, application_id=tenant,
-            outcome_ctx=(internals or {}).get("outcome_ctx") or {},
+            outcome_ctx=internals.get("outcome_ctx") or {},
             routing_policy_version=s.routing_policy_version,
             endpoint_registry_version=_registry_version(request),
             workload=workload, workload_source=workload_source,
             attempts=tuple(attempts), rejected=tuple(rejected),
-            latency_ms=(time.monotonic() - started) * 1000)
+            latency_ms=(time.monotonic() - started) * 1000, **served)
     except Exception:
         logging.getLogger("serving.obs").warning(
             "outcome record failed request=%s", request_id, exc_info=True)
@@ -477,6 +484,9 @@ async def _record_exception_outcome(request: Request, exc: BaseException, *,
     await _record_failure_outcome(
         request, status, tenant=tenant, request_id=request_id, started=started,
         s=s, internals=internals,
+        # A `ContextWindowExceeded` from the gateway names the models it tried,
+        # like `BackendUnavailable`; the others carry none.
+        attempts=tuple(getattr(exc, "attempted_models", ())),
         # `NoEligibleCandidate.rejected` is `(name, code)` tuples; the builder
         # takes `{name, code}` mappings (the router trace's shape).
         rejected=tuple({"name": name, "code": code}
@@ -487,7 +497,10 @@ async def _record_exception_outcome(request: Request, exc: BaseException, *,
 @router.post("/v1/chat/completions", response_model=None)
 async def chat_completions(body: ChatRequest, request: Request) -> dict | StreamingResponse:
     s = request.app.state.settings
-    request_id = f"req-{uuid.uuid4().hex[:8]}"
+    # The full 128-bit uuid: this id is the `routing_outcomes` primary key,
+    # retained for 90 days, so a short id's collisions would lose rows and
+    # misattach feedback (P2b-2 final review #2).
+    request_id = f"req-{uuid.uuid4().hex}"
     started = time.monotonic()
     started_ns = time.time_ns()
     auth = await _authenticate(request)
