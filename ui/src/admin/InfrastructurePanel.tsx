@@ -46,13 +46,13 @@ function HealthBadge({ status, error }: { status: string; error: string | null }
 
 // Step-7 circuit breaker (B45): a small badge next to HealthBadge when this
 // replica's breaker state is not "closed" -- "circuit open" (amber, the
-// existing `frontier` tier color) or "trial" for half_open (the evidence-
-// based half-open trial in flight; see app/gateway/breaker.py). Nothing
-// renders when closed, matching HealthBadge's convention of silence for the
-// unremarkable case.
+// existing `frontier` tier color) or "half-open" for half_open (cooldown
+// over; the next reported result closes or reopens it -- see
+// app/gateway/breaker.py). Nothing renders when closed, matching
+// HealthBadge's convention of silence for the unremarkable case.
 function CircuitBadge({ circuit }: { circuit: OnboardedModel["circuit"] }) {
   if (!circuit || circuit.state === "closed") return null;
-  const label = circuit.state === "half_open" ? "trial" : "circuit open";
+  const label = circuit.state === "half_open" ? "half-open" : "circuit open";
   const title =
     circuit.state === "open" && circuit.open_until_s != null
       ? `${circuit.consecutive_failures} consecutive failures; retry in ${Math.max(0, Math.round(circuit.open_until_s))}s`

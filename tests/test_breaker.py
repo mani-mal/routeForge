@@ -175,3 +175,22 @@ def test_half_open_metric_also_dedupes_across_record_calls(monkeypatch):
     b.record_success("m", now=33.0)             # first post-cooldown observer -> "half_open" then "closed"
     assert calls.count("half_open") == 1
     assert calls.count("closed") == 1
+
+
+def test_each_transition_logs_one_structured_line(caplog):
+    """Spec §6: one structured line per transition -- model, from, to, cooldown."""
+    import logging
+    b = CircuitBreaker(CFG)
+    with caplog.at_level(logging.INFO, logger="serving.breaker"):
+        _trip(b)                                  # closed -> open, 30 s
+        b.open_set(now=40.0)                      # open -> half_open
+        b.record_failure("m", now=41.0)           # half_open -> open, 60 s
+        b.record_success("m", now=200.0)          # (half_open noted) -> closed
+    lines = [r.getMessage() for r in caplog.records if r.name == "serving.breaker"]
+    assert lines == [
+        "circuit transition model=m from=closed to=open cooldown_s=30",
+        "circuit transition model=m from=open to=half_open cooldown_s=-",
+        "circuit transition model=m from=half_open to=open cooldown_s=60",
+        "circuit transition model=m from=open to=half_open cooldown_s=-",
+        "circuit transition model=m from=half_open to=closed cooldown_s=-",
+    ]

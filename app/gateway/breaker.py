@@ -16,7 +16,8 @@ States, per model name:
 
 Half-open is EVIDENCE-based, with NO per-caller lease: once the cooldown has
 elapsed (`now >= open_until`) the model is simply admitted to EVERY caller --
-`open_set()` is a pure read, it grants nothing and holds nothing. The FIRST
+`open_set()` grants nothing and holds nothing -- its only write is the one-shot
+`half_open` log/metric dedup flag described below. The FIRST
 result reported for that model after the cooldown elapses -- by whichever
 caller reports it first -- decides the transition: a success closes, a
 failure reopens (cooldown doubled, capped). Before the cooldown elapses, a
@@ -48,11 +49,14 @@ the log/metric).
 Only failures the gateway classifies with `counts_as_endpoint_unhealth` are
 recorded -- a 4xx is the request's fault and never trips a circuit (B36).
 
-What the breaker does NOT do: decide eligibility. `open_set()` is handed to
-`Router.select`, which removes those names in `feasible_set`'s LAST stage
-(`circuit_open`), after every policy stage -- so it can only remove a
-candidate policy already admitted, and cannot widen placement. When that
-leaves nothing, the router retries without it (`circuit_bypass`).
+What the breaker does NOT do: decide eligibility, or the target tier.
+`open_set()` is handed to `Router.select`, which picks the tier from the
+POLICY-eligible set first and only then drops open names among that tier's
+final candidates (labelled by `feasible_set`'s LAST stage, `circuit_open`) --
+so it can only remove a candidate policy already admitted, cannot widen
+placement and cannot lower a risk floor or an escalation (rule 8). When
+every candidate in the target tier is open, the router bypasses the breaker
+within that tier (`circuit_bypass`).
 
 Per-process and in-memory, like `SignalStore`: each API replica trips on its
 own failures, and a restart starts every circuit closed. Every method takes
@@ -99,13 +103,19 @@ class CircuitBreaker:
     def _now(now: float | None) -> float:
         return time.monotonic() if now is None else now
 
-    def _transition(self, model: str, to_state: str, cooldown: float | None) -> None:
+    def _transition(self, model: str, from_state: str, to_state: str,
+                    cooldown: float | None) -> None:
+        """One metric increment and ONE structured log line per transition
+        (spec §6): model, from-state, to-state and the cooldown just set
+        (`-` when the transition sets none)."""
         metrics.observe_breaker_transition(to_state)
-        log.info("circuit %s -> %s%s", model, to_state,
-                 f" (cooldown {cooldown:.0f}s)" if cooldown else "")
+        log.info("circuit transition model=%s from=%s to=%s cooldown_s=%s",
+                 model, from_state, to_state,
+                 f"{cooldown:.0f}" if cooldown else "-")
 
-    def _open(self, model: str, e: _Entry, t: float, cooldown: float) -> _Entry:
-        self._transition(model, "open", cooldown)
+    def _open(self, model: str, e: _Entry, t: float, cooldown: float,
+              from_state: str) -> _Entry:
+        self._transition(model, from_state, "open", cooldown)
         return replace(e, open_until=t + cooldown, cooldown_s=cooldown,
                        half_open_logged=False)
 
@@ -115,7 +125,7 @@ class CircuitBreaker:
         a log/metric dedup -- it does not gate admission (see module
         docstring); callers must persist the returned entry themselves."""
         if e.open_until is not None and t >= e.open_until and not e.half_open_logged:
-            self._transition(model, "half_open", None)
+            self._transition(model, "open", "half_open", None)
             return replace(e, half_open_logged=True)
         return e
 
@@ -133,12 +143,13 @@ class CircuitBreaker:
             # reported it.
             e = self._note_half_open(model, e, t)
             self._m[model] = self._open(
-                model, e, t, min(e.cooldown_s * 2, self._cfg.max_cooldown_s))
+                model, e, t, min(e.cooldown_s * 2, self._cfg.max_cooldown_s),
+                "half_open")
             return
         # Closed: accumulate toward the threshold.
         e = replace(e, failures=e.failures + 1)
         if e.failures >= self._cfg.failure_threshold:
-            e = self._open(model, e, t, self._cfg.cooldown_s)
+            e = self._open(model, e, t, self._cfg.cooldown_s, "closed")
         self._m[model] = e
 
     def record_success(self, model: str, *, now: float | None = None) -> None:
@@ -152,13 +163,13 @@ class CircuitBreaker:
                 return
             # Cooldown has elapsed: this is the half-open trial's result.
             self._note_half_open(model, e, t)
-            self._transition(model, "closed", None)
+            self._transition(model, "half_open", "closed", None)
         self._m[model] = _Entry()
 
     def open_set(self, *, now: float | None = None) -> frozenset[str]:
-        """Models to exclude from THIS selection. A pure read: it grants
-        nothing and holds no lease (see module docstring for why the earlier
-        lease design was removed). A model whose cooldown has elapsed is
+        """Models to exclude from THIS selection. It grants nothing and holds
+        no lease (see module docstring for why the earlier lease design was
+        removed); its only write is the one-shot half_open log-dedup flag. A model whose cooldown has elapsed is
         half-open and simply left OUT of the returned set for every caller --
         no admission bookkeeping is made or consumed here. The only mutation
         is the one-shot `half_open_logged` dedup flag, which affects nothing

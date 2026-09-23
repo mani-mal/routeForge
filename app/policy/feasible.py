@@ -100,7 +100,8 @@ if TYPE_CHECKING:  # avoid importing the apps layer at module load
     from app.apps.policy import AppPolicyView
     from app.apps.registry import ModelRegistry
 
-# Stage codes -- stable identifiers for the five filters above.
+# Stage codes -- stable identifiers for the seven stages in the table above
+# (stage 2 has one code per data-handling rule, below).
 RESIDENCY = "residency"
 PRIOR_FAILURE = "prior_failure"
 APP_SCOPE = "app_scope"
