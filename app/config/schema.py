@@ -340,6 +340,14 @@ class SemanticCacheCfg(BaseModel):
     embedding: str = "off"
 
 
+class OutcomesCfg(BaseModel):
+    """P2b-2 routing outcome records (app/apps/outcomes.py). Infra switch, so
+    serving.yaml owns it. `enabled: false` writes nothing and changes nothing
+    else."""
+    enabled: bool = True
+    retention_days: float = 90.0
+
+
 class ServingCfg(BaseModel):
     providers: dict[str, ProviderCfg]
     pii_detection: str
@@ -374,6 +382,11 @@ class ServingCfg(BaseModel):
     # serving.yaml that predates feature #6 has no semantic_cache: block, and a
     # required field here would KeyError every existing deployment on upgrade.
     semantic_cache: SemanticCacheCfg = SemanticCacheCfg()
+    # P2b-2 routing outcome records. Defaulted like memory/semantic_cache: a
+    # mounted serving.yaml that predates this feature has no `outcomes:`
+    # block, and a required field here would KeyError every existing
+    # deployment on upgrade.
+    outcomes: OutcomesCfg = OutcomesCfg()
     observability: ObservabilityCfg
 
 

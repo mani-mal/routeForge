@@ -143,7 +143,9 @@ def test_admin_feedback_no_trace_id_reports_reason(client, monkeypatch):
     r = client.post(f"/api/requests/{rid}/feedback",
                     json={"score_name": "route_correct", "value": 1})
     assert r.status_code == 200, r.text
-    assert r.json() == {"stored": False, "reason": "no trace"}
+    # P2b-2 Task 5: no trace_id still records locally (outcomes.enabled
+    # defaults True and the served request wrote a routing_outcomes row).
+    assert r.json() == {"stored": False, "reason": "no trace", "recorded": True}
 
 
 def test_admin_feedback_unknown_score_name_422(client):

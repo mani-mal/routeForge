@@ -9,8 +9,8 @@ non-null B45 answer: §9. Branch `feat/b48-failure-injection`, code at `8344b21`
 **Predecessors:** P1a ([`policy-compiler-noninterference.md`](policy-compiler-noninterference.md)),
 P1b (`app/policy/feasible.py`), P2a ([`routing-signal-provenance.md`](routing-signal-provenance.md)),
 signal hardening (`SignalStore.replay`).
-**Slice:** P2b-1, the offline harness. P2b-2 (production outcome records) and P2b-3
-(learning bounded by the feasible set) are not built.
+**Slice:** P2b-1, the offline harness. P2b-2 (production outcome records) was built on
+2026-09-23 (§13). P2b-3 (learning bounded by the feasible set) is not built.
 **Audience:** whoever writes the paper.
 
 This is the evidence file, not the paper. It records what was built, what the first runs
@@ -36,6 +36,12 @@ attempts at 1 s per case and 4 of 10 at 30 s per case, and does nothing at 300 s
 which is an effect of the bench's case clock, not of production. It pays for this after
 recovery, by keeping the cheaper endpoint out for the rest of its cooldown: +51% and +39% mean
 chosen cost.
+
+**Update 2026-09-23 (§13).** P2b-2 is built: RouteForge now writes one content-free
+outcome record per routed request, keeps feedback scores locally, and exports both as a
+dataset. §13 records the dataset's model, its invariants, and what it can and cannot
+support. It contains no results: nothing has been deployed, so there is no production
+data yet.
 
 ---
 
@@ -1644,3 +1650,183 @@ Compare `router_online:default` with `router_online:breaker_off` in each `metric
 (`strategies`), and read first attempts from `choices.jsonl` (`attempts[0]` per `strategy`,
 `case_id`). Each run takes about 3 s. Write the output outside the repository; run output is
 not committed.
+
+---
+
+## 13. P2b-2: production outcome records as a dataset (2026-09-23)
+
+§1 named the obstacle this programme started from: the feasible oracle needs outcomes
+for every eligible endpoint of a request, and production observes only the one it chose.
+P2b-1 worked around that offline, by sweeping every eligible endpoint of a synthetic
+suite. §10 and §11.1 then showed what a missing quality signal costs live: Llama fails
+every claim summary, and the router cannot know it, because every onboarded model scores
+at its tier-default quality. B51's peer prior removed the latency fiction that made this
+worse; it did not add a quality signal.
+
+P2b-2 is the first half of the durable fix. RouteForge now **records what happened on
+each production request**, per workload, so that a later slice can learn from it. This
+section records the dataset as built on `feat/routing-outcome-records` (code at
+`e14f8e5`, plus the final-review fixes of 2026-09-23). Design: `docs/superpowers/specs/2026-09-23-routing-outcome-records-design.md`,
+amended on 2026-09-23 where the build departed from it. Field-level reference:
+[`docs/reference/routing-outcomes.md`](../reference/routing-outcomes.md). **This section
+contains no results.** Nothing has been deployed, so no production record exists yet.
+
+### 13.1 The record model
+
+One record per request that reached a routing decision. Writing $x$ for what is known
+before routing, $E$ for the candidate set, $a$ for the served endpoint and $y$ for what
+was observed:
+
+- **Context $x$.** Everything the gate and compression know, content-free:
+  `sensitivity`, `risk_class`, `onprem_only`, `detected_entity_types` (types, never
+  values), `complexity` (post-compression tokens / 2000), `prompt_tokens_bucket`, and
+  `workload` (an optional client-supplied slug; §13.4).
+- **Versions $v$.** `app_policy_version`, `endpoint_registry_version`,
+  `routing_policy_version`. Together they identify the policy, the endpoint pool and the
+  router configuration the decision was made under.
+- **Decision.** `tier_target`; `eligible` (the names scored); `rejected` (`{name, code}`
+  for everything excluded); `scoring` (a `RankResult.to_record()`); `circuit_bypass`;
+  `cache_hit`. All four decision fields describe the request's **first routing
+  decision**: the first trace entry that is a router hop or a failed gateway hop carrying
+  `scoring`, i.e. the decision that picked the first attempt. After a failover that is the
+  failed hop; after a confidence escalation it is the first, unserved router hop. The
+  scoring record is enough to recompute that **first** ranking offline. It is not the
+  record of the hop that served, which can differ.
+- **Action $a$.** `chosen` (the **served** model: the last router hop that chose one), and
+  `attempts` (every model tried, in order, including failed hops). So the record pairs
+  the router's first choice with the request's final outcome, and `attempts` gives the
+  path between them.
+- **Outcome $y$.** `status` (`ok`, `backend_failed`, `verify_failed`, `no_eligible`,
+  `context_overflow`), `cost_usd`, `latency_ms`, token counts, the step-9 verification
+  fields and `verify_mode`, and zero or more **feedback** rows (`score_name`, a numeric or
+  categorical value, `source` = `app` or `admin`).
+
+Two quality signals exist, both labelled by source. **Step-9 verification** is recorded on
+every served request, but it measures leakage and verifiability, not whether the answer
+was good. **Feedback** is the only direct quality label, and it exists only where a client
+or an admin chose to send it.
+
+What is *not* in the model, by design (spec §3): no propensity, no LLM-as-judge score,
+no counterfactual outcome, and no request content.
+
+**Definitions the analysis must respect** (full list in the reference doc, §3):
+
+- `latency_ms` has two definitions. `ok` records sum the trace hops; failure records
+  measure wall-clock from the start of the request handler, including gate time. Never pool
+  them.
+- `eligible` is the **scored** set of the target tier, not the whole feasible set. The
+  policy-feasible set of the first hop is, by inference from how codes are assigned (not
+  pinned by a test), `eligible` plus every `rejected` entry whose `code` is null (the
+  router's own tier, budget and lower-score filters) or `circuit_open`.
+- A semantic-cache hit is `ok` with `cache_hit: true` and `chosen: null`: its trace has no
+  router hop, so the model that produced the cached answer is not recorded. The report
+  gives these records their own `(cache)` bucket.
+- A `verify_failed` record is attributed to the served attempt: step 9 refused a response a
+  model had already produced, so `chosen`, `attempts`, `scoring`, the cost, the tokens and
+  `verify_mode: failed` are all recorded, read from a reason-free copy of the trace.
+- `request_id` is `req-` plus a full UUID4 (128 random bits). Feedback joins on
+  `(application_id, request_id)`.
+- Some requests write no record at all (reference §3.1): 401, 429, gate errors,
+  pinned-model rejections, cancellations, unhandled 500s, and the rare real-token stream
+  that ends without a final result. So "records" is not "requests".
+
+### 13.2 Invariants, and the test that pins each
+
+| Invariant | Pinned by | Falsified? |
+|---|---|---|
+| Content-free: no column name suggests text; a request carrying an SSN and an e-mail address leaves neither in its record; the builder copies no text; `rejected` keeps `{name, code}` only; the gate context holds no prompt text | `tests/test_outcome_store.py::test_schema_is_content_free`; `tests/test_outcome_hooks.py::test_outcome_row_carries_no_request_content`; `tests/test_outcome_builder.py::test_build_ok_outcome_is_content_free`, `test_build_failure_outcome_no_eligible_stores_only_name_and_code`; `tests/test_outcome_ctx_pipeline.py::test_outcome_ctx_has_no_prompt_text_even_with_ssn` | n/a. The end-to-end PII test now covers failure records too (`test_verify_failed_row_carries_no_request_content`, `test_no_eligible_row_carries_no_request_content`) |
+| Feedback text (`comment`, `corrected_output`) is never stored locally; a correction is still countable | `tests/test_outcome_feedback.py::test_comment_and_corrected_output_text_never_stored_locally` | n/a |
+| Feedback is app-scoped: another app's request is indistinguishable from a missing one, and writes nothing | `tests/test_outcome_feedback.py::test_cross_app_feedback_is_refused_and_writes_no_row`; `tests/test_outcome_store.py::test_get_outcome_is_app_scoped`, `test_find_outcome_by_trace_id_and_request_id_is_app_scoped` | n/a |
+| Versions are stamped on every record, served or failed | `tests/test_outcome_hooks.py::test_plain_request_writes_one_ok_row` (all three versions); `test_backend_failure_writes_backend_failed_row` (registry version only; the other two reach failure records by the same builder arguments, untested end to end) | n/a |
+| The report never pools across `endpoint_registry_version` | `tests/eval/test_outcomes_report.py::test_mixed_registry_versions_produce_separate_groups` | n/a |
+| The report never prints regret, and opens with the served-arm caveat verbatim | `tests/eval/test_outcomes_report.py::test_report_never_mentions_regret`, `test_report_starts_with_the_caveat_verbatim`, `test_report_of_an_empty_export_still_starts_with_the_caveat` | n/a |
+| Mean cost and latency percentiles are over `ok` records only | `tests/eval/test_outcomes_report.py::test_summarize_chat_ep_mid_bucket_has_the_failover_and_the_verify_failure`, `test_summarize_no_eligible_row_lands_in_unchosen_bucket_with_no_latency` | **Yes**: the Task 7 review found failed records (cost 0) diluting the mean cost (fixed in `e14f8e5`) |
+| A `verify_failed` record names the served model, its attempts and `verify_mode: failed`; the stashed trace carries no `reason` | `tests/test_outcome_hooks.py::test_verify_failed_row_is_attributed_to_the_served_model`, `test_keepalive_verify_failed_row_is_attributed`; `tests/test_outcome_builder.py::test_build_failure_outcome_verify_failed_reads_the_stashed_trace` | **Yes**: the final review found `verify_failed` records carried no attribution at all (`chosen` null, `attempts` empty), because the pipeline raised after the gateway served; the eval fixture's attributed verify_failed line was one the code could not produce (fixed 2026-09-23) |
+| Decision fields describe the first routing decision; `chosen` the served model; the same after failover and after escalation | `tests/test_outcome_builder.py::test_build_ok_outcome_failover_first_decision_is_the_failed_hop`, `test_build_ok_outcome_escalation_first_decision_describes_eligible_scoring_tier`; `tests/test_outcome_hooks.py::test_failover_row_first_decision_is_the_failed_attempt` | **Yes**: the final review found the hop differed by path (after escalation the first router hop, after failover the served hop, dropping the failed attempt's scoring) (fixed 2026-09-23) |
+| Request ids do not collide; feedback never attaches across apps | `tests/test_outcome_hooks.py::test_request_id_is_full_uuid_hex`; `tests/test_outcome_export.py::test_export_never_attaches_another_apps_feedback`; `tests/test_outcome_store.py::test_feedback_for_is_scoped_by_application_id` | **Yes**: the final review found 32-bit ids as a 90-day primary key and a feedback join on `request_id` alone (fixed 2026-09-23) |
+| `verify_mode` distinguishes the real streaming modes | `tests/test_outcome_hooks.py::test_stream_modes_record_verify_mode`; `tests/test_outcome_builder.py::test_build_ok_outcome_verify_waived_stream`, `test_build_ok_outcome_verify_incremental` | **Yes**: the Task 2 review found that checking `required` first recorded every real `stream_unverified` and `incremental_verify` request as `not_required`, because both always carry `required: false` (fixed in `6d3f542`) |
+| Recording never changes routing or the response; switched off, nothing is written | `tests/test_outcome_hooks.py::test_outcomes_disabled_writes_no_row_and_same_response`, `test_outcomes_disabled_writes_no_failure_row`; `tests/eval/test_isolation.py::test_no_serving_module_imports_app_eval` | n/a |
+| A failed write never fails the request or its metering | `tests/test_outcome_hooks.py::test_outcome_write_failure_is_swallowed` | n/a |
+| A local feedback-store failure never changes the status or `stored`, and never blocks the Langfuse post | `tests/test_outcome_feedback.py::test_feedback_find_outcome_failure_does_not_block_langfuse_post`, `test_feedback_write_feedback_failure_on_corrected_output_does_not_block_second_post`, and the two admin equivalents | **Yes**: the Task 5 review found an unguarded local lookup turning a DB error into a bare 500 and skipping the Langfuse post (fixed in `afd5045`) |
+| An invalid workload tag is dropped, never rejected; the header beats `metadata`; `metadata` is not forwarded upstream | `tests/test_outcome_hooks.py::test_invalid_workload_header_still_serves`, `test_metadata_workload_is_stored_and_not_forwarded_upstream`; `tests/test_outcome_builder.py::test_parse_workload_header_beats_metadata` | n/a |
+| Retention deletes old records from both tables and runs independently of the observation prune | `tests/test_outcome_store.py::test_prune_outcomes_deletes_old_rows_from_both_tables`; `tests/routing/test_signal_wiring.py::test_the_loop_also_prunes_outcomes_hourly_when_enabled`, `test_an_outcomes_prune_failure_does_not_stop_the_flusher` | n/a |
+
+### 13.3 What the dataset can and cannot support
+
+**Can support:**
+
+- **Descriptive rates per workload**: served-ok, `no_eligible`, `backend_failed`,
+  `context_overflow` and verification-failure rates, multi-attempt rate (failover or
+  escalation; the record does not tell them apart), cost and latency of
+  served requests, and feedback coverage. The empty-set rate is the production
+  counterpart of the bench's §5.7 run.
+- **Auditing the router against its own record.** The scoring record lets an analyst
+  recompute each first-hop ranking offline, and the versions tell them which configuration
+  to recompute it under.
+- **Change detection across versions.** Records never mix across registry versions in the
+  report, so a before/after comparison around an onboarding or a routing change is
+  possible. It is still confounded by any change in the traffic mix over the same period.
+- **Quality labels for the served endpoint**, where feedback exists. This is the signal
+  §10 and §11.1 lacked: "Llama fails claim summaries" becomes visible as a low `quality` or
+  `route_correct` mean in the `(claims.summary, llama)` cell, once clients tag and score.
+
+**Cannot support:**
+
+- **Counterfactuals.** Each record has the outcome of the served endpoint only. What any
+  other eligible endpoint would have done is not observed, so oracle regret is not
+  computable from these records, and the report never prints it. FeasibleRouteBench
+  remains the only source of counterfactual outcomes.
+- **Unconfounded endpoint comparisons.** The router decides which requests each endpoint
+  sees, by tier, price and signal. Two endpoints' per-cell means come from different
+  request mixes, even within one `(workload, chosen)` cell, because the router also
+  conditions on `complexity`, `risk_class` and residency. Differences are descriptive, not
+  causal.
+- **Off-policy evaluation.** The router is deterministic: for a given context and state it
+  picks one endpoint with probability 1 and every other with probability 0. Inverse
+  propensity weighting and doubly robust estimators need every action a candidate policy
+  would take to have been taken with non-zero probability. A deterministic logger gives no
+  such overlap, so no estimator can score an alternative router from these records alone.
+  The records carry no propensities because there are none to record.
+- **Quality where nobody labelled.** Feedback is voluntary and sparse, and who labels is
+  not random: a client may only score failures. Label coverage is reported per workload so
+  this is visible; it is not corrected for. Step-9 verification is present everywhere but
+  is not a quality measure.
+
+### 13.4 What P2b-3 needs from it
+
+P2b-3 (learning and exploration bounded by the feasible set) needs, at least:
+
+1. **Propensities, logged at decision time.** Any exploration must record the probability
+   with which the served endpoint was chosen and the policy that chose it. That means new
+   columns and a schema bump, and it is the prerequisite for off-policy evaluation from
+   production data. Exploration must stay inside the feasible set: the eligibility filters
+   run before any exploration, so it can never widen placement.
+2. **The full feasible set on the record.** `eligible` is the target tier's scored set.
+   Exploration across tiers within the feasible set needs the set logged directly, not
+   reconstructed from `rejected` codes (§13.1).
+3. **A denser quality label.** Voluntary feedback will be sparse and non-randomly missing.
+   An LLM-as-judge (out of scope here) or a deterministic per-workload grader is the
+   candidate. Whatever it is, it must stay content-free in these tables and be labelled by
+   source.
+4. **A workload taxonomy clients actually send.** `workload` is optional. Untagged traffic
+   can be grouped only by derived features (`prompt_tokens_bucket`, `complexity`,
+   `sensitivity`, entity types), which do not say what the task was.
+5. **The bench as the check.** Any learned policy should be scored on FeasibleRouteBench
+   against the feasible oracle before it serves traffic. The production records say what
+   happened; the bench says what would have happened.
+6. **The served model on cache hits.** A cache-hit record does not name the model that
+   produced the answer (§13.1). A learner that credits endpoints must either exclude cache
+   hits or have this added.
+
+### 13.5 Limits: what this does NOT show
+
+- **No data.** The feature is built and tested, not deployed. Every statement in §13.3 is
+  about what the records permit, not about anything observed.
+- **Deploy prerequisite.** The two new tables need no `ALTER`, but earlier outstanding
+  `ALTER`s (`context_window_source` from #64) must be applied first.
+- **One extra commit per request.** The outcome write is inline, next to the usage row,
+  so it adds one database commit to every routed request. Its latency cost was not
+  measured.
+- **Failure-record PII** is now covered end to end for `verify_failed` and `no_eligible`
+  (§13.2, first row); `backend_failed` and `context_overflow` are covered by the builder
+  unit tests and by construction.

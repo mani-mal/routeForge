@@ -7,6 +7,7 @@ tests/test_apps_store.py.
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import json
 import time
 
@@ -15,6 +16,7 @@ import pytest
 from app.apps.bootstrap import seed_demo_apps
 from app.apps.db import Database
 from app.apps import store
+from app.apps.models import RoutingOutcome
 from app.apps.policy import AppPolicyView
 from app.compression.ccr import CCRStore
 from app.config.loader import load_settings
@@ -542,11 +544,15 @@ def test_seed_failure_leaves_an_empty_store_and_the_app_serving(monkeypatch):
 _WAIT_S = 5.0
 
 
-def _flusher_app(db, sink, *, interval: float = 0.01):
+def _flusher_app(db, sink, *, interval: float = 0.01, outcomes_enabled: bool = True,
+                 outcomes_retention_days: float = 90.0):
     from types import SimpleNamespace
     cfg = S.routing.signals.model_copy(update={"flush_interval_s": interval})
     state = SimpleNamespace(
-        settings=SimpleNamespace(routing=SimpleNamespace(signals=cfg)),
+        settings=SimpleNamespace(
+            routing=SimpleNamespace(signals=cfg),
+            serving=SimpleNamespace(outcomes=SimpleNamespace(
+                enabled=outcomes_enabled, retention_days=outcomes_retention_days))),
         db=db, observation_sink=sink)
     return SimpleNamespace(state=state)
 
@@ -688,7 +694,127 @@ def test_a_prune_failure_does_not_stop_the_flusher(monkeypatch):
         await asyncio.wait_for(main.stop_observations(app), _WAIT_S + 6)
 
     asyncio.run(go())
+
+
+# -- Task 6: the same hourly loop also prunes routing_outcomes -------------
+
+def _outcomes_prune_spy(monkeypatch, *, raises: bool):
+    from app import main
+    calls: list[float] = []
+
+    async def _spy(s, *, older_than_days):
+        calls.append(older_than_days)
+        if raises:
+            raise RuntimeError("outcomes prune boom")
+        return 0
+
+    monkeypatch.setattr(main.apps_store, "prune_outcomes", _spy)
+    return calls
+
+
+def test_the_loop_also_prunes_outcomes_hourly_when_enabled(monkeypatch):
+    """The first iteration is due for both prunes (see the observation-loop
+    equivalent above); outcomes uses its own retention_days, not the
+    observation log's seed_window_hours."""
+    from app import main
+
+    calls = _outcomes_prune_spy(monkeypatch, raises=False)
+
+    async def go():
+        app = _flusher_app(_fresh_db(), ObservationSink(10),
+                           outcomes_enabled=True, outcomes_retention_days=42.0)
+        main.start_observations(app)
+        await _until(lambda: calls)
+        await asyncio.sleep(0.1)        # ~10 more intervals -- still once
+        await asyncio.wait_for(main.stop_observations(app), _WAIT_S + 6)
+
+    asyncio.run(go())
+    assert calls == [42.0]
+
+
+def test_the_loop_skips_outcomes_prune_when_disabled(monkeypatch):
+    from app import main
+
+    calls = _outcomes_prune_spy(monkeypatch, raises=False)
+    obs_calls = _prune_spy(monkeypatch, raises=False)
+
+    async def go():
+        app = _flusher_app(_fresh_db(), ObservationSink(10), outcomes_enabled=False)
+        main.start_observations(app)
+        await _until(lambda: obs_calls)     # the observation prune still ran
+        await asyncio.sleep(0.05)
+        await asyncio.wait_for(main.stop_observations(app), _WAIT_S + 6)
+
+    asyncio.run(go())
+    assert obs_calls == [S.routing.signals.seed_window_hours]
+    assert calls == []
+
+
+def test_an_outcomes_prune_failure_does_not_stop_the_flusher(monkeypatch):
+    """Guarded separately: an outcomes-prune failure must not block the
+    observation prune (which still ran, per obs_calls) or kill the loop."""
+    from app import main
+
+    calls = _outcomes_prune_spy(monkeypatch, raises=True)
+    obs_calls = _prune_spy(monkeypatch, raises=False)
+    sink = ObservationSink(10)
+
+    async def go():
+        app = _flusher_app(_fresh_db(), sink)
+        main.start_observations(app)
+        await _until(lambda: calls and obs_calls)
+        sink.put(Observation(time.time(), "m", "ok", 1.0, False, None))
+        await _until(lambda: not sink._buf)     # a later flush still runs
+        assert not app.state.observation_task.done()
+        await asyncio.wait_for(main.stop_observations(app), _WAIT_S + 6)
+
+    asyncio.run(go())
     assert len(calls) == 1
+    assert len(obs_calls) == 1
+
+
+def test_the_loop_prune_deletes_an_old_outcome_row_and_keeps_a_new_one():
+    """End to end: a routing_outcomes row past retention_days is gone after
+    the loop's first (due) iteration; a recent one survives."""
+    from app import main
+
+    db = _fresh_db()
+    now = dt.datetime.now(dt.timezone.utc)
+
+    async def seed():
+        async with db.session() as s:
+            await store.write_outcome(s, dict(
+                request_id="old-1", application_id="app-1", status="ok"))
+            await store.write_outcome(s, dict(
+                request_id="new-1", application_id="app-1", status="ok"))
+            await s.commit()
+        async with db.session() as s:
+            old_row = await s.get(RoutingOutcome, "old-1")
+            old_row.ts = now - dt.timedelta(days=10)
+            new_row = await s.get(RoutingOutcome, "new-1")
+            new_row.ts = now - dt.timedelta(hours=1)
+            await s.commit()
+
+    asyncio.run(seed())
+
+    async def go():
+        app = _flusher_app(db, ObservationSink(10), outcomes_enabled=True,
+                           outcomes_retention_days=1.0)
+        main.start_observations(app)
+        await asyncio.sleep(0.15)       # a few intervals -- one due prune
+        await asyncio.wait_for(main.stop_observations(app), _WAIT_S + 6)
+
+    asyncio.run(go())
+
+    async def check():
+        async with db.session() as s:
+            old = await store.get_outcome(s, "old-1", application_id="app-1")
+            new = await store.get_outcome(s, "new-1", application_id="app-1")
+        return old, new
+
+    old, new = asyncio.run(check())
+    assert old is None
+    assert new is not None
 
 
 @pytest.mark.parametrize("exc", [

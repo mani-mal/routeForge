@@ -29,6 +29,9 @@ from app.api.streaming import (
 )
 from app.apps import store
 from app.apps.langfuse_provision import load_app_langfuse
+from app.apps.outcomes import (
+    build_failure_outcome, build_ok_outcome, feedback_values, parse_workload,
+)
 from app.apps.policy import AppPolicyView, day_spend_usd, policy_view_from
 from app.apps.privacy import AppPrivacyProfile
 from app.errors import (
@@ -221,6 +224,14 @@ def _resolve_stream_mode(body: ChatRequest, app_policy: AppPolicyView, s) -> str
     return None if mode in (None, STREAM_MODES[0]) else mode
 
 
+def _is_pinned_model_rejection(exc: BaseException) -> bool:
+    """A `PipelineRejected` for a client-pinned `model` the app may not use
+    (`Pipeline.run`: "requested model ..."). Every other `PipelineRejected` on
+    the serving path is a step-9 verification failure. One test, shared by the
+    HTTP error mapping and the outcome recorder, so they can never disagree."""
+    return isinstance(exc, PipelineRejected) and str(exc).startswith("requested model")
+
+
 def _error_status_detail(exc: BaseException) -> tuple[int, str, str | None] | None:
     """The (status, detail, openai_code) the HTTP path returns for a serving
     exception. One mapping, used by the plain HTTP path and by the keepalive
@@ -228,7 +239,7 @@ def _error_status_detail(exc: BaseException) -> tuple[int, str, str | None] | No
     client branches on (B49)."""
     if isinstance(exc, PipelineRejected):
         message = str(exc)
-        rejected_model = message.startswith("requested model")
+        rejected_model = _is_pinned_model_rejection(exc)
         prefix = ("model request rejected: " if rejected_model
                   else "response failed verification: ")
         code = (CODE_MODEL_NOT_FOUND if rejected_model
@@ -317,7 +328,11 @@ async def _record_cancelled(request: Request, *, tenant: str, request_id: str,
 
 async def _record_failed(request: Request, *, tenant: str, request_id: str,
                          started: float, model: str,
-                         ctx: ExecutionPolicyContext | None = None) -> None:
+                         ctx: ExecutionPolicyContext | None = None,
+                         s=None, internals: dict | None = None,
+                         attempts: tuple[str, ...] = (),
+                         workload: str | None = None,
+                         workload_source: str = "none") -> None:
     """Meter a request that failed on the BACKEND (spec §4, B38): one usage row
     with `status="error"`, so an outage shows up in the console instead of
     vanishing from every usage figure.
@@ -333,7 +348,10 @@ async def _record_failed(request: Request, *, tenant: str, request_id: str,
     tier/provider come from the registry. Tokens and cost are zero -- nothing
     was served -- and every spend/token/latency/budget aggregate filters on
     `status == "ok"`, so this row moves none of them. `metrics` is untouched:
-    the caller's existing `observe_request` already counted the failure."""
+    the caller's existing `observe_request` already counted the failure.
+
+    It also writes the request's `backend_failed` routing outcome (P2b-2),
+    naming `attempts` -- the candidates the gateway tried, in order."""
     try:
         cand = next((c for c in request.app.state.registry.effective_pool()
                      if c.name == model), None)
@@ -353,6 +371,10 @@ async def _record_failed(request: Request, *, tenant: str, request_id: str,
     except Exception:
         logging.getLogger("serving.obs").exception(
             "error-usage record failed (swallowed)")
+    await _record_failure_outcome(
+        request, "backend_failed", tenant=tenant, request_id=request_id,
+        started=started, s=s, internals=internals, attempts=attempts,
+        workload=workload, workload_source=workload_source)
 
 
 def _failed_model(exc: BaseException) -> str:
@@ -362,10 +384,123 @@ def _failed_model(exc: BaseException) -> str:
     return attempted[-1] if attempted else "-"
 
 
+async def _record_outcome(request: Request, row: dict) -> None:
+    """Write one `routing_outcomes` row (P2b-2) in its own session. Best
+    effort, like every other record on the serving path: a failed write is
+    logged and swallowed, so it can never fail or alter the response, and it
+    never touches the usage row. It is inline, like the usage row, so it does
+    add one DB commit to the request. `outcomes.enabled: false` writes
+    nothing."""
+    if not request.app.state.settings.serving.outcomes.enabled:
+        return
+    try:
+        async with request.app.state.db.session() as session:
+            await store.write_outcome(session, row)
+            await session.commit()
+    except Exception:
+        logging.getLogger("serving.obs").warning(
+            "outcome record failed request=%s", row.get("request_id"), exc_info=True)
+
+
+def _registry_version(request: Request) -> str | None:
+    """The live `ModelRegistry.registry_version()`, or None if it cannot be
+    read. A failure row needs it (no response carries it), and reading it
+    must never break the error path it is recorded from."""
+    try:
+        return request.app.state.registry.registry_version()
+    except Exception:
+        return None
+
+
+def _outcome_failure_status(exc: BaseException) -> str | None:
+    """The routing-outcome status for a serving exception that is NOT a
+    backend failure (`_record_failed` writes those), or None when the
+    exception is not a routing outcome at all: a pinned-model rejection, a
+    policy-gate error, anything unmapped."""
+    if isinstance(exc, ContextWindowExceeded):
+        return "context_overflow"
+    if isinstance(exc, NoEligibleCandidate):
+        return "no_eligible"
+    if isinstance(exc, PipelineRejected) and not _is_pinned_model_rejection(exc):
+        return "verify_failed"
+    return None
+
+
+async def _record_failure_outcome(request: Request, status: str, *, tenant: str,
+                                  request_id: str, started: float, s=None,
+                                  internals: dict | None = None,
+                                  attempts: tuple[str, ...] = (),
+                                  rejected: tuple = (),
+                                  workload: str | None = None,
+                                  workload_source: str = "none") -> None:
+    """Build and write a failed request's outcome row. Content-free: the
+    gate's `outcome_ctx` (ids, enums, entity TYPES), the candidate names
+    tried, and the `{name, code}` of each policy rejection -- never the
+    exception's message. A `verify_failed` row is attributed from the
+    reason-free trace `Pipeline.run` stashed in `internals["outcome_trace"]`
+    before refusing the response (a model was served; step 9 refused it)."""
+    try:
+        s = s if s is not None else request.app.state.settings
+        internals = internals or {}
+        served: dict = {}
+        if status == "verify_failed" and internals.get("outcome_trace") is not None:
+            served = {"trace": internals["outcome_trace"],
+                      **(internals.get("outcome_usage") or {})}
+        row = build_failure_outcome(
+            status=status, request_id=request_id, application_id=tenant,
+            outcome_ctx=internals.get("outcome_ctx") or {},
+            routing_policy_version=s.routing_policy_version,
+            endpoint_registry_version=_registry_version(request),
+            workload=workload, workload_source=workload_source,
+            attempts=tuple(attempts), rejected=tuple(rejected),
+            latency_ms=(time.monotonic() - started) * 1000, **served)
+    except Exception:
+        logging.getLogger("serving.obs").warning(
+            "outcome record failed request=%s", request_id, exc_info=True)
+        return
+    await _record_outcome(request, row)
+
+
+async def _record_exception_outcome(request: Request, exc: BaseException, *,
+                                    tenant: str, request_id: str, started: float,
+                                    s, internals: dict | None,
+                                    workload: str | None,
+                                    workload_source: str) -> None:
+    """The outcome row for a mapped serving exception, shared by the plain
+    HTTP path and the keepalive stream's error frame. A `BackendUnavailable`
+    goes through `_record_failed` (usage row + outcome); the three routing
+    outcomes in `_outcome_failure_status` get an outcome row only; anything
+    else gets nothing."""
+    if isinstance(exc, BackendUnavailable):
+        await _record_failed(request, tenant=tenant, request_id=request_id,
+                             started=started, model=_failed_model(exc), s=s,
+                             internals=internals,
+                             attempts=tuple(getattr(exc, "attempted_models", ())),
+                             workload=workload, workload_source=workload_source)
+        return
+    status = _outcome_failure_status(exc)
+    if status is None:
+        return
+    await _record_failure_outcome(
+        request, status, tenant=tenant, request_id=request_id, started=started,
+        s=s, internals=internals,
+        # A `ContextWindowExceeded` from the gateway names the models it tried,
+        # like `BackendUnavailable`; the others carry none.
+        attempts=tuple(getattr(exc, "attempted_models", ())),
+        # `NoEligibleCandidate.rejected` is `(name, code)` tuples; the builder
+        # takes `{name, code}` mappings (the router trace's shape).
+        rejected=tuple({"name": name, "code": code}
+                       for name, code in getattr(exc, "rejected", ())),
+        workload=workload, workload_source=workload_source)
+
+
 @router.post("/v1/chat/completions", response_model=None)
 async def chat_completions(body: ChatRequest, request: Request) -> dict | StreamingResponse:
     s = request.app.state.settings
-    request_id = f"req-{uuid.uuid4().hex[:8]}"
+    # The full 128-bit uuid: this id is the `routing_outcomes` primary key,
+    # retained for 90 days, so a short id's collisions would lose rows and
+    # misattach feedback (P2b-2 final review #2).
+    request_id = f"req-{uuid.uuid4().hex}"
     started = time.monotonic()
     started_ns = time.time_ns()
     auth = await _authenticate(request)
@@ -381,6 +516,14 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
         raise ApiError(401, "invalid or missing API token", code=CODE_INVALID_API_KEY)
     tenant, app_policy, app_langfuse = auth
     stream_mode = _resolve_stream_mode(body, app_policy, s)
+    # P2b-2: the client's optional workload tag, for the routing outcome row
+    # only. The header wins over `metadata.workload`; an invalid tag is
+    # recorded as such and the request is served regardless. `metadata` is
+    # never forwarded upstream (it is not in `FORWARDED_PARAMS`).
+    workload, workload_source = parse_workload(
+        request.headers.get("x-routeforge-workload"),
+        (body.model_extra or {}).get("metadata"))
+    outcome_kw = {"workload": workload, "workload_source": workload_source}
 
     # Per-application quotas (fail closed). Rate limit first (cheap, in-memory),
     # then the daily spend cap (one indexed sum). Both reject with 429; the
@@ -484,7 +627,8 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
                         get_meta=get_meta, body=body, tenant=tenant,
                         app_policy=app_policy, app_langfuse=app_langfuse,
                         profile=profile, session_id=session_id, s=s,
-                        internals=internals, started=started, started_ns=started_ns)
+                        internals=internals, started=started, started_ns=started_ns,
+                        **outcome_kw)
                 # incremental_verify (Task 7): stream real tokens, but pipe each
                 # delta through a hold-back StreamingVerifier so no un-redacted
                 # text is ever released. Build the verifier on the request's
@@ -495,7 +639,8 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
                     get_meta=get_meta, body=body, tenant=tenant,
                     app_policy=app_policy, app_langfuse=app_langfuse,
                     profile=profile, session_id=session_id, s=s,
-                    internals=internals, started=started, started_ns=started_ns)
+                    internals=internals, started=started, started_ns=started_ns,
+                    **outcome_kw)
         if stream_mode is not None:
             task = asyncio.create_task(request.app.state.pipeline.run(
                 request_id, tenant, body, app_policy=app_policy, profile=profile,
@@ -509,7 +654,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
                     app_langfuse=app_langfuse, profile=profile,
                     session_id=session_id, s=s, started=started,
                     internals=internals,
-                    started_ns=started_ns))
+                    started_ns=started_ns, **outcome_kw))
             resp = task.result()   # raises -> the except clauses below map it
         else:
             task = asyncio.create_task(request.app.state.pipeline.run(
@@ -534,14 +679,14 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
             logging.getLogger("serving.api").warning(
                 "request %s failed with %d: %s", request_id, mapped[0], mapped[1])
         metrics.observe_request("-", "rejected")
-        if isinstance(e, BackendUnavailable):
-            await _record_failed(request, tenant=tenant, request_id=request_id,
-                                 started=started, model=_failed_model(e))
+        await _record_exception_outcome(
+            request, e, tenant=tenant, request_id=request_id, started=started,
+            s=s, internals=internals, **outcome_kw)
         raise ApiError(mapped[0], mapped[1], code=mapped[2])
     await _finalize(request, resp, body=body, tenant=tenant, app_policy=app_policy,
                     app_langfuse=app_langfuse, profile=profile,
                     session_id=session_id, s=s, request_id=request_id,
-                    internals=internals, started_ns=started_ns)
+                    internals=internals, started_ns=started_ns, **outcome_kw)
     if stream_mode is None:
         return resp
     # verified_then_stream: the pipeline already ran the FULL request above
@@ -624,7 +769,9 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
                     app_langfuse: object | None, profile: AppPrivacyProfile,
                     session_id: str | None, s, request_id: str,
                     internals: dict | None = None,
-                    started_ns: int | None = None) -> None:
+                    started_ns: int | None = None,
+                    workload: str | None = None,
+                    workload_source: str = "none") -> None:
     """Post-model-call processing shared by every response shape (non-stream
     and every streaming mode): telemetry export, the first-party console
     snapshot, the durable per-app usage row, and the live decision-stream
@@ -884,6 +1031,21 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
     except Exception:  # usage metering must never break serving
         logging.getLogger("serving.obs").exception(
             "usage record failed (swallowed)")
+    # The request's routing outcome (P2b-2): content-free, built from the
+    # trace and the gate's `outcome_ctx`. Every response shape reaches here --
+    # a real-token stream only after `_finalize_stream` has stamped its
+    # waived/incremental verify record, so `verify_mode` reads it.
+    try:
+        outcome = build_ok_outcome(
+            resp, request_id=request_id, application_id=tenant,
+            outcome_ctx=internals.get("outcome_ctx") or {},
+            routing_policy_version=s.routing_policy_version,
+            workload=workload, workload_source=workload_source)
+    except Exception:
+        logging.getLogger("serving.obs").warning(
+            "outcome record failed request=%s", request_id, exc_info=True)
+    else:
+        await _record_outcome(request, outcome)
     try:
         # Live decision stream for the UI's flow visualizer (Phase 6a Task
         # 2). Same redaction-safe data history already stored — no raw PII,
@@ -911,7 +1073,9 @@ async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
                             app_langfuse: object | None, profile: AppPrivacyProfile,
                             session_id: str | None, s, started: float,
                             internals: dict | None = None,
-                            started_ns: int | None = None) -> AsyncIterator[str]:
+                            started_ns: int | None = None,
+                            workload: str | None = None,
+                            workload_source: str = "none") -> AsyncIterator[str]:
     """SSE for a streamed request whose complete, verified answer is not ready
     within one keepalive interval. Sends a keepalive comment each interval until
     the pipeline task finishes, then the same frames `verified_then_stream`
@@ -981,12 +1145,15 @@ async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
                     logging.getLogger("serving.api").warning(
                         "request %s failed with %d: %s", request_id, mapped[0], mapped[1])
                 metrics.observe_request("-", "rejected")
-            if isinstance(e, BackendUnavailable):
-                # Shielded for the same reason `_finalize` is below: a
-                # disconnect landing mid-write must not lose the row.
-                with anyio.CancelScope(shield=True):
-                    await _record_failed(request, tenant=tenant, request_id=request_id,
-                                         started=started, model=_failed_model(e))
+            # Shielded for the same reason `_finalize` is below: a
+            # disconnect landing mid-write must not lose the row. Same
+            # recorder as the plain HTTP path (usage `error` row for a backend
+            # failure; the routing outcome for every routing failure).
+            with anyio.CancelScope(shield=True):
+                await _record_exception_outcome(
+                    request, e, tenant=tenant, request_id=request_id,
+                    started=started, s=s, internals=internals,
+                    workload=workload, workload_source=workload_source)
             yield sse_error_frame(*mapped)
             yield SSE_DONE
             return
@@ -1000,7 +1167,8 @@ async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
             await _finalize(request, resp, body=body, tenant=tenant, app_policy=app_policy,
                             app_langfuse=app_langfuse, profile=profile,
                             session_id=session_id, s=s, request_id=request_id,
-                            internals=internals, started_ns=started_ns)
+                            internals=internals, started_ns=started_ns,
+                            workload=workload, workload_source=workload_source)
         message = resp["choices"][0]["message"]
         async for frame in chunk_text(request_id, resp["model"], message["content"] or "",
                                       tool_calls=message.get("tool_calls")):
@@ -1073,17 +1241,25 @@ def _backend_failed(watched: _WatchedDeltas, get_meta: Callable[[], dict]) -> bo
 
 
 async def _record_failed_stream(request: Request, *, tenant: str, request_id: str,
-                                started: float, get_meta: Callable[[], dict]) -> None:
+                                started: float, get_meta: Callable[[], dict],
+                                s=None, internals: dict | None = None,
+                                workload: str | None = None,
+                                workload_source: str = "none") -> None:
     """The `error` row for a real-token stream whose backend failed: named for
     the router's chosen model and the gate's ctx, both known eagerly on
-    `get_meta` (`Pipeline.run_stream`). Shielded: it runs in the generator's
+    `get_meta` (`Pipeline.run_stream`). A real-token stream makes exactly one
+    backend attempt (no gateway fallback once tokens flow), so that model is
+    the outcome row's only attempt. Shielded: it runs in the generator's
     `finally`, where a disconnect's re-cancelling scope would otherwise cut
     the write short."""
+    chosen = getattr(get_meta, "chosen_model", None)
     with anyio.CancelScope(shield=True):
         await _record_failed(request, tenant=tenant, request_id=request_id,
-                             started=started,
-                             model=getattr(get_meta, "chosen_model", "-"),
-                             ctx=getattr(get_meta, "ctx", None))
+                             started=started, model=chosen or "-",
+                             ctx=getattr(get_meta, "ctx", None), s=s,
+                             internals=internals,
+                             attempts=(chosen,) if chosen else (),
+                             workload=workload, workload_source=workload_source)
 
 
 def _stream_unverified_response(
@@ -1093,7 +1269,9 @@ def _stream_unverified_response(
         app_langfuse: object | None, profile: AppPrivacyProfile,
         session_id: str | None, s, internals: dict | None = None,
         started: float,
-        started_ns: int | None = None) -> StreamingResponse:
+        started_ns: int | None = None,
+        workload: str | None = None,
+        workload_source: str = "none") -> StreamingResponse:
     """Live token-forwarding SSE for `stream_unverified` (real backend
     streaming). Emits an OpenAI-style role frame, forwards each `deltas` token
     as a `content` frame, then (after the stream drains) a `finish_reason`
@@ -1132,14 +1310,17 @@ def _stream_unverified_response(
             if _backend_failed(watched, get_meta):
                 await _record_failed_stream(request, tenant=tenant,
                                             request_id=request_id, started=started,
-                                            get_meta=get_meta)
+                                            get_meta=get_meta, s=s,
+                                            internals=internals, workload=workload,
+                                            workload_source=workload_source)
             else:
                 await _finalize_stream(
                     request, request_id=request_id, deltas=deltas,
                     get_meta=get_meta, meta=meta, body=body, tenant=tenant,
                     app_policy=app_policy, app_langfuse=app_langfuse,
                     profile=profile, session_id=session_id, s=s,
-                    internals=internals, started_ns=started_ns)
+                    internals=internals, started_ns=started_ns,
+                    workload=workload, workload_source=workload_source)
 
     return sse_response(_gen())
 
@@ -1151,7 +1332,9 @@ def _incremental_verify_response(
         app_langfuse: object | None, profile: AppPrivacyProfile,
         session_id: str | None, s, internals: dict | None = None,
         started: float,
-        started_ns: int | None = None) -> StreamingResponse:
+        started_ns: int | None = None,
+        workload: str | None = None,
+        workload_source: str = "none") -> StreamingResponse:
     """Live token streaming for `incremental_verify` (Task 7). Real backend
     deltas are piped through a hold-back `StreamingVerifier` before egress, so
     an entity split across chunk boundaries never leaks its raw prefix; the
@@ -1202,7 +1385,9 @@ def _incremental_verify_response(
             if _backend_failed(watched, get_meta):
                 await _record_failed_stream(request, tenant=tenant,
                                             request_id=request_id, started=started,
-                                            get_meta=get_meta)
+                                            get_meta=get_meta, s=s,
+                                            internals=internals, workload=workload,
+                                            workload_source=workload_source)
             else:
                 await _finalize_stream(
                     request, request_id=request_id, deltas=deltas,
@@ -1212,7 +1397,8 @@ def _incremental_verify_response(
                     internals=internals,
                     verify_performed=True, verify_reason="incremental",
                     client_text="".join(released),
-                    started_ns=started_ns)
+                    started_ns=started_ns,
+                    workload=workload, workload_source=workload_source)
 
     return sse_response(_gen())
 
@@ -1226,7 +1412,9 @@ async def _finalize_stream(
         verify_performed: bool = False,
         verify_reason: str = "waived: stream_unverified",
         client_text: str | None = None,
-        started_ns: int | None = None) -> None:
+        started_ns: int | None = None,
+        workload: str | None = None,
+        workload_source: str = "none") -> None:
     """Assemble the `resp` dict from the pipeline's final streaming metadata and
     run the shared `_finalize`. Guarded end to end: a failure here must never
     surface to the (already-streaming) client. Shared by both real-streaming
@@ -1280,16 +1468,63 @@ async def _finalize_stream(
                         app_policy=app_policy, app_langfuse=app_langfuse,
                         profile=profile, session_id=session_id, s=s,
                         internals=internals, request_id=request_id,
-                        started_ns=started_ns)
+                        started_ns=started_ns,
+                        workload=workload, workload_source=workload_source)
     except Exception:  # finalize must never break the (already sent) stream
         log.exception("streaming finalize failed (swallowed)")
+
+
+async def _find_outcome_safe(request: Request, *, tenant: str, request_id: str | None,
+                             trace_id: str | None):
+    """`store.find_outcome`, best-effort like every other record on the
+    serving path (`_record_outcome` above): a DB error here must never break
+    feedback intake or block a Langfuse post that only needs a `trace_id`
+    the caller already supplied directly -- log and return None, same as "no
+    matching outcome" (P2b-2 Task 5 fix round 1)."""
+    try:
+        async with request.app.state.db.session() as session:
+            return await store.find_outcome(
+                session, application_id=tenant, request_id=request_id, trace_id=trace_id)
+    except Exception:
+        logging.getLogger("serving.obs").warning(
+            "outcome lookup failed for feedback request=%s trace=%s",
+            request_id, trace_id, exc_info=True)
+        return None
+
+
+async def _write_feedback_safe(request: Request, *, request_id: str, application_id: str,
+                                score_name: str, value_num: float | None,
+                                value_cat: str | None, source: str) -> bool:
+    """`store.write_feedback` + commit, best-effort: a DB error here must
+    never change the HTTP status, `stored`, or block a Langfuse post that
+    hasn't happened yet (the `corrected_output` local write runs before its
+    own Langfuse post) -- log and return False (P2b-2 Task 5 fix round 1)."""
+    try:
+        async with request.app.state.db.session() as session:
+            await store.write_feedback(
+                session, request_id=request_id, application_id=application_id,
+                score_name=score_name, value_num=value_num, value_cat=value_cat,
+                source=source)
+            await session.commit()
+        return True
+    except Exception:
+        logging.getLogger("serving.obs").warning(
+            "local feedback write failed request=%s score=%s", request_id, score_name,
+            exc_info=True)
+        return False
 
 
 class FeedbackIn(BaseModel):
     """Body for POST /v1/feedback. `value` is numeric for quality-style scores
     or a string for categorical scores (e.g. failure_type); Langfuse decides
-    dataType by which of those it is (see `app.obs.scores.post_score`)."""
-    trace_id: str
+    dataType by which of those it is (see `app.obs.scores.post_score`).
+
+    One of `trace_id`/`request_id` is required (P2b-2 Task 5): `request_id`
+    links the score to the local, app-scoped `outcome_feedback` row and, when
+    `trace_id` is omitted, also supplies the Langfuse trace to post to -- the
+    matching `routing_outcomes` row's own `trace_id`, if it has one."""
+    trace_id: str | None = None
+    request_id: str | None = None
     score_name: str
     value: float | str
     comment: str | None = None
@@ -1298,25 +1533,70 @@ class FeedbackIn(BaseModel):
 
 @router.post("/v1/feedback")
 async def feedback(body: FeedbackIn, request: Request) -> dict:
-    """App-token-authenticated eval/feedback intake (F1 Phase D / B16). Posts
-    straight to the calling app's OWN residency-local Langfuse project via
-    REST — never the shared project, and never anywhere at all when the app
-    has no provisioned project (fail-closed; `post_score` handles that case
-    and returns False, which becomes `{"stored": false}` here, HTTP 200 —
-    a missing project is not the caller's fault and must not surface as an
-    error)."""
+    """App-token-authenticated eval/feedback intake (F1 Phase D / B16; local
+    storage added P2b-2 Task 5).
+
+    Langfuse (`stored`): posts straight to the calling app's OWN
+    residency-local Langfuse project via REST — never the shared project,
+    and never anywhere at all when the app has no provisioned project or no
+    trace_id is known (fail-closed; `post_score` handles the no-project case
+    and returns False, which becomes `stored: false` here, HTTP 200 — a
+    missing project is not the caller's fault and must not surface as an
+    error).
+
+    Local (`recorded`): app-scoped by construction -- `store.find_outcome`
+    only ever matches a `routing_outcomes` row owned by the AUTHENTICATED
+    caller, so another app's request is indistinguishable from a request
+    that doesn't exist, and both give `recorded: false` without a local
+    write. `comment` and `corrected_output` TEXT are never written locally;
+    a `corrected_output` submission instead writes a second, fixed
+    `value_num=1.0` row under that score name. Gated on
+    `serving.outcomes.enabled` -- disabled means `recorded` is always False
+    and Langfuse behaviour is unchanged."""
     auth = await _authenticate(request)
     if auth is None:
         raise ApiError(401, "invalid or missing API token", code=CODE_INVALID_API_KEY)
     tenant, app_policy, app_langfuse = auth
+    if body.trace_id is None and body.request_id is None:
+        raise ApiError(422, "one of trace_id or request_id is required",
+                       code=CODE_INVALID_VALUE)
     if body.score_name not in SCORE_NAMES:
         raise ApiError(422, f"unknown score_name: {body.score_name!r}",
                        code=CODE_INVALID_VALUE)
-    await ensure_score_config(app_langfuse, body.score_name)  # best-effort, never raises
-    stored = await post_score(app_langfuse, body.trace_id, body.score_name,
-                              body.value, body.comment)
+
+    outcome = None
+    if request.app.state.settings.serving.outcomes.enabled:
+        outcome = await _find_outcome_safe(
+            request, tenant=tenant, request_id=body.request_id, trace_id=body.trace_id)
+
+    # With only request_id given, fall back to the outcome row's own
+    # trace_id (None if telemetry never exported one, or if the lookup
+    # itself failed) for the Langfuse post.
+    trace_id = body.trace_id or (outcome.trace_id if outcome is not None else None)
+
+    recorded = False
+    if outcome is not None:
+        parsed = feedback_values(body.score_name, body.value)
+        if parsed is not None:
+            value_num, value_cat = parsed
+            recorded = await _write_feedback_safe(
+                request, request_id=outcome.request_id, application_id=tenant,
+                score_name=body.score_name, value_num=value_num, value_cat=value_cat,
+                source="app")
+
+    stored = False
+    if trace_id is not None:
+        await ensure_score_config(app_langfuse, body.score_name)  # best-effort, never raises
+        stored = await post_score(app_langfuse, trace_id, body.score_name,
+                                  body.value, body.comment)
     if body.corrected_output:
-        await ensure_score_config(app_langfuse, "corrected_output")
-        await post_score(app_langfuse, body.trace_id, "corrected_output", 1,
-                         body.corrected_output)
-    return {"stored": stored}
+        if outcome is not None:
+            await _write_feedback_safe(
+                request, request_id=outcome.request_id, application_id=tenant,
+                score_name="corrected_output", value_num=1.0, value_cat=None,
+                source="app")
+        if trace_id is not None:
+            await ensure_score_config(app_langfuse, "corrected_output")
+            await post_score(app_langfuse, trace_id, "corrected_output", 1,
+                             body.corrected_output)
+    return {"stored": stored, "recorded": recorded}

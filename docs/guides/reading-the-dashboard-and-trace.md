@@ -136,7 +136,7 @@ The trace is the ten-step decision record for the request, top to bottom. This i
 why" — the part that makes the demo credible.
 
 ### Request — *incoming OpenAI-compatible call*
-- **request id** `req-2c0a5fca` — correlates the UI, the logs, and the Langfuse trace.
+- **request id** `req-2c0a5fca…` (`req-` plus 32 hex digits) — correlates the UI, the logs, and the Langfuse trace.
 - **served model** `nemotron-nano-8b-v1` — the model that ultimately answered.
 - Note: *"The raw prompt is never stored or shown."* This is deliberate — see §7.
 

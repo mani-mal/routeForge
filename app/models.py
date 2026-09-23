@@ -211,6 +211,11 @@ class DecisionRecord(BaseModel):
     chosen_display_name: str | None = None  # human-facing name for `chosen`
     chosen_tier: str | None = None       # tier of the chosen candidate (F3 sp.candidates)
     chosen_provider: str | None = None   # provider of the chosen candidate (F3 sp.candidates)
+    # P2b-2: the router's FINAL target tier this decision was made for
+    # (RoutingDecision.tier_target) -- may differ from chosen_tier under a
+    # budget fallback. None on a hop with no router decision behind it (e.g.
+    # a step="gateway" escalation-skipped record).
+    tier_target: str | None = None
     reason: str
     rejected: list[RejectedCandidate] = Field(default_factory=list)
     est_cost_usd: float = 0.0

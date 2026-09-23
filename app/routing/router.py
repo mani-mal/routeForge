@@ -76,6 +76,12 @@ class RoutingDecision:
     quality_source: str = "tier_default"
     scoring: "RankResult | None" = None
     circuit_bypass: bool = False
+    # P2b-2: the FINAL target tier this decision was made for (post-clamp to
+    # the best residency-allowed tier, pre-budget-fallback) -- the Y in
+    # `reason`'s "tier X (target Y...)". None only if a future caller builds
+    # a RoutingDecision without going through `_select` (no such caller
+    # exists today).
+    tier_target: str | None = None
 
 
 class Router:
@@ -181,7 +187,8 @@ class Router:
                     "no candidates after residency filter: the model pool is empty; "
                     "onboard a model (residency cannot be satisfied by an empty pool)")
             raise NoEligibleCandidate(
-                f"no candidates after residency filter: {_explain(rejected)}")
+                f"no candidates after residency filter: {_explain(rejected)}",
+                rejected=tuple((r.name, r.code) for r in rejected))
 
         # 2. target tier from complexity + risk floor + escalation, clamped to
         #    the best residency-permitted tier
@@ -256,7 +263,8 @@ class Router:
                 f"(tier {cheapest.tier}) is estimated at ${cheapest_est:.4f} "
                 f"({tokens_after} prompt + {out_tokens} output tokens), over the per-request "
                 f"cap ${ctx.max_cost_usd:.4f}. Raise the application's "
-                "max_cost_usd_per_request, lower max_tokens, or lower the model's price.")
+                "max_cost_usd_per_request, lower max_tokens, or lower the model's price.",
+                rejected=tuple((c.name, None) for c, _e in over))
 
         # 4b. drop open circuits among the chosen tier's final candidates. The
         #     tier is already fixed; if every one of them is open, bypass the
@@ -308,4 +316,5 @@ class Router:
             reason=reason,
             rejected=rejected,
             quality_score=chosen_q.score, quality_source=chosen_q.source,
-            scoring=result, circuit_bypass=circuit_bypass)
+            scoring=result, circuit_bypass=circuit_bypass,
+            tier_target=target)

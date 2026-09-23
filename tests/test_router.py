@@ -108,6 +108,32 @@ def test_default_resolver_reproduces_tier_default_quality():
     assert decision.quality_score == S.routing.tier_quality[decision.chosen.tier]
 
 
+def test_tier_target_matches_the_target_named_in_reason():
+    # P2b-2 Task 3: `tier_target` is the FINAL target tier the decision was
+    # made for -- the Y in reason's "tier X (target Y...)" -- not the chosen
+    # candidate's own tier (X), which can differ under a budget fallback.
+    d = R.select(_ctx({"onprem", "azure", "bedrock"}), tokens_after=20,
+                 complexity=0.1)
+    assert d.tier_target is not None
+    assert f"(target {d.tier_target}" in d.reason
+
+
+def test_tier_target_survives_budget_fallback_as_the_pre_fallback_target():
+    from app.apps.policy import AppPolicyView
+    from app.policy.context import build_context
+    from tests._litellm_fake import make_test_registry as _mk_reg
+
+    s = load_settings()
+    reg = _mk_reg(s)
+    ctx = build_context(s, "req-tt", "acme", [], None,
+                        app_policy=AppPolicyView(residency="any"), registry=reg)
+    ctx = ctx.model_copy(update={"max_cost_usd": 0.00015, "risk_class": "low"})
+    d = Router(s, registry=reg).select(ctx, 2000, 1.0, output_tokens=100)
+    assert "budget fallback from" in d.reason
+    assert d.chosen.tier != d.tier_target        # fell back below the target
+    assert f"(target {d.tier_target}," in d.reason
+
+
 def test_residency_rejection_is_labeled_residency_not_generic():
     from app.config.loader import load_settings
     from app.policy.context import build_context

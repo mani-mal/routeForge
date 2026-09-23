@@ -22,7 +22,7 @@ P2b is therefore decomposed (user decision, 2026-09-21):
 | Slice | What | Status |
 |---|---|---|
 | **P2b-1** | Offline harness: sweep every eligible endpoint per case, compute the oracle, score strategies | **this spec** |
-| P2b-2 | Production outcome records (§16) exported as a dataset | later |
+| P2b-2 | Production outcome records (§16) exported as a dataset | **built 2026-09-23** (`docs/superpowers/specs/2026-09-23-routing-outcome-records-design.md`) |
 | P2b-3 | Learning / exploration bounded by the feasible set | later — needs P2b-1 to measure it |
 
 ## 2. Decisions (user answers, 2026-09-21)

@@ -27,6 +27,7 @@ from app.apps import store
 from app.apps.admin_auth import require_admin
 from app.apps.langfuse_provision import load_app_langfuse
 from app.apps.models import RequestSnapshot
+from app.apps.outcomes import feedback_values
 from app.obs.scores import SCORE_NAMES, ensure_score_config, post_score
 
 # The whole /api/* console surface is admin-gated: it exposes cross-tenant
@@ -93,34 +94,99 @@ class AdminFeedbackIn(BaseModel):
     corrected_output: str | None = None
 
 
+async def _find_outcome_safe(request: Request, *, tenant: str, request_id: str):
+    """`store.find_outcome`, best-effort like every other record on the
+    serving path: a DB error here must never break feedback intake or block
+    the Langfuse post below -- log and return None, same as "no matching
+    outcome" (P2b-2 Task 5 fix round 1)."""
+    try:
+        async with request.app.state.db.session() as session:
+            return await store.find_outcome(
+                session, application_id=tenant, request_id=request_id, trace_id=None)
+    except Exception:
+        logging.getLogger("serving.obs").warning(
+            "outcome lookup failed for admin feedback request=%s", request_id, exc_info=True)
+        return None
+
+
+async def _write_feedback_safe(request: Request, *, request_id: str, application_id: str,
+                                score_name: str, value_num: float | None,
+                                value_cat: str | None, source: str) -> bool:
+    """`store.write_feedback` + commit, best-effort: a DB error here must
+    never change the HTTP status, `stored`, or block a Langfuse post that
+    hasn't happened yet -- log and return False (P2b-2 Task 5 fix round 1)."""
+    try:
+        async with request.app.state.db.session() as session:
+            await store.write_feedback(
+                session, request_id=request_id, application_id=application_id,
+                score_name=score_name, value_num=value_num, value_cat=value_cat,
+                source=source)
+            await session.commit()
+        return True
+    except Exception:
+        logging.getLogger("serving.obs").warning(
+            "local feedback write failed request=%s score=%s", request_id, score_name,
+            exc_info=True)
+        return False
+
+
 @router.post("/requests/{request_id}/feedback")
 async def admin_feedback(request_id: str, body: AdminFeedbackIn, request: Request) -> dict:
-    """Admin-console feedback intake (F1 Phase D task 4): score a request the
-    admin is already looking at in the console, by its stored trace_id —
-    admin-gating is inherited from this router's `Depends(require_admin)`.
-    Resolves the app's own Langfuse project via the request's tenant (the
-    snapshot row's `application_id`, B3) and posts through the same
-    `post_score` helper `/v1/feedback` uses, so fail-closed behaviour
-    (unknown tenant / app has no project -> `app_langfuse is None` -> dropped,
-    `{"stored": false}`, HTTP 200) is identical."""
+    """Admin-console feedback intake (F1 Phase D task 4; local storage added
+    P2b-2 Task 5): score a request the admin is already looking at in the
+    console, by its stored trace_id — admin-gating is inherited from this
+    router's `Depends(require_admin)`. Resolves the app's own Langfuse
+    project via the request's tenant (the snapshot row's `application_id`,
+    B3) and posts through the same `post_score` helper `/v1/feedback` uses,
+    so fail-closed behaviour (unknown tenant / app has no project ->
+    `app_langfuse is None` -> dropped, `stored: false`, HTTP 200) is
+    identical.
+
+    Local (`recorded`): looks the request up in `routing_outcomes` by
+    `request_id` scoped to the snapshot's own tenant and, when found, writes
+    an `outcome_feedback` row with `source="admin"` — including when there
+    is no trace_id to post to Langfuse at all (`comment`/`corrected_output`
+    TEXT is still never stored locally; see `/v1/feedback`)."""
     async with request.app.state.db.session() as session:
         snap = await session.get(RequestSnapshot, request_id)
     if snap is None:
         raise HTTPException(404, f"request {request_id!r} not found")
-    resp = snap.full_json
-    trace_id = resp.get("trace_id")
-    if not trace_id:
-        # Telemetry was off (or export failed) for this request — nothing to
-        # attach a score to. Not an error: the admin just can't score this one.
-        return {"stored": False, "reason": "no trace"}
     if body.score_name not in SCORE_NAMES:
         raise HTTPException(422, f"unknown score_name {body.score_name!r}")
+    resp = snap.full_json
+    trace_id = resp.get("trace_id")
     tenant = snap.application_id
-    app_langfuse = None
+
+    outcome = None
+    if tenant is not None and request.app.state.settings.serving.outcomes.enabled:
+        outcome = await _find_outcome_safe(request, tenant=tenant, request_id=request_id)
+
+    recorded = False
+    if outcome is not None:
+        parsed = feedback_values(body.score_name, body.value)
+        if parsed is not None:
+            value_num, value_cat = parsed
+            recorded = await _write_feedback_safe(
+                request, request_id=outcome.request_id, application_id=tenant,
+                score_name=body.score_name, value_num=value_num, value_cat=value_cat,
+                source="admin")
+        if body.corrected_output:
+            await _write_feedback_safe(
+                request, request_id=outcome.request_id, application_id=tenant,
+                score_name="corrected_output", value_num=1.0, value_cat=None,
+                source="admin")
+
+    if not trace_id:
+        # Telemetry was off (or export failed) for this request — nothing to
+        # attach a score to in Langfuse. Not an error: the admin just can't
+        # score this one there (the local row above still recorded).
+        return {"stored": False, "reason": "no trace", "recorded": recorded}
+
+    tenant_app = None
     if tenant is not None:
         async with request.app.state.db.session() as session:
-            app = await store.get_application(session, tenant)
-        app_langfuse = load_app_langfuse(app) if app is not None else None
+            tenant_app = await store.get_application(session, tenant)
+    app_langfuse = load_app_langfuse(tenant_app) if tenant_app is not None else None
     await ensure_score_config(app_langfuse, body.score_name)  # best-effort, never raises
     stored = await post_score(app_langfuse, trace_id, body.score_name,
                               body.value, body.comment)
@@ -128,7 +194,7 @@ async def admin_feedback(request_id: str, body: AdminFeedbackIn, request: Reques
         await ensure_score_config(app_langfuse, "corrected_output")
         await post_score(app_langfuse, trace_id, "corrected_output", 1,
                          body.corrected_output)
-    return {"stored": stored}
+    return {"stored": stored, "recorded": recorded}
 
 
 @router.get("/stats")

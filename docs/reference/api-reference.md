@@ -17,6 +17,8 @@ The one endpoint your app calls for inference.
 ### Request
 
 Headers: `Authorization: Bearer rf_live_…`, `Content-Type: application/json`.
+Optional: `x-routeforge-session` (see [Sessions and tracing](#sessions-and-tracing)) and
+`x-routeforge-workload` (see [Workload tag](#workload-tag)).
 
 Body:
 
@@ -39,6 +41,8 @@ Body:
 | `parallel_tool_calls` | boolean | no | — | Forwarded to the backend. |
 
 Unknown fields are **accepted, not rejected** (the model allows extras). The
+OpenAI `metadata` object is accepted too; only its `workload` key is read (see
+[Workload tag](#workload-tag)), and `metadata` is never forwarded to the backend. The
 demo-only hint fields `mock_confidence` / `mock_fail` (mock-backend generation
 hints) are read if present. See
 [`agentic-app-guide.md`](../guides/agentic-app-guide.md).
@@ -65,7 +69,7 @@ A standard `ChatCompletion` **plus routeForge-specific fields**:
 
 ```jsonc
 {
-  "id": "req-1a2b3c4d",                      // request id — correlates trace + usage
+  "id": "req-1a2b3c4d5e6f47a8b9c0d1e2f3a4b5c6", // request id: "req-" + 32 hex (a UUID4) — correlates trace + usage
   "object": "chat.completion",
   "created": 1757030400,                     // unix seconds — always present
   "model": "onprem-7b",                      // slug of the model actually chosen
@@ -126,7 +130,8 @@ Notes:
   redacted/raw copies of the prompt and completion, per the app's `capture_io`) — **not** a
   telemetry channel and not meant for API clients to consume; ignore it.
 - `trace_id` is the Langfuse trace id, present only when telemetry export succeeded. Pass it
-  as `trace_id` to `POST /v1/feedback` to attach a score to this request.
+  as `trace_id` to `POST /v1/feedback` to attach a score to this request. `id` works too,
+  as `request_id`, and needs no telemetry.
 
 ### The `trace` array
 
@@ -296,6 +301,22 @@ The derived id is formatted as `auto-` followed by 24 hex characters: a keyed HM
 
 The session id is used for **trace and console grouping only**. Persistent memory (agent long-term context) is partitioned by the client-supplied `x-routeforge-session` header only; a derived session id does not change memory partitioning or affect memory semantics. An agent conversation with no header still groups into one session in Langfuse and the console as its history grows, without touching the memory partition it reads and writes.
 
+### Workload tag
+
+An optional label for the kind of work a request does, such as `claims.summary`. It
+groups your requests in RouteForge's routing outcome records
+([`routing-outcomes.md`](./routing-outcomes.md)). It **never affects routing** and is not
+echoed on the response.
+
+- Send it as the `x-routeforge-workload` header, or as `metadata.workload` in the body.
+  The header wins whenever it is present, even if it is invalid.
+- The value is lower-cased and must match `^[a-z0-9][a-z0-9._-]{0,63}$`.
+- **An invalid tag is dropped, never rejected.** The request is served normally (`200`)
+  and the outcome record notes that the tag was invalid.
+- `metadata` is never forwarded to the backend.
+- **Do not put personal data in it.** Like `x-routeforge-session`, it is a label for a
+  kind of work, not an identifier for a person or a record. It is stored as given.
+
 ---
 
 ## Errors
@@ -330,6 +351,7 @@ Every error the inference endpoint can return:
 | `422` | `model request rejected: requested model '<model>' is not permitted or unavailable: <gate>` | `model_not_found` | The pinned `model` failed the named gate; `GET /v1/models` lists what this app can pin. |
 | `422` | `response failed verification: <detail>` | `response_failed_verification` | Output leakage / verification failed. |
 | `422` | `unknown score_name: <name>` (`POST /v1/feedback` only) | `invalid_value` | `score_name` is not one of the recognized names. |
+| `422` | `one of trace_id or request_id is required` (`POST /v1/feedback` only) | `invalid_value` | The feedback body names no request. |
 | `429` | `rate limit exceeded for this application` | `rate_limit_exceeded` | Over your `max_rpm`. |
 | `429` | `daily budget exceeded for this application` | `insufficient_quota` | Over your `max_spend_usd_per_day`. |
 | `500` | `internal error` | `internal_error` | Unexpected server-side failure. |
@@ -421,11 +443,49 @@ App-token authenticated (same `Authorization: Bearer rf_live_…` as inference).
 Posts an evaluation/RLHF score for a prior request straight to your app's **own**
 residency-local Langfuse project — never the shared project.
 
-Body — `{ trace_id, score_name, value, comment?, corrected_output? }`. `value` is
-a number or string; `score_name` must be one of the recognized score names
-(otherwise `422 unknown score_name: …`). Returns `{"stored": <bool>}` (HTTP
-`200`); `stored: false` when your app has no provisioned Langfuse project — a
-missing project is not an error.
+Body — `{ request_id?, trace_id?, score_name, value, comment?, corrected_output? }`.
+
+- **Name the request** by `request_id` (the response `id`), by `trace_id`, or both. At
+  least one is required; neither gives `422 one of trace_id or request_id is required`.
+  `request_id` works without telemetry. With only `request_id`, the Langfuse post uses
+  that request's own `trace_id`, if it has one.
+- `score_name` must be one of `route_correct`, `preferred_model`, `failure_type`,
+  `quality`, `corrected_output` (otherwise `422 unknown score_name: …`).
+- `value` is a number or a string. A string is stored locally only if it matches
+  `[A-Za-z0-9._:/-]{1,100}` (so a model slug such as `nvidia/llama-3.1-nemotron-nano-8b-v1`
+  fits); a number only if it is finite.
+- `comment` and `corrected_output` go to your Langfuse project only. RouteForge never
+  stores their text itself.
+
+Returns `{"stored": <bool>, "recorded": <bool>}`, always HTTP `200`:
+
+- `stored` — the score reached your app's own Langfuse project. `false` when your app
+  has no provisioned project or no trace id is known. A missing project is not an error.
+- `recorded` — the score was written to RouteForge's own outcome records
+  ([`routing-outcomes.md`](./routing-outcomes.md) §6). Lookups are scoped to your
+  application: a request that belongs to another app is treated exactly like one that
+  does not exist, and gives `recorded: false`. Also `false` when outcome records are
+  switched off, or `value` fails the checks above.
+
+---
+
+## `GET /admin/outcomes/export` (admin-only)
+
+Not for applications: it needs the admin session cookie, not an app token (`401`
+without it). It streams RouteForge's routing outcome records, with their feedback, as
+NDJSON (`application/x-ndjson`), one `routeforge.outcome/v1` record per line, across all
+applications.
+
+| Parameter | Default | Notes |
+|---|---|---|
+| `since`, `until` | the last 7 days | ISO-8601; a value with no offset is UTC; a bad value is `422` |
+| `application_id` | all | filter to one application |
+| `limit` | `100000` | capped at 100 000; below 1 is `422` |
+
+Errors use FastAPI's `{"detail": ...}` shape, like the rest of `/admin/*`. The records
+hold ids, enum values, numbers, entity types and version hashes only, never request or
+response text. Line format, columns and an example:
+[`routing-outcomes.md`](./routing-outcomes.md) §7.
 
 ---
 

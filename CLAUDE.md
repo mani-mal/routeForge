@@ -193,7 +193,9 @@ certificate carries the chosen candidate's terms only. It says nothing about
 whether the ranking was *good* — only what it was and what it rested on. Boot
 seeding replays the per-attempt `endpoint_observations` log (endpoint health
 only — no tenant or content), so a seeded signal is a reconstruction, across
-replicas, of what the live stores saw, at its true age.
+replicas, of what the live stores saw, at its true age. Since P2b-2, every routed request
+also writes a content-free `routing_outcomes` record (plus local feedback scores) that
+nothing reads back into routing — see `docs/reference/routing-outcomes.md`.
 
 ## Configuration — everything switchable at startup
 

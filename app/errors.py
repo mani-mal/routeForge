@@ -14,7 +14,18 @@ class NoEligibleCandidate(ValueError):
     """No model survived the residency/budget/scope filter -- e.g. an
     onprem_only request with no healthy on-prem model (CLAUDE.md rule 3).
     Route maps -> 422. Subclasses ValueError for back-compat with existing
-    pytest.raises(ValueError) router callers."""
+    pytest.raises(ValueError) router callers.
+
+    `rejected` is the candidate set that caused this rejection, as
+    `(name, code)` tuples -- content-free (P2b-2 outcome records read it via
+    `app/apps/outcomes.py`'s failure builder; `code` is `None` where the
+    raising stage has no stable code of its own, e.g. the router's own
+    budget filter). Keyword-only, defaulted, so every existing
+    `NoEligibleCandidate("msg")` construction keeps working unchanged."""
+
+    def __init__(self, *args, rejected: tuple = ()) -> None:
+        super().__init__(*args)
+        self.rejected = tuple(rejected)
 
 
 class BackendUnavailable(RuntimeError):
@@ -37,4 +48,12 @@ class ContextWindowExceeded(ValueError):
     client's error, not an outage: route maps -> 400 with the upstream reason,
     so the client compacts its history instead of retrying a 502. The gateway
     only surfaces it when EVERY model it tried refused for this reason; any
-    other failure in the mix keeps the request a 502 (BackendUnavailable)."""
+    other failure in the mix keeps the request a 502 (BackendUnavailable).
+
+    `attempted_models` (like `BackendUnavailable`'s) lists the candidates the
+    gateway tried, in order, so the request's `context_overflow` routing
+    outcome names them. Empty when raised by a single backend call."""
+
+    def __init__(self, *args, attempted_models: tuple[str, ...] = ()) -> None:
+        super().__init__(*args)
+        self.attempted_models = tuple(attempted_models)

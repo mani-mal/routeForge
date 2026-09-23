@@ -301,3 +301,18 @@ def test_bad_breaker_values_are_caught(field, value, code):
     s = copy.deepcopy(load_settings())
     setattr(s.routing.breaker, field, value)
     assert any(code in e for e in lint_settings(s))
+
+
+# --- P2b-2 routing outcome records (serving.yaml `outcomes`) ---------------
+
+def test_outcomes_config_loads_with_shipped_values():
+    o = load_settings().serving.outcomes
+    assert o.enabled is True
+    assert o.retention_days == 90
+
+
+def test_outcomes_nonpositive_retention_is_caught():
+    s = copy.deepcopy(load_settings())
+    s.serving.outcomes.retention_days = 0
+    assert any(e.startswith("OUTCOMES_RETENTION_NOT_POSITIVE")
+              for e in lint_settings(s))
