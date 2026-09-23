@@ -288,3 +288,107 @@ def test_availability_decay_is_reachable_through_rank():
 
     assert soon.ordered[0].availability.value < later.ordered[0].availability.value
     assert later.ordered[0].availability.value == pytest.approx(1.0, abs=1e-3)
+
+
+# --- 6. peer latency prior (B51) ---------------------------------------------
+# An unmeasured model used to score at the optimistic tier default (200 ms for
+# cheap) while its measured tier-mates reported their real 3-18 s, so the router
+# preferred every model it knew NOTHING about until each had `min_samples`
+# observations. It now borrows the median measured latency of its eligible
+# same-tier peers: "assume typical", not "assume ~80x faster".
+
+def _rank(eligible, store, now=None):
+    return DefaultRoutingStrategy().rank(
+        eligible, ctx=_ctx({"onprem"}), tokens_after=20,
+        weights=S.routing.weights, quality_resolver=Router(S, registry=REG)._quality,
+        signals=store, signals_cfg=S.routing.signals, now=now)
+
+
+def _measure(store, name, ms, *, start=0.0):
+    for k in range(S.routing.signals.min_samples):
+        store.observe_success(name, ms, now=start + k)
+
+
+def _by_name(result):
+    return {sc.candidate.name: sc for sc in result.ordered}
+
+
+def test_unmeasured_model_borrows_median_of_measured_same_tier_peers():
+    store = SignalStore(S.routing.signals)
+    a, b, c, new = (PoolCandidate(name=f"b51-{n}", provider="onprem", tier="cheap")
+                    for n in ("a", "b", "c", "new"))
+    _measure(store, a.name, 3600.0)
+    _measure(store, b.name, 16200.0)
+    _measure(store, c.name, 18400.0)
+    store.observe_success(new.name, 900.0, now=0.0)   # 1 sample < min_samples
+
+    got = _by_name(_rank([(a, .001), (b, .001), (c, .001), (new, .001)], store, now=5.0))
+
+    assert got[new.name].latency.value == 16200.0
+    assert got[new.name].latency.source == "peer_prior"
+    assert got[new.name].latency.samples == 1          # its own true count
+    assert got[a.name].latency.source == "measured"
+
+
+def test_unmeasured_model_no_longer_outranks_measured_peer_on_missing_data():
+    """The B51 pick pattern: equal quality/availability, the measured model is
+    cheaper, but the unmeasured one used to win on its fictional 200 ms."""
+    store = SignalStore(S.routing.signals)
+    known = PoolCandidate(name="b51-known", provider="onprem", tier="cheap")
+    unknown = PoolCandidate(name="b51-unknown", provider="onprem", tier="cheap")
+    _measure(store, known.name, 16000.0)
+
+    result = _rank([(known, 0.0009), (unknown, 0.001)], store, now=5.0)
+
+    assert result.ordered[0].candidate.name == known.name
+
+
+def test_prior_ignores_other_tiers_and_falls_back_to_tier_default():
+    store = SignalStore(S.routing.signals)
+    mid = PoolCandidate(name="b51-mid", provider="onprem", tier="mid")
+    cheap = PoolCandidate(name="b51-cheap", provider="onprem", tier="cheap")
+    _measure(store, mid.name, 9000.0)
+
+    got = _by_name(_rank([(mid, .001), (cheap, .001)], store, now=5.0))
+
+    assert got[cheap.name].latency.source == "tier_default"
+    assert got[cheap.name].latency.value == S.routing.signals.tier_latency_ms["cheap"]
+
+
+def test_stale_model_falls_back_to_peer_prior_not_tier_default():
+    cfg = S.routing.signals
+    store = SignalStore(cfg)
+    old = PoolCandidate(name="b51-old", provider="onprem", tier="cheap")
+    live = PoolCandidate(name="b51-live", provider="onprem", tier="cheap")
+    _measure(store, old.name, 4000.0)
+    later = cfg.staleness_s + 100.0
+    _measure(store, live.name, 12000.0, start=later)
+
+    got = _by_name(_rank([(old, .001), (live, .001)], store,
+                         now=later + cfg.min_samples))
+
+    assert got[old.name].latency.source == "peer_prior"
+    assert got[old.name].latency.value == 12000.0
+    assert got[old.name].latency.samples == cfg.min_samples
+
+
+def test_empty_store_is_unchanged_by_peer_prior():
+    store = SignalStore(S.routing.signals)
+    cands = [PoolCandidate(name=f"b51-e{i}", provider="onprem", tier="cheap")
+             for i in range(3)]
+    for sc in _rank([(c, .001) for c in cands], store).ordered:
+        assert sc.latency.source == "tier_default"
+        assert sc.latency.value == S.routing.signals.tier_latency_ms["cheap"]
+
+
+def test_disabled_signals_never_use_peer_prior():
+    cfg = S.routing.signals.model_copy(update={"enabled": False})
+    store = SignalStore(cfg)
+    a = PoolCandidate(name="b51-da", provider="onprem", tier="cheap")
+    b = PoolCandidate(name="b51-db", provider="onprem", tier="cheap")
+    _measure(store, a.name, 16000.0)
+    result = DefaultRoutingStrategy().rank(
+        [(a, .001), (b, .001)], ctx=_ctx({"onprem"}), tokens_after=20,
+        weights=S.routing.weights, quality_resolver=Router(S, registry=REG)._quality,
+        signals=store, signals_cfg=cfg, now=5.0)
+    assert {sc.latency.source for sc in result.ordered} == {"disabled"}

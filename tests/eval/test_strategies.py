@@ -268,9 +268,12 @@ _COLD_WEIGHTS = {**_HOT_WEIGHTS, "availability": 0.0}
 def _slow_fast_setup(tmp_path):
     """Two same-tier, same-price candidates differing only in measured
     latency/availability once warmed: `slow-available` (5 successes,
-    `latency_ms=900`) and `fast-flaky` (5 errors). `min_samples` defaults to
-    5, so exactly 5 rows per model is the minimum that reports both signals
-    as `measured` rather than `neutral`/`tier_default`. Shared by every
+    `latency_ms=900`) and `fast-flaky` (5 successes at `latency_ms=100`, then
+    5 errors). `min_samples` defaults to 5, so 5 successes per model is the
+    minimum that reports latency as `measured` rather than
+    `tier_default`/`peer_prior`. `fast-flaky`'s speed must be MEASURED: with
+    errors alone it would have no latency, borrow `slow-available`'s via the
+    B51 peer prior, and be no faster at all. Shared by every
     router_variant/warm_signals test below."""
     settings, registry, case, ctx, eligible = _build(tmp_path, [
         _entry("slow-available", price_input=0.08, price_output=0.08),
@@ -282,6 +285,9 @@ def _slow_fast_setup(tmp_path):
         [MatrixRow(case_id=f"warm-{i}", endpoint="slow-available",
                    quality=1.0, passed=True, cost_usd=0.0001, latency_ms=900.0)
          for i in range(5)]
+        + [MatrixRow(case_id=f"warm-ok-{i}", endpoint="fast-flaky",
+                     quality=1.0, passed=True, cost_usd=0.0001, latency_ms=100.0)
+           for i in range(5)]
         + [MatrixRow(case_id=f"warm-{i}", endpoint="fast-flaky",
                      quality=0.0, passed=False, cost_usd=0.0001,
                      latency_ms=None, error="BackendUnavailable",

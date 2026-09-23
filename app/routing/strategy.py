@@ -15,7 +15,8 @@ future NeMo Switchyard strategy).
 consumes a `SignalStore` (app/routing/signals.py) for per-model latency and
 availability instead of hardcoded constants, and reports -- per candidate,
 per term -- not just the value used but where it came from (`measured`,
-`tier_default`, `neutral`, `disabled`, or a `QUALITY_SOURCES` member). The
+`tier_default`, `peer_prior`, `neutral`, `disabled`, or a `QUALITY_SOURCES`
+member). The
 whole reason this is worth doing is the identity property: with an empty
 `SignalStore`, the formula below reproduces the pre-P2a scores exactly (see
 `DefaultRoutingStrategy` and `tests/routing/test_strategy_identity.py`), so
@@ -25,6 +26,7 @@ actually exists.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from statistics import median
 from typing import TYPE_CHECKING, Protocol
 
 from app.config.schema import PoolCandidate
@@ -33,7 +35,7 @@ if TYPE_CHECKING:
     from app.config.schema import SignalsCfg
     from app.models import ExecutionPolicyContext
     from app.routing.quality import QualityResolver
-    from app.routing.signals import SignalStore
+    from app.routing.signals import SignalStore, SignalValue
 
 
 @dataclass(frozen=True)
@@ -56,7 +58,7 @@ class ScoredCandidate:
     est_cost_usd: float
     score: float
     quality: TermValue          # source from QUALITY_SOURCES
-    latency: TermValue          # ms; measured | tier_default | disabled
+    latency: TermValue          # ms; measured | peer_prior | tier_default | disabled
     availability: TermValue     # [0,1]; measured | neutral | disabled
     cost_norm: float
     cost_cached_pricing: str    # "priced" | "unpriced"
@@ -147,10 +149,12 @@ class DefaultRoutingStrategy:
              signals, signals_cfg, cached_pricing=None, now=None) -> RankResult:
         max_cost = max((est for _, est in eligible), default=0.0)
         scored: list[ScoredCandidate] = []
+        latencies = _with_peer_prior(
+            [(cand, signals.latency(cand.name, cand.tier, now=now))
+             for cand, _ in eligible])
 
-        for cand, est in eligible:
+        for (cand, est), lat in zip(eligible, latencies):
             q = quality_resolver.resolve(cand.name)
-            lat = signals.latency(cand.name, cand.tier, now=now)
             avail = signals.availability(cand.name, now=now)
 
             cost_norm = est / max_cost if max_cost > 0 else 0.0
@@ -164,7 +168,7 @@ class DefaultRoutingStrategy:
             scored.append(ScoredCandidate(
                 candidate=cand, est_cost_usd=est, score=score,
                 quality=TermValue(q.score, q.source),
-                latency=TermValue(lat.value, lat.source, lat.samples),
+                latency=lat,
                 availability=TermValue(avail.value, avail.source, avail.samples),
                 cost_norm=cost_norm,
                 cost_cached_pricing=(cached_pricing or {}).get(cand.name, "unpriced")))
@@ -174,6 +178,40 @@ class DefaultRoutingStrategy:
                           signals_enabled=signals_cfg.enabled,
                           latency_scale_ms=signals_cfg.latency_scale_ms,
                           max_latency_norm=signals_cfg.max_latency_norm)
+
+
+def _with_peer_prior(latencies: list[tuple[PoolCandidate, "SignalValue"]]
+                     ) -> list[TermValue]:
+    """Replace each `tier_default` latency with the MEDIAN measured latency of
+    the other eligible candidates in the same tier, sourced `peer_prior` (B51).
+
+    The tier default is optimistic (200 ms for `cheap`), while real on-prem
+    reasoning models measure 3-18 s. Scoring an unmeasured -- or stale -- model
+    at the default made it look ~80x faster than its measured tier-mates, so
+    the router sent it traffic on missing data alone until it had
+    `min_samples` observations: after every restart, onboarding, or idle hour.
+    Borrowing the peers' median assumes the model is typical instead.
+
+    Same tier only: tiers differ in latency by design. With no measured
+    same-tier peer the tier default stands, so an empty SignalStore still
+    reproduces the pre-P2a scores exactly (the identity property). `disabled`
+    is never touched. `samples` keeps the model's OWN true count. The value
+    used is what the scoring record carries, so a hop stays recomputable
+    offline from the record alone.
+    """
+    measured: dict[str, list[float]] = {}
+    for cand, lat in latencies:
+        if lat.source == "measured":
+            measured.setdefault(cand.tier, []).append(lat.value)
+
+    out: list[TermValue] = []
+    for cand, lat in latencies:
+        peers = measured.get(cand.tier)
+        if lat.source == "tier_default" and peers:
+            out.append(TermValue(median(peers), "peer_prior", lat.samples))
+        else:
+            out.append(TermValue(lat.value, lat.source, lat.samples))
+    return out
 
 
 _STRATEGIES: dict[str, type[RoutingStrategy]] = {"default": DefaultRoutingStrategy}
