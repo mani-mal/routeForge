@@ -15,6 +15,7 @@ dependency on it.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 
 import pytest
@@ -28,6 +29,7 @@ from app.gateway.breaker import CircuitBreaker
 from app.gateway.gateway import Gateway
 from app.models import ExecutionPolicyContext, GenerationResult, Message
 from app.routing.router import Router
+from app.routing.signals import SignalStore
 from tests._litellm_fake import _DeterministicLiteLLM
 
 # Enable both cloud providers so their static-pool candidates are actually
@@ -196,16 +198,66 @@ def test_open_circuit_saves_the_wasted_attempt():
     assert any(x.name == "a" and x.code == "circuit_open" for x in router.rejected)
 
 
-def test_gateway_failures_trip_the_breaker_and_4xx_does_not():
-    reg = _reg({"a": _onprem("a"), "b": _onprem("b")})
+class _Exc500(Exception):
+    status_code = 500
+
+
+class _Exc429(Exception):
+    status_code = 429
+
+
+@pytest.mark.parametrize("exc_factory", [
+    lambda: _Exc500("internal server error"),
+    lambda: _Exc429("rate limited"),
+    lambda: ConnectionError("connection refused"),     # transport, no status
+], ids=["500", "429", "no-status-transport"])
+def test_gateway_failures_trip_the_breaker(exc_factory):
+    """Endpoint unhealth, reported through the real gateway, OPENS the circuit
+    after `failure_threshold` -- and the request after that makes no wasted
+    attempt on it. "a" is cheaper than "b", so while closed it is always
+    attempted first (and fails over to "b")."""
+    reg = _reg({"a": _onprem("a", price=0.05), "b": _onprem("b", price=0.2)})
     br = CircuitBreaker(S.routing.breaker)
-    gw = _gw(_FailForModels(S, {"a"}), reg, br)
+    backend = _FailWith(S, "a", exc_factory)
+    gw = _gw(backend, reg, br)
     ctx = _ctx(reg, {"onprem"}, onprem=True)
     for _ in range(S.routing.breaker.failure_threshold):
-        _call(gw, ctx)          # whenever "a" is picked first it fails over to "b"
-    # "a" failed at least once per call it was chosen; assert via state, not count:
+        backend.calls.clear()
+        _call(gw, ctx)
+        assert backend.calls == ["a", "b"]
+    assert br.state("a").state == "open"
+    backend.calls.clear()
+    _call(gw, ctx)
+    assert backend.calls == ["b"]            # no wasted attempt once open
+
+
+@pytest.mark.parametrize("exc_factory", [
+    lambda: TypeError("generate() got an unexpected keyword argument 'x'"),
+    lambda: AttributeError("'NoneType' object has no attribute 'choices'"),
+    lambda: KeyError("choices"),
+    lambda: ValueError("bad local value"),
+    lambda: json.JSONDecodeError("Expecting value", "", 0),
+    lambda: NotImplementedError(),
+], ids=["TypeError", "AttributeError", "KeyError", "ValueError",
+        "JSONDecodeError", "NotImplementedError"])
+def test_local_programming_errors_do_not_trip_the_breaker_or_lower_availability(
+        exc_factory):
+    """A bug on OUR side of the wire (the kind that was once swallowed as a
+    backend failure) says nothing about the endpoint. Counting it would let a
+    client-side bug open a circuit every tenant shares."""
+    reg = _reg({"a": _onprem("a", price=0.05), "b": _onprem("b", price=0.2)})
+    br = CircuitBreaker(S.routing.breaker)
+    signals = SignalStore(S.routing.signals)
+    backend = _FailWith(S, "a", exc_factory)
+    gw = Gateway(S, backend, Router(S, registry=reg, signals=signals), reg,
+                 signals=signals, breaker=br)
+    ctx = _ctx(reg, {"onprem"}, onprem=True)
+    for _ in range(S.routing.breaker.failure_threshold + 1):
+        _call(gw, ctx)
     st = br.state("a")
-    assert st.consecutive_failures >= 1
+    assert st.state == "closed" and st.consecutive_failures == 0
+    assert signals.availability("a").value == 1.0
+    assert signals.availability("a").source == "neutral"
 
 
 def test_success_records_on_the_breaker():

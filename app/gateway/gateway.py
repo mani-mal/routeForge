@@ -43,6 +43,14 @@ def _format_upstream_error(model: str, exc: Exception) -> str:
             f"{redact_value(_scrub_endpoints(str(exc)))[:200]}")
 
 
+# Exception classes that mean "our code is wrong", not "the endpoint is sick"
+# (see counts_as_endpoint_unhealth). json.JSONDecodeError is a ValueError.
+_LOCAL_PROGRAMMING_ERRORS: tuple[type[BaseException], ...] = (
+    TypeError, AttributeError, NameError, KeyError, IndexError,
+    AssertionError, NotImplementedError, ValueError,
+)
+
+
 def counts_as_endpoint_unhealth(exc: Exception) -> bool:
     """Does this failure say something about the ENDPOINT, or about the request?
 
@@ -55,10 +63,31 @@ def counts_as_endpoint_unhealth(exc: Exception) -> bool:
     the closest thing to admission pressure an OpenAI-compatible endpoint can
     express -- the one real capacity signal the protocol offers.
 
-    Anything with no status at all (connection refused, TLS failure, timeout)
-    is endpoint unhealth.
+    Anything else with no status at all (connection refused, TLS failure,
+    timeout) is endpoint unhealth.
+
+    **Local programming errors are not** -- `TypeError`, `AttributeError`,
+    `NameError`, `KeyError`, `IndexError`, `AssertionError`,
+    `NotImplementedError` and `ValueError` (which includes
+    `json.JSONDecodeError`), checked BEFORE the status code. These are bugs on
+    OUR side of the wire (a changed Protocol signature raising `TypeError`
+    inside the backend has been swallowed as a backend failure in this project
+    before). This predicate feeds both the availability signal and the step-7
+    circuit breaker, and the breaker is shared by every tenant: counting a
+    client-side bug would let one request shape open an endpoint's circuit
+    for everyone. The accepted cost: an endpoint that returns malformed JSON
+    (a `JSONDecodeError` in the client library) no longer counts against it.
+
+    No transport/API error class the backend can raise subclasses one of
+    these (MRO-checked over litellm, openai and httpx: the only hits are
+    `openai.InvalidWebhookSignatureError`, raised by webhook verification and
+    never on a completion call, and litellm's `RouterRateLimitError[Basic]`,
+    raised only by `litellm.Router`, which RouteForge does not use), so no
+    explicit exemption is needed. Re-check if a new backend is added.
     """
     if isinstance(exc, ContextWindowExceeded):
+        return False
+    if isinstance(exc, _LOCAL_PROGRAMMING_ERRORS):
         return False
     code = getattr(exc, "status_code", None)
     if code is None:

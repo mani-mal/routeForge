@@ -7,6 +7,7 @@ tests/test_apps_store.py.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 
 import pytest
@@ -688,3 +689,30 @@ def test_a_prune_failure_does_not_stop_the_flusher(monkeypatch):
 
     asyncio.run(go())
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("exc", [
+    TypeError("x"), AttributeError("x"), NameError("x"), KeyError("x"),
+    IndexError("x"), AssertionError("x"), NotImplementedError("x"),
+    ValueError("x"), json.JSONDecodeError("Expecting value", "", 0),
+], ids=lambda e: type(e).__name__)
+def test_local_programming_errors_are_not_endpoint_unhealth(exc):
+    """A bug on our side of the wire must not become a cross-tenant outage
+    lever (final-review fix wave, finding 2). Checked before the status code."""
+    assert counts_as_endpoint_unhealth(exc) is False
+
+
+def test_real_provider_transport_errors_still_count():
+    """None of the transport/API classes the LiteLLM backend can raise
+    subclass a local-error class (MRO-checked in the fix-wave report), so
+    they keep counting."""
+    httpx = pytest.importorskip("httpx")
+    import litellm
+    req = httpx.Request("POST", "http://x/v1/chat/completions")
+    assert counts_as_endpoint_unhealth(httpx.ConnectError("refused", request=req)) is True
+    assert counts_as_endpoint_unhealth(
+        litellm.APIConnectionError(message="refused", llm_provider="openai",
+                                   model="m")) is True
+    assert counts_as_endpoint_unhealth(
+        litellm.ServiceUnavailableError(message="down", llm_provider="openai",
+                                        model="m")) is True
