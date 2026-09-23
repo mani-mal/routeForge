@@ -1,0 +1,266 @@
+# P2b-2: routing outcome records — design
+
+**Date:** 2026-09-23 · **Status:** approved direction (owner answers below), spec awaiting
+review · **Programme:** P2b-1 FeasibleRouteBench (shipped) → **P2b-2 outcome records** →
+P2b-3 learning/exploration · **Source:** Priorities 1–3 handoff §16, and the Phase 2 bullet
+"versioned routing-outcome records"
+
+## 1. Why
+
+The router has no measured quality signal. Every onboarded model scores at its tier-default
+quality. So when several models tie on price and tier, which one wins is a tie-break, not a
+judgement. This was observed live twice (research doc §10, §11.1): Llama fails every claim
+summary and the router cannot know it. B51's fix removed the latency fiction that made
+this worse. The durable fix is to **record what actually happened on each request, per
+workload**, so that P2b-3 can learn from it and FeasibleRouteBench can report on it.
+
+Most of the substrate exists but is scattered or perishable:
+
+- versions and the eligible/rejected/scored sets are on the trace (`resp["trace"]`, `sp.*`);
+- cost and latency are in `usage_records`, which is metering and has no row for
+  verify-failed or empty-set requests;
+- quality feedback goes **only** to the app's Langfuse project (`/v1/feedback`). RouteForge
+  never keeps it, and it is keyed by `trace_id`, which exists only when telemetry exported;
+- `request_snapshots` is capped at 500 rows, so it is a console cache, not a dataset.
+
+## 2. Owner decisions (2026-09-23)
+
+| Question | Decision |
+|---|---|
+| Quality signal source | **Feedback + step 9.** Keep `/v1/feedback` scores locally, and record the step-9 verification outcome on every request. Each is labelled by source. LLM-as-judge is a later slice. |
+| Workload label | **Client tag + derived.** An optional validated client label, plus features RouteForge derives itself. |
+| Dataset export | **Admin JSONL + bench loader.** An admin-only NDJSON export, and a FeasibleRouteBench loader/report over it. Training stays P2b-3. |
+| Storage | **New tables** (`create_all`, no ALTER), not wider `usage_records`, and not derived from snapshots. |
+
+## 3. Scope
+
+**In:**
+- the `routing_outcomes` and `outcome_feedback` tables;
+- the write path on every routed outcome;
+- workload tagging;
+- local feedback storage, with request-id linkage;
+- retention;
+- the admin export;
+- the eval loader and report;
+- docs.
+
+**Out:**
+- **Learning or changing routing from outcomes** (P2b-3). This slice writes and reads
+  records; the router does not consume them. Routing is byte-identical.
+- **LLM-as-judge.**
+- **Pushing datasets to Langfuse.**
+- **Propensity logging for off-policy evaluation.** The router is deterministic today, and
+  P2b-3's exploration adds propensities.
+
+## 4. Records
+
+### 4.1 `routing_outcomes`: one row per request that reached routing
+
+| Column | Type | Source / notes |
+|---|---|---|
+| `request_id` | str PK | `resp["id"]` / the route's request id |
+| `application_id` | str, indexed | the tenant (no FK cascade surprise: `ondelete=CASCADE` like `usage_records`) |
+| `ts` | datetime, indexed | |
+| `trace_id` | str, nullable, indexed | `resp["trace_id"]` when telemetry exported. The join key for `/v1/feedback`. |
+| `status` | str enum | see below |
+| `app_policy_version`, `endpoint_registry_version`, `routing_policy_version` | str | from ctx / certificate / `Settings.routing_policy_version` |
+| `workload` | str, nullable | the validated client tag (§5) |
+| `workload_source` | str enum | `client`, `none` or `invalid` |
+| `tier_target` | str, nullable | surfaced from the router (§6) |
+| `complexity` | float, nullable | surfaced from the pipeline (§6) |
+| `prompt_tokens_bucket` | str | `<1k`, `1k-4k`, `4k-16k`, `16k-64k` or `>64k`, over post-compression prompt tokens |
+| `sensitivity`, `risk_class` | str | from ctx |
+| `onprem_only` | bool | |
+| `detected_entity_types` | JSON list[str] | entity **types** only |
+| `eligible` | JSON list[str] | the first router hop's eligible names, from `scoring.candidates` plus chosen |
+| `rejected` | JSON list[{name, code}] | codes only, no reason strings |
+| `attempts` | JSON list[str] | models tried, in order, including failed hops |
+| `chosen` | str, nullable | the served model; null when nothing was served |
+| `scoring` | JSON, nullable | the first router hop's `RankResult.to_record()`, which is ids and numbers only |
+| `circuit_bypass` | bool | written by the breaker slice; false until then |
+| `cost_usd`, `latency_ms` | float | the total across hops |
+| `prompt_tokens`, `completion_tokens` | int | |
+| `verify_required`, `verify_performed`, `verify_passed` | bool, nullable | from the `verify` trace record |
+| `verify_mode` | str enum, nullable | `not_required`, `verified`, `failed`, `waived_stream` or `incremental` |
+
+`status` takes exactly one of these values:
+
+| `status` | HTTP | When |
+|---|---|---|
+| `ok` | 200 | the request was served (every stream mode included) |
+| `backend_failed` | 502 | `BackendUnavailable`: all attempts failed |
+| `verify_failed` | 422 | step 9 failed closed |
+| `no_eligible` | 422 | an empty feasible set, **the empty-set cases the benchmark cares about** |
+| `context_overflow` | 400 | every attempt refused on context length |
+
+The following are **not recorded**, because they never reached routing: 401, rate-limit 429,
+budget 429, gate errors, and client cancellation (499). A cancellation is not an outcome of
+the routing decision.
+
+### 4.2 `outcome_feedback`: zero or more rows per request
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | int PK autoincrement | |
+| `request_id` | str, indexed | a logical link to `routing_outcomes`, not an FK, so feedback survives the outcome row's pruning order |
+| `application_id` | str, indexed | always the **authenticated caller's** app |
+| `ts` | datetime | |
+| `score_name` | str enum | `SCORE_NAMES`: `route_correct`, `preferred_model`, `failure_type`, `quality` |
+| `value_num` | float, nullable | for numeric scores |
+| `value_cat` | str, nullable | for categorical scores; validated `[A-Za-z0-9._:-]{1,64}`, and otherwise the row is refused |
+| `source` | str enum | `app` for `/v1/feedback`, `admin` for the console |
+
+**Never stored:** `comment` and `corrected_output`. They are free text that can carry PII,
+and they keep going to Langfuse exactly as today. `corrected_output`'s own score row
+(value 1) is stored, so "a correction was submitted" is still countable.
+
+### 4.3 The privacy invariant
+
+Both tables hold **ids, enums, numbers, entity types and version hashes only**, never prompt,
+completion, tool arguments, reason strings, or upstream error text. Four tests enforce it:
+
+- a pipeline test sends an SSN and an e-mail address, then asserts neither appears in any
+  column of either row;
+- a schema test asserts that neither table has a column whose name suggests content;
+- `rejected` stores `code`, never `reason`, since reasons can embed model or detail text;
+- `workload` and `value_cat` are regex-validated slugs, capped at 64 characters.
+
+## 5. Workload tagging
+
+- **Sources,** first match wins:
+  1. the `x-routeforge-workload` header;
+  2. the OpenAI `metadata.workload` body field (the body model already allows extras);
+  3. none.
+- **Validation.** Lower-cased, then `^[a-z0-9][a-z0-9._-]{0,63}$`. An invalid value is
+  **dropped, never rejected**. A bad tag must not break a client, so the row records
+  `workload=null, workload_source="invalid"`.
+- **Not forwarded upstream.** `metadata` is still not in `FORWARDED_PARAMS`.
+- **Content-free by contract.** The workload tag is documented like `x-routeforge-session`:
+  clients must not put personal data in it, and the slug format limits what can go there.
+
+## 6. Write path
+
+- **Builder.** One pure builder, `app/apps/outcomes.py::build_outcome(...)`, maps
+  `(resp or failure context, ctx, settings, workload, status)` to a row dict. It lives in
+  `app/apps`, because `app/eval` must not be imported by serving (the AST isolation test).
+- **Hooks,** in `app/api/routes.py`:
+  - `_finalize` writes `ok`, in the same place `record_usage` writes the usage row. It
+    covers non-stream, keepalive/verified_then_stream, stream_unverified and
+    incremental_verify.
+  - `_record_failed` / `_record_failed_stream` write `backend_failed`.
+  - The error branches of the non-stream `except` block (and the keepalive error branch)
+    gain `verify_failed`, `no_eligible` and `context_overflow` writes. Those have no
+    `resp`, so the builder takes whatever the context holds and leaves the rest null.
+- **Surfacing the missing fields:**
+  - `tier_target` is added to `RoutingDecision` and to the router `DecisionRecord`, as a
+    new optional field (default None), so no wire break. The router already computes it.
+  - `complexity` is placed on the pipeline's result metadata.
+  - `routing_policy_version` comes from `Settings`.
+  - An empty-set rejection carries no trace, so its `eligible` is `[]` and `rejected`
+    comes from the `NoEligibleCandidate`'s feasible set. The exception gains an optional
+    `rejected` tuple for this.
+- **Best effort.** The outcome write happens in its own `try` block after the usage
+  write. If it fails, the error is logged with the request_id and
+  `routeforge_outcome_write_failures_total` is incremented. **It never fails or delays the
+  response.** Metering, which is billing, stays the durable record.
+- **Switch.** `serving.yaml` gets `outcomes: {enabled: true, retention_days: 90}`. This is
+  infrastructure: `serving.yaml` owns observability switches, and the config lint gains
+  its single-owner entry. With `enabled: false`, nothing is written and nothing else changes.
+- **Retention.** The existing hourly `_observation_loop` (`app/main.py`) also calls
+  `prune_outcomes(older_than_days)`, which deletes from both tables by `ts`.
+
+## 7. Feedback linkage
+
+- **`FeedbackIn` accepts `request_id`.** It gains an optional `request_id`, and at least
+  one of `trace_id` / `request_id` is required, otherwise the call gets a 422.
+- **Resolving the request.** The outcome row is looked up by `request_id`, or by
+  `trace_id`, **scoped to the authenticated caller's `application_id`**. An app can never
+  score another app's request: a mismatch is treated as not found.
+- **Storing the score.** When the row exists, the score is stored locally, and **also**
+  posted to Langfuse exactly as today when a `trace_id` is known. The response becomes
+  `{"stored": <langfuse result>, "recorded": <local result>}`. It stays HTTP 200 in both
+  cases, and `stored` keeps its current meaning.
+- **Admin feedback.** Admin feedback (`POST /api/requests/{request_id}/feedback`) records
+  with `source="admin"`, including when the snapshot has no `trace_id` (today that returns
+  "no trace"). The local record no longer needs telemetry.
+
+## 8. Export
+
+`GET /admin/outcomes/export?since=&until=&application_id=&limit=` requires admin auth
+(`require_admin`) and returns `application/x-ndjson`.
+
+- **The response is streamed.** Rows are read in keyset pages ordered by `(ts, request_id)`,
+  so a large export never loads into memory.
+- **Line format.** Each line has the form
+  `{"schema": "routeforge.outcome/v1", "outcome": {...row...}, "feedback": [{score_name, value, source, ts}]}`.
+- **Parameters.** `since` and `until` are ISO-8601 and default to the last 7 days. `limit`
+  is capped at 100 000.
+- **Access boundary.** The data is already content-free, and access is limited to admin
+  users.
+
+## 9. Bench loader and report (`app/eval/outcomes.py` + `scripts/outcome_report.py`)
+
+- **Input.** The script reads an export file (not the DB). This keeps `app/eval`
+  deployment-agnostic and lets an operator hand a file to someone else.
+- **Loading.** It validates `schema` and refuses unknown majors. Records carry every
+  version stamp, so the report groups by `endpoint_registry_version` when more than one is
+  present and never silently pools across registry changes.
+- **Per `(workload, chosen)`,** where no workload is shown as `(untagged)`:
+  - n, and served-ok rate;
+  - verify pass rate, over requests where verification was performed;
+  - mean feedback `quality` with its label count;
+  - `route_correct` rate with its label count;
+  - mean cost, and latency p50/p95;
+  - failover rate (attempts > 1).
+- **Per workload:** `no_eligible` rate, `backend_failed` rate, and label coverage (the
+  share of requests with any feedback).
+- **Output.** `report.md` + `summary.json`. The summary is deterministic: stable ordering
+  and no timestamps, as the bench's `metrics.json` is.
+- **Stated caveat in the report header.** Production observes only the **served** endpoint
+  for each request. There is no counterfactual matrix, so **oracle regret is not
+  computable** from outcomes alone, and the report never prints it. Comparing endpoints
+  across different request mixes is confounded by the router's own choices. That is
+  P2b-3's problem, which is why exploration within the feasible set is a later slice.
+
+## 10. Testing (TDD)
+
+- **Builder:** every status; the fields present or null per status; bucket boundaries.
+- **Hooks (HTTP boundary, consumer-contract style):**
+  - one row per status;
+  - streaming modes write `ok` with the right `verify_mode`;
+  - cancelled writes nothing;
+  - a failure in the outcome write still returns 200 with metering intact.
+- **Privacy:** the SSN/e-mail test and the schema column-name test (§4.3).
+- **Workload:** header beats metadata; invalid values are dropped and never rejected; the
+  tag is not forwarded upstream.
+- **Feedback:**
+  - request_id and trace_id resolution;
+  - a cross-app attempt is not recorded;
+  - comment and corrected_output text are never stored;
+  - `stored`/`recorded` semantics;
+  - admin feedback works with no trace.
+- **Retention:** the prune deletes old rows from both tables.
+- **Export:** NDJSON shape, keyset paging across a page boundary, filters, admin-only (401).
+- **Loader/report:** a golden summary on a fixture export; mixed registry versions are not
+  pooled; the caveat text is present.
+- **Identity:** routing decisions are unchanged (the existing suite, plus a check that
+  `outcomes.enabled` has no effect on `resp`).
+
+## 11. Docs
+
+- New `docs/reference/routing-outcomes.md`: the schema, statuses, workload tagging,
+  feedback linkage, export, retention, and privacy invariant.
+- `docs/reference/api-reference.md`: `/v1/feedback`'s `request_id` and `recorded`, the
+  workload header, and the export endpoint.
+- `docs/guides/feasible-route-bench.md`: the outcome report.
+- Research-notes section per the research-documentation rule: the dataset's model,
+  invariants, the served-arm-only caveat, and what P2b-3 needs from it.
+- Backlog: P2b-2 marked shipped, and the B51 durable-fix pointer updated.
+
+## 12. Deploy
+
+- **Two new tables,** created by `create_all`. **No ALTER** is needed for them.
+- **The `DecisionRecord.tier_target` field** lives in JSON (trace and snapshot), not a
+  column, so it needs no migration either.
+- **Earlier ALTERs are still owed.** Deployments must first apply the earlier outstanding
+  ALTERs (`context_window_source` from #64) before rolling any image.
