@@ -121,7 +121,7 @@ filled on it exactly as on an `ok` row.
 | `routing_policy_version` | str | The routing+pricing content hash (`sp.routing_policy_version`). |
 | `workload` | str, nullable | The validated client tag (§4). |
 | `workload_source` | enum | `client` (a valid tag was supplied), `none` (nothing supplied) or `invalid` (supplied but rejected; `workload` is then null). |
-| `tier_target` | str, nullable | The **first routing decision's** target tier (§3.5); when that decision is a failed gateway hop that carries none, the first router hop's. The target is the tier after the complexity rule, risk floor, escalation and the clamp to the best residency-allowed tier, and **before** the budget fallback. The served tier can be lower when the budget fallback stepped down. Null on failure rows other than `verify_failed`. |
+| `tier_target` | str, nullable | The **first routing decision's** own target tier (§3.5). A failed gateway hop records it too, so after a failover it is the failed attempt's target; it is never borrowed from a later hop (a trace from before 2026-09-23 whose failed hop lacks it reads null). The target is the tier after the complexity rule, risk floor, escalation and the clamp to the best residency-allowed tier, and **before** the budget fallback. The served tier can be lower when the budget fallback stepped down. Null on failure rows other than `verify_failed`. |
 | `complexity` | float, nullable | The router's complexity input, `tokens_after / 2000` (post-compression tokens). Written on failure rows too when compression ran before the failure. Null on a semantic-cache hit. |
 | `prompt_tokens_bucket` | enum, nullable | `<1k`, `1k-4k`, `4k-16k`, `16k-64k` or `>64k`, over the response's `usage.prompt_tokens`. Lower bound inclusive: exactly 1000 tokens is `1k-4k`. Null on failure rows other than `verify_failed`. |
 | `sensitivity` | enum | `public`, `internal`, `confidential` or `restricted`, from the gate. |
@@ -133,7 +133,7 @@ filled on it exactly as on an `ok` row.
 | `attempts` | JSON list[str] | Models tried, in hop order, including failed hops. `ok`: each failed gateway hop's first-scored candidate and each router hop's chosen model. `verify_failed`: read from the served attempt's trace, as for `ok`. `backend_failed` and `context_overflow`: the models the gateway attempted; a real-token stream has exactly one. `[]` on `no_eligible`. |
 | `chosen` | str, nullable | The served model: the last router hop that chose one. Null when nothing was served, and also on a semantic-cache hit (§3.4). |
 | `scoring` | JSON, nullable | The first routing decision's (§3.5) scoring record (`RankResult.to_record()`, the same content as `sp.scoring`): weights, and per candidate its score and four terms with their sources. Ids and numbers only. Null on failure rows other than `verify_failed`. |
-| `circuit_bypass` | bool | True if any routing decision bypassed the circuit breaker (every candidate in the target tier was open). False on failure rows. |
+| `circuit_bypass` | bool | True if any routing decision -- a router hop or a failed gateway hop -- bypassed the circuit breaker (every candidate in the target tier was open). False on failure rows. |
 | `cache_hit` | bool | True when a semantic-cache entry served the request (§3.4). False otherwise, and on every failure row. |
 | `cost_usd` | float | The total cost across hops (`cost.total_usd`). On `verify_failed` rows the served attempt's cost, which was incurred. `0` on other failure rows. |
 | `latency_ms` | float | **Two definitions.** `ok` rows: the sum of the trace records' `latency_ms` (the same figure the usage row carries). Failure rows: wall-clock time from the start of the request handler to the failure, which includes authentication and gate time. Do not pool the two. |
@@ -189,7 +189,10 @@ different hops, on purpose:
   hop carrying `scoring`. That is the decision that picked the first attempt. After a
   failover it is the failed hop (its scoring and rejected set are kept on the gateway
   record); after an escalation it is the first, unserved router hop. `tier_target` comes
-  from that record, or from the first router hop when the failed hop carries none.
+  from that record alone: the gateway records the decision's `tier_target` and
+  `circuit_bypass` on a failed hop too, so there is no fallback to a later router hop
+  (whose target can differ after an escalation). `circuit_bypass` is true when any
+  decision hop, router or failed gateway, bypassed an open circuit.
 - `chosen` is the **served** model: the last router hop that chose one.
 - `attempts` lists every model tried, in order, so the path between the two is visible.
 

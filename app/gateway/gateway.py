@@ -229,6 +229,11 @@ class Gateway:
                     reason=f"{cand.name} failed; retrying peer/escalating",
                     rejected=decision.rejected, est_cost_usd=decision.est_cost_usd,
                     latency_ms=0.0, hop_index=len(records),
+                    # The decision's tier target and breaker bypass are as real
+                    # as its scoring: after a failover this record IS the
+                    # request's first routing decision (app/apps/outcomes.py).
+                    tier_target=decision.tier_target,
+                    circuit_bypass=decision.circuit_bypass,
                     # This hop's chosen field stays None (nothing was SERVED),
                     # but the scoring that led to picking `cand` is still real
                     # and otherwise permanently lost the instant this record

@@ -382,3 +382,22 @@ def test_ineligible_request_does_not_starve_a_recovered_endpoint():
     ctx_any = _ctx(reg, {"onprem"}, onprem=True)
     _call(gw, ctx_any)
     assert backend.calls == ["a"]
+
+
+def test_failed_hop_record_carries_tier_target_and_circuit_bypass():
+    """A failed attempt's `step="gateway"` record keeps the routing decision's
+    `tier_target` and `circuit_bypass` -- the outcome row reads both from the
+    first decision hop, which after a failover IS this record."""
+    reg = _reg({"a": _onprem("a", price=0.05), "b": _onprem("b", price=0.2)})
+    br = CircuitBreaker(S.routing.breaker)
+    for name in ("a", "b"):
+        for _ in range(S.routing.breaker.failure_threshold):
+            br.record_failure(name)
+    _result, records = _call(_gw(_FailForModels(S, {"a"}), reg, br),
+                             _ctx(reg, {"onprem"}, onprem=True))
+    failed = next(r for r in records if r.step == "gateway" and r.chosen is None
+                  and r.scoring)
+    assert failed.circuit_bypass is True
+    assert failed.tier_target is not None
+    router = next(r for r in records if r.step == "router")
+    assert failed.tier_target == router.tier_target
