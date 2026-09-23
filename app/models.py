@@ -196,9 +196,10 @@ class RejectedCandidate(BaseModel):
     reason: str
     display_name: str | None = None  # human-facing model name; falls back to name in UI
     # Stable stage identifier (`app/policy/feasible.py`'s `code`, e.g.
-    # "region_not_allowed") for a stage-2 data-handling exclusion; None for
-    # every other rejection reason (residency/app_scope/budget/tier/score),
-    # which have no stable code of their own. Lets `sp.candidates` answer
+    # "residency", "region_not_allowed", "circuit_open"). Every eligibility-
+    # stage rejection (all seven feasible_set stages) carries one; None only
+    # for the router's own later filters (tier, budget, lower score), which
+    # have no stable code of their own. Lets `sp.candidates` answer
     # "why not that endpoint" by code, not just by parsing the operator-facing
     # `reason` string (P1b design §6).
     code: str | None = None
@@ -226,6 +227,9 @@ class DecisionRecord(BaseModel):
     # scored, and inventing terms for them would be exactly the overstatement
     # P2a exists to remove.
     scoring: dict | None = None
+    # Step-7 breaker: True when every candidate policy admitted was held open
+    # and the router tried one anyway (app/routing/router.py::select).
+    circuit_bypass: bool = False
 
 
 class VerificationRecord(BaseModel):

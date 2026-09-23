@@ -97,6 +97,19 @@ class SignalsCfg(BaseModel):
     max_seed_obs_per_model: int = 200
 
 
+class BreakerCfg(BaseModel):
+    """Per-endpoint circuit breaker (step 7; app/gateway/breaker.py). Owned by
+    routing.yaml only. `enabled: false` makes the breaker's open set always
+    empty -- exactly the pre-breaker routing, and the control arm."""
+    enabled: bool = True
+    # Consecutive endpoint-unhealth failures (counts_as_endpoint_unhealth)
+    # that open the circuit. Any success resets the count.
+    failure_threshold: int = 3
+    # First open period; doubles on every failed half-open trial, capped below.
+    cooldown_s: float = 30.0
+    max_cooldown_s: float = 300.0
+
+
 class RoutingCfg(BaseModel):
     tiers: list[str]
     score_on: str
@@ -133,6 +146,8 @@ class RoutingCfg(BaseModel):
     strategy: str = "default"
     # P2a measured routing signals. Owned here (routing input), never restated.
     signals: SignalsCfg = SignalsCfg()
+    # Step-7 endpoint circuit breaker. Owned here (routing input), never restated.
+    breaker: BreakerCfg = BreakerCfg()
 
     @model_validator(mode="before")
     @classmethod

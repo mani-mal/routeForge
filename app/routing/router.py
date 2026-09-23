@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from app.config.schema import PoolCandidate, Settings
 from app.errors import NoEligibleCandidate
 from app.models import ExecutionPolicyContext, RejectedCandidate
-from app.policy.feasible import DATA_HANDLING_HINTS, feasible_set
+from app.policy.feasible import CIRCUIT_OPEN, DATA_HANDLING_HINTS, feasible_set
 from app.routing.pricing import price_call
 from app.routing.quality import QualityResolver
 from app.routing.signals import SignalStore
@@ -75,6 +75,7 @@ class RoutingDecision:
     quality_score: float = 0.0
     quality_source: str = "tier_default"
     scoring: "RankResult | None" = None
+    circuit_bypass: bool = False
 
 
 class Router:
@@ -120,7 +121,32 @@ class Router:
     def select(self, ctx: ExecutionPolicyContext, tokens_after: int,
                complexity: float, min_tier: str | None = None,
                exclude: frozenset[str] = frozenset(),
-               output_tokens: int | None = None) -> RoutingDecision:
+               output_tokens: int | None = None,
+               open_circuits: frozenset[str] = frozenset()) -> RoutingDecision:
+        """Choose a candidate for this call. `exclude` are models already tried
+        and failed on this request (lateral failover); `open_circuits` are
+        models the step-7 breaker currently holds open.
+
+        **The breaker never changes the target tier.** Tier targeting -- the
+        complexity/risk-floor/escalation targets, the clamp to the best
+        allowed tier, the tier pick and the budget fallback -- is computed from
+        the POLICY-eligible set, with open circuits still in it. Only then are
+        open circuits dropped, and only among the chosen tier's final
+        (post-budget) candidates. If every one of those is open, the router
+        bypasses the breaker WITHIN that tier (`circuit_bypass`): trying an
+        endpoint that may have recovered is never worse than today's
+        no-breaker behaviour, whereas stepping down a tier would silently
+        undercut a risk floor or an escalation (CLAUDE.md rule 8). The bypass
+        can only restore candidates policy already admitted, in the tier
+        policy already chose."""
+        return self._select(ctx, tokens_after, complexity, min_tier, exclude,
+                            output_tokens, open_circuits)
+
+    def _select(self, ctx: ExecutionPolicyContext, tokens_after: int,
+               complexity: float, min_tier: str | None,
+               exclude: frozenset[str],
+               output_tokens: int | None,
+               open_circuits: frozenset[str]) -> RoutingDecision:
         out_tokens = (output_tokens if output_tokens is not None
                       else expected_output_tokens(self._s, None))
         # 1. eligibility: residency/placement, prior failures, the app's own
@@ -128,8 +154,21 @@ class Router:
         #    gates. ONE authority for all of it (app/policy/feasible.py) --
         #    this step used to re-derive the same decision the policy gate had
         #    already made, and the two could disagree.
+        #    Open circuits are deliberately NOT applied here: this is the
+        #    POLICY-eligible set, and every tier decision below reads it (see
+        #    `select`). feasible_set's stage 7 stays the labelling authority for
+        #    which of the chosen tier's final candidates are open (step 4b).
         feasible = feasible_set(self._s, self._reg, ctx, tenant_id=ctx.tenant_id,
                                 exclude=exclude)
+        circuit_rejections: dict[str, RejectedCandidate] = {}
+        if open_circuits:
+            for r in feasible_set(self._s, self._reg, ctx, tenant_id=ctx.tenant_id,
+                                  exclude=exclude,
+                                  open_circuits=open_circuits).rejected:
+                if r.code == CIRCUIT_OPEN:
+                    circuit_rejections[r.name] = RejectedCandidate(
+                        name=r.name, provider=r.provider, tier=r.tier,
+                        display_name=r.display_name, reason=r.reason, code=r.code)
         allowed = list(feasible.eligible)
         rejected: list[RejectedCandidate] = [
             RejectedCandidate(name=r.name, provider=r.provider, tier=r.tier,
@@ -219,6 +258,19 @@ class Router:
                 f"cap ${ctx.max_cost_usd:.4f}. Raise the application's "
                 "max_cost_usd_per_request, lower max_tokens, or lower the model's price.")
 
+        # 4b. drop open circuits among the chosen tier's final candidates. The
+        #     tier is already fixed; if every one of them is open, bypass the
+        #     breaker within it rather than change the tier (see `select`).
+        circuit_bypass = False
+        if circuit_rejections:
+            closed = [(c, e) for c, e in eligible if c.name not in circuit_rejections]
+            if closed:
+                rejected.extend(circuit_rejections[c.name] for c, _e in eligible
+                                if c.name in circuit_rejections)
+                eligible = closed
+            else:
+                circuit_bypass = True
+
         # 5. score within the tier (chooses provider/model — cheaper on-prem
         #    wins). Delegated to the pluggable strategy (app/routing/strategy.py)
         #    -- it only ranks this already-filtered eligible set, it can never
@@ -247,10 +299,13 @@ class Router:
                 name=c.name, provider=c.provider, tier=c.tier,
                 display_name=c.display_name, reason="lower score"))
         chosen_q = self._quality.resolve(chosen.name)
+        reason = (f"tier {chosen.tier} (target {target}, budget fallback from {fallback_from})"
+                  if fallback_from else f"tier {chosen.tier} (target {target})")
+        if circuit_bypass:
+            reason += "; circuit bypass: every candidate in the target tier is open"
         return RoutingDecision(
             chosen=chosen, est_cost_usd=est,
-            reason=(f"tier {chosen.tier} (target {target}, budget fallback from {fallback_from})"
-                    if fallback_from else f"tier {chosen.tier} (target {target})"),
+            reason=reason,
             rejected=rejected,
             quality_score=chosen_q.score, quality_source=chosen_q.source,
-            scoring=result)
+            scoring=result, circuit_bypass=circuit_bypass)

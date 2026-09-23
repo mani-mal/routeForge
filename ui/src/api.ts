@@ -487,6 +487,12 @@ export type OnboardedModel = {
   region?: string | null;
   prompt_retention?: string | null;
   accepts_raw_sensitive?: boolean | null;
+  // Step-7 circuit breaker (B45) -- THIS REPLICA's view (per-process, like
+  // app/gateway/breaker.py). "closed" when the breaker is disabled or the
+  // model has never failed. Optional only for the same reason the P1b
+  // declarations above are: rows returned before this shipped had no field
+  // on the wire; the server always sends it now.
+  circuit?: { state: string; consecutive_failures: number; open_until_s: number | null };
 };
 export type OnboardIn = {
   slug: string; display_name: string; tier: string; endpoint: string;

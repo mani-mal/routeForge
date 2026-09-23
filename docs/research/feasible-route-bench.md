@@ -30,6 +30,13 @@ peer, exactly as if the weight were 0, at every seed and time scale tried. The f
 predicts this too (§9.5). The starter-suite numbers below are unchanged at `8344b21`; only
 arm names and output stamps moved (§5.1).
 
+**Update 2026-09-23 (§12).** The step-7 circuit breaker is built, and the same outage scenario
+was re-run with it on and off (simulated, seeds 0–9). It removes 7 of the 10 dead first
+attempts at 1 s per case and 4 of 10 at 30 s per case, and does nothing at 300 s per case,
+which is an effect of the bench's case clock, not of production. It pays for this after
+recovery, by keeping the cheaper endpoint out for the rest of its cooldown: +51% and +39% mean
+chosen cost.
+
 ---
 
 ## 0. File before you publish
@@ -1355,3 +1362,285 @@ docker run --rm --user $(id -u):$(id -g) -e HOME=/tmp --network host \
   --variants eval/variants/b45.yaml --live --yes --seed 0 --seconds-per-case 30
 # §11.1: --suite eval/suites/starter.jsonl --endpoints eval/endpoints/spark-live.yaml, no variants
 ```
+
+---
+
+## 12. The step-7 circuit breaker, measured (2026-09-23)
+
+§9 and §11 answered B45's weight question: `weights.availability` is a bounded ranking
+preference, and no weight tried kept a dead endpoint out of rotation without also
+overriding real cost differences. Both recommended a step-7 circuit breaker instead. This
+section records the breaker as built on `feat/endpoint-circuit-breaker` (code at `ef9315f`)
+and its simulated measurement on the §9 outage scenario. Design:
+`docs/superpowers/specs/2026-09-23-endpoint-circuit-breaker-design.md`, amended on
+2026-09-23 where the build departed from it (§12.1). **Every number here is simulated.**
+There is no live breaker run.
+
+### 12.1 What was built
+
+**State machine** (`app/gateway/breaker.py`, one `CircuitBreaker` per API process, state per
+model name):
+
+```
+closed    --failure_threshold consecutive unhealth failures--> open       (cooldown_s)
+open      --cooldown elapsed-----------------------------------> half_open
+half_open --first reported success-----------------------------> closed     (count and cooldown reset)
+half_open --first reported failure-----------------------------> open       (cooldown doubled, capped at max_cooldown_s)
+```
+
+- **What counts.** Only failures for which `counts_as_endpoint_unhealth(exc)` is true: no-status
+  transport errors, 5xx and 429. A 4xx, including context overflow, never trips a circuit (the
+  B36 rule the availability signal already uses). *(Final-review fix wave, 2026-09-23.)* Nor
+  does a local programming error (`TypeError`, `AttributeError`, `NameError`, `KeyError`,
+  `IndexError`, `AssertionError`, `NotImplementedError`, `ValueError` incl. `JSONDecodeError`):
+  the breaker is shared by every tenant, and a bug on our side must not open a circuit for
+  everyone. The bench's `SimulatedEndpointFailure` is a plain `Exception` and still counts.
+  Any success while closed resets the count.
+- **Evidence-based half-open.** Before the cooldown elapses, a reported success or failure
+  changes nothing: no close, no reopen, no change to the count or the cooldown. Once it has
+  elapsed, the model is admitted to **every** request, and the first result anyone reports
+  decides: a success closes the circuit, a failure reopens it with the cooldown doubled.
+- **No single-trial lease.** The spec's one-request trial lease and `trial_timeout_s` were
+  removed. The lease was granted inside `open_set()`, which runs before policy and scoring, so a
+  request that could never use the model (out of the app's scope, wrong tier, or simply
+  outscored by a cheaper peer) consumed it, and a recovered endpoint stayed excluded for a
+  further `trial_timeout_s` per such request (the Task 4 review reproduced three eligible
+  requests diverted this way). **Accepted cost:** while a circuit is half-open, concurrent
+  in-flight requests may each spend one attempt on a still-dead endpoint. Failover serves them
+  (a streamed request has no failover and fails that one call).
+- **Where it applies: `feasible_set` stage 7, the last stage** (`circuit_open`, "excluded ·
+  circuit open"). The spec placed it right after `prior_failure`. Running it after every policy
+  stage (app scope, pinned model, registry gates) means every policy reason wins over it, so
+  `circuit_open` only ever labels a candidate that policy fully admitted.
+- **The breaker never changes the target tier** *(final-review fix wave, 2026-09-23)*. As first
+  built, open circuits were removed before `Router._select` chose the tier, so the clamp to the
+  best allowed tier pulled the target down to whatever tier was still closed. The review probe:
+  a high-risk request with cloud allowed and `bedrock-frontier` open was served on **mid**
+  ("tier mid (target mid)", no bypass); a medium-risk `onprem_only` request with its on-prem mid
+  open, and an escalation to mid with mid open, were served on **cheap**. That silently undercut
+  the risk floor and the escalation (CLAUDE.md rule 8). Now the targets, the clamp, the tier pick
+  and the budget fallback are computed from the **policy**-eligible set, and open circuits are
+  dropped only among the chosen tier's final (post-budget) candidates, still labelled by stage 7.
+- **Within-tier bypass** (`Router._select`). If every final candidate in the target tier is
+  open, the router ranks them all anyway, sets `circuit_bypass: true` and appends
+  `"; circuit bypass: every candidate in the target tier is open"` to the reason. It never steps
+  to another tier to find a closed model. The bypass can only restore candidates policy admitted,
+  in the tier policy chose: an `onprem_only` request whose on-prem models are all open still
+  never reaches cloud. So the breaker never makes a request worse off than no breaker: it only
+  removes an open model when a closed same-tier peer can take its place.
+  **Re-checked on the bench:** the outage scenario's two endpoints share one tier, so the fix
+  changes no §12 number; seed 0 at 1 s/case re-run after the fix gives `router_online:default`
+  `wasted_attempts` 0.1 (3/30), as in §12.4.
+- **Gateway wiring.** `Gateway.run` and `Gateway.run_stream` read `open_set()` fresh on every
+  `Router.select`, including each failover and escalation re-select, and report every attempt's
+  outcome to the breaker.
+- **Per-process, boots closed.** Nothing is shared across replicas and nothing is replayed at
+  boot. Production reads `time.monotonic()`.
+- **Config** (`config/routing.yaml`, linted): `breaker: {enabled: true, failure_threshold: 3,
+  cooldown_s: 30, max_cooldown_s: 300}`. `enabled: false` makes `open_set()` always empty, which
+  is exactly the pre-breaker behaviour.
+
+### 12.2 The bench arms, and the case clock
+
+- **`router_online:<variant>`** (and the unvaried `router_online`) now carries its own
+  `CircuitBreaker`, because `routing.breaker.enabled` is true. It is fed only by the arm's own
+  earlier attempts, the same leak guards apply, and `open_set()` is read fresh on every hop of
+  the attempt chain, as in the gateway. This is the reported arm. `router_online` equals
+  `router_online:default` in all 30 runs below.
+- **`router_online:breaker_off`** is the control: the base weights, the same online arm, the
+  breaker disabled. The runner adds it whenever the base config has the breaker on.
+- **The breaker runs on the case clock** (§9.4): case `k` happens at `k × seconds_per_case`.
+  So `seconds_per_case` decides how many cases a cooldown covers:
+  - at **1 s/case**, the first 30 s cooldown covers 30 cases, longer than the rest of the suite;
+  - at **30 s/case**, the first cooldown ends exactly at the next case, which is therefore
+    already half-open. The first cooldown never excludes anything; only the doubled ones
+    (60, 120, 240 s) span whole case gaps;
+  - at **300 s/case** (= `max_cooldown_s`), no cooldown can outlast one case gap, so the breaker
+    never excludes anything and the two arms are identical by construction
+    (`TestBreakerCaseClockInteraction`).
+
+  This is a property of the bench, not of production. In production a cooldown is wall-clock
+  time, and it covers however many requests arrive in it.
+
+### 12.3 Stamp
+
+```
+suite            eval/suites/outage.jsonl        30 cases
+suite_hash       78e1be2bc1b234ba8ea418f83eeb890fc700dae75179425facc194f6a4dd9969
+endpoints        eval/endpoints/outage-sim.yaml  (fast-cheap, steady; unchanged from §9.5)
+endpoints_hash   bdb74978978dbe2ef956e7e7a447bec80fbcc9d59525bd5b74f9f6bfe465f7d6
+variants         eval/variants/b45.yaml
+seeds            0–9        seconds_per_case  1, 30, 300      attempt_cap 3
+breaker          enabled, failure_threshold 3, cooldown_s 30, max_cooldown_s 300
+git_sha          ef9315f9713a3c382c3347df0f6fbe0406c0efd7
+base_routing_policy_version  b56a629b0417 (was a4bf5708d2db: routing.yaml gained the breaker block)
+registry_version abeacbc653b5
+mode             simulated  SP_PII_DETECTION=regex
+result           30/30 runs exit 0; violations_total 0 in every run
+```
+
+`metrics.json` md5, first 8 hex digits, seeds 0–9 in order (they differ from §9.5 because the
+new arm is in the file):
+
+| `seconds_per_case` | seed 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | `0f42055d` | `6274ff12` | `4a34aa67` | `2f1c880a` | `aed0246a` | `27b348de` | `8f571d0d` | `e52c1f70` | `6aaef368` | `a438db7e` |
+| 30 | `d9ceb535` | `91255545` | `6b7e415c` | `c0e66a52` | `c499d399` | `62519057` | `c8f2000b` | `d077041d` | `188e925f` | `91eb332c` |
+| 300 | `3f574feb` | `02d9dc86` | `92ea52a9` | `353d70ff` | `cea99e9e` | `10dc293c` | `820ad1e0` | `4a83a2ea` | `200c544a` | `b4e9a3b6` |
+
+**Control check.** `router_online:breaker_off` reproduces §9.5's weight-0.2 row exactly at every
+spacing (10.5 wasted per run, mean chosen cost 2.251e-06, latency regret 326.1 ms, cost regret
+0), so the control is the pre-breaker router.
+
+### 12.4 Result
+
+Mean over seeds 0–9 [min–max]. "Wasted per run" is `wasted_attempts` × 30. "Dead firsts" is the
+number of outage cases (10–19) whose first attempt went to the dead `fast-cheap`. "Back on
+`fast-cheap`" is the first case after the outage whose first attempt is `fast-cheap` again.
+Mean chosen cost is against the control at the same spacing.
+
+| s/case | arm | wasted per run | mean chosen cost (USD) | cost regret (USD) | latency regret (ms) | pass rate | dead firsts | back on `fast-cheap` |
+|---|---|---|---|---|---|---|---|---|
+| 1 | **breaker on** | **4.4 [3–6]** | 3.392e-06 (**+51%**) | 1.07e-06 | **198.7** [147.2–234.5] | 0.943 | **3** [3–3] | **never** (not by case 29) |
+| 1 | breaker off | 10.5 [10–11] | 2.251e-06 | 0 | 326.1 [285.7–344.8] | 0.950 | 10 | case 20 |
+| 30 | **breaker on** | **7.0 [6–8]** | 3.122e-06 (**+39%**) | 8.4e-07 | **264.9** [220.0–289.7] | 0.950 | **6** [6–6] | case 27 [27–27] |
+| 30 | breaker off | 10.5 [10–11] | 2.251e-06 | 0 | 326.1 [285.7–344.8] | 0.950 | 10 | case 20 |
+| 300 | breaker on | 10.5 [10–11] | 2.251e-06 | 0 | 326.1 [285.7–344.8] | 0.950 | 10 | case 20 |
+| 300 | breaker off | 10.5 [10–11] | 2.251e-06 | 0 | 326.1 [285.7–344.8] | 0.950 | 10 | case 20 |
+
+`exhausted_rate` is the same for both arms at every spacing (mean 0.017): the five cases where
+`steady` flaked inside the outage exhaust every strategy, as in §9.5.
+
+**Where the difference falls** (breaker on − off, summed over the run, mean over seeds
+[min–max]; from `choices.jsonl`):
+
+| s/case | cases 0–9 | outage, cases 10–19 | after recovery, cases 20–29 |
+|---|---|---|---|
+| 1 | 0 | cost 0; latency **−6,700 ms** [−7,000 to −6,000] | cost **+3.42e-05 USD**; latency **+3,221 ms** [2,784–3,861] |
+| 30 | 0 | cost 0; latency **−3,800 ms** [−4,000 to −3,000] | cost **+2.61e-05 USD**; latency **+2,234 ms** [1,950–2,556] |
+| 300 | 0 | 0 (chains identical at 10/10 seeds) | 0 |
+
+**Seed 0, first attempts per case** (`F` = `fast-cheap`, `S` = `steady`, `F+S` = a wasted
+attempt on `fast-cheap`, then served by `steady`; cases 0–9 are `F` in every row):
+
+| arm | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20–26 | 27 | 28 | 29 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| on, 30 s/case | F+S | F+S | F+S | F+S | S | F+S | S | S | S | F+S | S | F | F | F |
+| on, 1 s/case | F+S | F+S | F+S | S | S | S | S | S | S | S | S | S | S | S |
+| off (any spacing), on at 300 s | F+S | F+S | F+S | F+S | F+S | F+S | F+S | F+S | F+S | F+S | F | F | F | F |
+
+At 30 s/case the sequence is the case clock at work. Cases 10–12 trip the circuit (30 s). Case
+13 lands exactly at the end of that cooldown, is admitted half-open, fails, and reopens for 60 s.
+Case 14 is excluded. Case 15 is the next trial, which fails (120 s). Cases 16–18 are excluded.
+Case 19 fails its trial (240 s), which excludes cases 20–26 although `fast-cheap` recovered at
+case 20. Case 27 is a successful trial and closes the circuit. The same sequence holds at every
+seed.
+
+### 12.5 Reading it
+
+- **At 1 s/case the breaker does what the spec predicted during the outage.** Exactly
+  `failure_threshold` (3) outage cases pay a wasted attempt, instead of all 10, at every seed.
+  No trial fits inside the suite, so there is no "one per failed trial" term. Latency regret
+  falls from 326 to 199 ms (−39%).
+- **At 30 s/case the benefit is partial:** 6 dead first attempts instead of 10, 3 to trip it and
+  3 failed trials. The first cooldown ends exactly at the next case and so excludes nothing.
+  Latency regret falls from 326 to 265 ms (−19%).
+- **At 300 s/case there is no effect at all**, at any seed. This is the case clock, not the
+  breaker: no cooldown up to `max_cooldown_s` outlasts a 300 s case gap. Production uses
+  wall-clock time, so this null says nothing about production at a low request rate beyond
+  what it literally is: requests 300 s apart never meet an open circuit.
+- **The cost is all after recovery, as it was for the larger weights in §9.5.** Inside the
+  outage the extra cost is exactly 0, because a failed attempt costs 0 and failover already
+  served those cases on `steady`. After the outage the breaker keeps the recovered, 4× cheaper
+  endpoint out for the rest of its current cooldown: for the whole of cases 20–29 at 1 s/case
+  (the 30 s cooldown is 30 cases long), and for cases 20–26 at 30 s/case (the 240 s cooldown
+  set by the failed trial at case 19). That costs +51% and +39% mean chosen cost, and gives back
+  about 300 ms per case served on `steady` (+3.2 s and +2.2 s per run), which the latency-regret
+  figures already include. Net latency is still better, because the saved failures (1000 ms
+  each, a designed value) outweigh it.
+- **A successful bypass does not close a circuit early.** At seed 6, 1 s/case, `steady` flaked
+  at cases 25, 28 and 29. `fast-cheap` was open, so the failover re-select found no candidate,
+  bypassed, and `fast-cheap` served each case. Those successes arrived before the cooldown had
+  elapsed, so under the evidence rule they changed nothing, and the next case went to `steady`
+  again. This is the designed behaviour (a result before the cooldown elapses is not trial
+  evidence). It is also part of the post-recovery cost. The same flakes are why the breaker-on
+  arm has wasted attempts outside the outage (0.6 per run at 1 s/case, 0.3 at 30 s/case): it
+  serves more traffic from `steady`, so it meets more of `steady`'s 5% error rate.
+- **Against the weights of §9.5.** At 1 s/case the breaker wastes fewer attempts than
+  `availability: 2.0` without a breaker (4.4 vs 5.5 per run) with lower latency regret (199 vs
+  217 ms) and higher cost (+51% vs +39%). At 30 s/case it is behind `w = 2` on all three (7.0 vs
+  5.7 wasted, 265 vs 221 ms, +39% vs +35%). What the breaker has that a weight does not is
+  structural and not measured here: it does nothing at all until an endpoint fails three
+  times in a row, so it never overrides a cost difference between two healthy endpoints, which
+  is what a weight of 2.0 would do on every request. The `router_online:<variant>` arms now
+  carry the breaker too, so §9.5's variant numbers are no longer reproduced by a current run;
+  they remain the no-breaker reference.
+- **Pass-rate differences** (0.943 vs 0.950 at 1 s/case) come from the declared simulated
+  qualities (`fast-cheap` FAQ 0.97, `steady` 0.95), as in §9.5. They are an input (§6.1).
+
+### 12.6 Limits: what this does NOT show
+
+- **The §9.6 limits all apply.** One designed scenario: two endpoints, one price ratio (0.25), one
+  outage span, one suite order, simulated failures, 30 cases, 10 seeds.
+- **The saving scales with a designed value.** Each avoided attempt saves the declared 1000 ms
+  failure latency. A fast refusal, like the live connection drop in §11.2, would make the saving
+  close to 0 while the post-recovery cost stays. A slow failure (a connect timeout, a hung
+  server) would make it larger.
+- **Case clock, not wall clock.** The three spacings produce three different stories (full,
+  partial, none) for one mechanism. Real traffic is bursty. In production the exclusion lasts a
+  wall-clock cooldown (30–300 s), and the post-recovery cost is whatever traffic arrives in the
+  remainder of it.
+- **One process, serial requests.** The bench models one replica with one request at a time.
+  With N API replicas each trips on its own failures, so an outage can cost up to N ×
+  `failure_threshold` wasted attempts before every replica has tripped. The accepted cost of
+  the no-lease half-open (concurrent in-flight requests each spending one attempt on a
+  still-dead endpoint) cannot occur in a serial bench and is unmeasured.
+- **No streaming in the bench.** The case the spec names as benefiting most (a streamed request,
+  which has no failover) is covered by unit tests (`test_run_stream_*`), not measured.
+- **One configuration.** `failure_threshold`, `cooldown_s` and `max_cooldown_s` were not swept.
+  The post-recovery cost at 30 s/case is set by the 240 s cooldown the third failed trial
+  produced. A shorter cap would shorten it.
+- **No live run.** A `--live` re-run with `scripts/outage_proxy.py` (§11.3) would exercise the
+  breaker through the real gateway. It has not been made.
+
+### 12.7 Invariants the breaker added, and the test that pins each
+
+| Invariant | Pinned by | Falsified? |
+|---|---|---|
+| Opens after `failure_threshold` consecutive unhealth failures; any success resets; models are independent | `tests/test_breaker.py::test_opens_after_threshold_consecutive_failures`, `test_success_resets_the_count`, `test_models_are_independent` | n/a |
+| A 4xx never trips; 5xx, 429 and transport errors do (and open it, after which the next request makes no wasted attempt); a local programming error neither trips it nor moves availability | `tests/test_gateway_breaker.py::test_gateway_failures_trip_the_breaker[500\|429\|no-status-transport]`, `test_local_programming_errors_do_not_trip_the_breaker_or_lower_availability`, `test_4xx_does_not_trip_the_breaker`; `tests/routing/test_signal_wiring.py::test_local_programming_errors_are_not_endpoint_unhealth`; `tests/eval/test_strategies.py::TestOnlineArmBreaker::test_breaker_true_ignores_non_unhealth_failures` | n/a |
+| Before the cooldown elapses, no result changes state, count or cooldown | `test_breaker.py::test_success_mid_cooldown_does_not_close`, `test_failure_mid_cooldown_does_not_change_cooldown_or_count` | **Yes**: the Task 2 review found a mid-cooldown success closing the circuit (fixed in `2d0d029`) |
+| After the cooldown, the first success closes and the first failure reopens with the cooldown doubled and capped | `test_breaker.py::test_trial_success_closes`, `test_trial_failure_reopens_with_doubled_cooldown_capped`, `test_success_after_cooldown_closes_without_lease`, `test_failure_after_cooldown_reopens_without_lease` | n/a |
+| Half-open admits every caller; an ineligible request cannot starve a recovered endpoint | `test_breaker.py::test_half_open_admits_every_caller_no_lease`, `test_concurrent_callers_all_admitted_while_still_dead`; `test_gateway_breaker.py::test_ineligible_request_does_not_starve_a_recovered_endpoint` | **Yes**: the Task 4 review probe diverted three eligible requests under the lease design (lease removed in `bb97af8`) |
+| `half_open` is metered and logged once per open period | `test_breaker.py::test_half_open_metric_emitted_exactly_once_per_open_period`, `test_half_open_metric_also_dedupes_across_record_calls` | n/a |
+| An open model is rejected with `circuit_open`; every policy reason wins over it | `tests/test_feasible_set.py::test_open_circuit_candidate_is_rejected_as_circuit_open`, `test_placement_excluded_and_open_circuit_reads_residency_not_circuit_open`; `tests/test_router_breaker.py::test_prior_failure_plus_open_circuits_bypass_keeps_prior_failure` | n/a |
+| All open → bypass, marked; the bypass never widens placement; a policy-empty set still raises | `test_router_breaker.py::test_all_open_bypasses_and_marks_it`, `test_bypass_never_widens_placement`, `test_no_eligible_for_policy_reasons_still_raises`; `test_gateway_breaker.py::test_all_open_bypass_is_on_the_record` | n/a |
+| The breaker never changes the target tier (risk floor, escalation, budget fallback); the bypass stays within the target tier; an empty open set reproduces today's decisions | `test_router_breaker.py::test_high_risk_open_frontier_keeps_the_frontier_target`, `test_medium_risk_onprem_only_open_mid_is_not_lowered_to_cheap`, `test_medium_risk_open_mid_prefers_a_closed_mid_peer`, `test_escalation_to_open_mid_is_not_lowered_to_cheap`, `test_open_cheap_peer_with_closed_peer_keeps_target_and_labels`, `test_budget_fallback_tier_is_computed_before_circuits`, `test_budget_fallback_prefers_closed_peer_in_fallback_tier`, `test_empty_open_set_matches_no_argument` | **Yes**: the final review's probe served a high-risk request on mid and a medium-risk / escalated one on cheap (fixed in `75e5ae4`) |
+| The gateway excludes an open endpoint up front (no wasted attempt), in `run` and `run_stream` | `test_gateway_breaker.py::test_open_circuit_saves_the_wasted_attempt`, `test_run_stream_open_circuit_excludes_the_model`, `test_run_stream_success_records_on_the_breaker`, `test_run_stream_failure_records_on_the_breaker`, `test_run_stream_early_close_records_nothing` | n/a |
+| `enabled: false` (or no breaker) is the pre-breaker behaviour | `test_breaker.py::test_disabled_never_opens`; `test_gateway_breaker.py::test_no_breaker_is_todays_behaviour`; `test_feasible_set.py::test_open_circuits_defaults_to_empty_set_no_change`; `TestOnlineArmBreaker::test_breaker_off_kwarg_equals_settings_disabled` | n/a |
+| Config lint: positive threshold and cooldown, `max_cooldown_s ≥ cooldown_s` | `tests/test_config_lint.py::test_breaker_config_loads_with_shipped_values`, `test_bad_breaker_values_are_caught` | n/a |
+| Bench arm: excludes after the threshold, its chain equals the direct `Router.select` chain, and it is a no-op at `seconds_per_case ≥ max_cooldown_s` | `TestOnlineArmBreaker::test_breaker_true_excludes_a_after_failure_threshold_failures`, `test_choose_equals_router_chain_with_breaker_open_circuits`; `TestBreakerCaseClockInteraction::test_seconds_per_case_at_max_cooldown_is_a_documented_no_op` | n/a |
+| Outage scenario: breaker-on wastes no more attempts than `breaker_off` (direction only) | `tests/eval/test_outage_scenario.py::test_outage_run_is_deterministic_clean_and_moves_the_online_variants` | n/a (asserts direction, never magnitude) |
+
+At `ef9315f`, `tests/eval` gives 279 passed; `tests/eval` plus the five breaker-related test
+files give 366 passed.
+
+### 12.8 Reproducing §12
+
+```bash
+git checkout feat/endpoint-circuit-breaker      # code at ef9315f
+for SPC in 1 30 300; do for SEED in 0 1 2 3 4 5 6 7 8 9; do
+  LITELLM_LOCAL_MODEL_COST_MAP=True SP_PII_DETECTION=regex \
+    uv run python scripts/feasible_bench.py \
+      --suite eval/suites/outage.jsonl \
+      --endpoints eval/endpoints/outage-sim.yaml \
+      --variants eval/variants/b45.yaml \
+      --seed $SEED --seconds-per-case $SPC --out /tmp/claude-breaker/s$SEED-$SPC
+done; done
+md5sum /tmp/claude-breaker/s0-30/metrics.json   # d9ceb5354738c22db6691e4135704e13 at ef9315f
+```
+
+Compare `router_online:default` with `router_online:breaker_off` in each `metrics.json`
+(`strategies`), and read first attempts from `choices.jsonl` (`attempts[0]` per `strategy`,
+`case_id`). Each run takes about 3 s. Write the output outside the repository; run output is
+not committed.

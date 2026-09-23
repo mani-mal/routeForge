@@ -33,6 +33,10 @@ if AVAILABLE:
     _tokens = Counter(
         "routeforge_tokens_total", "Tokens processed, by model and direction.",
         ["model", "direction"])
+    _breaker = Counter(
+        "routeforge_breaker_transitions_total",
+        "Circuit-breaker state transitions, by the state entered.",
+        ["to_state"])
 
 
 def observe_request(model: str, status: str) -> None:
@@ -62,6 +66,11 @@ def time_routing():
         yield
     finally:
         _overhead.observe(time.perf_counter() - start)
+
+
+def observe_breaker_transition(to_state: str) -> None:
+    if AVAILABLE:
+        _breaker.labels(to_state=to_state).inc()
 
 
 def render() -> tuple[bytes, str]:

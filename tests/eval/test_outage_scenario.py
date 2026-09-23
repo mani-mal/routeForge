@@ -6,9 +6,13 @@ What is asserted is what the design guarantees, not a B45 answer: the run is
 deterministic and clean, the outage really moves `router_online`'s
 availability variants apart at the default case clock (30 s per case), and
 the full-information `router_warm_prior` arm wastes no more attempts than
-`router_online` at the shipped weights. WHICH variant wastes fewer attempts
-is the scenario's finding and is reported, not asserted here (controller
-ruling H: the scenario must not be tuned to force a direction).
+`router_online:breaker_off` (the base config's step-7-breaker-disabled
+control arm, B45 Task 5 fix round 1 -- `router_online` itself now also
+carries the breaker, an extra mechanism `router_warm_prior` does not have,
+so it is no longer the fair, apples-to-apples comparator) at the shipped
+weights. WHICH variant wastes fewer attempts is the scenario's finding and
+is reported, not asserted here (controller ruling H: the scenario must not
+be tuned to force a direction).
 """
 from __future__ import annotations
 
@@ -77,10 +81,28 @@ def test_outage_run_is_deterministic_clean_and_moves_the_online_variants(tmp_pat
     assert len(set(wasted.values())) > 1, wasted
     # The full-information arm is a full-information reference (not an upper
     # bound: across seeds it sometimes wastes more at weights 1.0/2.0); at the
-    # shipped weights on this seed it wastes no more than router_online.
+    # shipped weights on this seed it wastes no more than the signal-learning
+    # arm it is fairly comparable to. That is router_online:breaker_off, not
+    # router_online any more (B45 Task 5): router_online now also carries the
+    # step-7 breaker, an extra mechanism router_warm_prior does not have, so
+    # comparing against it would not be an apples-to-apples full-information
+    # -vs-learned-signals comparison -- direction only (never a magnitude):
+    # the breaker/breaker_off pair right below is what measures the
+    # breaker's own effect.
     assert strategies["router_warm_prior"]["wasted_attempts"] <= \
-        strategies["router_online"]["wasted_attempts"]
+        strategies["router_online:breaker_off"]["wasted_attempts"]
     # The cold arm cannot learn: every availability variant is identical.
     cold = {json.dumps(strategies[f"router_cold:{v}"], sort_keys=True)
             for v in AVAILABILITY_VARIANTS}
     assert len(cold) == 1
+
+    # B45 Task 5: router_online:breaker_off is the base (unvaried) config's
+    # control arm -- same online arm, step-7 breaker disabled. With the
+    # breaker off, fast-cheap is never pulled out of rotation during its
+    # outage, so it can only waste as many (or more) attempts as the
+    # breaker-on reported arm, never fewer. Direction only, never magnitude
+    # (a byte-identical metrics.json for the same seed is already asserted
+    # above -- assertion 3 of the brief).
+    assert "router_online:breaker_off" in strategies
+    assert strategies["router_online:breaker_off"]["wasted_attempts"] >= \
+        strategies["router_online"]["wasted_attempts"]

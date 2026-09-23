@@ -125,9 +125,11 @@ def test_end_to_end_writes_all_five_files_and_every_strategy(tmp_path):
     for name in ("matrix.jsonl", "choices.jsonl", "metrics.json", "report.md", "run.json"):
         assert (out / name).is_file(), name
     metrics = json.loads((out / "metrics.json").read_text())
+    # router_online:breaker_off (B45 Task 5): the base config's control arm,
+    # added whenever the step-7 breaker is enabled (the shipped default).
     expected = set(_BASE_STRATEGIES) | {
         "fixed:local-b", "router_cold:avail0", "router_online:avail0",
-        "router_warm_prior:avail0"}
+        "router_warm_prior:avail0", "router_online:breaker_off"}
     assert set(metrics["strategies"]) == expected
     for name, m in metrics["strategies"].items():
         assert m["violation_rate"] == 0.0, name
@@ -293,7 +295,11 @@ def test_online_arm_is_built_on_harness_settings_with_the_deployment_cap(
     monkeypatch.setattr(runner, "OnlineArm", Spy)
     suite, eps = _write_inputs(tmp_path, _OUTAGE_CASES, _OUTAGE_ENDPOINTS)
     assert _run(suite, eps, tmp_path / "out", seconds_per_case=7.5).exit_code == 0
-    assert built == [([], 3, {"seconds_per_case": 7.5})]
+    # router_online, then router_online:breaker_off (B45 Task 5): the
+    # breaker's control arm, added for the base config whenever the shipped
+    # default (routing.yaml breaker.enabled) is on.
+    assert built == [([], 3, {"seconds_per_case": 7.5}),
+                     ([], 3, {"seconds_per_case": 7.5, "breaker": False})]
 
 
 def test_runner_out_of_order_online_call_trips_the_leak_guard(tmp_path, monkeypatch, capsys):

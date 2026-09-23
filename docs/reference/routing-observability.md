@@ -15,6 +15,10 @@ neither touches the Improvement Plane, neither weakens a privacy invariant.
 4. **The observation log** (signal hardening, 2026-09-21) — `endpoint_observations`:
    the per-attempt log every measured signal is drawn from, and what boot seeding now
    replays instead of aggregating `usage_records`.
+5. **The step-7 circuit breaker** (2026-09-23, B45) — takes an endpoint that keeps failing
+   out of rotation for a cooldown; visible as the `circuit_open` rejection code, the
+   `circuit_bypass` flag, a fifth metric family and a `circuit` object on the admin models
+   list (§5).
 
 > **Superseded 2026-09-17:** this page also documented `routing.stage_signals`, a
 > flag-gated raise-only tier bias derived from the internal agent loop's state.
@@ -54,7 +58,7 @@ job).
   `observe_*` call is a no-op, and `/metrics` returns **503**
   (`metrics unavailable: install the observability extra`).
 
-### The four metric families
+### The five metric families
 
 Source of truth: `app/obs/metrics.py`.
 
@@ -64,6 +68,7 @@ Source of truth: `app/obs/metrics.py`.
 | `routeforge_routing_decisions_total` | Counter | `tier`, `escalated` |
 | `routeforge_routing_overhead_seconds` | Histogram | *(none)* |
 | `routeforge_tokens_total` | Counter | `model`, `direction` (`in`\|`out`) |
+| `routeforge_breaker_transitions_total` | Counter | `to_state` (`open`\|`half_open`\|`closed`) |
 
 - `status` values you'll see: `ok`, `unauthorized`, `rate_limited`,
   `budget_exceeded`, `rejected`, `error`. For pre-routing rejects `model` is `-`.
@@ -71,6 +76,9 @@ Source of truth: `app/obs/metrics.py`.
   attempt — i.e. a fallback/escalation, not the first-choice candidate.
 - `routeforge_routing_overhead_seconds` times `Router.select()` only — router
   wall-time, not end-to-end latency.
+- `routeforge_breaker_transitions_total` counts step-7 circuit-breaker transitions by the
+  state entered (§5). It deliberately has **no `model` label**: which model is open is on
+  the admin models list and in the transition log line, not in label cardinality.
 
 **Privacy rule (load-bearing).** Labels are bounded-cardinality enums or model
 ids only. There is **no `tenant`/`application_id` label and no prompt text** —
@@ -129,9 +137,16 @@ endpoint's declared data handling carries a stable code alongside the operator-f
 | `prompt_retention_not_allowed` | the app set `require_no_retention` and the endpoint's declared retention is not `none` |
 | `raw_sensitive_not_accepted` | the request sends raw sensitive content and the endpoint declares `accepts_raw_sensitive: false` |
 
-Every other rejection — residency, budget, tier, score, app scope — has `code: null`.
-The codes are never fabricated: a rejection with no code of its own gets `null`, not a
-guess. See `docs/reference/per-app-config.md` for the rules themselves.
+**`circuit_open` — excluded because the step-7 breaker holds the model open** (§5). Its
+reason is `"excluded · circuit open"`. It is the last eligibility stage, so it only ever
+labels a candidate that every policy stage admitted; a model that is both out of policy and
+open reads the policy reason.
+
+Every rejection from the eligibility seam (`app/policy/feasible.py`) carries its stage
+code: `residency`, `prior_failure`, `app_scope`, `not_requested`, `model_scope`, the three
+data-handling codes above, and `circuit_open`. The rejections the router adds after
+eligibility — below/above target tier, over budget — have `code: null`. The codes are never
+fabricated: a rejection with no code of its own gets `null`, not a guess. See `docs/reference/per-app-config.md` for the rules themselves.
 
 ### `sp.endpoint_registry_version` — on the root span
 
@@ -303,12 +318,15 @@ escape hatch and restores the same numbers with `src: "disabled"`.
   cost and `1.0` for quality. **A dead endpoint can and does still rank first**
   when it is enough cheaper, or scores enough higher on quality, than a healthy
   peer. Availability is a ranking preference, **not a circuit breaker and not a
-  health gate**; it can never make a candidate ineligible, and failover remains
-  the only recovery mechanism. If you need a failing endpoint out of rotation,
-  disable it (`PUT /admin/infra/models/{slug}` with `enabled: false`) — do not
-  expect the signal to do it. Raising `weights.availability` is not advised
-  without measurement: it trades against cost and quality on every request, not
-  only on requests involving a sick endpoint.
+  health gate**; it can never make a candidate ineligible. Taking a failing
+  endpoint out of rotation is the step-7 circuit breaker's job (§5), which
+  excludes it after `breaker.failure_threshold` consecutive endpoint failures;
+  to take one out permanently, disable it (`PUT /admin/infra/models/{slug}`
+  with `enabled: false`). Do not expect the signal to do either. Raising
+  `weights.availability` is not advised: it trades against cost and quality on
+  every request, not only on requests involving a sick endpoint, and B45's
+  measurement found no weight that kept a dead, cheaper endpoint out without
+  doing that (`docs/research/feasible-route-bench.md` §9, §11).
 - **Per-replica drift is real.** The signal store is per-process: each API
   replica learns from its own traffic, so two replicas can hold different
   latency estimates for the same model and rank the same eligible set
@@ -475,10 +493,147 @@ non-streamed request's 502 and a keepalive stream's SSE error frame both write
 real-token stream's mid-generation failure records the request's true sensitivity. Don't
 build a per-sensitivity error breakdown from these rows without accounting for that gap.
 
+---
+
+## 5. The step-7 circuit breaker (2026-09-23, B45)
+
+`weights.availability` can only lower a failing endpoint's score by its weight, so a dead
+endpoint that is cheaper than its peer keeps winning, and every request pays a wasted
+attempt plus the failure latency before failover serves it. B45 measured this (research doc
+§9, §11). The breaker takes such an endpoint out of rotation instead. Source of truth:
+`app/gateway/breaker.py`; design:
+`docs/superpowers/specs/2026-09-23-endpoint-circuit-breaker-design.md`.
+
+### States
+
+```
+closed    --failure_threshold consecutive endpoint failures--> open       (cooldown_s)
+open      --cooldown elapsed-------------------------------------> half_open
+half_open --first reported success-------------------------------> closed
+half_open --first reported failure-------------------------------> open       (cooldown doubled, up to max_cooldown_s)
+```
+
+- **What counts as a failure:** only what `counts_as_endpoint_unhealth` counts — transport
+  errors with no status, 5xx and 429. A 4xx (including a context-window overflow) is the
+  request's fault and never trips a circuit. Nor does a local programming error raised on
+  RouteForge's side of the wire (`TypeError`, `AttributeError`, `NameError`, `KeyError`,
+  `IndexError`, `AssertionError`, `NotImplementedError`, `ValueError` — which includes a
+  `JSONDecodeError`): a bug of ours must not open a circuit every tenant shares. The
+  accepted cost is that an endpoint returning malformed JSON no longer counts against it.
+  The same rule feeds the availability signal (§3). Any success while closed resets the
+  count.
+- **"Consecutive" means consecutive reported results, across all concurrent requests on
+  this replica** — not per request or per tenant. One success from any request resets the
+  count, so an endpoint failing roughly half its calls under load may never open.
+- **The cross-tenant lever that remains.** The breaker is shared by every tenant. A 5xx
+  counts whoever caused it, so a tenant whose prompts make an endpoint return 5xx (a
+  crash on a particular input, say) can open that endpoint's circuit for everyone until
+  the cooldown ends. The within-tier bypass (below) keeps the tier reachable, and a
+  failure-tolerant client sees failover, but the other tenants lose that endpoint's
+  preference for a cooldown. Only 4xx and local errors are filtered out.
+- **Open:** the model is excluded from every routing decision until the cooldown ends.
+  Results reported during the cooldown change nothing, including a success from a bypass
+  (below).
+- **Half-open:** once the cooldown has elapsed the model is admitted to **every** request
+  again. There is no single-trial lease. The first result reported after that decides: a
+  success closes the circuit and resets the cooldown; a failure reopens it with the cooldown
+  doubled. **Cost to know about:** several requests in flight during the half-open window may
+  each spend one attempt on an endpoint that is still dead; failover serves them, a streamed
+  request fails that one call.
+- **Where it acts:** after the tier is chosen. The router picks the target tier —
+  complexity, risk floor, escalation, the clamp to the best allowed tier, and the budget
+  fallback — from the **policy**-eligible set, with open circuits still in it. Only then are
+  open circuits dropped, and only among that tier's final candidates, labelled by the last
+  stage of the one eligibility seam (`feasible_set` stage 7, code `circuit_open`, reason
+  "excluded · circuit open", §2). **The breaker never changes the target tier**: an open
+  frontier model does not move a high-risk request to mid (CLAUDE.md rule 8). It can only
+  remove a candidate policy admitted; it cannot widen placement.
+- **Cloud models are covered too.** The breaker keys on model name, so the YAML cloud pool
+  (`azure-*`, `bedrock-*`) is excluded when open exactly like an onboarded model. Cloud
+  models just have no `circuit` row in the admin view, which lists onboarded models only. `Gateway.run` and `Gateway.run_stream` pass the
+  current open set to every `Router.select`, including failover and escalation re-selects.
+  A streamed request has no failover, so the up-front exclusion is the only protection it
+  gets.
+
+### `circuit_bypass`
+
+If every final candidate in the target tier is open, the router does not reject the
+request, and it does not step to another tier either. It bypasses the breaker **within that
+tier**: it ranks all of the tier's candidates, open ones included, sets
+`circuit_bypass: true` on the router's `DecisionRecord`, and appends
+`"; circuit bypass: every candidate in the target tier is open"` to the decision's reason
+(so the Langfuse span's `sp.reason` shows it). Closed candidates in *other* tiers are not
+used; picking one would change the tier policy chose. Trying an endpoint that may have
+recovered is what the request would have done with no breaker, so the breaker never makes
+a request worse off than no breaker would: it only ever removes an open model when a
+closed peer in the same tier can take its place. The bypass only restores candidates policy
+already admitted: an `onprem_only` request whose on-prem models are all open still never
+reaches cloud. If the set is empty for a policy reason, the request is rejected as before.
+
+### Per-replica state
+
+The breaker is per process and in memory, like the signal store. Each API replica trips on
+its own failures, so with N replicas an outage can cost up to N × `failure_threshold`
+wasted attempts before every replica has excluded the endpoint, and replicas can disagree
+about a model's state. A restart starts every circuit closed; nothing is replayed from
+`endpoint_observations`.
+
+### Admin view: the `circuit` field
+
+`GET /admin/infra/models` adds a `circuit` object to each onboarded model. The console
+Infrastructure table shows a badge next to the health badge when the state is not
+`closed` ("circuit open", or "half-open" while half-open). Cloud (YAML pool) models are
+also covered by the breaker but have no `circuit` row here:
+
+```json
+"circuit": {"state": "open", "consecutive_failures": 3, "open_until_s": 24.7}
+```
+
+- `state` — `closed`, `open` or `half_open`.
+- `consecutive_failures` — the current count. While open it stays at the count that tripped
+  the circuit.
+- `open_until_s` — seconds until the cooldown ends, **only** while `state` is `open`;
+  `null` otherwise.
+
+It is **this replica's view**. Behind a load balancer, two reads can come from two replicas
+and disagree.
+
+### Metrics and logs
+
+Each transition increments `routeforge_breaker_transitions_total{to_state}` (§1) and logs one
+structured line on the `serving.breaker` logger:
+`circuit transition model=<model> from=<state> to=<state> cooldown_s=<n|->` (the cooldown
+just set when opening, `-` otherwise). `half_open` is counted once per open period.
+
+### Configuration
+
+`config/routing.yaml`, owned there only and checked by the config lint (a positive
+threshold and cooldown, `max_cooldown_s ≥ cooldown_s`):
+
+```yaml
+breaker:
+  enabled: true
+  failure_threshold: 3     # consecutive endpoint failures that open the circuit
+  cooldown_s: 30           # first open period; doubles on each failed half-open result
+  max_cooldown_s: 300
+```
+
+**`enabled: false` is the pre-breaker behaviour exactly:** the open set is always empty and
+nothing is recorded. Because `routing.yaml` is hashed into `sp.routing_policy_version`,
+turning the breaker on or off changes that version on every trace.
+
+**What it costs.** Simulated (research doc §12): on the §9 outage scenario it removed 7 of
+10 wasted first attempts when requests were 1 s apart and 4 of 10 at 30 s apart, and it kept
+the recovered, cheaper endpoint out for the rest of its cooldown afterwards (+51% and +39%
+mean chosen cost in that scenario). An operator trades outage-time latency against
+post-recovery cost through `cooldown_s` and `max_cooldown_s`.
+
+---
+
 ## Quick verification checklist
 
 ```bash
-# ① metrics render with the four families
+# ① metrics render with the five families
 curl -s http://<api>/metrics | grep -E '^# TYPE routeforge_'
 
 # ② open any Langfuse trace: root span has sp.routing_policy_version and

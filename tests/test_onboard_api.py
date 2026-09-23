@@ -47,6 +47,8 @@ def test_onboard_probe_pass_enables(client, monkeypatch):
 
     lst = client.get("/admin/infra/models").json()
     assert any(m["slug"] == "nemotron-mid" and m["enabled"] for m in lst)
+    row = next(m for m in lst if m["slug"] == "nemotron-mid")
+    assert row["circuit"]["state"] == "closed"
 
 
 def test_onboard_probe_fail_disables(client, monkeypatch):

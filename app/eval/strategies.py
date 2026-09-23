@@ -42,6 +42,7 @@ from app.config.schema import PoolCandidate, RoutingCfg, Settings, SignalsCfg
 from app.errors import NoEligibleCandidate
 from app.eval.cases import Case
 from app.eval.endpoints import deployment_failover_cap
+from app.gateway.breaker import CircuitBreaker
 from app.models import ExecutionPolicyContext
 from app.routing.observations import Observation
 from app.routing.pricing import price_call
@@ -207,12 +208,22 @@ def router(settings: Settings, registry: "ModelRegistry",
 
 
 def _router_chain(rt: Router, inp: StrategyInput, failed: Callable[[str], bool],
-                  max_attempts: int) -> tuple[str, ...]:
+                  max_attempts: int,
+                  open_circuits: Callable[[], frozenset[str]] | None = None
+                  ) -> tuple[str, ...]:
     """`Gateway.run`'s failover loop over the REAL `Router.select`: re-select
     with every already-failed slug in `exclude` until an attempt does not
     fail, `max_attempts` attempts are made, or `NoEligibleCandidate` (every
     reachable candidate excluded) ends the chain. Every attempt before the
-    last failed, so `exclude` is exactly the chain so far."""
+    last failed, so `exclude` is exactly the chain so far.
+
+    `open_circuits`, when given, is called fresh on EVERY hop (never cached
+    across hops) and its result passed straight through as
+    `Router.select(open_circuits=...)` -- the step-7 breaker's open set as of
+    right now, same as the gateway's own failover loop reads it. `None`
+    (every strategy except `OnlineArm` with a breaker) reproduces the
+    pre-breaker chain exactly: `Router.select`'s own `open_circuits` default
+    is an empty `frozenset`."""
     if max_attempts < 1:
         raise ValueError(f"max_attempts must be >= 1, got {max_attempts}")
     complexity = min(1.0, inp.tokens_after / 2000)
@@ -221,7 +232,9 @@ def _router_chain(rt: Router, inp: StrategyInput, failed: Callable[[str], bool],
         try:
             decision = rt.select(inp.ctx, inp.tokens_after, complexity,
                                  exclude=frozenset(chain),
-                                 output_tokens=inp.output_tokens)
+                                 output_tokens=inp.output_tokens,
+                                 open_circuits=(open_circuits() if open_circuits
+                                               is not None else frozenset()))
         except NoEligibleCandidate:
             break
         slug = decision.chosen.name
@@ -578,11 +591,31 @@ class OnlineArm:
     already moved when the next hop is selected. Here a case's observations
     land after its whole chain is chosen. The failed model is in `exclude`
     for every later hop of that chain either way, so its own signal cannot
-    change that chain's remaining picks."""
+    change that chain's remaining picks.
+
+    The step-7 `CircuitBreaker` (Task 2), when this arm owns one, is fed the
+    exact same way: ONLY this arm's own prior attempts, on the same case
+    clock, applied from `observe` after a case is scored -- never from a
+    matrix row this arm did not itself attempt. It is therefore covered by
+    the same leak guard as the signal store: nothing about case `k` can
+    reach the breaker before `choose(..., case_index=k)` has already run.
+
+    `breaker=True` means USE a breaker -- it is itself inert when
+    `routing.breaker.enabled` is false (`CircuitBreaker.record_failure` and
+    `.open_set` both no-op on a disabled `BreakerCfg`; see
+    `app/gateway/breaker.py`), so an explicit `breaker=True` over a
+    deployment that ships the breaker off does not turn it on behind that
+    deployment's back -- it only opts this arm INTO whatever the breaker's
+    own config already says. The breaker also runs on the SAME synthetic
+    case clock as the signal store: seconds_per_case therefore also sets how
+    much of an open cooldown a case gap covers (see the `case_clock` note in
+    `app/eval/runner.py::ARM_NOTES`; at seconds_per_case >= max_cooldown_s
+    the breaker is a documented no-op -- no cooldown can ever outlast one
+    case gap)."""
 
     def __init__(self, settings: Settings, registry: "ModelRegistry",
                  max_attempts: int, weights: dict[str, float] | None = None, *,
-                 seconds_per_case: float) -> None:
+                 seconds_per_case: float, breaker: bool | None = None) -> None:
         if max_attempts < 1:
             raise ValueError(f"max_attempts must be >= 1, got {max_attempts}")
         scored = settings if weights is None else variant_settings(settings, weights)
@@ -593,6 +626,8 @@ class OnlineArm:
         self._router = Router(scored, registry=registry, signals=self._store)
         self._last_case: int | None = None
         self._applied: list[AppliedObservation] = []
+        use_breaker = (settings.routing.breaker.enabled if breaker is None else breaker)
+        self._breaker = CircuitBreaker(scored.routing.breaker) if use_breaker else None
 
     @property
     def signals(self) -> SignalStore:
@@ -616,8 +651,11 @@ class OnlineArm:
             raise LeakageError(
                 f"scoring case {case_index} after case {self._last_case} was "
                 "already observed")
-        self._store.advance_read_clock(case_read_time(case_index, self._seconds_per_case))
-        return _router_chain(self._router, inp, failed, self._max_attempts)
+        t = case_read_time(case_index, self._seconds_per_case)
+        self._store.advance_read_clock(t)
+        open_circuits = (lambda: self._breaker.open_set(now=t)) if self._breaker else None
+        return _router_chain(self._router, inp, failed, self._max_attempts,
+                             open_circuits=open_circuits)
 
     def observe(self, case_index: int, attempts: tuple[str, ...],
                 rows_by_endpoint: Mapping[str, "MatrixRow"]) -> None:
@@ -651,9 +689,13 @@ class OnlineArm:
             if row.error is None:
                 t = _case_time(case_index, j, self._seconds_per_case)
                 self._store.observe_success(slug, float(row.latency_ms), now=t)
+                if self._breaker is not None:
+                    self._breaker.record_success(slug, now=t)
             elif row.counts_unhealth is True:
                 t = _case_time(case_index, j, self._seconds_per_case)
                 self._store.observe_error(slug, now=t)
+                if self._breaker is not None:
+                    self._breaker.record_failure(slug, now=t)
             else:
                 continue
             j += 1

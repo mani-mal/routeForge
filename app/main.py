@@ -30,6 +30,7 @@ from app.compression.ccr import CCRStore
 from app.config.lint import enforce
 from app.config.loader import load_settings
 from app.gateway.backends.factory import resolve_backend
+from app.gateway.breaker import CircuitBreaker
 from app.gateway.gateway import Gateway
 from app.memory.store import DeterministicMemoryStore
 from app.pipeline import Pipeline
@@ -242,7 +243,14 @@ def create_app() -> FastAPI:
     # app.include_router(router) below needs the APIRouter, not this Router instance.
     model_router = Router(settings, registry=registry, signals=signals)
     app.state.model_router = model_router
-    gateway = Gateway(settings, backend, model_router, registry, signals=signals)
+    # Step-7 circuit breaker (B45): ONE per-process instance, shared by the
+    # Gateway (records outcomes, reads open_set() every hop) and the admin
+    # models list (reads state() for display). Per-process/in-memory like
+    # SignalStore -- see app/gateway/breaker.py's module docstring.
+    breaker = CircuitBreaker(settings.routing.breaker)
+    app.state.breaker = breaker
+    gateway = Gateway(settings, backend, model_router, registry, signals=signals,
+                      breaker=breaker)
     # Step 5 (Headroom compression): local, TTL-bounded CCR store — never
     # exported to telemetry, contents never leave this process. See
     # app/compression/ccr.py and CLAUDE.md rule 6.

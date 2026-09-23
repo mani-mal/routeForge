@@ -113,6 +113,9 @@ ARM_NOTES = {
         "router_warm_prior replays every matrix row of every earlier case "
         "(all eligible endpoints) before scoring a case: a full-information "
         "reference (not an upper bound), never the reported number."),
+    "breaker_off": (
+        "router_online:breaker_off is the control: the same online arm with "
+        "the step-7 circuit breaker disabled."),
     "case_order": (
         "router_online and router_warm_prior depend on the suite's case order: "
         "a case is scored with what earlier cases taught the arm, and outages "
@@ -122,7 +125,18 @@ ARM_NOTES = {
         "t_k = k x seconds_per_case (1 ms sub-steps within a case) and is "
         "scored reading at t_k, so availability decay (half_life_s) and "
         "latency staleness depend on seconds_per_case -- quote it with any "
-        "number."),
+        "number. The step-7 breaker (router_online, unless breaker_off) runs "
+        "on the SAME case clock, so seconds_per_case also sets how much of "
+        "an open cooldown a case gap actually covers: at seconds_per_case == "
+        "cooldown_s (30 by default) the FIRST open period ends exactly at "
+        "the next case (its read lands at t >= open_until, i.e. already "
+        "half-open), so that first cooldown is invisible in the chosen "
+        "chains -- only a later, doubled cooldown can span a full case gap. "
+        "At seconds_per_case >= max_cooldown_s no cooldown, however many "
+        "times it has doubled, can ever outlast one case gap, so the "
+        "breaker never excludes anything: router_online and "
+        "router_online:breaker_off produce identical chains (a documented "
+        "no-op, not a bug -- see TestBreakerCaseClockInteraction)."),
     "failure_latency": (
         "A failed attempt with unknown failure latency (e.g. a live failure) "
         "counts as 0 ms in latency figures."),
@@ -487,6 +501,17 @@ async def _run_loaded(*, cases, specs, settings, registry, detector,
     online = {arm_name("router_online", variant): OnlineArm(
                   cfg, registry, max_attempts, seconds_per_case=seconds_per_case)
               for variant, cfg in scored_cfgs.items()}
+    # router_online:breaker_off: the base (unvaried) config's control arm --
+    # the same online arm with the step-7 breaker (Task 2/3) forced off, so
+    # the reported router_online arm's numbers can be read against what the
+    # breaker itself is doing (B45 Task 5). Only for the base config: a
+    # weight variant already has its own arm and its own breaker_off would
+    # multiply the strategy count for no signal the base one doesn't already
+    # give.
+    if settings.routing.breaker.enabled:
+        online["router_online:breaker_off"] = OnlineArm(
+            settings, registry, max_attempts, seconds_per_case=seconds_per_case,
+            breaker=False)
     warm_prior_names = {arm_name("router_warm_prior", variant): cfg
                         for variant, cfg in scored_cfgs.items()}
     strategy_names = list(static) + list(online) + list(warm_prior_names)

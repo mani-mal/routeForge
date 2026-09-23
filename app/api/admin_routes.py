@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import re
+import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field, field_validator
@@ -81,6 +82,24 @@ def _onboarded_dict(m) -> dict:
             # the form can render exactly what was saved.
             "region": m.region, "prompt_retention": m.prompt_retention,
             "accepts_raw_sensitive": m.accepts_raw_sensitive}
+
+
+def _circuit_dict(st, now: float) -> dict:
+    """Step-7 breaker state (B45) for one onboarded model row. `now` is a
+    single `time.monotonic()` snapshot taken once per list call so every
+    row's `open_until_s` is relative to the same instant. Per-process, like
+    the breaker itself (app/gateway/breaker.py) -- THIS REPLICA's view only;
+    another API replica may disagree.
+
+    `open_until_s` is only meaningful while still counting DOWN to a retry --
+    i.e. `state == "open"`. `half_open` keeps the same `open_until` timestamp
+    internally (it is how the breaker recognizes the cooldown has elapsed),
+    but that is now a moment in the past: surfacing it as "seconds from now"
+    would render a negative number ("retry in -12s"), which reads as a bug
+    rather than "already admitted". Clamp to None for every other state."""
+    open_until_s = (st.open_until - now) if st.state == "open" else None
+    return {"state": st.state, "consecutive_failures": st.consecutive_failures,
+            "open_until_s": open_until_s}
 
 
 def _effective_dict(app, settings) -> dict:
@@ -1115,5 +1134,14 @@ async def delete_onboarded_model(slug: str, request: Request,
 @admin_router.get("/infra/models")
 async def list_onboarded_models(request: Request,
                                 _: str = Depends(require_admin)) -> list:
+    br = getattr(request.app.state, "breaker", None)
+    now = time.monotonic()
     async with request.app.state.db.session() as session:
-        return [_onboarded_dict(m) for m in await store.list_onboarded(session)]
+        rows = []
+        for m in await store.list_onboarded(session):
+            d = _onboarded_dict(m)
+            d["circuit"] = (_circuit_dict(br.state(m.slug, now=now), now) if br is not None
+                            else {"state": "closed", "consecutive_failures": 0,
+                                  "open_until_s": None})
+            rows.append(d)
+        return rows

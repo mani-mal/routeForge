@@ -202,6 +202,28 @@ next-best *policy-permitted* candidate.
 Fallback must re-check `ctx.allowed_providers`. A cloud fallback on an `onprem_only`
 request is the single worst bug the product could have.
 
+**Circuit breaker (built 2026-09-23, B45; `app/gateway/breaker.py`).** One per API process,
+fed by the gateway with every attempt's outcome, counting only `counts_as_endpoint_unhealth`
+failures (a 4xx never trips it, nor does a local programming error such as `TypeError` or
+`ValueError` -- a bug of ours must not open a circuit every tenant shares). After `routing.breaker.failure_threshold` consecutive
+failures a model is open for `cooldown_s`. After that it is half-open and admitted to every
+request (no single-trial lease), and the first reported result closes it or reopens it with
+the cooldown doubled, up to `max_cooldown_s`. Rules to keep when touching it:
+- **The breaker never changes the target tier** (rule 8). `Router._select` computes the
+  targets, the clamp, the tier pick and the budget fallback from the POLICY-eligible set
+  (open circuits still in it), then drops open names only among the chosen tier's final
+  candidates, labelled by `feasible_set`'s **last** stage (`circuit_open`). The open set is
+  passed on every `Router.select`, failover and escalation re-selects included, in both
+  `Gateway.run` and `run_stream`. Never filter candidates post hoc in the gateway.
+- If every final candidate in the target tier is open, the router bypasses the breaker
+  WITHIN that tier (ranks them all, marks `circuit_bypass`). It never steps to another tier
+  to find a closed model, and it can only restore what policy admitted, so it can never
+  widen placement or undercut a risk floor.
+- It is not a scoring term. `weights.availability` stays a bounded ranking preference; B45
+  showed no weight keeps a cheaper dead endpoint out (research doc §9, §11, §12).
+- `enabled: false` must stay exactly the pre-breaker behaviour. Operator contract:
+  `docs/reference/routing-observability.md` §5.
+
 ## Cost accounting
 
 Accumulate per hop. Track actual token counts from the response, not estimates.
