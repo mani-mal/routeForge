@@ -300,6 +300,25 @@ def test_verify_failure_writes_verify_failed_row(monkeypatch):
         assert "leak detected" not in json.dumps(_columns(row), default=str)
 
 
+def test_verify_failure_stash_error_still_returns_the_422(monkeypatch, caplog):
+    """Stashing the outcome trace is telemetry for the outcome row. If it
+    raises, the client must still get the step-9 422 -- never a 500."""
+    import app.pipeline as pipeline_mod
+
+    _failing_verify(monkeypatch)
+
+    def _boom(*a, **kw):
+        raise RuntimeError("stash exploded")
+
+    monkeypatch.setattr(pipeline_mod, "outcome_trace", _boom)
+    with caplog.at_level("WARNING", logger="serving.obs"):
+        with _client() as c:
+            r = c.post("/v1/chat/completions", headers=DEMO, json=HELLO)
+            assert r.status_code == 422, r.text
+            assert v1_error(r)["code"] == "response_failed_verification"
+    assert any("outcome trace" in rec.getMessage() for rec in caplog.records)
+
+
 def test_keepalive_stream_verify_failure_writes_verify_failed_row(monkeypatch):
     _failing_verify(monkeypatch)
     real = litellm_backend.acompletion
