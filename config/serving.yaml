@@ -68,6 +68,14 @@ semantic_cache:
     user_prompt: true            # ignored by the cache (whole-request decision); kept for shape parity
   embedding: "off"                # deferred seam (C8) — no embedder wired, no embedding lib imported
 
+# P2b-2 routing outcome records: one content-free row per routed request
+# (ids, enums, numbers, versions -- never text) plus local feedback scores,
+# kept `retention_days` then pruned hourly. Exported via
+# GET /admin/outcomes/export. See docs/reference/routing-outcomes.md.
+outcomes:
+  enabled: true
+  retention_days: 90
+
 policy:
   pii_detection: presidio        # presidio | regex | off
   fail_closed: true              # never relax this

@@ -182,6 +182,14 @@ def lint_settings(s: Settings) -> list[str]:
                 f"PROVIDER_RAW_SENSITIVE_UNKNOWN providers.{pname} "
                 f"accepts_raw_sensitive={pcfg.accepts_raw_sensitive!r} not in "
                 f"{sorted(RAW_SENSITIVE_VALUES)}")
+    # P2b-2 routing outcome records (serving.yaml `outcomes`). retention_days
+    # <= 0 would make prune_outcomes's cutoff useless (deletes everything, or
+    # nothing ever ages out depending on sign) -- a named boot failure, not a
+    # silent no-op retention policy.
+    if s.serving.outcomes.retention_days <= 0:
+        errs.append(
+            f"OUTCOMES_RETENTION_NOT_POSITIVE {s.serving.outcomes.retention_days}")
+
     for c in s.routing.model_pool:
         retention = _data_handling_token(c.prompt_retention)
         if retention is not None and retention not in PROMPT_RETENTION_VALUES:

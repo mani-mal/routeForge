@@ -11,6 +11,7 @@ the walkthrough.
 | [`api-reference.md`](api-reference.md) | The OpenAI-compatible `/v1/chat/completions` wire contract — request/response fields, auth, examples. |
 | [`per-app-config.md`](per-app-config.md) | Every per-application policy knob (`policy_mode`, `pii_detection`, `pii_entity_denylist`, `pii_score_threshold`, `pii_exempt_patterns`, `stream_mode`) and its effective-value rules. |
 | [`routing-observability.md`](routing-observability.md) | `/metrics` Prometheus exporter and the `sp.candidates` / `sp.routing_policy_version` trace attributes. |
+| [`routing-outcomes.md`](routing-outcomes.md) | The `routing_outcomes` / `outcome_feedback` tables (P2b-2): content-free per-request outcome rows + local feedback scores, `outcomes:` config switch, store functions. |
 
 See [`../guides/README.md`](../guides/README.md) for the task-oriented docs
 these support.

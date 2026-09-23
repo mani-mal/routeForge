@@ -9,14 +9,14 @@ import datetime as dt
 import os
 import uuid
 
-from sqlalchemy import delete, select
+from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.apps.models import (
     Application, AppPolicy, AppRecognizer, AppSensitivityRule, AppToken,
-    EndpointObservation, ModelQuality, OnboardedModel, RequestSnapshot,
-    UsageRecord, utcnow,
+    EndpointObservation, ModelQuality, OnboardedModel, OutcomeFeedback,
+    RequestSnapshot, RoutingOutcome, UsageRecord, utcnow,
 )
 from app.apps.privacy import AppPrivacyProfile, SensitivityRuleView
 from app.apps.tokens import hash_token, token_prefix
@@ -161,6 +161,106 @@ async def prune_observations(session: AsyncSession, *,
     result = await session.execute(
         delete(EndpointObservation).where(EndpointObservation.ts < cutoff))
     return result.rowcount
+
+
+# --- routing outcomes (P2b-2: routing_outcomes + outcome_feedback) ---------
+#
+# CONTENT-FREE BY CONTRACT (spec §4.3): `row` and the feedback fields below
+# are ids, enums, numbers, entity TYPES and version hashes only -- never
+# prompt/completion text, reason strings or upstream error text. Callers
+# (later P2b-2 tasks) are responsible for only ever passing content-free
+# values; these functions do not re-validate that (RoutingOutcome/
+# OutcomeFeedback's own column set is the enforcement point -- see
+# tests/test_outcome_store.py's schema test).
+
+
+async def write_outcome(session: AsyncSession, row: dict) -> None:
+    """Persist one routing outcome row (caller commits). `row` is a plain
+    dict of RoutingOutcome column values, keyed by column name."""
+    session.add(RoutingOutcome(**row))
+
+
+async def get_outcome(session: AsyncSession, request_id: str, *,
+                      application_id: str) -> RoutingOutcome | None:
+    """Fetch one outcome by primary key, scoped to `application_id` -- a
+    request_id that belongs to another app returns None (fail closed, same
+    posture as `resolve_application`)."""
+    row = await session.get(RoutingOutcome, request_id)
+    if row is None or row.application_id != application_id:
+        return None
+    return row
+
+
+async def find_outcome(session: AsyncSession, *, application_id: str,
+                       request_id: str | None,
+                       trace_id: str | None) -> RoutingOutcome | None:
+    """App-scoped lookup by request_id when given, else by trace_id. Both
+    None returns None rather than an unscoped "any row for this app" query."""
+    stmt = select(RoutingOutcome).where(RoutingOutcome.application_id == application_id)
+    if request_id is not None:
+        stmt = stmt.where(RoutingOutcome.request_id == request_id)
+    elif trace_id is not None:
+        stmt = stmt.where(RoutingOutcome.trace_id == trace_id)
+    else:
+        return None
+    return (await session.execute(stmt)).scalars().first()
+
+
+async def write_feedback(session: AsyncSession, *, request_id: str,
+                         application_id: str, score_name: str,
+                         value_num: float | None, value_cat: str | None,
+                         source: str) -> None:
+    """Persist one feedback score (caller commits). `request_id` is a
+    LOGICAL link to routing_outcomes, not an FK (see OutcomeFeedback
+    docstring) -- this never validates the outcome row exists."""
+    session.add(OutcomeFeedback(
+        request_id=request_id, application_id=application_id,
+        score_name=score_name, value_num=value_num, value_cat=value_cat,
+        source=source))
+
+
+async def feedback_for(session: AsyncSession,
+                       request_ids: list[str]) -> dict[str, list[OutcomeFeedback]]:
+    """All feedback rows for the given request ids, grouped by request_id.
+    A request_id with no feedback is simply absent from the result."""
+    if not request_ids:
+        return {}
+    stmt = select(OutcomeFeedback).where(OutcomeFeedback.request_id.in_(request_ids))
+    rows = (await session.execute(stmt)).scalars().all()
+    out: dict[str, list[OutcomeFeedback]] = {}
+    for row in rows:
+        out.setdefault(row.request_id, []).append(row)
+    return out
+
+
+async def prune_outcomes(session: AsyncSession, *, older_than_days: float) -> int:
+    """Delete outcome AND feedback rows older than the retention window
+    (caller commits). Returns the number of routing_outcomes rows deleted."""
+    cutoff = utcnow() - dt.timedelta(days=older_than_days)
+    await session.execute(delete(OutcomeFeedback).where(OutcomeFeedback.ts < cutoff))
+    result = await session.execute(
+        delete(RoutingOutcome).where(RoutingOutcome.ts < cutoff))
+    return result.rowcount
+
+
+async def iter_outcomes(session: AsyncSession, *, since: dt.datetime,
+                        until: dt.datetime, application_id: str | None = None,
+                        after: tuple[dt.datetime, str] | None = None,
+                        page: int = 1000) -> list[RoutingOutcome]:
+    """One page of outcomes in [since, until], ordered by (ts, request_id).
+    `after` is the last (ts, request_id) of the previous page (keyset
+    pagination -- stable under concurrent writes, unlike OFFSET)."""
+    stmt = select(RoutingOutcome).where(
+        RoutingOutcome.ts >= since, RoutingOutcome.ts <= until)
+    if application_id is not None:
+        stmt = stmt.where(RoutingOutcome.application_id == application_id)
+    if after is not None:
+        after_ts, after_id = after
+        stmt = stmt.where(or_(
+            RoutingOutcome.ts > after_ts,
+            and_(RoutingOutcome.ts == after_ts, RoutingOutcome.request_id > after_id)))
+    stmt = stmt.order_by(RoutingOutcome.ts, RoutingOutcome.request_id).limit(page)
+    return list((await session.execute(stmt)).scalars().all())
 
 
 # --- request snapshots (B3: shared dashboard state across API replicas) ---

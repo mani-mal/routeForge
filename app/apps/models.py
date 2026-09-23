@@ -259,6 +259,68 @@ class EndpointObservation(Base):
     ttft_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
+class RoutingOutcome(Base):
+    """One routed request's outcome (P2b-2): what was eligible, what was tried,
+    what was served, what it cost, and how it verified -- the substrate P2b-3
+    learns from. CONTENT-FREE BY CONTRACT: ids, enums, numbers, entity TYPES
+    and version hashes only; never prompt/completion text, reason strings or
+    upstream error text (spec §4.3). A NEW table -> create_all, no migration."""
+
+    __tablename__ = "routing_outcomes"
+
+    request_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    application_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("applications.id", ondelete="CASCADE"), index=True)
+    ts: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(20))
+    app_policy_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    endpoint_registry_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    routing_policy_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    workload: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    workload_source: Mapped[str] = mapped_column(String(8), default="none")
+    tier_target: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    complexity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    prompt_tokens_bucket: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    sensitivity: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    risk_class: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    onprem_only: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    detected_entity_types: Mapped[list] = mapped_column(JSON, default=list)
+    eligible: Mapped[list] = mapped_column(JSON, default=list)
+    rejected: Mapped[list] = mapped_column(JSON, default=list)
+    attempts: Mapped[list] = mapped_column(JSON, default=list)
+    chosen: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    scoring: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    circuit_bypass: Mapped[bool] = mapped_column(Boolean, default=False)
+    cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    latency_ms: Mapped[float] = mapped_column(Float, default=0.0)
+    prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    verify_required: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    verify_performed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    verify_passed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    verify_mode: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+
+class OutcomeFeedback(Base):
+    """A score attached to one routed request (P2b-2 §4.2). `request_id` is a
+    LOGICAL link to routing_outcomes, not an FK, so pruning order never
+    orphans or blocks. `application_id` is always the AUTHENTICATED caller's.
+    `comment`/`corrected_output` text is never stored here -- it goes to the
+    app's own Langfuse project exactly as before."""
+
+    __tablename__ = "outcome_feedback"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    request_id: Mapped[str] = mapped_column(String(64), index=True)
+    application_id: Mapped[str] = mapped_column(String(64), index=True)
+    ts: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    score_name: Mapped[str] = mapped_column(String(32))
+    value_num: Mapped[float | None] = mapped_column(Float, nullable=True)
+    value_cat: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source: Mapped[str] = mapped_column(String(8))   # app | admin
+
+
 class RequestSnapshot(Base):
     """Durable, redaction-safe snapshot of one served request for the operator
     console (list/detail/stats/fleet + live stream rebuild). Replaces the
