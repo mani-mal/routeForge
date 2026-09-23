@@ -103,3 +103,104 @@ def test_prior_failure_plus_open_circuits_bypass_keeps_prior_failure():
                                         exclude=frozenset({"a"}),
                                         open_circuits=frozenset({"b"}))
     assert d.chosen.name == "b" and d.circuit_bypass is True
+
+
+# ---- final-review fix wave: the breaker must NEVER change the target tier ----
+# (rule 8 / the risk floor and escalation are policy; an open circuit is not.)
+
+_ALL = {"onprem", "azure", "bedrock"}
+
+
+def test_high_risk_open_frontier_keeps_the_frontier_target():
+    """Reviewer probe 1: high-risk, cloud allowed, bedrock-frontier open. It
+    used to be served on mid ('tier mid (target mid)', no bypass) -- the
+    breaker had silently lowered the risk floor."""
+    reg = _reg({"a": _onprem("a")})
+    d = Router(S, registry=reg).select(
+        _ctx(reg, _ALL, risk="high", max_cost=1.0), 20, 0.1,
+        open_circuits=frozenset({"bedrock-frontier"}))
+    assert d.chosen.name == "bedrock-frontier"
+    assert d.chosen.tier == "frontier"
+    assert d.circuit_bypass is True
+    assert "(target frontier)" in d.reason
+    assert "every candidate in the target tier is open" in d.reason
+
+
+def test_medium_risk_onprem_only_open_mid_is_not_lowered_to_cheap():
+    """Reviewer probe 2: medium-risk onprem_only, the only on-prem mid open."""
+    reg = _reg({"a": _onprem("a"), "m": _onprem("m", tier="mid")})
+    d = Router(S, registry=reg).select(
+        _ctx(reg, {"onprem"}, onprem=True, risk="medium"), 20, 0.1,
+        open_circuits=frozenset({"m"}))
+    assert d.chosen.name == "m" and d.chosen.tier == "mid"
+    assert d.circuit_bypass is True
+    assert "(target mid)" in d.reason
+
+
+def test_medium_risk_open_mid_prefers_a_closed_mid_peer():
+    reg = _reg({"a": _onprem("a"), "m1": _onprem("m1", tier="mid"),
+                "m2": _onprem("m2", tier="mid")})
+    d = Router(S, registry=reg).select(
+        _ctx(reg, {"onprem"}, onprem=True, risk="medium"), 20, 0.1,
+        open_circuits=frozenset({"m1"}))
+    assert d.chosen.name == "m2" and d.circuit_bypass is False
+    assert "(target mid)" in d.reason
+    [m1] = [r for r in d.rejected if r.name == "m1"]
+    assert m1.code == "circuit_open" and m1.reason == "excluded · circuit open"
+
+
+def test_escalation_to_open_mid_is_not_lowered_to_cheap():
+    """Reviewer probe 3: a confidence escalation to mid with mid open."""
+    reg = _reg({"a": _onprem("a"), "m": _onprem("m", tier="mid")})
+    d = Router(S, registry=reg).select(
+        _ctx(reg, {"onprem"}, onprem=True), 20, 0.1, min_tier="mid",
+        open_circuits=frozenset({"m"}))
+    assert d.chosen.name == "m" and d.circuit_bypass is True
+    assert "(target mid)" in d.reason
+
+
+def test_open_cheap_peer_with_closed_peer_keeps_target_and_labels():
+    reg = _reg({"a": _onprem("a"), "b": _onprem("b"), "m": _onprem("m", tier="mid")})
+    d = Router(S, registry=reg).select(_ctx(reg, {"onprem"}, onprem=True), 20, 0.1,
+                                        open_circuits=frozenset({"a"}))
+    assert d.chosen.name == "b" and d.circuit_bypass is False
+    assert d.reason == "tier cheap (target cheap)"
+    codes = {r.name: r.code for r in d.rejected}
+    assert codes["a"] == "circuit_open"
+
+
+def _pricey(slug: str, tier: str) -> dict:
+    return {**_onprem(slug, tier=tier), "price_input": 100000.0, "price_output": 100000.0}
+
+
+def test_budget_fallback_tier_is_computed_before_circuits():
+    """Frontier is over budget -> budget fallback to mid. The only mid is open:
+    the fallback must still land on mid (bypass within it), not on cheap."""
+    reg = _reg({"a": _onprem("a"), "m": _onprem("m", tier="mid"),
+                "f": _pricey("f", "frontier")})
+    d = Router(S, registry=reg).select(_ctx(reg, {"onprem"}, onprem=True), 20, 0.9,
+                                        open_circuits=frozenset({"m"}))
+    assert d.chosen.name == "m" and d.circuit_bypass is True
+    assert "budget fallback from frontier" in d.reason
+
+
+def test_budget_fallback_prefers_closed_peer_in_fallback_tier():
+    reg = _reg({"a": _onprem("a"), "m1": _onprem("m1", tier="mid"),
+                "m2": _onprem("m2", tier="mid"), "f": _pricey("f", "frontier")})
+    d = Router(S, registry=reg).select(_ctx(reg, {"onprem"}, onprem=True), 20, 0.9,
+                                        open_circuits=frozenset({"m1"}))
+    assert d.chosen.name == "m2" and d.circuit_bypass is False
+    assert "budget fallback from frontier" in d.reason
+    assert any(r.name == "m1" and r.code == "circuit_open" for r in d.rejected)
+
+
+def test_empty_open_set_matches_no_argument():
+    reg = _reg({"a": _onprem("a"), "m": _onprem("m", tier="mid"),
+                "f": _pricey("f", "frontier")})
+    r = Router(S, registry=reg)
+    for risk, cx in (("low", 0.1), ("medium", 0.5), ("high", 0.9)):
+        ctx = _ctx(reg, _ALL, risk=risk, max_cost=1.0)
+        a = r.select(ctx, 20, cx)
+        b = r.select(ctx, 20, cx, open_circuits=frozenset())
+        assert (a.chosen.name, a.reason, [(x.name, x.reason, x.code) for x in a.rejected]) == \
+               (b.chosen.name, b.reason, [(x.name, x.reason, x.code) for x in b.rejected])
