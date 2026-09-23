@@ -32,6 +32,30 @@ BUCKETS = ("<1k", "1k-4k", "4k-16k", "16k-64k", ">64k")
 # whitespace/markup, fails to match and is dropped rather than truncated.
 _WORKLOAD_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 
+# `outcome_feedback.value_cat` shape (P2b-2 Task 5): the same shape a
+# Langfuse categorical score value is expected to have -- an unparseable
+# value is refused outright, never truncated or coerced.
+_FEEDBACK_VALUE_CAT_RE = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
+
+
+def feedback_values(score_name: str, value: float | str
+                    ) -> tuple[float | None, str | None] | None:
+    """`(value_num, value_cat)` for one `outcome_feedback` row from a
+    `/v1/feedback`-shaped `value`. A string becomes `value_cat` -- checked
+    against `_FEEDBACK_VALUE_CAT_RE`; a value that fails is refused (`None`
+    is returned for the whole pair, not a truncated/coerced string) rather
+    than stored. Anything else becomes `value_num` as a plain float (never
+    fails: `FeedbackIn.value` is already typed `float | str`, so this branch
+    only ever sees something `float()` accepts).
+
+    `score_name` is accepted for callers' symmetry with `post_score`/
+    `SCORE_NAMES` but does not change the parse -- whether a value is
+    numeric or categorical is read off `value`'s own Python type, matching
+    `post_score`'s own `isinstance(value, str)` split."""
+    if isinstance(value, str):
+        return (None, value) if _FEEDBACK_VALUE_CAT_RE.fullmatch(value) else None
+    return (float(value), None)
+
 
 def _validate_tag(raw: str) -> str | None:
     """Lower-case `raw` and return it if it matches `_WORKLOAD_RE`, else

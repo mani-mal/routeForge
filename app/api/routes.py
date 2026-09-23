@@ -29,7 +29,9 @@ from app.api.streaming import (
 )
 from app.apps import store
 from app.apps.langfuse_provision import load_app_langfuse
-from app.apps.outcomes import build_failure_outcome, build_ok_outcome, parse_workload
+from app.apps.outcomes import (
+    build_failure_outcome, build_ok_outcome, feedback_values, parse_workload,
+)
 from app.apps.policy import AppPolicyView, day_spend_usd, policy_view_from
 from app.apps.privacy import AppPrivacyProfile
 from app.errors import (
@@ -1461,8 +1463,14 @@ async def _finalize_stream(
 class FeedbackIn(BaseModel):
     """Body for POST /v1/feedback. `value` is numeric for quality-style scores
     or a string for categorical scores (e.g. failure_type); Langfuse decides
-    dataType by which of those it is (see `app.obs.scores.post_score`)."""
-    trace_id: str
+    dataType by which of those it is (see `app.obs.scores.post_score`).
+
+    One of `trace_id`/`request_id` is required (P2b-2 Task 5): `request_id`
+    links the score to the local, app-scoped `outcome_feedback` row and, when
+    `trace_id` is omitted, also supplies the Langfuse trace to post to -- the
+    matching `routing_outcomes` row's own `trace_id`, if it has one."""
+    trace_id: str | None = None
+    request_id: str | None = None
     score_name: str
     value: float | str
     comment: str | None = None
@@ -1471,25 +1479,76 @@ class FeedbackIn(BaseModel):
 
 @router.post("/v1/feedback")
 async def feedback(body: FeedbackIn, request: Request) -> dict:
-    """App-token-authenticated eval/feedback intake (F1 Phase D / B16). Posts
-    straight to the calling app's OWN residency-local Langfuse project via
-    REST — never the shared project, and never anywhere at all when the app
-    has no provisioned project (fail-closed; `post_score` handles that case
-    and returns False, which becomes `{"stored": false}` here, HTTP 200 —
-    a missing project is not the caller's fault and must not surface as an
-    error)."""
+    """App-token-authenticated eval/feedback intake (F1 Phase D / B16; local
+    storage added P2b-2 Task 5).
+
+    Langfuse (`stored`): posts straight to the calling app's OWN
+    residency-local Langfuse project via REST — never the shared project,
+    and never anywhere at all when the app has no provisioned project or no
+    trace_id is known (fail-closed; `post_score` handles the no-project case
+    and returns False, which becomes `stored: false` here, HTTP 200 — a
+    missing project is not the caller's fault and must not surface as an
+    error).
+
+    Local (`recorded`): app-scoped by construction -- `store.find_outcome`
+    only ever matches a `routing_outcomes` row owned by the AUTHENTICATED
+    caller, so another app's request is indistinguishable from a request
+    that doesn't exist, and both give `recorded: false` without a local
+    write. `comment` and `corrected_output` TEXT are never written locally;
+    a `corrected_output` submission instead writes a second, fixed
+    `value_num=1.0` row under that score name. Gated on
+    `serving.outcomes.enabled` -- disabled means `recorded` is always False
+    and Langfuse behaviour is unchanged."""
     auth = await _authenticate(request)
     if auth is None:
         raise ApiError(401, "invalid or missing API token", code=CODE_INVALID_API_KEY)
     tenant, app_policy, app_langfuse = auth
+    if body.trace_id is None and body.request_id is None:
+        raise ApiError(422, "one of trace_id or request_id is required",
+                       code=CODE_INVALID_VALUE)
     if body.score_name not in SCORE_NAMES:
         raise ApiError(422, f"unknown score_name: {body.score_name!r}",
                        code=CODE_INVALID_VALUE)
-    await ensure_score_config(app_langfuse, body.score_name)  # best-effort, never raises
-    stored = await post_score(app_langfuse, body.trace_id, body.score_name,
-                              body.value, body.comment)
+
+    outcome = None
+    if request.app.state.settings.serving.outcomes.enabled:
+        async with request.app.state.db.session() as session:
+            outcome = await store.find_outcome(
+                session, application_id=tenant, request_id=body.request_id,
+                trace_id=body.trace_id)
+
+    # With only request_id given, fall back to the outcome row's own
+    # trace_id (None if telemetry never exported one) for the Langfuse post.
+    trace_id = body.trace_id or (outcome.trace_id if outcome is not None else None)
+
+    recorded = False
+    if outcome is not None:
+        parsed = feedback_values(body.score_name, body.value)
+        if parsed is not None:
+            value_num, value_cat = parsed
+            async with request.app.state.db.session() as session:
+                await store.write_feedback(
+                    session, request_id=outcome.request_id, application_id=tenant,
+                    score_name=body.score_name, value_num=value_num, value_cat=value_cat,
+                    source="app")
+                await session.commit()
+            recorded = True
+
+    stored = False
+    if trace_id is not None:
+        await ensure_score_config(app_langfuse, body.score_name)  # best-effort, never raises
+        stored = await post_score(app_langfuse, trace_id, body.score_name,
+                                  body.value, body.comment)
     if body.corrected_output:
-        await ensure_score_config(app_langfuse, "corrected_output")
-        await post_score(app_langfuse, body.trace_id, "corrected_output", 1,
-                         body.corrected_output)
-    return {"stored": stored}
+        if outcome is not None:
+            async with request.app.state.db.session() as session:
+                await store.write_feedback(
+                    session, request_id=outcome.request_id, application_id=tenant,
+                    score_name="corrected_output", value_num=1.0, value_cat=None,
+                    source="app")
+                await session.commit()
+        if trace_id is not None:
+            await ensure_score_config(app_langfuse, "corrected_output")
+            await post_score(app_langfuse, trace_id, "corrected_output", 1,
+                             body.corrected_output)
+    return {"stored": stored, "recorded": recorded}
