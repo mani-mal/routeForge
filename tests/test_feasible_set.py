@@ -344,3 +344,79 @@ def test_open_circuits_defaults_to_empty_set_no_change():
     default = feasible_set(S, reg, ctx, tenant_id="acme")
     explicit = feasible_set(S, reg, ctx, tenant_id="acme", open_circuits=frozenset())
     assert default == explicit
+
+
+# --- 8. B52: onprem_only holds at the seam itself ----------------------------
+#
+# The real gate (`build_context`) already narrows `allowed_providers` to
+# {onprem} under onprem_only. These pin that `feasible_set` does not RELY on
+# it: an inconsistent authority -- onprem_only set, a cloud provider still in
+# `allowed_providers` -- must still never yield a cloud candidate (rule 3).
+
+_B52_REG = _registry()
+_ALL_PROVIDERS = frozenset({"onprem", "azure", "bedrock"})
+
+
+def test_b52_inconsistent_context_never_reaches_cloud():
+    ctx = _ctx(_B52_REG, AppPolicyView()).model_copy(
+        update={"onprem_only": True, "allowed_providers": _ALL_PROVIDERS})
+
+    result = feasible_set(S, _B52_REG, ctx, tenant_id="acme")
+
+    assert result.eligible, "the on-prem candidates stay eligible"
+    assert {c.provider for c in result.eligible} == {"onprem"}
+    rejected = {r.name: r for r in result.rejected}
+    for name in CLOUD:
+        assert rejected[name].code == "residency"
+        assert rejected[name].reason == "excluded · residency"
+
+
+def test_b52_explicit_onprem_only_arg_narrows_explicit_providers():
+    """The policy-side path: `build_context` hands over placement it resolved
+    itself. `onprem_only=True` must bind even if the providers it passed alongside
+    would not."""
+    result = feasible_set(S, _B52_REG, AppPolicyView(), tenant_id="acme",
+                          allowed_providers=_ALL_PROVIDERS, onprem_only=True)
+
+    assert {c.provider for c in result.eligible} == {"onprem"}
+    assert {r.name: r.code for r in result.rejected}["azure-gpt-mid"] == "residency"
+
+
+from hypothesis import HealthCheck, given, settings as hyp_settings, strategies as st  # noqa: E402
+
+_BASE_CTX = _ctx(_B52_REG, AppPolicyView())
+_POOL_NAMES = sorted(c.name for c in _B52_REG.effective_pool())
+
+
+@hyp_settings(max_examples=200, deadline=None,
+              suppress_health_check=[HealthCheck.too_slow])
+@given(onprem_only=st.booleans(),
+       providers=st.frozensets(st.sampled_from(sorted(_ALL_PROVIDERS))),
+       exclude=st.frozensets(st.sampled_from(_POOL_NAMES)),
+       open_circuits=st.frozensets(st.sampled_from(_POOL_NAMES)),
+       requested=st.none() | st.sampled_from(_POOL_NAMES),
+       via_arg=st.booleans())
+def test_b52_property_onprem_only_admits_only_onprem(onprem_only, providers, exclude,
+                                                      open_circuits, requested, via_arg):
+    """For ANY context (consistent or not) and any per-request exclusions: when
+    the resolved onprem_only is true, every eligible candidate is on-prem, and
+    every cloud candidate reads `residency`."""
+    if via_arg:
+        result = feasible_set(S, _B52_REG, AppPolicyView(), tenant_id="acme",
+                              allowed_providers=providers, onprem_only=onprem_only,
+                              exclude=exclude, open_circuits=open_circuits)
+    else:
+        ctx = _BASE_CTX.model_copy(update={
+            "onprem_only": onprem_only, "allowed_providers": providers,
+            "requested_model": requested})
+        result = feasible_set(S, _B52_REG, ctx, tenant_id="acme",
+                              exclude=exclude, open_circuits=open_circuits)
+
+    if onprem_only:
+        assert all(c.provider == "onprem" for c in result.eligible)
+        for r in result.rejected:
+            if r.name in CLOUD:
+                assert r.code == "residency"
+    else:
+        # Off, placement is exactly `providers` -- nothing extra is narrowed.
+        assert all(c.provider in providers for c in result.eligible)

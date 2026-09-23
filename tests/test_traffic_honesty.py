@@ -176,17 +176,19 @@ def test_bedrock_enabled_pii_stays_onprem_while_clean_request_can_reach_cloud():
 
 
 def test_residency_filter_is_what_keeps_pii_onprem_not_provider_availability():
-    """Mutation check (documented, not run against production code): if the
-    residency filter in app/policy/context.py were deleted -- i.e.
-    `allowed = enabled` unconditionally instead of
-    `allowed = enabled & onprem_providers` when `onprem_only` -- then, in the
-    bedrock-enabled settings above, the SSN request's risk_class ("high")
-    would target the frontier tier, bedrock-frontier would be the only
-    frontier-tier candidate, and RecordingBackend WOULD record a bedrock
-    call, failing the PII assertion in the test above. That confirms the
-    guard above is falsifiable by an actual residency-filter regression, not
-    just by construction of the test. See app/policy/context.py:
-    `allowed = enabled & onprem_providers if onprem_only else enabled`.
+    """Mutation check with TWO guards (B52, 2026-09-23). Placement under
+    onprem_only is enforced twice: `build_context` narrows `allowed_providers`
+    to {onprem} (app/policy/context.py), and `feasible_set` intersects the
+    providers with {onprem} again at the eligibility seam
+    (app/policy/feasible.py, `ONPREM_ONLY_PROVIDERS`).
+
+    Phase 1 deletes ONLY the `build_context` filter (the context says
+    onprem_only=True yet lists bedrock -- the B52 inconsistent context): the
+    seam must still keep the SSN request off the cloud. Phase 2 deletes BOTH:
+    the high-risk request then targets the frontier tier, bedrock-frontier is
+    its only candidate, and RecordingBackend DOES record a bedrock call --
+    proving the backend-level guard in the tests above is falsifiable by an
+    actual residency regression, not vacuous by construction.
     """
     from app.policy import context as context_module
     from app.policy import gate as gate_module
@@ -240,21 +242,40 @@ def test_residency_filter_is_what_keeps_pii_onprem_not_provider_availability():
             detected_entities=tuple(sorted(etypes)), redaction_map_id=redaction_map_id,
             content_integrity=content_integrity)
 
-    gate_module.build_context = _leaky_build_context
-    try:
+    from app.errors import NoEligibleCandidate
+    from app.policy import feasible as feasible_module
+
+    def _run_ssn(request_id):
         registry = make_test_registry(settings)
         rec = RecordingBackend(_DeterministicLiteLLM(settings))
         pipe = _pipeline(rec, settings, registry)
         req = ChatRequest(messages=[
             Message(role="user", content="My SSN is 482-73-1946, please summarize this.")])
-        out = asyncio.run(pipe.run("r5", "hospital", req))
+        try:
+            out = asyncio.run(pipe.run(request_id, "hospital", req))
+        except NoEligibleCandidate:
+            out = None
+        return out, rec, registry
+
+    gate_module.build_context = _leaky_build_context
+    original_onprem_set = feasible_module.ONPREM_ONLY_PROVIDERS
+    try:
+        # Phase 1: only build_context is broken -> the seam still holds.
+        _out, rec, registry = _run_ssn("r5a")
+        assert all(_provider_of(m, settings, registry) == "onprem"
+                   for m in rec.models_called), (
+            "feasible_set must keep an onprem_only request off the cloud even "
+            "when the context still lists a cloud provider (B52)")
+
+        # Phase 2: the seam's narrowing is neutralised too -> it leaks.
+        feasible_module.ONPREM_ONLY_PROVIDERS = frozenset(settings.serving.providers)
+        out, rec, registry = _run_ssn("r5b")
         # onprem_only is still reported True (the context itself still sets
-        # it), but with the filter removed the router can now reach bedrock
-        # -- demonstrating the assertion in the tests above is genuinely
-        # falsifiable, not vacuous.
-        assert out["policy"]["onprem_only"] is True
+        # it), but with both filters removed the router can now reach bedrock.
+        assert out is not None and out["policy"]["onprem_only"] is True
         assert any(_provider_of(m, settings, registry) != "onprem" for m in rec.models_called), (
-            "expected the deliberately-broken residency filter to leak to a "
-            "cloud model, proving the real (unbroken) guard above is meaningful")
+            "expected the deliberately-broken residency filters to leak to a "
+            "cloud model, proving the real (unbroken) guards above are meaningful")
     finally:
         gate_module.build_context = original_build_context
+        feasible_module.ONPREM_ONLY_PROVIDERS = original_onprem_set
