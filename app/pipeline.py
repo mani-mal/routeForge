@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from app.apps.registry import ModelRegistry
 
 log = logging.getLogger("serving.cache")
+_obs_log = logging.getLogger("serving.obs")
 
 
 class PipelineRejected(Exception):
@@ -928,12 +929,21 @@ class Pipeline:
                 # attributed from this content-free trace -- ids, enums and
                 # numbers only; every free-text `reason` is dropped here, not
                 # merely ignored downstream.
-                internals["outcome_trace"] = outcome_trace(records, vrec)
-                internals["outcome_usage"] = {
-                    "prompt_tokens": result.tokens_in,
-                    "completion_tokens": result.tokens_out,
-                    "cost_usd": sum(r.actual_cost_usd or 0.0 for r in records),
-                }
+                #
+                # Guarded: this is telemetry FOR the outcome row. If it raises,
+                # the client must still get the step-9 422 below -- a stash
+                # failure can never turn a verification refusal into a 500.
+                try:
+                    internals["outcome_trace"] = outcome_trace(records, vrec)
+                    internals["outcome_usage"] = {
+                        "prompt_tokens": result.tokens_in,
+                        "completion_tokens": result.tokens_out,
+                        "cost_usd": sum(r.actual_cost_usd or 0.0 for r in records),
+                    }
+                except Exception:
+                    _obs_log.warning(
+                        "outcome trace stash failed on verify failure request=%s",
+                        ctx.request_id, exc_info=True)
             raise PipelineRejected(vrec.reason)
 
         # Egress tool-call redaction (Task 2): verify() above only scans

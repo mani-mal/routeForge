@@ -157,3 +157,37 @@ def test_admin_feedback_unknown_score_name_422(client):
     r = client.post(f"/api/requests/{rid}/feedback",
                     json={"score_name": "bogus", "value": 1})
     assert r.status_code == 422
+
+
+# --- non-finite numeric values are refused at the boundary -------------------
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("literal", ["NaN", "Infinity", "-Infinity"])
+def test_admin_feedback_rejects_non_finite_value(client, monkeypatch, literal):
+    import app.api.ui_routes as ui_mod
+
+    token = _make_app_with_langfuse(
+        client, "fbadminnan" + {"NaN": "a", "Infinity": "b", "-Infinity": "c"}[literal])
+    served = client.post("/v1/chat/completions",
+                         headers={"Authorization": f"Bearer {token}"}, json=_MSG)
+    assert served.status_code == 200, served.text
+    rid = served.json()["id"]
+    posted, written = [], []
+
+    async def _post(*a, **kw):
+        posted.append(a)
+        return True
+
+    async def _write(*a, **kw):
+        written.append(kw)
+        return True
+
+    monkeypatch.setattr(ui_mod, "post_score", _post)
+    monkeypatch.setattr(ui_mod, "_write_feedback_safe", _write)
+    body = '{"score_name": "route_correct", "value": ' + literal + '}'
+    r = client.post(f"/api/requests/{rid}/feedback", content=body,
+                    headers={"Content-Type": "application/json"})
+    assert r.status_code == 422, r.text
+    assert posted == [] and written == []

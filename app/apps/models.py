@@ -18,6 +18,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     LargeBinary,
     String,
@@ -313,6 +314,12 @@ class OutcomeFeedback(Base):
     app's own Langfuse project exactly as before."""
 
     __tablename__ = "outcome_feedback"
+    # Feedback is read per (app, request). create_all only builds this on a
+    # fresh DB; a deployed one needs the CREATE INDEX in
+    # docs/reference/routing-outcomes.md's deploy note.
+    __table_args__ = (
+        Index("ix_outcome_feedback_app_request", "application_id", "request_id"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     request_id: Mapped[str] = mapped_column(String(64), index=True)

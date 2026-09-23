@@ -1689,8 +1689,10 @@ was observed:
   `cache_hit`. All four decision fields describe the request's **first routing
   decision**: the first trace entry that is a router hop or a failed gateway hop carrying
   `scoring`, i.e. the decision that picked the first attempt. After a failover that is the
-  failed hop; after a confidence escalation it is the first, unserved router hop. The
-  scoring record is enough to recompute that **first** ranking offline. It is not the
+  failed hop; after a confidence escalation it is the first, unserved router hop. A failed
+  hop carries its own `tier_target` and `circuit_bypass` (2026-09-23), so `tier_target` is
+  never borrowed from a later hop, and `circuit_bypass` is true if any decision hop bypassed
+  an open circuit. The scoring record is enough to recompute that **first** ranking offline. It is not the
   record of the hop that served, which can differ.
 - **Action $a$.** `chosen` (the **served** model: the last router hop that chose one), and
   `attempts` (every model tried, in order, including failed hops). So the record pairs

@@ -43,6 +43,16 @@ contractual refusal of the endpoint, so it must not be relabelled by a
 transient prior failure or by a softer app-scope reason -- but it must never
 outrank residency, which is absolute.
 
+**`onprem_only` holds at this seam itself (B52, 2026-09-23).** Stage 1 does
+not trust the caller's `allowed_providers` to be consistent with
+`onprem_only`: whenever the resolved `onprem_only` is true (the context's, the
+explicit argument, or the policy's own residency), `feasible_set` intersects
+the providers with `{onprem}` before stage 1 runs. A cloud candidate is then
+rejected as `residency` even from a hand-built context that still lists a
+cloud provider -- rule 3's "unreachable by construction" no longer rests on
+`build_context` alone. For every context the real gate builds this is a
+no-op, because `build_context` has already narrowed to `{onprem}`.
+
 **Stage 2 -- the three data-handling rules (P1b design §4).** Each compares one
 requirement against one ENDPOINT DECLARATION:
 
@@ -118,6 +128,10 @@ CIRCUIT_OPEN = "circuit_open"
 REGION_NOT_ALLOWED = "region_not_allowed"
 PROMPT_RETENTION_NOT_ALLOWED = "prompt_retention_not_allowed"
 RAW_SENSITIVE_NOT_ACCEPTED = "raw_sensitive_not_accepted"
+
+# The only provider `onprem_only` admits. `feasible_set` intersects placement
+# with this whenever the resolved onprem_only is true (B52).
+ONPREM_ONLY_PROVIDERS = frozenset({"onprem"})
 
 # Operator-facing strings. The console renders these verbatim and
 # `app/routing/router.py::_FIX_HINTS` keys on them -- they are an interface.
@@ -521,6 +535,15 @@ def feasible_set(settings: Settings, registry: "ModelRegistry | None",
         in_scope = _policy_scope(policy)
         if data_handling is None:
             data_handling = DataHandling.from_policy(settings, policy)
+
+    # B52: `onprem_only` binds HERE, not only in `build_context`. Whatever the
+    # authority's `allowed_providers` says, a resolved onprem_only admits the
+    # on-prem provider and nothing else, so an inconsistent context (onprem_only
+    # set, a cloud provider still listed) rejects every cloud candidate as
+    # `residency` instead of routing to it (CLAUDE.md rule 3). A no-op for every
+    # context the real gate builds -- it has already narrowed to {onprem}.
+    if onprem:
+        providers = frozenset(providers) & ONPREM_ONLY_PROVIDERS
 
     eligible: list[PoolCandidate] = []
     rejected: list[Rejection] = []

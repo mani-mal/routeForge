@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -1595,6 +1596,10 @@ async def feedback(body: FeedbackIn, request: Request) -> dict:
     if body.score_name not in SCORE_NAMES:
         raise ApiError(422, f"unknown score_name: {body.score_name!r}",
                        code=CODE_INVALID_VALUE)
+    # Python's json accepts the non-standard NaN/Infinity literals; a
+    # non-finite score must never reach Langfuse or outcome_feedback.
+    if isinstance(body.value, float) and not math.isfinite(body.value):
+        raise ApiError(422, "value must be a finite number", code=CODE_INVALID_VALUE)
 
     outcome = None
     if request.app.state.settings.serving.outcomes.enabled:

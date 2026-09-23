@@ -160,11 +160,11 @@ byte-identical. `stream_options` is never forwarded upstream. A disconnect or ba
 failure emits no frame, and metering in the `finally` blocks is untouched.
 Tests: `tests/test_stream_include_usage.py`.
 
-## B52 — `feasible_set` trusts `ctx.allowed_providers` even when `ctx.onprem_only` is set
+## B52 — `feasible_set` trusts `ctx.allowed_providers` even when `ctx.onprem_only` is set  ✅ RESOLVED (2026-09-23)
 
 **Severity:** low, defence in depth only. It is unreachable through the real gate today.
 **Found:** 2026-09-23, final review of the endpoint circuit breaker. A reviewer probe hand-built an
-inconsistent `ExecutionPolicyContext`. **Open.**
+inconsistent `ExecutionPolicyContext`. **Resolved 2026-09-23** on `fix/b52-and-outcome-followups`.
 
 When `feasible_set` (`app/policy/feasible.py`) is given a context, it takes placement **only** from
 `ctx.allowed_providers`. `ctx.onprem_only=True` changes nothing but the rejection label
@@ -177,6 +177,14 @@ unreachable by construction" resting on one function, `build_context`, alone.
 `onprem_only` is true, so the invariant also holds at the single eligibility seam. Add a
 Hypothesis property: for any context with `onprem_only`, no eligible candidate has a
 provider other than `onprem`.
+
+**Resolution (2026-09-23):** `feasible_set` now intersects the providers with `{onprem}`
+(`ONPREM_ONLY_PROVIDERS`) whenever the resolved `onprem_only` is true — the context's, the explicit
+argument, or the policy's residency — before stage 1, so a cloud candidate is rejected as
+`residency` even from an inconsistent context. Every context the real gate builds was already
+narrowed, so no routing decision changes. Pinned by
+`tests/test_feasible_set.py::test_b52_*`, including a Hypothesis property over random
+contexts/providers/exclusions: under `onprem_only` every eligible candidate is `onprem`.
 
 ## B51 — unmeasured models look ~80× faster than measured reasoning models, so every restart or onboarding pays a quality-blind warm-up  ✅ RESOLVED (2026-09-23)
 

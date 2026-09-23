@@ -289,8 +289,10 @@ def trace_features(trace: list[dict]) -> dict:
       a failed gateway hop carrying `scoring` (the decision that picked the
       first attempt). After a failover that is the failed hop; after a
       confidence escalation it is the first, unserved router hop.
-      `tier_target` falls back to the first router hop when the decision hop
-      carries none.
+      `tier_target` is that hop's own (a failed gateway hop records it too);
+      it never falls back to a later router hop.
+    - `circuit_bypass` is True when ANY decision hop -- router or failed
+      gateway -- bypassed an open circuit.
     - `chosen` is the SERVED model: the last router hop with a `chosen`.
     - `attempts` is every model tried, in hop order.
     - `cache_hit` is True when a semantic-cache entry served the request (no
@@ -305,9 +307,10 @@ def trace_features(trace: list[dict]) -> dict:
         eligible = [c["name"] for c in scoring.get("candidates", [])]
     else:
         eligible = [chosen] if chosen is not None else []
+    # The first decision's OWN tier target -- a failed gateway hop records it
+    # too. Never borrowed from a later router hop, whose target may differ
+    # after an escalation; an older trace without it reads null.
     tier_target = first.get("tier_target") if first else None
-    if tier_target is None and router_hops:
-        tier_target = router_hops[0].get("tier_target")
     decision_hops = [e for e in trace
                      if e.get("step") == "router" or _is_failed_decision_hop(e)]
     verify_entry = next((e for e in trace if e.get("step") == "verify"), None)

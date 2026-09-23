@@ -17,6 +17,7 @@ import asyncio
 import dataclasses
 import json
 import logging
+import math
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -147,6 +148,10 @@ async def admin_feedback(request_id: str, body: AdminFeedbackIn, request: Reques
     an `outcome_feedback` row with `source="admin"` — including when there
     is no trace_id to post to Langfuse at all (`comment`/`corrected_output`
     TEXT is still never stored locally; see `/v1/feedback`)."""
+    # Python's json accepts the non-standard NaN/Infinity literals; a
+    # non-finite score must never reach Langfuse or outcome_feedback.
+    if isinstance(body.value, float) and not math.isfinite(body.value):
+        raise HTTPException(422, "value must be a finite number")
     async with request.app.state.db.session() as session:
         snap = await session.get(RequestSnapshot, request_id)
     if snap is None:

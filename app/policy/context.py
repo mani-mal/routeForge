@@ -9,6 +9,7 @@ from app.policy.feasible import (  # noqa: F401  (re-exported: app/pipeline.py i
     APP_SCOPE,
     DATA_HANDLING_HINTS,
     MODEL_SCOPE,
+    ONPREM_ONLY_PROVIDERS,
     REASON_DISABLED,
     RESIDENCY,
     DataHandling,
@@ -68,8 +69,13 @@ def pinned_model_reason(pool, ctx: ExecutionPolicyContext, registry: "ModelRegis
     not_found = "it is not onboarded, or is disabled (see GET /v1/models)"
     if c is None:
         return not_found
+    # Narrow exactly as `feasible_set` does (B52): under onprem_only only the
+    # on-prem provider is placeable, whatever `allowed_providers` says, so a
+    # pinned cloud model reads residency, never "disabled".
+    providers = (ctx.allowed_providers & ONPREM_ONLY_PROVIDERS if ctx.onprem_only
+                 else ctx.allowed_providers)
     rejection = candidate_rejection(
-        c, allowed_providers=ctx.allowed_providers, onprem_only=ctx.onprem_only,
+        c, allowed_providers=providers, onprem_only=ctx.onprem_only,
         in_scope=_ctx_scope(ctx), requested_model=None,
         exclude=frozenset(), registry=registry, tenant_id=tenant_id,
         data_handling=DataHandling.from_context(ctx))

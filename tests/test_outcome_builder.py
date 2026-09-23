@@ -283,9 +283,25 @@ def test_build_ok_outcome_failover_first_decision_is_the_failed_hop():
     assert row["tier_target"] == "cheap"
 
 
-def test_build_ok_outcome_failover_tier_target_falls_back_to_first_router_hop():
-    """A failed gateway hop with no `tier_target` of its own (an older
-    trace) takes it from the first router hop."""
+def test_build_ok_outcome_failover_tier_target_is_the_first_decisions_own():
+    """After a failover the first decision is the failed gateway hop, which
+    carries its own `tier_target` (the gateway records it). The outcome takes
+    it from THAT hop -- there is no fallback to a later router hop, whose tier
+    target may differ after an escalation."""
+    router = _router_hop("b", hop_index=1)
+    router["tier_target"] = "mid"
+    trace = [_gateway_failed_hop("a", hop_index=0, tier_target="cheap"), router,
+             _verify()]
+    row = build_ok_outcome(
+        _resp(trace), request_id="req-2", application_id="app-1",
+        outcome_ctx=outcome_context(_ctx()), routing_policy_version="rpv-1",
+        workload=None, workload_source="none")
+    assert row["tier_target"] == "cheap"
+
+
+def test_build_ok_outcome_failover_tier_target_is_not_borrowed_from_router_hop():
+    """An older trace whose failed hop carries no `tier_target` reads null --
+    never a later hop's value presented as the first decision's."""
     router = _router_hop("b", hop_index=1)
     router["tier_target"] = "mid"
     trace = [_gateway_failed_hop("a", hop_index=0), router, _verify()]
@@ -293,7 +309,18 @@ def test_build_ok_outcome_failover_tier_target_falls_back_to_first_router_hop():
         _resp(trace), request_id="req-2", application_id="app-1",
         outcome_ctx=outcome_context(_ctx()), routing_policy_version="rpv-1",
         workload=None, workload_source="none")
-    assert row["tier_target"] == "mid"
+    assert row["tier_target"] is None
+
+
+def test_build_ok_outcome_circuit_bypass_on_a_failed_gateway_hop_counts():
+    failed = _gateway_failed_hop("a", hop_index=0, tier_target="cheap")
+    failed["circuit_bypass"] = True
+    trace = [failed, _router_hop("b", hop_index=1), _verify()]
+    row = build_ok_outcome(
+        _resp(trace), request_id="req-2", application_id="app-1",
+        outcome_ctx=outcome_context(_ctx()), routing_policy_version="rpv-1",
+        workload=None, workload_source="none")
+    assert row["circuit_bypass"] is True
 
 
 def test_build_ok_outcome_escalation_last_chosen_wins():
