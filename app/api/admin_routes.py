@@ -7,16 +7,19 @@ audience. The dashboard (Phase 4) is the only intended client.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 import re
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from app.apps import store
 from app.apps.admin_auth import SESSION_COOKIE, require_admin
 from app.apps.langfuse_provision import LangfuseProvisioner, encrypt_secret
+from app.apps.models import OutcomeFeedback, RoutingOutcome
 from app.apps.policy_lint import price_warnings
 from app.apps.probe import probe_endpoint
 from app.apps.policy import AppPolicyView, policy_view_from
@@ -1145,3 +1148,111 @@ async def list_onboarded_models(request: Request,
                                   "open_until_s": None})
             rows.append(d)
         return rows
+
+
+# --- routing outcomes export (P2b-2 Task 6) ---------------------------------
+#
+# GET /admin/outcomes/export streams the routing_outcomes table (+ its joined
+# outcome_feedback) as NDJSON for offline analysis -- the eval/RLHF substrate
+# CLAUDE.md's RLHF-readiness note has in mind. Admin-only, like every other
+# route in this file; the data is content-free by construction (see
+# app/apps/store.py's P2b-2 section docstring), so this adds no new exposure
+# beyond "an admin can see routing metadata across every tenant", which the
+# rest of /admin/* already grants.
+
+_EXPORT_DEFAULT_LIMIT = 100_000
+_EXPORT_MAX_LIMIT = 100_000
+# Module-level so tests can monkeypatch it to exercise a page boundary
+# without needing 1000+ rows; referenced by bare name below, not captured as
+# a default arg, so a patched value takes effect on the next page fetch.
+_EXPORT_PAGE_SIZE = 1000
+
+
+def _export_iso(ts: dt.datetime) -> str:
+    """ISO-8601 UTC. SQLite (the test DB) hands `ts` back naive for a
+    `DateTime(timezone=True)` column; Postgres hands it back aware. Treat a
+    naive value as already UTC -- same convention as app/apps/store.py's
+    `_to_utc` -- so the exported timestamp always carries an explicit offset
+    on either backend, instead of Postgres rows getting `+00:00` and SQLite
+    rows silently getting none."""
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=dt.timezone.utc)
+    return ts.isoformat()
+
+
+def _export_outcome_dict(row: RoutingOutcome) -> dict:
+    d = {c.name: getattr(row, c.name) for c in RoutingOutcome.__table__.columns}
+    d["ts"] = _export_iso(row.ts)
+    return d
+
+
+def _export_feedback_list(rows: list[OutcomeFeedback]) -> list[dict]:
+    return [
+        {"score_name": r.score_name,
+         "value": r.value_num if r.value_num is not None else r.value_cat,
+         "source": r.source,
+         "ts": _export_iso(r.ts)}
+        for r in rows
+    ]
+
+
+def _parse_export_dt(raw: str | None) -> dt.datetime | None:
+    """`datetime.fromisoformat`, 422 on a bad value. A naive result (no
+    offset in `raw`) is treated as UTC -- see `_export_iso`'s docstring for
+    why that convention is safe against both backends."""
+    if raw is None:
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(raw)
+    except ValueError:
+        raise HTTPException(422, f"bad datetime {raw!r}; expected ISO-8601")
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed
+
+
+async def _export_lines(db, *, since: dt.datetime, until: dt.datetime,
+                        application_id: str | None, limit: int):
+    """NDJSON line generator: keyset-paged through `iter_outcomes`, a fresh
+    session per page (never one session -- or the whole export -- held open
+    or in memory at once), joining `feedback_for` per page and stopping once
+    `limit` lines have been emitted, even mid-page."""
+    after: tuple[dt.datetime, str] | None = None
+    emitted = 0
+    while emitted < limit:
+        async with db.session() as s:
+            rows = await store.iter_outcomes(
+                s, since=since, until=until, application_id=application_id,
+                after=after, page=_EXPORT_PAGE_SIZE)
+            if not rows:
+                return
+            feedback = await store.feedback_for(s, [r.request_id for r in rows])
+        for row in rows:
+            if emitted >= limit:
+                return
+            obj = {
+                "schema": "routeforge.outcome/v1",
+                "outcome": _export_outcome_dict(row),
+                "feedback": _export_feedback_list(feedback.get(row.request_id, [])),
+            }
+            yield json.dumps(obj, separators=(",", ":"), default=str) + "\n"
+            emitted += 1
+        after = (rows[-1].ts, rows[-1].request_id)
+        if len(rows) < _EXPORT_PAGE_SIZE:
+            return   # short page -- no more rows to fetch
+
+
+@admin_router.get("/outcomes/export")
+async def export_outcomes(
+        request: Request, since: str | None = None, until: str | None = None,
+        application_id: str | None = None, limit: int = _EXPORT_DEFAULT_LIMIT,
+        _: str = Depends(require_admin)) -> StreamingResponse:
+    if limit < 1:
+        raise HTTPException(422, "limit must be >= 1")
+    limit = min(limit, _EXPORT_MAX_LIMIT)
+    until_dt = _parse_export_dt(until) or dt.datetime.now(dt.timezone.utc)
+    since_dt = _parse_export_dt(since) or (until_dt - dt.timedelta(days=7))
+    return StreamingResponse(
+        _export_lines(request.app.state.db, since=since_dt, until=until_dt,
+                      application_id=application_id, limit=limit),
+        media_type="application/x-ndjson")

@@ -127,6 +127,24 @@ async def _observation_loop(app: FastAPI) -> None:
             except Exception:
                 logging.getLogger("serving.routing").warning(
                     "observation log prune failed", exc_info=True)
+            # P2b-2 Task 6: the same hourly beat also prunes routing_outcomes
+            # (+ outcome_feedback), in its own guarded session -- a failure
+            # here must never block the observation prune above (or vice
+            # versa), so each gets its own try/except rather than sharing
+            # one. `outcomes.enabled: false` skips it entirely (matches
+            # app/api/routes.py's write-side gate on the same flag).
+            outcomes_cfg = app.state.settings.serving.outcomes
+            if outcomes_cfg.enabled:
+                try:
+                    async with app.state.db.session() as s:
+                        n = await apps_store.prune_outcomes(
+                            s, older_than_days=outcomes_cfg.retention_days)
+                        await s.commit()
+                    logging.getLogger("serving.routing").info(
+                        "routing outcomes pruned rows=%d", n)
+                except Exception:
+                    logging.getLogger("serving.routing").warning(
+                        "routing outcomes prune failed", exc_info=True)
 
 
 def _log_flusher_death(task: "asyncio.Task[None]") -> None:
