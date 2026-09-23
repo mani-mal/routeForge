@@ -181,7 +181,7 @@ and stays on. See `docs/reference/per-app-config.md`.
 
 **Routing observability & signals** (shipped `0.11.0`; see
 `docs/reference/routing-observability.md`): (1) `GET /metrics` is an in-process Prometheus
-exporter — four `routeforge_*` families, bounded labels only, **no
+exporter — five `routeforge_*` families, bounded labels only, **no
 tenant/PII**, opt-in `observability` extra (503 without it), no bundled server;
 (2) every trace carries `sp.candidates` (chosen + rejected set) and
 `sp.routing_policy_version` (routing+pricing content hash), emitted regardless

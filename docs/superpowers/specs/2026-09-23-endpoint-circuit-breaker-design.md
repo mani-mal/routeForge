@@ -1,7 +1,9 @@
 # Endpoint circuit breaker (step 7) — design
 
-**Date:** 2026-09-23 · **Status:** approved direction (owner: "go with your recommendations"),
-spec awaiting review · **Closes:** the open half of backlog **B45**
+**Date:** 2026-09-23 · **Status:** approved direction (owner: "go with your recommendations");
+**built** on `feat/endpoint-circuit-breaker` and **amended 2026-09-23** in §3, §4, §5, §6, §7
+and §8 to match what was built (each amendment is marked and says why) · **Closes:** the open
+half of backlog **B45** · **Measured:** `docs/research/feasible-route-bench.md` §12
 
 ## 1. Why
 
@@ -41,10 +43,14 @@ One `CircuitBreaker` holds a small state record per model name. It has three sta
 
 ```
 closed ──(failure_threshold consecutive unhealth failures)──▶ open
-open   ──(cooldown elapsed, first request asks)────────────▶ half_open (one trial lease)
-half_open ──trial succeeds──▶ closed   (failures and cooldown reset)
-half_open ──trial fails─────▶ open     (cooldown doubles, capped at max_cooldown_s)
+open   ──(cooldown elapsed)────────────────────────────────▶ half_open (admitted to every request)
+half_open ──first reported success──▶ closed   (failures and cooldown reset)
+half_open ──first reported failure──▶ open     (cooldown doubles, capped at max_cooldown_s)
 ```
+
+> **Amended 2026-09-23 (as built).** The diagram originally read "first request asks → one
+> trial lease". Half-open is **evidence-based** and has **no lease**; see the two amended
+> bullets below.
 
 - **What counts.** Only failures for which `counts_as_endpoint_unhealth(exc)` is true:
   no-status transport errors, 5xx and 429. A 4xx, including context overflow, is the
@@ -53,12 +59,29 @@ half_open ──trial fails─────▶ open     (cooldown doubles, capped
 - **What resets.** Any success, whether streamed or not, resets the consecutive-failure
   count. A success is the same event that calls `observe_success` /
   `observe_stream_success`.
-- **Half-open allows one request at a time.** When the cooldown has elapsed, the first
-  `open_set()` read grants a single **trial lease** to one request, and the model is
-  reported as not-open for that one selection only. Every other request still sees it as
-  open until the trial reports its result. The lease is released on success or failure
-  and also expires after `trial_timeout_s`. That covers a trial whose caller vanished,
-  such as a client disconnect.
+- **Half-open is evidence-based.** *(Amended 2026-09-23; this bullet originally specified
+  a single-request trial lease.)* Before the cooldown elapses, a reported success or failure
+  changes nothing: no close, no reopen, no change to the count or the cooldown, and
+  `consecutive_failures` stays the count that tripped it. Once the cooldown has elapsed, the
+  first success reported for the model closes it and the first failure reopens it with the
+  cooldown doubled, whoever reports it. **Why:** the gateway has no per-request lease token,
+  and a result reported after the cooldown *is* current evidence of the endpoint's health;
+  adding tokens would have changed the router and gateway interfaces. Cost: a straggler
+  failure that started before the cooldown ended but reports after it can reopen the circuit
+  once (one extra cooldown).
+- **No single-trial lease; half-open admits every request.** *(Amended 2026-09-23; the
+  original bullet granted one trial lease from `open_set()`, released on the result or after
+  `trial_timeout_s`.)* After the cooldown the model is admitted to every request until the
+  first reported result. **Why the lease was dropped:** `open_set()` runs before policy and
+  scoring, so the lease went to whichever request read it first, including requests that
+  could never use the model (narrower app scope, another tier, over budget, or a cheaper peer
+  outscoring it). Each such request burned the lease, and a recovered endpoint stayed
+  excluded for another `trial_timeout_s` (the Task 4 review reproduced three eligible
+  requests diverted this way). With evidence-based half-open the lease added no safety, and
+  moving it after feasibility and scoring would have put more code on the privacy seam.
+  **Accepted cost:** during the half-open window, concurrent in-flight requests may each
+  spend one attempt on a still-dead endpoint, bounded by concurrency × failure latency.
+  Failover serves them; a streamed request fails that one call.
 - **Clock seam.** Every method takes an injectable `now` (monotonic), as `SignalStore`
   does, so the state machine can be tested without sleeping.
 - **Boot state is closed.** Nothing is replayed from `endpoint_observations`. A breaker
@@ -69,8 +92,14 @@ half_open ──trial fails─────▶ open     (cooldown doubles, capped
 
 - **New `feasible_set` stage.** `feasible_set` gains `open_circuits: frozenset[str]`, a new
   stage `circuit_open` with the reason "excluded · circuit open".
-  - It sits right after `prior_failure` (stage 3), so placement and data-handling reasons
-    are never relabelled by it.
+  - It is the **last** stage (stage 7, after `model_scope`), so every policy reason —
+    placement, data handling, prior failure, app scope, pinned model, registry gates — wins
+    over it, and `circuit_open` only ever labels a candidate policy fully admitted.
+    *(Amended 2026-09-23; this bullet originally placed it right after `prior_failure`,
+    stage 3.)* **Why:** every policy reason then wins. Placed after `prior_failure`, an open
+    model outside the app's scope would have read `circuit_open` instead of `app_scope`.
+    With the stage last, the set it removes from is exactly the policy-eligible set, so the
+    all-open bypass below plainly restores that set and nothing more.
   - Like `exclude`, it can **only remove** candidates. It is structurally unable to widen
     placement: an `onprem_only` request whose on-prem models are all open never reaches
     cloud.
@@ -98,8 +127,10 @@ breaker:
   failure_threshold: 3     # consecutive unhealth failures that open the circuit
   cooldown_s: 30           # first open period; doubles on each failed trial
   max_cooldown_s: 300
-  trial_timeout_s: 60      # a half-open trial lease expires after this
 ```
+
+> **Amended 2026-09-23.** `trial_timeout_s` was removed from `BreakerCfg`, `routing.yaml`,
+> the lint and the tests along with the trial lease (§3).
 
 - **Validation.** A `BreakerCfg` Pydantic model gets an entry in the config lint: all
   values must be positive, `max_cooldown_s ≥ cooldown_s`, and the block has one owner
@@ -119,8 +150,12 @@ breaker:
   with `to_state` ∈ `open | half_open | closed`. It has no model label, keeping to the
   exporter's rule of no unbounded labels. The docs' "four families" becomes five.
 - **Admin.** `GET /admin/infra/models` adds a `circuit` object per model:
-  `{state, consecutive_failures, open_until}`. It is read-only and reflects this replica's
-  view, which the docs say. The console Infrastructure table shows the state as a badge.
+  `{state, consecutive_failures, open_until_s}`. *(Amended 2026-09-23: the field is
+  `open_until_s`, seconds until the cooldown ends, set only while `state` is `open` and
+  `null` otherwise, because a monotonic timestamp means nothing to a client and a half-open
+  model's elapsed deadline would render as a negative countdown.)* It is read-only and
+  reflects this replica's view, which the docs say. The console Infrastructure table shows
+  the state as a badge.
 - **Logs.** Each transition logs one structured line: model, from, to, cooldown.
 
 ## 7. FeasibleRouteBench
@@ -130,8 +165,16 @@ breaker:
   pass `open_set(case clock)` to `Router.select`, exactly as the gateway does. The
   existing leak guards cover it: it sees only prior attempts.
 - **Control arm.** Breaker on or off follows `settings.routing.breaker.enabled`, so
-  `--variants` gains nothing new. A `breaker_off` variant file sets it off as the control
-  arm.
+  `--variants` gains nothing new. *(Amended 2026-09-23: no variant file is needed.)* When the
+  base config has the breaker on, the runner adds a control arm,
+  `router_online:breaker_off`: the base weights with the breaker disabled. The reported arm
+  is `router_online:<variant>`.
+- **Case clock.** *(Added 2026-09-23.)* The arm's breaker runs on the same synthetic case
+  clock as its signal store, so `seconds_per_case` decides how many cases a cooldown covers.
+  At 30 s per case the first 30 s cooldown ends exactly at the next case; at
+  `seconds_per_case ≥ max_cooldown_s` the breaker can never exclude anything and the two arms
+  are identical. Production uses wall-clock time, so that null is the bench's, not
+  production's (research doc §12.2).
 - **Re-measure the outage scenario.** Run `outage-sim` at seeds 0–9 × 1/30/300 s per case,
   breaker on vs off, and report wasted attempts, cost and latency regret, and the
   post-recovery lag. The expected shape is about `failure_threshold` wasted attempts at
@@ -141,12 +184,16 @@ breaker:
 
 ## 8. Testing (TDD)
 
-- **State machine.** Threshold, reset on success, cooldown doubling and cap, one trial
-  lease, lease expiry, and "4xx never trips" (context overflow, 400, 401), with 429 and
-  5xx tripping.
+- **State machine.** Threshold, reset on success, cooldown doubling and cap, and "4xx never
+  trips" (context overflow, 400, 401), with 429 and 5xx tripping. *(Amended 2026-09-23: the
+  lease tests were replaced by evidence-rule tests — results before the cooldown elapses
+  change nothing, every caller is admitted while half-open, and an ineligible request cannot
+  starve a recovered endpoint.)*
 - **Seam.** An open model is excluded with the code `circuit_open`. Placement reasons win.
-  `onprem_only` with every on-prem model open never yields cloud: the property test reuses
-  the P1 Hypothesis harness style.
+  `onprem_only` with every on-prem model open never yields cloud.
+  *(Amended 2026-09-23: this is pinned by the example test
+  `tests/test_router_breaker.py::test_bypass_never_widens_placement`, not a Hypothesis
+  property test.)*
 - **Bypass.** With all candidates open, one is still selected, `circuit_bypass` is set,
   and the candidate set equals the policy-eligible set.
 - **Gateway.** Failover excludes the open endpoint up front, so a second request makes no

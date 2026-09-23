@@ -202,6 +202,23 @@ next-best *policy-permitted* candidate.
 Fallback must re-check `ctx.allowed_providers`. A cloud fallback on an `onprem_only`
 request is the single worst bug the product could have.
 
+**Circuit breaker (built 2026-09-23, B45; `app/gateway/breaker.py`).** One per API process,
+fed by the gateway with every attempt's outcome, counting only `counts_as_endpoint_unhealth`
+failures (a 4xx never trips it). After `routing.breaker.failure_threshold` consecutive
+failures a model is open for `cooldown_s`. After that it is half-open and admitted to every
+request (no single-trial lease), and the first reported result closes it or reopens it with
+the cooldown doubled, up to `max_cooldown_s`. Rules to keep when touching it:
+- The open set is applied **only** through `feasible_set`'s **last** stage (`circuit_open`),
+  passed on every `Router.select`, failover and escalation re-selects included, in both
+  `Gateway.run` and `run_stream`. Never filter candidates post hoc in the gateway.
+- If every policy-eligible candidate is open, `Router.select` retries without the open set
+  and marks `circuit_bypass`. That retry can only restore what policy admitted, so it can
+  never widen placement; keep the stage last or this stops being true.
+- It is not a scoring term. `weights.availability` stays a bounded ranking preference; B45
+  showed no weight keeps a cheaper dead endpoint out (research doc §9, §11, §12).
+- `enabled: false` must stay exactly the pre-breaker behaviour. Operator contract:
+  `docs/reference/routing-observability.md` §5.
+
 ## Cost accounting
 
 Accumulate per hop. Track actual token counts from the response, not estimates.

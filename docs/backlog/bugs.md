@@ -389,13 +389,20 @@ client disconnected, which is precisely the failure mode ruling 2 exists to prev
 **Fix.** Add 399, 428, 430 and 499 to the existing `@pytest.mark.parametrize` lists.
 Four lines; no production change. Worth doing before anyone edits that predicate.
 
-## B45 — is `weights.availability: 0.2` large enough for a dead endpoint to lose? Unmeasured, and must not be tuned by guess
+## B45 — is `weights.availability: 0.2` large enough for a dead endpoint to lose? Unmeasured, and must not be tuned by guess  ✅ RESOLVED (2026-09-23, step-7 circuit breaker)
 
 **Severity:** design question, not a defect (the formula does what it says; the question
 is whether the magnitude is right)
 **Found:** 2026-09-19, P2a Task 9 review, while falsifying a claim in the design spec.
 **Measured 2026-09-23 (simulated + live; see the updates below). The weight question is
-answered. What remains open is the owner's decision on a step-7 circuit breaker.**
+answered.** **Resolved 2026-09-23** on `feat/endpoint-circuit-breaker` by building the
+step-7 circuit breaker (`app/gateway/breaker.py`): after `breaker.failure_threshold` (3)
+consecutive endpoint failures a model is excluded from routing for a cooldown (30 s,
+doubling on each failed half-open result up to 300 s), through the last stage of the
+eligibility seam (`circuit_open`). `weights.availability` stays 0.2 as a ranking preference.
+Measured on the same simulated outage scenario in
+[`docs/research/feasible-route-bench.md`](../research/feasible-route-bench.md) §12; operator
+contract in [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §5.
 
 Availability enters the step-6 score as an additive term `+ w.availability · availability`
 with `availability ∈ [0, 1]`. So moving a model from perfectly healthy to completely dead
@@ -522,11 +529,33 @@ it.
 > switch points and limits:
 > [`docs/research/feasible-route-bench.md`](../research/feasible-route-bench.md) §9.
 
+> **Update 2026-09-23 (breaker built). ✅ RESOLVED.** The owner chose the breaker. It is
+> per process, fed only by `counts_as_endpoint_unhealth` failures (a 4xx never trips it),
+> and runs as `feasible_set`'s **last** stage, so every policy reason wins over it and it
+> can never widen placement. If every policy-eligible candidate is open, the router tries
+> one anyway and marks the decision `circuit_bypass`. Half-open is evidence-based with no
+> single-trial lease: after the cooldown every request may use the model, and the first
+> reported result closes or reopens it. `enabled: false` is the pre-breaker behaviour.
+>
+> **Measured (simulated, §12; seeds 0–9, breaker on vs `router_online:breaker_off`):**
+>
+> - **1 s/case:** 3 dead first attempts per outage instead of 10 (exactly
+>   `failure_threshold`), 4.4 vs 10.5 wasted attempts per run, latency regret 199 vs 326
+>   ms. Cost +51% mean chosen cost, all after recovery: the 30 s cooldown outlasts the rest
+>   of the suite, so the recovered, 4× cheaper endpoint never comes back within it.
+> - **30 s/case:** 6 of 10 (3 to trip, 3 failed half-open results), 7.0 wasted per run,
+>   latency regret 265 ms, +39% cost; the endpoint is back 7 cases after recovery.
+> - **300 s/case:** no effect, at any seed. That is the bench's case clock (no cooldown up
+>   to `max_cooldown_s` outlasts a 300 s gap), not production, which uses wall-clock time.
+>
+> **Not shown:** a live breaker run, concurrent requests (the accepted half-open cost),
+> several replicas (each trips separately), streaming, other breaker settings.
+
 **Related.** B37 (`/health` reports a dead model as available for 22 hours) and B38
 (a failed request writes no usage row, so availability never seeds — **resolved
 2026-09-21**, see below) both made a dead endpoint *less* visible to this signal than it
-should be; B37 still does. A breaker (CLAUDE.md step 7, still unimplemented) is the other
-answer to the same problem, and a decision on one should be taken with the other in view.
+should be; B37 still does. The step-7 breaker (built 2026-09-23, above) is the other answer
+to the same problem; it does not change what `/health` reports (B37).
 
 ## B44 — `test_default_strategy_matches_pre_refactor_scoring` is an ordering-only oracle and reads like a stronger guarantee than it is
 
