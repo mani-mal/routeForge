@@ -701,9 +701,16 @@ def _assert_no_leak(arm: OnlineArm, k: int) -> None:
 
 
 def _run_online(settings, registry, inp, dead, live, n_cases, *, weights=None,
-                leak=False, check=True, dead_counts_unhealth=True, seconds_per_case=1.0):
+                leak=False, check=True, dead_counts_unhealth=True, seconds_per_case=1.0,
+                breaker=False):
+    # breaker=False: every test using this helper exercises the SIGNAL STORE
+    # path in isolation (availability decay, leak guards) -- the step-7
+    # breaker is a separate mechanism with its own tests (TestOnlineArmBreaker)
+    # and, left at its settings.routing.breaker.enabled default (True), would
+    # pull `dead` out of rotation after failure_threshold failures before the
+    # availability-weight effects these tests measure ever have a chance to.
     arm = OnlineArm(settings, registry, attempt_cap(BASE_SETTINGS), weights=weights,
-                    seconds_per_case=seconds_per_case)
+                    seconds_per_case=seconds_per_case, breaker=breaker)
     chains = []
     for k in range(n_cases):
         rows = _case_rows(k, dead, live, dead_counts_unhealth=dead_counts_unhealth)
@@ -867,6 +874,70 @@ class TestOnlineArm:
         failed = _failing(dead)
         assert arm.choose(inp, failed, case_index=3) == _direct_chain(
             settings, registry, arm.signals, inp, failed, attempt_cap(BASE_SETTINGS))
+
+
+# --------------------------------------------------------------------------
+# The step-7 breaker inside `router_online` (Task 5, B45). Two same-tier
+# onprem endpoints, "a" cheaper so the router prefers it every case; "a"
+# fails every case with an endpoint-unhealth error. At the shipped default
+# weights (availability: 0.2) the scoring term alone never moves the router
+# off the cheaper dead endpoint (B45's own finding) -- so ANY case where
+# breaker=False stops starting with "a" would falsify this test, and the
+# breaker is the only thing that can pull "a" out of rotation.
+# --------------------------------------------------------------------------
+
+class TestOnlineArmBreaker:
+    def _priced_setup(self, tmp_path):
+        settings, registry, case, ctx, eligible = _build(tmp_path, [
+            _entry("a-model", price_input=0.01, price_output=0.01),
+            _entry("b-model", price_input=0.08, price_output=0.08),
+        ])
+        inp = _strategy_input(case, ctx, eligible)
+        return settings, registry, inp
+
+    def _drive(self, arm, inp, n_cases):
+        chains = []
+        for k in range(n_cases):
+            rows = {"a-model": _err(f"case-{k}", "a-model"),
+                    "b-model": _ok(f"case-{k}", "b-model")}
+            def failed(s, rows=rows):
+                return rows[s].error is not None
+            chain = arm.choose(inp, failed, case_index=k)
+            chains.append(chain)
+            arm.observe(k, chain, rows)
+        return chains
+
+    def test_breaker_true_excludes_a_after_failure_threshold_failures(self, tmp_path):
+        settings, registry, inp = self._priced_setup(tmp_path)
+        threshold = settings.routing.breaker.failure_threshold
+        cap = attempt_cap(BASE_SETTINGS)
+        arm = OnlineArm(settings, registry, cap, seconds_per_case=1.0, breaker=True)
+
+        chains = self._drive(arm, inp, threshold)
+        # Every case up to (not including) the threshold: "a" is still
+        # cheapest and closed, so the chain still starts with it.
+        assert all(c[0] == "a-model" for c in chains)
+
+        # The threshold-th observed failure trips the breaker; the NEXT
+        # case's chain must not start with "a" any more.
+        rows = {"a-model": _err(f"case-{threshold}", "a-model"),
+                "b-model": _ok(f"case-{threshold}", "b-model")}
+        chain = arm.choose(inp, lambda s, rows=rows: rows[s].error is not None,
+                           case_index=threshold)
+        assert chain[0] != "a-model"
+        assert chain[0] == "b-model"
+
+    def test_breaker_false_keeps_starting_with_a(self, tmp_path):
+        settings, registry, inp = self._priced_setup(tmp_path)
+        threshold = settings.routing.breaker.failure_threshold
+        cap = attempt_cap(BASE_SETTINGS)
+        arm = OnlineArm(settings, registry, cap, seconds_per_case=1.0, breaker=False)
+
+        # Drive well past the threshold: with no breaker, nothing ever
+        # excludes "a" from a fresh selection, and the availability penalty
+        # alone (weight 0.2) never outweighs its price advantage.
+        chains = self._drive(arm, inp, threshold + 3)
+        assert all(c[0] == "a-model" for c in chains)
 
 
 # --------------------------------------------------------------------------

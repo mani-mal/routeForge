@@ -77,10 +77,29 @@ def test_outage_run_is_deterministic_clean_and_moves_the_online_variants(tmp_pat
     assert len(set(wasted.values())) > 1, wasted
     # The full-information arm is a full-information reference (not an upper
     # bound: across seeds it sometimes wastes more at weights 1.0/2.0); at the
-    # shipped weights on this seed it wastes no more than router_online.
+    # shipped weights on this seed it wastes no more than the signal-learning
+    # arm it is fairly comparable to. That is router_online:breaker_off, not
+    # router_online any more (B45 Task 5): router_online now also carries the
+    # step-7 breaker, an extra mechanism router_warm_prior does not have, so
+    # comparing against it would not be an apples-to-apples full-information
+    # -vs-learned-signals comparison -- and indeed the breaker lets
+    # router_online waste FEWER attempts than router_warm_prior here (0.2 vs
+    # 0.333), which is exactly what the breaker_off/router_online pair right
+    # below is for measuring.
     assert strategies["router_warm_prior"]["wasted_attempts"] <= \
-        strategies["router_online"]["wasted_attempts"]
+        strategies["router_online:breaker_off"]["wasted_attempts"]
     # The cold arm cannot learn: every availability variant is identical.
     cold = {json.dumps(strategies[f"router_cold:{v}"], sort_keys=True)
             for v in AVAILABILITY_VARIANTS}
     assert len(cold) == 1
+
+    # B45 Task 5: router_online:breaker_off is the base (unvaried) config's
+    # control arm -- same online arm, step-7 breaker disabled. With the
+    # breaker off, fast-cheap is never pulled out of rotation during its
+    # outage, so it can only waste as many (or more) attempts as the
+    # breaker-on reported arm, never fewer. Direction only, never magnitude
+    # (a byte-identical metrics.json for the same seed is already asserted
+    # above -- assertion 3 of the brief).
+    assert "router_online:breaker_off" in strategies
+    assert strategies["router_online:breaker_off"]["wasted_attempts"] >= \
+        strategies["router_online"]["wasted_attempts"]

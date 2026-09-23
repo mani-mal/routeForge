@@ -113,6 +113,9 @@ ARM_NOTES = {
         "router_warm_prior replays every matrix row of every earlier case "
         "(all eligible endpoints) before scoring a case: a full-information "
         "reference (not an upper bound), never the reported number."),
+    "breaker_off": (
+        "router_online:breaker_off is the control: the same online arm with "
+        "the step-7 circuit breaker disabled."),
     "case_order": (
         "router_online and router_warm_prior depend on the suite's case order: "
         "a case is scored with what earlier cases taught the arm, and outages "
@@ -487,6 +490,17 @@ async def _run_loaded(*, cases, specs, settings, registry, detector,
     online = {arm_name("router_online", variant): OnlineArm(
                   cfg, registry, max_attempts, seconds_per_case=seconds_per_case)
               for variant, cfg in scored_cfgs.items()}
+    # router_online:breaker_off: the base (unvaried) config's control arm --
+    # the same online arm with the step-7 breaker (Task 2/3) forced off, so
+    # the reported router_online arm's numbers can be read against what the
+    # breaker itself is doing (B45 Task 5). Only for the base config: a
+    # weight variant already has its own arm and its own breaker_off would
+    # multiply the strategy count for no signal the base one doesn't already
+    # give.
+    if settings.routing.breaker.enabled:
+        online["router_online:breaker_off"] = OnlineArm(
+            settings, registry, max_attempts, seconds_per_case=seconds_per_case,
+            breaker=False)
     warm_prior_names = {arm_name("router_warm_prior", variant): cfg
                         for variant, cfg in scored_cfgs.items()}
     strategy_names = list(static) + list(online) + list(warm_prior_names)
