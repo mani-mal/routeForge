@@ -18,6 +18,9 @@ change can change which endpoints exist and what "correct" means, so mixing
 versions in one aggregate would silently average across incomparable
 regimes. `null` is its own group, labelled `"(unknown)"`.
 
+**Semantic-cache hits** land in their own `"(cache)"` chosen bucket, never
+in an endpoint's bucket or in `"(none)"` (unserved requests).
+
 **No oracle regret.** Production observes only the served endpoint per
 request -- there is no counterfactual to compare against -- so this module
 never computes or reports regret. `render_report` prints `CAVEAT` verbatim
@@ -38,6 +41,7 @@ _SCHEMA_MAJOR = "v1"
 
 UNTAGGED_WORKLOAD = "(untagged)"
 UNCHOSEN = "(none)"
+CACHE_HIT = "(cache)"
 UNKNOWN_REGISTRY_VERSION = "(unknown)"
 
 CAVEAT = (
@@ -111,6 +115,16 @@ def _label(value: object, default: str) -> str:
     return value if isinstance(value, str) and value else default
 
 
+def _chosen_label(record: dict) -> str:
+    """The `chosen` bucket a record lands in. A semantic-cache hit has no
+    `chosen` (no router ran) and gets its own `CACHE_HIT` bucket: pooling it
+    into an endpoint would credit that endpoint with a free, instant answer
+    it never gave, and pooling it into `UNCHOSEN` would read it as unserved."""
+    if record.get("cache_hit") is True:
+        return CACHE_HIT
+    return _label(record.get("chosen"), UNCHOSEN)
+
+
 def _mean(xs: list[float]) -> float | None:
     return sum(xs) / len(xs) if xs else None
 
@@ -158,7 +172,9 @@ def _summarize_bucket(records: list[dict]) -> dict:
     ok_costs = [
         float(r["cost_usd"]) for r in records
         if r.get("status") == "ok" and _is_number(r.get("cost_usd"))]
-    failover = sum(1 for r in records if len(r.get("attempts") or []) > 1)
+    # More than one attempt = a failover OR a confidence escalation; the
+    # record does not distinguish them, so neither does the name.
+    multi_attempt = sum(1 for r in records if len(r.get("attempts") or []) > 1)
 
     return {
         "n": n,
@@ -171,7 +187,7 @@ def _summarize_bucket(records: list[dict]) -> dict:
         "cost_mean": _mean(ok_costs),
         "latency_p50": _nearest_rank(ok_latencies, 50),
         "latency_p95": _nearest_rank(ok_latencies, 95),
-        "failover_rate": failover / n if n else None,
+        "multi_attempt_rate": multi_attempt / n if n else None,
     }
 
 
@@ -193,7 +209,7 @@ def _summarize_version_group(records: list[dict]) -> dict:
     by_w: dict[str, list[dict]] = defaultdict(list)
     for r in records:
         w = _label(r.get("workload"), UNTAGGED_WORKLOAD)
-        c = _label(r.get("chosen"), UNCHOSEN)
+        c = _chosen_label(r)
         by_wc[w][c].append(r)
         by_w[w].append(r)
 
@@ -240,7 +256,7 @@ def _fmt(value) -> str:
 _BUCKET_COLUMNS = (
     "n", "served_ok_rate", "verify_pass_rate", "quality_mean", "quality_n",
     "route_correct_rate", "route_correct_n", "cost_mean", "latency_p50",
-    "latency_p95", "failover_rate",
+    "latency_p95", "multi_attempt_rate",
 )
 _WORKLOAD_COLUMNS = ("n", "no_eligible_rate", "backend_failed_rate", "label_coverage")
 

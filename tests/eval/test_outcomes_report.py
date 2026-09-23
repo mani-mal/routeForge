@@ -5,9 +5,14 @@ report over the admin NDJSON outcome export.
 one `endpoint_registry_version` ("reg-v1"), across two named workloads
 ("chat", "summarize") and one untagged workload (`workload: null`), three
 endpoints (ep-cheap, ep-mid, ep-frontier), with one `no_eligible` row
-(req-9), one failover row with `len(attempts) > 1` (req-4), and one
-`verify_failed` row (req-5). Every expected value below is computed by
-hand from that file, not from the implementation.
+(req-9), one `backend_failed` row (req-11), one failover row with
+`len(attempts) > 1` (req-4), and one `verify_failed` row (req-5). Every
+value in it is one the builders (`app/apps/outcomes.py`) can actually
+produce -- real buckets and verify modes, and failure rows shaped exactly
+as `build_failure_outcome` leaves them (a backend_failed/no_eligible row has
+no `chosen`; a verify_failed row is attributed to the served model). Every
+expected value below is computed by hand from that file, not from the
+implementation.
 """
 from __future__ import annotations
 
@@ -159,17 +164,19 @@ def test_summarize_chat_ep_cheap_bucket(golden_summary):
         "cost_mean": 0.0015,              # mean(0.001, 0.002, 0.0015) -- all 3 rows are ok
         "latency_p50": 110.0,
         "latency_p95": 120.0,
-        "failover_rate": 0.0,
+        "multi_attempt_rate": 0.0,
     }
 
 
 def test_summarize_chat_ep_mid_bucket_has_the_failover_and_the_verify_failure(golden_summary):
-    # req-4 (ok, failover: attempts=[ep-cheap, ep-mid]), req-5 (verify_failed)
+    # req-4 (ok, failover: attempts=[ep-cheap, ep-mid]), req-5 (verify_failed,
+    # attributed to the served ep-mid)
     bucket = golden_summary["registry_versions"]["reg-v1"]["by_workload_chosen"]["chat"]["ep-mid"]
     assert bucket == {
         "n": 2,
         "served_ok_rate": 0.5,            # 1/2 (only req-4 is ok)
-        "verify_pass_rate": 0.0,          # 0/2, both verify_performed=True but verify_passed=False
+        "verify_pass_rate": 0.5,          # 1/2: both verify_performed=True, req-4
+                                           # passed, req-5 failed
         "quality_mean": None,
         "quality_n": 0,
         "route_correct_rate": 0.0,        # mean(0.0)
@@ -178,7 +185,7 @@ def test_summarize_chat_ep_mid_bucket_has_the_failover_and_the_verify_failure(go
                                            # verify_failed cost (also 0.01) is excluded
         "latency_p50": 200.0,             # only req-4 is ok
         "latency_p95": 200.0,
-        "failover_rate": 0.5,             # 1/2
+        "multi_attempt_rate": 0.5,        # 1/2 (req-4)
     }
 
 
@@ -191,7 +198,7 @@ def test_summarize_summarize_ep_frontier_bucket(golden_summary):
     assert bucket["quality_n"] == 2
     assert bucket["latency_p50"] == 300.0
     assert bucket["latency_p95"] == 320.0
-    assert bucket["failover_rate"] == 0.0
+    assert bucket["multi_attempt_rate"] == 0.0
 
 
 def test_summarize_no_eligible_row_lands_in_unchosen_bucket_with_no_latency(golden_summary):
@@ -206,22 +213,81 @@ def test_summarize_no_eligible_row_lands_in_unchosen_bucket_with_no_latency(gold
     assert bucket["cost_mean"] is None
     assert bucket["latency_p50"] is None
     assert bucket["latency_p95"] is None
-    assert bucket["failover_rate"] == 0.0
+    assert bucket["multi_attempt_rate"] == 0.0
 
 
 def test_summarize_untagged_workload_bucket(golden_summary):
-    # req-10 (ok, cost 0.001), req-11 (backend_failed, cost 0.0 -- excluded
-    # from both cost_mean and latency, which are ok-rows-only)
+    # req-10 is the only untagged ok row served by ep-cheap. req-11
+    # (backend_failed) has no `chosen` -- nothing was served -- so it lands
+    # in "(none)", not in ep-cheap's bucket, even though ep-cheap was tried.
     bucket = golden_summary["registry_versions"]["reg-v1"]["by_workload_chosen"]["(untagged)"]["ep-cheap"]
-    assert bucket["n"] == 2
-    assert bucket["served_ok_rate"] == 0.5
+    assert bucket["n"] == 1
+    assert bucket["served_ok_rate"] == 1.0
     assert bucket["verify_pass_rate"] == 1.0
     assert bucket["quality_mean"] == 1.0
     assert bucket["quality_n"] == 1
-    assert bucket["cost_mean"] == 0.001      # mean(0.001) -- req-11's cost_usd=0.0
-                                              # is dropped since its status != ok
+    assert bucket["cost_mean"] == 0.001
     assert bucket["latency_p50"] == 90.0
     assert bucket["latency_p95"] == 90.0
+    assert bucket["multi_attempt_rate"] == 0.0
+
+
+def test_summarize_untagged_backend_failed_row_is_unchosen(golden_summary):
+    bucket = golden_summary["registry_versions"]["reg-v1"]["by_workload_chosen"]["(untagged)"]["(none)"]
+    assert bucket == {
+        "n": 1,
+        "served_ok_rate": 0.0,
+        "verify_pass_rate": None,         # verify_performed is null
+        "quality_mean": None,
+        "quality_n": 0,
+        "route_correct_rate": None,
+        "route_correct_n": 0,
+        "cost_mean": None,                # not an ok row
+        "latency_p50": None,
+        "latency_p95": None,
+        "multi_attempt_rate": 0.0,        # attempts=[ep-cheap], one attempt
+    }
+
+
+def test_fixture_uses_only_values_the_builders_produce():
+    """Final review #1: the golden fixture must not contain enum values the
+    code can never write."""
+    from app.apps.outcomes import BUCKETS, STATUSES, VERIFY_MODES
+    records, _ = load_export(str(GOLDEN_EXPORT))
+    for r in records:
+        assert r["status"] in STATUSES, r
+        assert r["prompt_tokens_bucket"] in (*BUCKETS, None), r
+        assert r["verify_mode"] in (*VERIFY_MODES, None), r
+        assert r["workload_source"] in ("client", "none", "invalid"), r
+        assert r["cache_hit"] is False
+        if r["status"] in ("backend_failed", "no_eligible", "context_overflow"):
+            assert r["chosen"] is None and r["verify_mode"] is None, r
+        if r["status"] == "verify_failed":
+            assert r["verify_mode"] == "failed" and r["chosen"] is not None, r
+
+
+def test_cache_hit_rows_get_their_own_chosen_bucket():
+    """A semantic-cache hit has no `chosen` (no router ran). It gets its own
+    "(cache)" bucket -- never pooled into an endpoint's bucket, and never
+    confused with the "(none)" bucket of requests that were not served."""
+    records = [
+        {"endpoint_registry_version": "v", "workload": "w", "chosen": None,
+         "cache_hit": True, "status": "ok", "cost_usd": 0.0, "latency_ms": 2.0,
+         "attempts": [], "feedback": []},
+        {"endpoint_registry_version": "v", "workload": "w", "chosen": None,
+         "cache_hit": False, "status": "no_eligible", "cost_usd": 0.0,
+         "latency_ms": 1.0, "attempts": [], "feedback": []},
+        {"endpoint_registry_version": "v", "workload": "w", "chosen": "ep",
+         "cache_hit": False, "status": "ok", "cost_usd": 0.01, "latency_ms": 50.0,
+         "attempts": ["ep"], "feedback": []},
+    ]
+    buckets = summarize(records)["registry_versions"]["v"]["by_workload_chosen"]["w"]
+    assert set(buckets) == {"(cache)", "(none)", "ep"}
+    assert buckets["(cache)"]["n"] == 1
+    assert buckets["(cache)"]["served_ok_rate"] == 1.0
+    assert buckets["(none)"]["n"] == 1
+    assert buckets["ep"]["n"] == 1 and buckets["ep"]["cost_mean"] == 0.01
+    assert "(cache)" in render_report(summarize(records))
 
 
 def test_summarize_by_workload_chat(golden_summary):
@@ -389,3 +455,11 @@ def test_cli_exits_1_on_unknown_schema_major(tmp_path):
     result = _run_cli(bad, tmp_path / "out")
     assert result.returncode == 1
     assert "load error" in result.stderr
+
+
+def test_report_names_multi_attempt_rate_not_failover_rate(golden_summary):
+    """More than one attempt is failover OR confidence escalation; the
+    column says so."""
+    report = render_report(golden_summary)
+    assert "multi_attempt_rate" in report
+    assert "failover_rate" not in report
