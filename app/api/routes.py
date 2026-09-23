@@ -387,8 +387,9 @@ def _failed_model(exc: BaseException) -> str:
 async def _record_outcome(request: Request, row: dict) -> None:
     """Write one `routing_outcomes` row (P2b-2) in its own session. Best
     effort, like every other record on the serving path: a failed write is
-    logged and swallowed, so it can never fail, alter or delay the response,
-    and it never touches the usage row. `outcomes.enabled: false` writes
+    logged and swallowed, so it can never fail or alter the response, and it
+    never touches the usage row. It is inline, like the usage row, so it does
+    add one DB commit to the request. `outcomes.enabled: false` writes
     nothing."""
     if not request.app.state.settings.serving.outcomes.enabled:
         return

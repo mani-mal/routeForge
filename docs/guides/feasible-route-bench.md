@@ -333,3 +333,68 @@ the production weight is a decision for the owner, not something this tool does.
 
 `sweep_generate_mismatches` does not by itself change the exit code: those rows are
 already error rows, scored as failed calls rather than credited to the endpoint.
+
+## 8. Outcome report (production records)
+
+`scripts/outcome_report.py` summarises RouteForge's **production** routing outcome
+records. It reads a file exported from a running deployment
+(`GET /admin/outcomes/export`; see
+[`docs/reference/routing-outcomes.md`](../reference/routing-outcomes.md) §7). It never
+connects to a database or a deployment.
+
+```bash
+curl -s -b "rf_admin_session=<session>" \
+  "http://<host>:8080/admin/outcomes/export?since=2026-09-16T00:00:00Z" > outcomes.ndjson
+
+uv run python scripts/outcome_report.py --export outcomes.ndjson --out results/outcomes
+```
+
+It writes `summary.json` and `report.md` into `--out`. Re-running it on the same export
+gives a byte-identical `summary.json`: keys are sorted, floats are rounded to 6 decimal
+places, and nothing time-dependent is included.
+
+**How it groups.** First by `endpoint_registry_version`. Records from different registry
+versions are **never pooled**, because a registry change can change which endpoints exist.
+A record with no version is grouped as `(unknown)`. Within each version:
+
+- per `(workload, chosen)`: `n`, served-ok rate, verify pass rate (over records where
+  verification was performed), mean `quality` feedback and its count, `route_correct`
+  rate and its count, mean cost, latency p50/p95 (nearest rank), and failover rate
+  (more than one attempt). Mean cost and the latency percentiles use `ok` records only,
+  because failed records carry zero cost and a different latency definition;
+- per workload: `n`, `no_eligible` rate, `backend_failed` rate, and label coverage (the
+  share of records with any feedback).
+
+A request with no workload tag is shown as `(untagged)`. A record with no served model
+(a failure, or a semantic-cache hit) is shown under chosen `(none)`.
+
+**Loading.** Blank lines are skipped. A line that is not JSON, or has no `outcome`, is
+skipped with a warning on stderr. A line whose `schema` is missing or is not
+`routeforge.outcome/v1` (a `v1.x` minor is accepted) stops the run with exit code `1`:
+the loader does not guess at a format it does not know.
+
+**How it differs from the bench.**
+
+| | FeasibleRouteBench (§1–§7) | Outcome report |
+|---|---|---|
+| Input | a suite of cases and an endpoint file | a production export |
+| Endpoints observed per request | **every** eligible endpoint | only the one that served it |
+| Quality | graded against each case's expected answer | client and admin feedback, where given, and step-9 verification |
+| Oracle regret | computed | **not computable, never printed** |
+| Endpoint comparisons | same cases for every endpoint | different request mixes, chosen by the router |
+
+`report.md` starts with this caveat, verbatim:
+
+> Production observes only the served endpoint for each request, so oracle regret is not
+> computable from these records and is not reported. Endpoint comparisons are confounded
+> by the router's own choices; treat them as descriptive, not causal.
+
+Use the report to see what production traffic looks like per workload: where requests
+fail, which endpoints serve which workloads, and how much feedback exists. Use the bench
+to compare endpoints on the same cases. The research notes on what the records can and
+cannot support are in [`docs/research/feasible-route-bench.md`](../research/feasible-route-bench.md) §13.
+
+| Exit code | Meaning |
+|---|---|
+| `0` | ok |
+| `1` | load error: the file cannot be read, or a line has an unrecognised or missing schema |

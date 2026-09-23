@@ -1,7 +1,8 @@
 # P2b-2: routing outcome records — design
 
-**Date:** 2026-09-23 · **Status:** approved direction (owner answers below), spec awaiting
-review · **Programme:** P2b-1 FeasibleRouteBench (shipped) → **P2b-2 outcome records** →
+**Date:** 2026-09-23 · **Status:** built 2026-09-23 on `feat/routing-outcome-records`;
+**amended 2026-09-23** where the build departed from it (§13, and inline notes marked
+*Amended*) · **Programme:** P2b-1 FeasibleRouteBench (shipped) → **P2b-2 outcome records** →
 P2b-3 learning/exploration · **Source:** Priorities 1–3 handoff §16, and the Phase 2 bullet
 "versioned routing-outcome records"
 
@@ -77,8 +78,8 @@ Most of the substrate exists but is scattered or perishable:
 | `attempts` | JSON list[str] | models tried, in order, including failed hops |
 | `chosen` | str, nullable | the served model; null when nothing was served |
 | `scoring` | JSON, nullable | the first router hop's `RankResult.to_record()`, which is ids and numbers only |
-| `circuit_bypass` | bool | written by the breaker slice; false until then |
-| `cost_usd`, `latency_ms` | float | the total across hops |
+| `circuit_bypass` | bool | *Amended:* recorded now (the breaker merged in PR #67): true if any router hop bypassed the breaker |
+| `cost_usd`, `latency_ms` | float | the total across hops. *Amended:* `latency_ms` on failure rows is wall-clock from the start of the request handler (includes gate time), not a hop sum |
 | `prompt_tokens`, `completion_tokens` | int | |
 | `verify_required`, `verify_performed`, `verify_passed` | bool, nullable | from the `verify` trace record |
 | `verify_mode` | str enum, nullable | `not_required`, `verified`, `failed`, `waived_stream` or `incremental` |
@@ -160,9 +161,11 @@ completion, tool arguments, reason strings, or upstream error text. Four tests e
     comes from the `NoEligibleCandidate`'s feasible set. The exception gains an optional
     `rejected` tuple for this.
 - **Best effort.** The outcome write happens in its own `try` block after the usage
-  write. If it fails, the error is logged with the request_id and
-  `routeforge_outcome_write_failures_total` is incremented. **It never fails or delays the
-  response.** Metering, which is billing, stays the durable record.
+  write. If it fails, the error is logged with the request_id (a `serving.obs` warning).
+  **It never fails or changes the response.** It is inline, like the usage row, so it
+  **does add one DB commit per request**. Metering, which is billing, stays the durable
+  record. *Amended 2026-09-23:* there is no `routeforge_outcome_write_failures_total`
+  metric (§13), and the earlier "never delays" was wrong.
 - **Switch.** `serving.yaml` gets `outcomes: {enabled: true, retention_days: 90}`. This is
   infrastructure: `serving.yaml` owns observability switches, and the config lint gains
   its single-owner entry. With `enabled: false`, nothing is written and nothing else changes.
@@ -264,3 +267,58 @@ completion, tool arguments, reason strings, or upstream error text. Four tests e
   column, so it needs no migration either.
 - **Earlier ALTERs are still owed.** Deployments must first apply the earlier outstanding
   ALTERs (`context_window_source` from #64) before rolling any image.
+
+## 13. Amendments (2026-09-23, from the build)
+
+The build (commits `e24eb2c`..`e14f8e5`) departed from this spec in these ways. The
+reference doc, `docs/reference/routing-outcomes.md`, describes what was built.
+
+**Decided while planning:**
+
+1. **No write-failure metric.** `routeforge_outcome_write_failures_total` was not added. A
+   failed write is a `serving.obs` warning naming the request_id. `/metrics` stays at five
+   families; a write failure is an operator log concern, not a routing signal.
+2. **`circuit_bypass` is recorded now.** The breaker merged in PR #67 before this slice, so
+   the column is true when any router hop's `DecisionRecord.circuit_bypass` was true.
+
+**Changed or settled during the build:**
+
+3. **The write adds one commit per request.** §6 said the write "never delays" the response.
+   It is inline in `_finalize`, in the same place as the usage row, so it adds one DB commit
+   per request. It still never fails or changes the response.
+4. **`verify_mode` checks the reason first.** Precedence: reason `waived*` → `waived_stream`;
+   reason `incremental` → `incremental`; `required` false → `not_required`; `passed` false →
+   `failed`; else `verified`. Real `stream_unverified` and `incremental_verify` records always
+   carry `required: false`, so checking `required` first recorded them all as `not_required`.
+5. **`latency_ms` has two definitions.** `ok` rows sum the trace hops (as the usage row does);
+   failure rows use wall-clock from the start of the request handler, including gate time.
+6. **More requests write no row** than §4.1 listed: pinned-model rejections (`422
+   model_not_found`), unhandled `500`s, `400 streaming_not_supported`, body validation
+   errors, and a real-token stream that ends with "stream ended without a final result"
+   (rare; it writes no usage row either; a known gap).
+7. **`no_eligible` rejections.** `rejected` comes from `NoEligibleCandidate.rejected` as
+   `{name, code}`. Eligibility-filter rejections carry codes; the router's budget filter has
+   `code: null`; an empty pool gives `[]`. The budget and empty-pool cases are
+   distinguishable only by `rejected` being non-empty with null codes.
+8. **`eligible` is the first hop's scored set** (`scoring.candidates`), falling back to
+   `[chosen]`, not "scored plus chosen". `tier_target` is the router's target before any
+   budget fallback.
+9. **Semantic-cache hits** are `ok` rows with no router hop, so `chosen`, `tier_target`,
+   `scoring` and `complexity` are null. The cached answer's model is not recorded.
+10. **Workload parsing.** A header that is present but invalid is authoritative: `metadata`
+    is not consulted. A `metadata` that is not an object, or a non-string `workload`, is
+    `invalid`; nothing supplied is `none`.
+11. **Feedback.** `SCORE_NAMES` has five names (`corrected_output` too). `recorded` reflects
+    the primary score only, not the extra `corrected_output` row. Every local lookup and
+    write is guarded: a local store failure is logged, gives `recorded: false`, and never
+    changes the HTTP status or `stored`, or blocks the Langfuse post. Admin feedback still
+    needs the request in the console's snapshot cache (404 otherwise).
+12. **Retention.** Feedback is pruned by its own `ts`, so late feedback can outlive its
+    outcome row. The prune is skipped when `outcomes.enabled` is false. The config lint
+    requires `retention_days > 0` (`OUTCOMES_RETENTION_NOT_POSITIVE`).
+13. **Export.** A naive `since`/`until` is taken as UTC. `limit` below 1 is `422`. Pages are
+    1000 rows, each in its own session. Feedback `value` is `value_num`, else `value_cat`.
+14. **Report.** Records are always grouped by `endpoint_registry_version`, not only when
+    more than one is present; a null version is `(unknown)`, a null chosen is `(none)`.
+    Mean cost, like the latency percentiles, is over `ok` rows only, because failed rows
+    carry zero cost. A missing `schema` field is refused like an unknown major.

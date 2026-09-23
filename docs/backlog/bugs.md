@@ -167,6 +167,13 @@ on the Spark at `5da06a4` (research doc §11.1): `router_online` went from 0.636
 Nemotron ×5, Llama ×5) to **0.955 (Qwen ×22)**, 0 violations. Note what this does *not* do: with every model above the 3 s cap, latency now ties
 them all, so there is no latency-driven exploration at all — a new model gets traffic only on
 quality or cost. The durable fix is still a measured quality signal (P2b-2 → P2b-3).
+**Durable-fix pointer, 2026-09-23:** P2b-2 is built on `feat/routing-outcome-records`. Every
+routed request now writes a content-free outcome record, and `/v1/feedback` scores are kept
+locally per request and workload
+([`docs/reference/routing-outcomes.md`](../reference/routing-outcomes.md)), so "Llama fails
+claim summaries" becomes visible once clients tag and score. The router does not read these
+records yet; learning from them is P2b-3
+([`docs/research/feasible-route-bench.md`](../research/feasible-route-bench.md) §13.4).
 
 Two P2a signal defaults interact badly with slow reasoning models:
 
@@ -198,7 +205,8 @@ onboarded model).
   call) instead of the tier default, or make the tier default pessimistic rather than optimistic.
 - Revisit `max_latency_norm` for deployments whose models are all multi-second.
 - The durable fix is a real quality signal (P2b-2 outcome records → P2b-3 learning), so a fast
-  model that fails a workload is not preferred for it.
+  model that fails a workload is not preferred for it. *(P2b-2 built 2026-09-23; see the pointer
+  above.)*
 - Measure any change with FeasibleRouteBench live before adopting it.
 
 ## B50 — `/v1/models` doesn't report each model's context limit, so clients hand-set it  ✅ RESOLVED (2026-09-22, `76b2206`)
@@ -2058,6 +2066,14 @@ trace's own project (fail-closed when the app has no project), and every chat re
 (`route_correct`, `preferred_model`, `failure_type`) and dataset-export readiness (traces +
 corrected outputs → Langfuse datasets → external TRL transform). Training stays out of scope.
 Original write-up kept below.
+
+**Update 2026-09-23 (P2b-2).** Still PARTIAL. The **router-decision** export now exists:
+content-free per-request outcome records plus locally kept feedback scores, exported by
+`GET /admin/outcomes/export` as NDJSON
+([`docs/reference/routing-outcomes.md`](../reference/routing-outcomes.md)). `route_correct`,
+`preferred_model` and `failure_type` are accepted score names. What remains is the
+**LLM-side** dataset (corrected outputs → Langfuse datasets → TRL transform): the outcome
+records deliberately hold no text, so they cannot serve it.
 
 **Prior status 2026-08-16 (historical):** gaps 1 & 2 shipped; gap 3 still open.
 
