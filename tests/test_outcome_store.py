@@ -55,6 +55,7 @@ def _outcome_row(**overrides) -> dict:
         chosen="onprem/qwen-7b",
         scoring={"onprem/qwen-7b": {"cost": 0.1}},
         circuit_bypass=False,
+        cache_hit=True,
         cost_usd=0.0012,
         latency_ms=234.5,
         prompt_tokens=120,
@@ -172,6 +173,40 @@ def test_write_feedback_rows_are_returned_by_feedback_for():
         assert names == {"thumbs", "rating"}
 
     _run(go())
+
+
+def test_feedback_for_is_scoped_by_application_id():
+    """Final review #2: the export joins feedback by (application_id,
+    request_id), so another app's feedback on a colliding request id can
+    never be attached to this app's outcome."""
+    async def go():
+        db = await _db()
+        async with db.session() as s:
+            await store.write_feedback(
+                s, request_id="req-1", application_id="app-1",
+                score_name="quality", value_num=1.0, value_cat=None, source="app")
+            await store.write_feedback(
+                s, request_id="req-1", application_id="app-2",
+                score_name="quality", value_num=0.0, value_cat=None, source="app")
+            await s.commit()
+
+        async with db.session() as s:
+            scoped = await store.feedback_for(s, ["req-1"], application_id="app-1")
+            unscoped = await store.feedback_for(s, ["req-1"])
+
+        assert [r.application_id for r in scoped["req-1"]] == ["app-1"]
+        assert len(unscoped["req-1"]) == 2
+
+    _run(go())
+
+
+def test_request_id_and_value_cat_columns_are_wide_enough():
+    """A request id is `req-` + 32 hex (36 chars); every column holding one
+    must fit it. `value_cat` holds up to 100 chars (a slashed model slug)."""
+    from app.apps.models import RequestSnapshot, UsageRecord
+    for model in (RoutingOutcome, OutcomeFeedback, RequestSnapshot, UsageRecord):
+        assert model.__table__.c.request_id.type.length >= 36, model.__name__
+    assert OutcomeFeedback.__table__.c.value_cat.type.length >= 100
 
 
 def test_prune_outcomes_deletes_old_rows_from_both_tables():

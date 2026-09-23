@@ -292,6 +292,9 @@ class RoutingOutcome(Base):
     chosen: Mapped[str | None] = mapped_column(String(100), nullable=True)
     scoring: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     circuit_bypass: Mapped[bool] = mapped_column(Boolean, default=False)
+    # True when a semantic-cache entry served the request: no router ran, so
+    # `chosen`/`attempts` stay empty.
+    cache_hit: Mapped[bool] = mapped_column(Boolean, default=False)
     cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     latency_ms: Mapped[float] = mapped_column(Float, default=0.0)
     prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
@@ -317,7 +320,7 @@ class OutcomeFeedback(Base):
     ts: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
     score_name: Mapped[str] = mapped_column(String(32))
     value_num: Mapped[float | None] = mapped_column(Float, nullable=True)
-    value_cat: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    value_cat: Mapped[str | None] = mapped_column(String(100), nullable=True)
     source: Mapped[str] = mapped_column(String(8))   # app | admin
 
 

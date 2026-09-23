@@ -18,6 +18,7 @@ from app.apps.outcomes import (
     VERIFY_MODES,
     build_failure_outcome,
     build_ok_outcome,
+    feedback_values,
     outcome_context,
     parse_workload,
     prompt_bucket,
@@ -70,13 +71,14 @@ def _router_hop(chosen, hop_index=0, scoring=None, rejected=None,
     ).model_dump()
 
 
-def _gateway_failed_hop(failed_name, hop_index=0, reason="a failed; retrying") -> dict:
-    scoring = {"weights": {}, "signals_enabled": False, "latency_scale_ms": 1.0,
-               "max_latency_norm": 1.0,
-               "candidates": [{"name": failed_name, "score": 0.1}]}
+def _gateway_failed_hop(failed_name, hop_index=0, reason="a failed; retrying",
+                        scoring=None, rejected=None, tier_target=None) -> dict:
+    scoring = scoring or {"weights": {}, "signals_enabled": False,
+                          "latency_scale_ms": 1.0, "max_latency_norm": 1.0,
+                          "candidates": [{"name": failed_name, "score": 0.1}]}
     return DecisionRecord(
         step="gateway", chosen=None, reason=reason, hop_index=hop_index,
-        scoring=scoring,
+        scoring=scoring, rejected=rejected or [], tier_target=tier_target,
     ).model_dump()
 
 
@@ -246,9 +248,52 @@ def test_build_ok_outcome_failover_then_router_hop():
 
     assert row["attempts"] == ["a", "b"]
     assert row["chosen"] == "b"
-    # first router hop's own scoring, not the failed gateway hop's
-    assert row["scoring"] == scoring_b
-    assert row["eligible"] == ["b"]
+    # the request's FIRST routing decision is the one that picked `a` (the
+    # failed gateway hop), not the later router hop that served `b`
+    assert row["scoring"]["candidates"] == [{"name": "a", "score": 0.1}]
+    assert row["eligible"] == ["a"]
+
+
+def test_build_ok_outcome_failover_first_decision_is_the_failed_hop():
+    """Ruling (final review #4): eligible/scoring/tier_target/rejected all
+    describe the request's FIRST routing decision -- after a failover that is
+    the failed gateway hop, which carries its own scoring and rejected set."""
+    scoring_a = {"weights": {}, "signals_enabled": False, "latency_scale_ms": 1.0,
+                 "max_latency_norm": 1.0,
+                 "candidates": [{"name": "a", "score": 0.9}, {"name": "b", "score": 0.5}]}
+    scoring_b = {"weights": {}, "signals_enabled": False, "latency_scale_ms": 1.0,
+                 "max_latency_norm": 1.0, "candidates": [{"name": "b", "score": 0.5}]}
+    trace = [
+        _gateway_failed_hop("a", hop_index=0, scoring=scoring_a,
+                            rejected=[_rejected(name="z", code="residency")],
+                            tier_target="cheap"),
+        _router_hop("b", hop_index=1, scoring=scoring_b,
+                    rejected=[_rejected(name="y", code="circuit_open")]),
+        _verify(),
+    ]
+    row = build_ok_outcome(
+        _resp(trace), request_id="req-2", application_id="app-1",
+        outcome_ctx=outcome_context(_ctx()), routing_policy_version="rpv-1",
+        workload=None, workload_source="none")
+    assert row["chosen"] == "b"
+    assert row["attempts"] == ["a", "b"]
+    assert row["scoring"] == scoring_a
+    assert row["eligible"] == ["a", "b"]
+    assert row["rejected"] == [{"name": "z", "code": "residency"}]
+    assert row["tier_target"] == "cheap"
+
+
+def test_build_ok_outcome_failover_tier_target_falls_back_to_first_router_hop():
+    """A failed gateway hop with no `tier_target` of its own (an older
+    trace) takes it from the first router hop."""
+    router = _router_hop("b", hop_index=1)
+    router["tier_target"] = "mid"
+    trace = [_gateway_failed_hop("a", hop_index=0), router, _verify()]
+    row = build_ok_outcome(
+        _resp(trace), request_id="req-2", application_id="app-1",
+        outcome_ctx=outcome_context(_ctx()), routing_policy_version="rpv-1",
+        workload=None, workload_source="none")
+    assert row["tier_target"] == "mid"
 
 
 def test_build_ok_outcome_escalation_last_chosen_wins():
@@ -270,6 +315,54 @@ def test_build_ok_outcome_escalation_last_chosen_wins():
     assert row["attempts"] == ["cheap-x", "mid-y"]
     # eligible comes from the FIRST router hop's scoring
     assert row["eligible"] == ["cheap-x"]
+
+
+def test_build_ok_outcome_escalation_first_decision_describes_eligible_scoring_tier():
+    """After a confidence escalation the first (unserved) router hop is the
+    first routing decision: eligible/scoring/tier_target/rejected come from
+    it, `chosen` is the escalated, served model."""
+    scoring_1 = {"weights": {}, "signals_enabled": False, "latency_scale_ms": 1.0,
+                 "max_latency_norm": 1.0,
+                 "candidates": [{"name": "cheap-x", "score": 0.5}]}
+    scoring_2 = {"weights": {}, "signals_enabled": False, "latency_scale_ms": 1.0,
+                 "max_latency_norm": 1.0,
+                 "candidates": [{"name": "mid-y", "score": 0.7}]}
+    first = _router_hop("cheap-x", hop_index=0, scoring=scoring_1,
+                        rejected=[_rejected(name="q", code="residency")])
+    first["tier_target"] = "cheap"
+    second = _router_hop("mid-y", hop_index=1, scoring=scoring_2)
+    second["tier_target"] = "mid"
+    row = build_ok_outcome(
+        _resp([first, second, _verify()]), request_id="req-3",
+        application_id="app-1", outcome_ctx=outcome_context(_ctx()),
+        routing_policy_version="rpv-1", workload=None, workload_source="none")
+    assert row["chosen"] == "mid-y"
+    assert row["scoring"] == scoring_1
+    assert row["eligible"] == ["cheap-x"]
+    assert row["tier_target"] == "cheap"
+    assert row["rejected"] == [{"name": "q", "code": "residency"}]
+
+
+def test_build_ok_outcome_cache_hit_sets_cache_hit_and_no_chosen():
+    trace = [_verify(required=False, performed=False),
+             {"step": "cache", "enabled": True, "hit": True, "latency_ms": 2.0}]
+    row = build_ok_outcome(
+        _resp(trace), request_id="req-c", application_id="app-1",
+        outcome_ctx=outcome_context(_ctx()), routing_policy_version="rpv-1",
+        workload=None, workload_source="none")
+    assert row["cache_hit"] is True
+    assert row["chosen"] is None
+    assert row["attempts"] == []
+
+
+def test_build_ok_outcome_cache_miss_is_not_a_cache_hit():
+    trace = [_router_hop("a"), _verify(),
+             {"step": "cache", "enabled": True, "hit": False}]
+    row = build_ok_outcome(
+        _resp(trace), request_id="req-c", application_id="app-1",
+        outcome_ctx=outcome_context(_ctx()), routing_policy_version="rpv-1",
+        workload=None, workload_source="none")
+    assert row["cache_hit"] is False
 
 
 def test_build_ok_outcome_verify_not_required():
@@ -433,6 +526,69 @@ def test_build_failure_outcome_reads_complexity_from_outcome_ctx():
         outcome_ctx=ctx, routing_policy_version="rpv-1",
         endpoint_registry_version=None, workload=None, workload_source="none")
     assert row["complexity"] == 0.81
+
+
+def test_build_failure_outcome_verify_failed_reads_the_stashed_trace():
+    """Ruling (final review #1): a step-9 failure served a model before it
+    was refused, so the verify_failed row derives attempts/chosen/scoring/
+    verify_*/cost/tokens from the pipeline's stashed trace -- through the
+    SAME trace-reading logic as `build_ok_outcome`."""
+    scoring = {"weights": {}, "signals_enabled": False, "latency_scale_ms": 1.0,
+               "max_latency_norm": 1.0, "candidates": [{"name": "m", "score": 0.9}]}
+    hop = _router_hop("m", scoring=scoring, rejected=[_rejected(name="n")],
+                      reason=f"routed; {SSN}")
+    hop["tier_target"] = "mid"
+    trace = [hop, _verify(required=True, performed=True, passed=False,
+                          reason=f"failed closed {EMAIL}")]
+    row = build_failure_outcome(
+        status="verify_failed", request_id="req-v", application_id="app-1",
+        outcome_ctx=outcome_context(_ctx()), routing_policy_version="rpv-1",
+        endpoint_registry_version="erv-1", workload=None, workload_source="none",
+        trace=trace, prompt_tokens=1500, completion_tokens=40, cost_usd=0.003,
+        latency_ms=12.0)
+    assert row["status"] == "verify_failed"
+    assert row["chosen"] == "m"
+    assert row["attempts"] == ["m"]
+    assert row["eligible"] == ["m"]
+    assert row["scoring"] == scoring
+    assert row["tier_target"] == "mid"
+    assert row["rejected"] == [{"name": "n", "code": "tier_below_target"}]
+    assert row["verify_required"] is True
+    assert row["verify_performed"] is True
+    assert row["verify_passed"] is False
+    assert row["verify_mode"] == "failed"
+    assert row["cost_usd"] == 0.003
+    assert row["prompt_tokens"] == 1500
+    assert row["completion_tokens"] == 40
+    assert row["prompt_tokens_bucket"] == "1k-4k"
+    assert row["latency_ms"] == 12.0
+    assert row["cache_hit"] is False
+    dumped = json.dumps(row, default=str)
+    assert SSN not in dumped and EMAIL not in dumped
+
+
+# --- feedback_values -----------------------------------------------------
+
+def test_feedback_values_accepts_a_slashed_model_slug():
+    slug = "nvidia/llama-3.1-nemotron-nano-8b-v1"
+    assert feedback_values("preferred_model", slug) == (None, slug)
+
+
+def test_feedback_values_categorical_length_limit_is_100():
+    assert feedback_values("preferred_model", "a" * 100) == (None, "a" * 100)
+    assert feedback_values("preferred_model", "a" * 101) is None
+
+
+def test_feedback_values_still_refuses_spaces_and_markup():
+    assert feedback_values("failure_type", "bad value!") is None
+    assert feedback_values("failure_type", "<script>") is None
+
+
+def test_feedback_values_refuses_non_finite_numbers():
+    assert feedback_values("quality", float("nan")) is None
+    assert feedback_values("quality", float("inf")) is None
+    assert feedback_values("quality", float("-inf")) is None
+    assert feedback_values("quality", 0.5) == (0.5, None)
 
 
 def test_statuses_constant():

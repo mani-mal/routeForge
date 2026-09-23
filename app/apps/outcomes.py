@@ -19,6 +19,7 @@ calling `parse_workload` once per request and threading its result into
 """
 from __future__ import annotations
 
+import math
 import re
 
 # --- constants --------------------------------------------------------
@@ -35,7 +36,10 @@ _WORKLOAD_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 # `outcome_feedback.value_cat` shape (P2b-2 Task 5): the same shape a
 # Langfuse categorical score value is expected to have -- an unparseable
 # value is refused outright, never truncated or coerced.
-_FEEDBACK_VALUE_CAT_RE = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
+# `/` is allowed so a `preferred_model` score can name a slashed model slug
+# (e.g. `nvidia/llama-3.1-nemotron-nano-8b-v1`); 100 chars matches
+# `OutcomeFeedback.value_cat` and `RoutingOutcome.chosen`.
+_FEEDBACK_VALUE_CAT_RE = re.compile(r"^[A-Za-z0-9._:/-]{1,100}$")
 
 
 def feedback_values(score_name: str, value: float | str
@@ -44,9 +48,9 @@ def feedback_values(score_name: str, value: float | str
     `/v1/feedback`-shaped `value`. A string becomes `value_cat` -- checked
     against `_FEEDBACK_VALUE_CAT_RE`; a value that fails is refused (`None`
     is returned for the whole pair, not a truncated/coerced string) rather
-    than stored. Anything else becomes `value_num` as a plain float (never
-    fails: `FeedbackIn.value` is already typed `float | str`, so this branch
-    only ever sees something `float()` accepts).
+    than stored. Anything else becomes `value_num` as a plain float --
+    refused (`None`) when it is not finite (NaN or +/-inf), which no score
+    means and which would poison every mean the report takes.
 
     `score_name` is accepted for callers' symmetry with `post_score`/
     `SCORE_NAMES` but does not change the parse -- whether a value is
@@ -54,7 +58,8 @@ def feedback_values(score_name: str, value: float | str
     `post_score`'s own `isinstance(value, str)` split."""
     if isinstance(value, str):
         return (None, value) if _FEEDBACK_VALUE_CAT_RE.fullmatch(value) else None
-    return (float(value), None)
+    num = float(value)
+    return (num, None) if math.isfinite(num) else None
 
 
 def _validate_tag(raw: str) -> str | None:
@@ -132,6 +137,13 @@ def _router_hops(trace: list[dict]) -> list[dict]:
     return [e for e in trace if e.get("step") == "router"]
 
 
+def _is_failed_decision_hop(e: dict) -> bool:
+    """A failed gateway hop: the router picked a candidate (its `scoring` is
+    real) but the backend call failed, so nothing was served."""
+    return (e.get("step") == "gateway" and e.get("chosen") is None
+            and bool(e.get("scoring")))
+
+
 def _rejected_rows(rejected) -> list[dict]:
     """Normalize any iterable of RejectedCandidate-shaped mappings down to
     `{name, code}` only -- never `reason`, which is free text an operator or
@@ -196,10 +208,10 @@ def build_ok_outcome(resp: dict, *, request_id: str, application_id: str,
     dict) and the caller-supplied ids/versions/workload tag. Reads only the
     content-free keys documented on the module (and the task-2 brief):
     `trace_id`, `usage.{prompt,completion}_tokens`, `cost.total_usd`,
-    `policy.endpoint_registry_version`, and the `step == "router"` /
-    `step == "gateway"` / `step == "verify"` trace entries. Never reads
+    `policy.endpoint_registry_version`, and the trace (through
+    `trace_features`, which owns the hop semantics). Never reads
     `resp["choices"]`, `resp["raw_completion"]`, `resp["sanitized_prompt"]`,
-    or any `reason` field.
+    or any DecisionRecord `reason` field.
 
     `complexity` is read off `outcome_ctx.get("complexity")` (`None` when
     absent): it is computed inside `Pipeline.run` (`comp.tokens_after /
@@ -212,29 +224,13 @@ def build_ok_outcome(resp: dict, *, request_id: str, application_id: str,
     (i.e. some router hop actually served one); with no scoring AND no
     chosen model it is `[]`, never `[None]`.
     """
-    trace = resp.get("trace") or []
     usage = resp.get("usage") or {}
     cost = resp.get("cost") or {}
     policy = resp.get("policy") or {}
-
-    router_hops = _router_hops(trace)
-    chosen_hops = [h for h in router_hops if h.get("chosen") is not None]
-    chosen = chosen_hops[-1]["chosen"] if chosen_hops else None
-    first_router = router_hops[0] if router_hops else None
-    scoring = first_router.get("scoring") if first_router else None
-    if scoring:
-        eligible = [c["name"] for c in scoring.get("candidates", [])]
-    else:
-        eligible = [chosen] if chosen is not None else []
-    tier_target = first_router.get("tier_target") if first_router else None
-    circuit_bypass = any(h.get("circuit_bypass") for h in router_hops)
-    rejected = _rejected_rows(first_router["rejected"]) if first_router else []
-    attempts = _attempts(trace)
-
-    verify_entry = next((e for e in trace if e.get("step") == "verify"), None)
+    trace = resp.get("trace") or []
     prompt_tokens = usage.get("prompt_tokens", 0)
 
-    return {
+    row = {
         "request_id": request_id,
         "application_id": application_id,
         "trace_id": resp.get("trace_id"),
@@ -244,23 +240,73 @@ def build_ok_outcome(resp: dict, *, request_id: str, application_id: str,
         "routing_policy_version": routing_policy_version,
         "workload": workload,
         "workload_source": workload_source,
-        "tier_target": tier_target,
         "complexity": outcome_ctx.get("complexity"),
         "prompt_tokens_bucket": prompt_bucket(prompt_tokens),
-        "sensitivity": outcome_ctx.get("sensitivity"),
-        "risk_class": outcome_ctx.get("risk_class"),
-        "onprem_only": outcome_ctx.get("onprem_only"),
-        "detected_entity_types": list(outcome_ctx.get("detected_entity_types") or []),
-        "eligible": eligible,
-        "rejected": rejected,
-        "attempts": attempts,
-        "chosen": chosen,
-        "scoring": scoring,
-        "circuit_bypass": circuit_bypass,
+        **_policy_features(outcome_ctx),
         "cost_usd": cost.get("total_usd", 0.0),
         "latency_ms": sum(e.get("latency_ms", 0.0) for e in trace),
         "prompt_tokens": prompt_tokens,
         "completion_tokens": usage.get("completion_tokens", 0),
+    }
+    row.update(trace_features(trace))
+    return row
+
+
+def _policy_features(outcome_ctx: dict) -> dict:
+    return {
+        "sensitivity": outcome_ctx.get("sensitivity"),
+        "risk_class": outcome_ctx.get("risk_class"),
+        "onprem_only": outcome_ctx.get("onprem_only"),
+        "detected_entity_types": list(outcome_ctx.get("detected_entity_types") or []),
+    }
+
+
+def trace_features(trace: list[dict]) -> dict:
+    """The routing and verification columns of an outcome row, read from a
+    content-free trace (a list of DecisionRecord / VerificationRecord /
+    CacheRecord dumps). The ONE place a trace is read -- `build_ok_outcome`
+    and a `verify_failed` `build_failure_outcome` both use it. Never reads a
+    `reason` except the verify record's, and only to match the pipeline's own
+    fixed `waived*`/`incremental` markers (see `_verify_mode`).
+
+    Hop semantics (spec §13, final review ruling #4):
+
+    - `eligible`, `scoring`, `tier_target`, `rejected` describe the request's
+      FIRST routing decision -- the first trace entry that is a router hop or
+      a failed gateway hop carrying `scoring` (the decision that picked the
+      first attempt). After a failover that is the failed hop; after a
+      confidence escalation it is the first, unserved router hop.
+      `tier_target` falls back to the first router hop when the decision hop
+      carries none.
+    - `chosen` is the SERVED model: the last router hop with a `chosen`.
+    - `attempts` is every model tried, in hop order.
+    - `cache_hit` is True when a semantic-cache entry served the request (no
+      router ran, so `chosen` stays null)."""
+    router_hops = _router_hops(trace)
+    chosen_hops = [h for h in router_hops if h.get("chosen") is not None]
+    chosen = chosen_hops[-1]["chosen"] if chosen_hops else None
+    first = next((e for e in trace
+                  if e.get("step") == "router" or _is_failed_decision_hop(e)), None)
+    scoring = first.get("scoring") if first else None
+    if scoring:
+        eligible = [c["name"] for c in scoring.get("candidates", [])]
+    else:
+        eligible = [chosen] if chosen is not None else []
+    tier_target = first.get("tier_target") if first else None
+    if tier_target is None and router_hops:
+        tier_target = router_hops[0].get("tier_target")
+    decision_hops = [e for e in trace
+                     if e.get("step") == "router" or _is_failed_decision_hop(e)]
+    verify_entry = next((e for e in trace if e.get("step") == "verify"), None)
+    return {
+        "tier_target": tier_target,
+        "eligible": eligible,
+        "rejected": _rejected_rows(first.get("rejected") or []) if first else [],
+        "attempts": _attempts(trace),
+        "chosen": chosen,
+        "scoring": scoring,
+        "circuit_bypass": any(h.get("circuit_bypass") for h in decision_hops),
+        "cache_hit": any(e.get("step") == "cache" and e.get("hit") for e in trace),
         "verify_required": verify_entry.get("required") if verify_entry else None,
         "verify_performed": verify_entry.get("performed") if verify_entry else None,
         "verify_passed": verify_entry.get("passed") if verify_entry else None,
@@ -274,7 +320,11 @@ def build_failure_outcome(*, status: str, request_id: str, application_id: str,
                            workload: str | None, workload_source: str,
                            attempts: tuple[str, ...] = (),
                            rejected: tuple = (),
-                           latency_ms: float = 0.0) -> dict:
+                           latency_ms: float = 0.0,
+                           trace: list[dict] | None = None,
+                           prompt_tokens: int = 0,
+                           completion_tokens: int = 0,
+                           cost_usd: float = 0.0) -> dict:
     """A `routing_outcomes` row for a request that never reached (or never
     completed) a served response. Fills what it is given -- `status`, the
     ids/versions, the policy-context features (known once the gate ran,
@@ -288,8 +338,15 @@ def build_failure_outcome(*, status: str, request_id: str, application_id: str,
     request went on to fail. `rejected` is normalized through the same
     `{name, code}`-only rule `build_ok_outcome` uses, regardless of what
     shape the caller's entries carry.
+
+    `trace` (a `verify_failed` row only): the content-free trace the
+    pipeline stashed before refusing a response step 9 failed -- a model WAS
+    served, so the routing and verify columns are read from it through
+    `trace_features`, exactly as for an `ok` row, and `prompt_tokens`/
+    `completion_tokens`/`cost_usd` are the served attempt's real figures
+    (`prompt_tokens_bucket` follows). `attempts`/`rejected` are then ignored.
     """
-    return {
+    row = {
         "request_id": request_id,
         "application_id": application_id,
         "trace_id": None,
@@ -302,16 +359,14 @@ def build_failure_outcome(*, status: str, request_id: str, application_id: str,
         "tier_target": None,
         "complexity": outcome_ctx.get("complexity"),
         "prompt_tokens_bucket": None,
-        "sensitivity": outcome_ctx.get("sensitivity"),
-        "risk_class": outcome_ctx.get("risk_class"),
-        "onprem_only": outcome_ctx.get("onprem_only"),
-        "detected_entity_types": list(outcome_ctx.get("detected_entity_types") or []),
+        **_policy_features(outcome_ctx),
         "eligible": [],
         "rejected": _rejected_rows(rejected),
         "attempts": list(attempts),
         "chosen": None,
         "scoring": None,
         "circuit_bypass": False,
+        "cache_hit": False,
         "cost_usd": 0.0,
         "latency_ms": latency_ms,
         "prompt_tokens": 0,
@@ -321,3 +376,12 @@ def build_failure_outcome(*, status: str, request_id: str, application_id: str,
         "verify_passed": None,
         "verify_mode": None,
     }
+    if trace is not None:
+        row.update(trace_features(trace))
+        row.update({
+            "cost_usd": cost_usd,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "prompt_tokens_bucket": prompt_bucket(prompt_tokens),
+        })
+    return row
