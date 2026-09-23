@@ -86,6 +86,47 @@ def test_load_export_v1_minor_suffix_is_still_v1(tmp_path):
     assert len(records) == 1
 
 
+def test_load_export_raises_valueerror_on_missing_schema_field(tmp_path):
+    """No `schema` key at all is treated the same as an unrecognized one --
+    this loader must not guess what an unlabelled line's format is."""
+    path = tmp_path / "export.ndjson"
+    path.write_text(
+        '{"outcome":{"request_id":"a"},"feedback":[]}\n', encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_export(str(path))
+
+
+def test_load_export_skips_a_line_missing_the_outcome_key(tmp_path):
+    path = tmp_path / "export.ndjson"
+    path.write_text(
+        '{"schema":"routeforge.outcome/v1","feedback":[]}\n'
+        '{"schema":"routeforge.outcome/v1","outcome":{"request_id":"b"},"feedback":[]}\n',
+        encoding="utf-8")
+    records, warnings = load_export(str(path))
+    assert [r["request_id"] for r in records] == ["b"]
+    assert len(warnings) == 1
+    assert "line 1" in warnings[0]
+    assert "outcome" in warnings[0]
+
+
+def test_load_export_empty_file_returns_no_records_and_no_warnings(tmp_path):
+    path = tmp_path / "export.ndjson"
+    path.write_text("", encoding="utf-8")
+    records, warnings = load_export(str(path))
+    assert records == []
+    assert warnings == []
+
+
+def test_summarize_of_an_empty_export_is_empty_but_well_formed():
+    assert summarize([]) == {"n_records": 0, "registry_versions": {}}
+
+
+def test_report_of_an_empty_export_still_starts_with_the_caveat():
+    report = render_report(summarize([]))
+    assert report.startswith(CAVEAT)
+    assert "n records: 0" in report
+
+
 # --------------------------------------------------------------------------
 # summarize -- golden values, hand-computed
 # --------------------------------------------------------------------------
@@ -115,7 +156,7 @@ def test_summarize_chat_ep_cheap_bucket(golden_summary):
         "quality_n": 2,
         "route_correct_rate": 1.0,        # mean(1.0)
         "route_correct_n": 1,
-        "cost_mean": 0.0015,              # mean(0.001, 0.002, 0.0015)
+        "cost_mean": 0.0015,              # mean(0.001, 0.002, 0.0015) -- all 3 rows are ok
         "latency_p50": 110.0,
         "latency_p95": 120.0,
         "failover_rate": 0.0,
@@ -133,7 +174,8 @@ def test_summarize_chat_ep_mid_bucket_has_the_failover_and_the_verify_failure(go
         "quality_n": 0,
         "route_correct_rate": 0.0,        # mean(0.0)
         "route_correct_n": 1,
-        "cost_mean": 0.01,
+        "cost_mean": 0.01,                # mean(0.01) -- ok rows only, so req-5's
+                                           # verify_failed cost (also 0.01) is excluded
         "latency_p50": 200.0,             # only req-4 is ok
         "latency_p95": 200.0,
         "failover_rate": 0.5,             # 1/2
@@ -159,20 +201,25 @@ def test_summarize_no_eligible_row_lands_in_unchosen_bucket_with_no_latency(gold
     assert bucket["n"] == 1
     assert bucket["served_ok_rate"] == 0.0
     assert bucket["verify_pass_rate"] is None
+    # req-9's cost_usd is 0.0 but its status is no_eligible, not ok, so it is
+    # excluded from cost_mean too -- an unserved row must not read as a free win.
+    assert bucket["cost_mean"] is None
     assert bucket["latency_p50"] is None
     assert bucket["latency_p95"] is None
     assert bucket["failover_rate"] == 0.0
 
 
 def test_summarize_untagged_workload_bucket(golden_summary):
-    # req-10 (ok), req-11 (backend_failed, excluded from ok-only latency)
+    # req-10 (ok, cost 0.001), req-11 (backend_failed, cost 0.0 -- excluded
+    # from both cost_mean and latency, which are ok-rows-only)
     bucket = golden_summary["registry_versions"]["reg-v1"]["by_workload_chosen"]["(untagged)"]["ep-cheap"]
     assert bucket["n"] == 2
     assert bucket["served_ok_rate"] == 0.5
     assert bucket["verify_pass_rate"] == 1.0
     assert bucket["quality_mean"] == 1.0
     assert bucket["quality_n"] == 1
-    assert bucket["cost_mean"] == 0.0005     # mean(0.001, 0.0)
+    assert bucket["cost_mean"] == 0.001      # mean(0.001) -- req-11's cost_usd=0.0
+                                              # is dropped since its status != ok
     assert bucket["latency_p50"] == 90.0
     assert bucket["latency_p95"] == 90.0
 

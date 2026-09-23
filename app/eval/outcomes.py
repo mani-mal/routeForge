@@ -56,9 +56,11 @@ def load_export(path: str) -> tuple[list[dict], list[str]]:
     skipped. A line that fails to parse as JSON, or that has no `outcome`
     key, is skipped and noted in `warnings` -- the rest of the file still
     loads. A line whose `schema` field's major version is not `v1` (e.g.
-    `routeforge.outcome/v2`) raises `ValueError` immediately: unlike a
-    malformed line, an unknown schema major means this module may not
-    understand the *rest* of the file either, so it does not guess.
+    `routeforge.outcome/v2`), OR that has no (or a non-string) `schema`
+    field at all, raises `ValueError` immediately: unlike a malformed line
+    or a missing `outcome`, an unrecognized or absent schema means this
+    module may not understand the *rest* of the file either, so it does
+    not guess and does not silently skip.
     """
     records: list[dict] = []
     warnings: list[str] = []
@@ -136,6 +138,10 @@ def _numeric_feedback(records: list[dict], score_name: str) -> list[float]:
     return values
 
 
+def _is_number(v: object) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
 def _summarize_bucket(records: list[dict]) -> dict:
     n = len(records)
     served_ok = sum(1 for r in records if r.get("status") == "ok")
@@ -146,7 +152,12 @@ def _summarize_bucket(records: list[dict]) -> dict:
     ok_latencies = sorted(
         float(r["latency_ms"]) for r in records
         if r.get("status") == "ok" and r.get("latency_ms") is not None)
-    costs = [float(r.get("cost_usd") or 0.0) for r in records]
+    # cost_mean is over ok rows only, like latency -- a failed attempt costs
+    # 0 by construction (RoutingOutcome default), so pooling it in would
+    # dilute the served cost with rows that were never served.
+    ok_costs = [
+        float(r["cost_usd"]) for r in records
+        if r.get("status") == "ok" and _is_number(r.get("cost_usd"))]
     failover = sum(1 for r in records if len(r.get("attempts") or []) > 1)
 
     return {
@@ -157,7 +168,7 @@ def _summarize_bucket(records: list[dict]) -> dict:
         "quality_n": len(quality_vals),
         "route_correct_rate": _mean(route_vals),
         "route_correct_n": len(route_vals),
-        "cost_mean": _mean(costs),
+        "cost_mean": _mean(ok_costs),
         "latency_p50": _nearest_rank(ok_latencies, 50),
         "latency_p95": _nearest_rank(ok_latencies, 95),
         "failover_rate": failover / n if n else None,
