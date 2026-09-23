@@ -1239,3 +1239,119 @@ Llama 0/10.
   there; the durable one is a measured quality signal (P2b-2 → P2b-3).
 - The example endpoint file shipped in P2b-1 put all three models on `:8000` with three different
   tiers; it is corrected (per-model ports, all `cheap`), and its test now pins the ports.
+
+---
+
+## 11. Live re-runs on the DGX Spark: B51 fix and B45 outage (2026-09-23)
+
+Two `--live` runs at `5da06a4` (the B51 fix, PR #65), both from an export at
+`~/projects/routeForge/feasible-bench-5da06a4/` on the Spark, executed as in §10.1 (a throwaway
+container from the deployed API image, `--network host`, run as the host user so it can write
+`results/`). The running API, its database and the deployed checkout were not touched. Both
+runs are one seed, so treat them as **signals, not quotable results**. Outputs are on the Spark
+only (completion text not kept).
+
+### 11.1 B51 re-run: the starter suite, same setup as §10
+
+| Field | Value |
+|---|---|
+| Suite / endpoints | as §10.1: `suite_hash` `3339c773…d8199`, `endpoints_hash` `d96737d8…31d3`, `registry_version` `81da53fced52`, `base_routing_policy_version` `a4bf5708d2db` |
+| Run | `--live --seed 0 --seconds-per-case 30`, `attempt_cap` 3, 66 calls, 2026-09-23 13:17–13:34 UTC, exit 0, `violations_total` 0 |
+| Output | `results/live-starter-b51-20260923T131738Z/` |
+
+| Strategy | §10 (`d9906f8`) | §11 (`5da06a4`) |
+|---|---|---|
+| `router_online` | 0.636: Qwen ×12, Nemotron **×5**, Llama **×5** | **0.955: Qwen ×22** |
+| `router_cold` | 0.955: Qwen ×22 | 0.955: Qwen ×22 |
+| `router_warm_prior` | 0.955: Qwen ×22 | 0.955: Qwen ×22 |
+| `cheapest`, `best_published_quality` | 0.409: Llama ×22 | 0.455: Llama ×22 |
+
+The sweep itself moved a little between the two days (Llama 9 → 10/22, Nemotron 18 → 19/22,
+Qwen 21/22 both days; mean latency 5.3 / 16.9 / 22.0 s), which is why the baselines changed.
+`router_online` is the arm the fix targets: with the peer prior an unmeasured model scores at
+its measured tier-mates' median latency instead of 200 ms, so there is no warm-up and the arm
+stays with its tie-break winner. This is the live confirmation of the offline check recorded
+in backlog B51. What it does **not** show: any model being chosen *for a reason*. All three
+still tie on price, tier, quality default and (above the 3 s cap) latency, so every router arm
+is a tie-break. That needs a measured quality signal (P2b-2 → P2b-3).
+
+### 11.2 B45 live outage run
+
+**Setup.** The simulated scenario of §9 (`outage-sim.yaml`) with real endpoints
+(`eval/endpoints/spark-outage-live.example.yaml`): `llama3.2:latest` as the cheap endpoint
+(illustrative price 0.10 per 1M) and `nemotron-3.5-lightning` as the healthy peer (0.40),
+equal published quality 0.90, both `cheap`. The outage is **real at the transport level but
+injected**. No model server was stopped (the same servers serve an interactive coding
+client). Instead `scripts/outage_proxy.py` sat in front of Ollama and, for exactly the
+questions of cases 10–19, closed the connection without a response. Everything else went
+through to Ollama unchanged. Its log shows 10 drops and 20 passes, one per sweep call, as
+designed.
+
+| Field | Value |
+|---|---|
+| Suite | `eval/suites/outage.jsonl`, `suite_hash` `78e1be2b…9969` |
+| Endpoints | `endpoints_hash` `8d44fbca…0d04`, `registry_version` `1d210fb00609` |
+| Run | `--live --variants eval/variants/b45.yaml --seed 0 --seconds-per-case 30`, `attempt_cap` 3, 60 calls, 2026-09-23 13:34–13:37 UTC, exit 0, `violations_total` 0 |
+| Output | `results/live-outage-b45-20260923T133434Z/` |
+
+**The live failure path works end to end.** Each dropped call surfaced through the real
+LiteLLM gateway as `InternalServerError … Connection error`. The runner recorded all 10 rows
+with `counts_unhealth: true` (production's `counts_as_endpoint_unhealth` verdict) and
+`failure_latency_ms: null`. The connection closed immediately, so no failure latency was
+measured and chains charge it as 0 ms (§9.2). There were no other errors. Mean successful
+latency was Llama 0.3 s and Nemotron 4.4 s, short FAQ answers. The one non-error failure,
+`outage-faq-028` on Llama, is a grader miss, and it gives every strategy 29/30.
+
+**First attempts (L = the dead-during-outage Llama, N = Nemotron), cases 0–29:**
+
+| Arm | Chain firsts | Wasted attempts |
+|---|---|---|
+| `router_online:default` (w = 0.2) | `L` ×30 | 10 |
+| `router_online:availability_0` | `L` ×30 | 10 |
+| `router_online:availability_1` | `L` ×30 | 10 |
+| `router_online:availability_2` | `L`×13, **`N` at cases 13–14**, `L` ×15 | 8 |
+| every `router_cold:*`, `router_warm_prior:*`, baseline | `L` ×30 | 10 |
+
+No arm was exhausted. Failover to Nemotron served every outage case, so the price of each
+wasted attempt here is one refused call, near-instant in this run.
+
+**Reading it.**
+
+- **The live answer agrees with §9.** At the shipped `availability: 0.2` the online router
+  sent the first attempt of **every** outage case to the dead endpoint, the same chains as
+  weight 0. The live run has one seed and one real failure shape (an immediate connection
+  drop). §9 has 30 simulated runs with a designed 1000 ms failure. They agree, and the formula
+  predicts the result: the dead endpoint's score lead is mostly cost (4× cheaper), and a term
+  of weight `w` can take back at most `w`.
+- **Even `w = 1` moved nothing here, and `w = 2` moved two cases.** At `w = 2` the router
+  switched after three consecutive failures (cases 10–12), then went back to Llama from case
+  15 while the outage was still on. The mechanism is **not traced**: once traffic leaves
+  Llama it gets no new observations, and its availability is an EWMA that also carries its
+  earlier 10 successes and decays back toward 1.0 on wall-clock time. How those interact at
+  30 s per case was not instrumented. Either way, no weight tried here kept the dead
+  endpoint out for the whole outage.
+- **What this does not show:** a slow failure (a connect timeout or a hung server, where each
+  wasted attempt costs seconds), several seeds, or a real price difference (both endpoints
+  are really $0; the prices are illustrative).
+
+**Consequence.** B45 now has both a simulated and a live answer, and they agree: raising
+`weights.availability` does not keep traffic off a dead endpoint without overriding genuine
+cost differences. The recommendation of §9 stands unchanged: keep 0.2 as a ranking
+preference, and take a dead endpoint out of rotation with a **step-7 circuit breaker** (not
+built) or an operator disable. Changing the weight, or building the breaker, is the owner's
+decision. `config/routing.yaml` is untouched.
+
+### 11.3 Reproducing §11
+
+```bash
+# on the Spark, in an export of 5da06a4 (git archive; the Spark cannot git fetch)
+python3 -c "import json; rows=[json.loads(l) for l in open('eval/suites/outage.jsonl')]; \
+  json.dump([r['messages'][-1]['content'] for r in rows[10:20]], open('down.json','w'))"
+nohup python3 scripts/outage_proxy.py 11500 http://127.0.0.1:11434 down.json proxy.log &
+docker run --rm --user $(id -u):$(id -g) -e HOME=/tmp --network host \
+  --entrypoint /app/.venv/bin/python -e PYTHONPATH=/bench -e SP_ONPREM_API_KEY \
+  -v $PWD:/bench -w /bench routeforge-spark-api scripts/feasible_bench.py \
+  --suite eval/suites/outage.jsonl --endpoints eval/endpoints/spark-outage-live.yaml \
+  --variants eval/variants/b45.yaml --live --yes --seed 0 --seconds-per-case 30
+# §11.1: --suite eval/suites/starter.jsonl --endpoints eval/endpoints/spark-live.yaml, no variants
+```

@@ -1,0 +1,37 @@
+# EXAMPLE --live endpoint file for the B45 outage run on the RouteForge DGX Spark
+# (docs/research/feasible-route-bench.md §11). Mirrors eval/endpoints/outage-sim.yaml
+# with real endpoints. "<spark>" is a LITERAL PLACEHOLDER, never a real host.
+#
+#   1. start scripts/outage_proxy.py on the Spark in front of Ollama:
+#        python3 scripts/outage_proxy.py 11500 http://127.0.0.1:11434 down.json proxy.log
+#   2. cp this file to spark-outage-live.yaml and replace "<spark>"
+#   3. uv run python scripts/feasible_bench.py --suite eval/suites/outage.jsonl \
+#        --endpoints eval/endpoints/spark-outage-live.yaml \
+#        --variants eval/variants/b45.yaml --live --seed 0 --seconds-per-case 30
+#
+# The llama entry points at the PROXY, which drops the connection (no response,
+# no status) for outage cases 10-19 only. Nemotron is the healthy peer.
+# Prices are ILLUSTRATIVE, copied from outage-sim (0.10 vs 0.40 per 1M) so the
+# cheap endpoint carries the same cost lead as the simulation; the real
+# endpoints are onboarded at $0. Published quality is equal on purpose, so
+# availability is the only term that can move the choice during the outage.
+endpoints:
+  - slug: "llama3.2:latest"
+    provider: onprem
+    tier: cheap
+    price: {input: 0.10, output: 0.10}
+    quality: 0.90
+    region: us
+    prompt_retention: none
+    accepts_raw_sensitive: true
+    live: {endpoint: "http://<spark>:11500/v1"}
+
+  - slug: nemotron-3.5-lightning
+    provider: onprem
+    tier: cheap
+    price: {input: 0.40, output: 0.40}
+    quality: 0.90
+    region: us
+    prompt_retention: none
+    accepts_raw_sensitive: true
+    live: {endpoint: "http://<spark>:8001/v1", api_key_env: SP_ONPREM_API_KEY}
