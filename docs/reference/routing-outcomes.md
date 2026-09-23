@@ -38,6 +38,18 @@ the defaults above.
 `tier_target` field added to the router's `DecisionRecord` lives in JSON (trace and
 snapshot), not in a column.
 
+**Upgrade: the `outcome_feedback` composite index (2026-09-23).** `outcome_feedback` gained
+a composite index on `(application_id, request_id)`. `create_all` builds it on a fresh
+database, but it never adds an index to a table that already exists, so a database that
+already has `outcome_feedback` (the Spark) needs it created by hand. The statement is
+idempotent and valid on both Postgres and SQLite, and is safe to run before or after
+rolling the image (the index only speeds up lookups; no code depends on it existing):
+
+```sql
+CREATE INDEX IF NOT EXISTS ix_outcome_feedback_app_request
+    ON outcome_feedback (application_id, request_id);
+```
+
 ## 2. Content-free by contract
 
 Both tables hold **ids, enum values, numbers, entity types and version hashes only.** They

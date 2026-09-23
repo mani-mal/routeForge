@@ -315,3 +315,19 @@ def test_schema_is_content_free():
     assert "prompt_tokens" in RoutingOutcome.__table__.columns
     assert "prompt_tokens_bucket" in RoutingOutcome.__table__.columns
     assert "completion_tokens" in RoutingOutcome.__table__.columns
+
+
+def test_outcome_feedback_has_the_app_request_composite_index():
+    """Feedback is looked up by (application_id, request_id). create_all builds
+    the composite index on a fresh DB; a deployed DB needs the documented
+    `CREATE INDEX IF NOT EXISTS` (docs/reference/routing-outcomes.md)."""
+    from sqlalchemy import inspect
+
+    async def _indexes():
+        db = await _db()
+        async with db.engine.connect() as conn:
+            return await conn.run_sync(
+                lambda c: inspect(c).get_indexes("outcome_feedback"))
+
+    idx = {i["name"]: i["column_names"] for i in _run(_indexes())}
+    assert idx.get("ix_outcome_feedback_app_request") == ["application_id", "request_id"]
