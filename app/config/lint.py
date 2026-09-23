@@ -97,6 +97,20 @@ def lint_settings(s: Settings) -> list[str]:
         errs.append(f"SIGNALS_MAX_BUFFER_NOT_POSITIVE {sig.max_buffer}")
     if sig.max_seed_obs_per_model < 1:
         errs.append(f"SIGNALS_MAX_SEED_OBS_NOT_POSITIVE {sig.max_seed_obs_per_model}")
+
+    # Step-7 circuit breaker (routing.yaml `breaker`). Zero/negative values
+    # would open a circuit on no failures or never let it recover.
+    brk = s.routing.breaker
+    if brk.failure_threshold < 1:
+        errs.append(f"BREAKER_THRESHOLD_NOT_POSITIVE {brk.failure_threshold}")
+    if brk.cooldown_s <= 0:
+        errs.append(f"BREAKER_COOLDOWN_NOT_POSITIVE {brk.cooldown_s}")
+    if brk.trial_timeout_s <= 0:
+        errs.append(f"BREAKER_TRIAL_TIMEOUT_NOT_POSITIVE {brk.trial_timeout_s}")
+    if brk.max_cooldown_s < brk.cooldown_s:
+        errs.append(f"BREAKER_MAX_COOLDOWN_BELOW_COOLDOWN "
+                    f"{brk.max_cooldown_s} < {brk.cooldown_s}")
+
     # `availability` is the renamed scoring weight (was `capacity`); a
     # routing.yaml with neither key is a boot failure, not a silent 0 weight.
     if "availability" not in s.routing.weights:

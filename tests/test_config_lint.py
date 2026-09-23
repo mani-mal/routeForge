@@ -279,3 +279,26 @@ def test_signals_writer_knob_defaults_pass_lint():
 def test_signals_writer_knob_defaults():
     c = SignalsCfg()
     assert (c.flush_interval_s, c.max_buffer, c.max_seed_obs_per_model) == (5.0, 10000, 200)
+
+
+# --- Step-7 circuit breaker config (routing.yaml `breaker`) -----------------
+
+from app.config.schema import BreakerCfg
+
+
+def test_breaker_config_loads_with_shipped_values():
+    b = load_settings().routing.breaker
+    assert b == BreakerCfg(enabled=True, failure_threshold=3, cooldown_s=30.0,
+                           max_cooldown_s=300.0, trial_timeout_s=60.0)
+
+
+@pytest.mark.parametrize("field,value,code", [
+    ("failure_threshold", 0, "BREAKER_THRESHOLD_NOT_POSITIVE"),
+    ("cooldown_s", 0, "BREAKER_COOLDOWN_NOT_POSITIVE"),
+    ("trial_timeout_s", -1, "BREAKER_TRIAL_TIMEOUT_NOT_POSITIVE"),
+    ("max_cooldown_s", 10, "BREAKER_MAX_COOLDOWN_BELOW_COOLDOWN"),
+])
+def test_bad_breaker_values_are_caught(field, value, code):
+    s = copy.deepcopy(load_settings())
+    setattr(s.routing.breaker, field, value)
+    assert any(code in e for e in lint_settings(s))
