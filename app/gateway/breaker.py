@@ -14,6 +14,19 @@ States, per model name:
     half_open --trial succeeds--> closed  (count + cooldown reset)
     half_open --trial fails-----> open    (cooldown doubles, capped)
 
+Half-open is EVIDENCE-based, not lease-based: there is no per-request trial
+token (the gateway call sites have none to thread through), so once the
+cooldown has elapsed (`now >= open_until`) the FIRST result reported for
+that model -- by whichever caller reports it first -- is what decides the
+transition: a success closes, a failure reopens (cooldown doubled, capped).
+Before the cooldown elapses, a result changes nothing: no close, no reopen,
+no count or cooldown mutation. The accepted cost: a straggler failure whose
+attempt started before the trial began, but which is only *reported* after
+the cooldown elapses, still counts as evidence and can reopen the circuit
+once. `open_set()`'s lease (`trial_until`) exists only to pick a single
+caller to admit while the cooldown is fresh -- it does not gate whether a
+result closes or reopens the circuit.
+
 Only failures the gateway classifies with `counts_as_endpoint_unhealth` are
 recorded -- a 4xx is the request's fault and never trips a circuit (B36).
 
@@ -78,12 +91,19 @@ class CircuitBreaker:
             return
         t = self._now(now)
         e = self._m.get(model, _Entry())
+        if e.open_until is not None:
+            if t < e.open_until:
+                # Still mid-cooldown: not evidence yet. Changes nothing.
+                return
+            # Cooldown has elapsed: this is the half-open trial's result.
+            # Reopen with cooldown doubled (capped), regardless of who
+            # reported it or whether they held the open_set() lease.
+            self._m[model] = self._open(
+                model, e, t, min(e.cooldown_s * 2, self._cfg.max_cooldown_s))
+            return
+        # Closed: accumulate toward the threshold.
         e = replace(e, failures=e.failures + 1)
-        if e.trial_until is not None:
-            # The half-open trial failed: back to open, cooldown doubled.
-            e = self._open(model, e, t,
-                           min(e.cooldown_s * 2, self._cfg.max_cooldown_s))
-        elif e.open_until is None and e.failures >= self._cfg.failure_threshold:
+        if e.failures >= self._cfg.failure_threshold:
             e = self._open(model, e, t, self._cfg.cooldown_s)
         self._m[model] = e
 
@@ -92,6 +112,11 @@ class CircuitBreaker:
         if e is None:
             return
         if e.open_until is not None:
+            t = self._now(now)
+            if t < e.open_until:
+                # Still mid-cooldown: not evidence yet. Changes nothing.
+                return
+            # Cooldown has elapsed: this is the half-open trial's result.
             self._transition(model, "closed", None)
         self._m[model] = _Entry()
 
@@ -99,8 +124,12 @@ class CircuitBreaker:
         """Models to exclude from THIS selection. A model whose cooldown has
         elapsed and has no live trial lease is granted one here -- it is
         left OUT of the returned set for this caller only, and stays in it
-        for every other caller until the trial reports back or the lease
-        expires (`trial_timeout_s`)."""
+        for every other caller until the lease expires (`trial_timeout_s`),
+        at which point it is re-granted to the next caller. The lease only
+        decides who gets to *attempt* the call first; it does not gate
+        whether a reported result closes or reopens the circuit (see
+        module docstring) and re-granting an expired lease is not a new
+        open->half_open transition, so it is not re-logged/re-metered."""
         if not self._cfg.enabled:
             return frozenset()
         t = self._now(now)
@@ -114,8 +143,10 @@ class CircuitBreaker:
             if e.trial_until is not None and t < e.trial_until:
                 out.add(model)          # someone else holds the trial
                 continue
+            first_grant = e.trial_until is None
             self._m[model] = replace(e, trial_until=t + self._cfg.trial_timeout_s)
-            self._transition(model, "half_open", None)
+            if first_grant:
+                self._transition(model, "half_open", None)
         return frozenset(out)
 
     def state(self, model: str, *, now: float | None = None) -> CircuitState:
