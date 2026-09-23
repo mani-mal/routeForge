@@ -24,6 +24,7 @@ EMPTY_SUITE = f"{REPO_EVAL}/suites/empty-set.jsonl"
 HEALTHCARE_SIM = f"{REPO_EVAL}/endpoints/healthcare-sim.yaml"
 CLOUD_ONLY_SIM = f"{REPO_EVAL}/endpoints/cloud-only-sim.yaml"
 SPARK_LIVE_EXAMPLE = f"{REPO_EVAL}/endpoints/spark-live.example.yaml"
+SPARK_OUTAGE_EXAMPLE = f"{REPO_EVAL}/endpoints/spark-outage-live.example.yaml"
 B45_VARIANTS = f"{REPO_EVAL}/variants/b45.yaml"
 
 RUN_TIMEOUT_S = 180
@@ -134,6 +135,18 @@ def test_spark_live_example_loads_only_with_live_true():
         assert spec.live.endpoint == f"http://<spark>:{ports[spec.slug]}/v1"
         assert spec.tier == "cheap"
         assert spec.simulated is None
+
+
+def test_spark_outage_example_routes_llama_through_the_outage_proxy():
+    """The B45 live example (research §11.2): Llama goes through
+    scripts/outage_proxy.py on :11500, never straight to Ollama, and keeps
+    outage-sim's 4x cost lead so the live run is the simulated scenario."""
+    specs, _ = load_endpoints(SPARK_OUTAGE_EXAMPLE, live=True, tiers=TIERS)
+    by = {s.slug: s for s in specs}
+    assert set(by) == {"llama3.2:latest", "nemotron-3.5-lightning"}
+    assert by["llama3.2:latest"].live.endpoint == "http://<spark>:11500/v1"
+    assert by["nemotron-3.5-lightning"].live.endpoint == "http://<spark>:8001/v1"
+    assert all(s.tier == "cheap" and s.simulated is None for s in specs)
 
 
 # --------------------------------------------------------------------------

@@ -144,8 +144,9 @@ caused this. `max_latency_norm` is unchanged (not part of this fix).
 **Verified** offline with a Spark-shaped simulation (three free `cheap` on-prem models at
 3.6/16.2/18.4 s, Llama failing claim summaries; starter suite, seed 0): `router_online` went from
 `{qwen: 12, nemotron: 5, llama: 5}`, 15/22 passed, to `{qwen: 22}`, 22/22; the shipped
-`healthcare-sim` report is byte-identical before and after. **Still owed:** a live Spark
-re-run. Note what this does *not* do: with every model above the 3 s cap, latency now ties
+`healthcare-sim` report is byte-identical before and after. **Live-verified 2026-09-23**
+on the Spark at `5da06a4` (research doc §11.1): `router_online` went from 0.636 (Qwen ×12,
+Nemotron ×5, Llama ×5) to **0.955 (Qwen ×22)**, 0 violations. Note what this does *not* do: with every model above the 3 s cap, latency now ties
 them all, so there is no latency-driven exploration at all — a new model gets traffic only on
 quality or cost. The durable fix is still a measured quality signal (P2b-2 → P2b-3).
 
@@ -393,7 +394,8 @@ Four lines; no production change. Worth doing before anyone edits that predicate
 **Severity:** design question, not a defect (the formula does what it says; the question
 is whether the magnitude is right)
 **Found:** 2026-09-19, P2a Task 9 review, while falsifying a claim in the design spec.
-**Open — for the successor slice to MEASURE.**
+**Measured 2026-09-23 (simulated + live; see the updates below). The weight question is
+answered. What remains open is the owner's decision on a step-7 circuit breaker.**
 
 Availability enters the step-6 score as an additive term `+ w.availability · availability`
 with `availability ∈ [0, 1]`. So moving a model from perfectly healthy to completely dead
@@ -498,6 +500,21 @@ it.
 > or operator disable, not as a weight to raise. Revisit only after a live run.
 > **Changing `weights.availability` is the owner's decision;** `config/routing.yaml` is
 > untouched.
+
+> **Update 2026-09-23 (live run). Answered: the live result agrees with the simulation.**
+> A `--live` outage run on the DGX Spark at `5da06a4` used real Llama (cheap, illustrative
+> 0.10/1M) and Nemotron (0.40/1M) endpoints. A proxy dropped Llama's connection for cases
+> 10–19, and no model server was stopped (`scripts/outage_proxy.py`). The drops surfaced
+> through the real gateway as `InternalServerError … Connection error` with
+> `counts_unhealth: true`. At `availability: 0.2` the online router sent **all 10** outage
+> first attempts to the dead endpoint, the same as weights 0 and 1. At weight 2 it moved
+> only 2 of them. Failover served every case (0 exhausted, 0 violations). One seed and one
+> failure shape (an immediate drop). Details are in
+> [`docs/research/feasible-route-bench.md`](../research/feasible-route-bench.md) §11.2.
+> **The measurement question is closed.** A weight does not keep a dead endpoint out without
+> overriding genuine cost differences. **Remaining owner decision:** build the step-7
+> circuit breaker (or rely on operator disable). Keep 0.2 as the ranking preference;
+> `config/routing.yaml` is untouched.
 >
 > **Limits.** This is one designed scenario with simulated failures. Outages are indexed
 > by case, not time. The outage was one-sided: the healthy peer drew no flakes at seed 0
