@@ -94,6 +94,42 @@ class AdminFeedbackIn(BaseModel):
     corrected_output: str | None = None
 
 
+async def _find_outcome_safe(request: Request, *, tenant: str, request_id: str):
+    """`store.find_outcome`, best-effort like every other record on the
+    serving path: a DB error here must never break feedback intake or block
+    the Langfuse post below -- log and return None, same as "no matching
+    outcome" (P2b-2 Task 5 fix round 1)."""
+    try:
+        async with request.app.state.db.session() as session:
+            return await store.find_outcome(
+                session, application_id=tenant, request_id=request_id, trace_id=None)
+    except Exception:
+        logging.getLogger("serving.obs").warning(
+            "outcome lookup failed for admin feedback request=%s", request_id, exc_info=True)
+        return None
+
+
+async def _write_feedback_safe(request: Request, *, request_id: str, application_id: str,
+                                score_name: str, value_num: float | None,
+                                value_cat: str | None, source: str) -> bool:
+    """`store.write_feedback` + commit, best-effort: a DB error here must
+    never change the HTTP status, `stored`, or block a Langfuse post that
+    hasn't happened yet -- log and return False (P2b-2 Task 5 fix round 1)."""
+    try:
+        async with request.app.state.db.session() as session:
+            await store.write_feedback(
+                session, request_id=request_id, application_id=application_id,
+                score_name=score_name, value_num=value_num, value_cat=value_cat,
+                source=source)
+            await session.commit()
+        return True
+    except Exception:
+        logging.getLogger("serving.obs").warning(
+            "local feedback write failed request=%s score=%s", request_id, score_name,
+            exc_info=True)
+        return False
+
+
 @router.post("/requests/{request_id}/feedback")
 async def admin_feedback(request_id: str, body: AdminFeedbackIn, request: Request) -> dict:
     """Admin-console feedback intake (F1 Phase D task 4; local storage added
@@ -123,29 +159,22 @@ async def admin_feedback(request_id: str, body: AdminFeedbackIn, request: Reques
 
     outcome = None
     if tenant is not None and request.app.state.settings.serving.outcomes.enabled:
-        async with request.app.state.db.session() as session:
-            outcome = await store.find_outcome(
-                session, application_id=tenant, request_id=request_id, trace_id=None)
+        outcome = await _find_outcome_safe(request, tenant=tenant, request_id=request_id)
 
     recorded = False
     if outcome is not None:
         parsed = feedback_values(body.score_name, body.value)
         if parsed is not None:
             value_num, value_cat = parsed
-            async with request.app.state.db.session() as session:
-                await store.write_feedback(
-                    session, request_id=outcome.request_id, application_id=tenant,
-                    score_name=body.score_name, value_num=value_num, value_cat=value_cat,
-                    source="admin")
-                await session.commit()
-            recorded = True
+            recorded = await _write_feedback_safe(
+                request, request_id=outcome.request_id, application_id=tenant,
+                score_name=body.score_name, value_num=value_num, value_cat=value_cat,
+                source="admin")
         if body.corrected_output:
-            async with request.app.state.db.session() as session:
-                await store.write_feedback(
-                    session, request_id=outcome.request_id, application_id=tenant,
-                    score_name="corrected_output", value_num=1.0, value_cat=None,
-                    source="admin")
-                await session.commit()
+            await _write_feedback_safe(
+                request, request_id=outcome.request_id, application_id=tenant,
+                score_name="corrected_output", value_num=1.0, value_cat=None,
+                source="admin")
 
     if not trace_id:
         # Telemetry was off (or export failed) for this request — nothing to

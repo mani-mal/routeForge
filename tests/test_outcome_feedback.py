@@ -17,9 +17,11 @@ from __future__ import annotations
 import json
 from contextlib import contextmanager
 
+import httpx
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from app.apps import store as store_mod
 from app.apps.models import OutcomeFeedback
 from app.main import create_app
 from tests.test_admin_api import _login
@@ -58,6 +60,16 @@ def _make_app_with_langfuse(c: TestClient, app_id: str) -> str:
         "project_id": "proj_air"})
     assert lf.status_code == 200, lf.text
     return token
+
+
+def _patch_httpx(monkeypatch, handler):
+    real_ac = httpx.AsyncClient
+
+    def fake_client(*args, **kwargs):
+        kwargs.pop("transport", None)
+        return real_ac(*args, transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", fake_client)
 
 
 # --------------------------------------------------------------------------- #
@@ -233,3 +245,158 @@ def test_feedback_recording_disabled_when_outcomes_disabled():
         assert r.json()["recorded"] is False
 
         assert _feedback_rows(c) == []
+
+
+# --------------------------------------------------------------------------- #
+# Fix round 1: local DB failures must be swallowed -- never a 500, never
+# block a Langfuse post that doesn't depend on the failed call.
+# --------------------------------------------------------------------------- #
+def test_feedback_find_outcome_failure_does_not_block_langfuse_post(monkeypatch):
+    with _client() as c:
+        token = _make_app_with_langfuse(c, "fbfail1")
+        body = _serve(c, {"Authorization": f"Bearer {token}"})
+        trace_id = body.get("trace_id")
+        assert trace_id, "expected a trace_id once Langfuse is provisioned for the app"
+
+        calls = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append({"url": str(request.url), "body": json.loads(request.content)})
+            return httpx.Response(200, json={"id": "score_1"})
+
+        _patch_httpx(monkeypatch, handler)
+
+        async def _boom(*args, **kwargs):
+            raise RuntimeError("db down")
+
+        monkeypatch.setattr(store_mod, "find_outcome", _boom)
+
+        r = c.post("/v1/feedback", headers={"Authorization": f"Bearer {token}"},
+                   json={"trace_id": trace_id, "score_name": "route_correct", "value": 1})
+        assert r.status_code == 200, r.text
+        assert r.json()["recorded"] is False
+        assert r.json()["stored"] is True  # unchanged vs. a healthy lookup: trace_id
+                                            # was given directly, so a failed local
+                                            # lookup never touches the Langfuse post.
+
+        score_calls = [call["url"] for call in calls if call["url"].endswith("/api/public/scores")]
+        assert len(score_calls) == 1
+
+        assert _feedback_rows(c) == []
+
+
+def test_feedback_write_feedback_failure_on_corrected_output_does_not_block_second_post(
+        monkeypatch):
+    with _client() as c:
+        token = _make_app_with_langfuse(c, "fbfail2")
+        body = _serve(c, {"Authorization": f"Bearer {token}"})
+        trace_id = body.get("trace_id")
+        assert trace_id
+
+        calls = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append({"url": str(request.url), "body": json.loads(request.content)})
+            return httpx.Response(200, json={"id": "score_x"})
+
+        _patch_httpx(monkeypatch, handler)
+
+        orig_write_feedback = store_mod.write_feedback
+
+        async def _boom_on_corrected(*args, **kwargs):
+            if kwargs.get("score_name") == "corrected_output":
+                raise RuntimeError("db down")
+            return await orig_write_feedback(*args, **kwargs)
+
+        monkeypatch.setattr(store_mod, "write_feedback", _boom_on_corrected)
+
+        r = c.post("/v1/feedback", headers={"Authorization": f"Bearer {token}"},
+                   json={"trace_id": trace_id, "score_name": "quality", "value": 0.5,
+                         "corrected_output": "the fixed answer"})
+        assert r.status_code == 200, r.text
+        assert r.json()["stored"] is True
+        assert r.json()["recorded"] is True  # primary write succeeded
+
+        score_calls = [call["body"] for call in calls if call["url"].endswith("/api/public/scores")]
+        assert len(score_calls) == 2
+        assert {sc["name"] for sc in score_calls} == {"quality", "corrected_output"}
+
+        # Only the primary score made it to outcome_feedback -- the
+        # corrected_output write raised and was swallowed.
+        rows = _feedback_rows(c)
+        assert len(rows) == 1
+        assert rows[0].score_name == "quality"
+
+
+def test_admin_feedback_find_outcome_failure_does_not_block_langfuse_post(monkeypatch):
+    with _client() as c:
+        token = _make_app_with_langfuse(c, "fbadminfail1")
+        body = _serve(c, {"Authorization": f"Bearer {token}"})
+        rid = body["id"]
+        assert body.get("trace_id")
+
+        calls = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append({"url": str(request.url), "body": json.loads(request.content)})
+            return httpx.Response(200, json={"id": "score_1"})
+
+        _patch_httpx(monkeypatch, handler)
+
+        async def _boom(*args, **kwargs):
+            raise RuntimeError("db down")
+
+        monkeypatch.setattr(store_mod, "find_outcome", _boom)
+
+        r = c.post(f"/api/requests/{rid}/feedback",
+                   json={"score_name": "route_correct", "value": 1})
+        assert r.status_code == 200, r.text
+        assert r.json()["recorded"] is False
+        assert r.json()["stored"] is True
+
+        score_calls = [call["url"] for call in calls if call["url"].endswith("/api/public/scores")]
+        assert len(score_calls) == 1
+
+        assert _feedback_rows(c) == []
+
+
+def test_admin_feedback_write_feedback_failure_on_corrected_output_does_not_block_second_post(
+        monkeypatch):
+    with _client() as c:
+        token = _make_app_with_langfuse(c, "fbadminfail2")
+        body = _serve(c, {"Authorization": f"Bearer {token}"})
+        rid = body["id"]
+        assert body.get("trace_id")
+
+        calls = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append({"url": str(request.url), "body": json.loads(request.content)})
+            return httpx.Response(200, json={"id": "score_x"})
+
+        _patch_httpx(monkeypatch, handler)
+
+        orig_write_feedback = store_mod.write_feedback
+
+        async def _boom_on_corrected(*args, **kwargs):
+            if kwargs.get("score_name") == "corrected_output":
+                raise RuntimeError("db down")
+            return await orig_write_feedback(*args, **kwargs)
+
+        monkeypatch.setattr(store_mod, "write_feedback", _boom_on_corrected)
+
+        r = c.post(f"/api/requests/{rid}/feedback",
+                   json={"score_name": "quality", "value": 0.5,
+                         "corrected_output": "the fixed answer"})
+        assert r.status_code == 200, r.text
+        assert r.json()["stored"] is True
+        assert r.json()["recorded"] is True
+
+        score_calls = [call["body"] for call in calls if call["url"].endswith("/api/public/scores")]
+        assert len(score_calls) == 2
+        assert {sc["name"] for sc in score_calls} == {"quality", "corrected_output"}
+
+        rows = _feedback_rows(c)
+        assert len(rows) == 1
+        assert rows[0].score_name == "quality"
+        assert rows[0].source == "admin"

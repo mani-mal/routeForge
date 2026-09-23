@@ -1460,6 +1460,46 @@ async def _finalize_stream(
         log.exception("streaming finalize failed (swallowed)")
 
 
+async def _find_outcome_safe(request: Request, *, tenant: str, request_id: str | None,
+                             trace_id: str | None):
+    """`store.find_outcome`, best-effort like every other record on the
+    serving path (`_record_outcome` above): a DB error here must never break
+    feedback intake or block a Langfuse post that only needs a `trace_id`
+    the caller already supplied directly -- log and return None, same as "no
+    matching outcome" (P2b-2 Task 5 fix round 1)."""
+    try:
+        async with request.app.state.db.session() as session:
+            return await store.find_outcome(
+                session, application_id=tenant, request_id=request_id, trace_id=trace_id)
+    except Exception:
+        logging.getLogger("serving.obs").warning(
+            "outcome lookup failed for feedback request=%s trace=%s",
+            request_id, trace_id, exc_info=True)
+        return None
+
+
+async def _write_feedback_safe(request: Request, *, request_id: str, application_id: str,
+                                score_name: str, value_num: float | None,
+                                value_cat: str | None, source: str) -> bool:
+    """`store.write_feedback` + commit, best-effort: a DB error here must
+    never change the HTTP status, `stored`, or block a Langfuse post that
+    hasn't happened yet (the `corrected_output` local write runs before its
+    own Langfuse post) -- log and return False (P2b-2 Task 5 fix round 1)."""
+    try:
+        async with request.app.state.db.session() as session:
+            await store.write_feedback(
+                session, request_id=request_id, application_id=application_id,
+                score_name=score_name, value_num=value_num, value_cat=value_cat,
+                source=source)
+            await session.commit()
+        return True
+    except Exception:
+        logging.getLogger("serving.obs").warning(
+            "local feedback write failed request=%s score=%s", request_id, score_name,
+            exc_info=True)
+        return False
+
+
 class FeedbackIn(BaseModel):
     """Body for POST /v1/feedback. `value` is numeric for quality-style scores
     or a string for categorical scores (e.g. failure_type); Langfuse decides
@@ -1512,13 +1552,12 @@ async def feedback(body: FeedbackIn, request: Request) -> dict:
 
     outcome = None
     if request.app.state.settings.serving.outcomes.enabled:
-        async with request.app.state.db.session() as session:
-            outcome = await store.find_outcome(
-                session, application_id=tenant, request_id=body.request_id,
-                trace_id=body.trace_id)
+        outcome = await _find_outcome_safe(
+            request, tenant=tenant, request_id=body.request_id, trace_id=body.trace_id)
 
     # With only request_id given, fall back to the outcome row's own
-    # trace_id (None if telemetry never exported one) for the Langfuse post.
+    # trace_id (None if telemetry never exported one, or if the lookup
+    # itself failed) for the Langfuse post.
     trace_id = body.trace_id or (outcome.trace_id if outcome is not None else None)
 
     recorded = False
@@ -1526,13 +1565,10 @@ async def feedback(body: FeedbackIn, request: Request) -> dict:
         parsed = feedback_values(body.score_name, body.value)
         if parsed is not None:
             value_num, value_cat = parsed
-            async with request.app.state.db.session() as session:
-                await store.write_feedback(
-                    session, request_id=outcome.request_id, application_id=tenant,
-                    score_name=body.score_name, value_num=value_num, value_cat=value_cat,
-                    source="app")
-                await session.commit()
-            recorded = True
+            recorded = await _write_feedback_safe(
+                request, request_id=outcome.request_id, application_id=tenant,
+                score_name=body.score_name, value_num=value_num, value_cat=value_cat,
+                source="app")
 
     stored = False
     if trace_id is not None:
@@ -1541,12 +1577,10 @@ async def feedback(body: FeedbackIn, request: Request) -> dict:
                                   body.value, body.comment)
     if body.corrected_output:
         if outcome is not None:
-            async with request.app.state.db.session() as session:
-                await store.write_feedback(
-                    session, request_id=outcome.request_id, application_id=tenant,
-                    score_name="corrected_output", value_num=1.0, value_cat=None,
-                    source="app")
-                await session.commit()
+            await _write_feedback_safe(
+                request, request_id=outcome.request_id, application_id=tenant,
+                score_name="corrected_output", value_num=1.0, value_cat=None,
+                source="app")
         if trace_id is not None:
             await ensure_score_config(app_langfuse, "corrected_output")
             await post_score(app_langfuse, trace_id, "corrected_output", 1,
