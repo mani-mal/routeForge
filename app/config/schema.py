@@ -108,9 +108,6 @@ class BreakerCfg(BaseModel):
     # First open period; doubles on every failed half-open trial, capped below.
     cooldown_s: float = 30.0
     max_cooldown_s: float = 300.0
-    # A half-open trial lease expires after this, so a trial whose caller
-    # vanished (client disconnect) cannot keep the circuit half-open forever.
-    trial_timeout_s: float = 60.0
 
 
 class RoutingCfg(BaseModel):

@@ -5,7 +5,7 @@ from app.gateway.breaker import CircuitBreaker
 from app.obs import metrics
 
 CFG = BreakerCfg(enabled=True, failure_threshold=3, cooldown_s=30.0,
-                 max_cooldown_s=100.0, trial_timeout_s=60.0)
+                 max_cooldown_s=100.0)
 
 
 def _trip(b, model="m", start=0.0):
@@ -32,12 +32,16 @@ def test_success_resets_the_count():
     assert b.open_set(now=3.5) == frozenset()
 
 
-def test_half_open_admits_exactly_one_trial():
+def test_half_open_admits_every_caller_no_lease():
+    """Fix round 1, finding 1: `open_set()` is a pure read now -- once the
+    cooldown elapses EVERY caller finds the model admitted (not just a single
+    lease-holder), repeatedly, for as long as the circuit stays half-open."""
     b = CircuitBreaker(CFG)
     _trip(b)                                    # opens at t=2, until 32
-    assert "m" in b.open_set(now=31.0)
-    assert "m" not in b.open_set(now=33.0)      # this caller holds the trial
-    assert "m" in b.open_set(now=33.1)          # everyone else still excluded
+    assert "m" in b.open_set(now=31.0)          # still mid-cooldown: excluded
+    assert "m" not in b.open_set(now=33.0)      # cooldown elapsed: admitted
+    assert "m" not in b.open_set(now=33.1)      # admitted again -- no lease consumed
+    assert "m" not in b.open_set(now=50.0)      # still admitted, no result reported yet
     assert b.state("m", now=33.1).state == "half_open"
 
 
@@ -56,18 +60,20 @@ def test_trial_failure_reopens_with_doubled_cooldown_capped():
     b.open_set(now=33.0)
     b.record_failure("m", now=34.0)             # cooldown 60 -> open until 94
     assert "m" in b.open_set(now=93.0)
-    assert "m" not in b.open_set(now=95.0)      # trial granted
+    assert "m" not in b.open_set(now=95.0)      # half-open again, admitted
     b.record_failure("m", now=96.0)             # cooldown 120 -> capped 100 -> until 196
     assert "m" in b.open_set(now=195.0)
     assert "m" not in b.open_set(now=197.0)
 
 
-def test_trial_lease_expires():
+def test_concurrent_callers_all_admitted_while_still_dead():
+    """The accepted cost the module docstring documents: while half-open,
+    every concurrent caller may pick the model and attempt it, not just one --
+    there is no single-trial gate any more."""
     b = CircuitBreaker(CFG)
-    _trip(b)
-    assert "m" not in b.open_set(now=33.0)      # trial leased at 33
-    assert "m" in b.open_set(now=90.0)          # lease still held (< 33+60)
-    assert "m" not in b.open_set(now=94.0)      # lease expired -> new trial
+    _trip(b)                                    # opens at t=2, until 32
+    for t in (33.0, 33.0, 33.0, 40.0, 50.0):
+        assert "m" not in b.open_set(now=t)
 
 
 def test_disabled_never_opens():
@@ -141,15 +147,31 @@ def test_failure_after_cooldown_reopens_without_lease():
     assert "m" not in b.open_set(now=93.0)
 
 
-def test_expired_lease_regrant_emits_no_duplicate_half_open_metric(monkeypatch):
-    """Finding 4: re-granting an expired trial lease within the same open
-    period is not a new open->half_open transition, so it must not re-emit
-    the metric/log."""
+def test_half_open_metric_emitted_exactly_once_per_open_period(monkeypatch):
+    """Finding 4 (rewritten for the no-lease design): repeated reads of
+    `open_set()` after the cooldown has elapsed must not re-emit the
+    open->half_open transition -- it is logged/metered exactly once per open
+    period via the one-shot `half_open_logged` dedup flag, not once per
+    caller."""
     calls: list[str] = []
     monkeypatch.setattr(metrics, "observe_breaker_transition",
                         lambda to_state: calls.append(to_state))
     b = CircuitBreaker(CFG)
     _trip(b)                                    # opens at t=2, until 32 -> "open"
-    b.open_set(now=33.0)                        # first grant -> "half_open"
-    b.open_set(now=94.0)                        # lease expired (33+60=93) -> re-grant only
+    b.open_set(now=33.0)                        # first post-cooldown read -> "half_open"
+    b.open_set(now=40.0)                        # every later caller: no re-emit
+    b.open_set(now=50.0)
     assert calls.count("half_open") == 1
+
+
+def test_half_open_metric_also_dedupes_across_record_calls(monkeypatch):
+    """The same dedup applies when `record_success`/`record_failure`, not
+    `open_set()`, is the first caller to observe the elapsed cooldown."""
+    calls: list[str] = []
+    monkeypatch.setattr(metrics, "observe_breaker_transition",
+                        lambda to_state: calls.append(to_state))
+    b = CircuitBreaker(CFG)
+    _trip(b)                                    # opens at t=2, until 32 -> "open"
+    b.record_success("m", now=33.0)             # first post-cooldown observer -> "half_open" then "closed"
+    assert calls.count("half_open") == 1
+    assert calls.count("closed") == 1

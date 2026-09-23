@@ -31,16 +31,17 @@ signals:
 # Step-7 endpoint circuit breaker (app/gateway/breaker.py). An endpoint that
 # fails `failure_threshold` times in a row (endpoint-side failures only -- a
 # 4xx never counts) is excluded from routing for `cooldown_s`, then admitted
-# for ONE trial request; a failed trial doubles the cooldown up to
-# `max_cooldown_s`. It can only remove candidates policy already admitted, and
-# if every eligible candidate is open the router tries one anyway
-# (circuit_bypass). Per-process state. `enabled: false` = no breaker.
+# to EVERY request (half-open, evidence-based, no single-trial lease) until
+# the first reported result: a success closes it, a failure reopens it and
+# doubles the cooldown up to `max_cooldown_s`. It can only remove candidates
+# policy already admitted, and if every eligible candidate is open the router
+# tries one anyway (circuit_bypass). Per-process state. `enabled: false` = no
+# breaker.
 breaker:
   enabled: true
   failure_threshold: 3
   cooldown_s: 30
   max_cooldown_s: 300
-  trial_timeout_s: 60
 
 # Step-6 scoring strategy (app/routing/strategy.py). "default" reproduces the
 # scoring above exactly. An unknown name fails the config lint at boot -- it

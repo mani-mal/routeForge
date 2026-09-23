@@ -289,13 +289,12 @@ from app.config.schema import BreakerCfg
 def test_breaker_config_loads_with_shipped_values():
     b = load_settings().routing.breaker
     assert b == BreakerCfg(enabled=True, failure_threshold=3, cooldown_s=30.0,
-                           max_cooldown_s=300.0, trial_timeout_s=60.0)
+                           max_cooldown_s=300.0)
 
 
 @pytest.mark.parametrize("field,value,code", [
     ("failure_threshold", 0, "BREAKER_THRESHOLD_NOT_POSITIVE"),
     ("cooldown_s", 0, "BREAKER_COOLDOWN_NOT_POSITIVE"),
-    ("trial_timeout_s", -1, "BREAKER_TRIAL_TIMEOUT_NOT_POSITIVE"),
     ("max_cooldown_s", 10, "BREAKER_MAX_COOLDOWN_BELOW_COOLDOWN"),
 ])
 def test_bad_breaker_values_are_caught(field, value, code):

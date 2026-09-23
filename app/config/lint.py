@@ -105,8 +105,6 @@ def lint_settings(s: Settings) -> list[str]:
         errs.append(f"BREAKER_THRESHOLD_NOT_POSITIVE {brk.failure_threshold}")
     if brk.cooldown_s <= 0:
         errs.append(f"BREAKER_COOLDOWN_NOT_POSITIVE {brk.cooldown_s}")
-    if brk.trial_timeout_s <= 0:
-        errs.append(f"BREAKER_TRIAL_TIMEOUT_NOT_POSITIVE {brk.trial_timeout_s}")
     if brk.max_cooldown_s < brk.cooldown_s:
         errs.append(f"BREAKER_MAX_COOLDOWN_BELOW_COOLDOWN "
                     f"{brk.max_cooldown_s} < {brk.cooldown_s}")

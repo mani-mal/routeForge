@@ -89,9 +89,17 @@ def _circuit_dict(st, now: float) -> dict:
     single `time.monotonic()` snapshot taken once per list call so every
     row's `open_until_s` is relative to the same instant. Per-process, like
     the breaker itself (app/gateway/breaker.py) -- THIS REPLICA's view only;
-    another API replica may disagree."""
+    another API replica may disagree.
+
+    `open_until_s` is only meaningful while still counting DOWN to a retry --
+    i.e. `state == "open"`. `half_open` keeps the same `open_until` timestamp
+    internally (it is how the breaker recognizes the cooldown has elapsed),
+    but that is now a moment in the past: surfacing it as "seconds from now"
+    would render a negative number ("retry in -12s"), which reads as a bug
+    rather than "already admitted". Clamp to None for every other state."""
+    open_until_s = (st.open_until - now) if st.state == "open" else None
     return {"state": st.state, "consecutive_failures": st.consecutive_failures,
-            "open_until_s": (st.open_until - now) if st.open_until is not None else None}
+            "open_until_s": open_until_s}
 
 
 def _effective_dict(app, settings) -> dict:
