@@ -48,4 +48,12 @@ class ContextWindowExceeded(ValueError):
     client's error, not an outage: route maps -> 400 with the upstream reason,
     so the client compacts its history instead of retrying a 502. The gateway
     only surfaces it when EVERY model it tried refused for this reason; any
-    other failure in the mix keeps the request a 502 (BackendUnavailable)."""
+    other failure in the mix keeps the request a 502 (BackendUnavailable).
+
+    `attempted_models` (like `BackendUnavailable`'s) lists the candidates the
+    gateway tried, in order, so the request's `context_overflow` routing
+    outcome names them. Empty when raised by a single backend call."""
+
+    def __init__(self, *args, attempted_models: tuple[str, ...] = ()) -> None:
+        super().__init__(*args)
+        self.attempted_models = tuple(attempted_models)

@@ -107,11 +107,12 @@ def _exhausted(last_error: str, overflow_errors: list[str], failures: int,
     the client's error, so it surfaces as `ContextWindowExceeded` (400) with
     the upstream reason kept whole (its token counts are the actionable part,
     so it is not cut to the 200-char log form). Any other failure in the mix
-    keeps it an outage (502), and carries `attempted_models` -- the candidates
+    keeps it an outage (502). Both carry `attempted_models` -- the candidates
     tried, in order (signal hardening, spec §4) -- so the route can meter the
-    last one on its `error` usage row."""
+    last one on its `error` usage row and name them on the routing outcome."""
     if overflow_errors and len(overflow_errors) == failures:
-        return ContextWindowExceeded(overflow_errors[-1])
+        return ContextWindowExceeded(overflow_errors[-1],
+                                     attempted_models=tuple(attempted))
     return BackendUnavailable(
         "backend failed on all reachable candidates for this request "
         f"(last error: {last_error})", attempted_models=tuple(attempted))

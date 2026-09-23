@@ -149,6 +149,21 @@ def test_bad_categorical_value_is_refused():
         assert _feedback_rows(c) == []
 
 
+def test_slashed_model_slug_is_recorded_as_a_categorical_value():
+    """Final review #3: a `preferred_model` score names a real model slug,
+    and those carry `/`."""
+    slug = "nvidia/llama-3.1-nemotron-nano-8b-v1"
+    with _client() as c:
+        rid = _serve(c, DEMO)["id"]
+        r = c.post("/v1/feedback", headers=DEMO,
+                   json={"request_id": rid, "score_name": "preferred_model",
+                         "value": slug})
+        assert r.status_code == 200, r.text
+        assert r.json()["recorded"] is True
+        rows = _feedback_rows(c)
+        assert [(x.value_cat, x.value_num) for x in rows] == [(slug, None)]
+
+
 # --------------------------------------------------------------------------- #
 # 5. neither id given -> 422
 # --------------------------------------------------------------------------- #
