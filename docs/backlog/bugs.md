@@ -127,11 +127,27 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
-## B51 — unmeasured models look ~80× faster than measured reasoning models, so every restart or onboarding pays a quality-blind warm-up
+## B51 — unmeasured models look ~80× faster than measured reasoning models, so every restart or onboarding pays a quality-blind warm-up  ✅ RESOLVED (2026-09-23)
 
 **Severity:** medium (routing quality; no privacy or eligibility impact — a signal can only reorder)
 **Found:** 2026-09-22, first live FeasibleRouteBench run on the Spark
-([`docs/research/feasible-route-bench.md`](../research/feasible-route-bench.md) §10). **Open.**
+([`docs/research/feasible-route-bench.md`](../research/feasible-route-bench.md) §10).
+**Resolved 2026-09-23** on `fix/b51-peer-latency-prior` by a **peer prior**: an unmeasured or
+stale model's latency is now the median measured latency of the other eligible candidates in
+its tier (provenance `peer_prior`, `app/routing/strategy.py::_with_peer_prior`); the tier
+default applies only when no same-tier peer is measured, so an empty store still scores
+exactly as before. The other fix direction below — seeding from the onboarding probe — was
+rejected: the probe is a `GET /models` reachability check, not a completion, so it measures
+nothing about generation latency (the "probe already makes a real call" premise below was
+wrong), and even a one-token completion would time TTFT, not the 16–18 s of reasoning that
+caused this. `max_latency_norm` is unchanged (not part of this fix).
+**Verified** offline with a Spark-shaped simulation (three free `cheap` on-prem models at
+3.6/16.2/18.4 s, Llama failing claim summaries; starter suite, seed 0): `router_online` went from
+`{qwen: 12, nemotron: 5, llama: 5}`, 15/22 passed, to `{qwen: 22}`, 22/22; the shipped
+`healthcare-sim` report is byte-identical before and after. **Still owed:** a live Spark
+re-run. Note what this does *not* do: with every model above the 3 s cap, latency now ties
+them all, so there is no latency-driven exploration at all — a new model gets traffic only on
+quality or cost. The durable fix is still a measured quality signal (P2b-2 → P2b-3).
 
 Two P2a signal defaults interact badly with slow reasoning models:
 

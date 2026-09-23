@@ -252,20 +252,32 @@ full eligible set, so it can verify that one score but can never reproduce the
 every eligible candidate, can do that. Full replay (the ranking, not just one
 candidate's score) stays a trace-only property.
 
-### The four provenance values
+### The five provenance values
 
 `src` on `latency` and `availability`:
 
 | `src` | Means |
 |---|---|
 | `measured` | an EWMA over at least `signals.min_samples` observed calls, not stale. `n` is the observation count. |
-| `tier_default` | **latency only.** No usable measurement — fewer than `min_samples` observations, or the newest one is older than `signals.staleness_s`. The value is `signals.tier_latency_ms[tier]`. `n` still reports the true count, which may be non-zero. |
+| `peer_prior` | **latency only.** No usable measurement of this model (as for `tier_default`), but at least one other *eligible* candidate in the **same tier** is `measured`. The value is the median of those peers' measured latencies. `n` still reports this model's own true count. (B51) |
+| `tier_default` | **latency only.** No usable measurement — fewer than `min_samples` observations, or the newest one is older than `signals.staleness_s` — **and** no measured same-tier peer in the eligible set. The value is `signals.tier_latency_ms[tier]`. `n` still reports the true count, which may be non-zero. |
 | `neutral` | **availability only.** Fewer than `min_samples` observations; the value is `1.0`, which is exactly the pre-P2a hardcoded constant. |
 | `disabled` | `signals.enabled: false`. Tier default / `1.0`, and `n` is reported as `0` even when observations exist (see the caveat below). |
 
-A stale latency falls back to the tier default **outright** rather than drifting
+A stale latency falls back to the peer prior or the tier default **outright** rather than drifting
 toward it: a drifted number would be neither measured nor default and could not
 be labelled honestly.
+
+**Why `peer_prior` exists (B51).** The tier defaults are optimistic (200 ms for
+`cheap`), while real on-prem reasoning models measure several seconds. Scoring
+an unmeasured model at the default made it look up to ~80× faster than its
+measured tier-mates, so after every restart, onboarding or idle hour the router
+sent each unmeasured model `min_samples` requests on missing data alone,
+regardless of whether it could do the task. The peer prior assumes a new model is
+*typical* for its tier instead. It is computed from the eligible set the hop
+scored, and the value used is the `ms` in the record, so a hop remains
+recomputable offline from the record alone. With no measured peer — including an
+empty store — the tier default stands, so the identity property is unchanged.
 
 `quality.src` is the existing four-rung ladder (`app/routing/quality.py`:
 `customer` / `calibrated` / `published` / `tier_default`), now reported for
