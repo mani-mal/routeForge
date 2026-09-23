@@ -1390,7 +1390,12 @@ half_open --first reported failure-----------------------------> open       (coo
 
 - **What counts.** Only failures for which `counts_as_endpoint_unhealth(exc)` is true: no-status
   transport errors, 5xx and 429. A 4xx, including context overflow, never trips a circuit (the
-  B36 rule the availability signal already uses). Any success while closed resets the count.
+  B36 rule the availability signal already uses). *(Final-review fix wave, 2026-09-23.)* Nor
+  does a local programming error (`TypeError`, `AttributeError`, `NameError`, `KeyError`,
+  `IndexError`, `AssertionError`, `NotImplementedError`, `ValueError` incl. `JSONDecodeError`):
+  the breaker is shared by every tenant, and a bug on our side must not open a circuit for
+  everyone. The bench's `SimulatedEndpointFailure` is a plain `Exception` and still counts.
+  Any success while closed resets the count.
 - **Evidence-based half-open.** Before the cooldown elapses, a reported success or failure
   changes nothing: no close, no reopen, no change to the count or the cooldown. Once it has
   elapsed, the model is admitted to **every** request, and the first result anyone reports
@@ -1406,14 +1411,26 @@ half_open --first reported failure-----------------------------> open       (coo
 - **Where it applies: `feasible_set` stage 7, the last stage** (`circuit_open`, "excluded ·
   circuit open"). The spec placed it right after `prior_failure`. Running it after every policy
   stage (app scope, pinned model, registry gates) means every policy reason wins over it, so
-  `circuit_open` only ever labels a candidate that policy fully admitted, and the all-open
-  bypass plainly restores exactly the policy-eligible set.
-- **All-open bypass** (`Router.select`). If the open set is the only reason the eligible set is
-  empty, the router selects again without it, sets `circuit_bypass: true` on the decision and
-  appends `"; circuit bypass: every eligible candidate is open"` to its reason. Dropping the last
-  stage can only restore the policy-eligible set, never widen placement: an `onprem_only`
-  request whose on-prem models are all open still never reaches cloud. The bypass never makes a
-  request worse off than no breaker.
+  `circuit_open` only ever labels a candidate that policy fully admitted.
+- **The breaker never changes the target tier** *(final-review fix wave, 2026-09-23)*. As first
+  built, open circuits were removed before `Router._select` chose the tier, so the clamp to the
+  best allowed tier pulled the target down to whatever tier was still closed. The review probe:
+  a high-risk request with cloud allowed and `bedrock-frontier` open was served on **mid**
+  ("tier mid (target mid)", no bypass); a medium-risk `onprem_only` request with its on-prem mid
+  open, and an escalation to mid with mid open, were served on **cheap**. That silently undercut
+  the risk floor and the escalation (CLAUDE.md rule 8). Now the targets, the clamp, the tier pick
+  and the budget fallback are computed from the **policy**-eligible set, and open circuits are
+  dropped only among the chosen tier's final (post-budget) candidates, still labelled by stage 7.
+- **Within-tier bypass** (`Router._select`). If every final candidate in the target tier is
+  open, the router ranks them all anyway, sets `circuit_bypass: true` and appends
+  `"; circuit bypass: every candidate in the target tier is open"` to the reason. It never steps
+  to another tier to find a closed model. The bypass can only restore candidates policy admitted,
+  in the tier policy chose: an `onprem_only` request whose on-prem models are all open still
+  never reaches cloud. So the breaker never makes a request worse off than no breaker: it only
+  removes an open model when a closed same-tier peer can take its place.
+  **Re-checked on the bench:** the outage scenario's two endpoints share one tier, so the fix
+  changes no §12 number; seed 0 at 1 s/case re-run after the fix gives `router_online:default`
+  `wasted_attempts` 0.1 (3/30), as in §12.4.
 - **Gateway wiring.** `Gateway.run` and `Gateway.run_stream` read `open_set()` fresh on every
   `Router.select`, including each failover and escalation re-select, and report every attempt's
   outcome to the breaker.
@@ -1591,13 +1608,14 @@ seed.
 | Invariant | Pinned by | Falsified? |
 |---|---|---|
 | Opens after `failure_threshold` consecutive unhealth failures; any success resets; models are independent | `tests/test_breaker.py::test_opens_after_threshold_consecutive_failures`, `test_success_resets_the_count`, `test_models_are_independent` | n/a |
-| A 4xx never trips; 5xx, 429 and transport errors do | `tests/test_gateway_breaker.py::test_gateway_failures_trip_the_breaker_and_4xx_does_not`, `test_4xx_does_not_trip_the_breaker`; `tests/eval/test_strategies.py::TestOnlineArmBreaker::test_breaker_true_ignores_non_unhealth_failures` | n/a |
+| A 4xx never trips; 5xx, 429 and transport errors do (and open it, after which the next request makes no wasted attempt); a local programming error neither trips it nor moves availability | `tests/test_gateway_breaker.py::test_gateway_failures_trip_the_breaker[500\|429\|no-status-transport]`, `test_local_programming_errors_do_not_trip_the_breaker_or_lower_availability`, `test_4xx_does_not_trip_the_breaker`; `tests/routing/test_signal_wiring.py::test_local_programming_errors_are_not_endpoint_unhealth`; `tests/eval/test_strategies.py::TestOnlineArmBreaker::test_breaker_true_ignores_non_unhealth_failures` | n/a |
 | Before the cooldown elapses, no result changes state, count or cooldown | `test_breaker.py::test_success_mid_cooldown_does_not_close`, `test_failure_mid_cooldown_does_not_change_cooldown_or_count` | **Yes**: the Task 2 review found a mid-cooldown success closing the circuit (fixed in `2d0d029`) |
 | After the cooldown, the first success closes and the first failure reopens with the cooldown doubled and capped | `test_breaker.py::test_trial_success_closes`, `test_trial_failure_reopens_with_doubled_cooldown_capped`, `test_success_after_cooldown_closes_without_lease`, `test_failure_after_cooldown_reopens_without_lease` | n/a |
 | Half-open admits every caller; an ineligible request cannot starve a recovered endpoint | `test_breaker.py::test_half_open_admits_every_caller_no_lease`, `test_concurrent_callers_all_admitted_while_still_dead`; `test_gateway_breaker.py::test_ineligible_request_does_not_starve_a_recovered_endpoint` | **Yes**: the Task 4 review probe diverted three eligible requests under the lease design (lease removed in `bb97af8`) |
 | `half_open` is metered and logged once per open period | `test_breaker.py::test_half_open_metric_emitted_exactly_once_per_open_period`, `test_half_open_metric_also_dedupes_across_record_calls` | n/a |
 | An open model is rejected with `circuit_open`; every policy reason wins over it | `tests/test_feasible_set.py::test_open_circuit_candidate_is_rejected_as_circuit_open`, `test_placement_excluded_and_open_circuit_reads_residency_not_circuit_open`; `tests/test_router_breaker.py::test_prior_failure_plus_open_circuits_bypass_keeps_prior_failure` | n/a |
 | All open → bypass, marked; the bypass never widens placement; a policy-empty set still raises | `test_router_breaker.py::test_all_open_bypasses_and_marks_it`, `test_bypass_never_widens_placement`, `test_no_eligible_for_policy_reasons_still_raises`; `test_gateway_breaker.py::test_all_open_bypass_is_on_the_record` | n/a |
+| The breaker never changes the target tier (risk floor, escalation, budget fallback); the bypass stays within the target tier; an empty open set reproduces today's decisions | `test_router_breaker.py::test_high_risk_open_frontier_keeps_the_frontier_target`, `test_medium_risk_onprem_only_open_mid_is_not_lowered_to_cheap`, `test_medium_risk_open_mid_prefers_a_closed_mid_peer`, `test_escalation_to_open_mid_is_not_lowered_to_cheap`, `test_open_cheap_peer_with_closed_peer_keeps_target_and_labels`, `test_budget_fallback_tier_is_computed_before_circuits`, `test_budget_fallback_prefers_closed_peer_in_fallback_tier`, `test_empty_open_set_matches_no_argument` | **Yes**: the final review's probe served a high-risk request on mid and a medium-risk / escalated one on cheap (fixed in `75e5ae4`) |
 | The gateway excludes an open endpoint up front (no wasted attempt), in `run` and `run_stream` | `test_gateway_breaker.py::test_open_circuit_saves_the_wasted_attempt`, `test_run_stream_open_circuit_excludes_the_model`, `test_run_stream_success_records_on_the_breaker`, `test_run_stream_failure_records_on_the_breaker`, `test_run_stream_early_close_records_nothing` | n/a |
 | `enabled: false` (or no breaker) is the pre-breaker behaviour | `test_breaker.py::test_disabled_never_opens`; `test_gateway_breaker.py::test_no_breaker_is_todays_behaviour`; `test_feasible_set.py::test_open_circuits_defaults_to_empty_set_no_change`; `TestOnlineArmBreaker::test_breaker_off_kwarg_equals_settings_disabled` | n/a |
 | Config lint: positive threshold and cooldown, `max_cooldown_s ≥ cooldown_s` | `tests/test_config_lint.py::test_breaker_config_loads_with_shipped_values`, `test_bad_breaker_values_are_caught` | n/a |

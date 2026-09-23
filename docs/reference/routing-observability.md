@@ -515,7 +515,22 @@ half_open --first reported failure-------------------------------> open       (c
 
 - **What counts as a failure:** only what `counts_as_endpoint_unhealth` counts — transport
   errors with no status, 5xx and 429. A 4xx (including a context-window overflow) is the
-  request's fault and never trips a circuit. Any success while closed resets the count.
+  request's fault and never trips a circuit. Nor does a local programming error raised on
+  RouteForge's side of the wire (`TypeError`, `AttributeError`, `NameError`, `KeyError`,
+  `IndexError`, `AssertionError`, `NotImplementedError`, `ValueError` — which includes a
+  `JSONDecodeError`): a bug of ours must not open a circuit every tenant shares. The
+  accepted cost is that an endpoint returning malformed JSON no longer counts against it.
+  The same rule feeds the availability signal (§3). Any success while closed resets the
+  count.
+- **"Consecutive" means consecutive reported results, across all concurrent requests on
+  this replica** — not per request or per tenant. One success from any request resets the
+  count, so an endpoint failing roughly half its calls under load may never open.
+- **The cross-tenant lever that remains.** The breaker is shared by every tenant. A 5xx
+  counts whoever caused it, so a tenant whose prompts make an endpoint return 5xx (a
+  crash on a particular input, say) can open that endpoint's circuit for everyone until
+  the cooldown ends. The within-tier bypass (below) keeps the tier reachable, and a
+  failure-tolerant client sees failover, but the other tenants lose that endpoint's
+  preference for a cooldown. Only 4xx and local errors are filtered out.
 - **Open:** the model is excluded from every routing decision until the cooldown ends.
   Results reported during the cooldown change nothing, including a success from a bypass
   (below).
@@ -525,23 +540,35 @@ half_open --first reported failure-------------------------------> open       (c
   doubled. **Cost to know about:** several requests in flight during the half-open window may
   each spend one attempt on an endpoint that is still dead; failover serves them, a streamed
   request fails that one call.
-- **Where it acts:** the open set is the **last** stage of the one eligibility seam
-  (`feasible_set` stage 7, code `circuit_open`, §2). It can only remove a candidate policy
-  admitted; it cannot widen placement. `Gateway.run` and `Gateway.run_stream` pass the
+- **Where it acts:** after the tier is chosen. The router picks the target tier —
+  complexity, risk floor, escalation, the clamp to the best allowed tier, and the budget
+  fallback — from the **policy**-eligible set, with open circuits still in it. Only then are
+  open circuits dropped, and only among that tier's final candidates, labelled by the last
+  stage of the one eligibility seam (`feasible_set` stage 7, code `circuit_open`, reason
+  "excluded · circuit open", §2). **The breaker never changes the target tier**: an open
+  frontier model does not move a high-risk request to mid (CLAUDE.md rule 8). It can only
+  remove a candidate policy admitted; it cannot widen placement.
+- **Cloud models are covered too.** The breaker keys on model name, so the YAML cloud pool
+  (`azure-*`, `bedrock-*`) is excluded when open exactly like an onboarded model. Cloud
+  models just have no `circuit` row in the admin view, which lists onboarded models only. `Gateway.run` and `Gateway.run_stream` pass the
   current open set to every `Router.select`, including failover and escalation re-selects.
   A streamed request has no failover, so the up-front exclusion is the only protection it
   gets.
 
 ### `circuit_bypass`
 
-If every candidate that policy admits is open, the router does not reject the request. It
-selects again without the open set, sets `circuit_bypass: true` on the router's
-`DecisionRecord`, and appends `"; circuit bypass: every eligible candidate is open"` to the
-decision's reason (so the Langfuse span's `sp.reason` shows it). Trying an endpoint that may
-have recovered is never worse than having no breaker. The retry only restores candidates
-policy already admitted: an `onprem_only` request whose on-prem models are all open still
-never reaches cloud. If the set is empty for a policy reason, the request is rejected as
-before.
+If every final candidate in the target tier is open, the router does not reject the
+request, and it does not step to another tier either. It bypasses the breaker **within that
+tier**: it ranks all of the tier's candidates, open ones included, sets
+`circuit_bypass: true` on the router's `DecisionRecord`, and appends
+`"; circuit bypass: every candidate in the target tier is open"` to the decision's reason
+(so the Langfuse span's `sp.reason` shows it). Closed candidates in *other* tiers are not
+used; picking one would change the tier policy chose. Trying an endpoint that may have
+recovered is what the request would have done with no breaker, so the breaker never makes
+a request worse off than no breaker would: it only ever removes an open model when a
+closed peer in the same tier can take its place. The bypass only restores candidates policy
+already admitted: an `onprem_only` request whose on-prem models are all open still never
+reaches cloud. If the set is empty for a policy reason, the request is rejected as before.
 
 ### Per-replica state
 
@@ -555,7 +582,8 @@ about a model's state. A restart starts every circuit closed; nothing is replaye
 
 `GET /admin/infra/models` adds a `circuit` object to each onboarded model. The console
 Infrastructure table shows a badge next to the health badge when the state is not
-`closed` ("circuit open", or "trial" while half-open):
+`closed` ("circuit open", or "half-open" while half-open). Cloud (YAML pool) models are
+also covered by the breaker but have no `circuit` row here:
 
 ```json
 "circuit": {"state": "open", "consecutive_failures": 3, "open_until_s": 24.7}
@@ -573,8 +601,9 @@ and disagree.
 ### Metrics and logs
 
 Each transition increments `routeforge_breaker_transitions_total{to_state}` (§1) and logs one
-line on the `serving.breaker` logger: `circuit <model> -> <state>` plus the cooldown when
-opening. `half_open` is counted once per open period.
+structured line on the `serving.breaker` logger:
+`circuit transition model=<model> from=<state> to=<state> cooldown_s=<n|->` (the cooldown
+just set when opening, `-` otherwise). `half_open` is counted once per open period.
 
 ### Configuration
 

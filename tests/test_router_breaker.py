@@ -1,6 +1,6 @@
 """`Router.select(open_circuits=...)` -- the step-7 breaker's name-set plumbing
 into eligibility (`app/policy/feasible.py`'s `circuit_open` stage) and the
-all-open bypass.
+within-tier bypass (the breaker never changes the target tier).
 
 This task does NOT use `BreakerCfg`/`CircuitBreaker` (app/gateway/breaker.py,
 Tasks 1-2) -- it only adds the router-side name-set param and the bypass.

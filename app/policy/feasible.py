@@ -26,10 +26,12 @@ produces the operator-facing `reason` string the console already renders:
 
 Stage 7 runs LAST, after every policy stage above it, so that every policy
 reason wins over it and `circuit_open` only ever labels a candidate that is
-otherwise fully policy-eligible -- see `candidate_rejection`'s docstring for
-why that ordering is what makes the router's all-open bypass
-(`app/routing/router.py::select`) safe: dropping stage 7 can only ever restore
-exactly the policy-eligible set, never widen it.
+otherwise fully policy-eligible. That is what makes the router's use of it
+safe (`app/routing/router.py::select`): the router chooses the target tier
+from the set WITHOUT stage 7 (the breaker never changes the tier), reads this
+stage only to label which of that tier's final candidates are open, and
+bypasses it within the tier when all of them are -- which can only restore
+policy-eligible candidates, never widen placement.
 
 The order is load-bearing, not stylistic: placement runs first so an excluded
 cloud model under `onprem_only` always reads "residency" rather than a softer
@@ -443,8 +445,8 @@ def candidate_rejection(c: PoolCandidate, *, allowed_providers: frozenset[str] |
         return _rejection(c, REASON_DISABLED, MODEL_SCOPE)
     # Stage 7: a circuit the step-7 breaker holds open (app/gateway/breaker.py).
     # LAST, after every policy stage: it only ever labels a candidate policy
-    # fully admitted, so dropping it can only shrink the set, and the router's
-    # all-open bypass restores exactly the policy-eligible set.
+    # fully admitted, so applying it can only shrink the set, and the router's
+    # within-tier bypass can only restore policy-eligible candidates.
     if c.name in open_circuits:
         return _rejection(c, REASON_CIRCUIT_OPEN, CIRCUIT_OPEN)
     return None

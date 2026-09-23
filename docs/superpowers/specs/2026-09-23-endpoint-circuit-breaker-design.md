@@ -26,7 +26,7 @@ outage. Streaming requests have no failover at all, so they fail outright.
 - a per-endpoint breaker in the gateway, fed by the gateway's existing
   `counts_as_endpoint_unhealth` verdicts;
 - an open circuit is excluded from routing, through the one eligibility seam, with its own code;
-- a bypass when every eligible candidate is open;
+- a bypass, within the target tier, when every candidate in that tier is open;
 - configuration, the console/admin view, `/metrics`, and trace provenance;
 - a FeasibleRouteBench arm that models it, plus re-measuring the outage scenario.
 
@@ -55,7 +55,12 @@ half_open ──first reported failure──▶ open     (cooldown doubles, capp
 - **What counts.** Only failures for which `counts_as_endpoint_unhealth(exc)` is true:
   no-status transport errors, 5xx and 429. A 4xx, including context overflow, is the
   request's fault and never trips the breaker. This is the same rule the availability
-  signal uses, and for the same B36 reason.
+  signal uses, and for the same B36 reason. *(Amended 2026-09-23, final review: a local
+  programming error -- `TypeError`, `AttributeError`, `NameError`, `KeyError`, `IndexError`,
+  `AssertionError`, `NotImplementedError`, `ValueError` incl. `JSONDecodeError` -- does not
+  count either, checked before the status code. **Why:** the breaker is shared by every
+  tenant, so a bug on RouteForge's side of the wire must not become a cross-tenant outage
+  lever. Accepted cost: an endpoint returning malformed JSON no longer counts against it.)*
 - **What resets.** Any success, whether streamed or not, resets the consecutive-failure
   count. A success is the same event that calls `observe_success` /
   `observe_stream_success`.
@@ -99,21 +104,41 @@ half_open ──first reported failure──▶ open     (cooldown doubles, capp
     stage 3.)* **Why:** every policy reason then wins. Placed after `prior_failure`, an open
     model outside the app's scope would have read `circuit_open` instead of `app_scope`.
     With the stage last, the set it removes from is exactly the policy-eligible set, so the
-    all-open bypass below plainly restores that set and nothing more.
+    within-tier bypass below can only restore policy-eligible candidates.
   - Like `exclude`, it can **only remove** candidates. It is structurally unable to widen
     placement: an `onprem_only` request whose on-prem models are all open never reaches
     cloud.
 - **Every selection passes it.** `Gateway.run` and `Gateway.run_stream` pass
   `breaker.open_set(now)` into every `Router.select`, including each failover and
   escalation re-select. `Router.select` threads it through to `feasible_set`.
-- **All-open bypass.** Suppose the breaker exclusion is the *only* reason the eligible set
-  is empty: the set is non-empty without `open_circuits`, but becomes empty with it.
-  - `Router.select` then re-selects **without** `open_circuits` and records it on the
-    decision: `reason` gets the suffix `"; circuit bypass: every eligible candidate is open"`,
-    and the decision gets `circuit_bypass: true`.
+- **The breaker never changes the target tier.** *(Amended 2026-09-23, final review;
+  reason: CLAUDE.md rule 8.)* As first built, the open set was removed before
+  `Router._select` computed the target tier, so the clamp to the best allowed tier pulled the
+  target down to whatever tier was still closed. A high-risk request with `bedrock-frontier`
+  open was served on mid; a medium-risk `onprem_only` request with its on-prem mid open, or
+  an escalation to mid with mid open, on cheap. That silently undercuts a risk floor or an
+  escalation. Now:
+  - the complexity/risk-floor/escalation targets, the clamp, the tier pick and the budget
+    fallback are all computed from the **policy**-eligible set (`feasible_set` without
+    `open_circuits`);
+  - open circuits are then dropped only among the chosen tier's final (post-budget)
+    candidates. `feasible_set` stage 7 stays the labelling authority: the router computes the
+    set a second time with `open_circuits` and uses its `circuit_open` rejections only to
+    decide which of those final candidates are open.
+- **Within-tier bypass.** *(Amended 2026-09-23, final review. This bullet originally
+  re-selected without `open_circuits` when the WHOLE eligible set was open, which let a
+  partly open set change the tier as above.)* If every final candidate in the target tier is
+  open:
+  - `Router.select` ranks them all anyway and records it on the decision: `reason` gets the
+    suffix `"; circuit bypass: every candidate in the target tier is open"`, and the decision
+    gets `circuit_bypass: true`. It never steps to another tier to find a closed model.
   - Rationale: rejecting would turn an availability problem into a guaranteed failure,
-    while trying the endpoint may succeed if it has recovered. That is today's behaviour,
-    so the breaker never makes a request worse off than no breaker would.
+    while trying the endpoint may succeed if it has recovered. Trying it is what the request
+    would have done with no breaker, and the breaker only ever removes an open model when a
+    closed same-tier peer takes its place, so the breaker never makes a request worse off
+    than no breaker would.
+  - A policy-empty set still raises `NoEligibleCandidate` exactly as before, and
+    `open_circuits=frozenset()` reproduces the pre-breaker decisions exactly.
   - Privacy is unaffected, because the bypass only restores candidates that policy
     already admitted.
 - **Streaming benefits most.** A stream has no failover, so excluding an open endpoint up

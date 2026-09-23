@@ -4,9 +4,9 @@
 `Router.select` call (each hop, not once per request), record a failure only
 when `counts_as_endpoint_unhealth` says the failure is the endpoint's fault
 (a 4xx never trips it -- B36), and record a success after a successful
-generate. `RoutingDecision.circuit_bypass` (set when every eligible candidate
-was open and the router retried without the breaker) rides the step="router"
-`DecisionRecord` unchanged.
+generate. `RoutingDecision.circuit_bypass` (set when every candidate in the
+target tier is open and the router bypassed the breaker within that tier)
+rides the step="router" `DecisionRecord` unchanged.
 
 Helpers (`_FailForModels`, `_onprem`, `_reg`, `_ctx`, `S`) copied from
 tests/test_gateway_lateral_failover.py so this module has no import-time
