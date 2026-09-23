@@ -127,6 +127,24 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
+## B52 — `feasible_set` trusts `ctx.allowed_providers` even when `ctx.onprem_only` is set
+
+**Severity:** low, defence in depth only. It is unreachable through the real gate today.
+**Found:** 2026-09-23, final review of the endpoint circuit breaker. A reviewer probe hand-built an
+inconsistent `ExecutionPolicyContext`. **Open.**
+
+When `feasible_set` (`app/policy/feasible.py`) is given a context, it takes placement **only** from
+`ctx.allowed_providers`. `ctx.onprem_only=True` changes nothing but the rejection label
+(`residency`). So a context with `onprem_only=True` whose `allowed_providers` includes a cloud
+provider **routes to cloud**. The real gate never builds such a context, because `build_context`
+narrows `allowed_providers` to `{onprem}` under `onprem_only`. That leaves rule 3's "cloud is
+unreachable by construction" resting on one function, `build_context`, alone.
+
+**Fix direction:** in `feasible_set`, intersect the providers with `{onprem}` whenever the resolved
+`onprem_only` is true, so the invariant also holds at the single eligibility seam. Add a
+Hypothesis property: for any context with `onprem_only`, no eligible candidate has a
+provider other than `onprem`.
+
 ## B51 — unmeasured models look ~80× faster than measured reasoning models, so every restart or onboarding pays a quality-blind warm-up  ✅ RESOLVED (2026-09-23)
 
 **Severity:** medium (routing quality; no privacy or eligibility impact — a signal can only reorder)
