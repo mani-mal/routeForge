@@ -420,3 +420,19 @@ def test_b52_property_onprem_only_admits_only_onprem(onprem_only, providers, exc
     else:
         # Off, placement is exactly `providers` -- nothing extra is narrowed.
         assert all(c.provider in providers for c in result.eligible)
+
+
+def test_b52_pinned_cloud_model_under_inconsistent_onprem_only_reads_residency():
+    """`pinned_model_reason` asks the same seam, so it must narrow the same
+    way: a pinned cloud model under onprem_only is refused for residency, not
+    explained as "disabled", even from a context that still lists cloud."""
+    from app.policy.context import pinned_model_reason
+
+    ctx = _ctx(_B52_REG, AppPolicyView()).model_copy(
+        update={"onprem_only": True, "allowed_providers": _ALL_PROVIDERS,
+                "requested_model": "azure-gpt-mid"})
+
+    reason = pinned_model_reason(_B52_REG.effective_pool(), ctx, _B52_REG,
+                                 "acme", "azure-gpt-mid")
+    assert "excluded by residency" in reason
+    assert reason != "it is disabled"

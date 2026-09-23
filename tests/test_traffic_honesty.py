@@ -252,24 +252,30 @@ def test_residency_filter_is_what_keeps_pii_onprem_not_provider_availability():
         req = ChatRequest(messages=[
             Message(role="user", content="My SSN is 482-73-1946, please summarize this.")])
         try:
-            out = asyncio.run(pipe.run(request_id, "hospital", req))
-        except NoEligibleCandidate:
-            out = None
-        return out, rec, registry
+            return asyncio.run(pipe.run(request_id, "hospital", req)), None, rec, registry
+        except NoEligibleCandidate as exc:
+            return None, exc, rec, registry
 
     gate_module.build_context = _leaky_build_context
     original_onprem_set = feasible_module.ONPREM_ONLY_PROVIDERS
     try:
-        # Phase 1: only build_context is broken -> the seam still holds.
-        _out, rec, registry = _run_ssn("r5a")
+        # Phase 1: only build_context is broken -> the seam still holds. The
+        # request must be REFUSED, and refused because the seam rejected the
+        # one cloud candidate as residency -- "no cloud call" alone would be
+        # vacuously true of a refusal for any reason.
+        out, exc, rec, registry = _run_ssn("r5a")
+        assert out is None and exc is not None, (
+            "feasible_set must refuse an onprem_only request whose context "
+            "still lists a cloud provider (B52), not serve it")
+        assert ("bedrock-frontier", "residency") in exc.rejected, exc.rejected
+        assert "excluded · residency" in str(exc)
         assert all(_provider_of(m, settings, registry) == "onprem"
-                   for m in rec.models_called), (
-            "feasible_set must keep an onprem_only request off the cloud even "
-            "when the context still lists a cloud provider (B52)")
+                   for m in rec.models_called)
 
         # Phase 2: the seam's narrowing is neutralised too -> it leaks.
         feasible_module.ONPREM_ONLY_PROVIDERS = frozenset(settings.serving.providers)
-        out, rec, registry = _run_ssn("r5b")
+        out, exc, rec, registry = _run_ssn("r5b")
+        assert exc is None, exc
         # onprem_only is still reported True (the context itself still sets
         # it), but with both filters removed the router can now reach bedrock.
         assert out is not None and out["policy"]["onprem_only"] is True
