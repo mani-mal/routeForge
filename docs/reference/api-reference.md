@@ -69,7 +69,7 @@ A standard `ChatCompletion` **plus routeForge-specific fields**:
 
 ```jsonc
 {
-  "id": "req-1a2b3c4d",                      // request id — correlates trace + usage
+  "id": "req-1a2b3c4d5e6f47a8b9c0d1e2f3a4b5c6", // request id: "req-" + 32 hex (a UUID4) — correlates trace + usage
   "object": "chat.completion",
   "created": 1757030400,                     // unix seconds — always present
   "model": "onprem-7b",                      // slug of the model actually chosen
@@ -452,7 +452,8 @@ Body — `{ request_id?, trace_id?, score_name, value, comment?, corrected_outpu
 - `score_name` must be one of `route_correct`, `preferred_model`, `failure_type`,
   `quality`, `corrected_output` (otherwise `422 unknown score_name: …`).
 - `value` is a number or a string. A string is stored locally only if it matches
-  `[A-Za-z0-9._:-]{1,64}`.
+  `[A-Za-z0-9._:/-]{1,100}` (so a model slug such as `nvidia/llama-3.1-nemotron-nano-8b-v1`
+  fits); a number only if it is finite.
 - `comment` and `corrected_output` go to your Langfuse project only. RouteForge never
   stores their text itself.
 
@@ -464,7 +465,7 @@ Returns `{"stored": <bool>, "recorded": <bool>}`, always HTTP `200`:
   ([`routing-outcomes.md`](./routing-outcomes.md) §6). Lookups are scoped to your
   application: a request that belongs to another app is treated exactly like one that
   does not exist, and gives `recorded: false`. Also `false` when outcome records are
-  switched off, or a string `value` fails the format above.
+  switched off, or `value` fails the checks above.
 
 ---
 

@@ -322,3 +322,28 @@ reference doc, `docs/reference/routing-outcomes.md`, describes what was built.
     more than one is present; a null version is `(unknown)`, a null chosen is `(none)`.
     Mean cost, like the latency percentiles, is over `ok` rows only, because failed rows
     carry zero cost. A missing `schema` field is refused like an unknown major.
+
+**Final-review fixes (2026-09-23):**
+
+15. **`verify_failed` rows are attributed.** `Pipeline.run` stashes a copy of the trace with
+    every free-text `reason` removed (`outcome_trace`), plus the served attempt's tokens and
+    cost, in `internals` before raising `PipelineRejected` for a step-9 failure. The route
+    builds the row from it through the same reader as `ok` rows (`trace_features`):
+    `chosen`, `attempts`, `scoring`, `eligible`, `tier_target`, `rejected`, the `verify_*`
+    fields (`verify_mode: failed`), cost and tokens.
+16. **Hop semantics.** `eligible`, `scoring`, `tier_target` and `rejected` describe the
+    request's **first routing decision**: the first trace entry that is a router hop or a
+    failed gateway hop carrying `scoring`. `chosen` is the served model. Amends item 8
+    ("the first hop's scored set"), which after a failover pointed at the served hop.
+17. **Request ids are 128-bit.** `req-` plus the full UUID4 hex (36 characters), since the
+    id is the outcomes primary key kept for 90 days. Feedback joins on
+    `(application_id, request_id)` (`feedback_for(..., application_id=)`).
+18. **`value_cat`** allows `/` and up to 100 characters (`String(100)`), so a
+    `preferred_model` score can name a slashed model slug. A non-finite numeric value is
+    refused.
+19. **`cache_hit` column.** True on a semantic-cache hit (`chosen` stays null). The report
+    gives these rows their own `(cache)` chosen bucket. Amends items 9 and 14.
+20. **`context_overflow` rows record attempts**: the gateway's `ContextWindowExceeded`
+    carries `attempted_models` like `BackendUnavailable`.
+21. **Report:** `failover_rate` is renamed `multi_attempt_rate` (more than one attempt is
+    a failover or an escalation; the record does not tell them apart).

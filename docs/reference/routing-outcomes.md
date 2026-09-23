@@ -79,7 +79,7 @@ Source: `app/apps/models.py::RoutingOutcome`, built by `app/apps/outcomes.py`
 |---|---|---|
 | `ok` | 200 | The request was served. Covers the plain response and every stream mode (`verified_then_stream`, `stream_unverified`, `incremental_verify`). |
 | `backend_failed` | 502 | Every attempt failed upstream (`BackendUnavailable`), or a real-token stream's backend failed. The same request also gets a usage row with `status="error"`. |
-| `verify_failed` | 422 | Step 9 failed closed (`response failed verification`). |
+| `verify_failed` | 422 | Step 9 failed closed (`response failed verification`). A model **was** served before step 9 refused it, so the row is attributed like an `ok` row (§3.5). |
 | `no_eligible` | 422 | The candidate set was empty: after the eligibility filters, or after the router's per-request budget filter (`no_eligible_model`). |
 | `context_overflow` | 400 | Every attempt refused on context length (`context_length_exceeded`). |
 
@@ -104,12 +104,14 @@ writes the `ok` row as usual.
 
 ### 3.2 Columns
 
-"Null on failure rows" means `build_failure_outcome` always leaves the column null, empty or
-zero, because no response exists to read it from.
+"Null on failure rows" means `build_failure_outcome` leaves the column null, empty or zero,
+because no response exists to read it from. **Exception:** a `verify_failed` row is built
+from the served attempt's trace (§3.5), so the routing, verify, cost and token columns are
+filled on it exactly as on an `ok` row.
 
 | Column | Type | What it is |
 |---|---|---|
-| `request_id` | str, PK | The response `id` (`req-…`). |
+| `request_id` | str, PK | The response `id`: `req-` followed by the 32 hex digits of a random UUID4 (36 characters, 128 random bits), so ids do not collide within the retention window. |
 | `application_id` | str, indexed | The tenant. Foreign key to `applications`, `ON DELETE CASCADE`, like `usage_records`. |
 | `ts` | datetime, indexed | When the row was written (UTC). |
 | `trace_id` | str, nullable, indexed | The Langfuse trace id, present only when telemetry exported one. Always null on failure rows. A join key for `/v1/feedback`. |
@@ -119,24 +121,25 @@ zero, because no response exists to read it from.
 | `routing_policy_version` | str | The routing+pricing content hash (`sp.routing_policy_version`). |
 | `workload` | str, nullable | The validated client tag (§4). |
 | `workload_source` | enum | `client` (a valid tag was supplied), `none` (nothing supplied) or `invalid` (supplied but rejected; `workload` is then null). |
-| `tier_target` | str, nullable | The first router hop's **target** tier: after the complexity rule, risk floor, escalation and the clamp to the best residency-allowed tier, and **before** the budget fallback. The served tier can be lower when the budget fallback stepped down. Null on failure rows. |
+| `tier_target` | str, nullable | The **first routing decision's** target tier (§3.5); when that decision is a failed gateway hop that carries none, the first router hop's. The target is the tier after the complexity rule, risk floor, escalation and the clamp to the best residency-allowed tier, and **before** the budget fallback. The served tier can be lower when the budget fallback stepped down. Null on failure rows other than `verify_failed`. |
 | `complexity` | float, nullable | The router's complexity input, `tokens_after / 2000` (post-compression tokens). Written on failure rows too when compression ran before the failure. Null on a semantic-cache hit. |
-| `prompt_tokens_bucket` | enum, nullable | `<1k`, `1k-4k`, `4k-16k`, `16k-64k` or `>64k`, over the response's `usage.prompt_tokens`. Lower bound inclusive: exactly 1000 tokens is `1k-4k`. Null on failure rows. |
+| `prompt_tokens_bucket` | enum, nullable | `<1k`, `1k-4k`, `4k-16k`, `16k-64k` or `>64k`, over the response's `usage.prompt_tokens`. Lower bound inclusive: exactly 1000 tokens is `1k-4k`. Null on failure rows other than `verify_failed`. |
 | `sensitivity` | enum | `public`, `internal`, `confidential` or `restricted`, from the gate. |
 | `risk_class` | str | From the gate. |
 | `onprem_only` | bool | From the gate. |
 | `detected_entity_types` | JSON list[str] | Entity **types** the gate detected (`US_SSN`, `EMAIL_ADDRESS`), sorted and de-duplicated. Never values. |
-| `eligible` | JSON list[str] | The names the first router hop **scored** (`scoring.candidates`): the candidates left after the eligibility filters and the router's own tier, budget and circuit filters. Falls back to `[chosen]` when the hop carries no scoring record. `[]` on failure rows. |
-| `rejected` | JSON list[{name, code}] | Candidates excluded, `{name, code}` only. On `ok` rows: the first router hop's rejected list. An eligibility-stage rejection carries its stable code (`residency`, `region_not_allowed`, `circuit_open`, …); the router's own later filters (tier, budget, lower score) have `code: null`. A scored candidate that lost appears in both `eligible` and `rejected` (code null). On `no_eligible` rows, see §3.3. |
-| `attempts` | JSON list[str] | Models tried, in hop order, including failed hops. `ok`: each failed gateway hop's first-scored candidate and each router hop's chosen model. `backend_failed`: the models the gateway attempted; a real-token stream has exactly one. `[]` on other failures. |
+| `eligible` | JSON list[str] | The names the **first routing decision** (§3.5) **scored** (`scoring.candidates`): the candidates left after the eligibility filters and the router's own tier, budget and circuit filters. Falls back to `[chosen]` when the hop carries no scoring record. `[]` on failure rows other than `verify_failed`. |
+| `rejected` | JSON list[{name, code}] | Candidates excluded, `{name, code}` only. On `ok` and `verify_failed` rows: the first routing decision's (§3.5) rejected list. An eligibility-stage rejection carries its stable code (`residency`, `region_not_allowed`, `circuit_open`, …); the router's own later filters (tier, budget, lower score) have `code: null`. A scored candidate that lost appears in both `eligible` and `rejected` (code null). On `no_eligible` rows, see §3.3. |
+| `attempts` | JSON list[str] | Models tried, in hop order, including failed hops. `ok`: each failed gateway hop's first-scored candidate and each router hop's chosen model. `verify_failed`: read from the served attempt's trace, as for `ok`. `backend_failed` and `context_overflow`: the models the gateway attempted; a real-token stream has exactly one. `[]` on `no_eligible`. |
 | `chosen` | str, nullable | The served model: the last router hop that chose one. Null when nothing was served, and also on a semantic-cache hit (§3.4). |
-| `scoring` | JSON, nullable | The first router hop's scoring record (`RankResult.to_record()`, the same content as `sp.scoring`): weights, and per candidate its score and four terms with their sources. Ids and numbers only. Null on failure rows. |
-| `circuit_bypass` | bool | True if any router hop bypassed the circuit breaker (every candidate in the target tier was open). False on failure rows. |
-| `cost_usd` | float | The total cost across hops (`cost.total_usd`). `0` on failure rows. |
+| `scoring` | JSON, nullable | The first routing decision's (§3.5) scoring record (`RankResult.to_record()`, the same content as `sp.scoring`): weights, and per candidate its score and four terms with their sources. Ids and numbers only. Null on failure rows other than `verify_failed`. |
+| `circuit_bypass` | bool | True if any routing decision bypassed the circuit breaker (every candidate in the target tier was open). False on failure rows. |
+| `cache_hit` | bool | True when a semantic-cache entry served the request (§3.4). False otherwise, and on every failure row. |
+| `cost_usd` | float | The total cost across hops (`cost.total_usd`). On `verify_failed` rows the served attempt's cost, which was incurred. `0` on other failure rows. |
 | `latency_ms` | float | **Two definitions.** `ok` rows: the sum of the trace records' `latency_ms` (the same figure the usage row carries). Failure rows: wall-clock time from the start of the request handler to the failure, which includes authentication and gate time. Do not pool the two. |
-| `prompt_tokens`, `completion_tokens` | int | From the response `usage`. `0` on failure rows. |
-| `verify_required`, `verify_performed`, `verify_passed` | bool, nullable | From the trace's `verify` record. Null on failure rows. |
-| `verify_mode` | enum, nullable | See below. Null on failure rows. |
+| `prompt_tokens`, `completion_tokens` | int | From the response `usage` (on `verify_failed`, the served attempt's). `0` on other failure rows. |
+| `verify_required`, `verify_performed`, `verify_passed` | bool, nullable | From the trace's `verify` record. On `verify_failed` rows `true`, `true`, `false`. Null on other failure rows. |
+| `verify_mode` | enum, nullable | See below. `failed` on `verify_failed` rows; null on other failure rows. |
 
 **`verify_mode`** is derived from the `verify` record, checking the reason first:
 
@@ -168,10 +171,37 @@ non-empty with null codes.
 ### 3.4 Semantic-cache hits
 
 A request served from the semantic cache is recorded as `ok`, but its trace has no router
-hop (only the `verify` and `cache` records). So on a cache-hit row `chosen`, `tier_target`,
-`scoring` and `complexity` are null, and `eligible` and `attempts` are `[]`. The model that
-produced the cached answer is not recorded. An `ok` row with `chosen: null` is a cache hit.
-The report counts these under the chosen label `(none)`.
+hop (only the `verify` and `cache` records). So a cache-hit row has `cache_hit: true`, and
+`chosen`, `tier_target`, `scoring` and `complexity` are null, and `eligible` and `attempts`
+are `[]`. The model that produced the cached answer is not recorded. The report puts these
+rows in their own chosen bucket, `(cache)`: never in an endpoint's bucket (that endpoint
+did not answer), and never in `(none)` (the request was served).
+
+### 3.5 Which hop each column describes
+
+A request can take several hops: a **failover** (the chosen model's call failed, the
+gateway re-selects without it) or a **confidence escalation** (the served answer scored
+below the threshold, the gateway re-routes to a higher tier). The row describes two
+different hops, on purpose:
+
+- `eligible`, `scoring`, `tier_target` and `rejected` describe the request's **first
+  routing decision**: the first trace entry that is either a router hop or a failed gateway
+  hop carrying `scoring`. That is the decision that picked the first attempt. After a
+  failover it is the failed hop (its scoring and rejected set are kept on the gateway
+  record); after an escalation it is the first, unserved router hop. `tier_target` comes
+  from that record, or from the first router hop when the failed hop carries none.
+- `chosen` is the **served** model: the last router hop that chose one.
+- `attempts` lists every model tried, in order, so the path between the two is visible.
+
+So the scoring record ranks the first attempt, not necessarily `chosen`. It is enough to
+recompute the router's **first** ranking offline; it is not the record of the hop that
+served. Learning studies the router's first choice and its outcome, and every later hop
+is recoverable from `attempts`.
+
+A `verify_failed` row follows the same rules. `Pipeline.run` stashes the trace of the
+served attempt, with every free-text `reason` removed, in the route's `internals`
+out-parameter before it raises (`app/apps/outcomes.py::outcome_trace`); the route builds
+the row from it through the same reader as an `ok` row (`trace_features`).
 
 ## 4. Workload tagging
 
@@ -208,8 +238,8 @@ Source: `app/apps/models.py::OutcomeFeedback`.
 | `application_id` | str, indexed | Always the application that owns the outcome row: the authenticated caller for `/v1/feedback`, the snapshot's tenant for admin feedback. |
 | `ts` | datetime, indexed | When the score was recorded. |
 | `score_name` | str | One of `route_correct`, `preferred_model`, `failure_type`, `quality`, `corrected_output`. |
-| `value_num` | float, nullable | A numeric score. |
-| `value_cat` | str, nullable | A categorical score. Must match `[A-Za-z0-9._:-]{1,64}`; a value that does not is refused (no row), not truncated. |
+| `value_num` | float, nullable | A numeric score. NaN and ±infinity are refused (no row). |
+| `value_cat` | str, nullable | A categorical score. Must match `[A-Za-z0-9._:/-]{1,100}` (`/` so a `preferred_model` score can name a slashed model slug such as `nvidia/llama-3.1-nemotron-nano-8b-v1`); a value that does not is refused (no row), not truncated. |
 | `source` | enum | `app` (`POST /v1/feedback`) or `admin` (the console). |
 
 **Never stored:** `comment` and `corrected_output` text. Both are free text that can carry
@@ -268,13 +298,13 @@ streamed.
 
 Rows are ordered by `(ts, request_id)` and read in keyset pages of 1000, each in its own
 database session, so a large export is never held in memory. Each row's feedback is joined
-per page.
+per page by `(application_id, request_id)`, never by `request_id` alone.
 
 **Line format** (`routeforge.outcome/v1`), one JSON object per line:
 
 ```json
 {"schema": "routeforge.outcome/v1",
- "outcome": {"request_id": "req-3f9c1a2b", "application_id": "app-claims",
+ "outcome": {"request_id": "req-3f9c1a2b0d4e4c6f8a1b2c3d4e5f6a7b", "application_id": "app-claims",
              "ts": "2026-09-23T10:15:02.118000+00:00", "trace_id": "8d2e…",
              "status": "ok", "app_policy_version": "39260c5ee1ad",
              "endpoint_registry_version": "a41c…", "routing_policy_version": "5be0…",
@@ -287,7 +317,7 @@ per page.
                           {"name": "llama-8b", "code": null}],
              "attempts": ["qwen3.8-27b"], "chosen": "qwen3.8-27b",
              "scoring": {"weights": {…}, "candidates": [{"name": "qwen3.8-27b", "score": …, …}, …], …},
-             "circuit_bypass": false, "cost_usd": 0.00021, "latency_ms": 3620.4,
+             "circuit_bypass": false, "cache_hit": false, "cost_usd": 0.00021, "latency_ms": 3620.4,
              "prompt_tokens": 812, "completion_tokens": 140,
              "verify_required": true, "verify_performed": true, "verify_passed": true,
              "verify_mode": "verified"},
@@ -349,7 +379,8 @@ runs once at startup) calls `prune_outcomes(older_than_days=retention_days)`:
 ## 10. Store functions
 
 `app/apps/store.py`: `write_outcome`, `get_outcome`, `find_outcome`, `write_feedback`,
-`feedback_for`, `prune_outcomes`, `iter_outcomes`. Each takes an `AsyncSession`, and the
+`feedback_for`, `prune_outcomes`, `iter_outcomes`. `feedback_for` takes an optional
+`application_id`; the export always passes it. Each takes an `AsyncSession`, and the
 caller commits. `get_outcome` and `find_outcome` are app-scoped: a row owned by another app
 returns `None`. `find_outcome` with neither id returns `None`, never an unscoped query.
 `iter_outcomes` pages by the keyset `(ts, request_id)` rather than `OFFSET`, so paging stays

@@ -1666,7 +1666,7 @@ worse; it did not add a quality signal.
 P2b-2 is the first half of the durable fix. RouteForge now **records what happened on
 each production request**, per workload, so that a later slice can learn from it. This
 section records the dataset as built on `feat/routing-outcome-records` (code at
-`e14f8e5`). Design: `docs/superpowers/specs/2026-09-23-routing-outcome-records-design.md`,
+`e14f8e5`, plus the final-review fixes of 2026-09-23). Design: `docs/superpowers/specs/2026-09-23-routing-outcome-records-design.md`,
 amended on 2026-09-23 where the build departed from it. Field-level reference:
 [`docs/reference/routing-outcomes.md`](../reference/routing-outcomes.md). **This section
 contains no results.** Nothing has been deployed, so no production record exists yet.
@@ -1684,12 +1684,18 @@ was observed:
 - **Versions $v$.** `app_policy_version`, `endpoint_registry_version`,
   `routing_policy_version`. Together they identify the policy, the endpoint pool and the
   router configuration the decision was made under.
-- **Decision.** `tier_target`; `eligible` (the names the first router hop scored);
-  `rejected` (`{name, code}` for everything excluded); `scoring` (the first hop's
-  `RankResult.to_record()`, enough to recompute its ranking offline, as `sp.scoring` is);
-  `circuit_bypass`.
-- **Action $a$.** `chosen`, and `attempts` (every model tried, in order, including failed
-  hops).
+- **Decision.** `tier_target`; `eligible` (the names scored); `rejected` (`{name, code}`
+  for everything excluded); `scoring` (a `RankResult.to_record()`); `circuit_bypass`;
+  `cache_hit`. All four decision fields describe the request's **first routing
+  decision**: the first trace entry that is a router hop or a failed gateway hop carrying
+  `scoring`, i.e. the decision that picked the first attempt. After a failover that is the
+  failed hop; after a confidence escalation it is the first, unserved router hop. The
+  scoring record is enough to recompute that **first** ranking offline. It is not the
+  record of the hop that served, which can differ.
+- **Action $a$.** `chosen` (the **served** model: the last router hop that chose one), and
+  `attempts` (every model tried, in order, including failed hops). So the record pairs
+  the router's first choice with the request's final outcome, and `attempts` gives the
+  path between them.
 - **Outcome $y$.** `status` (`ok`, `backend_failed`, `verify_failed`, `no_eligible`,
   `context_overflow`), `cost_usd`, `latency_ms`, token counts, the step-9 verification
   fields and `verify_mode`, and zero or more **feedback** rows (`score_name`, a numeric or
@@ -1712,8 +1718,14 @@ no counterfactual outcome, and no request content.
   policy-feasible set of the first hop is, by inference from how codes are assigned (not
   pinned by a test), `eligible` plus every `rejected` entry whose `code` is null (the
   router's own tier, budget and lower-score filters) or `circuit_open`.
-- A semantic-cache hit is `ok` with `chosen: null`: its trace has no router hop, so the
-  model that produced the cached answer is not recorded.
+- A semantic-cache hit is `ok` with `cache_hit: true` and `chosen: null`: its trace has no
+  router hop, so the model that produced the cached answer is not recorded. The report
+  gives these records their own `(cache)` bucket.
+- A `verify_failed` record is attributed to the served attempt: step 9 refused a response a
+  model had already produced, so `chosen`, `attempts`, `scoring`, the cost, the tokens and
+  `verify_mode: failed` are all recorded, read from a reason-free copy of the trace.
+- `request_id` is `req-` plus a full UUID4 (128 random bits). Feedback joins on
+  `(application_id, request_id)`.
 - Some requests write no record at all (reference §3.1): 401, 429, gate errors,
   pinned-model rejections, cancellations, unhandled 500s, and the rare real-token stream
   that ends without a final result. So "records" is not "requests".
@@ -1722,13 +1734,16 @@ no counterfactual outcome, and no request content.
 
 | Invariant | Pinned by | Falsified? |
 |---|---|---|
-| Content-free: no column name suggests text; a request carrying an SSN and an e-mail address leaves neither in its record; the builder copies no text; `rejected` keeps `{name, code}` only; the gate context holds no prompt text | `tests/test_outcome_store.py::test_schema_is_content_free`; `tests/test_outcome_hooks.py::test_outcome_row_carries_no_request_content`; `tests/test_outcome_builder.py::test_build_ok_outcome_is_content_free`, `test_build_failure_outcome_no_eligible_stores_only_name_and_code`; `tests/test_outcome_ctx_pipeline.py::test_outcome_ctx_has_no_prompt_text_even_with_ssn` | n/a. Gap: the end-to-end PII test covers an `ok` record only |
+| Content-free: no column name suggests text; a request carrying an SSN and an e-mail address leaves neither in its record; the builder copies no text; `rejected` keeps `{name, code}` only; the gate context holds no prompt text | `tests/test_outcome_store.py::test_schema_is_content_free`; `tests/test_outcome_hooks.py::test_outcome_row_carries_no_request_content`; `tests/test_outcome_builder.py::test_build_ok_outcome_is_content_free`, `test_build_failure_outcome_no_eligible_stores_only_name_and_code`; `tests/test_outcome_ctx_pipeline.py::test_outcome_ctx_has_no_prompt_text_even_with_ssn` | n/a. The end-to-end PII test now covers failure records too (`test_verify_failed_row_carries_no_request_content`, `test_no_eligible_row_carries_no_request_content`) |
 | Feedback text (`comment`, `corrected_output`) is never stored locally; a correction is still countable | `tests/test_outcome_feedback.py::test_comment_and_corrected_output_text_never_stored_locally` | n/a |
 | Feedback is app-scoped: another app's request is indistinguishable from a missing one, and writes nothing | `tests/test_outcome_feedback.py::test_cross_app_feedback_is_refused_and_writes_no_row`; `tests/test_outcome_store.py::test_get_outcome_is_app_scoped`, `test_find_outcome_by_trace_id_and_request_id_is_app_scoped` | n/a |
 | Versions are stamped on every record, served or failed | `tests/test_outcome_hooks.py::test_plain_request_writes_one_ok_row` (all three versions); `test_backend_failure_writes_backend_failed_row` (registry version only; the other two reach failure records by the same builder arguments, untested end to end) | n/a |
 | The report never pools across `endpoint_registry_version` | `tests/eval/test_outcomes_report.py::test_mixed_registry_versions_produce_separate_groups` | n/a |
 | The report never prints regret, and opens with the served-arm caveat verbatim | `tests/eval/test_outcomes_report.py::test_report_never_mentions_regret`, `test_report_starts_with_the_caveat_verbatim`, `test_report_of_an_empty_export_still_starts_with_the_caveat` | n/a |
 | Mean cost and latency percentiles are over `ok` records only | `tests/eval/test_outcomes_report.py::test_summarize_chat_ep_mid_bucket_has_the_failover_and_the_verify_failure`, `test_summarize_no_eligible_row_lands_in_unchosen_bucket_with_no_latency` | **Yes**: the Task 7 review found failed records (cost 0) diluting the mean cost (fixed in `e14f8e5`) |
+| A `verify_failed` record names the served model, its attempts and `verify_mode: failed`; the stashed trace carries no `reason` | `tests/test_outcome_hooks.py::test_verify_failed_row_is_attributed_to_the_served_model`, `test_keepalive_verify_failed_row_is_attributed`; `tests/test_outcome_builder.py::test_build_failure_outcome_verify_failed_reads_the_stashed_trace` | **Yes**: the final review found `verify_failed` records carried no attribution at all (`chosen` null, `attempts` empty), because the pipeline raised after the gateway served; the eval fixture's attributed verify_failed line was one the code could not produce (fixed 2026-09-23) |
+| Decision fields describe the first routing decision; `chosen` the served model; the same after failover and after escalation | `tests/test_outcome_builder.py::test_build_ok_outcome_failover_first_decision_is_the_failed_hop`, `test_build_ok_outcome_escalation_first_decision_describes_eligible_scoring_tier`; `tests/test_outcome_hooks.py::test_failover_row_first_decision_is_the_failed_attempt` | **Yes**: the final review found the hop differed by path (after escalation the first router hop, after failover the served hop, dropping the failed attempt's scoring) (fixed 2026-09-23) |
+| Request ids do not collide; feedback never attaches across apps | `tests/test_outcome_hooks.py::test_request_id_is_full_uuid_hex`; `tests/test_outcome_export.py::test_export_never_attaches_another_apps_feedback`; `tests/test_outcome_store.py::test_feedback_for_is_scoped_by_application_id` | **Yes**: the final review found 32-bit ids as a 90-day primary key and a feedback join on `request_id` alone (fixed 2026-09-23) |
 | `verify_mode` distinguishes the real streaming modes | `tests/test_outcome_hooks.py::test_stream_modes_record_verify_mode`; `tests/test_outcome_builder.py::test_build_ok_outcome_verify_waived_stream`, `test_build_ok_outcome_verify_incremental` | **Yes**: the Task 2 review found that checking `required` first recorded every real `stream_unverified` and `incremental_verify` request as `not_required`, because both always carry `required: false` (fixed in `6d3f542`) |
 | Recording never changes routing or the response; switched off, nothing is written | `tests/test_outcome_hooks.py::test_outcomes_disabled_writes_no_row_and_same_response`, `test_outcomes_disabled_writes_no_failure_row`; `tests/eval/test_isolation.py::test_no_serving_module_imports_app_eval` | n/a |
 | A failed write never fails the request or its metering | `tests/test_outcome_hooks.py::test_outcome_write_failure_is_swallowed` | n/a |
@@ -1741,7 +1756,8 @@ no counterfactual outcome, and no request content.
 **Can support:**
 
 - **Descriptive rates per workload**: served-ok, `no_eligible`, `backend_failed`,
-  `context_overflow` and verification-failure rates, failover rate, cost and latency of
+  `context_overflow` and verification-failure rates, multi-attempt rate (failover or
+  escalation; the record does not tell them apart), cost and latency of
   served requests, and feedback coverage. The empty-set rate is the production
   counterpart of the bench's §5.7 run.
 - **Auditing the router against its own record.** The scoring record lets an analyst
@@ -1811,5 +1827,6 @@ P2b-3 (learning and exploration bounded by the feasible set) needs, at least:
 - **One extra commit per request.** The outcome write is inline, next to the usage row,
   so it adds one database commit to every routed request. Its latency cost was not
   measured.
-- **Failure-record PII is covered by construction, not end-to-end.** See the first row of
-  §13.2.
+- **Failure-record PII** is now covered end to end for `verify_failed` and `no_eligible`
+  (§13.2, first row); `backend_failed` and `context_overflow` are covered by the builder
+  unit tests and by construction.
