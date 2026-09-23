@@ -1226,14 +1226,22 @@ async def _export_lines(db, *, since: dt.datetime, until: dt.datetime,
                 after=after, page=_EXPORT_PAGE_SIZE)
             if not rows:
                 return
-            feedback = await store.feedback_for(s, [r.request_id for r in rows])
+            # Joined by (application_id, request_id): one scoped lookup per
+            # app on the page, so feedback can never attach across apps.
+            by_app: dict[str, list[str]] = {}
+            for r in rows:
+                by_app.setdefault(r.application_id, []).append(r.request_id)
+            feedback = {
+                app_id: await store.feedback_for(s, ids, application_id=app_id)
+                for app_id, ids in by_app.items()}
         for row in rows:
             if emitted >= limit:
                 return
             obj = {
                 "schema": "routeforge.outcome/v1",
                 "outcome": _export_outcome_dict(row),
-                "feedback": _export_feedback_list(feedback.get(row.request_id, [])),
+                "feedback": _export_feedback_list(
+                    feedback[row.application_id].get(row.request_id, [])),
             }
             yield json.dumps(obj, separators=(",", ":"), default=str) + "\n"
             emitted += 1

@@ -219,13 +219,18 @@ async def write_feedback(session: AsyncSession, *, request_id: str,
         source=source))
 
 
-async def feedback_for(session: AsyncSession,
-                       request_ids: list[str]) -> dict[str, list[OutcomeFeedback]]:
+async def feedback_for(session: AsyncSession, request_ids: list[str], *,
+                       application_id: str | None = None
+                       ) -> dict[str, list[OutcomeFeedback]]:
     """All feedback rows for the given request ids, grouped by request_id.
-    A request_id with no feedback is simply absent from the result."""
+    A request_id with no feedback is simply absent from the result. With
+    `application_id`, only that app's rows -- the export joins feedback by
+    (application_id, request_id), never by request_id alone."""
     if not request_ids:
         return {}
     stmt = select(OutcomeFeedback).where(OutcomeFeedback.request_id.in_(request_ids))
+    if application_id is not None:
+        stmt = stmt.where(OutcomeFeedback.application_id == application_id)
     rows = (await session.execute(stmt)).scalars().all()
     out: dict[str, list[OutcomeFeedback]] = {}
     for row in rows:

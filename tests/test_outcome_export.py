@@ -170,3 +170,28 @@ def test_export_bad_until_is_422(client):
     _login(client)
     r = client.get("/admin/outcomes/export", params={"until": "not-a-date"})
     assert r.status_code == 422
+
+
+def test_export_never_attaches_another_apps_feedback(client):
+    """Final review #2: feedback is joined by (application_id, request_id).
+    A row written under app B for A's request id (a collision, or a
+    mis-scoped writer) must not appear on A's exported outcome."""
+    _login(client)
+    now = dt.datetime.now(dt.timezone.utc)
+    _seed(client.app, [("r1", "A", now - dt.timedelta(hours=1))])
+    _write_feedback(client.app, "r1", "A", score_name="quality", value_num=1.0,
+                    value_cat=None, source="app")
+    _write_feedback(client.app, "r1", "B", score_name="quality", value_num=0.0,
+                    value_cat=None, source="app")
+
+    lines = _lines(client.get("/admin/outcomes/export"))
+    assert len(lines) == 1
+    assert [fb["value"] for fb in lines[0]["feedback"]] == [1.0]
+
+
+def test_export_carries_cache_hit(client):
+    _login(client)
+    now = dt.datetime.now(dt.timezone.utc)
+    _seed(client.app, [("r1", "A", now - dt.timedelta(hours=1))])
+    lines = _lines(client.get("/admin/outcomes/export"))
+    assert lines[0]["outcome"]["cache_hit"] is False
