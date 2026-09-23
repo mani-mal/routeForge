@@ -18,6 +18,7 @@ from app.routing.signals import SignalStore
 
 if TYPE_CHECKING:
     from app.apps.registry import ModelRegistry
+    from app.gateway.breaker import CircuitBreaker
 
 _NEXT = {"cheap": "mid", "mid": "frontier", "frontier": None}
 
@@ -93,12 +94,17 @@ log = logging.getLogger("serving.gateway")
 class Gateway:
     def __init__(self, settings: Settings, backend: InferenceBackend,
                  router: Router, registry: "ModelRegistry | None" = None,
-                 signals: "SignalStore | None" = None) -> None:
+                 signals: "SignalStore | None" = None,
+                 breaker: "CircuitBreaker | None" = None) -> None:
         self._s = settings
         self._backend = backend
         self._router = router
         self._reg = registry
         self._signals = signals
+        self._breaker = breaker
+
+    def _open_circuits(self) -> frozenset[str]:
+        return self._breaker.open_set() if self._breaker is not None else frozenset()
 
     @property
     def router(self) -> Router:
@@ -148,7 +154,8 @@ class Gateway:
                 with metrics.time_routing():
                     decision = self._router.select(
                         ctx, tokens_after, complexity, min_tier,
-                        exclude=frozenset(failed_models), output_tokens=out_tokens)
+                        exclude=frozenset(failed_models), output_tokens=out_tokens,
+                        open_circuits=self._open_circuits())
             except NoEligibleCandidate as exc:
                 # A confidence escalation found nothing eligible at the higher
                 # tier (e.g. it is over the per-request budget the served answer
@@ -180,6 +187,8 @@ class Gateway:
                     # This hop's model failed -- observe THAT model, not the
                     # peer that succeeds on the next iteration.
                     self._signals.observe_error(cand.name)
+                if self._breaker is not None and counts_as_endpoint_unhealth(exc):
+                    self._breaker.record_failure(cand.name)
                 if isinstance(exc, ContextWindowExceeded):
                     overflow_errors.append(
                         redact_value(_scrub_endpoints(str(exc)))[:1000])
@@ -209,6 +218,8 @@ class Gateway:
 
             if self._signals is not None:
                 self._signals.observe_success(cand.name, result.latency_ms)
+            if self._breaker is not None:
+                self._breaker.record_success(cand.name)
 
             records.append(DecisionRecord(
                 step="router", chosen=cand.name,
@@ -220,7 +231,8 @@ class Gateway:
                 hop_index=len(records),
                 quality_score=decision.quality_score,
                 quality_source=decision.quality_source,
-                scoring=decision.scoring.to_record() if decision.scoring else None))
+                scoring=decision.scoring.to_record() if decision.scoring else None,
+                circuit_bypass=decision.circuit_bypass))
             metrics.observe_routing_decision(cand.tier, escalated=escalations > 0)
 
             # For onprem_only requests the router clamps an out-of-reach tier back
@@ -266,7 +278,8 @@ class Gateway:
         with metrics.time_routing():
             decision = self._router.select(
                 ctx, tokens_after, complexity, None,
-                output_tokens=expected_output_tokens(self._s, params))
+                output_tokens=expected_output_tokens(self._s, params),
+                open_circuits=self._open_circuits())
         cand = decision.chosen
         price = (self._reg.price_for(cand.name) if self._reg
                  else self._s.pricing.models[cand.name])
@@ -279,7 +292,8 @@ class Gateway:
             actual_cost_usd=None, latency_ms=0.0, hop_index=0,
             quality_score=decision.quality_score,
             quality_source=decision.quality_source,
-            scoring=decision.scoring.to_record() if decision.scoring else None)
+            scoring=decision.scoring.to_record() if decision.scoring else None,
+            circuit_bypass=decision.circuit_bypass)
         records: list[DecisionRecord] = [record]
         metrics.observe_routing_decision(cand.tier, escalated=False)
 
@@ -299,10 +313,14 @@ class Gateway:
                             # Availability only -- a stream's timing is not the
                             # quantity the latency EWMA holds (spec §5).
                             self._signals.observe_stream_success(cand.name, ttft_ms)
+                        if self._breaker is not None:
+                            self._breaker.record_success(cand.name)
                     yield chunk
             except Exception as exc:
                 if self._signals is not None and counts_as_endpoint_unhealth(exc):
                     self._signals.observe_error(cand.name, streamed=True)
+                if self._breaker is not None and counts_as_endpoint_unhealth(exc):
+                    self._breaker.record_failure(cand.name)
                 error = _format_upstream_error(cand.name, exc)
                 log.warning("backend stream failed request=%s model=%s: %s",
                             ctx.request_id, cand.name, error)

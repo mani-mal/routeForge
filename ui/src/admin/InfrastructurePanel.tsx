@@ -44,6 +44,30 @@ function HealthBadge({ status, error }: { status: string; error: string | null }
   );
 }
 
+// Step-7 circuit breaker (B45): a small badge next to HealthBadge when this
+// replica's breaker state is not "closed" -- "circuit open" (amber, the
+// existing `frontier` tier color) or "trial" for half_open (the evidence-
+// based half-open trial in flight; see app/gateway/breaker.py). Nothing
+// renders when closed, matching HealthBadge's convention of silence for the
+// unremarkable case.
+function CircuitBadge({ circuit }: { circuit: OnboardedModel["circuit"] }) {
+  if (!circuit || circuit.state === "closed") return null;
+  const label = circuit.state === "half_open" ? "trial" : "circuit open";
+  const title =
+    circuit.state === "open" && circuit.open_until_s != null
+      ? `${circuit.consecutive_failures} consecutive failures; retry in ${Math.max(0, Math.round(circuit.open_until_s))}s`
+      : `${circuit.consecutive_failures} consecutive failures`;
+  return (
+    <span
+      className="inline-flex items-center gap-1 whitespace-nowrap font-mono text-xs text-frontier"
+      title={title}
+    >
+      <span aria-hidden="true">●</span>
+      {label}
+    </span>
+  );
+}
+
 // The onboard/edit field set, held as strings (what the inputs actually carry)
 // so one control block serves both forms. Onboard (POST) and edit (PUT) take
 // the same full `OnboardIn` body server-side, so they take the same fields.
@@ -455,7 +479,10 @@ function ModelRow({
           <Toggle on={model.enabled} onToggle={toggleEnabled} label={`${model.display_name} enabled`} />
         </td>
         <td className="py-2 pr-3 align-top">
-          <HealthBadge status={model.probe_status} error={model.probe_error} />
+          <div className="flex flex-col gap-1">
+            <HealthBadge status={model.probe_status} error={model.probe_error} />
+            <CircuitBadge circuit={model.circuit} />
+          </div>
         </td>
         <td className="py-2 align-top">
           <div className="flex items-center gap-2">
