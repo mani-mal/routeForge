@@ -127,6 +127,39 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
+## B53 — streamed responses never carried the terminal `usage` frame  ✅ RESOLVED (2026-09-23)
+
+**Severity:** high for agent clients (context overflow), otherwise low.
+**Found:** 2026-09-23, from a Qwen Code session on the DGX Spark (diagnosed in a
+separate session).
+
+`/v1/chat/completions` returned `usage` on the non-streamed path, but no stream mode
+ever emitted OpenAI's terminal usage chunk, even when the client sent
+`stream_options: {"include_usage": true}`. The counts existed internally, because
+metering used them, but `openai_chunk` had no way to serialize them.
+
+**Impact.** Qwen Code drives its context accounting from reported usage. With none,
+it fell back to a character-based estimate that undercounted token-dense JSON and
+code history by at least 1.58×. In one measured case a real 253,953-token prompt
+never crossed its 160,563-token auto-compaction trigger. Compaction fired too late,
+the history outgrew the 262,144-token window, and every later turn failed with
+`400 ContextWindowExceeded`. The session was then unrecoverable, because compaction
+itself had to send the oversized history.
+
+**Fix.** A new `app/api/streaming.py::usage_chunk` builds the frame, and
+`app/api/routes.py::_stream_usage` reads the client's `include_usage`. The frame
+(`choices: []`, the same `created`/`id`/`model` as the rest of the stream, `usage`
+equal to the non-stream body's) is emitted after the finish frame and before
+`[DONE]` in all four emit sites:
+- `verified_then_stream`, both plain and keepalive;
+- `stream_unverified`;
+- `incremental_verify`.
+
+The frame appears **only** when the client asked for it, so without it the stream is
+byte-identical. `stream_options` is never forwarded upstream. A disconnect or backend
+failure emits no frame, and metering in the `finally` blocks is untouched.
+Tests: `tests/test_stream_include_usage.py`.
+
 ## B52 — `feasible_set` trusts `ctx.allowed_providers` even when `ctx.onprem_only` is set
 
 **Severity:** low, defence in depth only. It is unreachable through the real gate today.

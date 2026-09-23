@@ -77,6 +77,23 @@ def openai_chunk(request_id: str, model: str, *, delta: str | None = None,
     }
 
 
+def usage_chunk(request_id: str, model: str, usage: dict, *,
+                created: int) -> dict:
+    """The terminal usage frame OpenAI sends when the request carried
+    `stream_options: {"include_usage": true}` (B53): after the
+    `finish_reason` frame, before `[DONE]`, with an EMPTY `choices` array.
+    `usage` is RouteForge's own accounting -- the same object the non-stream
+    body returns -- and `created` is the stream's constant value."""
+    return {
+        "id": request_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+        "choices": [],
+        "usage": usage,
+    }
+
+
 def sse_frame(obj: dict) -> str:
     return f"data: {json.dumps(obj)}\n\n"
 
@@ -104,7 +121,8 @@ def _split_on_word_boundaries(text: str, chunk_size: int) -> list[str]:
 async def chunk_text(request_id: str, model: str, text: str, *,
                       chunk_size: int = 48,
                       created: int | None = None,
-                      tool_calls: list[dict] | None = None) -> AsyncIterator[str]:
+                      tool_calls: list[dict] | None = None,
+                      usage: dict | None = None) -> AsyncIterator[str]:
     """Yield a full OpenAI-style SSE stream for an already-finished,
     already-verified `text`: a role-opening frame, then content frames
     splitting `text` on ~word boundaries, a `finish_reason="stop"` frame, and
@@ -114,7 +132,11 @@ async def chunk_text(request_id: str, model: str, text: str, *,
 
     When the finished answer carries `tool_calls`, they go out in one frame
     after any content, each stamped with its stream `index` (OpenAI clients
-    key the delta merge on it), and the stream finishes with "tool_calls"."""
+    key the delta merge on it), and the stream finishes with "tool_calls".
+
+    `usage` (only when the client asked for it -- the caller decides) adds the
+    OpenAI terminal usage frame after the finish frame; `None` leaves the
+    stream byte-identical to a request that never asked."""
     if created is None:
         created = int(time.time())
     yield sse_frame(openai_chunk(request_id, model, role="assistant", created=created))
@@ -127,6 +149,8 @@ async def chunk_text(request_id: str, model: str, text: str, *,
     finish_reason = "tool_calls" if tool_calls else "stop"
     yield sse_frame(openai_chunk(request_id, model, finish_reason=finish_reason,
                                  created=created))
+    if usage is not None:
+        yield sse_frame(usage_chunk(request_id, model, usage, created=created))
     yield SSE_DONE
 
 

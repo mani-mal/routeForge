@@ -246,6 +246,26 @@ the fully-verified path regardless of `stream_mode`. (The dashboard's live
 decision stream is a *separate*, admin-only channel — see
 [Decision stream](#the-decision-stream-admin-only).)
 
+### Token usage on a stream (`stream_options.include_usage`)
+
+Send `"stream_options": {"include_usage": true}` to receive token usage on a stream,
+exactly as OpenAI does. The stream then ends with one extra frame, after the
+`finish_reason` frame and before `data: [DONE]`, whose `choices` array is empty:
+
+```
+data: {"id":"req-…","object":"chat.completion.chunk","created":…,"model":"…","choices":[],"usage":{"prompt_tokens":53,"completion_tokens":8,"total_tokens":61,"cached_prompt_tokens":0}}
+data: [DONE]
+```
+
+The numbers are RouteForge's own accounting, the same `usage` object a non-streamed
+response carries (including the `cached_prompt_tokens` extension). The frame is
+emitted in every `stream_mode`. Without `include_usage: true` the stream is
+unchanged and carries no usage frame. A stream that ends early (client disconnect)
+or fails at the backend has no usage frame. Agent clients that size their context
+from reported usage (for example Qwen Code's auto-compaction) need this set:
+without it they fall back to a local estimate that can undercount token-dense
+history badly (B53).
+
 ### Keepalive comments for long-running requests
 
 When a request waits for a complete, verified answer — such as a tool turn, `verified_then_stream` streaming, or a request floored to the fully-verified path — RouteForge sends SSE keepalive comment lines every `server.stream_keepalive_s` seconds (default 5) once the answer takes longer than one interval. The format is `: keepalive` on a line by itself. OpenAI-compatible clients ignore comment lines, so keepalive frames do not affect request/response semantics. They are transparent to tool calling and standard streaming clients.
