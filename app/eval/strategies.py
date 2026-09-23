@@ -598,7 +598,20 @@ class OnlineArm:
     clock, applied from `observe` after a case is scored -- never from a
     matrix row this arm did not itself attempt. It is therefore covered by
     the same leak guard as the signal store: nothing about case `k` can
-    reach the breaker before `choose(..., case_index=k)` has already run."""
+    reach the breaker before `choose(..., case_index=k)` has already run.
+
+    `breaker=True` means USE a breaker -- it is itself inert when
+    `routing.breaker.enabled` is false (`CircuitBreaker.record_failure` and
+    `.open_set` both no-op on a disabled `BreakerCfg`; see
+    `app/gateway/breaker.py`), so an explicit `breaker=True` over a
+    deployment that ships the breaker off does not turn it on behind that
+    deployment's back -- it only opts this arm INTO whatever the breaker's
+    own config already says. The breaker also runs on the SAME synthetic
+    case clock as the signal store: seconds_per_case therefore also sets how
+    much of an open cooldown a case gap covers (see the `case_clock` note in
+    `app/eval/runner.py::ARM_NOTES`; at seconds_per_case >= max_cooldown_s
+    the breaker is a documented no-op -- no cooldown can ever outlast one
+    case gap)."""
 
     def __init__(self, settings: Settings, registry: "ModelRegistry",
                  max_attempts: int, weights: dict[str, float] | None = None, *,

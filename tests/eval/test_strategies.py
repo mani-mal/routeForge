@@ -11,6 +11,7 @@ docs/superpowers/specs/2026-09-21-feasible-route-bench-design.md §5 step 3.
 from __future__ import annotations
 
 import asyncio
+import copy
 import time
 
 import pydantic
@@ -33,9 +34,11 @@ from app.eval.strategies import (
     LeakageError,
     OnlineArm,
     StrategyInput,
+    _router_chain,
     attempt_cap,
     best_published_quality,
     best_published_quality_attempts,
+    case_read_time,
     cheapest,
     cheapest_attempts,
     fixed,
@@ -886,34 +889,44 @@ class TestOnlineArm:
 # breaker is the only thing that can pull "a" out of rotation.
 # --------------------------------------------------------------------------
 
+def _priced_two_endpoint_setup(tmp_path):
+    """Same shape as `_two_endpoint_setup`, but with explicit prices instead
+    of a coin-flip tie: "a" is always cheaper, so every breaker test's
+    "closed" baseline is unambiguous (the router prefers "a" for a reason
+    other than tie-break order)."""
+    settings, registry, case, ctx, eligible = _build(tmp_path, [
+        _entry("a-model", price_input=0.01, price_output=0.01),
+        _entry("b-model", price_input=0.08, price_output=0.08),
+    ])
+    inp = _strategy_input(case, ctx, eligible)
+    return settings, registry, inp
+
+
+def _drive_priced(arm, inp, n_cases, *, counts_unhealth=True):
+    """Drive `arm` through `n_cases`, "a-model" failing every case (with
+    `counts_unhealth` on the error row), "b-model" always serving.
+    `choose` then `observe`, in that order, per case -- the arm's own
+    protocol."""
+    chains = []
+    for k in range(n_cases):
+        rows = {"a-model": _err(f"case-{k}", "a-model", counts_unhealth=counts_unhealth),
+                "b-model": _ok(f"case-{k}", "b-model")}
+        def failed(s, rows=rows):
+            return rows[s].error is not None
+        chain = arm.choose(inp, failed, case_index=k)
+        chains.append(chain)
+        arm.observe(k, chain, rows)
+    return chains
+
+
 class TestOnlineArmBreaker:
-    def _priced_setup(self, tmp_path):
-        settings, registry, case, ctx, eligible = _build(tmp_path, [
-            _entry("a-model", price_input=0.01, price_output=0.01),
-            _entry("b-model", price_input=0.08, price_output=0.08),
-        ])
-        inp = _strategy_input(case, ctx, eligible)
-        return settings, registry, inp
-
-    def _drive(self, arm, inp, n_cases):
-        chains = []
-        for k in range(n_cases):
-            rows = {"a-model": _err(f"case-{k}", "a-model"),
-                    "b-model": _ok(f"case-{k}", "b-model")}
-            def failed(s, rows=rows):
-                return rows[s].error is not None
-            chain = arm.choose(inp, failed, case_index=k)
-            chains.append(chain)
-            arm.observe(k, chain, rows)
-        return chains
-
     def test_breaker_true_excludes_a_after_failure_threshold_failures(self, tmp_path):
-        settings, registry, inp = self._priced_setup(tmp_path)
+        settings, registry, inp = _priced_two_endpoint_setup(tmp_path)
         threshold = settings.routing.breaker.failure_threshold
         cap = attempt_cap(BASE_SETTINGS)
         arm = OnlineArm(settings, registry, cap, seconds_per_case=1.0, breaker=True)
 
-        chains = self._drive(arm, inp, threshold)
+        chains = _drive_priced(arm, inp, threshold)
         # Every case up to (not including) the threshold: "a" is still
         # cheapest and closed, so the chain still starts with it.
         assert all(c[0] == "a-model" for c in chains)
@@ -928,7 +941,7 @@ class TestOnlineArmBreaker:
         assert chain[0] == "b-model"
 
     def test_breaker_false_keeps_starting_with_a(self, tmp_path):
-        settings, registry, inp = self._priced_setup(tmp_path)
+        settings, registry, inp = _priced_two_endpoint_setup(tmp_path)
         threshold = settings.routing.breaker.failure_threshold
         cap = attempt_cap(BASE_SETTINGS)
         arm = OnlineArm(settings, registry, cap, seconds_per_case=1.0, breaker=False)
@@ -936,8 +949,118 @@ class TestOnlineArmBreaker:
         # Drive well past the threshold: with no breaker, nothing ever
         # excludes "a" from a fresh selection, and the availability penalty
         # alone (weight 0.2) never outweighs its price advantage.
-        chains = self._drive(arm, inp, threshold + 3)
+        chains = _drive_priced(arm, inp, threshold + 3)
         assert all(c[0] == "a-model" for c in chains)
+
+    def test_breaker_off_kwarg_equals_settings_disabled(self, tmp_path):
+        """Fix round 1 finding 4: the runner builds `router_online:breaker_off`
+        via `breaker=False` over the SAME (breaker-enabled) base config
+        `router_online` itself uses. That must choose identically to the
+        other way to get "no breaker" -- `breaker=None` (the default) over a
+        `Settings` object whose `routing.breaker.enabled` is already False --
+        so the control arm's numbers mean "no breaker", not "no breaker,
+        constructed one particular way"."""
+        settings, registry, inp = _priced_two_endpoint_setup(tmp_path)
+        cap = attempt_cap(BASE_SETTINGS)
+        disabled = copy.deepcopy(settings)
+        disabled.routing.breaker.enabled = False
+
+        arm_kwarg_off = OnlineArm(settings, registry, cap, seconds_per_case=1.0,
+                                  breaker=False)
+        arm_settings_off = OnlineArm(disabled, registry, cap, seconds_per_case=1.0)
+
+        threshold = settings.routing.breaker.failure_threshold
+        for k in range(threshold + 3):
+            rows = {"a-model": _err(f"case-{k}", "a-model"),
+                    "b-model": _ok(f"case-{k}", "b-model")}
+            def failed(s, rows=rows):
+                return rows[s].error is not None
+            c1 = arm_kwarg_off.choose(inp, failed, case_index=k)
+            c2 = arm_settings_off.choose(inp, failed, case_index=k)
+            assert c1 == c2
+            arm_kwarg_off.observe(k, c1, rows)
+            arm_settings_off.observe(k, c2, rows)
+
+    def test_breaker_true_ignores_non_unhealth_failures(self, tmp_path):
+        """Fix round 1 finding 2: the breaker must obey the exact same
+        counts_unhealth gate as the signal store (a 4xx-shaped failure is
+        the request's fault, never the endpoint's) -- so with breaker=True
+        but every "a" failure NOT unhealth, the circuit must never open:
+        the chain keeps starting with "a" past failure_threshold, and the
+        breaker's own state for "a" stays "closed"."""
+        settings, registry, inp = _priced_two_endpoint_setup(tmp_path)
+        threshold = settings.routing.breaker.failure_threshold
+        cap = attempt_cap(BASE_SETTINGS)
+        arm = OnlineArm(settings, registry, cap, seconds_per_case=1.0, breaker=True)
+
+        chains = _drive_priced(arm, inp, threshold + 2, counts_unhealth=False)
+        assert all(c[0] == "a-model" for c in chains)
+        assert arm._breaker.state("a-model").state == "closed"
+
+    def test_choose_equals_router_chain_with_breaker_open_circuits(self, tmp_path):
+        """Fix round 1 finding 2: the breaker-on version of
+        `test_online_choose_equals_router_chain_over_its_own_store` --
+        `choose(k)` must equal a direct `_router_chain` call over the arm's
+        own store, with `open_circuits` wired to the SAME breaker's
+        `open_set(now=t_k)`, once the breaker has actually tripped (so the
+        comparison is not vacuously true with an always-empty open set)."""
+        settings, registry, inp = _priced_two_endpoint_setup(tmp_path)
+        threshold = settings.routing.breaker.failure_threshold
+        cap = attempt_cap(BASE_SETTINGS)
+        arm = OnlineArm(settings, registry, cap, seconds_per_case=1.0, breaker=True)
+        _drive_priced(arm, inp, threshold)   # trips the circuit for "a-model"
+        assert arm._breaker.state("a-model", now=case_read_time(
+            threshold, arm.seconds_per_case)).state != "closed"
+
+        failed = _failing("a-model")
+        t = case_read_time(threshold, arm.seconds_per_case)
+        # Read at t_k first, exactly as `choose` itself would -- `_router_chain`
+        # reads the store at `now=None`, which resolves to whatever the
+        # frozen clock is currently set to.
+        arm.signals.advance_read_clock(t)
+        rt = Router(settings, registry=registry, signals=arm.signals)
+        expected = _router_chain(rt, inp, failed, cap,
+                                 open_circuits=lambda: arm._breaker.open_set(now=t))
+
+        assert arm.choose(inp, failed, case_index=threshold) == expected
+
+
+# --------------------------------------------------------------------------
+# Documented no-op: the breaker runs on the SAME case clock as the signal
+# store (fix round 1 finding 1). At seconds_per_case >= max_cooldown_s, no
+# cooldown -- however many times it has doubled -- can ever outlast one case
+# gap, so every case's read always lands at or after the circuit's
+# open_until: it is admitted (half-open) on every single case, and the
+# breaker never actually excludes anything. router_online and
+# router_online:breaker_off must therefore choose identically.
+# --------------------------------------------------------------------------
+
+class TestBreakerCaseClockInteraction:
+    def test_seconds_per_case_at_max_cooldown_is_a_documented_no_op(self, tmp_path):
+        settings, registry, inp = _priced_two_endpoint_setup(tmp_path)
+        cap = attempt_cap(BASE_SETTINGS)
+        seconds_per_case = settings.routing.breaker.max_cooldown_s
+        arm_on = OnlineArm(settings, registry, cap, seconds_per_case=seconds_per_case,
+                           breaker=True)
+        arm_off = OnlineArm(settings, registry, cap, seconds_per_case=seconds_per_case,
+                            breaker=False)
+        n = 20   # several times failure_threshold and several cooldown doublings
+        for k in range(n):
+            rows = {"a-model": _err(f"case-{k}", "a-model"),
+                    "b-model": _ok(f"case-{k}", "b-model")}
+            def failed(s, rows=rows):
+                return rows[s].error is not None
+            chain_on = arm_on.choose(inp, failed, case_index=k)
+            chain_off = arm_off.choose(inp, failed, case_index=k)
+            # Direction only: identical chains, never a magnitude. This is
+            # the no-op the case_clock ARM_NOTES entry documents.
+            assert chain_on == chain_off, f"case {k}: breaker diverged from breaker_off"
+            arm_on.observe(k, chain_on, rows)
+            arm_off.observe(k, chain_off, rows)
+        # The circuit did open at least once (failure_threshold reached),
+        # but never for long enough to survive to the next case's read.
+        assert arm_on._breaker.state("a-model").consecutive_failures >= \
+            settings.routing.breaker.failure_threshold
 
 
 # --------------------------------------------------------------------------
