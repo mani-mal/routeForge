@@ -5,11 +5,16 @@ import asyncio
 
 from hypothesis import HealthCheck, given, settings as hsettings, strategies as st
 
-from app.eval.simulate import observed_latencies, select_rows, simulate
+from app.eval.simulate import (REPORT_CAVEAT, observed_latencies, render_report, select_rows,
+                               simulate, simulate_row, summarize)
 from tests.eval.sim_fixtures import (BASE_SETTINGS, app_entry, make_row, make_snapshot,
                                      onboarded_row)
 
 P = "routeforge.policy-proposal/v1"
+
+_INPUTS = {"export_sha256": "e", "snapshot_sha256": "s", "proposal_sha256": "p",
+           "proposal_title": "t", "routing_policy_version": "v",
+           "registry_version": "r", "snapshot_generated_at": "2026-09-24T00:00:00Z"}
 
 
 def _run(records, snap, prop):
@@ -148,3 +153,104 @@ def test_rejection_records_codes_and_no_cost():
     assert r.proposed.reject_codes and "residency" in r.proposed.reject_codes
     assert r.proposed.eligible == ()
     assert (r.proposed.model, r.proposed.cost_usd, r.proposed.latency_ms) == (None, None, None)
+
+
+# --- Task 5: summarize, render_report, REPORT_CAVEAT ------------------------
+
+def test_summarize_empty_proposal_zero_deltas():
+    results, excluded = _run(_rows(), make_snapshot(), {"schema": P})
+    sim = summarize(results, excluded, inputs=_INPUTS, edits={})
+    t = sim["totals"]
+    assert t["route_changed"] == t["newly_rejected"] == t["newly_served"] == 0
+    assert t["cost_usd"]["delta"] == 0
+    assert sim["moves"] == [] and sim["affected_apps"] == []
+    assert sim["schema"] == "routeforge.simulation/v1"
+
+
+def test_summarize_counts_new_rejections_and_moves():
+    snap = make_snapshot(apps=[app_entry("app-a", allowed_models=["local-mid"])])
+    results, excluded = _run(_rows(3), snap, {"schema": P,
+                                              "endpoints": {"remove": ["local-mid"]}})
+    sim = summarize(results, excluded, inputs=_INPUTS, edits={})
+    assert sim["totals"]["newly_rejected"] == 3
+    assert sim["moves"] == [{"from": "local-mid", "to": "(rejected)", "count": 3}]
+    assert sim["affected_apps"] == ["app-a"]
+    assert sim["new_rejections"]["by_app"] == {"app-a": 3}
+
+
+def test_baseline_agreement_and_warning():
+    rows = _rows(4)                              # all recorded attempts[0] == local-cheap
+    results, excluded = _run(rows, make_snapshot(), {"schema": P})
+    sim = summarize(results, excluded, inputs=_INPUTS, edits={})
+    assert sim["baseline"]["rows_compared"] == 4
+    assert 0.0 <= sim["baseline"]["agreement"] <= 1.0
+    assert sim["baseline"]["warning"] == (sim["baseline"]["agreement"] < 0.90)
+
+
+def test_report_opens_with_caveat():
+    results, excluded = _run(_rows(), make_snapshot(), {"schema": P})
+    md = render_report(summarize(results, excluded, inputs=_INPUTS, edits={}))
+    assert md.startswith("> " + REPORT_CAVEAT.split("\n")[0])
+    assert "## New rejections" in md and "## Excluded rows" in md
+
+
+def test_summarize_deterministic():                                        # §9.8
+    a = summarize(*_run(_rows(), make_snapshot(), {"schema": P}), inputs=_INPUTS, edits={})
+    b = summarize(*_run(_rows(), make_snapshot(), {"schema": P}), inputs=_INPUTS, edits={})
+    import json
+    assert json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
+
+
+def test_entity_placeholder_only_type_is_read():
+    """Poisoned start/end/value on the placeholder Entity must not affect the
+    replayed decision -- only `.type` is read on this path (spec §7)."""
+    snap = make_snapshot()
+    row = make_row("poison-check", "app-a", detected_entity_types=["US_SSN"])
+    import asyncio as _asyncio
+    from app.eval.scenario import build_scenario, close_scenario
+
+    async def _both():
+        scn = await build_scenario(snap, base=BASE_SETTINGS)
+        try:
+            observed = observed_latencies([row])
+            normal = simulate_row(scn, row, observed)
+
+            import app.eval.simulate as sim_mod
+            real_entity = sim_mod.Entity
+            poisoned = []
+
+            def _poison_entity(*, type, start, end, value):  # noqa: A002
+                poisoned.append((start, end, value))
+                return real_entity(type=type, start=999, end=-1, value="POISON")
+
+            sim_mod.Entity = _poison_entity
+            try:
+                tampered = simulate_row(scn, row, observed)
+            finally:
+                sim_mod.Entity = real_entity
+            return normal, tampered, poisoned
+        finally:
+            await close_scenario(scn)
+
+    normal, tampered, poisoned = _asyncio.run(_both())
+    assert poisoned, "the monkeypatched Entity constructor was never called"
+    assert tampered == normal
+
+
+def test_signal_latency_rung_used_when_no_observed_rows():
+    """A model with enough snapshot signal samples and no observed rows in
+    the export routes with `latency_source == 'signal'` and the snapshot's
+    latency value (spec §7's latency ladder, rung 2)."""
+    min_samples = BASE_SETTINGS.routing.signals.min_samples
+    snap = make_snapshot(signals={
+        "local-cheap": {"latency_ms": 4242.0, "latency_n": min_samples,
+                        "availability": 1.0, "availability_n": min_samples}})
+    # status != "ok" so this row's own latency is never folded into
+    # `observed_latencies` -- otherwise the "observed" rung would shadow
+    # the "signal" rung this test targets.
+    row = make_row("sig1", "app-a", complexity=0.05, status="backend_failed")
+    results, _ = _run([row], snap, {"schema": P})
+    (r,) = results
+    assert r.current.model == "local-cheap"
+    assert r.current.latency_source == "signal"
+    assert r.current.latency_ms == 4242.0

@@ -28,11 +28,16 @@ never be recorded as a rejected request.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import statistics
+from collections import Counter
 from dataclasses import dataclass
+from datetime import datetime
 
 from app.config.schema import Settings
 from app.errors import ContextWindowExceeded, NoEligibleCandidate
+from app.eval.outcomes import UNTAGGED_WORKLOAD, _fmt, _mean, _nearest_rank, _round6
 from app.eval.proposal import apply_proposal
 from app.eval.scenario import Scenario, build_scenario, close_scenario
 from app.models import Entity
@@ -188,3 +193,308 @@ async def simulate(records: list[dict], snapshot: dict, proposal: dict, *,
             await close_scenario(proposed)
     finally:
         await close_scenario(current)
+
+
+# --- summary and report (spec §8) -------------------------------------------
+
+#: The report's opening blockquote, verbatim from spec §8, one string per
+#: source line (without the leading "> " -- `render_report` adds that on
+#: every line so a multi-line quote stays a single blockquote).
+REPORT_CAVEAT = (
+    "**Simulation only.** Nothing in this report has been applied. It predicts the first routing\n"
+    "decision of recorded requests under the proposal, using the real eligibility and routing\n"
+    "code and a frozen snapshot of signals. It does not model failover, escalation, breaker\n"
+    "state, request pins or caching."
+)
+
+
+def _parse_ts(ts: str) -> datetime:
+    return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+
+
+def _route_changed(r: RowResult) -> bool:
+    return (r.current.outcome == "routed" and r.proposed.outcome == "routed"
+            and r.current.model != r.proposed.model)
+
+
+def _newly_rejected(r: RowResult) -> bool:
+    return r.current.outcome == "routed" and r.proposed.outcome == "rejected"
+
+
+def _newly_served(r: RowResult) -> bool:
+    return r.current.outcome == "rejected" and r.proposed.outcome == "routed"
+
+
+def _delta(current: float | None, proposed: float | None) -> dict:
+    delta = proposed - current if current is not None and proposed is not None else None
+    return {"current": current, "proposed": proposed, "delta": delta}
+
+
+def _bucket_stats(rows: list[RowResult]) -> dict:
+    """The `{requests, route_changed, newly_rejected, newly_served, cost_usd,
+    latency_ms, quality_mean, onprem_share}` block shared by `totals`,
+    `by_app.<app>` and `by_workload.<workload>` (spec §8)."""
+    cost = {}
+    lat_p50 = {}
+    lat_p95 = {}
+    quality = {}
+    onprem_share = {}
+    for arm in ("current", "proposed"):
+        routed = [getattr(r, arm) for r in rows if getattr(r, arm).outcome == "routed"]
+        cost[arm] = sum(a.cost_usd or 0.0 for a in routed)
+        latencies = sorted(a.latency_ms for a in routed if a.latency_ms is not None)
+        lat_p50[arm] = _nearest_rank(latencies, 50)
+        lat_p95[arm] = _nearest_rank(latencies, 95)
+        q_vals = [a.quality for a in routed if a.quality is not None]
+        quality[arm] = _mean(q_vals)
+        onprem_share[arm] = ((sum(1 for a in routed if a.provider == "onprem") / len(routed))
+                              if routed else None)
+
+    return {
+        "requests": len(rows),
+        "route_changed": sum(1 for r in rows if _route_changed(r)),
+        "newly_rejected": sum(1 for r in rows if _newly_rejected(r)),
+        "newly_served": sum(1 for r in rows if _newly_served(r)),
+        "cost_usd": _delta(cost["current"], cost["proposed"]),
+        "latency_ms": {"p50": _delta(lat_p50["current"], lat_p50["proposed"]),
+                       "p95": _delta(lat_p95["current"], lat_p95["proposed"])},
+        "quality_mean": _delta(quality["current"], quality["proposed"]),
+        "onprem_share": {"current": onprem_share["current"], "proposed": onprem_share["proposed"]},
+    }
+
+
+def _baseline(results: list[RowResult]) -> dict:
+    """Fidelity check (spec §7): does the `current` arm's pick agree with the
+    recorded first attempt, over simulated `ok` rows with a recorded
+    attempt. Never compares `proposed` -- the headline diff is always
+    `current` vs `proposed`, both simulated."""
+    compared = [r for r in results
+                if r.row.get("status") == "ok" and (r.row.get("attempts") or [])]
+    rows_compared = len(compared)
+    agreement = None
+    by_app: dict[str, float] = {}
+    disagreements: Counter = Counter()
+    if rows_compared:
+        agree_count = sum(1 for r in compared if r.current.model == r.row["attempts"][0])
+        agreement = agree_count / rows_compared
+        for app_id in sorted({r.row["application_id"] for r in compared}):
+            sub = [r for r in compared if r.row["application_id"] == app_id]
+            by_app[app_id] = sum(
+                1 for r in sub if r.current.model == r.row["attempts"][0]) / len(sub)
+        for r in compared:
+            recorded = r.row["attempts"][0]
+            simulated = r.current.model or "(rejected)"
+            if recorded != simulated:
+                disagreements[(recorded, simulated)] += 1
+
+    top = sorted(disagreements.items(), key=lambda kv: (-kv[1], kv[0][0], kv[0][1]))[:10]
+    top_disagreements = [{"recorded": rec, "simulated": sim, "count": n}
+                         for (rec, sim), n in top]
+    return {
+        "rows_compared": rows_compared,
+        "agreement": agreement,
+        "warning": agreement is not None and agreement < 0.90,
+        "by_app": by_app,
+        "top_disagreements": top_disagreements,
+    }
+
+
+def _moves(results: list[RowResult]) -> list[dict]:
+    counts: Counter = Counter()
+    for r in results:
+        frm = r.current.model or "(rejected)"
+        to = r.proposed.model or "(rejected)"
+        if frm != to:
+            counts[(frm, to)] += 1
+    top = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0][0], kv[0][1]))[:20]
+    return [{"from": frm, "to": to, "count": n} for (frm, to), n in top]
+
+
+def _new_rejections(results: list[RowResult]) -> dict:
+    by_app: Counter = Counter()
+    by_code: Counter = Counter()
+    for r in results:
+        if _newly_rejected(r):
+            by_app[r.row["application_id"]] += 1
+            for code in r.proposed.reject_codes:
+                by_code[code] += 1
+    return {"by_app": dict(by_app), "by_code": dict(by_code)}
+
+
+def _sources(results: list[RowResult]) -> dict:
+    out: dict[str, dict] = {}
+    for arm in ("current", "proposed"):
+        latency: Counter = Counter()
+        quality: Counter = Counter()
+        for r in results:
+            a = getattr(r, arm)
+            if a.outcome == "routed":
+                latency[a.latency_source] += 1
+                quality[a.quality_source] += 1
+        out[arm] = {"latency": dict(latency), "quality": dict(quality)}
+    return out
+
+
+def _window(results: list[RowResult]) -> dict | None:
+    ts_list = [r.row["ts"] for r in results if r.row.get("ts")]
+    if not ts_list:
+        return None
+    ts_list = sorted(ts_list, key=_parse_ts)
+    return {"start": ts_list[0], "end": ts_list[-1]}
+
+
+def _per_day(window: dict | None, cost_usd: dict) -> dict | None:
+    if window is None:
+        return None
+    days = (_parse_ts(window["end"]) - _parse_ts(window["start"])).total_seconds() / 86400
+    if days < 1:
+        return None
+    return {"cost_usd": {k: (v / days if v is not None else None) for k, v in cost_usd.items()}}
+
+
+def summarize(results: list[RowResult], excluded: dict[str, int], *, inputs: dict,
+             edits: dict) -> dict:
+    """The deterministic `simulation.json` document (spec §8). `inputs` is
+    the caller's partial input record (no `window` yet -- this function
+    computes it from the simulated rows and adds it before hashing, so
+    `simulation_id` covers the window too)."""
+    full_inputs = dict(inputs)
+    full_inputs["window"] = _window(results)
+    simulation_id = hashlib.sha256(
+        json.dumps(full_inputs, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+
+    by_app_ids = sorted({r.row["application_id"] for r in results})
+    by_workload_labels = sorted({r.row.get("workload") or UNTAGGED_WORKLOAD for r in results})
+    totals = _bucket_stats(results)
+
+    sim = {
+        "schema": "routeforge.simulation/v1",
+        "simulation_id": simulation_id,
+        "inputs": full_inputs,
+        "edits": edits,
+        "rows": {"simulated": len(results), "excluded": dict(excluded)},
+        "baseline": _baseline(results),
+        "totals": totals,
+        "by_app": {app_id: _bucket_stats([r for r in results
+                                          if r.row["application_id"] == app_id])
+                  for app_id in by_app_ids},
+        "by_workload": {wl: _bucket_stats([r for r in results
+                                           if (r.row.get("workload") or UNTAGGED_WORKLOAD) == wl])
+                       for wl in by_workload_labels},
+        "moves": _moves(results),
+        "new_rejections": _new_rejections(results),
+        "affected_apps": sorted({r.row["application_id"] for r in results
+                                 if _route_changed(r) or _newly_rejected(r)
+                                 or _newly_served(r)}),
+        "sources": _sources(results),
+        "per_day": _per_day(full_inputs["window"], totals["cost_usd"]),
+    }
+    return _round6(sim)
+
+
+def _metrics_table(stats: dict) -> list[str]:
+    lines = [
+        f"requests: {stats['requests']} &middot; route_changed: {stats['route_changed']} "
+        f"&middot; newly_rejected: {stats['newly_rejected']} "
+        f"&middot; newly_served: {stats['newly_served']}",
+        "",
+        "| metric | current | proposed | delta |",
+        "|---|---|---|---|",
+    ]
+    c = stats["cost_usd"]
+    lines.append(f"| cost_usd | {_fmt(c['current'])} | {_fmt(c['proposed'])} | {_fmt(c['delta'])} |")
+    p50 = stats["latency_ms"]["p50"]
+    lines.append(f"| latency_ms p50 | {_fmt(p50['current'])} | {_fmt(p50['proposed'])} | "
+                f"{_fmt(p50['delta'])} |")
+    p95 = stats["latency_ms"]["p95"]
+    lines.append(f"| latency_ms p95 | {_fmt(p95['current'])} | {_fmt(p95['proposed'])} | "
+                f"{_fmt(p95['delta'])} |")
+    q = stats["quality_mean"]
+    lines.append(f"| quality_mean | {_fmt(q['current'])} | {_fmt(q['proposed'])} | {_fmt(q['delta'])} |")
+    o = stats["onprem_share"]
+    lines.append(f"| onprem_share | {_fmt(o['current'])} | {_fmt(o['proposed'])} | n/a |")
+    return lines
+
+
+def render_report(sim: dict) -> str:
+    """The `report.md` document (spec §8), in the order: caveat, baseline
+    warning, headline, new rejections, moves, by-app, by-workload,
+    latency/quality sources, excluded rows."""
+    lines: list[str] = ["> " + line for line in REPORT_CAVEAT.split("\n")]
+    lines.append("")
+
+    baseline = sim["baseline"]
+    if baseline["warning"]:
+        lines.append(
+            f"> **Warning:** baseline agreement is only {baseline['agreement'] * 100:.1f}% "
+            f"across {baseline['rows_compared']} compared rows (below the 90% threshold). "
+            "Treat the headline diff as noisier than usual -- see spec §7 for causes.")
+        lines.append("")
+
+    lines.append("## Headline")
+    lines.append("")
+    lines += _metrics_table(sim["totals"])
+    lines.append("")
+
+    lines.append("## New rejections")
+    lines.append("")
+    new_rej = sim["new_rejections"]
+    if not new_rej["by_app"] and not new_rej["by_code"]:
+        lines.append("None.")
+    else:
+        lines.append("| app | count |")
+        lines.append("|---|---|")
+        for app_id in sorted(new_rej["by_app"]):
+            lines.append(f"| {app_id} | {new_rej['by_app'][app_id]} |")
+        lines.append("")
+        lines.append("| code | count |")
+        lines.append("|---|---|")
+        for code in sorted(new_rej["by_code"]):
+            lines.append(f"| {code} | {new_rej['by_code'][code]} |")
+    lines.append("")
+
+    lines.append("## Moves")
+    lines.append("")
+    if not sim["moves"]:
+        lines.append("None.")
+    else:
+        lines.append("| from | to | count |")
+        lines.append("|---|---|---|")
+        for move in sim["moves"]:
+            lines.append(f"| {move['from']} | {move['to']} | {move['count']} |")
+    lines.append("")
+
+    lines.append("## By app")
+    lines.append("")
+    for app_id in sorted(sim["by_app"]):
+        lines.append(f"### {app_id}")
+        lines.append("")
+        lines += _metrics_table(sim["by_app"][app_id])
+        lines.append("")
+
+    lines.append("## By workload")
+    lines.append("")
+    for wl in sorted(sim["by_workload"]):
+        lines.append(f"### {wl}")
+        lines.append("")
+        lines += _metrics_table(sim["by_workload"][wl])
+        lines.append("")
+
+    lines.append("## Latency and quality sources")
+    lines.append("")
+    sources = sim["sources"]
+    for arm in ("current", "proposed"):
+        lines.append(f"### {arm}")
+        lines.append(f"- latency: {sources[arm]['latency']}")
+        lines.append(f"- quality: {sources[arm]['quality']}")
+    lines.append("")
+
+    lines.append("## Excluded rows")
+    lines.append("")
+    excluded = sim["rows"]["excluded"]
+    lines.append("| reason | count |")
+    lines.append("|---|---|")
+    for reason in sorted(excluded):
+        lines.append(f"| {reason} | {excluded[reason]} |")
+
+    return "\n".join(lines) + "\n"
