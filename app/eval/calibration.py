@@ -1,6 +1,6 @@
 """Offline quality calibration (P2b-3 Task 3): turn a P2b-2 outcome export
 into per-(model, workload) Beta-posterior quality estimates and a
-hash-identified recommendation file an admin reviews and applies.
+content-hashed recommendation file an admin reviews and applies.
 
 **File-based only.** No DB, no `app.api`, no serving import -- like
 `app/eval/outcomes.py`, this reads a file an operator downloaded from
@@ -37,15 +37,20 @@ A row with no evidence adds nothing but still counts toward `n_rows` and
 
 **Prior.** `Beta(k*q0, k*(1-q0))`, posterior `Beta(a0 + s, b0 + t - s)`.
 `q0` is the model's quality term (`{"v", "src"}`) from the group's
-`scoring.candidates`, taken only when `src` is `published` or
+`scoring.candidates`, taken as-is only when `src` is `published` or
 `tier_default`: a `calibrated` or `customer` term is itself a previous
 recommendation or a declaration, and recalibrating against it would compound
-one calibration on top of another. Among qualifying terms the one from the
-newest record wins (latest `ts`, then greatest `request_id`, then first in
-candidate order). `priors[model]` overrides the export (`q0_source` =
-`"prior"`; a prior must lie strictly inside (0, 1), and an export term of
-exactly 0 or 1 is skipped as degenerate). With no source at all the model's
-units are `insufficient` with reason `no prior`.
+one calibration on top of another. Such a term instead offers its `base`
+(`{"v", "src"}`, the published/tier_default value underneath the override,
+which the router records whenever an override supplied the quality), so a
+second calibration round over an export taken after an apply still finds
+its prior. Among qualifying terms the one from the newest record wins
+(latest `ts`, then greatest `request_id`, then first in candidate order).
+`priors[model]` overrides the export (`q0_source` = `"prior"`; a prior must
+lie strictly inside (0, 1), and an export term of exactly 0 or 1 is skipped
+as degenerate). With no source at all the model's units are `insufficient`
+with reason `no prior` (or, when the model had only calibrated/customer
+terms with no base, a reason that says so and points at `--priors`).
 
 **Beta quantiles** are pure Python (`_beta_ppf`: `math.lgamma` plus the
 Numerical Recipes `betacf` continued fraction, inverted by bisection to
@@ -75,6 +80,11 @@ _CI_HIGH_P = 1.0 - _CI_LOW_P
 
 EXCLUDED_STATUSES = ("no_eligible", "backend_failed", "context_overflow")
 PRIOR_SOURCES = ("published", "tier_default")
+OVERRIDE_SOURCES = ("calibrated", "customer")
+
+NO_PRIOR = "no prior"
+NO_PRIOR_OVERRIDE_ONLY = (
+    "no prior: only calibrated/customer terms without a base; pass --priors")
 
 STATUS_RECOMMENDED = "recommended"
 STATUS_INSUFFICIENT = "insufficient"
@@ -267,11 +277,34 @@ def _valid_q0(v: object) -> bool:
     return _is_number(v) and 0.0 < v < 1.0
 
 
-def _export_priors(records: list[dict]) -> dict[str, tuple[float, str]]:
-    """`{model: (q0, src)}` from `scoring.candidates[*].quality`, restricted
-    to `PRIOR_SOURCES`; the newest record wins (see module docstring)."""
+def _term_prior(q: dict) -> tuple[float, str] | None:
+    """The prior a scoring record's quality term offers, or None.
+
+    A `published`/`tier_default` term is its own prior. A `calibrated` or
+    `customer` term is never used as-is (that would compound one calibration
+    on another); it offers its content-free `base` -- the published/
+    tier_default value the ladder would have used without the override --
+    when the router recorded one."""
+    v, src = q.get("v"), q.get("src")
+    if src in PRIOR_SOURCES:
+        return (float(v), src) if _valid_q0(v) else None
+    if src in OVERRIDE_SOURCES:
+        base = q.get("base")
+        if isinstance(base, dict) and base.get("src") in PRIOR_SOURCES \
+                and _valid_q0(base.get("v")):
+            return float(base["v"]), base["src"]
+    return None
+
+
+def _export_priors(records: list[dict]) -> tuple[dict[str, tuple[float, str]], set[str]]:
+    """`({model: (q0, src)}, override_only)` from
+    `scoring.candidates[*].quality` (see `_term_prior`); the newest record
+    wins (see module docstring). `override_only` names the models whose only
+    quality terms were `calibrated`/`customer` ones with no usable `base` --
+    so their `no prior` reason can say why."""
     floor = dt.datetime.min.replace(tzinfo=dt.timezone.utc)
     best: dict[str, tuple[tuple, float, str]] = {}
+    overridden: set[str] = set()
     for r in records:
         scoring = r.get("scoring")
         if not isinstance(scoring, dict):
@@ -283,17 +316,21 @@ def _export_priors(records: list[dict]) -> dict[str, tuple[float, str]]:
             name, q = cand.get("name"), cand.get("quality")
             if not isinstance(name, str) or not isinstance(q, dict):
                 continue
-            v, src = q.get("v"), q.get("src")
-            if src not in PRIOR_SOURCES or not _valid_q0(v):
+            if q.get("src") in OVERRIDE_SOURCES:
+                overridden.add(name)
+            prior = _term_prior(q)
+            if prior is None:
                 continue
             if name not in best or key > best[name][0]:
-                best[name] = (key, float(v), src)
-    return {m: (v, src) for m, (_, v, src) in best.items()}
+                best[name] = (key, prior[0], prior[1])
+    priors = {m: (v, src) for m, (_, v, src) in best.items()}
+    return priors, overridden - set(priors)
 
 
 def _unit(model: str, workload: str | None, rows: list[dict],
           prior: tuple[float, str] | None, *, k: float, min_labels: int,
-          max_ci_width: float, min_shift: float) -> dict:
+          max_ci_width: float, min_shift: float,
+          no_prior_reason: str = NO_PRIOR) -> dict:
     s, t, labelled = 0.0, 0, 0
     for r in rows:
         rs, rt = _row_evidence(r)
@@ -309,7 +346,7 @@ def _unit(model: str, workload: str | None, rows: list[dict],
         "status": STATUS_INSUFFICIENT, "reason": None,
     }
     if prior is None:
-        unit["reason"] = "no prior"
+        unit["reason"] = no_prior_reason
         return unit
     q0, src = prior
     alpha = k * q0 + s
@@ -361,7 +398,7 @@ def estimate(records: list[dict], *, k: float = 10.0, min_labels: int = 20,
         if not _valid_q0(v):
             raise ValueError(f"prior for {model!r} must be in (0, 1), got {v!r}")
     version, group = _pick_group(records, registry_version)
-    export_priors = _export_priors(group)
+    export_priors, override_only = _export_priors(group)
 
     by_model: dict[str, list[dict]] = {}
     for r in group:
@@ -376,14 +413,15 @@ def estimate(records: list[dict], *, k: float = 10.0, min_labels: int = 20,
             prior: tuple[float, str] | None = (float(priors[model]), "prior")
         else:
             prior = export_priors.get(model)
+        reason = NO_PRIOR_OVERRIDE_ONLY if model in override_only else NO_PRIOR
         by_workload: dict[str, list[dict]] = {}
         for r in rows:
             w = r.get("workload")
             if isinstance(w, str) and w:
                 by_workload.setdefault(w, []).append(r)
         for w, wrows in by_workload.items():
-            units.append(_unit(model, w, wrows, prior, **opts))
-        units.append(_unit(model, None, rows, prior, **opts))
+            units.append(_unit(model, w, wrows, prior, no_prior_reason=reason, **opts))
+        units.append(_unit(model, None, rows, prior, no_prior_reason=reason, **opts))
     units.sort(key=lambda u: (u["model"], u["workload"] is None, u["workload"] or ""))
 
     return _round6({

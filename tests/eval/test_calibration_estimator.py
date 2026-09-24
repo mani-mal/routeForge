@@ -195,8 +195,9 @@ def test_calibrated_src_is_not_a_prior(tmp_path):
     lines = [_rec("r1", scoring=sc, feedback=[("route_correct", 1)]),
              _rec("r2", chosen="m-b", scoring=sc, feedback=[("route_correct", 1)])]
     est = estimate(_load(tmp_path, lines))
-    assert _unit(est, "m-a", None)["reason"] == "no prior"
-    assert _unit(est, "m-b", None)["reason"] == "no prior"
+    why = "no prior: only calibrated/customer terms without a base; pass --priors"
+    assert _unit(est, "m-a", None)["reason"] == why
+    assert _unit(est, "m-b", None)["reason"] == why
     # ...but a published term elsewhere in the group is used.
     lines.append(_rec("r3", ts="2026-09-19T00:00:00+00:00", feedback=[]))
     assert _unit(estimate(_load(tmp_path, lines)), "m-a", None)["q0"] == 0.5
@@ -392,3 +393,35 @@ def test_negative_zero_normalised():
     out = _round6({"a": -0.0, "b": [-1e-9, 0.25], "c": True, "d": -0.5})
     assert json.dumps(out, sort_keys=True) == \
         '{"a": 0.0, "b": [0.0, 0.25], "c": true, "d": -0.5}'
+
+
+# --- round two: the prior comes from an override term's `base` -------------
+
+def test_round_two_prior_comes_from_the_override_base(tmp_path):
+    """After an apply every quality term reads `calibrated`/`customer`; the
+    router records the published/tier_default value underneath as `base`,
+    and that is the next round's prior (final-review ruling 2)."""
+    sc = {"candidates": [
+        {"name": "m-a", "quality": {"v": 0.9, "src": "calibrated", "set": "s1",
+                                     "base": {"v": 0.5, "src": "tier_default"}}},
+        {"name": "m-b", "quality": {"v": 0.3, "src": "customer",
+                                     "base": {"v": 0.61, "src": "published"}}}]}
+    lines = [_rec("r1", scoring=sc, feedback=[("route_correct", 1)]),
+             _rec("r2", chosen="m-b", scoring=sc, feedback=[("route_correct", 1)])]
+    est = estimate(_load(tmp_path, lines))
+    ua, ub = _unit(est, "m-a", None), _unit(est, "m-b", None)
+    assert (ua["q0"], ua["q0_source"]) == (0.5, "tier_default")
+    assert (ub["q0"], ub["q0_source"]) == (0.61, "published")
+    assert ua["reason"] != "no prior" and ua["alpha"] == 6.0
+
+
+@pytest.mark.parametrize("base", [None, {"v": 0.5, "src": "calibrated"},
+                                  {"v": 1.0, "src": "published"}, "x"])
+def test_unusable_base_is_no_prior(tmp_path, base):
+    q = {"v": 0.9, "src": "calibrated"}
+    if base is not None:
+        q["base"] = base
+    lines = [_rec("r1", scoring={"candidates": [{"name": "m-a", "quality": q}]},
+                  feedback=[("route_correct", 1)])]
+    u = _unit(estimate(_load(tmp_path, lines)), "m-a", None)
+    assert u["reason"].startswith("no prior: only calibrated/customer terms")

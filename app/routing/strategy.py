@@ -53,6 +53,10 @@ class TermValue:
     # P2b-3: the calibration set a `calibrated` quality came from. Only the
     # quality term ever sets it; None everywhere else.
     set_id: str | None = None
+    # P2b-3, quality only: the published/tier_default `(value, source)`
+    # underneath a customer/calibrated score (`QualityScore.base`). None
+    # whenever no override supplied the quality, and on every other term.
+    base: tuple[float, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -174,7 +178,7 @@ class DefaultRoutingStrategy:
 
             scored.append(ScoredCandidate(
                 candidate=cand, est_cost_usd=est, score=score,
-                quality=TermValue(q.score, q.source, set_id=q.set_id),
+                quality=TermValue(q.score, q.source, set_id=q.set_id, base=q.base),
                 latency=lat,
                 availability=TermValue(avail.value, avail.source, avail.samples),
                 cost_norm=cost_norm,
@@ -188,14 +192,22 @@ class DefaultRoutingStrategy:
 
 
 def _quality_record(q: TermValue) -> dict:
-    """`{"v", "src"}`, plus `"set"` only when a calibration set supplied the
-    score. With no calibration the entry has the same shape as before P2b-3.
-    The one value that can differ is an onboarded mid/frontier model's
-    tier-default quality, which is now its real tier's value instead of the
-    0.5 floor (B54)."""
+    """`{"v", "src"}`, plus `"set"` when a calibration set supplied the score,
+    plus `"base": {"v", "src"}` -- the published/tier_default value underneath
+    -- whenever an override (customer or calibrated) supplied it. The base is
+    what the NEXT calibration round uses as its prior
+    (`app/eval/calibration.py::_export_priors`); without it a second round
+    over an export taken after an apply would find no prior at all.
+
+    With no override the entry has exactly the pre-P2b-3 shape. The one value
+    that can differ is an onboarded model's quality: its published
+    `onboarded_models.quality`, else its real tier's default, instead of the
+    0.5 floor every onboarded model fell to before (B54)."""
     rec: dict = {"v": q.value, "src": q.source}
     if q.set_id is not None:
         rec["set"] = q.set_id
+    if q.base is not None:
+        rec["base"] = {"v": q.base[0], "src": q.base[1]}
     return rec
 
 

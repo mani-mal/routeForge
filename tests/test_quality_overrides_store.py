@@ -33,20 +33,23 @@ def test_no_rows_gives_empty_dict():
     _run(go())
 
 
-def test_customer_beats_calibrated_for_same_model():
+def test_customer_and_calibrated_for_same_key_are_both_kept():
+    """Precedence runs ACROSS keys at resolve time, so the store keeps both
+    candidates per key (final-review ruling 1)."""
     async def go():
         db = await _db()
         async with db.session() as s:
-            await store.upsert_model_quality(
-                s, model_name="local-8b", score=0.62, source="calibrated",
-                eval_run_id="run-1")
+            await store.write_calibration_set(
+                s, set_id="run-1",
+                units=[{"model": "local-8b", "workload": None, "score": 0.62}])
             await store.upsert_model_quality(
                 s, model_name="local-8b", score=0.80, source="customer")
             await s.commit()
 
         async with db.session() as s:
             overrides = await store.load_quality_overrides(s)
-        assert overrides[("local-8b", None)] == (0.80, "customer", None)
+        assert overrides[("local-8b", None)] == {
+            "customer": (0.80, None), "calibrated": (0.62, "run-1")}
 
     _run(go())
 
@@ -55,18 +58,16 @@ def test_per_workload_rows_are_keyed_separately():
     async def go():
         db = await _db()
         async with db.session() as s:
-            await store.upsert_model_quality(
-                s, model_name="local-8b", task_class=None, score=0.70,
-                source="calibrated", eval_run_id="run-1")
-            await store.upsert_model_quality(
-                s, model_name="local-8b", task_class="claims", score=0.55,
-                source="calibrated", eval_run_id="run-1")
+            await store.write_calibration_set(
+                s, set_id="run-1",
+                units=[{"model": "local-8b", "workload": None, "score": 0.70},
+                       {"model": "local-8b", "workload": "claims", "score": 0.55}])
             await s.commit()
 
         async with db.session() as s:
             overrides = await store.load_quality_overrides(s)
-        assert overrides[("local-8b", None)] == (0.70, "calibrated", "run-1")
-        assert overrides[("local-8b", "claims")] == (0.55, "calibrated", "run-1")
+        assert overrides[("local-8b", None)] == {"calibrated": (0.70, "run-1")}
+        assert overrides[("local-8b", "claims")] == {"calibrated": (0.55, "run-1")}
 
     _run(go())
 
@@ -87,7 +88,7 @@ def test_newer_calibrated_at_wins_among_calibrated_rows():
 
         async with db.session() as s:
             overrides = await store.load_quality_overrides(s)
-        assert overrides[("local-8b", None)] == (0.75, "calibrated", "set-new")
+        assert overrides[("local-8b", None)] == {"calibrated": (0.75, "set-new")}
 
     _run(go())
 
@@ -183,11 +184,11 @@ def test_delete_calibration_set_removes_only_that_set():
             overrides = await store.load_quality_overrides(s)
             sets = await store.list_calibration_sets(s)
         # customer row untouched
-        assert overrides[("local-8b", None)] == (0.9, "customer", None)
+        assert overrides[("local-8b", None)] == {"customer": (0.9, None)}
         # the surviving calibrated row for local-8b/claims is gone
         assert ("local-8b", "claims") not in overrides
         # the other set is untouched
-        assert overrides[("local-14b", None)] == (0.7, "calibrated", "set-keep")
+        assert overrides[("local-14b", None)] == {"calibrated": (0.7, "set-keep")}
         assert [row["set_id"] for row in sets] == ["set-keep"]
 
     _run(go())

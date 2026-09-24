@@ -620,11 +620,20 @@ async def upsert_model_quality(
     model_name: str,
     task_class: str | None = None,
     score: float,
-    source: str,
-    eval_run_id: str | None = None,
+    source: str = "customer",
     notes: str | None = None,
 ) -> ModelQuality:
-    """Insert-or-replace the (model_name, task_class, source) score (caller commits)."""
+    """Insert-or-replace an operator's `customer` quality declaration for
+    `(model_name, task_class)` (caller commits).
+
+    Customer rows only: `calibrated` rows are written exclusively by
+    `write_calibration_set` (one set per `eval_run_id`, revertible as a unit),
+    so a stray upsert can never create a calibrated row no set owns. Any other
+    `source` raises `ValueError`."""
+    if source != "customer":
+        raise ValueError(
+            f"upsert_model_quality writes customer rows only, got source={source!r} "
+            f"(calibrated rows come from write_calibration_set)")
     stmt = select(ModelQuality).where(
         ModelQuality.model_name == model_name,
         ModelQuality.task_class.is_(task_class) if task_class is None
@@ -638,44 +647,53 @@ async def upsert_model_quality(
         session.add(row)
     row.score = score
     row.calibrated_at = utcnow()
-    row.eval_run_id = eval_run_id
+    row.eval_run_id = None
     row.notes = notes
     return row
 
 
-# Provenance precedence for load_quality_overrides: customer wins over calibrated.
-_QUALITY_SOURCE_RANK = {"customer": 2, "calibrated": 1}
+# The DB-sourced quality provenances the routing ladder reads (see
+# app/routing/quality.py::OVERRIDE_SOURCES). Rows with any other source are
+# ignored.
+_OVERRIDE_SOURCES = ("customer", "calibrated")
 
 
 async def load_quality_overrides(
     session: AsyncSession,
-) -> dict[tuple[str, str | None], tuple[float, str, str | None]]:
+) -> dict[tuple[str, str | None], dict[str, tuple[float, str | None]]]:
     """Keyed quality overrides for the routing quality ladder (P2b-3 §7).
 
-    Maps `(model_name, task_class)` to `(score, source, set_id)`. `set_id` is
-    the row's `eval_run_id` for a `calibrated` row and always `None` for a
-    `customer` row (even if one happened to carry an `eval_run_id`). For a
-    given key, `customer` beats `calibrated`; among `calibrated` rows for the
-    same key, the row with the newest `calibrated_at` wins.
+    Maps `(model_name, task_class)` to `{source: (score, set_id)}` with at
+    most one entry per source in `("customer", "calibrated")`. Customer and
+    calibrated candidates are kept SEPARATE per key: precedence runs ACROSS
+    keys (customer (m, wl) -> customer (m, None) -> calibrated (m, wl) ->
+    calibrated (m, None)), so collapsing to one winner per key here would let
+    a per-workload calibrated row beat a model-wide customer declaration.
+    `QualityResolver.resolve` applies the order.
+
+    `set_id` is the row's `eval_run_id` for a `calibrated` row and always
+    `None` for a `customer` row. Among `calibrated` rows for the same key the
+    newest `calibrated_at` wins (a later set supersedes an earlier one). Ids,
+    enums and numbers only -- content-free.
 
     Selects over ALL rows (no `task_class IS NULL` filter) -- the table is
     small, so scanning both the scalar and per-workload rows in one query is
-    fine. Nothing in serving called this function before P2b-3 (spec §3); this
-    is the seam the router/gateway wiring reads from (spec §7).
+    fine.
     """
     rows = (await session.execute(select(ModelQuality))).scalars().all()
-    # cur = (rank, calibrated_at, score, source, set_id)
-    best: dict[tuple[str, str | None], tuple[int, dt.datetime, float, str, str | None]] = {}
+    best: dict[tuple[str, str | None, str], tuple[dt.datetime, float, str | None]] = {}
     for r in rows:
-        rank = _QUALITY_SOURCE_RANK.get(r.source, 0)
-        key = (r.model_name, r.task_class)
+        if r.source not in _OVERRIDE_SOURCES:
+            continue
+        key = (r.model_name, r.task_class, r.source)
         set_id = r.eval_run_id if r.source == "calibrated" else None
-        cand = (rank, r.calibrated_at, r.score, r.source, set_id)
         cur = best.get(key)
-        if cur is None or (cand[0], cand[1]) > (cur[0], cur[1]):
-            best[key] = cand
-    return {key: (score, source, set_id)
-            for key, (_rank, _at, score, source, set_id) in best.items()}
+        if cur is None or r.calibrated_at > cur[0]:
+            best[key] = (r.calibrated_at, r.score, set_id)
+    out: dict[tuple[str, str | None], dict[str, tuple[float, str | None]]] = {}
+    for (model, task_class, source), (_at, score, set_id) in best.items():
+        out.setdefault((model, task_class), {})[source] = (score, set_id)
+    return out
 
 
 async def write_calibration_set(

@@ -194,22 +194,32 @@ async def refresh_quality(app: FastAPI) -> bool:
     boot, every `routing.quality_refresh_s` by `_quality_loop`, and by the
     calibration apply/revert routes so a change takes effect at once.
 
+    Serialised by `app.state.quality_lock`: the DB read AND the snapshot swap
+    happen under the lock, so refreshes install in the order they read. Without
+    it a slow timer refresh that read BEFORE an apply committed could finish
+    AFTER the apply's own refresh and put the pre-apply snapshot back.
+
     Returns True when the new snapshot was installed. On ANY failure the last
     good snapshot stays in place (quality only reorders; a stale snapshot is
     always safe), a warning is logged, and False is returned -- it never
     raises. Must run on the real serving loop, never in create_app's
     throwaway one."""
-    try:
-        async with app.state.db.session() as session:
-            rows = await apps_store.load_quality_overrides(session)
-        app.state.quality.set_overrides({
-            key: QualityScore(score, source, set_id)
-            for key, (score, source, set_id) in rows.items()})
-        return True
-    except Exception:
-        logging.getLogger("serving.routing").warning(
-            "quality refresh failed; keeping the last snapshot", exc_info=True)
-        return False
+    lock = getattr(app.state, "quality_lock", None)
+    if lock is None:
+        lock = app.state.quality_lock = asyncio.Lock()
+    async with lock:
+        try:
+            async with app.state.db.session() as session:
+                rows = await apps_store.load_quality_overrides(session)
+            app.state.quality.set_overrides({
+                key: [QualityScore(score, source, set_id)
+                      for source, (score, set_id) in by_source.items()]
+                for key, by_source in rows.items()})
+            return True
+        except Exception:
+            logging.getLogger("serving.routing").warning(
+                "quality refresh failed; keeping the last snapshot", exc_info=True)
+            return False
 
 
 async def _quality_loop(app: FastAPI) -> None:
@@ -422,9 +432,13 @@ def create_app() -> FastAPI:
     async def _stop_quality() -> None:
         """Stop the refresher. It only ever reads, so cancelling it on a
         timeout loses nothing. Never raises."""
-        app.state.quality_stop.set()
+        stop = getattr(app.state, "quality_stop", None)
+        task = getattr(app.state, "quality_task", None)
+        if stop is None or task is None:
+            return   # startup never ran (or failed before starting the loop)
+        stop.set()
         try:
-            await asyncio.wait_for(app.state.quality_task, timeout=5)
+            await asyncio.wait_for(task, timeout=5)
         except (Exception, asyncio.CancelledError):
             logging.getLogger("serving.routing").warning(
                 "quality refresher did not stop cleanly", exc_info=True)
