@@ -64,7 +64,7 @@ import hashlib
 import json
 import math
 
-from app.eval.outcomes import UNKNOWN_REGISTRY_VERSION
+from app.eval.outcomes import UNKNOWN_REGISTRY_VERSION, UNTAGGED_WORKLOAD
 
 RECOMMENDATION_SCHEMA = "routeforge.quality-recommendation/v1"
 
@@ -428,3 +428,283 @@ def build_recommendation(estimate_dict: dict, *, export_sha256: str) -> dict:
 def dump_recommendation(rec: dict) -> str:
     """Byte-stable text for `recommendation.json`."""
     return json.dumps(rec, sort_keys=True, indent=2) + "\n"
+
+
+# --- replay diff (spec §5) ---------------------------------------------
+#
+# The replay re-ranks each logged decision with the *proposed* quality and
+# reports which decisions would change. It reads ONLY the scoring record
+# (`RankResult.to_record()`, app/routing/strategy.py) -- never the live
+# config -- and it only reorders the logged eligible set, so it can never
+# add a candidate or change eligibility or placement.
+#
+# The formula and tie-break mirror `DefaultRoutingStrategy.rank` exactly:
+#
+#   score = w.quality * q - w.cost * cost.norm
+#           - w.latency * min(latency.ms / latency_scale_ms, max_latency_norm)
+#           + w.availability * availability.v
+#   order = sorted by (-score, cost.est_usd), stable
+#
+# The strategy has no "missing term" branch: every term is always present
+# and its recorded value is what was used, whatever its `src` says
+# (`peer_prior` carries the borrowed median; `disabled` carries the tier
+# default / 1.0 the strategy actually scored with). So the replay uses the
+# recorded values as-is, and a record that lacks one is *not recomputable*
+# -- an equivalence failure, never a silent default.
+
+REPLAY_CAVEAT = (
+    "This replay shows which logged decisions would change. It cannot show "
+    "what the changed decisions would have produced: production observes "
+    "only the served model."
+)
+
+_WEIGHT_KEYS = ("quality", "cost", "latency", "availability")
+
+
+class _NotRecomputable(ValueError):
+    pass
+
+
+def _num(obj: object, key: str, where: str) -> float:
+    v = obj.get(key) if isinstance(obj, dict) else None
+    if not _is_number(v) or not math.isfinite(v):
+        raise _NotRecomputable(f"{where}.{key} missing or not a finite number")
+    return v
+
+
+def _parse_scoring(scoring: dict) -> tuple[dict, float, float, list[dict]]:
+    weights = scoring.get("weights")
+    w = {k: _num(weights, k, "weights") for k in _WEIGHT_KEYS}
+    scale = _num(scoring, "latency_scale_ms", "scoring")
+    if scale == 0:
+        raise _NotRecomputable("scoring.latency_scale_ms is 0")
+    cap = _num(scoring, "max_latency_norm", "scoring")
+    cands = []
+    for i, c in enumerate(scoring.get("candidates") or []):
+        where = f"candidates[{i}]"
+        if not isinstance(c, dict) or not isinstance(c.get("name"), str):
+            raise _NotRecomputable(f"{where}.name missing")
+        cands.append({
+            "name": c["name"],
+            "q": _num(c.get("quality"), "v", f"{where}.quality"),
+            "lat_ms": _num(c.get("latency"), "ms", f"{where}.latency"),
+            "avail": _num(c.get("availability"), "v", f"{where}.availability"),
+            "cost_norm": _num(c.get("cost"), "norm", f"{where}.cost"),
+            "est_usd": _num(c.get("cost"), "est_usd", f"{where}.cost"),
+        })
+    return w, scale, cap, cands
+
+
+def _winner(w: dict, scale: float, cap: float, cands: list[dict],
+            quality: dict[str, float]) -> str:
+    """Mirror of `DefaultRoutingStrategy.rank`: same expression order (so
+    float ties reproduce), same `(-score, est_cost)` stable sort."""
+    scored = []
+    for c in cands:
+        lat_norm = min(c["lat_ms"] / scale, cap)
+        score = (w["quality"] * quality.get(c["name"], c["q"])
+                 - w["cost"] * c["cost_norm"]
+                 - w["latency"] * lat_norm
+                 + w["availability"] * c["avail"])
+        scored.append((score, c["est_usd"], c["name"]))
+    scored.sort(key=lambda s: (-s[0], s[1]))
+    return scored[0][2]
+
+
+def _proposed_units(recommendation: dict) -> dict[tuple[str, str | None], float]:
+    out: dict[tuple[str, str | None], float] = {}
+    for u in recommendation.get("units") or []:
+        if u.get("status") != STATUS_RECOMMENDED or not _is_number(u.get("mean")):
+            continue
+        out[(u["model"], u.get("workload"))] = float(u["mean"])
+    return out
+
+
+def _latest_quality(record: dict) -> float | None:
+    """The row's latest `quality` label in [0, 1] (same rule as
+    `_row_evidence`), or None."""
+    floor = dt.datetime.min.replace(tzinfo=dt.timezone.utc)
+    best: tuple[dt.datetime, object] | None = None
+    for fb in record.get("feedback") or []:
+        if not isinstance(fb, dict) or fb.get("score_name") != "quality":
+            continue
+        ts = _parse_ts(fb.get("ts")) or floor
+        if best is None or ts >= best[0]:
+            best = (ts, fb.get("value"))
+    if best is None:
+        return None
+    v = best[1]
+    return float(v) if _is_number(v) and 0.0 <= v <= 1.0 else None
+
+
+def _evidence(group: list[dict], model: str, workload: str | None):
+    rows = [r for r in group
+            if r.get("cache_hit") is not True and r.get("chosen") == model
+            and r.get("workload") == workload]
+    if not rows:
+        return "no evidence"
+    qualities = [q for q in (_latest_quality(r) for r in rows) if q is not None]
+    costs = [float(r["cost_usd"]) for r in rows
+             if r.get("status") == "ok" and _is_number(r.get("cost_usd"))]
+    return {
+        "served": len(rows),
+        "quality_mean": sum(qualities) / len(qualities) if qualities else None,
+        "verify_failed": sum(1 for r in rows if r.get("status") == "verify_failed"),
+        "cost_mean": sum(costs) / len(costs) if costs else None,
+    }
+
+
+def replay(records: list[dict], recommendation: dict) -> dict:
+    """Re-rank every logged decision in the recommendation's registry group
+    twice -- unchanged (the equivalence check) and with the recommended
+    qualities -- and report the per-workload diff (spec §5).
+
+    Only `status == "recommended"` units apply. For a candidate the
+    per-workload unit wins, else the `(model, *)` unit, else its logged
+    quality. Records with no `scoring` (or an empty candidate list) are not
+    decisions and are skipped (`n_skipped_no_scoring`). A scoring record
+    that cannot be recomputed, or whose unchanged replay does not pick
+    `scoring.candidates[0]`, is a mismatch and sets `equivalence_ok` False.
+    """
+    version = recommendation.get("registry_version")
+    group = [r for r in records if _version_label(r) == version]
+    proposed = _proposed_units(recommendation)
+
+    mismatches: list[dict] = []
+    skipped = 0
+    per_wl: dict[str, dict] = {}
+    new_picks: dict[str, set[str]] = {}
+    for r in group:
+        scoring = r.get("scoring")
+        if not isinstance(scoring, dict) or not scoring.get("candidates"):
+            skipped += 1
+            continue
+        rid = r.get("request_id")
+        try:
+            w, scale, cap, cands = _parse_scoring(scoring)
+        except _NotRecomputable as exc:
+            mismatches.append({"request_id": rid, "logged": None, "replayed": None,
+                               "reason": f"not recomputable: {exc}"})
+            continue
+        logged = cands[0]["name"]
+        unchanged = _winner(w, scale, cap, cands, {})
+        if unchanged != logged:
+            mismatches.append({"request_id": rid, "logged": logged,
+                               "replayed": unchanged,
+                               "reason": "unchanged replay picks a different candidate"})
+            continue
+
+        workload = r.get("workload")
+        workload = workload if isinstance(workload, str) and workload else None
+        quality: dict[str, float] = {}
+        for c in cands:
+            key = (c["name"], workload)
+            if workload is not None and key in proposed:
+                quality[c["name"]] = proposed[key]
+            elif (c["name"], None) in proposed:
+                quality[c["name"]] = proposed[(c["name"], None)]
+        new = _winner(w, scale, cap, cands, quality)
+
+        label = workload if workload is not None else UNTAGGED_WORKLOAD
+        wl = per_wl.setdefault(label, {"decisions_total": 0, "decisions_changed": 0,
+                                       "moves": {}, "_workload": workload})
+        wl["decisions_total"] += 1
+        if new != logged:
+            wl["decisions_changed"] += 1
+            move = f"{logged}->{new}"
+            wl["moves"][move] = wl["moves"].get(move, 0) + 1
+            new_picks.setdefault(label, set()).add(new)
+
+    out_wl = {}
+    for label in sorted(per_wl):
+        wl = per_wl[label]
+        out_wl[label] = {
+            "decisions_total": wl["decisions_total"],
+            "decisions_changed": wl["decisions_changed"],
+            "moves": dict(sorted(wl["moves"].items())),
+            "new_pick_evidence": {
+                m: _evidence(group, m, wl["_workload"])
+                for m in sorted(new_picks.get(label, ()))},
+        }
+    return _round6({
+        "registry_version": version,
+        "equivalence_ok": not mismatches,
+        "mismatches": mismatches,
+        "n_replayed": sum(wl["decisions_total"] for wl in per_wl.values()),
+        "n_skipped_no_scoring": skipped,
+        "per_workload": out_wl,
+    })
+
+
+# --- report ------------------------------------------------------------
+
+def _fmt(value) -> str:
+    if value is None:
+        return "n/a"
+    if isinstance(value, float):
+        return f"{value:.6g}"
+    return str(value)
+
+
+def _wl(workload: str | None) -> str:
+    return "*" if workload is None else workload
+
+
+def render_report(estimate_dict: dict, replay_dict: dict) -> str:
+    """`report.md`: `REPLAY_CAVEAT` verbatim first, then the recommended
+    units, the no-change units, the insufficient units with their reasons,
+    and the per-workload replay diff with each new pick's logged evidence."""
+    units = estimate_dict.get("units") or []
+    lines = [REPLAY_CAVEAT, "", "# Quality calibration recommendation", "",
+             f"endpoint_registry_version: {_fmt(estimate_dict.get('registry_version'))}",
+             ""]
+
+    def section(title: str, status: str, cols: tuple[str, ...]) -> None:
+        nonlocal lines
+        rows = [u for u in units if u.get("status") == status]
+        lines += [f"## {title} ({len(rows)})", ""]
+        if not rows:
+            lines += ["(none)", ""]
+            return
+        lines += ["| model | workload | " + " | ".join(cols) + " |",
+                  "|" + "---|" * (2 + len(cols))]
+        for u in rows:
+            lines.append("| " + " | ".join(
+                [u["model"], _wl(u.get("workload"))]
+                + [_fmt(u.get(c)) for c in cols]) + " |")
+        lines.append("")
+
+    section("Recommended units", STATUS_RECOMMENDED,
+            ("q0", "q0_source", "mean", "ci_low", "ci_high", "shift",
+             "n_labels", "n_rows", "label_coverage"))
+    section("No-change units", STATUS_NO_CHANGE,
+            ("q0", "mean", "ci_low", "ci_high", "shift", "n_labels", "reason"))
+    section("Insufficient units", STATUS_INSUFFICIENT,
+            ("n_labels", "n_rows", "label_coverage", "reason"))
+
+    per_wl = replay_dict.get("per_workload") or {}
+    lines += ["## Replay diff", "",
+              f"decisions replayed: {replay_dict.get('n_replayed', 0)}; "
+              f"skipped (no scoring record): "
+              f"{replay_dict.get('n_skipped_no_scoring', 0)}", "",
+              "| workload | decisions_changed / decisions_total |", "|---|---|"]
+    for label in sorted(per_wl):
+        wl = per_wl[label]
+        lines.append(f"| {label} | {wl['decisions_changed']} / {wl['decisions_total']} |")
+    lines.append("")
+    for label in sorted(per_wl):
+        wl = per_wl[label]
+        if not wl["moves"]:
+            continue
+        lines += [f"### {label}", "", "| move (from->to) | n |", "|---|---|"]
+        lines += [f"| {m} | {n} |" for m, n in sorted(wl["moves"].items())]
+        lines += ["", "| new pick | served | quality_mean | verify_failed | cost_mean |",
+                  "|---|---|---|---|---|"]
+        for m, ev in sorted(wl["new_pick_evidence"].items()):
+            if ev == "no evidence":
+                lines.append(f"| {m} | no evidence | | | |")
+            else:
+                lines.append(f"| {m} | {ev['served']} | {_fmt(ev['quality_mean'])} | "
+                             f"{ev['verify_failed']} | {_fmt(ev['cost_mean'])} |")
+        lines.append("")
+    return "\n".join(lines) + "\n"
