@@ -127,7 +127,7 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
-## B54 — onboarded on-prem models scored at the 0.5 quality floor regardless of tier  ✅ RESOLVED (2026-09-24)
+## B54 — onboarded on-prem models scored at the 0.5 quality floor regardless of tier or published quality  ✅ RESOLVED (2026-09-24)
 
 **Severity:** low–medium (ranking only; never eligibility or placement).
 **Found:** 2026-09-24, in review of P2b-3 Task 2 (offline quality calibration).
@@ -140,19 +140,31 @@ flat `_TIER_DEFAULT_FLOOR` (0.5) and never got its tier's `tier_quality`.
 
 **Effect.** An onboarded `mid` model scored quality 0.5, while a YAML `mid` peer (for
 example `azure-gpt-mid`) scored 0.75. That is 0.25 × `weights.quality` lost in the
-quality term purely for being onboarded. `frontier` lost 0.5. `cheap` was unaffected,
-because `tier_quality.cheap == 0.5` equals the floor. The published `quality` set at
-onboarding was ignored in the same way.
+quality term purely for being onboarded. `frontier` lost 0.5. The published `quality`
+set at onboarding (`onboarded_models.quality`) was ignored in the same way, **for every
+tier, `cheap` included**: an onboarded cheap model with a published quality of 0.66 still
+scored 0.5. Only an onboarded cheap model with no published quality was unaffected
+(`tier_quality.cheap == 0.5` equals the floor).
 
 **Fix.** `ModelRegistry.generation` increments on every successful `refresh`. The
 resolver rebuilds its maps from `registry.effective_pool()` whenever the generation
 has moved, so models present at first load and models onboarded later both resolve
-to their own tier (`app/routing/quality.py::_sync_pool`). As a result, with zero
-`model_quality` rows, onboarded mid and frontier models now score their tier
-default instead of 0.5. That is the one intended deviation from pre-P2b-3 identity
-(spec §7). Tests: `tests/test_quality_serving.py`
+to their own published quality or tier (`app/routing/quality.py::_sync_pool`). As a
+result, with zero `model_quality` rows, **any onboarded model with a non-null published
+`quality` now scores it (any tier, cheap included)**, and an onboarded mid/frontier
+model without one scores its tier default instead of 0.5. That is the one intended
+deviation from pre-P2b-3 identity (spec §7).
+
+**Deploy check.** Every row this returns is scored differently after deploy:
+
+```sql
+SELECT slug, tier, quality FROM onboarded_models WHERE tier <> 'cheap' OR quality IS NOT NULL;
+```
+
+Tests: `tests/test_quality_serving.py`
 (`test_b54_onboarded_mid_model_scores_its_tier_default_over_http`,
-`test_model_onboarded_after_boot_resolves_to_its_tier_default`).
+`test_model_onboarded_after_boot_resolves_to_its_tier_default`),
+`tests/test_quality_final_fixes.py::test_b54_onboarded_cheap_model_published_quality_is_scored`.
 
 ## B53 — streamed responses never carried the terminal `usage` frame  ✅ RESOLVED (2026-09-23)
 

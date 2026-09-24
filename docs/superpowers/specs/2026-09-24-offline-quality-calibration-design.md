@@ -32,7 +32,7 @@ feedback scores. P2b-3 turns those records into quality estimates the router can
 ## 3. Existing substrate (verified 2026-09-24)
 
 - **The quality ladder** (`app/routing/quality.py`) is customer > calibrated > published >
-  tier_default. `QualityResolver.resolve(model, task_class=None)` accepts `task_class` but
+  tier_default (as built, applied across keys — see §7). `QualityResolver.resolve(model, task_class=None)` accepts `task_class` but
   ignores it.
 - **The `model_quality` table** (`app/apps/models.py`) has these columns: `model_name`,
   `task_class` (reserved, nullable), `score`, `source` (`customer | calibrated`),
@@ -138,8 +138,10 @@ feedback scores. P2b-3 turns those records into quality estimates the router can
   count).
 - **`DELETE /admin/quality/calibrations/{set_id}`** deletes that set's rows and refreshes.
   Other sets and customer rows are untouched.
-- **Precedence:** a `customer` row always beats `calibrated` for the same
-  `(model, task_class)`.
+- **Precedence:** a `customer` row always beats `calibrated` — for the same
+  `(model, task_class)` and across keys: a model-wide `customer (model, None)` row beats a
+  per-workload `calibrated (model, task_class)` row (see §7 and §12, final-review
+  ruling 1).
 - **Several applied sets:** the newest calibrated row per `(model, task_class)` wins, by
   `calibrated_at`.
 
@@ -156,14 +158,19 @@ feedback scores. P2b-3 turns those records into quality estimates the router can
     60, and single-owned in routing.yaml) by the existing background loop;
   - apply and revert also refresh at once;
   - a refresh failure keeps the last good snapshot and logs a warning.
-- **Sharing the snapshot:** the router and the gateway share **one** `QualityResolver`
-  whose override snapshot is swapped atomically. It is a plain dict replaced by reference;
-  there are no awaits in `resolve`.
-- **Resolution:** `QualityResolver.resolve(model, task_class)` checks, in order:
-  1. the `(model, task_class)` override;
-  2. the `(model, None)` override;
-  3. published;
-  4. tier default.
+- **Sharing the snapshot:** the process shares **one** `QualityResolver`
+  (`app.state.quality`) whose override snapshot is swapped atomically; only the router
+  reads it (the gateway reads the router's decision, never the resolver). It is a plain
+  `(customer, calibrated)` pair of dicts replaced by reference; there are no awaits in
+  `resolve`.
+- **Resolution:** `QualityResolver.resolve(model, task_class)` checks, in order
+  (*amended 2026-09-24, final review*):
+  1. customer `(model, task_class)`;
+  2. customer `(model, None)`;
+  3. calibrated `(model, task_class)`;
+  4. calibrated `(model, None)`;
+  5. published;
+  6. tier default.
   The source label stays `customer` or `calibrated`, and the override also carries its
   `set_id` (null for customer).
 - **Call site:** the strategy calls `resolve(cand.name, ctx.workload)`.
@@ -172,12 +179,14 @@ feedback scores. P2b-3 turns those records into quality estimates the router can
   JSON, and it needs no ALTER.
 - **Identity:** with no `model_quality` rows, every decision is byte-identical to today.
   A test pins this.
-  *Amended 2026-09-24:* the identity holds with one exception.
-  Onboarded mid and frontier models now resolve to their tier-default quality (0.75
-  and 1.0) instead of the 0.5 floor. The old resolver was built before the registry
-  loaded, so every onboarded model fell to the floor. That was a bug, recorded as B54
-  in `docs/backlog/bugs.md`, and is fixed here. Cheap-tier and static YAML pool
-  scores are unchanged. A golden test pins the YAML-pool scoring record verbatim.
+  *Amended 2026-09-24:* the identity holds with one exception, B54. The old resolver
+  was built before the registry loaded, so **every** onboarded model fell to the 0.5
+  floor, ignoring both its tier and its published `onboarded_models.quality`. Now an
+  onboarded model scores its published quality when it has one — **any tier, cheap
+  included** — else its tier default (mid 0.75, frontier 1.0, cheap 0.5). So an onboarded
+  model's score changes iff it is non-cheap or has a non-null published `quality`.
+  Static YAML pool scores are unchanged; a golden test pins the YAML-pool scoring record
+  verbatim. Recorded as B54 in `docs/backlog/bugs.md`.
 
 ## 8. Privacy and safety
 
@@ -228,6 +237,10 @@ feedback scores. P2b-3 turns those records into quality estimates the router can
 - **Behaviour change:** existing `customer` or `calibrated` rows in `model_quality`
   (if any) **start affecting routing**, because nothing loaded them before. Before
   deploying, check the Spark DB for existing rows and name them in the release notes.
+- **Behaviour change (B54):** every onboarded model with a non-null published
+  `quality`, or a non-cheap tier, stops scoring the 0.5 floor. Before deploying, run
+  `SELECT slug, tier, quality FROM onboarded_models WHERE tier <> 'cheap' OR quality IS NOT NULL;`
+  — every row returned is scored differently after deploy.
 
 ## 12. Amendments (2026-09-24, Task 6, from the build's SDD ledger)
 
@@ -264,13 +277,21 @@ The rest of what the build settled, beyond this spec's original text:
   independent exact method to ~1e-13; a placeholder quantile value in the plan
   (`Beta(10,30)` q0.95 = "0.3683") was wrong in its 4th decimal — the verified value is
   0.3681529.
-- **Known deferred minor, not fixed in this build.** A recommendation with **zero**
-  `recommended` units applies successfully (`applied: 0`) instead of being refused; the
-  resulting no-op set is then neither blocked from re-apply (nothing was written under its
-  `set_id`) nor revertible (`DELETE` reports `404`, having deleted nothing). Low severity —
-  it can never write an out-of-range or unknown-model row, only a true no-op — but it is a
-  rough edge for an admin who expects `POST` to refuse an empty recommendation. Left open
-  for a later wave; not tracked as a numbered backlog bug.
+- **Final-review rulings (2026-09-24).**
+  1. *Cross-key precedence.* Resolution is customer `(m, wl)` → customer `(m, None)` →
+     calibrated `(m, wl)` → calibrated `(m, None)` → published → tier default; the
+     override snapshot keeps customer and calibrated candidates separate per key
+     (`load_quality_overrides` returns `{(m, wl): {source: (score, set_id)}}`). The
+     dry-run's `customer_wins` is computed on that order.
+  2. *Round two.* An override-supplied quality term also carries a content-free
+     `base: {v, src}` (the published/tier_default value underneath); the estimator reads
+     `q0` from it. Records without an override are byte-identical.
+  3. *Validation.* Zero recommended units → 422 `no recommended units` (dry run and
+     apply); a unit `workload` must be null or a lower-case workload slug; duplicate
+     `(model, workload)` recommended units → 422.
+  4. *Audit.* Apply returns `registry_version_match` and `forced`; apply and revert each
+     log one JSON audit line. The dry run lists `shadowed_by` per unit.
+  5. *Refresh ordering.* `refresh_quality` holds a lock around read + swap.
 - **Docs (this task).** `docs/reference/quality-calibration.md` (new), research §14,
   `docs/reference/README.md`, `docs/guides/feasible-route-bench.md` §9,
   `docs/reference/api-reference.md`, and the B51 pointer in `docs/backlog/bugs.md`.

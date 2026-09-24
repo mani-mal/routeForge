@@ -80,14 +80,21 @@ just not toward `n_labels`.
 ### 2.4 Prior
 
 `Beta(α₀, β₀)` with `α₀ = k·q0` and `β₀ = k·(1 − q0)`. `q0` is the model's quality **today**
-— read from the group's own `scoring.candidates[*].quality` terms, and only from a term
-whose `src` is `published` or `tier_default`. A `calibrated` or `customer` term is itself
-a previous recommendation or a declaration; using it as a prior would compound one
-calibration on top of another, so it is never eligible as `q0`. Among qualifying terms in
-the group, the newest record wins. A `--priors` JSON file (`{"model": q0, ...}`) overrides
-the export's value for named models; a prior must lie strictly inside `(0, 1)`. With no
-qualifying term and no `--priors` entry, the unit is `insufficient` with reason `no prior`
-— it is never silently scored against a default.
+before any override — read from the group's own `scoring.candidates[*].quality` terms. A
+term whose `src` is `published` or `tier_default` is used as-is. A `calibrated` or
+`customer` term is itself a previous recommendation or a declaration; using its `v` as a
+prior would compound one calibration on top of another, so it is never eligible as `q0`
+itself. Instead, whenever an override supplied the quality the router also records the
+value underneath it as a content-free `base: {"v", "src"}` (`src` is `published` or
+`tier_default`), and the estimator takes `q0` from that `base`. That is what lets a
+**second round** work: once a set is applied, every quality term in later exports reads
+`src: calibrated`, and without `base` every unit would be `insufficient`. Among qualifying
+terms in the group, the newest record wins. A `--priors` JSON file (`{"model": q0, ...}`)
+overrides the export's value for named models; a prior must lie strictly inside `(0, 1)`.
+With no qualifying term and no `--priors` entry, the unit is `insufficient` with reason
+`no prior` — or, when the model had only `calibrated`/`customer` terms with no `base`
+(records written before `base` existed), `no prior: only calibrated/customer terms
+without a base; pass --priors`. It is never silently scored against a default.
 
 The posterior is `Beta(α₀ + s, β₀ + (t − s))`, its mean is the point estimate, and its
 90% equal-tailed interval comes from the Beta quantile function — computed by a
@@ -174,7 +181,7 @@ Writes `recommendation.json` and `report.md` into `--out`. Exit codes:
 | Code | Meaning |
 |---|---|
 | `0` | wrote both files |
-| `1` | load or option error — bad export path, unrecognized export schema, unknown `--registry-version`, an invalid option, or a bad `--priors` file |
+| `1` | load, option or numeric error — bad export path, unrecognized export schema, unknown `--registry-version`, an invalid option, a bad `--priors` file, or a Beta quantile that failed to converge (reported, never a traceback) |
 | `2` | replay equivalence failure — a fully-specified scoring record's unchanged replay disagreed with its logged order; nothing is written |
 
 A `not_recomputable` count (records skipped because their scoring was missing a term) is
@@ -194,13 +201,18 @@ a warning on stderr, not a failure — the CLI still exits `0` and writes both f
   "units": [
     {"model": "qwen3-8b", "workload": "claims.summary",
      "q0": 0.75, "q0_source": "tier_default",
-     "alpha": 27.0, "beta": 3.0, "mean": 0.9, "ci_low": 0.75, "ci_high": 0.98,
+     "alpha": 36.0, "beta": 4.0, "mean": 0.9, "ci_low": 0.81302, "ci_high": 0.964201,
      "shift": 0.15, "n_labels": 30, "n_rows": 30, "label_coverage": 1.0,
      "status": "recommended", "reason": null}
   ],
   "set_id": "<16 hex chars>"
 }
 ```
+
+The numbers are consistent: with `k = 10` and `q0 = 0.75` the prior is `Beta(7.5, 2.5)`;
+30 trials with `s = 28.5` successes (fractional `quality` labels count as fractions) give
+the posterior `Beta(7.5 + 28.5, 2.5 + 1.5) = Beta(36, 4)`, mean `0.9`, 90% interval
+`[0.81302, 0.964201]` (width 0.151 — under the 0.25 default).
 
 `units` carries **every** unit the estimator computed, whatever its status — the report
 needs the `insufficient` and `no_change` ones too. Only units with `status: "recommended"`
@@ -230,10 +242,15 @@ Body: the `recommendation.json` payload, as-is.
 2. `set_id` must equal the value recomputed from the payload's own content;
 3. every `status: "recommended"` unit's `model` must exist in the live registry
    (`ModelRegistry.effective_pool()`);
-4. every such unit's `mean` must be a finite number in `[0, 1]`;
-5. the payload's `registry_version` must equal the live `registry.registry_version()`,
-   unless the request carries `force_registry_mismatch=true` (which is echoed back in the
-   response so it's visible it was used).
+4. every such unit's `workload` must be `null` (the `(model, *)` unit) or a workload slug
+   exactly as serving stores one — lower-case, `^[a-z0-9][a-z0-9._-]{0,63}$`, the P2b-2
+   tag shape. `"*"`, upper-case, and non-strings are refused, not normalized;
+5. every such unit's `mean` must be a finite number in `[0, 1]`;
+6. no two recommended units may share a `(model, workload)`;
+7. at least one unit must be `recommended` (`"no recommended units"` otherwise — an empty
+   set would be a no-op that could be neither `409`-blocked nor reverted);
+8. the payload's `registry_version` must equal the live `registry.registry_version()`,
+   unless the request carries `force_registry_mismatch=true`.
 
 **Dry run (`dry_run=true`, default `false`) — writes nothing:**
 
@@ -241,13 +258,20 @@ Body: the `recommendation.json` payload, as-is.
 {"set_id": "...", "registry_version_match": true,
  "units": [{"model": "qwen3-8b", "workload": null,
             "current": {"score": 0.5, "source": "tier_default", "set_id": null},
-            "proposed": 0.9, "customer_wins": false}]}
+            "proposed": 0.9, "customer_wins": false, "shadowed_by": []}]}
 ```
 
-`customer_wins` is `true` when the model's *current* effective row is a `customer`
-declaration — applying will still write the `calibrated` row, but it will not change what
-the router resolves (§7's precedence), so the admin sees that up front instead of being
-surprised after apply.
+`customer_wins` is `true` when a `customer` declaration will beat this unit after apply —
+computed on exactly §7's order: a `customer (model, workload)` row, or a model-wide
+`customer (model, *)` row (which beats even a per-workload calibrated unit). Applying
+still writes the `calibrated` row, but it will not change what the router resolves, so the
+admin sees that up front instead of being surprised after apply.
+
+`shadowed_by` lists existing rows **more specific** than a proposed `(model, *)` unit that
+will keep winning for their own workload after apply:
+`[{"workload": "claims", "source": "calibrated", "set_id": "..."}, ...]` (customer rows
+carry `"set_id": null`). A per-workload unit has nothing more specific, so its list is
+always empty.
 
 **Apply (`dry_run=false`):** one DB transaction writes a `model_quality` row per
 recommended unit (`source="calibrated"`, `task_class=<workload>` or `NULL` for `*`,
@@ -255,17 +279,19 @@ recommended unit (`source="calibrated"`, `task_class=<workload>` or `NULL` for `
 quality snapshot at once. Response:
 
 ```json
-{"set_id": "...", "applied": 1, "refreshed": true}
+{"set_id": "...", "applied": 1, "refreshed": true,
+ "registry_version_match": true, "forced": false}
 ```
+
+`forced` is `true` only when `force_registry_mismatch=true` was actually needed (the
+versions differed). Apply and revert each write **one** audit line on the `serving.admin`
+logger — a compact JSON object of ids, counts and flags only:
+`{"admin_id": "...", "event": "quality_calibration_applied", "forced": false,
+"registry_version_match": true, "set_id": "...", "units": 1}` (revert:
+`"event": "quality_calibration_reverted"`, `"forced": false`, `units` = rows deleted).
 
 Re-applying the same `set_id` is **not** idempotent: it returns `409` (a `model_quality`
 row with that `eval_run_id` already exists) and writes nothing further.
-
-**Known rough edge (open, deferred):** a recommendation with zero `recommended` units
-currently applies successfully with `applied: 0` instead of being refused. Because no row
-was written, that `set_id` is then neither blocked from a later re-apply nor listed nor
-revertible (`DELETE` on it returns `404`). It can never write an invalid row — it is a
-true no-op — but do not rely on a `POST` refusing an all-`insufficient` recommendation.
 
 ### `GET /admin/quality/calibrations`
 
@@ -285,35 +311,53 @@ DB had zero effect. That changes with this feature; see the deploy note below.
 
 `QualityResolver.resolve(model, task_class)` checks, in order:
 
-1. the `(model, task_class)` override (a workload-scoped row);
-2. the `(model, None)` override (the `(model, *)` row);
-3. the model's published quality (set at onboarding);
-4. the tier default.
+1. `customer (model, task_class)` — a workload-scoped declaration;
+2. `customer (model, None)` — a model-wide declaration;
+3. `calibrated (model, task_class)` — a workload-scoped calibration;
+4. `calibrated (model, None)` — the `(model, *)` calibration;
+5. the model's published quality (`onboarded_models.quality`, or `quality` on a YAML pool
+   entry);
+6. the tier default.
 
-Within overrides, `customer` always beats `calibrated` for the same `(model, task_class)`
-key — an operator's explicit declaration is never silently overridden by a calibration.
-Among several applied `calibrated` sets touching the same key, the row with the newest
-`calibrated_at` wins. The scoring record's quality term gains a `set` field (the
-calibration's `set_id`) whenever the source is `calibrated`, so a trace shows exactly
-which set produced the quality that was scored — `null` for `customer`, `published` and
-`tier_default` sources.
+An operator's `customer` declaration is never overridden by a calibration — not even by a
+**more specific** per-workload one: a model-wide customer row beats a per-workload
+calibrated row. The snapshot keeps customer and calibrated candidates separate per key so
+this cross-key order is decidable. Among several applied `calibrated` sets touching the
+same key, the row with the newest `calibrated_at` wins. Only the router reads the resolver
+(the gateway reads the router's decision, never the resolver).
+
+The scoring record's quality term is `{"v", "src"}` plus, only when an override supplied
+the score:
+
+- `set` — the calibration's `set_id`, when the source is `calibrated`;
+- `base: {"v", "src"}` — the `published`/`tier_default` value the ladder would have used
+  without the override (for `calibrated` **and** `customer` terms). It is what the next
+  calibration round uses as its prior (§2.4).
+
+A term with no override has exactly its pre-P2b-3 shape (no `set`, no `base`).
 
 **B54, fixed in this slice.** `QualityResolver` used to build its tier/published-quality
 maps once, at `create_app` time, before the `ModelRegistry` had loaded any onboarded row —
-so every onboarded model silently fell through to the flat 0.5 tier-default floor
-regardless of its real tier. The resolver now rebuilds those maps whenever the registry's
-`generation` counter moves (i.e., on every successful refresh), so an onboarded `mid` or
-`frontier` model resolves to its own tier default (0.75 / 1.0) like a YAML pool model
-would. This is the one intentional change to pre-P2b-3 behaviour: with zero
-`model_quality` rows, decisions are otherwise byte-identical to before. See
-`docs/backlog/bugs.md` B54.
+so **every** onboarded model silently fell through to the flat 0.5 floor, ignoring both
+its real tier **and** its published `onboarded_models.quality`. The resolver now rebuilds
+those maps whenever the registry's `generation` counter moves (i.e., on every successful
+refresh), so an onboarded model scores its published quality when it has one — **any
+tier, `cheap` included** — else its own tier default (`cheap` 0.5, `mid` 0.75, `frontier`
+1.0), like a YAML pool model would. This is the one intentional change to pre-P2b-3
+behaviour: with zero `model_quality` rows, YAML-pool decisions are byte-identical to
+before, and an onboarded model's quality changes only if it is non-`cheap` or has a
+non-null published `quality`. See `docs/backlog/bugs.md` B54.
 
 ## 8. Refresh behaviour
 
-The shared `QualityResolver` (`app.state.quality`, one per process, read by both the
-router and the gateway) holds its override snapshot as a plain dict, swapped by reference
-in one assignment — a concurrent `resolve()` always sees either the old snapshot or the
-new one, never a mix, and `resolve()` itself has no awaits.
+The shared `QualityResolver` (`app.state.quality`, one per process, read only by the
+router — the gateway never reads it) holds its override snapshot as a plain
+`(customer, calibrated)` pair of dicts, swapped by reference in one assignment — a
+concurrent `resolve()` always sees either the old snapshot or the new one, never a mix,
+and `resolve()` itself has no awaits. Refreshes are serialized by a lock around the DB
+read *and* the swap, so snapshots install in the order they were read: a slow timed
+refresh that read before an apply committed can never finish after the apply's own
+refresh and put the pre-apply snapshot back.
 
 That snapshot is (re)loaded:
 
@@ -345,6 +389,14 @@ set, so serving on a stale-but-valid snapshot is always safe.
   that had already decided; nothing here randomizes routing to go gather more labels
   faster. If a use case needs that, it needs a different, out-of-scope slice (propensity
   logging, bandit or online learning — see `docs/research/feasible-route-bench.md` §14.4).
+- **Only the served (final) hop gets credit.** A request that failed over to another
+  model is credited to the model that finally served it (`chosen`); the earlier hops'
+  models get neither credit nor blame from that request's labels.
+- **The workload namespace is global.** A workload slug is a free-form, client-declared
+  tag (`x-routeforge-workload` / `metadata.workload`), and a calibration keyed
+  `(model, "claims")` applies to every app that sends `claims` — not just the app whose
+  feedback produced it. Apps that mean different things by the same slug share one
+  calibration; pick slugs deliberately (e.g. prefix them per app) if that matters.
 - **No automatic gate.** Applying a recommendation is a human action. There is no
   FeasibleRouteBench gate wired into apply; running the bench against a candidate set
   before applying it is a manual, optional step an operator can still choose to do.
@@ -352,7 +404,19 @@ set, so serving on a stale-but-valid snapshot is always safe.
 ## 10. Deploy note
 
 No schema change — `model_quality` already has every column this feature needs. One new
-config key, `routing.quality_refresh_s` (config-linted `> 0`). Because nothing in serving
-read `model_quality` before this slice, **any `customer` or `calibrated` row already
-present in a deployed database starts affecting routing the moment this ships** — check
-for pre-existing rows before deploying and call them out in the release notes.
+config key, `routing.quality_refresh_s` (config-linted `> 0`). Two pre-deploy checks,
+because two stored values start affecting routing the moment this ships:
+
+1. Nothing in serving read `model_quality` before this slice, so **any `customer` or
+   `calibrated` row already present in a deployed database starts affecting routing** —
+   check `SELECT model_name, task_class, source, score FROM model_quality;` and call any
+   rows out in the release notes.
+2. B54: every onboarded model used to score the 0.5 floor. Now any onboarded model with a
+   non-null published `quality`, or a non-`cheap` tier, scores that value instead —
+   check with
+
+   ```sql
+   SELECT slug, tier, quality FROM onboarded_models WHERE tier <> 'cheap' OR quality IS NOT NULL;
+   ```
+
+   Every row returned will be scored differently after deploy.

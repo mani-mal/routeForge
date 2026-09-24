@@ -1868,14 +1868,20 @@ past decisions before anything about it can move.
   by volume alone), plus a 0/1 trial from `verify_failed`. A row with no evidence still
   counts toward `n_rows` and `label_coverage`.
 - **Prior.** `Beta(k·q0, k·(1−q0))`, `q0` read only from a `published` or `tier_default`
-  quality term in the group's own scoring records — never from a `calibrated` or
-  `customer` term, so a calibration can never compound on top of an earlier one. No
-  qualifying term and no `--priors` entry means the unit is `insufficient` by construction,
-  never silently scored against a default.
+  value in the group's own scoring records — never from a `calibrated` or `customer`
+  term's own value, so a calibration can never compound on top of an earlier one. Such a
+  term instead carries a content-free `base` (the published/tier_default value underneath
+  the override), which is the prior for the next round; without it every unit of a second
+  round would be `insufficient`. No qualifying value and no `--priors` entry means the unit
+  is `insufficient` by construction, never silently scored against a default.
 - **Gate.** A unit is `recommended` only once it has enough trials (`min_labels`, default
   20), a narrow enough 90% interval (`max_ci_width`, default 0.25), and a shift big enough
   to matter (`min_shift`, default 0.02) — all three, not any one.
-- **Promotion.** A recommendation is a signed, hash-identified file. An admin reviews a
+- **Promotion.** A recommendation is a **content-hashed** file: its `set_id` is a sha256
+  over its own canonical content. That hash is an **integrity** check (the server
+  recomputes it and refuses a file edited after it was produced), **not** an authenticity
+  control — anyone can recompute it for any content. Authorization is the admin session
+  that `POST`s the file. An admin reviews a
   **replay** — every logged decision in the recommendation's registry group, re-ranked
   with the recorded weights and terms but the proposed quality substituted in — before
   choosing to apply. Applying writes `model_quality` rows; the router picks them up on its
@@ -1891,7 +1897,7 @@ past decisions before anything about it can move.
 | Exclusions (cache hit, null `chosen`, `no_eligible`/`backend_failed`/`context_overflow`) contribute no evidence | `tests/eval/test_calibration_estimator.py::test_exclusions` |
 | Only the latest label per `(request, score_name)` counts — repeats don't inflate `n_labels` | `tests/eval/test_calibration_estimator.py::test_repeated_labels_count_once_latest_wins`, `test_label_ts_tie_goes_to_last_in_file_order` |
 | `quality` and `route_correct` are independent trials on the same row; `verify_failed` adds its own | `tests/eval/test_calibration_estimator.py::test_quality_plus_route_correct_is_two_trials`, `test_verify_failed_plus_quality_is_two_trials` |
-| A `calibrated`/`customer` quality term is never used as a prior (no compounding) | `tests/eval/test_calibration_estimator.py::test_calibrated_src_is_not_a_prior` |
+| A `calibrated`/`customer` quality term's own value is never used as a prior (no compounding); its `base` is, so a second round finds its prior | `tests/eval/test_calibration_estimator.py::test_calibrated_src_is_not_a_prior`, `test_round_two_prior_comes_from_the_override_base`; `tests/test_quality_final_fixes.py::test_end_to_end_calibration_round_trip_and_round_two` |
 | No prior and no override → `insufficient`, reason `no prior` | `tests/eval/test_calibration_estimator.py::test_no_prior_insufficient` |
 | The recommendation gate needs all three of `min_labels`, `max_ci_width`, `min_shift` | `tests/eval/test_calibration_estimator.py::test_min_labels_insufficient`, `test_small_shift_no_change`, `test_hand_example_ci_too_wide_at_default` |
 | The Beta quantile is pure Python, cross-checked against an independent exact method (binomial-identity inversion in rational arithmetic) to ~1e-13, never `scipy` | `tests/eval/test_calibration_estimator.py::test_beta_ppf_known_values`, `test_beta_cdf_matches_binomial_identity`, module docstring |
@@ -1900,12 +1906,12 @@ past decisions before anything about it can move.
 | Replay only reorders the logged eligible set; a non-recommended unit changes nothing | `tests/eval/test_calibration_replay.py::test_non_recommended_units_never_change_a_decision` |
 | A new pick never served for a workload is flagged `no evidence`, not given fabricated numbers | `tests/eval/test_calibration_replay.py::test_a_new_pick_never_served_is_flagged_no_evidence` |
 | The CLI aborts (exit 2, writes nothing) on an equivalence failure; a load/option error is exit 1; a clean run with skipped-but-not-failing records is exit 0 | `tests/eval/test_calibration_replay.py::test_cli_exits_2_on_an_equivalence_failure`, `test_cli_exits_1_on_option_or_load_errors`, `test_cli_skips_partial_scoring_records_and_exits_0` |
-| Apply validates schema, hash, model existence, score range and registry version before writing anything; every failure is 422 | `tests/test_quality_calibrations_api.py::test_hash_mismatch_gives_422_and_writes_nothing`, `test_unknown_model_gives_422`, `test_registry_mismatch_gives_422_without_force_and_200_with_force` |
+| Apply validates schema, hash, model existence, workload shape, score range, duplicate units, a non-empty recommended set, and registry version before writing anything; every failure is 422 | `tests/test_quality_calibrations_api.py::test_hash_mismatch_gives_422_and_writes_nothing`, `test_unknown_model_gives_422`, `test_registry_mismatch_gives_422_without_force_and_200_with_force`; `tests/test_quality_final_fixes.py::test_invalid_unit_workload_is_422`, `test_duplicate_recommended_units_are_422`, `test_zero_recommended_units_is_422_for_dry_run_and_apply` |
 | Re-applying the same `set_id` is refused (409), never silently duplicated | `tests/test_quality_overrides_store.py::test_write_calibration_set_twice_raises_value_error`; `tests/test_quality_calibrations_api.py::test_reapplying_same_set_gives_409` |
 | Revert deletes only its own set's rows; other sets and `customer` rows are untouched | `tests/test_quality_overrides_store.py::test_delete_calibration_set_removes_only_that_set`; `tests/test_quality_calibrations_api.py::test_revert_restores_previous_resolution` |
-| `customer` always beats `calibrated` for the same key, in the resolver, the store, and the dry-run preview | `tests/test_quality_resolver.py::test_override_rung_beats_published_and_tier_default`; `tests/test_quality_overrides_store.py::test_customer_beats_calibrated_for_same_model`; `tests/test_quality_calibrations_api.py::test_customer_row_wins_in_dry_run_and_after_apply` |
+| `customer` always beats `calibrated` — for the same key and across keys (a model-wide customer row beats a per-workload calibrated row), in the resolver and the dry-run preview; the store keeps both candidates per key | `tests/test_quality_resolver.py::test_override_rung_beats_published_and_tier_default`; `tests/test_quality_overrides_store.py::test_customer_and_calibrated_for_same_key_are_both_kept`; `tests/test_quality_calibrations_api.py::test_customer_row_wins_in_dry_run_and_after_apply`; `tests/test_quality_final_fixes.py::test_resolver_full_ladder_order`, `test_cross_key_customer_wins_in_dry_run_and_after_apply` |
 | A calibrated `set_id` is stamped on the served candidate's scoring record | `tests/test_quality_calibrations_api.py::test_apply_writes_rows_and_routed_request_carries_calibrated_source` |
-| With zero `model_quality` rows, decisions are unchanged from pre-P2b-3 — except the B54 fix (onboarded mid/frontier models now score their tier default, not the 0.5 floor) | `tests/test_quality_serving.py::test_empty_overrides_decide_exactly_like_the_default_resolver`, `test_golden_yaml_pool_scoring_record_is_unchanged`, `test_b54_onboarded_mid_model_scores_its_tier_default_over_http` |
+| With zero `model_quality` rows, decisions are unchanged from pre-P2b-3 — except the B54 fix: onboarded models no longer all score the 0.5 floor; one with a published `quality` scores it (any tier, cheap included), else its tier default | `tests/test_quality_serving.py::test_empty_overrides_decide_exactly_like_the_default_resolver`, `test_golden_yaml_pool_scoring_record_is_unchanged`, `test_b54_onboarded_mid_model_scores_its_tier_default_over_http`; `tests/test_quality_final_fixes.py::test_b54_onboarded_cheap_model_published_quality_is_scored` |
 | A per-workload calibration changes the pick only for that workload; a refresh failure keeps the last good snapshot; serving never imports `app.eval` | `tests/test_quality_serving.py::test_workload_scoped_override_changes_only_that_workload`, `test_refresh_picks_up_new_rows_and_keeps_snapshot_on_failure`; `tests/eval/test_isolation.py` |
 | `onprem_only` eligibility is never affected by a calibrated quality — quality only reorders | `tests/test_quality_serving.py::test_calibrated_cloud_quality_never_lifts_onprem_only` |
 
