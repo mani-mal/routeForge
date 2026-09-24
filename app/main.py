@@ -37,6 +37,7 @@ from app.pipeline import Pipeline
 from app.policy.detectors import make_detector
 from app.policy.gate import Gate
 from app.routing.observations import ObservationSink
+from app.routing.quality import QualityResolver, QualityScore
 from app.routing.router import Router
 from app.routing.signals import SignalStore
 
@@ -188,6 +189,46 @@ async def stop_observations(app: FastAPI) -> None:
     await flush_observations(app.state.db, app.state.observation_sink)
 
 
+async def refresh_quality(app: FastAPI) -> bool:
+    """Reload `model_quality` into the shared resolver (P2b-3 §7). Called at
+    boot, every `routing.quality_refresh_s` by `_quality_loop`, and by the
+    calibration apply/revert routes so a change takes effect at once.
+
+    Returns True when the new snapshot was installed. On ANY failure the last
+    good snapshot stays in place (quality only reorders; a stale snapshot is
+    always safe), a warning is logged, and False is returned -- it never
+    raises. Must run on the real serving loop, never in create_app's
+    throwaway one."""
+    try:
+        async with app.state.db.session() as session:
+            rows = await apps_store.load_quality_overrides(session)
+        app.state.quality.set_overrides({
+            key: QualityScore(score, source, set_id)
+            for key, (score, source, set_id) in rows.items()})
+        return True
+    except Exception:
+        logging.getLogger("serving.routing").warning(
+            "quality refresh failed; keeping the last snapshot", exc_info=True)
+        return False
+
+
+async def _quality_loop(app: FastAPI) -> None:
+    """Background refresher: `refresh_quality` every
+    `routing.quality_refresh_s` until `app.state.quality_stop` is set. A
+    failed refresh is logged inside `refresh_quality` and never ends the
+    loop."""
+    stop: asyncio.Event = app.state.quality_stop
+    while not stop.is_set():
+        try:
+            await asyncio.wait_for(
+                stop.wait(), app.state.settings.routing.quality_refresh_s)
+        except asyncio.TimeoutError:
+            pass
+        if stop.is_set():
+            break
+        await refresh_quality(app)
+
+
 def create_app() -> FastAPI:
     settings = load_settings()
     enforce(settings)
@@ -259,7 +300,16 @@ def create_app() -> FastAPI:
     app.state.signals = signals
     # named model_router (not router) to avoid shadowing the APIRouter imported above;
     # app.include_router(router) below needs the APIRouter, not this Router instance.
-    model_router = Router(settings, registry=registry, signals=signals)
+    # P2b-3: ONE quality resolver for the whole process, stored on app.state
+    # and shared with the Router, so a refresh (boot, timer, apply/revert)
+    # swaps the snapshot the router reads. Constructed with NO I/O and no
+    # overrides -- the rows are loaded in the startup event below (never in
+    # create_app's throwaway loop, see `signals` above). Until then, and
+    # whenever the table is empty, it resolves exactly as before.
+    quality = QualityResolver(settings, registry=registry)
+    app.state.quality = quality
+    model_router = Router(settings, quality_resolver=quality,
+                          registry=registry, signals=signals)
     app.state.model_router = model_router
     # Step-7 circuit breaker (B45): ONE per-process instance, shared by the
     # Gateway (records outcomes, reads open_set() every hop) and the admin
@@ -357,6 +407,27 @@ def create_app() -> FastAPI:
                 "signal store seeding failed; starting with an empty store",
                 exc_info=True)
         start_observations(app)
+
+    @app.on_event("startup")
+    async def _load_quality() -> None:
+        """Boot-load `model_quality` into the shared resolver, then start the
+        timed refresher. A failed load logs a warning (inside
+        `refresh_quality`) and serves with no overrides -- the pre-P2b-3
+        behaviour -- until a later refresh succeeds."""
+        await refresh_quality(app)
+        app.state.quality_stop = asyncio.Event()
+        app.state.quality_task = asyncio.create_task(_quality_loop(app))
+
+    @app.on_event("shutdown")
+    async def _stop_quality() -> None:
+        """Stop the refresher. It only ever reads, so cancelling it on a
+        timeout loses nothing. Never raises."""
+        app.state.quality_stop.set()
+        try:
+            await asyncio.wait_for(app.state.quality_task, timeout=5)
+        except (Exception, asyncio.CancelledError):
+            logging.getLogger("serving.routing").warning(
+                "quality refresher did not stop cleanly", exc_info=True)
 
     @app.on_event("shutdown")
     async def _stop_observations() -> None:

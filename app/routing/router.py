@@ -306,7 +306,7 @@ class Router:
             rejected.append(RejectedCandidate(
                 name=c.name, provider=c.provider, tier=c.tier,
                 display_name=c.display_name, reason="lower score"))
-        chosen_q = self._quality.resolve(chosen.name)
+        chosen_q = self._quality.resolve(chosen.name, ctx.workload)
         reason = (f"tier {chosen.tier} (target {target}, budget fallback from {fallback_from})"
                   if fallback_from else f"tier {chosen.tier} (target {target})")
         if circuit_bypass:

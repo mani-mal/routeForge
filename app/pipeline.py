@@ -694,7 +694,8 @@ class Pipeline:
                   request: ChatRequest, app_policy=None,
                   profile: AppPrivacyProfile | None = None,
                   session_id: str | None = None,
-                  internals: dict | None = None) -> dict:
+                  internals: dict | None = None,
+                  workload: str | None = None) -> dict:
         # `internals` is an out-parameter: a dict the CALLER owns, which this
         # method fills with the values the telemetry exporter needs and nobody
         # may serialize (`_publish_telemetry_views`). Optional, so a script or
@@ -723,7 +724,7 @@ class Pipeline:
             det, rules, eff = self._gate_inputs(app_policy, profile)
             ctx, reps, eff = self._gate.evaluate(
                 request_id, tenant_id, request, app_policy=app_policy,
-                detector=det, rules=rules, eff=eff)
+                detector=det, rules=rules, eff=eff, workload=workload)
         except PolicyGateError:
             raise
         except Exception as e:
@@ -1124,7 +1125,8 @@ class Pipeline:
                          request: ChatRequest, app_policy=None,
                          profile: AppPrivacyProfile | None = None,
                          session_id: str | None = None,
-                         internals: dict | None = None
+                         internals: dict | None = None,
+                         workload: str | None = None
                          ) -> tuple[AsyncIterator[str], Callable[[], dict]]:
         """Real backend token-streaming substrate for the direct (single-shot)
         path (Tasks 6-7 wire the route to this). Skips step-9 verification --
@@ -1166,7 +1168,7 @@ class Pipeline:
             det, rules, eff = self._gate_inputs(app_policy, profile)
             ctx, reps, eff = self._gate.evaluate(
                 request_id, tenant_id, request, app_policy=app_policy,
-                detector=det, rules=rules, eff=eff)
+                detector=det, rules=rules, eff=eff, workload=workload)
         except PolicyGateError:
             raise
         except Exception as e:

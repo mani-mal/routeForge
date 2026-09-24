@@ -52,6 +52,13 @@ class ModelRegistry:
     def __init__(self, settings: Settings) -> None:
         self._s = settings
         self._rows: dict[str, _OnboardedRow] | None = None
+        # Bumped on every successful `refresh`, so derived caches (the shared
+        # QualityResolver's tier/published maps) know the pool may have moved.
+        self._generation = 0
+
+    @property
+    def generation(self) -> int:
+        return self._generation
 
     async def ensure_loaded(self, db) -> None:
         if self._rows is None:
@@ -73,6 +80,7 @@ class ModelRegistry:
                     price_cached_input=r.price_cached_input,
                     context_window=r.context_window)
                 for r in rows}
+            self._generation += 1
         except Exception:
             _log.exception("registry refresh failed; keeping last-known-good")
 

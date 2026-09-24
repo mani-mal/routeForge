@@ -333,6 +333,7 @@ class Gate:
                  detector: Detector | None = None,
                  rules: list | None = None,
                  eff: EffectivePolicy | None = None,
+                 workload: str | None = None,
                  ) -> tuple[ExecutionPolicyContext, Representations, EffectivePolicy]:
         """Step 2. Returns `(ctx, reps, eff)`:
 
@@ -350,6 +351,10 @@ class Gate:
         place that composition happens. `eff` is compiled here when a caller
         (a test, a script) does not supply one, so the gate is never without
         an effective policy to read.
+
+        `workload` is the client's already-validated, content-free workload
+        slug (P2b-3), threaded onto the context for the router's quality term;
+        nothing in the gate reads it.
         """
         det = detector or self._detector
         if eff is None:
@@ -390,7 +395,8 @@ class Gate:
                             # from the same EffectivePolicy: `build_context`
                             # needs it for P1b's raw-sensitive eligibility rule
                             # (design §4) and must not re-derive it.
-                            model_input=eff.protection.model_input)
+                            model_input=eff.protection.model_input,
+                            workload=workload)
         ctx = ctx.model_copy(update={
             "requested_model": None if request.model == "auto" else request.model,
         })

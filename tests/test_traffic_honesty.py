@@ -204,7 +204,8 @@ def test_residency_filter_is_what_keeps_pii_onprem_not_provider_availability():
     def _leaky_build_context(settings, request_id, tenant_id, entities,
                              redaction_map_id, app_policy=None, app_rules=None,
                              registry=None, escalate_residency=True,
-                             content_integrity=None, model_input=None):
+                             content_integrity=None, model_input=None,
+                             workload=None):
         """Reimplements build_context but WITHOUT the onprem residency
         filter, to prove the guard above would catch this exact regression.
         (Signature mirrors build_context, incl. the app_policy/app_rules

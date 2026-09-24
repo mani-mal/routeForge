@@ -135,6 +135,11 @@ class ExecutionPolicyContext(BaseModel):
     # or otherwise, that can turn eligibility off.
     model_scope_active: bool = False
     requested_model: str | None = None
+    # P2b-3: the client's validated workload slug (`app/apps/outcomes.
+    # parse_workload`), content-free. It selects which `model_quality` row the
+    # router's quality term reads -- a RANKING input only. Eligibility
+    # (`app/policy/feasible.py`), placement and residency never read it.
+    workload: str | None = None
     max_cost_usd: float
     max_latency_ms: int
     risk_class: str

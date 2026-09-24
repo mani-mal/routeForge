@@ -124,6 +124,7 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
                   escalate_residency: bool = True,
                   content_integrity: str | None = None,
                   model_input: str | None = None,
+                  workload: str | None = None,
                   ) -> ExecutionPolicyContext:
     """Step 3: the immutable ExecutionPolicyContext.
 
@@ -265,6 +266,9 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
         require_verification=rule.require_verification,
         detected_entities=tuple(sorted(etypes)),
         redaction_map_id=redaction_map_id,
+        # P2b-3: carried for the router's quality term ONLY. Nothing above --
+        # placement, `feasible_set`, `allowed_models` -- reads it.
+        workload=workload,
         compression_override=(app_policy.compression_enabled
                               if app_policy is not None else None),
         # The COMPILED axis, never the raw nullable column: one authority
