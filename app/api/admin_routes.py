@@ -1276,6 +1276,16 @@ async def config_snapshot(request: Request, _: str = Depends(require_admin)) -> 
     reads (P3a spec §4), for the offline policy simulator
     (`scripts/policy_simulate.py`). Read-only: it changes nothing."""
     state = request.app.state
+    # Outside the session block below (same reason as the other admin routes
+    # that call this): registry.ensure_loaded() opens its own db.session(),
+    # which would deadlock on the non-reentrant SQLite write-lock if nested
+    # inside the one below. Without this, a registry that's never taken a
+    # live request yet (registry.py: "lazily loaded on the first request")
+    # snapshots as an empty effective pool/registry_version even though
+    # `onboarded` (read straight from the DB, not the registry) is accurate
+    # -- exactly the discrepancy the P3a round-trip test (spec §9.10) exists
+    # to catch.
+    await state.registry.ensure_loaded(state.db)
     async with state.db.session() as session:
         return await build_config_snapshot(
             session, settings=state.settings, registry=state.registry,
