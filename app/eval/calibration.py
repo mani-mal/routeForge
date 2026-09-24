@@ -21,11 +21,16 @@ the choice is deterministic. `registry_version=` selects a group explicitly.
 (`chosen`). Rows are excluded when `cache_hit` is true, `chosen` is null, or
 the status is `no_eligible`, `backend_failed` or `context_overflow` -- those
 say nothing about answer quality. Per included row:
-  - each numeric feedback `quality` value in [0, 1] adds that fraction as
-    successes and 1 trial;
-  - each `route_correct` value of exactly 0 or 1 adds that value as
-    successes and 1 trial;
-  - a `verify_failed` row adds 0 successes and 1 trial.
+  - its **latest** `quality` label (by the feedback entry's own `ts`; ties
+    go to the last in file order), when numeric and in [0, 1], adds that
+    fraction as successes and 1 trial;
+  - its latest `route_correct` label, when exactly 0 or 1, adds that value
+    as successes and 1 trial;
+  - a `verify_failed` row adds 0 successes and 1 trial, in addition to any
+    label (it is a separate signal).
+Only the latest label per score counts: a client posting the same label N
+times for one request must not inflate `n_labels` and narrow the interval.
+Non-dict feedback entries are skipped.
 A row with no evidence adds nothing but still counts toward `n_rows` and
 `label_coverage` (= rows with at least one piece of evidence / `n_rows`).
 `n_labels` is the trial count `t`.
@@ -59,7 +64,7 @@ import hashlib
 import json
 import math
 
-from app.eval.outcomes import UNKNOWN_REGISTRY_VERSION, _round6
+from app.eval.outcomes import UNKNOWN_REGISTRY_VERSION
 
 RECOMMENDATION_SCHEMA = "routeforge.quality-recommendation/v1"
 
@@ -75,6 +80,28 @@ STATUS_RECOMMENDED = "recommended"
 STATUS_INSUFFICIENT = "insufficient"
 STATUS_NO_CHANGE = "no_change"
 
+LABEL_SCORES = ("quality", "route_correct")
+
+# Iteration cap for `_betacf`; hitting it raises rather than returning an
+# unconverged value (module-level so a test can shrink it).
+_BETACF_MAX_ITER = 1000
+
+
+def _round6(value):
+    """Round every float leaf to 6 dp (as `outcomes._round6` does), and
+    normalise `-0.0` to `0.0`: a signed zero serialises as `-0.0` and would
+    change the canonical JSON, and so the `set_id`, for the same value."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, float):
+        rounded = round(value, 6)
+        return 0.0 if rounded == 0.0 else rounded
+    if isinstance(value, dict):
+        return {k: _round6(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_round6(v) for v in value]
+    return value
+
 
 # --- Beta distribution (pure Python) -----------------------------------
 
@@ -89,7 +116,7 @@ def _betacf(a: float, b: float, x: float) -> float:
         d = fpmin
     d = 1.0 / d
     h = d
-    for m in range(1, 1000):
+    for m in range(1, _BETACF_MAX_ITER + 1):
         m2 = 2 * m
         aa = m * (b - m) * x / ((qam + m2) * (a + m2))
         d = 1.0 + aa * d
@@ -111,8 +138,10 @@ def _betacf(a: float, b: float, x: float) -> float:
         delta = d * c
         h *= delta
         if abs(delta - 1.0) < 3e-16:
-            break
-    return h
+            return h
+    raise ArithmeticError(
+        f"betacf did not converge in {_BETACF_MAX_ITER} iterations "
+        f"(a={a}, b={b}, x={x})")
 
 
 def _beta_cdf(x: float, a: float, b: float) -> float:
@@ -202,10 +231,23 @@ def _included(record: dict) -> bool:
 
 
 def _row_evidence(record: dict) -> tuple[float, int]:
-    """`(successes, trials)` one included row contributes."""
-    s, t = 0.0, 0
+    """`(successes, trials)` one included row contributes: at most one
+    trial per score in `LABEL_SCORES` -- the latest entry by its own `ts`
+    (ties go to the last in file order) -- plus one failure trial when the
+    row is `verify_failed`. Non-dict feedback entries are skipped."""
+    floor = dt.datetime.min.replace(tzinfo=dt.timezone.utc)
+    latest: dict[str, tuple[dt.datetime, object]] = {}
     for fb in record.get("feedback") or []:
-        name, v = fb.get("score_name"), fb.get("value")
+        if not isinstance(fb, dict):
+            continue
+        name = fb.get("score_name")
+        if name not in LABEL_SCORES:
+            continue
+        ts = _parse_ts(fb.get("ts")) or floor
+        if name not in latest or ts >= latest[name][0]:
+            latest[name] = (ts, fb.get("value"))
+    s, t = 0.0, 0
+    for name, (_, v) in latest.items():
         if not _is_number(v):
             continue
         if name == "quality" and 0.0 <= v <= 1.0:
@@ -293,12 +335,28 @@ def _unit(model: str, workload: str | None, rows: list[dict],
 
 # --- public API --------------------------------------------------------
 
+def _validate_options(*, k: object, min_labels: object, max_ci_width: object,
+                      min_shift: object) -> None:
+    def finite(v: object) -> bool:
+        return _is_number(v) and math.isfinite(v)
+
+    if not finite(k) or k <= 0:
+        raise ValueError(f"k must be a finite number > 0, got {k!r}")
+    if not isinstance(min_labels, int) or isinstance(min_labels, bool) or min_labels < 0:
+        raise ValueError(f"min_labels must be an int >= 0, got {min_labels!r}")
+    for name, v in (("max_ci_width", max_ci_width), ("min_shift", min_shift)):
+        if not finite(v) or v < 0:
+            raise ValueError(f"{name} must be a finite number >= 0, got {v!r}")
+
+
 def estimate(records: list[dict], *, k: float = 10.0, min_labels: int = 20,
              max_ci_width: float = 0.25, min_shift: float = 0.02,
              priors: dict[str, float] | None = None,
              registry_version: str | None = None) -> dict:
     """Per-(model, workload) and per-(model, *) Beta-posterior quality
     estimates for one registry-version group (spec §4)."""
+    _validate_options(k=k, min_labels=min_labels, max_ci_width=max_ci_width,
+                      min_shift=min_shift)
     for model, v in (priors or {}).items():
         if not _valid_q0(v):
             raise ValueError(f"prior for {model!r} must be in (0, 1), got {v!r}")

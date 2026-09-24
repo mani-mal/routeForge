@@ -310,3 +310,85 @@ def test_set_id_changes_with_any_unit_score(tmp_path):
         estimate(_load(tmp_path, _hand_example()), priors={"m-a": 0.6}),
         export_sha256="00")
     assert other["set_id"] != rec["set_id"]
+
+
+# --- fix round 1 --------------------------------------------------------
+
+def _fb(name: str, value: object, ts: str) -> dict:
+    return {"score_name": name, "value": value, "source": "admin", "ts": ts}
+
+
+def _with_feedback(line: dict, entries: list) -> dict:
+    line["feedback"] = entries
+    return line
+
+
+def test_repeated_labels_count_once_latest_wins(tmp_path):
+    line = _with_feedback(_rec("r"), [
+        _fb("quality", 0.2, "2026-09-20T00:01:00+00:00"),
+        _fb("quality", 0.9, "2026-09-20T00:03:00+00:00"),   # latest
+        _fb("quality", 0.4, "2026-09-20T00:02:00+00:00"),
+    ])
+    u = _unit(estimate(_load(tmp_path, [line])), "m-a", None)
+    assert u["n_labels"] == 1
+    assert (u["alpha"], u["beta"]) == (5.9, 5.1)
+
+
+def test_label_ts_tie_goes_to_last_in_file_order(tmp_path):
+    ts = "2026-09-20T00:01:00+00:00"
+    line = _with_feedback(_rec("r"), [_fb("route_correct", 1, ts),
+                                      _fb("route_correct", 0, ts)])
+    u = _unit(estimate(_load(tmp_path, [line])), "m-a", None)
+    assert (u["n_labels"], u["alpha"], u["beta"]) == (1, 5.0, 6.0)
+
+
+def test_quality_plus_route_correct_is_two_trials(tmp_path):
+    line = _rec("r", feedback=[("quality", 0.5), ("route_correct", 1)])
+    u = _unit(estimate(_load(tmp_path, [line])), "m-a", None)
+    assert (u["n_labels"], u["alpha"], u["beta"]) == (2, 6.5, 5.5)
+
+
+def test_verify_failed_plus_quality_is_two_trials(tmp_path):
+    line = _rec("r", status="verify_failed", feedback=[("quality", 1.0)])
+    u = _unit(estimate(_load(tmp_path, [line])), "m-a", None)
+    assert (u["n_labels"], u["alpha"], u["beta"]) == (2, 6.0, 6.0)
+
+
+def test_non_dict_feedback_entries_skipped(tmp_path):
+    line = _with_feedback(_rec("r"), ["junk", 3, None, ["x"],
+                                      _fb("route_correct", 1, "2026-09-20T00:00:00+00:00")])
+    u = _unit(estimate(_load(tmp_path, [line])), "m-a", None)
+    assert (u["n_labels"], u["alpha"]) == (1, 6.0)
+
+
+@pytest.mark.parametrize("kwargs, name", [
+    ({"k": 0}, "k"), ({"k": -1.0}, "k"), ({"k": float("inf")}, "k"),
+    ({"k": float("nan")}, "k"), ({"k": "10"}, "k"),
+    ({"min_labels": -1}, "min_labels"), ({"min_labels": 2.5}, "min_labels"),
+    ({"min_labels": True}, "min_labels"),
+    ({"max_ci_width": -0.1}, "max_ci_width"),
+    ({"max_ci_width": float("nan")}, "max_ci_width"),
+    ({"min_shift": -0.01}, "min_shift"), ({"min_shift": float("inf")}, "min_shift"),
+])
+def test_invalid_options_refused(kwargs, name):
+    with pytest.raises(ValueError, match=name):
+        estimate([], **kwargs)
+
+
+def test_zero_options_are_valid():
+    est = estimate([], min_labels=0, max_ci_width=0.0, min_shift=0.0)
+    assert est["units"] == []
+
+
+def test_betacf_raises_at_iteration_cap(monkeypatch):
+    import app.eval.calibration as cal
+    monkeypatch.setattr(cal, "_BETACF_MAX_ITER", 1)
+    with pytest.raises(ArithmeticError, match=r"a=10.*b=30"):
+        cal._beta_cdf(0.2, 10, 30)
+
+
+def test_negative_zero_normalised():
+    from app.eval.calibration import _round6
+    out = _round6({"a": -0.0, "b": [-1e-9, 0.25], "c": True, "d": -0.5})
+    assert json.dumps(out, sort_keys=True) == \
+        '{"a": 0.0, "b": [0.0, 0.25], "c": true, "d": -0.5}'
