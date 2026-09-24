@@ -513,3 +513,23 @@ def test_cli_applies_a_priors_file(tmp_path):
     assert r.returncode == 0, r.stderr
     rec = json.loads((out / "recommendation.json").read_text(encoding="utf-8"))
     assert rec["options"]["priors"] == {"m-b": 0.3}
+
+
+def test_cli_numeric_error_exits_1_with_a_message(tmp_path, monkeypatch, capsys):
+    """An ArithmeticError from the estimator (e.g. a non-converging Beta
+    quantile) is reported and exits 1 -- never a traceback."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("quality_recommend_cli", SCRIPT)
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+
+    def boom(*a, **k):
+        raise ArithmeticError("betacf did not converge")
+    monkeypatch.setattr(cli, "estimate", boom)
+    export = tmp_path / "export.ndjson"
+    _write_export(export, _cli_records())
+    rc = cli.main(["--export", str(export), "--out", str(tmp_path / "o")])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "numeric error" in err and "betacf did not converge" in err
+    assert not (tmp_path / "o").exists()

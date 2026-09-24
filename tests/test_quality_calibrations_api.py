@@ -109,7 +109,8 @@ def test_apply_writes_rows_and_routed_request_carries_calibrated_source():
 
         r = c.post("/admin/quality/calibrations", json=rec)
         assert r.status_code == 200, r.text
-        assert r.json() == {"set_id": rec["set_id"], "applied": 1, "refreshed": True}
+        assert r.json() == {"set_id": rec["set_id"], "applied": 1, "refreshed": True,
+                            "registry_version_match": True, "forced": False}
 
         chat = c.post("/v1/chat/completions", headers=DEMO, json=HELLO)
         assert chat.status_code == 200, chat.text
@@ -121,6 +122,7 @@ def test_apply_writes_rows_and_routed_request_carries_calibrated_source():
         assert cand["quality"]["src"] == "calibrated"
         assert cand["quality"]["set"] == rec["set_id"]
         assert cand["quality"]["v"] == 0.97
+        assert cand["quality"]["base"] == {"v": 0.5, "src": "tier_default"}
 
 
 def test_reapplying_same_set_gives_409():

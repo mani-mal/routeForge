@@ -1269,11 +1269,37 @@ async def export_outcomes(
 
 # --- quality calibration (P2b-3 Task 5) -------------------------------------
 
+def _audit_calibration(fields: dict) -> None:
+    """ONE structured audit line per apply/revert: a compact JSON object of
+    ids, counts and flags (content-free), also attached as `extra` for a
+    structured handler."""
+    logging.getLogger("serving.admin").info(
+        "%s", json.dumps(fields, sort_keys=True, separators=(",", ":")),
+        extra={"audit": fields})
+
+
+def _shadowed_by(model: str, workload: str | None, customer: dict,
+                 calibrated: dict) -> list[dict]:
+    """Existing override rows MORE SPECIFIC than a proposed `(model, None)`
+    unit, which will keep winning for their workload after apply: a
+    `customer` or `calibrated` row keyed `(model, wl)`. A per-workload unit
+    has nothing more specific, so its list is always empty. (A model-wide
+    customer row is not "shadowing" -- it is `customer_wins`.)"""
+    if workload is not None:
+        return []
+    out = []
+    for source, rows in (("customer", customer), ("calibrated", calibrated)):
+        for (m, wl), q in rows.items():
+            if m == model and wl is not None:
+                out.append({"workload": wl, "source": source, "set_id": q.set_id})
+    return sorted(out, key=lambda x: (x["workload"], x["source"]))
+
+
 @admin_router.post("/quality/calibrations")
 async def apply_calibration(
         request: Request, rec: dict = Body(...),
         dry_run: bool = False, force_registry_mismatch: bool = False,
-        _: str = Depends(require_admin)) -> dict:
+        admin_id: str = Depends(require_admin)) -> dict:
     """Validate a `recommendation.json` against the live registry, then
     either preview it (`dry_run=true`, writes nothing) or apply it (one
     `write_calibration_set` transaction + `refresh_quality`). See spec §6."""
@@ -1288,9 +1314,12 @@ async def apply_calibration(
         raise HTTPException(422, str(exc)) from exc
 
     set_id = rec.get("set_id")
+    version_match = rec.get("registry_version") == current_registry_version
+    forced = force_registry_mismatch and not version_match
 
     if dry_run:
         quality = request.app.state.quality
+        customer, calibrated = quality.override_maps()
         units = []
         for u in recommended:
             model, workload = u["model"], u.get("workload")
@@ -1301,11 +1330,14 @@ async def apply_calibration(
                 "current": {"score": current.score, "source": current.source,
                             "set_id": current.set_id},
                 "proposed": u["mean"],
-                "customer_wins": current.source == "customer",
+                # Same order `resolve` applies: customer (m, wl) -> customer
+                # (m, None) beat ANY calibrated row, however specific.
+                "customer_wins": quality.customer_override(model, workload) is not None,
+                "shadowed_by": _shadowed_by(model, workload, customer, calibrated),
             })
         return {
             "set_id": set_id,
-            "registry_version_match": rec.get("registry_version") == current_registry_version,
+            "registry_version_match": version_match,
             "units": units,
         }
 
@@ -1321,7 +1353,12 @@ async def apply_calibration(
 
     from app.main import refresh_quality  # local import: avoids admin_routes<->main cycle
     refreshed = await refresh_quality(request.app)
-    return {"set_id": set_id, "applied": applied, "refreshed": refreshed}
+    _audit_calibration({
+        "event": "quality_calibration_applied", "set_id": set_id,
+        "units": applied, "forced": forced,
+        "registry_version_match": version_match, "admin_id": admin_id})
+    return {"set_id": set_id, "applied": applied, "refreshed": refreshed,
+            "registry_version_match": version_match, "forced": forced}
 
 
 @admin_router.get("/quality/calibrations")
@@ -1334,7 +1371,7 @@ async def list_calibrations(request: Request, _: str = Depends(require_admin)) -
 
 @admin_router.delete("/quality/calibrations/{set_id}")
 async def revert_calibration(set_id: str, request: Request,
-                             _: str = Depends(require_admin)) -> dict:
+                             admin_id: str = Depends(require_admin)) -> dict:
     async with request.app.state.db.session() as session:
         deleted = await store.delete_calibration_set(session, set_id)
         if deleted == 0:
@@ -1343,4 +1380,7 @@ async def revert_calibration(set_id: str, request: Request,
 
     from app.main import refresh_quality  # local import: avoids admin_routes<->main cycle
     await refresh_quality(request.app)
+    _audit_calibration({
+        "event": "quality_calibration_reverted", "set_id": set_id,
+        "units": deleted, "forced": False, "admin_id": admin_id})
     return {"set_id": set_id, "deleted": deleted}

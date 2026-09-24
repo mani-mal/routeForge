@@ -12,8 +12,9 @@ applying a recommendation is a separate, human-gated admin action.
 File-based only: no DB, no `app.api`, no serving import
 (`tests/eval/test_isolation.py`).
 
-Exit codes: 0 ok; 1 load or option error (bad path, unrecognized export
-schema, unknown registry version, invalid option or priors file); 2 replay
+Exit codes: 0 ok; 1 load, option or numeric error (bad path, unrecognized
+export schema, unknown registry version, invalid option or priors file, a
+Beta quantile that failed to converge); 2 replay
 equivalence failure -- for a fully-specified scoring record, the unchanged
 replay disagreed with the logged candidate order, so the replay does not
 mirror the router and no files are written. Records whose scoring lacks a
@@ -82,6 +83,12 @@ def main(argv: list[str] | None = None) -> int:
                        priors=priors, registry_version=args.registry_version)
     except (OSError, ValueError) as exc:
         print(f"quality_recommend: load error: {exc}", file=sys.stderr)
+        return 1
+    except ArithmeticError as exc:
+        # e.g. the Beta quantile's continued fraction failed to converge for
+        # an extreme posterior -- report it; never a traceback.
+        print(f"quality_recommend: numeric error while estimating: {exc}",
+              file=sys.stderr)
         return 1
 
     for w in warnings:
