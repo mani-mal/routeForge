@@ -159,10 +159,10 @@ error naming the key, so a typo can never silently simulate "no change".
 - Every value is validated with the same rules the admin write path applies. For example,
   the tier must be canonical and prices non-negative and finite.
 
-**Always an error:**
+**Loading rules:**
 - An empty proposal (`{"schema": …}` only) is valid and must predict zero changes (§9).
-- Loading a proposal can **fail**, and never partially applies. Any error exits non-zero
-  before any simulation runs.
+- Loading is all-or-nothing: a proposal either loads completely or fails, and is never
+  partially applied. Any error exits 2 before any simulation runs.
 
 ## 6. Scenario construction (`app/eval/scenario.py`)
 
