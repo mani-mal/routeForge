@@ -306,7 +306,9 @@ class Router:
             rejected.append(RejectedCandidate(
                 name=c.name, provider=c.provider, tier=c.tier,
                 display_name=c.display_name, reason="lower score"))
-        chosen_q = self._quality.resolve(chosen.name, ctx.workload)
+        # The certificate's quality is the ranked term itself, so the two
+        # agree by construction (never a second resolve).
+        chosen_q = ordered[0].quality
         reason = (f"tier {chosen.tier} (target {target}, budget fallback from {fallback_from})"
                   if fallback_from else f"tier {chosen.tier} (target {target})")
         if circuit_bypass:
@@ -315,6 +317,6 @@ class Router:
             chosen=chosen, est_cost_usd=est,
             reason=reason,
             rejected=rejected,
-            quality_score=chosen_q.score, quality_source=chosen_q.source,
+            quality_score=chosen_q.value, quality_source=chosen_q.source,
             scoring=result, circuit_bypass=circuit_bypass,
             tier_target=target)

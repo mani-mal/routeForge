@@ -109,7 +109,7 @@ def test_resolver_order_workload_then_scalar_then_published_then_tier():
 # --------------------------------------------------------------------------- #
 # 2. identity: an empty override map changes nothing
 # --------------------------------------------------------------------------- #
-def test_empty_overrides_are_byte_identical_to_today():
+def test_empty_overrides_decide_exactly_like_the_default_resolver():
     reg = make_test_registry(S_CLOUD)
     fresh = Router(S_CLOUD, registry=reg)
     shared = QualityResolver(S_CLOUD, registry=reg)
@@ -229,3 +229,107 @@ def test_model_onboarded_after_boot_resolves_to_its_tier_default():
         mid_q = c.app.state.settings.routing.tier_quality["mid"]
         assert mid_q != 0.5
         assert q.resolve("late-mid") == QualityScore(mid_q, "tier_default")
+
+
+# --------------------------------------------------------------------------- #
+# B54: onboarded mid models score their tier default, not the 0.5 floor
+# --------------------------------------------------------------------------- #
+def test_b54_onboarded_mid_model_scores_its_tier_default_over_http():
+    """With NO model_quality rows, an onboarded mid-tier model's scoring record
+    shows its tier's `tier_quality` (0.75), not the 0.5 floor every onboarded
+    model got before P2b-3 (the resolver was built before the registry loaded).
+    """
+    with _client() as c:
+        disable_seeded_models(c)
+        add_model(c, "b54-mid", tier="mid", price_input=0.1, price_output=0.1)
+        # A long prompt targets the mid tier; the only mid candidate is ours.
+        long = {"messages": [{"role": "user", "content": "word " * 1200}]}
+        r = c.post("/v1/chat/completions", headers=DEMO, json=long)
+        assert r.status_code == 200, r.text
+        assert r.json()["model"] == "b54-mid"
+        rec = _outcomes(c)[0].scoring
+        [cand] = [x for x in rec["candidates"] if x["name"] == "b54-mid"]
+        assert cand["quality"] == {"v": 0.75, "src": "tier_default"}
+
+
+# --------------------------------------------------------------------------- #
+# golden identity over the static YAML pool (no onboarded models, no rows)
+# --------------------------------------------------------------------------- #
+_GOLDEN_WEIGHTS = {"quality": 1.0, "cost": 0.6, "latency": 0.3, "availability": 0.2}
+
+# Derived once at base 2e8fd0c (pre-Task-2) and verified identical at this
+# commit; asserted verbatim so ANY drift in the YAML-pool record is caught.
+_GOLDEN = {
+    0.5: ("azure-gpt-mid", "tier mid (target mid)", 0.75, "tier_default", 0.0003372, {
+        "weights": _GOLDEN_WEIGHTS, "signals_enabled": True,
+        "latency_scale_ms": 1000.0, "max_latency_norm": 3.0,
+        "candidates": [{
+            "name": "azure-gpt-mid", "score": 0.20000000000000004,
+            "quality": {"v": 0.75, "src": "tier_default"},
+            "latency": {"ms": 500.0, "src": "tier_default", "n": 0},
+            "availability": {"v": 1.0, "src": "neutral", "n": 0},
+            "cost": {"est_usd": 0.0003372, "norm": 1.0, "cached": "unpriced"}}]}),
+    0.9: ("bedrock-frontier", "tier frontier (target frontier)", 1.0, "tier_default",
+          0.00828, {
+        "weights": _GOLDEN_WEIGHTS, "signals_enabled": True,
+        "latency_scale_ms": 1000.0, "max_latency_norm": 3.0,
+        "candidates": [{
+            "name": "bedrock-frontier", "score": 0.30000000000000004,
+            "quality": {"v": 1.0, "src": "tier_default"},
+            "latency": {"ms": 1000.0, "src": "tier_default", "n": 0},
+            "availability": {"v": 1.0, "src": "neutral", "n": 0},
+            "cost": {"est_usd": 0.00828, "norm": 1.0, "cached": "unpriced"}}]}),
+}
+
+
+def test_golden_yaml_pool_scoring_record_is_unchanged():
+    from app.apps.registry import ModelRegistry
+    reg = ModelRegistry(S_CLOUD)   # static YAML pool only: nothing onboarded
+    q = QualityResolver(S_CLOUD, registry=reg)
+    q.set_overrides({})            # an empty model_quality table
+    r = Router(S_CLOUD, quality_resolver=q, registry=reg)
+    for complexity, (name, reason, qv, qsrc, est, record) in _GOLDEN.items():
+        for workload in (None, "claims"):
+            d = r.select(_ctx(reg, {"onprem", "azure", "bedrock"}, workload=workload),
+                         tokens_after=200, complexity=complexity)
+            assert (d.chosen.name, d.reason, d.quality_score, d.quality_source,
+                    d.est_cost_usd) == (name, reason, qv, qsrc, est)
+            assert d.scoring.to_record() == record
+
+
+# --------------------------------------------------------------------------- #
+# defence in depth: out-of-range / non-finite overrides are skipped
+# --------------------------------------------------------------------------- #
+def test_set_overrides_skips_non_finite_and_out_of_range_scores(caplog):
+    s = load_settings()
+    r = QualityResolver(s)
+    with caplog.at_level("WARNING", logger="serving.routing"):
+        r.set_overrides({
+            ("local-8b", None): QualityScore(float("nan"), "calibrated", "s"),
+            ("local-8b", "claims"): QualityScore(1.5, "calibrated", "s"),
+            ("m-inf", None): QualityScore(float("inf"), "customer"),
+            ("m-neg", None): QualityScore(-0.1, "customer"),
+            ("m-ok", None): QualityScore(1.0, "customer"),
+            ("m-zero", None): QualityScore(0.0, "calibrated", "s"),
+        })
+    assert r.resolve("local-8b", "claims").source == "tier_default"
+    assert r.resolve("m-inf").source == "tier_default"
+    assert r.resolve("m-neg").source == "tier_default"
+    assert r.resolve("m-ok") == QualityScore(1.0, "customer")
+    assert r.resolve("m-zero") == QualityScore(0.0, "calibrated", "s")
+    assert sum("quality override skipped" in m for m in caplog.messages) == 4
+
+
+# --------------------------------------------------------------------------- #
+# the decision's quality IS the ranked term (certificate == ranking)
+# --------------------------------------------------------------------------- #
+def test_decision_quality_is_the_ranked_term():
+    reg = make_test_registry(S_CLOUD)
+    q = QualityResolver(S_CLOUD, registry=reg)
+    q.set_overrides({("azure-gpt-mid", "claims"): QualityScore(0.99, "calibrated", "k")})
+    r = Router(S_CLOUD, quality_resolver=q, registry=reg)
+    d = r.select(_ctx(reg, {"onprem", "azure", "bedrock"}, workload="claims"),
+                 tokens_after=200, complexity=0.1, min_tier="mid")
+    top = d.scoring.ordered[0]
+    assert top.candidate.name == d.chosen.name
+    assert (d.quality_score, d.quality_source) == (top.quality.value, top.quality.source)

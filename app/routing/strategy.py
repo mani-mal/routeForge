@@ -189,7 +189,10 @@ class DefaultRoutingStrategy:
 
 def _quality_record(q: TermValue) -> dict:
     """`{"v", "src"}`, plus `"set"` only when a calibration set supplied the
-    score -- so with no calibration the record is byte-identical to pre-P2b-3."""
+    score. With no calibration the entry has the same shape as before P2b-3.
+    The one value that can differ is an onboarded mid/frontier model's
+    tier-default quality, which is now its real tier's value instead of the
+    0.5 floor (B54)."""
     rec: dict = {"v": q.value, "src": q.source}
     if q.set_id is not None:
         rec["set"] = q.set_id

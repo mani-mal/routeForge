@@ -127,6 +127,33 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
+## B54 — onboarded on-prem models scored at the 0.5 quality floor regardless of tier  ✅ RESOLVED (2026-09-24)
+
+**Severity:** low–medium (ranking only; never eligibility or placement).
+**Found:** 2026-09-24, in review of P2b-3 Task 2 (offline quality calibration).
+
+`QualityResolver` built its tier and published-quality maps once, when
+`create_app` constructed it. At that point the `ModelRegistry` had not loaded its
+onboarded rows yet, because it loads them lazily on the first request. So the maps
+held only the static YAML pool. Every onboarded on-prem model fell through to the
+flat `_TIER_DEFAULT_FLOOR` (0.5) and never got its tier's `tier_quality`.
+
+**Effect.** An onboarded `mid` model scored quality 0.5, while a YAML `mid` peer (for
+example `azure-gpt-mid`) scored 0.75. That is 0.25 × `weights.quality` lost in the
+quality term purely for being onboarded. `frontier` lost 0.5. `cheap` was unaffected,
+because `tier_quality.cheap == 0.5` equals the floor. The published `quality` set at
+onboarding was ignored in the same way.
+
+**Fix.** `ModelRegistry.generation` increments on every successful `refresh`. The
+resolver rebuilds its maps from `registry.effective_pool()` whenever the generation
+has moved, so models present at first load and models onboarded later both resolve
+to their own tier (`app/routing/quality.py::_sync_pool`). As a result, with zero
+`model_quality` rows, onboarded mid and frontier models now score their tier
+default instead of 0.5. That is the one intended deviation from pre-P2b-3 identity
+(spec §7). Tests: `tests/test_quality_serving.py`
+(`test_b54_onboarded_mid_model_scores_its_tier_default_over_http`,
+`test_model_onboarded_after_boot_resolves_to_its_tier_default`).
+
 ## B53 — streamed responses never carried the terminal `usage` frame  ✅ RESOLVED (2026-09-23)
 
 **Severity:** high for agent clients (context overflow), otherwise low.

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -84,10 +86,25 @@ class QualityResolver:
     def set_overrides(self, mapping: "dict[OverrideKey | str, QualityScore]") -> None:
         """Swap the override snapshot. Builds the new dict first, then replaces
         the reference in one assignment -- a concurrent `resolve` sees either
-        the old snapshot or the new one, never a mix."""
+        the old snapshot or the new one, never a mix.
+
+        Defence in depth (spec §8): an entry whose score is non-finite or
+        outside [0, 1] is skipped with a warning. The store and the apply
+        route validate too, but a bad row must never be able to move the
+        quality term by more than `weights.quality`."""
         new: dict[OverrideKey, QualityScore] = {}
         for key, q in mapping.items():
-            new[(key, None) if isinstance(key, str) else (key[0], key[1])] = q
+            k = (key, None) if isinstance(key, str) else (key[0], key[1])
+            try:
+                ok = math.isfinite(q.score) and 0.0 <= q.score <= 1.0
+            except TypeError:
+                ok = False
+            if not ok:
+                logging.getLogger("serving.routing").warning(
+                    "quality override skipped: model=%s workload=%s score=%r "
+                    "is not a finite value in [0, 1]", k[0], k[1], q.score)
+                continue
+            new[k] = q
         self._overrides = new
 
     def resolve(self, model: str, task_class: str | None = None) -> QualityScore:

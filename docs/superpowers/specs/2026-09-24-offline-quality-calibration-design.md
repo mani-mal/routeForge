@@ -172,6 +172,12 @@ feedback scores. P2b-3 turns those records into quality estimates the router can
   JSON, and it needs no ALTER.
 - **Identity:** with no `model_quality` rows, every decision is byte-identical to today.
   A test pins this.
+  *Amended 2026-09-24:* the identity holds with one exception.
+  Onboarded mid and frontier models now resolve to their tier-default quality (0.75
+  and 1.0) instead of the 0.5 floor. The old resolver was built before the registry
+  loaded, so every onboarded model fell to the floor. That was a bug, recorded as B54
+  in `docs/backlog/bugs.md`, and is fixed here. Cheap-tier and static YAML pool
+  scores are unchanged. A golden test pins the YAML-pool scoring record verbatim.
 
 ## 8. Privacy and safety
 
