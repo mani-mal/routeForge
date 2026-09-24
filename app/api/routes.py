@@ -640,7 +640,8 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
             try:
                 deltas, get_meta = await request.app.state.pipeline.run_stream(
                     request_id, tenant, body, app_policy=app_policy, profile=profile,
-                    session_id=client_session_id, internals=internals)
+                    session_id=client_session_id, internals=internals,
+                    workload=workload)
             except StreamFallback:
                 pass  # fall through: run the FULL verified pipeline, then chunk it
             else:
@@ -667,7 +668,8 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
         if stream_mode is not None:
             task = asyncio.create_task(request.app.state.pipeline.run(
                 request_id, tenant, body, app_policy=app_policy, profile=profile,
-                session_id=client_session_id, internals=internals))
+                session_id=client_session_id, internals=internals,
+                workload=workload))
             keepalive = s.serving.stream_keepalive_s
             done, _ = await _wait_or_cancel_on_shutdown(task, keepalive)
             if not done:
@@ -682,7 +684,8 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
         else:
             task = asyncio.create_task(request.app.state.pipeline.run(
                 request_id, tenant, body, app_policy=app_policy, profile=profile,
-                session_id=client_session_id, internals=internals))
+                session_id=client_session_id, internals=internals,
+                workload=workload))
             resp = await _await_unless_disconnected(
                 task, request.is_disconnected, s.serving.stream_keepalive_s)
     except HTTPException:

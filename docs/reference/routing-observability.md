@@ -182,6 +182,10 @@ on every trace's root span.
   that govern routing/pricing do.
 - Lets a later eval pipeline group decisions by the exact policy that produced
   them.
+- It does **not** cover the DB-sourced quality snapshot (`model_quality`
+  customer/calibrated rows, P2b-3): two decisions with the same hash can score
+  quality differently. The scoring record's quality term's `set` field identifies
+  the calibrated input (see `docs/reference/quality-calibration.md` §7).
 
 ### `sp.prompt_version` — on the root span
 

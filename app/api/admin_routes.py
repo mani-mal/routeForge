@@ -12,12 +12,13 @@ import logging
 import re
 import time
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from app.apps import store
 from app.apps.admin_auth import SESSION_COOKIE, require_admin
+from app.apps.calibration_sets import CalibrationError, validate_recommendation
 from app.apps.langfuse_provision import LangfuseProvisioner, encrypt_secret
 from app.apps.models import OutcomeFeedback, RoutingOutcome
 from app.apps.policy_lint import price_warnings
@@ -1264,3 +1265,122 @@ async def export_outcomes(
         _export_lines(request.app.state.db, since=since_dt, until=until_dt,
                       application_id=application_id, limit=limit),
         media_type="application/x-ndjson")
+
+
+# --- quality calibration (P2b-3 Task 5) -------------------------------------
+
+def _audit_calibration(fields: dict) -> None:
+    """ONE structured audit line per apply/revert: a compact JSON object of
+    ids, counts and flags (content-free), also attached as `extra` for a
+    structured handler."""
+    logging.getLogger("serving.admin").info(
+        "%s", json.dumps(fields, sort_keys=True, separators=(",", ":")),
+        extra={"audit": fields})
+
+
+def _shadowed_by(model: str, workload: str | None, customer: dict,
+                 calibrated: dict) -> list[dict]:
+    """Existing override rows MORE SPECIFIC than a proposed `(model, None)`
+    unit, which will keep winning for their workload after apply: a
+    `customer` or `calibrated` row keyed `(model, wl)`. A per-workload unit
+    has nothing more specific, so its list is always empty. (A model-wide
+    customer row is not "shadowing" -- it is `customer_wins`.)"""
+    if workload is not None:
+        return []
+    out = []
+    for source, rows in (("customer", customer), ("calibrated", calibrated)):
+        for (m, wl), q in rows.items():
+            if m == model and wl is not None:
+                out.append({"workload": wl, "source": source, "set_id": q.set_id})
+    return sorted(out, key=lambda x: (x["workload"], x["source"]))
+
+
+@admin_router.post("/quality/calibrations")
+async def apply_calibration(
+        request: Request, rec: dict = Body(...),
+        dry_run: bool = False, force_registry_mismatch: bool = False,
+        admin_id: str = Depends(require_admin)) -> dict:
+    """Validate a `recommendation.json` against the live registry, then
+    either preview it (`dry_run=true`, writes nothing) or apply it (one
+    `write_calibration_set` transaction + `refresh_quality`). See spec §6."""
+    registry = request.app.state.registry
+    await registry.ensure_loaded(request.app.state.db)
+    current_registry_version = registry.registry_version()
+    try:
+        recommended = validate_recommendation(
+            rec, registry=registry, current_registry_version=current_registry_version,
+            force_registry_mismatch=force_registry_mismatch)
+    except CalibrationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+    set_id = rec.get("set_id")
+    version_match = rec.get("registry_version") == current_registry_version
+    forced = force_registry_mismatch and not version_match
+
+    if dry_run:
+        quality = request.app.state.quality
+        customer, calibrated = quality.override_maps()
+        units = []
+        for u in recommended:
+            model, workload = u["model"], u.get("workload")
+            current = quality.resolve(model, workload)
+            units.append({
+                "model": model,
+                "workload": workload,
+                "current": {"score": current.score, "source": current.source,
+                            "set_id": current.set_id},
+                "proposed": u["mean"],
+                # Same order `resolve` applies: customer (m, wl) -> customer
+                # (m, None) beat ANY calibrated row, however specific.
+                "customer_wins": quality.customer_override(model, workload) is not None,
+                "shadowed_by": _shadowed_by(model, workload, customer, calibrated),
+            })
+        return {
+            "set_id": set_id,
+            "registry_version_match": version_match,
+            "units": units,
+        }
+
+    async with request.app.state.db.session() as session:
+        try:
+            applied = await store.write_calibration_set(
+                session, set_id=set_id,
+                units=[{"model": u["model"], "workload": u.get("workload"),
+                        "score": u["mean"]} for u in recommended])
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        await session.commit()
+
+    from app.main import refresh_quality  # local import: avoids admin_routes<->main cycle
+    refreshed = await refresh_quality(request.app)
+    _audit_calibration({
+        "event": "quality_calibration_applied", "set_id": set_id,
+        "units": applied, "forced": forced,
+        "registry_version_match": version_match, "admin_id": admin_id})
+    return {"set_id": set_id, "applied": applied, "refreshed": refreshed,
+            "registry_version_match": version_match, "forced": forced}
+
+
+@admin_router.get("/quality/calibrations")
+async def list_calibrations(request: Request, _: str = Depends(require_admin)) -> list:
+    async with request.app.state.db.session() as session:
+        sets = await store.list_calibration_sets(session)
+    return [{"set_id": s["set_id"], "applied_at": _iso(s["applied_at"]),
+             "units": s["units"]} for s in sets]
+
+
+@admin_router.delete("/quality/calibrations/{set_id}")
+async def revert_calibration(set_id: str, request: Request,
+                             admin_id: str = Depends(require_admin)) -> dict:
+    async with request.app.state.db.session() as session:
+        deleted = await store.delete_calibration_set(session, set_id)
+        if deleted == 0:
+            raise HTTPException(404, f"calibration set not found: {set_id}")
+        await session.commit()
+
+    from app.main import refresh_quality  # local import: avoids admin_routes<->main cycle
+    await refresh_quality(request.app)
+    _audit_calibration({
+        "event": "quality_calibration_reverted", "set_id": set_id,
+        "units": deleted, "forced": False, "admin_id": admin_id})
+    return {"set_id": set_id, "deleted": deleted}

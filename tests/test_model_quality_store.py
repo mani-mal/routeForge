@@ -18,17 +18,20 @@ def test_upsert_and_load_quality_overrides():
 
     async def go():
         async with db.session() as s:
+            await store.write_calibration_set(
+                s, set_id="run-1",
+                units=[{"model": "local-8b", "workload": None, "score": 0.62}])
             await store.upsert_model_quality(
-                s, model_name="local-8b", score=0.62, source="calibrated",
-                eval_run_id="run-1", notes="seed")
-            await store.upsert_model_quality(
-                s, model_name="local-8b", score=0.80, source="customer")
+                s, model_name="local-8b", score=0.80, source="customer",
+                notes="seed")
             await s.commit()
 
         async with db.session() as s:
             overrides = await store.load_quality_overrides(s)
-        # customer beats calibrated for the same model
-        assert overrides["local-8b"] == (0.80, "customer")
+        # both candidates are kept per key (precedence is the resolver's job);
+        # customer rows always carry a None set_id (P2b-3).
+        assert overrides[("local-8b", None)] == {
+            "customer": (0.80, None), "calibrated": (0.62, "run-1")}
 
     _run(go())
 

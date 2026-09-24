@@ -316,3 +316,18 @@ def test_outcomes_nonpositive_retention_is_caught():
     s.serving.outcomes.retention_days = 0
     assert any(e.startswith("OUTCOMES_RETENTION_NOT_POSITIVE")
               for e in lint_settings(s))
+
+
+# --- P2b-3 offline quality calibration (routing.yaml `quality_refresh_s`) --
+
+def test_quality_refresh_s_default_and_shipped_value():
+    assert load_settings().routing.quality_refresh_s == 60.0
+
+
+@pytest.mark.parametrize("value", [0, 0.0, -1])
+def test_quality_refresh_nonpositive_is_caught(value):
+    s = copy.deepcopy(load_settings())
+    s.routing.quality_refresh_s = value
+    assert any(e.startswith("QUALITY_REFRESH_NOT_POSITIVE") for e in lint_settings(s))
+    with pytest.raises(SystemExit):
+        enforce(s)

@@ -127,6 +127,45 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
+## B54 — onboarded on-prem models scored at the 0.5 quality floor regardless of tier or published quality  ✅ RESOLVED (2026-09-24)
+
+**Severity:** low–medium (ranking only; never eligibility or placement).
+**Found:** 2026-09-24, in review of P2b-3 Task 2 (offline quality calibration).
+
+`QualityResolver` built its tier and published-quality maps once, when
+`create_app` constructed it. At that point the `ModelRegistry` had not loaded its
+onboarded rows yet, because it loads them lazily on the first request. So the maps
+held only the static YAML pool. Every onboarded on-prem model fell through to the
+flat `_TIER_DEFAULT_FLOOR` (0.5) and never got its tier's `tier_quality`.
+
+**Effect.** An onboarded `mid` model scored quality 0.5, while a YAML `mid` peer (for
+example `azure-gpt-mid`) scored 0.75. That is 0.25 × `weights.quality` lost in the
+quality term purely for being onboarded. `frontier` lost 0.5. The published `quality`
+set at onboarding (`onboarded_models.quality`) was ignored in the same way, **for every
+tier, `cheap` included**: an onboarded cheap model with a published quality of 0.66 still
+scored 0.5. Only an onboarded cheap model with no published quality was unaffected
+(`tier_quality.cheap == 0.5` equals the floor).
+
+**Fix.** `ModelRegistry.generation` increments on every successful `refresh`. The
+resolver rebuilds its maps from `registry.effective_pool()` whenever the generation
+has moved, so models present at first load and models onboarded later both resolve
+to their own published quality or tier (`app/routing/quality.py::_sync_pool`). As a
+result, with zero `model_quality` rows, **any onboarded model with a non-null published
+`quality` now scores it (any tier, cheap included)**, and an onboarded mid/frontier
+model without one scores its tier default instead of 0.5. That is the one intended
+deviation from pre-P2b-3 identity (spec §7).
+
+**Deploy check.** Every row this returns is scored differently after deploy:
+
+```sql
+SELECT slug, tier, quality FROM onboarded_models WHERE tier <> 'cheap' OR quality IS NOT NULL;
+```
+
+Tests: `tests/test_quality_serving.py`
+(`test_b54_onboarded_mid_model_scores_its_tier_default_over_http`,
+`test_model_onboarded_after_boot_resolves_to_its_tier_default`),
+`tests/test_quality_final_fixes.py::test_b54_onboarded_cheap_model_published_quality_is_scored`.
+
 ## B53 — streamed responses never carried the terminal `usage` frame  ✅ RESOLVED (2026-09-23)
 
 **Severity:** high for agent clients (context overflow), otherwise low.
@@ -215,6 +254,16 @@ locally per request and workload
 claim summaries" becomes visible once clients tag and score. The router does not read these
 records yet; learning from them is P2b-3
 ([`docs/research/feasible-route-bench.md`](../research/feasible-route-bench.md) §13.4).
+
+**Update 2026-09-24:** P2b-3 is built — an offline, human-approved calibration workflow
+(export → `scripts/quality_recommend.py` → review the replay diff → apply via
+`/admin/quality/calibrations`) that, once an admin applies a set, does make the router read
+a measured quality signal for the first time. See
+[`docs/reference/quality-calibration.md`](../reference/quality-calibration.md) and
+[`docs/research/feasible-route-bench.md`](../research/feasible-route-bench.md) §14. This
+closes the "durable fix" gap **only where labels already exist and an admin has applied a
+set** — it is not automatic, it is not exploration, and an unlabelled or unreviewed
+workload is exactly as blind as before. Not deployed.
 
 Two P2a signal defaults interact badly with slow reasoning models:
 

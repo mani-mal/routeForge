@@ -10,7 +10,10 @@ non-null B45 answer: §9. Branch `feat/b48-failure-injection`, code at `8344b21`
 P1b (`app/policy/feasible.py`), P2a ([`routing-signal-provenance.md`](routing-signal-provenance.md)),
 signal hardening (`SignalStore.replay`).
 **Slice:** P2b-1, the offline harness. P2b-2 (production outcome records) was built on
-2026-09-23 (§13). P2b-3 (learning bounded by the feasible set) is not built.
+2026-09-23 (§13). P2b-3 — offline, human-approved quality calibration, the first thing
+built on top of the P2b-2 dataset — was built on 2026-09-24 (§14). §13.4's other
+prerequisites for online exploration (propensity logging, a denser label, a workload
+taxonomy) remain not built.
 **Audience:** whoever writes the paper.
 
 This is the evidence file, not the paper. It records what was built, what the first runs
@@ -1832,3 +1835,134 @@ P2b-3 (learning and exploration bounded by the feasible set) needs, at least:
 - **Failure-record PII** is now covered end to end for `verify_failed` and `no_eligible`
   (§13.2, first row); `backend_failed` and `context_overflow` are covered by the builder
   unit tests and by construction.
+
+## 14. P2b-3: offline, human-approved quality calibration (2026-09-24)
+
+§13.4 named what production learning from the P2b-2 dataset would need, and listed the
+online items (propensity logging, the full feasible set on the record, a denser label) as
+still missing. P2b-3, as actually built, is narrower and deliberately does not attempt
+those: it is a **recommend-then-human-applies** loop over the served-arm dataset §13
+already describes, with no exploration and no change to eligibility. Design:
+`docs/superpowers/specs/2026-09-24-offline-quality-calibration-design.md` (§12 records
+where the build departed from it). Field-level reference:
+[`docs/reference/quality-calibration.md`](../reference/quality-calibration.md). Code:
+`app/eval/calibration.py` (estimator + replay), `app/apps/calibration_sets.py` (serving-side
+validator), `app/routing/quality.py` (resolver), `scripts/quality_recommend.py` (CLI),
+`app/api/admin_routes.py` (apply/list/revert). **Not deployed**, so this section — like
+§13 — reports what the code does, not a production result.
+
+### 14.1 The model
+
+An outcome record's evidence (§13.1's $y$) is turned into a Beta-Binomial estimate of one
+model's quality on one workload, and that estimate is checked against the router's own
+past decisions before anything about it can move.
+
+- **Unit and credit.** `(model, workload)` for every non-null workload a model served,
+  plus `(model, *)` over all its included rows. Credit goes to the served model
+  (`chosen`); cache hits, a null `chosen`, and the three "says nothing about answer
+  quality" statuses (`no_eligible`, `backend_failed`, `context_overflow`) are excluded —
+  the same exclusion set §13.3 already names as a "cannot support" for endpoint
+  comparisons, now enforced in code rather than just noted.
+- **Evidence.** At most one `quality` trial and one `route_correct` trial per row (the
+  latest by feedback `ts`, so repeated identical feedback cannot narrow a unit's interval
+  by volume alone), plus a 0/1 trial from `verify_failed`. A row with no evidence still
+  counts toward `n_rows` and `label_coverage`.
+- **Prior.** `Beta(k·q0, k·(1−q0))`, `q0` read only from a `published` or `tier_default`
+  value in the group's own scoring records — never from a `calibrated` or `customer`
+  term's own value, so a calibration can never compound on top of an earlier one. Such a
+  term instead carries a content-free `base` (the published/tier_default value underneath
+  the override), which is the prior for the next round; without it every unit of a second
+  round would be `insufficient`. No qualifying value and no `--priors` entry means the unit
+  is `insufficient` by construction, never silently scored against a default.
+- **Gate.** A unit is `recommended` only once it has enough trials (`min_labels`, default
+  20), a narrow enough 90% interval (`max_ci_width`, default 0.25), and a shift big enough
+  to matter (`min_shift`, default 0.02) — all three, not any one.
+- **Promotion.** A recommendation is a **content-hashed** file: its `set_id` is a sha256
+  over its own canonical content. That hash is an **integrity** check (the server
+  recomputes it and refuses a file edited after it was produced), **not** an authenticity
+  control — anyone can recompute it for any content. Authorization is the admin session
+  that `POST`s the file. An admin reviews a
+  **replay** — every logged decision in the recommendation's registry group, re-ranked
+  with the recorded weights and terms but the proposed quality substituted in — before
+  choosing to apply. Applying writes `model_quality` rows; the router picks them up on its
+  next refresh. Nothing in the loop is automatic past that one human action.
+
+### 14.2 Invariants, and the test that pins each
+
+| Invariant | Pinned by |
+|---|---|
+| A recommendation is deterministic: same export + options → byte-identical `recommendation.json`, sorted keys, 6-dp floats | `tests/eval/test_calibration_estimator.py::test_recommendation_shape_and_determinism` |
+| `set_id` is a content hash of the file minus `set_id`, computed identically by the offline and serving implementations | `tests/eval/test_calibration_estimator.py::test_set_id_is_the_specified_hash`, `test_set_id_changes_with_any_unit_score`; `tests/test_quality_calibrations_api.py::test_serving_and_eval_set_id_implementations_agree` |
+| Records never pool across `endpoint_registry_version`; the default group is the newest by latest `ts`, not by label | `tests/eval/test_calibration_estimator.py::test_registry_versions_never_pooled`, `test_newest_group_is_latest_ts_not_label` |
+| Exclusions (cache hit, null `chosen`, `no_eligible`/`backend_failed`/`context_overflow`) contribute no evidence | `tests/eval/test_calibration_estimator.py::test_exclusions` |
+| Only the latest label per `(request, score_name)` counts — repeats don't inflate `n_labels` | `tests/eval/test_calibration_estimator.py::test_repeated_labels_count_once_latest_wins`, `test_label_ts_tie_goes_to_last_in_file_order` |
+| `quality` and `route_correct` are independent trials on the same row; `verify_failed` adds its own | `tests/eval/test_calibration_estimator.py::test_quality_plus_route_correct_is_two_trials`, `test_verify_failed_plus_quality_is_two_trials` |
+| A `calibrated`/`customer` quality term's own value is never used as a prior (no compounding); its `base` is, so a second round finds its prior | `tests/eval/test_calibration_estimator.py::test_calibrated_src_is_not_a_prior`, `test_round_two_prior_comes_from_the_override_base`; `tests/test_quality_final_fixes.py::test_end_to_end_calibration_round_trip_and_round_two` |
+| No prior and no override → `insufficient`, reason `no prior` | `tests/eval/test_calibration_estimator.py::test_no_prior_insufficient` |
+| The recommendation gate needs all three of `min_labels`, `max_ci_width`, `min_shift` | `tests/eval/test_calibration_estimator.py::test_min_labels_insufficient`, `test_small_shift_no_change`, `test_hand_example_ci_too_wide_at_default` |
+| The Beta quantile is pure Python, cross-checked against an independent exact method (binomial-identity inversion in rational arithmetic) to ~1e-13, never `scipy` | `tests/eval/test_calibration_estimator.py::test_beta_ppf_known_values`, `test_beta_cdf_matches_binomial_identity`, module docstring |
+| Replay's equivalence check compares the **full recorded candidate order**, not just the winner | `tests/eval/test_calibration_replay.py::test_unchanged_replay_reproduces_every_real_logged_choice`, `test_swapping_two_non_winning_candidates_fails_equivalence` |
+| A scoring record missing a term is skipped and counted `not_recomputable`; only a fully-specified record whose unchanged replay disagrees fails equivalence | `tests/eval/test_calibration_replay.py::test_an_unrecomputable_scoring_record_is_skipped_and_counted`, `test_a_tampered_record_fails_equivalence` |
+| Replay only reorders the logged eligible set; a non-recommended unit changes nothing | `tests/eval/test_calibration_replay.py::test_non_recommended_units_never_change_a_decision` |
+| A new pick never served for a workload is flagged `no evidence`, not given fabricated numbers | `tests/eval/test_calibration_replay.py::test_a_new_pick_never_served_is_flagged_no_evidence` |
+| The CLI aborts (exit 2, writes nothing) on an equivalence failure; a load/option error is exit 1; a clean run with skipped-but-not-failing records is exit 0 | `tests/eval/test_calibration_replay.py::test_cli_exits_2_on_an_equivalence_failure`, `test_cli_exits_1_on_option_or_load_errors`, `test_cli_skips_partial_scoring_records_and_exits_0` |
+| Apply validates schema, hash, model existence, workload shape, score range, duplicate units, a non-empty recommended set, and registry version before writing anything; every failure is 422 | `tests/test_quality_calibrations_api.py::test_hash_mismatch_gives_422_and_writes_nothing`, `test_unknown_model_gives_422`, `test_registry_mismatch_gives_422_without_force_and_200_with_force`; `tests/test_quality_final_fixes.py::test_invalid_unit_workload_is_422`, `test_duplicate_recommended_units_are_422`, `test_zero_recommended_units_is_422_for_dry_run_and_apply` |
+| Re-applying the same `set_id` is refused (409), never silently duplicated | `tests/test_quality_overrides_store.py::test_write_calibration_set_twice_raises_value_error`; `tests/test_quality_calibrations_api.py::test_reapplying_same_set_gives_409` |
+| Revert deletes only its own set's rows; other sets and `customer` rows are untouched | `tests/test_quality_overrides_store.py::test_delete_calibration_set_removes_only_that_set`; `tests/test_quality_calibrations_api.py::test_revert_restores_previous_resolution` |
+| `customer` always beats `calibrated` — for the same key and across keys (a model-wide customer row beats a per-workload calibrated row), in the resolver and the dry-run preview; the store keeps both candidates per key | `tests/test_quality_resolver.py::test_override_rung_beats_published_and_tier_default`; `tests/test_quality_overrides_store.py::test_customer_and_calibrated_for_same_key_are_both_kept`; `tests/test_quality_calibrations_api.py::test_customer_row_wins_in_dry_run_and_after_apply`; `tests/test_quality_final_fixes.py::test_resolver_full_ladder_order`, `test_cross_key_customer_wins_in_dry_run_and_after_apply` |
+| A calibrated `set_id` is stamped on the served candidate's scoring record | `tests/test_quality_calibrations_api.py::test_apply_writes_rows_and_routed_request_carries_calibrated_source` |
+| With zero `model_quality` rows, decisions are unchanged from pre-P2b-3 — except the B54 fix: onboarded models no longer all score the 0.5 floor; one with a published `quality` scores it (any tier, cheap included), else its tier default | `tests/test_quality_serving.py::test_empty_overrides_decide_exactly_like_the_default_resolver`, `test_golden_yaml_pool_scoring_record_is_unchanged`, `test_b54_onboarded_mid_model_scores_its_tier_default_over_http`; `tests/test_quality_final_fixes.py::test_b54_onboarded_cheap_model_published_quality_is_scored` |
+| A per-workload calibration changes the pick only for that workload; a refresh failure keeps the last good snapshot; serving never imports `app.eval` | `tests/test_quality_serving.py::test_workload_scoped_override_changes_only_that_workload`, `test_refresh_picks_up_new_rows_and_keeps_snapshot_on_failure`; `tests/eval/test_isolation.py` |
+| `onprem_only` eligibility is never affected by a calibrated quality — quality only reorders | `tests/test_quality_serving.py::test_calibrated_cloud_quality_never_lifts_onprem_only` |
+
+### 14.3 What it can and cannot support
+
+**Can support:**
+
+- **Turning §13.3's "quality labels for the served endpoint" into routing.** That was the
+  one thing §13.3 said the P2b-2 dataset *could* support but nothing consumed; P2b-3 is
+  that consumer, gated by a human reading a replay diff first.
+- **An auditable, reversible change.** Every applied set is a versioned `set_id`, listed
+  and individually revertible; the router's decision trace names which set produced a
+  quality term whenever one applied.
+- **Correcting the specific failure mode §10/§11.1 observed** (a model that fails a
+  workload keeps being routed to it, because nothing measured that it was failing) —
+  *once labels exist*, and only after a human reviews and applies the result.
+
+**Cannot support (same boundary §13.3 already drew for the dataset, now also true of what
+calibration computes from it):**
+
+- **Counterfactuals or unconfounded comparisons.** The estimator credits only the served
+  model; it cannot know what an unserved eligible model would have scored, so a
+  low estimate for a rarely-served model and a high one for a heavily-served model are not
+  directly comparable ranking quality — they may just reflect different request mixes.
+  Nothing here revisits that; FeasibleRouteBench is still the source of counterfactuals.
+- **Faster labelling.** The estimator is bounded by whatever `quality`/`route_correct`
+  feedback already exists; it invents no new labels and runs no exploration to go collect
+  more.
+- **Self-correction.** A calibration is a one-time offline snapshot. If the underlying
+  model's behaviour changes after a set is applied, nothing here notices; re-running the
+  workflow on a fresh export is the only way to update it.
+
+### 14.4 What a later exploration slice would still need
+
+§13.4's list stands almost unchanged — P2b-3 did not build any of it, only the offline
+recommend/apply loop on top of the served-arm dataset:
+
+1. **Propensities, logged at decision time** — the prerequisite for any exploration and
+   for off-policy evaluation from production data (§13.4 item 1, §13.3 "off-policy
+   evaluation").
+2. **The full feasible set on the record**, not reconstructed from `rejected` codes
+   (§13.4 item 2) — needed if exploration is to range across the whole feasible set rather
+   than just the target tier.
+3. **A denser, less voluntary quality label** (§13.4 item 3) — P2b-3's `min_labels`/`
+   max_ci_width` gates exist precisely because voluntary feedback is sparse; a denser label
+   would let more units clear them sooner (§2.5's "roughly 25+ labels" note in the
+   reference doc).
+4. **A workload taxonomy clients actually send** (§13.4 item 4) — calibration is per
+   workload; untagged traffic can only ever produce a `(model, *)` estimate.
+5. **The bench as the pre-apply check** (§13.4 item 5) — P2b-3 deliberately ships with no
+   FeasibleRouteBench gate wired into apply (spec, out of scope); an operator can still run
+   one manually before applying, but nothing enforces it.
+6. **The served model on cache hits** (§13.4 item 6) — a cache hit still credits no model
+   in the P2b-3 estimator either, for the same reason §13.1 gives.

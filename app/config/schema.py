@@ -148,6 +148,11 @@ class RoutingCfg(BaseModel):
     signals: SignalsCfg = SignalsCfg()
     # Step-7 endpoint circuit breaker. Owned here (routing input), never restated.
     breaker: BreakerCfg = BreakerCfg()
+    # P2b-3 offline quality calibration: how often (seconds) the boot-time
+    # background loop re-reads `store.load_quality_overrides` into the shared
+    # QualityResolver snapshot. Single-owned here; the config lint rejects a
+    # non-positive value (QUALITY_REFRESH_NOT_POSITIVE).
+    quality_refresh_s: float = 60.0
 
     @model_validator(mode="before")
     @classmethod

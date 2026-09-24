@@ -509,6 +509,41 @@ response text. Line format, columns and an example:
 
 ---
 
+## `POST /admin/quality/calibrations` (admin-only)
+
+Admin-only, like every route in this section (`401` without the admin session cookie).
+Validates and, unless `?dry_run=true`, applies a `recommendation.json` produced by
+`scripts/quality_recommend.py` — the offline, human-approved quality-calibration workflow
+(P2b-3). Body is the recommendation file as-is; query params `dry_run` (default `false`)
+and `force_registry_mismatch` (default `false`).
+
+A validation failure (unsupported schema, a `set_id` that doesn't match the file's own
+content hash, an unknown model, a unit `workload` that is not null or a lower-case
+workload slug, an out-of-range score, duplicate `(model, workload)` units, no recommended
+units at all, or a registry-version mismatch without `force_registry_mismatch`) is `422`
+and writes nothing. Re-applying an already-applied `set_id` is `409`. A dry run previews
+each recommended unit's current effective quality/source and proposed score, whether a
+`customer` row would still win (`customer_wins`), and any more specific existing rows
+that will keep winning for their workload (`shadowed_by`), without writing anything; an
+apply writes one `model_quality` row per recommended unit, refreshes this replica's
+routing quality snapshot immediately, and returns `{"set_id", "applied", "refreshed",
+"registry_version_match", "forced"}`. Apply and revert each log one JSON audit line.
+
+## `GET /admin/quality/calibrations` (admin-only)
+
+Lists applied calibration sets: `[{"set_id", "applied_at", "units"}, ...]`, newest first.
+
+## `DELETE /admin/quality/calibrations/{set_id}` (admin-only)
+
+Reverts one applied set (deletes its `model_quality` rows and refreshes this replica's
+snapshot immediately). `404` if `set_id` is not an applied set. Other sets and any
+`customer` row are untouched.
+
+Full field reference, the estimator, the replay diff, precedence and the refresh
+behaviour: [`quality-calibration.md`](./quality-calibration.md).
+
+---
+
 ## `GET /metrics`
 
 No auth. A Prometheus scrape surface (in-process exporter; `503 metrics

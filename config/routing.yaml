@@ -114,3 +114,9 @@ model_pool:
 fallback:
   max_retries_same_provider: 1
   backoff_base_ms: 100
+
+# P2b-3 offline quality calibration: refresh interval (seconds) for the
+# boot-time background loop that re-reads model_quality overrides
+# (store.load_quality_overrides) into the shared QualityResolver snapshot.
+# Apply/revert also refresh at once. Single-owned here; must be > 0.
+quality_refresh_s: 60

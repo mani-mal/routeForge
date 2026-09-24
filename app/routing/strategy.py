@@ -50,6 +50,13 @@ class TermValue:
     value: float
     source: str
     samples: int = 0
+    # P2b-3: the calibration set a `calibrated` quality came from. Only the
+    # quality term ever sets it; None everywhere else.
+    set_id: str | None = None
+    # P2b-3, quality only: the published/tier_default `(value, source)`
+    # underneath a customer/calibrated score (`QualityScore.base`). None
+    # whenever no override supplied the quality, and on every other term.
+    base: tuple[float, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -87,7 +94,7 @@ class RankResult:
             "candidates": [
                 {"name": sc.candidate.name,
                  "score": sc.score,
-                 "quality": {"v": sc.quality.value, "src": sc.quality.source},
+                 "quality": _quality_record(sc.quality),
                  "latency": {"ms": sc.latency.value, "src": sc.latency.source,
                              "n": sc.latency.samples},
                  "availability": {"v": sc.availability.value,
@@ -148,13 +155,17 @@ class DefaultRoutingStrategy:
     def rank(self, eligible, *, ctx, tokens_after, weights, quality_resolver,
              signals, signals_cfg, cached_pricing=None, now=None) -> RankResult:
         max_cost = max((est for _, est in eligible), default=0.0)
+        # Offline callers (replay, unit tests) may rank with no context at all.
+        workload = getattr(ctx, "workload", None)
         scored: list[ScoredCandidate] = []
         latencies = _with_peer_prior(
             [(cand, signals.latency(cand.name, cand.tier, now=now))
              for cand, _ in eligible])
 
         for (cand, est), lat in zip(eligible, latencies):
-            q = quality_resolver.resolve(cand.name)
+            # The workload is a content-free slug; it only picks WHICH quality
+            # row applies. Eligibility never reads it (app/policy/feasible.py).
+            q = quality_resolver.resolve(cand.name, workload)
             avail = signals.availability(cand.name, now=now)
 
             cost_norm = est / max_cost if max_cost > 0 else 0.0
@@ -167,7 +178,7 @@ class DefaultRoutingStrategy:
 
             scored.append(ScoredCandidate(
                 candidate=cand, est_cost_usd=est, score=score,
-                quality=TermValue(q.score, q.source),
+                quality=TermValue(q.score, q.source, set_id=q.set_id, base=q.base),
                 latency=lat,
                 availability=TermValue(avail.value, avail.source, avail.samples),
                 cost_norm=cost_norm,
@@ -178,6 +189,26 @@ class DefaultRoutingStrategy:
                           signals_enabled=signals_cfg.enabled,
                           latency_scale_ms=signals_cfg.latency_scale_ms,
                           max_latency_norm=signals_cfg.max_latency_norm)
+
+
+def _quality_record(q: TermValue) -> dict:
+    """`{"v", "src"}`, plus `"set"` when a calibration set supplied the score,
+    plus `"base": {"v", "src"}` -- the published/tier_default value underneath
+    -- whenever an override (customer or calibrated) supplied it. The base is
+    what the NEXT calibration round uses as its prior
+    (`app/eval/calibration.py::_export_priors`); without it a second round
+    over an export taken after an apply would find no prior at all.
+
+    With no override the entry has exactly the pre-P2b-3 shape. The one value
+    that can differ is an onboarded model's quality: its published
+    `onboarded_models.quality`, else its real tier's default, instead of the
+    0.5 floor every onboarded model fell to before (B54)."""
+    rec: dict = {"v": q.value, "src": q.source}
+    if q.set_id is not None:
+        rec["set"] = q.set_id
+    if q.base is not None:
+        rec["base"] = {"v": q.base[0], "src": q.base[1]}
+    return rec
 
 
 def _with_peer_prior(latencies: list[tuple[PoolCandidate, "SignalValue"]]
