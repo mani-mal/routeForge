@@ -27,8 +27,9 @@ def test_upsert_and_load_quality_overrides():
 
         async with db.session() as s:
             overrides = await store.load_quality_overrides(s)
-        # customer beats calibrated for the same model
-        assert overrides["local-8b"] == (0.80, "customer")
+        # customer beats calibrated for the same (model, task_class) key;
+        # customer rows always carry a None set_id (P2b-3).
+        assert overrides[("local-8b", None)] == (0.80, "customer", None)
 
     _run(go())
 

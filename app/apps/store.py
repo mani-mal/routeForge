@@ -647,19 +647,101 @@ async def upsert_model_quality(
 _QUALITY_SOURCE_RANK = {"customer": 2, "calibrated": 1}
 
 
-async def load_quality_overrides(session: AsyncSession) -> dict[str, tuple[float, str]]:
-    """One winning (score, source) per model_name across the scalar (task_class
-    IS NULL) rows, customer beating calibrated. Feeds the router's override
-    snapshot; empty until the Stage 2 harness writes rows."""
-    stmt = select(ModelQuality).where(ModelQuality.task_class.is_(None))
-    rows = (await session.execute(stmt)).scalars().all()
-    best: dict[str, tuple[int, float, str]] = {}
+async def load_quality_overrides(
+    session: AsyncSession,
+) -> dict[tuple[str, str | None], tuple[float, str, str | None]]:
+    """Keyed quality overrides for the routing quality ladder (P2b-3 §7).
+
+    Maps `(model_name, task_class)` to `(score, source, set_id)`. `set_id` is
+    the row's `eval_run_id` for a `calibrated` row and always `None` for a
+    `customer` row (even if one happened to carry an `eval_run_id`). For a
+    given key, `customer` beats `calibrated`; among `calibrated` rows for the
+    same key, the row with the newest `calibrated_at` wins.
+
+    Selects over ALL rows (no `task_class IS NULL` filter) -- the table is
+    small, so scanning both the scalar and per-workload rows in one query is
+    fine. Nothing in serving called this function before P2b-3 (spec §3); this
+    is the seam the router/gateway wiring reads from (spec §7).
+    """
+    rows = (await session.execute(select(ModelQuality))).scalars().all()
+    # cur = (rank, calibrated_at, score, source, set_id)
+    best: dict[tuple[str, str | None], tuple[int, dt.datetime, float, str, str | None]] = {}
     for r in rows:
         rank = _QUALITY_SOURCE_RANK.get(r.source, 0)
-        cur = best.get(r.model_name)
-        if cur is None or rank > cur[0]:
-            best[r.model_name] = (rank, r.score, r.source)
-    return {name: (score, source) for name, (_r, score, source) in best.items()}
+        key = (r.model_name, r.task_class)
+        set_id = r.eval_run_id if r.source == "calibrated" else None
+        cand = (rank, r.calibrated_at, r.score, r.source, set_id)
+        cur = best.get(key)
+        if cur is None or (cand[0], cand[1]) > (cur[0], cur[1]):
+            best[key] = cand
+    return {key: (score, source, set_id)
+            for key, (_rank, _at, score, source, set_id) in best.items()}
+
+
+async def write_calibration_set(
+    session: AsyncSession, *, set_id: str, units: list[dict],
+) -> int:
+    """Write one `model_quality` row per unit for a new calibration set
+    (P2b-3 §6). Each unit dict has `model`, `workload` (`None` for the `(model,
+    *)` unit) and `score`. Every row is written with `source="calibrated"`,
+    `eval_run_id=set_id` and `notes="P2b-3 set"`. Returns the row count.
+
+    Raises `ValueError` if `set_id` already exists (idempotent apply is the
+    admin route's job, not this function's -- see spec §6). Caller commits.
+    """
+    existing = (await session.execute(
+        select(ModelQuality.id).where(ModelQuality.eval_run_id == set_id).limit(1)
+    )).scalar_one_or_none()
+    if existing is not None:
+        raise ValueError(f"calibration set already exists: {set_id}")
+    count = 0
+    for u in units:
+        session.add(ModelQuality(
+            id=uuid.uuid4().hex,
+            model_name=u["model"],
+            task_class=u.get("workload"),
+            score=u["score"],
+            source="calibrated",
+            eval_run_id=set_id,
+            notes="P2b-3 set",
+        ))
+        count += 1
+    return count
+
+
+async def list_calibration_sets(session: AsyncSession) -> list[dict]:
+    """Applied calibration sets, newest first: `{set_id, applied_at, units}`
+    grouped by `eval_run_id` over the `calibrated` rows (P2b-3 §6)."""
+    stmt = (
+        select(ModelQuality)
+        .where(ModelQuality.source == "calibrated", ModelQuality.eval_run_id.is_not(None))
+    )
+    rows = (await session.execute(stmt)).scalars().all()
+    groups: dict[str, dict] = {}
+    for r in rows:
+        g = groups.get(r.eval_run_id)
+        if g is None:
+            groups[r.eval_run_id] = {
+                "set_id": r.eval_run_id, "applied_at": r.calibrated_at, "units": 1}
+        else:
+            g["units"] += 1
+            if r.calibrated_at > g["applied_at"]:
+                g["applied_at"] = r.calibrated_at
+    return sorted(groups.values(), key=lambda g: g["applied_at"], reverse=True)
+
+
+async def delete_calibration_set(session: AsyncSession, set_id: str) -> int:
+    """Delete every `calibrated` row belonging to `set_id`. Returns the number
+    of rows deleted (0 if the set does not exist). Customer rows and other
+    calibration sets are untouched (P2b-3 §6). Caller commits."""
+    ids = (await session.execute(
+        select(ModelQuality.id).where(
+            ModelQuality.eval_run_id == set_id, ModelQuality.source == "calibrated")
+    )).scalars().all()
+    if not ids:
+        return 0
+    await session.execute(delete(ModelQuality).where(ModelQuality.id.in_(ids)))
+    return len(ids)
 
 
 # --- onboarded models (runtime model registry; replaces infra_models/infra_settings) ---

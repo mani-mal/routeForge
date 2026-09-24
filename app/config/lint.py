@@ -109,6 +109,12 @@ def lint_settings(s: Settings) -> list[str]:
         errs.append(f"BREAKER_MAX_COOLDOWN_BELOW_COOLDOWN "
                     f"{brk.max_cooldown_s} < {brk.cooldown_s}")
 
+    # P2b-3 offline quality calibration: the background refresh loop divides
+    # (conceptually, sleeps on) this interval -- a non-positive value would
+    # busy-loop or never refresh. Single-owned in routing.yaml.
+    if s.routing.quality_refresh_s <= 0:
+        errs.append(f"QUALITY_REFRESH_NOT_POSITIVE {s.routing.quality_refresh_s}")
+
     # `availability` is the renamed scoring weight (was `capacity`); a
     # routing.yaml with neither key is a boot failure, not a silent 0 weight.
     if "availability" not in s.routing.weights:
