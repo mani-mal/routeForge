@@ -59,7 +59,8 @@ def load_snapshot(path: str) -> tuple[dict, str]:
     hash is over the raw file bytes, so it changes with any byte, including
     whitespace. Raises `SnapshotError` on invalid JSON or a failed
     `validate_snapshot`."""
-    raw = open(path, "rb").read()
+    with open(path, "rb") as f:
+        raw = f.read()
     digest = hashlib.sha256(raw).hexdigest()
     try:
         doc = json.loads(raw)
@@ -105,14 +106,14 @@ def build_settings(doc: dict, base: Settings) -> Settings:
     settings = copy.deepcopy(base)
     doc_settings = doc["settings"]
 
-    try:
-        settings = settings.model_copy(update={
-            "routing": RoutingCfg.model_validate(doc_settings["routing"]),
-            "pricing": PricingCfg.model_validate(doc_settings["pricing"]),
-            "policy": PolicyCfg.model_validate(doc_settings["policy"]),
-        })
-    except ValidationError as exc:
-        raise SnapshotError("settings.<section>", str(exc)) from exc
+    update = {}
+    for section, cls in (("routing", RoutingCfg), ("pricing", PricingCfg),
+                         ("policy", PolicyCfg)):
+        try:
+            update[section] = cls.model_validate(doc_settings[section])
+        except ValidationError as exc:
+            raise SnapshotError(f"settings.{section}", str(exc)) from exc
+    settings = settings.model_copy(update=update)
 
     settings.routing_policy_version = doc["routing_policy_version"]
 

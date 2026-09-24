@@ -66,11 +66,18 @@ def test_app_policy_compiled():
 @pytest.mark.parametrize("mutate,where", [
     (lambda d: d.update(schema="routeforge.config-snapshot/v2"), "schema"),
     (lambda d: d.pop("apps"), "apps"),
+    (lambda d: d["settings"]["routing"].pop("tiers"), "settings.routing"),
     (lambda d: d["settings"]["providers"].update(nosuch={"enabled": True, "region": None,
         "prompt_retention": None, "accepts_raw_sensitive": None}), "settings.providers.nosuch"),
     (lambda d: d["apps"][0]["policy"].update(bogus=1), "apps.app-a.policy.bogus"),
 ])
 def test_load_errors_name_the_location(mutate, where):
+    """The first two cases raise from `validate_snapshot` (structural); the
+    rest raise from `build_scenario` -- a section-specific Pydantic
+    validation failure (`settings.routing`), an undeclared provider
+    (`settings.providers.nosuch`), and an unknown app-policy field
+    (`apps.app-a.policy.bogus`). Each names its own location, not a generic
+    `settings.<section>` placeholder."""
     doc = make_snapshot()
     mutate(doc)
     with pytest.raises(SnapshotError) as exc:
