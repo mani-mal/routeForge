@@ -200,11 +200,12 @@ Each is built the same way:
 **Rows.**
 - Every export row is one real request.
 - A row is **simulated** when all of these hold:
-  - `status` is `ok`, `error` or `rejected`;
+  - `status` is one of the P2b-2 outcome statuses: `ok`, `backend_failed`, `verify_failed`,
+    `no_eligible` or `context_overflow`;
   - `complexity` and `prompt_tokens` are present;
   - `application_id` is in the snapshot;
   - `cache_hit` is false.
-- Every other row is **excluded**, with a counted reason: `cache_hit`, `cancelled`,
+- Every other row is **excluded**, with a counted reason: `cache_hit`, `unknown_status`,
   `unknown_app`, `missing_features`. It is never silently dropped.
 
 **Context rebuild (per row, per arm).**
