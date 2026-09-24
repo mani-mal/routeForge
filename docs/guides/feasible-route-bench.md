@@ -394,6 +394,19 @@ fail, which endpoints serve which workloads, and how much feedback exists. Use t
 to compare endpoints on the same cases. The research notes on what the records can and
 cannot support are in [`docs/research/feasible-route-bench.md`](../research/feasible-route-bench.md) §13.
 
+## 9. Turning outcomes into a quality calibration
+
+The outcome report above is descriptive only — nothing it produces feeds back into
+routing. If the report shows a model with a weak `quality`/`route_correct` mean on a
+workload, `scripts/quality_recommend.py` is the next step: an **offline, human-approved**
+workflow (export → estimate → review a replay diff → dry run → apply) that can update the
+router's per-model quality via `/admin/quality/calibrations`. It is a separate feature
+(P2b-3), fully documented in
+[`docs/reference/quality-calibration.md`](../reference/quality-calibration.md) and in the
+research notes' [§14](../research/feasible-route-bench.md#14-p2b-3-offline-human-approved-quality-calibration-2026-09-24).
+It is not exploration or online learning — it never changes eligibility, and nothing
+applies without an admin reading the diff first.
+
 | Exit code | Meaning |
 |---|---|
 | `0` | ok |

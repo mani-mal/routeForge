@@ -243,6 +243,16 @@ claim summaries" becomes visible once clients tag and score. The router does not
 records yet; learning from them is P2b-3
 ([`docs/research/feasible-route-bench.md`](../research/feasible-route-bench.md) §13.4).
 
+**Update 2026-09-24:** P2b-3 is built — an offline, human-approved calibration workflow
+(export → `scripts/quality_recommend.py` → review the replay diff → apply via
+`/admin/quality/calibrations`) that, once an admin applies a set, does make the router read
+a measured quality signal for the first time. See
+[`docs/reference/quality-calibration.md`](../reference/quality-calibration.md) and
+[`docs/research/feasible-route-bench.md`](../research/feasible-route-bench.md) §14. This
+closes the "durable fix" gap **only where labels already exist and an admin has applied a
+set** — it is not automatic, it is not exploration, and an unlabelled or unreviewed
+workload is exactly as blind as before. Not deployed.
+
 Two P2a signal defaults interact badly with slow reasoning models:
 
 1. **Optimistic unmeasured latency.** Until a model has `signals.min_samples` (5) observations,

@@ -228,3 +228,49 @@ feedback scores. P2b-3 turns those records into quality estimates the router can
 - **Behaviour change:** existing `customer` or `calibrated` rows in `model_quality`
   (if any) **start affecting routing**, because nothing loaded them before. Before
   deploying, check the Spark DB for existing rows and name them in the release notes.
+
+## 12. Amendments (2026-09-24, Task 6, from the build's SDD ledger)
+
+§7's identity amendment (B54) was already folded in inline above during Task 2's review.
+The rest of what the build settled, beyond this spec's original text:
+
+- **§4 evidence, tightened.** "Each feedback `quality` value... adds" read as if every
+  posted value counted. As built, a row contributes **at most one** `quality` trial and
+  **at most one** `route_correct` trial — the **latest** entry for that score name, by the
+  feedback's own `ts` (a tie goes to the last entry in file order) — plus, separately, the
+  `verify_failed` 0/1 trial. Reason: without this, a client could narrow a unit's own
+  interval just by re-posting the same score. `quality` and `route_correct` remain
+  independent trials on the same row when both are present.
+- **§5 equivalence, strengthened and clarified.** "Reproduces the logged choice for every
+  record" is checked against the **full recorded candidate order**, not only the winner —
+  a strictly stronger check at no extra cost. Separately, the spec's "a mismatch aborts the
+  report, because it means the scoring record is not recomputable" conflated two different
+  cases; as built they are distinct:
+  - a record whose scoring is **missing a term** (for example a pre-P2a export) cannot be
+    recomputed at all. It is skipped and counted in `not_recomputable` — a warning, not a
+    failure; the CLI still exits `0`.
+  - a record whose scoring is **fully specified** but whose *unchanged* replay still
+    disagrees with its logged order is the actual equivalence failure: the CLI aborts with
+    exit code `2` and writes no files, because the replay cannot be trusted to mirror the
+    router at all.
+- **§4 defaults, confirmed strict by design.** The plan's own worked example — 18
+  `route_correct: 1`, 2 `route_correct: 0`, 2 `verify_failed` (`s=18`, `t=22`,
+  `q0=0.5` → `Beta(23, 9)`) — is `insufficient` at the shipped defaults: its 90% interval is
+  0.257049 wide, just over `max_ci_width`'s default 0.25, even though its shift (0.219)
+  clears `min_shift` easily. The defaults were kept as specified (a strict gate is the
+  intent, not a bug); `docs/reference/quality-calibration.md` §2.5 states this so an
+  operator isn't surprised that ~20 labels is usually not enough in practice. The Beta
+  quantile is implemented pure-Python only (never `scipy`), cross-checked against an
+  independent exact method to ~1e-13; a placeholder quantile value in the plan
+  (`Beta(10,30)` q0.95 = "0.3683") was wrong in its 4th decimal — the verified value is
+  0.3681529.
+- **Known deferred minor, not fixed in this build.** A recommendation with **zero**
+  `recommended` units applies successfully (`applied: 0`) instead of being refused; the
+  resulting no-op set is then neither blocked from re-apply (nothing was written under its
+  `set_id`) nor revertible (`DELETE` reports `404`, having deleted nothing). Low severity —
+  it can never write an out-of-range or unknown-model row, only a true no-op — but it is a
+  rough edge for an admin who expects `POST` to refuse an empty recommendation. Left open
+  for a later wave; not tracked as a numbered backlog bug.
+- **Docs (this task).** `docs/reference/quality-calibration.md` (new), research §14,
+  `docs/reference/README.md`, `docs/guides/feasible-route-bench.md` §9,
+  `docs/reference/api-reference.md`, and the B51 pointer in `docs/backlog/bugs.md`.
