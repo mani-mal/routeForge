@@ -52,6 +52,22 @@ def test_cli_exit_2_on_bad_proposal(tmp_path):
     assert proc.returncode == 2 and "bogus" in proc.stderr
 
 
+def test_cli_exit_2_on_snapshot_deep_validation_failure(tmp_path):
+    """`load_snapshot`'s shallow structural check passes (schema, required
+    top-level keys, unique app ids), but `simulate()`'s deep validation
+    (`build_settings`, via `apply_proposal`) rejects a provider the running
+    deployment's serving.yaml never declared. Spec §8: exit 2 covers "an
+    input file failed to load OR VALIDATE" -- not just the narrower load
+    errors caught before `simulate()` runs."""
+    snap = make_snapshot()
+    snap["settings"]["providers"]["mystery-provider"] = {
+        "enabled": True, "region": "onprem", "prompt_retention": "none",
+        "accepts_raw_sensitive": True}
+    proc, _ = _run_cli(tmp_path, [], snap, {"schema": P})
+    assert proc.returncode == 2, proc.stderr
+    assert "mystery-provider" in proc.stderr
+
+
 def test_cli_exit_3_on_new_rejections_when_flagged(tmp_path):
     from tests.eval.sim_fixtures import app_entry
     snap = make_snapshot(apps=[app_entry("app-a", allowed_models=["local-mid"])])

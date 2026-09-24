@@ -62,6 +62,16 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         records, warnings = load_export(args.export)
+    except (ValueError, OSError, json.JSONDecodeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    # Printed right after `load_export` succeeds, not after every load, so
+    # they still surface if a later file (snapshot/proposal) fails to load.
+    for w in warnings:
+        print(f"policy_simulate: warning: {w}", file=sys.stderr)
+
+    try:
         export_sha256 = hashlib.sha256(Path(args.export).read_bytes()).hexdigest()
         snapshot, snapshot_sha256 = load_snapshot(args.snapshot)
         proposal, proposal_sha256 = load_proposal(args.proposal)
@@ -70,12 +80,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    for w in warnings:
-        print(f"policy_simulate: warning: {w}", file=sys.stderr)
-
     try:
         results, excluded = asyncio.run(simulate(records, snapshot, proposal, base=base))
-    except ProposalError as exc:
+    except (SnapshotError, ProposalError) as exc:
+        # Spec §8 governs over the narrower "catch ProposalError" reading:
+        # exit 2 is "an input file failed to load OR VALIDATE" -- a
+        # snapshot that passes `load_snapshot`'s shallow structural check
+        # but fails `build_settings`'s deep validation (e.g. an undeclared
+        # provider) is exactly that, and `apply_proposal`/`build_scenario`
+        # inside `simulate()` can raise either error type.
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
