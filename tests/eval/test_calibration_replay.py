@@ -209,15 +209,40 @@ def test_a_tampered_record_fails_equivalence():
     out = replay(records, _rec([]))
     assert out["equivalence_ok"] is False
     assert [m["request_id"] for m in out["mismatches"]] == ["bad"]
-    assert out["mismatches"][0]["logged"] == tampered["candidates"][0]["name"]
+    assert out["mismatches"][0]["logged"] == [c["name"] for c in tampered["candidates"]]
 
 
-def test_an_unrecomputable_scoring_record_fails_equivalence():
-    s = copy.deepcopy(_real_cases()[0])
-    del s["candidates"][1]["latency"]
-    out = replay([_outcome("r", s)], _rec([]))
+def test_swapping_two_non_winning_candidates_fails_equivalence():
+    """Equivalence is over the FULL recorded order, not just the winner."""
+    s = _scoring([("m-a", "cheap", 0.001), ("m-b", "cheap", 0.002),
+                  ("m-c", "cheap", 0.003)],
+                 quality={"m-a": (0.7, "published"), "m-b": (0.6, "published"),
+                          "m-c": (0.5, "published")})
+    c = s["candidates"]
+    assert c[1]["score"] != c[2]["score"]     # distinct: a swap is a real disorder
+    tampered = copy.deepcopy(s)
+    tc = tampered["candidates"]
+    tc[1], tc[2] = tc[2], tc[1]
+    assert tc[0]["name"] == c[0]["name"]      # the winner is untouched
+    out = replay([_outcome("bad", tampered)], _rec([]))
     assert out["equivalence_ok"] is False
-    assert "not recomputable" in out["mismatches"][0]["reason"]
+    assert out["mismatches"][0]["reason"] == "unchanged replay disagreed with the logged order"
+    assert out["mismatches"][0]["replayed"] == [x["name"] for x in c]
+
+
+def test_an_unrecomputable_scoring_record_is_skipped_and_counted():
+    """A scoring record missing a term cannot be replayed; it is skipped and
+    counted, never scored with a default and never an equivalence failure."""
+    partial = copy.deepcopy(_real_cases()[0])
+    del partial["candidates"][1]["latency"]
+    names_only = {"candidates": [{"name": "m-a"}, {"name": "m-b"}]}
+    records = [_outcome("full", _real_cases()[0]), _outcome("p1", partial),
+               _outcome("p2", names_only)]
+    out = replay(records, _rec([]))
+    assert out["equivalence_ok"] is True
+    assert out["mismatches"] == []
+    assert out["not_recomputable"] == 2
+    assert out["per_workload"]["chat"]["decisions_total"] == 1
 
 
 def test_records_without_scoring_are_skipped_not_replayed():
@@ -298,6 +323,21 @@ def test_a_new_pick_never_served_is_flagged_no_evidence():
     records = [_outcome("c1", s, workload="chat")]
     out = replay(records, _rec([_unit("m-b", "chat", 0.9)]))
     assert out["per_workload"]["chat"]["new_pick_evidence"] == {"m-b": "no evidence"}
+
+
+def test_new_pick_evidence_excludes_the_estimators_excluded_statuses():
+    s = _flip_scoring()
+    records = [_outcome("c1", s, workload="chat")]
+    records += [_outcome(f"x{st}", s, chosen="m-b", workload="chat", status=st,
+                         feedback=[("quality", 0.0)])
+                for st in ("no_eligible", "backend_failed", "context_overflow")]
+    out = replay(records, _rec([_unit("m-b", "chat", 0.9)]))
+    assert out["per_workload"]["chat"]["new_pick_evidence"] == {"m-b": "no evidence"}
+    records.append(_outcome("ok", s, chosen="m-b", workload="chat",
+                            feedback=[("quality", 1.0)]))
+    out = replay(records, _rec([_unit("m-b", "chat", 0.9)]))
+    ev = out["per_workload"]["chat"]["new_pick_evidence"]["m-b"]
+    assert (ev["served"], ev["quality_mean"]) == (1, 1.0)
 
 
 def test_new_pick_evidence_comes_from_its_own_logged_rows():
@@ -411,6 +451,39 @@ def test_cli_exits_2_on_an_equivalence_failure(tmp_path):
     assert "tampered" in r.stderr
     assert not (out / "report.md").exists()
     assert not (out / "recommendation.json").exists()
+
+
+def test_cli_skips_partial_scoring_records_and_exits_0(tmp_path):
+    recs = _cli_records()
+    partial = copy.deepcopy(recs[0])
+    partial["request_id"] = "partial"
+    del partial["scoring"]["weights"]
+    names_only = copy.deepcopy(recs[1])
+    names_only["request_id"] = "names-only"
+    names_only["scoring"] = {"candidates": [{"name": "m-a"}, {"name": "m-b"}]}
+    export = tmp_path / "export.ndjson"
+    _write_export(export, recs + [partial, names_only])
+    out = tmp_path / "o"
+    r = _run("--export", str(export), "--out", str(out))
+    assert r.returncode == 0, r.stderr
+    assert "2 records skipped" in r.stderr
+    report = (out / "report.md").read_text(encoding="utf-8")
+    assert "skipped (not recomputable: scoring record missing a term): 2" in report
+    records, _ = load_export(str(export))
+    rec = json.loads((out / "recommendation.json").read_text(encoding="utf-8"))
+    assert replay(records, rec)["not_recomputable"] == 2
+
+
+def test_cli_accepts_the_shared_name_only_fixture(tmp_path):
+    fixture = REPO_ROOT / "tests" / "eval" / "fixtures" / "outcomes_export.ndjson"
+    out = tmp_path / "o"
+    r = _run("--export", str(fixture), "--out", str(out))
+    assert r.returncode == 0, r.stderr
+    assert (out / "report.md").read_text(encoding="utf-8").startswith(REPLAY_CAVEAT)
+    records, _ = load_export(str(fixture))
+    rec = json.loads((out / "recommendation.json").read_text(encoding="utf-8"))
+    rp = replay(records, rec)
+    assert rp["not_recomputable"] > 0 and rp["n_replayed"] == 0
 
 
 @pytest.mark.parametrize("extra", [

@@ -445,12 +445,23 @@ def dump_recommendation(rec: dict) -> str:
 #           + w.availability * availability.v
 #   order = sorted by (-score, cost.est_usd), stable
 #
+# The sort runs over the candidates in their RECORDED order, so an exact
+# (score, est_usd) tie in the proposed replay resolves by recorded order --
+# the only order the record preserves (the router's original eligible order
+# is not logged).
+#
 # The strategy has no "missing term" branch: every term is always present
 # and its recorded value is what was used, whatever its `src` says
 # (`peer_prior` carries the borrowed median; `disabled` carries the tier
 # default / 1.0 the strategy actually scored with). So the replay uses the
-# recorded values as-is, and a record that lacks one is *not recomputable*
-# -- an equivalence failure, never a silent default.
+# recorded values as-is. A record that lacks one (e.g. a pre-P2a export
+# whose scoring carries names only) is *not recomputable*: it is skipped
+# and counted in `not_recomputable`, never scored with a silent default.
+#
+# Equivalence: for every fully-specified record, the unchanged replay must
+# reproduce the FULL recorded order (`[c["name"] for c in candidates]`),
+# not just the winner. A disagreement means the replay does not mirror the
+# strategy, so its diff cannot be trusted -- the CLI exits 2.
 
 REPLAY_CAVEAT = (
     "This replay shows which logged decisions would change. It cannot show "
@@ -495,10 +506,11 @@ def _parse_scoring(scoring: dict) -> tuple[dict, float, float, list[dict]]:
     return w, scale, cap, cands
 
 
-def _winner(w: dict, scale: float, cap: float, cands: list[dict],
-            quality: dict[str, float]) -> str:
+def _rank(w: dict, scale: float, cap: float, cands: list[dict],
+          quality: dict[str, float]) -> list[str]:
     """Mirror of `DefaultRoutingStrategy.rank`: same expression order (so
-    float ties reproduce), same `(-score, est_cost)` stable sort."""
+    float ties reproduce), same `(-score, est_cost)` stable sort over the
+    recorded order. Returns the candidate names best-first."""
     scored = []
     for c in cands:
         lat_norm = min(c["lat_ms"] / scale, cap)
@@ -508,7 +520,7 @@ def _winner(w: dict, scale: float, cap: float, cands: list[dict],
                  + w["availability"] * c["avail"])
         scored.append((score, c["est_usd"], c["name"]))
     scored.sort(key=lambda s: (-s[0], s[1]))
-    return scored[0][2]
+    return [name for _, _, name in scored]
 
 
 def _proposed_units(recommendation: dict) -> dict[tuple[str, str | None], float]:
@@ -538,9 +550,13 @@ def _latest_quality(record: dict) -> float | None:
 
 
 def _evidence(group: list[dict], model: str, workload: str | None):
+    # Same exclusions as the estimator's `_included`: cache hits and
+    # no_eligible / backend_failed / context_overflow rows say nothing
+    # about the model's answers.
     rows = [r for r in group
             if r.get("cache_hit") is not True and r.get("chosen") == model
-            and r.get("workload") == workload]
+            and r.get("workload") == workload
+            and r.get("status") not in EXCLUDED_STATUSES]
     if not rows:
         return "no evidence"
     qualities = [q for q in (_latest_quality(r) for r in rows) if q is not None]
@@ -563,8 +579,11 @@ def replay(records: list[dict], recommendation: dict) -> dict:
     per-workload unit wins, else the `(model, *)` unit, else its logged
     quality. Records with no `scoring` (or an empty candidate list) are not
     decisions and are skipped (`n_skipped_no_scoring`). A scoring record
-    that cannot be recomputed, or whose unchanged replay does not pick
-    `scoring.candidates[0]`, is a mismatch and sets `equivalence_ok` False.
+    missing any term is skipped and counted in `not_recomputable`. A
+    fully-specified record whose unchanged replay does not reproduce the
+    full recorded candidate order is a mismatch and sets `equivalence_ok`
+    False. In the proposed replay an exact `(score, est_usd)` tie resolves
+    by recorded order.
     """
     version = recommendation.get("registry_version")
     group = [r for r in records if _version_label(r) == version]
@@ -572,6 +591,7 @@ def replay(records: list[dict], recommendation: dict) -> dict:
 
     mismatches: list[dict] = []
     skipped = 0
+    not_recomputable = 0
     per_wl: dict[str, dict] = {}
     new_picks: dict[str, set[str]] = {}
     for r in group:
@@ -582,16 +602,16 @@ def replay(records: list[dict], recommendation: dict) -> dict:
         rid = r.get("request_id")
         try:
             w, scale, cap, cands = _parse_scoring(scoring)
-        except _NotRecomputable as exc:
-            mismatches.append({"request_id": rid, "logged": None, "replayed": None,
-                               "reason": f"not recomputable: {exc}"})
+        except _NotRecomputable:
+            not_recomputable += 1
             continue
-        logged = cands[0]["name"]
-        unchanged = _winner(w, scale, cap, cands, {})
-        if unchanged != logged:
-            mismatches.append({"request_id": rid, "logged": logged,
+        logged_order = [c["name"] for c in cands]
+        logged = logged_order[0]
+        unchanged = _rank(w, scale, cap, cands, {})
+        if unchanged != logged_order:
+            mismatches.append({"request_id": rid, "logged": logged_order,
                                "replayed": unchanged,
-                               "reason": "unchanged replay picks a different candidate"})
+                               "reason": "unchanged replay disagreed with the logged order"})
             continue
 
         workload = r.get("workload")
@@ -603,7 +623,7 @@ def replay(records: list[dict], recommendation: dict) -> dict:
                 quality[c["name"]] = proposed[key]
             elif (c["name"], None) in proposed:
                 quality[c["name"]] = proposed[(c["name"], None)]
-        new = _winner(w, scale, cap, cands, quality)
+        new = _rank(w, scale, cap, cands, quality)[0]
 
         label = workload if workload is not None else UNTAGGED_WORKLOAD
         wl = per_wl.setdefault(label, {"decisions_total": 0, "decisions_changed": 0,
@@ -632,6 +652,7 @@ def replay(records: list[dict], recommendation: dict) -> dict:
         "mismatches": mismatches,
         "n_replayed": sum(wl["decisions_total"] for wl in per_wl.values()),
         "n_skipped_no_scoring": skipped,
+        "not_recomputable": not_recomputable,
         "per_workload": out_wl,
     })
 
@@ -686,7 +707,9 @@ def render_report(estimate_dict: dict, replay_dict: dict) -> str:
     lines += ["## Replay diff", "",
               f"decisions replayed: {replay_dict.get('n_replayed', 0)}; "
               f"skipped (no scoring record): "
-              f"{replay_dict.get('n_skipped_no_scoring', 0)}", "",
+              f"{replay_dict.get('n_skipped_no_scoring', 0)}; "
+              f"skipped (not recomputable: scoring record missing a term): "
+              f"{replay_dict.get('not_recomputable', 0)}", "",
               "| workload | decisions_changed / decisions_total |", "|---|---|"]
     for label in sorted(per_wl):
         wl = per_wl[label]

@@ -14,9 +14,11 @@ File-based only: no DB, no `app.api`, no serving import
 
 Exit codes: 0 ok; 1 load or option error (bad path, unrecognized export
 schema, unknown registry version, invalid option or priors file); 2 replay
-equivalence failure -- replaying with no changes did not reproduce a logged
-choice, so the scoring records are not recomputable and no files are
-written.
+equivalence failure -- for a fully-specified scoring record, the unchanged
+replay disagreed with the logged candidate order, so the replay does not
+mirror the router and no files are written. Records whose scoring lacks a
+term (e.g. pre-P2a exports) are skipped and counted as not recomputable,
+not treated as a failure.
 """
 from __future__ import annotations
 
@@ -88,9 +90,9 @@ def main(argv: list[str] | None = None) -> int:
     rec = build_recommendation(est, export_sha256=export_sha256)
     diff = replay(records, rec)
     if not diff["equivalence_ok"]:
-        print("quality_recommend: replay equivalence FAILED -- replaying with no "
-              "changes did not reproduce the logged choice; the scoring records "
-              "are not recomputable, so no recommendation is written:",
+        print("quality_recommend: replay equivalence FAILED -- the unchanged "
+              "replay disagreed with the logged order, so the replay diff "
+              "cannot be trusted and no recommendation is written:",
               file=sys.stderr)
         for m in diff["mismatches"]:
             print(f"  request_id={m['request_id']} logged={m['logged']} "
@@ -103,6 +105,10 @@ def main(argv: list[str] | None = None) -> int:
     (out / "report.md").write_text(render_report(est, diff), encoding="utf-8")
 
     n_rec = sum(1 for u in rec["units"] if u["status"] == "recommended")
+    if diff["not_recomputable"]:
+        print(f"quality_recommend: warning: {diff['not_recomputable']} records "
+              f"skipped (scoring record missing a term; not recomputable)",
+              file=sys.stderr)
     print(f"quality_recommend: {len(records)} records ({len(warnings)} warnings), "
           f"{n_rec} recommended units, set_id {rec['set_id']} -> {out}")
     return 0
