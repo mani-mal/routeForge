@@ -2156,7 +2156,18 @@ the core disagree, and `_budget_core` raises loudly rather than build a silently
 
 ### 16.4 Spark example
 
-Pending the Spark verification after deploy.
+Live on the DGX Spark (2026-09-25, `dd3790c`). A throwaway app with default residency sent a
+`model: auto` request whose prompt carried a unique marker. The pool held five enabled on-prem
+models in the cheap and mid tiers, with no region declared; cloud providers were disabled.
 
 | case | core |
 |---|---|
+| app `allowed_tiers: [frontier]` | `allowed_tiers` ("tier must be one of frontier"), 5 candidates, no state |
+| app `allowed_regions: [eu]` | `allowed_regions` (security; hint: "Onboard or approve an endpoint declared in an allowed region."), 5 candidates, no state |
+
+- Both responses were 422 `no_eligible_model` with `error.conflicting_core`.
+- Both `routing_outcomes` rows (`status = no_eligible`) carried the `to_record()` core.
+- The prompt marker appeared in neither.
+- The `serving.api` `no_eligible_model` log line did **not** reach the container log. RouteForge
+  configures no logging handler, so every `serving.*` INFO record is dropped in deployment.
+  This is filed as B57; the 422 and the outcome row are the working channels until it is fixed.
