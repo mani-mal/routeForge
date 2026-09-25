@@ -22,7 +22,8 @@ import math
 from app.config.loader import load_settings
 from app.config.schema import Settings
 from app.eval.scenario import _app_policy_view, build_settings
-from app.policy.compile import PolicyViolation, compile_policy, resolve_residency
+from app.policy.compile import (_OPERATOR_NAME, PolicyViolation, compile_policy,
+                                resolve_residency)
 from app.policy.enums import PROMPT_RETENTION_VALUES
 
 SCHEMA = "routeforge.policy-proposal/v1"
@@ -90,33 +91,65 @@ def _validate_schema(doc: dict) -> None:
             "schema", f"major version must be {_SCHEMA_MAJOR!r}; got {major!r}")
 
 
+def _opt_dict(obj: dict, key: str, path: str) -> dict:
+    """`obj[key]` as a dict, `{}` when absent/null; any other type is a
+    `ProposalError` at `path` (never an AttributeError traceback)."""
+    value = obj.get(key)
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ProposalError(path, "must be an object")
+    return value
+
+
+def _opt_list(obj: dict, key: str, path: str) -> list:
+    value = obj.get(key)
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ProposalError(path, "must be a list")
+    return value
+
+
 def _validate_keys(doc: dict) -> None:
     """Structural-only pass: every key, at every level, is one of the
-    documented ones (spec §5). Value validity (types, ranges, references into
-    the snapshot) happens later in `apply_proposal`, which has a snapshot to
-    check against; this pass does not need one."""
+    documented ones (spec §5), and every container is the documented type
+    (object / list / list of slug strings) -- so a malformed document is a
+    `ProposalError` naming its path, never a traceback. Value validity
+    (types, ranges, references into the snapshot) happens later in
+    `apply_proposal`, which has a snapshot to check against; this pass does
+    not need one."""
     _check_keys(doc, _TOP_KEYS, "")
 
-    for app_id, edit in (doc.get("apps") or {}).items():
+    for app_id, edit in _opt_dict(doc, "apps", "apps").items():
         _check_keys(edit, _APP_EDIT_KEYS, f"apps.{app_id}")
-        for i, rule in enumerate(edit.get("sensitivity_rules") or []):
-            _check_keys(rule, _RULE_KEYS, f"apps.{app_id}.sensitivity_rules[{i}]")
+        rules_path = f"apps.{app_id}.sensitivity_rules"
+        for i, rule in enumerate(_opt_list(edit, "sensitivity_rules", rules_path)):
+            _check_keys(rule, _RULE_KEYS, f"{rules_path}[{i}]")
 
-    for name, fields in (doc.get("providers") or {}).items():
+    for name, fields in _opt_dict(doc, "providers", "providers").items():
         _check_keys(fields, _PROVIDER_EDIT_KEYS, f"providers.{name}")
 
-    endpoints = doc.get("endpoints") or {}
+    endpoints = _opt_dict(doc, "endpoints", "endpoints")
     _check_keys(endpoints, _ENDPOINTS_KEYS, "endpoints")
-    for i, entry in enumerate(endpoints.get("add") or []):
-        slug = entry.get("slug") if isinstance(entry, dict) else None
-        loc = f"endpoints.add.{slug}" if isinstance(slug, str) and slug else f"endpoints.add[{i}]"
+    for i, entry in enumerate(_opt_list(endpoints, "add", "endpoints.add")):
+        if not isinstance(entry, dict):
+            raise ProposalError(f"endpoints.add[{i}]", "must be an object")
+        slug = entry.get("slug")
+        if not isinstance(slug, str) or not slug:
+            raise ProposalError(f"endpoints.add[{i}].slug", "must be a non-empty string")
+        loc = f"endpoints.add.{slug}"
         _check_keys(entry, _ENDPOINT_ADD_KEYS, loc)
         if isinstance(entry.get("price"), dict):
             _check_keys(entry["price"], _PRICE_KEYS, f"{loc}.price")
-    for slug, fields in (endpoints.get("update") or {}).items():
+    for op in ("remove", "disable", "enable"):
+        for i, slug in enumerate(_opt_list(endpoints, op, f"endpoints.{op}")):
+            if not isinstance(slug, str) or not slug:
+                raise ProposalError(f"endpoints.{op}[{i}]", "must be a non-empty slug string")
+    for slug, fields in _opt_dict(endpoints, "update", "endpoints.update").items():
         _check_keys(fields, _ENDPOINT_UPDATE_KEYS, f"endpoints.update.{slug}")
 
-    for slug, fields in (doc.get("prices") or {}).items():
+    for slug, fields in _opt_dict(doc, "prices", "prices").items():
         _check_keys(fields, _PRICE_KEYS, f"prices.{slug}")
 
 
@@ -162,10 +195,21 @@ def _validate_price_fields(loc: str, price) -> None:
         raise ProposalError(loc, "cached_input must be null or a finite number >= 0")
 
 
+def _is_str_list(value) -> bool:
+    return isinstance(value, list) and all(isinstance(v, str) for v in value)
+
+
+def _validate_region(loc: str, value) -> None:
+    """Admin parity (`OnboardIn.region: str | None`): a string or null.
+    The token itself is customer vocabulary -- not checked against a list."""
+    if value is not None and not isinstance(value, str):
+        raise ProposalError(loc, "must be a string or null")
+
+
 def _validate_allowed_app_ids(loc: str, value, app_ids: set[str]) -> None:
     if value is None:
         return
-    if not isinstance(value, list):
+    if not _is_str_list(value):
         raise ProposalError(loc, "must be null or a list of application ids")
     bad = sorted(set(value) - app_ids)
     if bad:
@@ -200,6 +244,8 @@ def _validate_tier(loc: str, value, canonical_tiers: set[str]) -> None:
 def _validate_rule(app_id: str, i: int, rule: dict, risk_classes: set[str],
                    sensitivity_levels: set[str]) -> None:
     loc = f"apps.{app_id}.sensitivity_rules[{i}]"
+    if not isinstance(rule, dict):
+        raise ProposalError(loc, "must be an object")
     entities = rule.get("entities")
     if not isinstance(entities, list) or not all(isinstance(e, str) for e in entities):
         raise ProposalError(f"{loc}.entities", "must be a list of strings")
@@ -219,7 +265,8 @@ def _validate_rule(app_id: str, i: int, rule: dict, risk_classes: set[str],
 
 def _validate_app_edit(app_id: str, edit: dict, entry: dict, settings: Settings,
                        canonical_tiers: set[str], risk_classes: set[str],
-                       sensitivity_levels: set[str]) -> None:
+                       sensitivity_levels: set[str], declared_providers: set[str],
+                       known_models: set[str]) -> None:
     if "residency" in edit:
         _, parsed = resolve_residency(edit["residency"])
         if not parsed:
@@ -228,15 +275,44 @@ def _validate_app_edit(app_id: str, edit: dict, entry: dict, settings: Settings,
                 f"unparseable residency {edit['residency']!r}")
 
     for field in _SET_FIELDS:
-        if field in edit and edit[field] is not None and not isinstance(edit[field], list):
-            raise ProposalError(f"apps.{app_id}.{field}", "must be a list or null")
+        if field in edit and edit[field] is not None and not _is_str_list(edit[field]):
+            raise ProposalError(f"apps.{app_id}.{field}", "must be a list of strings or null")
 
-    if "allowed_tiers" in edit and edit["allowed_tiers"] is not None:
-        bad = sorted(set(edit["allowed_tiers"]) - canonical_tiers)
+    # Mirrors `app/api/admin_routes.py::_validate_policy_values`: the admin
+    # write path checks only values a write CHANGES (a stored value from
+    # before a check existed must not block an unrelated edit), refuses an
+    # empty allowlist (the store reads [] as "no restriction", the opposite
+    # of what clearing a list means), and refuses unknown tiers, providers
+    # and models. `allowed_regions` is refused by the compiler below
+    # (ALLOWED_REGIONS_INVALID), exactly as on the admin path.
+    def changed(field: str) -> bool:
+        value = edit.get(field)
+        if value is None:
+            return False
+        stored = entry["policy"].get(field)
+        return stored is None or sorted(value) != sorted(stored)
+
+    for field in ("allowed_tiers", "allowed_providers", "allowed_models"):
+        if changed(field) and len(edit[field]) == 0:
+            raise ProposalError(
+                f"apps.{app_id}.{field}",
+                "is an empty list, which RouteForge reads as 'no restriction'; "
+                "use null to clear it")
+    for field, legal, what in (("allowed_tiers", canonical_tiers, "tier"),
+                               ("allowed_providers", declared_providers, "provider")):
+        if changed(field):
+            bad = sorted(set(edit[field]) - legal)
+            if bad:
+                raise ProposalError(
+                    f"apps.{app_id}.{field}",
+                    f"unknown {what}(s) {bad}; legal {what}s: {sorted(legal)}")
+    if changed("allowed_models"):
+        bad = sorted(set(edit["allowed_models"]) - known_models)
         if bad:
             raise ProposalError(
-                f"apps.{app_id}.allowed_tiers",
-                f"unknown tier(s) {bad}; legal tiers: {sorted(canonical_tiers)}")
+                f"apps.{app_id}.allowed_models",
+                f"unknown model(s) {bad}: not in the YAML pool, not onboarded and "
+                "not added by this proposal")
 
     if "max_cost_usd_per_request" in edit and edit["max_cost_usd_per_request"] is not None:
         if not _finite_positive(edit["max_cost_usd_per_request"]):
@@ -261,9 +337,18 @@ def _validate_app_edit(app_id: str, edit: dict, entry: dict, settings: Settings,
             merged[field] = edit[field]
     try:
         view = _app_policy_view(merged, app_id)
-        compile_policy(view, settings)
+        eff = compile_policy(view, settings)
     except (PolicyViolation, ValueError) as exc:
         raise ProposalError(f"apps.{app_id}", str(exc)) from exc
+    if eff.rejected:
+        # An unparseable value `compile_policy` failed closed on: the admin
+        # write path refuses it (`validate_effective`, e.g.
+        # ALLOWED_REGIONS_INVALID), so a proposal must too.
+        names = [_OPERATOR_NAME.get(axis, axis) for axis, _value in eff.rejected]
+        detail = ", ".join(f"{_OPERATOR_NAME.get(axis, axis)}={value!r}"
+                           for axis, value in eff.rejected)
+        raise ProposalError(f"apps.{app_id}.{names[0]}",
+                            f"refused by compile_policy (unparseable value): {detail}")
 
 
 # --- endpoint edit validation --------------------------------------------------
@@ -282,6 +367,7 @@ def _validate_endpoint_add(entry, onboarded_by_slug: dict, pricing_models: set[s
             f"{loc}.provider", "provider not declared in the snapshot")
     _validate_tier(f"{loc}.tier", entry.get("tier"), canonical_tiers)
     _validate_price_fields(f"{loc}.price", entry.get("price"))
+    _validate_region(f"{loc}.region", entry.get("region"))
     _validate_prompt_retention(f"{loc}.prompt_retention", entry.get("prompt_retention"))
     _validate_accepts_raw_sensitive(
         f"{loc}.accepts_raw_sensitive", entry.get("accepts_raw_sensitive"))
@@ -297,6 +383,8 @@ def _validate_endpoint_update(slug: str, fields: dict, canonical_tiers: set[str]
     loc = f"endpoints.update.{slug}"
     if "tier" in fields:
         _validate_tier(f"{loc}.tier", fields["tier"], canonical_tiers)
+    if "region" in fields:
+        _validate_region(f"{loc}.region", fields["region"])
     if "prompt_retention" in fields:
         _validate_prompt_retention(f"{loc}.prompt_retention", fields["prompt_retention"])
     if "accepts_raw_sensitive" in fields:
@@ -343,13 +431,23 @@ def apply_proposal(snapshot: dict, proposal: dict, *, base: Settings | None = No
     declared_providers = set(snapshot["settings"]["providers"])
     app_ids = set(apps_by_id)
 
+    # Every model an app's `allowed_models` may name: the YAML pool, the
+    # snapshot's onboarded rows, and this proposal's own `endpoints.add`
+    # (admin parity: `_validate_policy_values`'s known-model set, plus the
+    # endpoint the same proposal onboards). `_validate_keys` above already
+    # guaranteed every add entry is an object with a string slug.
+    known_models = ({c.name for c in settings.routing.model_pool}
+                    | set(onboarded_by_slug)
+                    | {e["slug"] for e in (proposal.get("endpoints") or {}).get("add") or []})
+
     # -- apps --
     app_edits = proposal.get("apps") or {}
     for app_id, edit in app_edits.items():
         if app_id not in apps_by_id:
             raise ProposalError(f"apps.{app_id}", "unknown application")
         _validate_app_edit(app_id, edit, apps_by_id[app_id], settings,
-                          canonical_tiers, risk_classes, sensitivity_levels)
+                          canonical_tiers, risk_classes, sensitivity_levels,
+                          declared_providers, known_models)
 
     # -- providers --
     provider_edits = proposal.get("providers") or {}

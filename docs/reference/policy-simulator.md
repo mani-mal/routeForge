@@ -127,17 +127,26 @@ predict zero change in every row (spec §9.1).
 anything is applied — loading is all-or-nothing.
 
 **Top level (`_TOP_KEYS`):** `schema`, `title`, `apps`, `providers`, `endpoints`, `prices`.
+Every container must be the documented type — `apps`, `providers`, `prices`,
+`endpoints` and `endpoints.update` objects; `endpoints.add` a list of objects;
+`remove`/`disable`/`enable` lists of slug strings — or loading fails naming the path.
 
 **`apps.<application_id>`** — the app must already be in the snapshot. A field not named in
 the edit is left as-is; `null` means "set to null" (inherit), the same meaning the admin
 `PUT` gives it. After the per-field checks below, the merged policy is built into an
 `AppPolicyView` and run through `compile_policy` — any resulting `PolicyViolation` is also
-a load error, named `apps.<application_id>`.
+a load error, named `apps.<application_id>`, and so is any value `compile_policy` could not
+parse and failed closed on (its `rejected` list — e.g. an empty or blank `allowed_regions`),
+named `apps.<application_id>.<field>`. The rules mirror the admin write path
+(`app/api/admin_routes.py::_validate_policy_values` plus the compiler's refusals): a value
+the admin `PUT` would refuse is a proposal load error too. As on the admin path, the
+allowlist checks apply only to a value the edit **changes** — re-sending the stored value
+is never refused.
 
 | Key | Validation |
 |---|---|
 | `residency` | Must parse via `resolve_residency` (`any`, `private_cloud_ok`, `onprem_only`, or `null`). |
-| `allowed_regions`, `allowed_tiers`, `allowed_providers`, `allowed_models` | Must be a list or `null`. `allowed_tiers` entries are additionally checked against the canonical tier list (`cheap`, `mid`, `frontier`); `allowed_providers` and `allowed_models` are **not** cross-checked against the snapshot's declared providers or pool — an entry that names nothing eligible simply matches no candidate. |
+| `allowed_regions`, `allowed_tiers`, `allowed_providers`, `allowed_models` | Must be a list of strings or `null`. `allowed_tiers`, `allowed_providers` and `allowed_models` may not be an empty list (the store reads `[]` as "no restriction"; use `null` to clear). `allowed_tiers` entries must be canonical tiers (`cheap`, `mid`, `frontier`); `allowed_providers` entries must be declared in the snapshot's `settings.providers`; `allowed_models` entries must be a YAML pool model, an onboarded row in the snapshot, or a slug this same proposal's `endpoints.add` onboards. `allowed_regions` must be non-empty with non-blank tokens (refused by `compile_policy`, as `ALLOWED_REGIONS_INVALID` is on the admin path). |
 | `require_no_retention`, `escalate_residency_on_detection` | Must be a bool or `null`. |
 | `max_cost_usd_per_request` | Must be a finite number `> 0`, or `null`. |
 | `sensitivity_rules` | A list; each rule needs `entities` (list of strings), `sensitivity` (a value in the deployment's sensitivity scale), `residency` (parseable), `risk_class` (a configured risk class) and `require_verification` (bool). |
@@ -150,9 +159,9 @@ appear in at most one of these operations.
 
 | Operation | Validation |
 |---|---|
-| `add` (list of objects) | Keys: `slug`, `provider`, `tier`, `price`, `region`, `prompt_retention`, `accepts_raw_sensitive`, `context_window`, `quality`, `allowed_app_ids`. `slug` must be new — not an existing onboarded row or a priced YAML pool model. `provider` must be declared. `tier` must be canonical. `price.input`/`price.output` must be finite ≥ 0; `price.cached_input` null or finite ≥ 0. `prompt_retention` null or one of `none`/`retained`/`unknown`. `accepts_raw_sensitive` null or bool. `context_window` null or an int `> 0`. `quality` null or a finite value in `[0, 1]`. `allowed_app_ids` null or a list of application ids that exist in the snapshot. `region` is accepted as given — not itself validated. |
+| `add` (list of objects) | Keys: `slug`, `provider`, `tier`, `price`, `region`, `prompt_retention`, `accepts_raw_sensitive`, `context_window`, `quality`, `allowed_app_ids`. `slug` must be new — not an existing onboarded row or a priced YAML pool model. `provider` must be declared. `tier` must be canonical. `price.input`/`price.output` must be finite ≥ 0; `price.cached_input` null or finite ≥ 0. `prompt_retention` null or one of `none`/`retained`/`unknown`. `accepts_raw_sensitive` null or bool. `context_window` null or an int `> 0`. `quality` null or a finite value in `[0, 1]`. `allowed_app_ids` null or a list of application ids that exist in the snapshot. `region` must be a string or `null`; the token itself is customer vocabulary and is not checked against a list (admin parity). |
 | `remove`, `disable`, `enable` (lists of slugs) | Each slug must already be an onboarded row. |
-| `update` (map slug → fields) | Same slug requirement. Fields: `tier`, `region`, `prompt_retention`, `accepts_raw_sensitive`, `context_window`, `allowed_app_ids` — validated the same way as `add`'s matching field, only when the field is present. `region` is again unvalidated pass-through. |
+| `update` (map slug → fields) | Same slug requirement. Fields: `tier`, `region`, `prompt_retention`, `accepts_raw_sensitive`, `context_window`, `allowed_app_ids` — validated the same way as `add`'s matching field, only when the field is present (`region`: string or `null`). |
 
 **`prices.<slug>`** — `{"input", "output", "cached_input"}`, same price validation as
 `endpoints.add[].price`. The slug must be an onboarded row not being removed in this same
