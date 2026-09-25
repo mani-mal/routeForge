@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
 from hypothesis import HealthCheck, given, settings as hsettings, strategies as st
 
 from app.eval.simulate import (REPORT_CAVEAT, observed_latencies, render_report, select_rows,
@@ -254,3 +255,40 @@ def test_signal_latency_rung_used_when_no_observed_rows():
     assert r.current.model == "local-cheap"
     assert r.current.latency_source == "signal"
     assert r.current.latency_ms == 4242.0
+
+
+@pytest.mark.parametrize("over", [                                          # Important 3
+    {"request_id": None}, {"request_id": 7},
+    {"complexity": "high"}, {"complexity": True}, {"prompt_tokens": "abc"},
+    {"prompt_tokens": None}, {"completion_tokens": "x"},
+    {"detected_entity_types": "US_SSN"}, {"detected_entity_types": [["US_SSN"]]},
+    {"workload": ["a"]}, {"ts": 5}, {"ts": "not-a-time"},
+    {"attempts": "local-cheap"}, {"attempts": [["local-cheap"]]},
+])
+def test_select_rows_malformed_features_are_counted_not_crashed(over):
+    row = make_row("r1", "app-a")
+    row.update(over)
+    rows, excluded = select_rows([row], {"app-a"})
+    assert rows == [] and excluded["missing_features"] == 1
+
+
+def test_select_rows_missing_keys_and_unhashables():
+    no_types = make_row("r1", "app-a")
+    del no_types["detected_entity_types"]
+    no_id = make_row("r2", "app-a")
+    del no_id["request_id"]
+    recs = [no_types, no_id,
+            make_row("r3", "app-a", status=["ok"]),
+            make_row("r4", ["app-a"])]
+    rows, excluded = select_rows(recs, {"app-a"})
+    assert rows == []
+    assert (excluded["missing_features"], excluded["unknown_status"],
+            excluded["unknown_app"]) == (2, 1, 1)
+    # null detected_entity_types is legal (no entities recorded)
+    ok, _ = select_rows([make_row("r5", "app-a", detected_entity_types=None)], {"app-a"})
+    assert len(ok) == 1
+
+
+def test_observed_latencies_ignores_malformed_attempts():
+    assert observed_latencies([make_row("r1", "a", attempts=5),
+                               make_row("r2", "a", attempts=[["x"]], chosen=["x"])]) == {}

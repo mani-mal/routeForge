@@ -30,11 +30,14 @@ import json
 import sys
 from pathlib import Path
 
+import yaml
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from app.apps.snapshot import SERVING_POLICY_FIELDS  # noqa: E402
+from app.config.lint import ConfigLintError  # noqa: E402
 from app.config.loader import load_settings  # noqa: E402
 from app.eval.outcomes import load_export  # noqa: E402
 from app.eval.proposal import ProposalError, load_proposal, normalized_edits  # noqa: E402
@@ -76,9 +79,17 @@ def main(argv: list[str] | None = None) -> int:
         export_sha256 = hashlib.sha256(Path(args.export).read_bytes()).hexdigest()
         snapshot, snapshot_sha256 = load_snapshot(args.snapshot)
         proposal, proposal_sha256 = load_proposal(args.proposal)
-        base = load_settings(args.config_dir)
     except (SnapshotError, ProposalError, ValueError, OSError, json.JSONDecodeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    # The base config is an input too: a directory that fails the boot lint
+    # (`ConfigLintError`, not a ValueError), has a missing key or bad YAML is
+    # exit 2 naming it, never a traceback.
+    try:
+        base = load_settings(args.config_dir)
+    except (ConfigLintError, ValueError, KeyError, OSError, yaml.YAMLError) as exc:
+        print(f"error: --config-dir {args.config_dir}: {exc}", file=sys.stderr)
         return 2
 
     try:

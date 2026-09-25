@@ -73,20 +73,58 @@ class RowResult:
     proposed: ArmResult
 
 
+def _is_str_list(value) -> bool:
+    return isinstance(value, list) and all(isinstance(v, str) for v in value)
+
+
+def _valid_ts(ts) -> bool:
+    if ts is None:
+        return True
+    if not isinstance(ts, str):
+        return False
+    try:
+        _parse_ts(ts)
+    except ValueError:
+        return False
+    return True
+
+
+def _has_features(row: dict) -> bool:
+    """Every field replay and the summary read is present and well-typed:
+    a malformed export row is counted under `missing_features`, never a
+    `KeyError`/`ValueError` traceback (spec §8: bad input is exit 2 or a
+    counted exclusion, not a crash)."""
+    return (isinstance(row.get("request_id"), str) and bool(row["request_id"])
+            and _is_number(row.get("complexity"))
+            and _is_number(row.get("prompt_tokens"))
+            and (row.get("completion_tokens") is None or _is_number(row["completion_tokens"]))
+            and (row.get("detected_entity_types", ...) is None
+                 or _is_str_list(row.get("detected_entity_types")))
+            and (row.get("workload") is None or isinstance(row["workload"], str))
+            and (row.get("attempts") is None or _is_str_list(row["attempts"]))
+            and _valid_ts(row.get("ts")))
+
+
 def select_rows(records: list[dict], app_ids: set[str]) -> tuple[list[dict], dict[str, int]]:
     """The rows to simulate, sorted by `(ts, request_id)`, plus a count per
     exclusion reason. Every excluded row is counted under exactly one reason
-    (first match, in `EXCLUSION_REASONS` order) -- never silently dropped."""
+    (first match, in `EXCLUSION_REASONS` order) -- never silently dropped.
+    `missing_features` covers a missing or mistyped `request_id`,
+    `complexity`, `prompt_tokens`, `completion_tokens`, `workload`,
+    `attempts`, `ts`, or `detected_entity_types` (list of strings, or null
+    -- but the key must be present)."""
     excluded = {reason: 0 for reason in EXCLUSION_REASONS}
     kept: list[dict] = []
     for row in records:
+        status = row.get("status")
+        app_id = row.get("application_id")
         if row.get("cache_hit"):
             excluded["cache_hit"] += 1
-        elif row.get("status") not in SIMULATED_STATUSES:
+        elif not isinstance(status, str) or status not in SIMULATED_STATUSES:
             excluded["unknown_status"] += 1
-        elif row.get("application_id") not in app_ids:
+        elif not isinstance(app_id, str) or app_id not in app_ids:
             excluded["unknown_app"] += 1
-        elif row.get("complexity") is None or row.get("prompt_tokens") is None:
+        elif not _has_features(row):
             excluded["missing_features"] += 1
         else:
             kept.append(row)
@@ -105,7 +143,7 @@ def observed_latencies(records: list[dict]) -> dict[str, float]:
     samples: dict[str, list[float]] = {}
     for row in records:
         attempts = row.get("attempts") or []
-        if row.get("status") != "ok" or len(attempts) != 1:
+        if row.get("status") != "ok" or not _is_str_list(attempts) or len(attempts) != 1:
             continue
         if row.get("chosen") != attempts[0] or not _is_number(row.get("latency_ms")):
             continue

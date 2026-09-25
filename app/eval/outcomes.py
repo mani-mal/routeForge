@@ -78,6 +78,9 @@ def load_export(path: str) -> tuple[list[dict], list[str]]:
             except json.JSONDecodeError as exc:
                 warnings.append(f"line {lineno}: invalid JSON ({exc}), skipped")
                 continue
+            if not isinstance(obj, dict):
+                warnings.append(f"line {lineno}: not a JSON object, skipped")
+                continue
             schema = obj.get("schema")
             if not isinstance(schema, str) or not schema.startswith(_SCHEMA_PREFIX):
                 raise ValueError(f"line {lineno}: unrecognized schema {schema!r}")

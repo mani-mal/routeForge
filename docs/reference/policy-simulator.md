@@ -190,7 +190,7 @@ uv run python scripts/policy_simulate.py \
 | Code | Meaning |
 |---|---|
 | `0` | `simulation.json` and `report.md` written |
-| `2` | an input file failed to load, validate or apply — a bad export, an invalid proposal (unknown key, bad value), or a snapshot that loads structurally but fails **deep** validation during `simulate()` (for example a provider the running deployment's own `config/` never declared). Nothing is written; the offending location is on stderr. |
+| `2` | an input failed to load, validate or apply — a bad export, an invalid proposal (unknown key, bad value, a container of the wrong type), a malformed snapshot (a missing or mistyped nested key, named by its dotted path), a snapshot that loads structurally but fails **deep** validation during `simulate()` (for example a provider the running deployment's own `config/` never declared), or a `--config-dir` that cannot load (missing key, bad YAML, a failed config lint). Nothing is written; the offending location is on stderr — never a traceback. |
 | `3` | the proposal introduces new rejections and `--fail-on-new-rejections` was passed |
 
 The CLI is file-based only: no DB, no `app.api` import, no network
@@ -213,7 +213,7 @@ the export window).
 | `simulation_id` | first 16 hex characters of the sha256 over the canonical `inputs` block |
 | `inputs` | `export_sha256`, `snapshot_sha256`, `proposal_sha256`, `proposal_title`, `routing_policy_version`, `registry_version`, `snapshot_generated_at`, `serving_policy` (the four posture values every app was compiled under — the snapshot's), `window` (`{start, end}` over the simulated rows' `ts`, or `null`) |
 | `edits` | the proposal, minus `schema`/`title`, keys sorted — exactly what was asked for |
-| `rows` | `simulated` (count) and `excluded` (count per reason: `cache_hit`, `unknown_status`, `unknown_app`, `missing_features`) |
+| `rows` | `simulated` (count) and `excluded` (count per reason: `cache_hit`, `unknown_status`, `unknown_app`, `missing_features`). `missing_features` counts a row whose `request_id`, `complexity`, `prompt_tokens` (numeric), `completion_tokens` (numeric or null), `detected_entity_types` (list of strings or null; the key must be present), `workload`, `attempts` or `ts` is missing or mistyped — a malformed row is counted, never a crash. A non-object export line is a skipped-line warning. |
 | `baseline` | the fidelity check — `rows_compared`, `agreement`, `warning`, `by_app`, `top_disagreements` (§5) |
 | `totals`, `by_app.<id>`, `by_workload.<label>` | each the same block: `requests`, `route_changed`, `newly_rejected`, `newly_served`, `cost_usd` (`{current, proposed, delta}`), `latency_ms.p50`/`.p95` (same shape), `quality_mean` (same shape), `onprem_share` (`{current, proposed}`) |
 | `moves` | top 20 `{from, to, count}` model-pair moves; `(rejected)` is a legal `from`/`to` value |
