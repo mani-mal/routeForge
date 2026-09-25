@@ -98,6 +98,34 @@ def test_live_round_trip_baseline_is_perfect(tmp_path):                   # §9.
     assert sim["baseline"]["agreement"] == 1.0
 
 
+def test_live_round_trip_pinned_baseline_is_perfect(tmp_path):            # B55
+    """Requests pinned to the model the unpinned router would NOT pick replay
+    to that pin: the recorded `requested_model` (and `max_tokens`) survive the
+    real export and the simulator honours them."""
+    with TestClient(create_app()) as c:
+        auth = {"Authorization": "Bearer demo-key"}
+        hello = {"messages": [{"role": "user", "content": "hello"}]}
+        unpinned = c.post("/v1/chat/completions", headers=auth, json=hello).json()["model"]
+        pin = "local-32b" if unpinned != "local-32b" else "local-8b"
+        for _ in range(3):
+            r = c.post("/v1/chat/completions", headers=auth,
+                       json={**hello, "model": pin, "max_tokens": 64})
+            assert r.status_code == 200, r.text
+            assert r.json()["model"] == pin
+        _login(c)
+        snapshot = c.get("/admin/config-snapshot").json()
+        export = [json.loads(x) for x in
+                  c.get("/admin/outcomes/export").text.strip().splitlines()]
+    pinned_rows = [e for e in export if e["outcome"]["requested_model"] == pin]
+    assert len(pinned_rows) == 3
+    assert all(e["outcome"]["max_tokens"] == 64 for e in pinned_rows)
+    proc, out = _run_cli(tmp_path, export, snapshot, {"schema": P})
+    assert proc.returncode == 0, proc.stderr
+    sim = json.loads((out / "simulation.json").read_text())
+    assert sim["rows"]["simulated"] == 4
+    assert sim["baseline"]["agreement"] == 1.0
+
+
 def test_cli_echoes_snapshot_serving_policy(tmp_path):                  # Important 1
     snap = make_snapshot(serving_policy_over={"default_policy_mode": "passthrough"})
     proc, out = _run_cli(tmp_path, [_line(make_row("r1", "app-a"))], snap, {"schema": P})
