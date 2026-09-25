@@ -256,6 +256,9 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
         onprem_only=onprem_only,
         allowed_providers=frozenset(allowed),
         allowed_models=allowed_models,
+        # P3b: the app's own residency, pre-escalation -- explanation only
+        # (the conflicting core's `residency` source), never placement.
+        app_residency=app_residency,
         model_scope_active=model_scope_active,
         app_allowed_tiers=(app_policy.allowed_tiers
                            if app_policy is not None else None),

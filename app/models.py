@@ -142,6 +142,15 @@ class ExecutionPolicyContext(BaseModel):
     # `allowed_models` above, which stays the first-fail authority.
     app_allowed_tiers: frozenset[str] | None = None
     app_allowed_models: frozenset[str] | None = None
+    # P3b: the application's OWN resolved residency token (`any` |
+    # `private_cloud_ok` | `onprem_only`), BEFORE any sensitivity-rule
+    # escalation -- set once in `build_context`. Content-free. Read ONLY by
+    # the router's conflicting core to say whether `onprem_only` came from the
+    # app (`app_residency`) or was raised by a sensitivity rule
+    # (`sensitivity_rule`). Never a placement input: `onprem_only` /
+    # `allowed_providers` above are the only placement authority. `None` for a
+    # hand-built context (the core then reports `app_residency`).
+    app_residency: str | None = None
     requested_model: str | None = None
     # P2b-3: the client's validated workload slug (`app/apps/outcomes.
     # parse_workload`), content-free. It selects which `model_quality` row the
