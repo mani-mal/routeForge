@@ -58,7 +58,7 @@ fixes both the alphabet and the tie-break order for the minimum-hitting-set sear
 | `allowed_providers` | the provider is outside the resolved placement set (app `allowed_providers`, enabled providers, on-prem availability) for a non-`onprem_only` residency | yes | `app_policy` |
 | `allowed_regions` | stage-2 region rule: the app set `allowed_regions` and the endpoint's declared region is not in it (`unknown` excludes) | yes | `app_policy` |
 | `require_no_retention` | stage-2 retention rule: the app requires no retention and the endpoint declares other than `none` (`unknown` excludes) | yes | `app_policy` |
-| `raw_sensitive` | stage-2 raw-sensitive rule: the request sends unredacted sensitive content and the endpoint declares `accepts_raw_sensitive: false` | yes | `app_policy` |
+| `raw_sensitive` | stage-2 raw-sensitive rule: the request sends unredacted sensitive content and the endpoint declares `accepts_raw_sensitive: false` (only a declared `false` fires this — `unknown` does **not** exclude, unlike the two rows above) | yes | `app_policy` |
 | `allowed_tiers` | the app's `allowed_tiers` excludes the candidate's tier | no | `app_policy` |
 | `allowed_models` | the app's `allowed_models` excludes the candidate | no | `app_policy` |
 | `endpoint_app_allowlist` | the onboarded endpoint's `allowed_app_ids` excludes this app | no | `endpoint` |
