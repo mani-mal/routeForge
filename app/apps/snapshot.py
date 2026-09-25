@@ -6,7 +6,8 @@ overrides and signals so the offline simulator (`app/eval/scenario.py`) can
 rebuild the SAME eligibility and routing inputs without touching the
 deployment. Content-free and secret-free BY CONSTRUCTION: every field is
 listed explicitly below -- nothing is dumped wholesale except the routing,
-pricing and policy config sections, which hold no secrets. Excluded: endpoint
+pricing and policy config sections, which hold no secrets, plus the four
+deployment posture values in `SERVING_POLICY_FIELDS` (not secrets). Excluded: endpoint
 URLs, `api_key_env`, `serving.observability` (Langfuse), `pii_exempt_patterns`
 (operator regexes), custom recognizers, and per-app credential columns.
 """
@@ -28,6 +29,12 @@ _ONBOARDED_FIELDS = ("slug", "display_name", "provider", "tier", "quality",
                      "enabled", "allowed_app_ids", "region", "prompt_retention",
                      "accepts_raw_sensitive", "context_window")
 _PROVIDER_FIELDS = ("enabled", "region", "prompt_retention", "accepts_raw_sensitive")
+#: The deployment posture defaults and ceilings `compile_policy` reads from
+#: `settings.serving` (env-overridable via SP_* in `app/config/loader.py`).
+#: Not secrets. Without them the simulator would compile every app under the
+#: CLI machine's local posture instead of the deployment's.
+SERVING_POLICY_FIELDS = ("pii_detection", "allow_app_pii_downgrade",
+                         "default_policy_mode", "allow_app_passthrough")
 _EXCLUDED_POLICY_FIELDS = frozenset({"pii_exempt_patterns"})
 
 
@@ -73,6 +80,8 @@ async def build_config_snapshot(session, *, settings, registry, quality, signals
     apps = []
     for a in await store.list_applications(session):
         full = await store.get_application_with_policy(session, a.id)
+        if full is None:          # deleted between the list and this read
+            continue
         apps.append({"application_id": a.id, "name": a.name,
                      "policy": policy_dict(policy_view_from(full)),
                      "sensitivity_rules": await _rules(session, a.id)})
@@ -89,6 +98,8 @@ async def build_config_snapshot(session, *, settings, registry, quality, signals
             "pricing": settings.pricing.model_dump(mode="json"),
             "policy": settings.policy.model_dump(mode="json"),
             "providers": providers,
+            "serving_policy": {k: getattr(settings.serving, k)
+                               for k in SERVING_POLICY_FIELDS},
         },
         "onboarded": sorted(onboarded, key=lambda o: o["slug"]),
         "apps": sorted(apps, key=lambda x: x["application_id"]),

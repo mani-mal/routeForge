@@ -27,8 +27,21 @@ def app_entry(app_id: str, *, sensitivity_rules: list | None = None, **policy) -
             "sensitivity_rules": sensitivity_rules or []}
 
 
+def serving_policy(settings=None, **over) -> dict:
+    """The snapshot's `settings.serving_policy` block for `settings`
+    (default: `BASE_SETTINGS`) -- the four deployment posture values
+    `compile_policy` reads (P3a final fix, Important 1)."""
+    s = (settings or BASE_SETTINGS).serving
+    block = {"pii_detection": s.pii_detection,
+             "allow_app_pii_downgrade": s.allow_app_pii_downgrade,
+             "default_policy_mode": s.default_policy_mode,
+             "allow_app_passthrough": s.allow_app_passthrough}
+    block.update(over)
+    return block
+
+
 def make_snapshot(*, onboarded=None, apps=None, providers=None, quality=None,
-                  signals=None) -> dict:
+                  signals=None, serving_policy_over: dict | None = None) -> dict:
     s = BASE_SETTINGS
     prov = {n: {"enabled": c.enabled, "region": c.region,
                 "prompt_retention": c.prompt_retention,
@@ -44,7 +57,8 @@ def make_snapshot(*, onboarded=None, apps=None, providers=None, quality=None,
         "settings": {"routing": s.routing.model_dump(mode="json"),
                      "pricing": s.pricing.model_dump(mode="json"),
                      "policy": s.policy.model_dump(mode="json"),
-                     "providers": prov},
+                     "providers": prov,
+                     "serving_policy": serving_policy(**(serving_policy_over or {}))},
         "onboarded": onboarded if onboarded is not None else [
             onboarded_row("local-cheap", "cheap"),
             onboarded_row("local-mid", "mid"),

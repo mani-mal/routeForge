@@ -41,7 +41,8 @@ def test_snapshot_shape_and_versions():
         assert doc["schema"] == "routeforge.config-snapshot/v1"
         assert doc["routing_policy_version"] == c.app.state.settings.routing_policy_version
         assert doc["registry_version"] == c.app.state.registry.registry_version()
-        assert set(doc["settings"]) == {"routing", "pricing", "policy", "providers"}
+        assert set(doc["settings"]) == {"routing", "pricing", "policy", "providers",
+                                        "serving_policy"}
         for p in doc["settings"]["providers"].values():
             assert set(p) == {"enabled", "region", "prompt_retention", "accepts_raw_sensitive"}
         slugs = [o["slug"] for o in doc["onboarded"]]
@@ -104,3 +105,39 @@ def test_snapshot_includes_disabled_onboarded_rows(monkeypatch):
         doc = c.get("/admin/config-snapshot").json()
         row = next(o for o in doc["onboarded"] if o["slug"] == slug)
         assert row["enabled"] is False
+
+
+def test_snapshot_carries_live_serving_policy(monkeypatch):
+    """P3a final fix, Important 1: the four posture values `compile_policy`
+    reads travel in the snapshot, with the LIVE (env-overridden) values."""
+    monkeypatch.setenv("SP_ALLOW_APP_PASSTHROUGH", "false")
+    monkeypatch.setenv("SP_PII_DETECTION", "regex")
+    with TestClient(create_app()) as c:
+        _login(c)
+        doc = c.get("/admin/config-snapshot").json()
+        live = c.app.state.settings.serving
+    assert doc["settings"]["serving_policy"] == {
+        "pii_detection": "regex",
+        "allow_app_pii_downgrade": live.allow_app_pii_downgrade,
+        "default_policy_mode": live.default_policy_mode,
+        "allow_app_passthrough": False,
+    }
+
+
+def test_snapshot_skips_app_deleted_mid_read(monkeypatch):
+    """P3a final fix, M3: an app deleted between the list and the per-app
+    read is skipped, not a 500."""
+    from app.apps import store
+    real = store.get_application_with_policy
+
+    async def racy(session, app_id):
+        return None if app_id == "default" else await real(session, app_id)
+
+    monkeypatch.setattr(store, "get_application_with_policy", racy)
+    with TestClient(create_app()) as c:
+        _login(c)
+        monkeypatch.setattr("app.apps.snapshot.store.get_application_with_policy", racy)
+        r = c.get("/admin/config-snapshot")
+    assert r.status_code == 200, r.text
+    ids = [a["application_id"] for a in r.json()["apps"]]
+    assert "default" not in ids and ids

@@ -34,6 +34,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from app.apps.snapshot import SERVING_POLICY_FIELDS  # noqa: E402
 from app.config.loader import load_settings  # noqa: E402
 from app.eval.outcomes import load_export  # noqa: E402
 from app.eval.proposal import ProposalError, load_proposal, normalized_edits  # noqa: E402
@@ -100,6 +101,10 @@ def main(argv: list[str] | None = None) -> int:
         "routing_policy_version": snapshot["routing_policy_version"],
         "registry_version": snapshot["registry_version"],
         "snapshot_generated_at": snapshot["generated_at"],
+        # The deployment posture every app was compiled under -- the
+        # SNAPSHOT's values, never this machine's local config.
+        "serving_policy": {k: snapshot["settings"]["serving_policy"][k]
+                           for k in SERVING_POLICY_FIELDS},
     }
     sim = summarize(results, excluded, inputs=inputs, edits=normalized_edits(proposal))
 

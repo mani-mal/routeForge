@@ -50,6 +50,14 @@ curl -s -b "rf_admin_session=<session>" \
 
 Everything a routing decision reads — settings, the onboarded pool, per-app policy,
 quality overrides and the current signals — as one content-free JSON document (§7).
+That includes `settings.serving_policy`: the deployment's four posture values
+`compile_policy` reads (`pii_detection`, `allow_app_pii_downgrade`, `default_policy_mode`,
+`allow_app_passthrough`, with any `SP_*` env overrides already applied). Every app is
+compiled under **the snapshot's** posture, never the posture of the machine running the
+simulator — so an app that inherits `default_policy_mode` compiles to the same
+`model_input` (and so the same raw-sensitive eligibility) offline as it does live. A
+snapshot without this block (taken before it existed) is refused with
+`settings.serving_policy: missing`; re-export it.
 
 ```bash
 curl -s -b "rf_admin_session=<session>" \
@@ -165,7 +173,7 @@ uv run python scripts/policy_simulate.py \
 | `--snapshot` | required | `GET /admin/config-snapshot` JSON file |
 | `--proposal` | required | `routeforge.policy-proposal/v1` JSON file |
 | `--out` | required | output directory (created if missing) |
-| `--config-dir` | `config` | the base config directory the snapshot's `routing`/`pricing`/`policy` sections are overlaid onto — the same repo config a boot would load |
+| `--config-dir` | `config` | the base config directory the snapshot is overlaid onto. The snapshot replaces `routing`/`pricing`/`policy` wholesale and overrides each declared provider's data-handling fields and the four `serving_policy` posture values, so the base only supplies what no routing decision reads (and the set of declared providers). |
 | `--fail-on-new-rejections` | off | exit `3` instead of `0` when the proposal newly rejects any simulated row (for CI/GitOps gating) |
 
 **Exit codes** (`scripts/policy_simulate.py`):
@@ -187,14 +195,14 @@ the reverse — this script only ever reads files and the base `config/` directo
 Deterministic: the same three inputs give byte-identical output (floats rounded to 6
 places, `sort_keys=True`). `simulation_id` is the first 16 hex characters of a sha256 over
 the canonical `inputs` block (export/snapshot/proposal hashes, the proposal title, the
-snapshot's `routing_policy_version`/`registry_version`/`generated_at`, and the export
-window).
+snapshot's `routing_policy_version`/`registry_version`/`generated_at`/`serving_policy`, and
+the export window).
 
 | Field | Contents |
 |---|---|
 | `schema` | `"routeforge.simulation/v1"` |
 | `simulation_id` | first 16 hex characters of the sha256 over the canonical `inputs` block |
-| `inputs` | `export_sha256`, `snapshot_sha256`, `proposal_sha256`, `proposal_title`, `routing_policy_version`, `registry_version`, `snapshot_generated_at`, `window` (`{start, end}` over the simulated rows' `ts`, or `null`) |
+| `inputs` | `export_sha256`, `snapshot_sha256`, `proposal_sha256`, `proposal_title`, `routing_policy_version`, `registry_version`, `snapshot_generated_at`, `serving_policy` (the four posture values every app was compiled under — the snapshot's), `window` (`{start, end}` over the simulated rows' `ts`, or `null`) |
 | `edits` | the proposal, minus `schema`/`title`, keys sorted — exactly what was asked for |
 | `rows` | `simulated` (count) and `excluded` (count per reason: `cache_hit`, `unknown_status`, `unknown_app`, `missing_features`) |
 | `baseline` | the fidelity check — `rows_compared`, `agreement`, `warning`, `by_app`, `top_disagreements` (§5) |
@@ -281,6 +289,9 @@ From spec §2, plus what the build settled during P3a:
 that nothing it returns can leak a customer secret or request content — every field is
 listed explicitly in the builder; nothing is dumped wholesale except the `routing`,
 `pricing` and `policy` config sections, which hold no secrets by construction.
+`settings.serving_policy` carries exactly four named posture values
+(`app/apps/snapshot.py::SERVING_POLICY_FIELDS`) — a detector name, a default mode and two
+booleans, none of them secrets.
 
 **Excluded, on purpose:** endpoint URLs, `api_key_env`, `serving.observability` (Langfuse
 host/keys), `pii_exempt_patterns` (operator regexes), custom recognizer definitions, and

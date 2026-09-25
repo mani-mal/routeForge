@@ -120,3 +120,106 @@ def test_round_trip_matches_live_feasible_set():
         finally:
             await close_scenario(scn)
     assert asyncio.run(sim()) == live_names
+
+
+# --- P3a final review fixes ----------------------------------------------------
+
+def _eligible_for_ssn_row(doc, base):
+    """The policy-eligible names for one US_SSN row -- the reviewer's repro
+    for Important 1 (raw-sensitive eligibility depends on compiled
+    `model_input`, which depends on the deployment's posture defaults)."""
+    from app.eval.simulate import simulate_row
+    from tests.eval.sim_fixtures import make_row
+    row = make_row("r1", "app-a", detected_entity_types=["US_SSN"])
+
+    async def go():
+        scn = await build_scenario(doc, base=base)
+        try:
+            return (simulate_row(scn, row, {}).eligible,
+                    scn.apps["app-a"].eff.protection.model_input,
+                    scn.settings.serving.default_policy_mode)
+        finally:
+            await close_scenario(scn)
+    return asyncio.run(go())
+
+
+def _base_with(**serving):
+    import copy
+    base = copy.deepcopy(BASE_SETTINGS)
+    for k, v in serving.items():
+        setattr(base.serving, k, v)
+    return base
+
+
+def test_serving_policy_comes_from_snapshot_not_base():                 # Important 1
+    doc = make_snapshot(onboarded=[
+        onboarded_row("local-cheap", "cheap", accepts_raw_sensitive=False),
+        onboarded_row("local-mid", "mid")])
+    enforced = _eligible_for_ssn_row(doc, BASE_SETTINGS)
+    assert enforced == (("local-cheap", "local-mid"), "redact", "enforced")
+    # A CLI machine whose local config (or SP_DEFAULT_POLICY_MODE) says
+    # passthrough must not change what the SNAPSHOT's deployment would do.
+    assert _eligible_for_ssn_row(
+        doc, _base_with(default_policy_mode="passthrough")) == enforced
+    # ...and the snapshot's own value does decide it.
+    pt_doc = make_snapshot(onboarded=doc["onboarded"],
+                           serving_policy_over={"default_policy_mode": "passthrough"})
+    assert _eligible_for_ssn_row(pt_doc, BASE_SETTINGS) == (
+        ("local-mid",), "raw", "passthrough")
+
+
+def test_serving_policy_all_four_values_overlaid():
+    from app.eval.scenario import build_settings
+    doc = make_snapshot(serving_policy_over={
+        "pii_detection": "regex", "allow_app_pii_downgrade": False,
+        "default_policy_mode": "passthrough", "allow_app_passthrough": False})
+    s = build_settings(doc, BASE_SETTINGS).serving
+    assert (s.pii_detection, s.allow_app_pii_downgrade, s.default_policy_mode,
+            s.allow_app_passthrough) == ("regex", False, "passthrough", False)
+    # the base is never mutated
+    assert BASE_SETTINGS.serving.default_policy_mode == "enforced"
+
+
+def _bad_signal(d):
+    d["signals"] = {"local-mid": {"latency_ms": 1.0}}
+
+
+@pytest.mark.parametrize("mutate,where", [
+    (lambda d: d["settings"].pop("serving_policy"), "settings.serving_policy"),
+    (lambda d: d["settings"]["serving_policy"].pop("allow_app_passthrough"),
+     "settings.serving_policy.allow_app_passthrough"),
+    (lambda d: d["settings"]["serving_policy"].update(default_policy_mode="loose"),
+     "settings.serving_policy.default_policy_mode"),
+    (lambda d: d["settings"]["serving_policy"].update(pii_detection=3),
+     "settings.serving_policy.pii_detection"),
+    (lambda d: d["settings"]["serving_policy"].update(allow_app_pii_downgrade="yes"),
+     "settings.serving_policy.allow_app_pii_downgrade"),
+    (lambda d: d["settings"].pop("routing"), "settings.routing"),
+    (lambda d: d.update(settings=[]), "settings"),
+    (lambda d: d["settings"]["providers"]["onprem"].pop("region"),
+     "settings.providers.onprem.region"),
+    (lambda d: d["settings"].update(providers=[]), "settings.providers"),
+    (lambda d: d["onboarded"][0].pop("tier"), "onboarded.local-cheap.tier"),
+    (lambda d: d["onboarded"][0].update(tier="strong"), "onboarded.local-cheap.tier"),   # M2
+    (lambda d: d.update(onboarded={}), "onboarded"),
+    (lambda d: d["onboarded"].append("x"), "onboarded[3]"),
+    (lambda d: d["apps"][0].pop("sensitivity_rules"), "apps.app-a.sensitivity_rules"),
+    (lambda d: d["apps"][0].pop("name"), "apps.app-a.name"),
+    (lambda d: d["apps"][0].update(policy=[]), "apps.app-a.policy"),
+    (lambda d: d["apps"][0]["policy"].update(allowed_tiers=[["cheap"]]),
+     "apps.app-a.policy.allowed_tiers"),
+    (lambda d: d["apps"][0].update(sensitivity_rules=[{"entities": ["X"]}]),
+     "apps.app-a.sensitivity_rules[0]"),
+    (lambda d: d["apps"].append([]), "apps[1]"),
+    (lambda d: d["quality"].pop("customer"), "quality.customer"),
+    (lambda d: d["quality"].update(calibrated=[{"model": "m"}]), "quality.calibrated[0]"),
+    (_bad_signal, "signals.local-mid"),
+    (lambda d: d.update(signals=[]), "signals"),
+])
+def test_malformed_snapshot_is_a_named_snapshot_error(mutate, where):      # Important 3
+    doc = make_snapshot()
+    mutate(doc)
+    with pytest.raises(SnapshotError) as exc:
+        validate_snapshot(doc)
+        asyncio.run(build_scenario(doc, base=BASE_SETTINGS))
+    assert exc.value.where == where, str(exc.value)

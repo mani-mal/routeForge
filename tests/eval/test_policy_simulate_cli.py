@@ -94,3 +94,12 @@ def test_live_round_trip_baseline_is_perfect(tmp_path):                   # §9.
     sim = json.loads((out / "simulation.json").read_text())
     assert sim["rows"]["simulated"] == 4
     assert sim["baseline"]["agreement"] == 1.0
+
+
+def test_cli_echoes_snapshot_serving_policy(tmp_path):                  # Important 1
+    snap = make_snapshot(serving_policy_over={"default_policy_mode": "passthrough"})
+    proc, out = _run_cli(tmp_path, [_line(make_row("r1", "app-a"))], snap, {"schema": P})
+    assert proc.returncode == 0, proc.stderr
+    sim = json.loads((out / "simulation.json").read_text())
+    assert sim["inputs"]["serving_policy"] == snap["settings"]["serving_policy"]
+    assert sim["inputs"]["serving_policy"]["default_policy_mode"] == "passthrough"

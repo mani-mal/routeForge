@@ -20,10 +20,12 @@ from app.apps.db import Database
 from app.apps.policy import AppPolicyView
 from app.apps.privacy import AppPrivacyProfile, SensitivityRuleView, effective_rules
 from app.apps.registry import ModelRegistry
+from app.apps.snapshot import SERVING_POLICY_FIELDS
 from app.apps.store import upsert_onboarded
 from app.config.lint import lint_settings
 from app.config.schema import PolicyCfg, PricingCfg, RoutingCfg, Settings, SignalsCfg
 from app.policy.compile import EffectivePolicy, compile_policy
+from app.policy.enums import PII_MODES, POLICY_MODES
 from app.routing.quality import QualityResolver, QualityScore
 from app.routing.router import Router
 from app.routing.signals import SignalValue
@@ -72,9 +74,14 @@ def load_snapshot(path: str) -> tuple[dict, str]:
 
 def validate_snapshot(doc: dict) -> None:
     """Cheap, structural checks only -- schema string, required top-level
-    keys, unique app ids. Deeper checks (settings validation, registry load,
-    unknown policy fields) happen in `build_scenario`, which is where they
-    need live objects (a base `Settings`, a scratch DB) to check against."""
+    keys, the type and required keys of every nested container the builders
+    index (so a missing or mistyped key is a `SnapshotError` naming its
+    path, never a `KeyError`/`TypeError` traceback), unique app ids. Deeper
+    checks (settings validation, registry load, unknown policy fields) happen
+    in `build_scenario`, which is where they need live objects (a base
+    `Settings`, a scratch DB) to check against."""
+    if not isinstance(doc, dict):
+        raise SnapshotError("<root>", "must be an object")
     schema = doc.get("schema")
     if not isinstance(schema, str) or not schema.startswith(SCHEMA_PREFIX):
         raise SnapshotError(
@@ -88,10 +95,136 @@ def validate_snapshot(doc: dict) -> None:
         if key not in doc:
             raise SnapshotError(key, "missing")
 
-    app_ids = [a.get("application_id") for a in doc["apps"]]
+    _validate_structure(doc)
+
+    app_ids = [a["application_id"] for a in doc["apps"]]
     if len(app_ids) != len(set(app_ids)):
         dupes = sorted({a for a in app_ids if app_ids.count(a) > 1})
         raise SnapshotError("apps", f"duplicate application_id(s): {dupes}")
+
+
+# The keys each nested snapshot container must carry -- exactly what
+# `build_settings`/`build_scenario`/`FrozenSignals` index.
+_PROVIDER_KEYS = ("enabled", "region", "prompt_retention", "accepts_raw_sensitive")
+_ONBOARDED_KEYS = ("slug", "display_name", "provider", "tier", "quality",
+                   "price_input", "price_output", "price_cached_input",
+                   "enabled", "allowed_app_ids", "region", "prompt_retention",
+                   "accepts_raw_sensitive", "context_window")
+_APP_KEYS = ("application_id", "name", "policy", "sensitivity_rules")
+_RULE_KEYS = ("entities", "sensitivity", "risk_class", "residency", "require_verification")
+_QUALITY_KEYS = ("model", "workload", "score", "set_id")
+_SIGNAL_KEYS = ("latency_ms", "latency_n", "availability", "availability_n")
+
+
+def _need_dict(value, where: str) -> dict:
+    if not isinstance(value, dict):
+        raise SnapshotError(where, "must be an object")
+    return value
+
+
+def _need_list(value, where: str) -> list:
+    if not isinstance(value, list):
+        raise SnapshotError(where, "must be a list")
+    return value
+
+
+def _need_keys(obj: dict, keys, where: str) -> None:
+    for key in keys:
+        if key not in obj:
+            raise SnapshotError(f"{where}.{key}", "missing")
+
+
+def _is_str_list(value) -> bool:
+    return isinstance(value, list) and all(isinstance(v, str) for v in value)
+
+
+def _is_number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _validate_serving_policy(block) -> None:
+    """The four deployment posture values `compile_policy` reads (P3a final
+    fix, Important 1). A snapshot without them predates the fix: its
+    posture is unknown, so it is refused rather than silently taking the
+    CLI machine's local config."""
+    where = "settings.serving_policy"
+    _need_dict(block, where)
+    _need_keys(block, SERVING_POLICY_FIELDS, where)
+    if block["pii_detection"] not in PII_MODES:
+        raise SnapshotError(f"{where}.pii_detection",
+                            f"must be one of {sorted(PII_MODES)}; got {block['pii_detection']!r}")
+    if block["default_policy_mode"] not in POLICY_MODES:
+        raise SnapshotError(
+            f"{where}.default_policy_mode",
+            f"must be one of {sorted(POLICY_MODES)}; got {block['default_policy_mode']!r}")
+    for key in ("allow_app_pii_downgrade", "allow_app_passthrough"):
+        if not isinstance(block[key], bool):
+            raise SnapshotError(f"{where}.{key}", "must be a bool")
+
+
+def _validate_structure(doc: dict) -> None:
+    settings = _need_dict(doc["settings"], "settings")
+    for section in ("routing", "pricing", "policy", "providers", "serving_policy"):
+        if section not in settings:
+            raise SnapshotError(f"settings.{section}", "missing")
+    for name, fields in _need_dict(settings["providers"], "settings.providers").items():
+        where = f"settings.providers.{name}"
+        _need_keys(_need_dict(fields, where), _PROVIDER_KEYS, where)
+    _validate_serving_policy(settings["serving_policy"])
+
+    for i, row in enumerate(_need_list(doc["onboarded"], "onboarded")):
+        row = _need_dict(row, f"onboarded[{i}]")
+        slug = row.get("slug")
+        if not isinstance(slug, str) or not slug:
+            raise SnapshotError(f"onboarded[{i}].slug", "must be a non-empty string")
+        where = f"onboarded.{slug}"
+        _need_keys(row, _ONBOARDED_KEYS, where)
+        if not isinstance(row["enabled"], bool):
+            raise SnapshotError(f"{where}.enabled", "must be a bool")
+        if not isinstance(row["tier"], str):
+            raise SnapshotError(f"{where}.tier", "must be a string")
+        if row["allowed_app_ids"] is not None and not _is_str_list(row["allowed_app_ids"]):
+            raise SnapshotError(f"{where}.allowed_app_ids", "must be null or a list of strings")
+
+    for i, entry in enumerate(_need_list(doc["apps"], "apps")):
+        entry = _need_dict(entry, f"apps[{i}]")
+        app_id = entry.get("application_id")
+        if not isinstance(app_id, str) or not app_id:
+            raise SnapshotError(f"apps[{i}].application_id", "must be a non-empty string")
+        where = f"apps.{app_id}"
+        _need_keys(entry, _APP_KEYS, where)
+        policy = _need_dict(entry["policy"], f"{where}.policy")
+        for field in _SET_FIELDS:
+            value = policy.get(field)
+            if value is not None and not _is_str_list(value):
+                raise SnapshotError(f"{where}.policy.{field}", "must be null or a list of strings")
+        rules = _need_list(entry["sensitivity_rules"], f"{where}.sensitivity_rules")
+        for j, rule in enumerate(rules):
+            rwhere = f"{where}.sensitivity_rules[{j}]"
+            _need_dict(rule, rwhere)
+            missing = [k for k in _RULE_KEYS if k not in rule]
+            if missing:
+                raise SnapshotError(rwhere, f"missing key(s) {missing}")
+            if not _is_str_list(rule["entities"]):
+                raise SnapshotError(f"{rwhere}.entities", "must be a list of strings")
+
+    quality = _need_dict(doc["quality"], "quality")
+    for bucket in ("customer", "calibrated"):
+        if bucket not in quality:
+            raise SnapshotError(f"quality.{bucket}", "missing")
+        for i, q in enumerate(_need_list(quality[bucket], f"quality.{bucket}")):
+            qwhere = f"quality.{bucket}[{i}]"
+            _need_dict(q, qwhere)
+            missing = [k for k in _QUALITY_KEYS if k not in q]
+            if missing:
+                raise SnapshotError(qwhere, f"missing key(s) {missing}")
+
+    for model, row in _need_dict(doc["signals"], "signals").items():
+        swhere = f"signals.{model}"
+        _need_dict(row, swhere)
+        bad = [k for k in _SIGNAL_KEYS if not _is_number(row.get(k))]
+        if bad:
+            raise SnapshotError(swhere, f"missing or non-numeric key(s) {bad}")
 
 
 def build_settings(doc: dict, base: Settings) -> Settings:
@@ -100,9 +233,11 @@ def build_settings(doc: dict, base: Settings) -> Settings:
 
     Starts from `copy.deepcopy(base)`, replaces `routing`/`pricing`/`policy`
     wholesale with the snapshot's sections, overlays each declared provider's
-    four fields, sets `routing_policy_version`, then runs the same
+    four fields and the four `serving_policy` posture values, sets
+    `routing_policy_version`, then runs the same
     cross-file lint a boot runs. A snapshot that fails validation or lint is
     a load error, named at its location."""
+    validate_snapshot(doc)
     settings = copy.deepcopy(base)
     doc_settings = doc["settings"]
 
@@ -127,6 +262,14 @@ def build_settings(doc: dict, base: Settings) -> Settings:
         cfg.region = fields["region"]
         cfg.prompt_retention = fields["prompt_retention"]
         cfg.accepts_raw_sensitive = fields["accepts_raw_sensitive"]
+
+    # The deployment's posture defaults and ceilings (P3a final fix,
+    # Important 1): `compile_policy` reads these, so the SNAPSHOT's values
+    # decide an app's compiled posture -- never the machine running the
+    # simulator (its serving.yaml or SP_* env overrides).
+    for key, value in doc_settings["serving_policy"].items():
+        if key in SERVING_POLICY_FIELDS:
+            setattr(settings.serving, key, value)
 
     violations = lint_settings(settings)
     if violations:
@@ -214,8 +357,13 @@ def _app_policy_view(policy: dict, app_id: str) -> AppPolicyView:
 
 
 async def build_scenario(doc: dict, *, base: Settings) -> Scenario:
-    validate_snapshot(doc)
-    settings = build_settings(doc, base)
+    settings = build_settings(doc, base)   # runs validate_snapshot first
+    canonical_tiers = set(settings.routing.tiers)
+    for row in doc["onboarded"]:
+        if row["tier"] not in canonical_tiers:
+            raise SnapshotError(
+                f"onboarded.{row['slug']}.tier",
+                f"unknown tier {row['tier']!r}; legal tiers: {sorted(canonical_tiers)}")
 
     db = Database(url="sqlite+aiosqlite://")
     await db.ensure_ready()
