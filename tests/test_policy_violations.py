@@ -30,7 +30,10 @@ from app.policy.feasible import (
     feasible_set,
     violation_matrix,
 )
+from tests.test_endpoint_data_handling import S as _DH_S
+from tests.test_endpoint_data_handling import _ctx as _dh_ctx
 from tests.test_endpoint_data_handling import _onprem as _declared_onprem
+from tests.test_endpoint_data_handling import _registry as _dh_registry
 from tests.test_feasible_set import CLOUD, S, _ctx, _registry, _run
 
 CODE_TO_IDS = {
@@ -97,28 +100,61 @@ def test_residency_vs_allowed_providers_split():
     assert _violations(pool["azure-gpt-mid"], narrow_ctx, reg) == frozenset()
 
 
-def test_context_scope_says_nothing_about_a_placement_refused_candidate():
-    """`ctx.allowed_models` already dropped every placement-refused name, so from
-    a context a cloud candidate under onprem_only reads `residency` only -- not
-    a spurious `allowed_models` (Scope.placement_masked). The policy-side scope
-    is exact and reports both when both refuse it."""
+def test_context_scope_is_exact_for_a_placement_refused_candidate():
+    """`ctx.allowed_models` already dropped every placement-refused name (it is
+    built from first-fail codes), so it cannot say whether app scope ALSO
+    refuses one. `Scope.from_context` reads the app's own lists instead: a
+    cloud candidate outside `allowed_models` under onprem_only reports both
+    `residency` and `allowed_models` -- exactly what the policy-side scope
+    reports -- and one inside it reports `residency` alone."""
     reg = _registry()
     pool = _pool(reg)
     policy = AppPolicyView(residency="onprem_only",
-                           allowed_models=frozenset({"local-8b"}))
+                           allowed_models=frozenset({"local-8b", "azure-gpt-mid"}))
     ctx = _ctx(reg, policy)
-    assert "azure-gpt-mid" not in ctx.allowed_models
+    assert "azure-gpt-mid" not in ctx.allowed_models   # the first-fail set
 
+    assert _violations(pool["bedrock-frontier"], ctx, reg) == {
+        "residency", "allowed_models"}
     assert _violations(pool["azure-gpt-mid"], ctx, reg) == {"residency"}
-    # A placement-admitted candidate outside the app's scope still reports it.
     assert _violations(pool["local-32b"], ctx, reg) == {"allowed_models"}
 
     providers, onprem = _resolve_placement(S, reg, policy)
     from_policy = candidate_violations(
-        pool["azure-gpt-mid"], allowed_providers=providers, onprem_only=onprem,
+        pool["bedrock-frontier"], allowed_providers=providers, onprem_only=onprem,
         scope=Scope.from_policy(policy), requested_model=None, registry=reg,
         tenant_id="acme", data_handling=DataHandling.from_policy(S, policy))
     assert from_policy == {"residency", "allowed_models"}
+
+
+def test_stage2_refused_candidate_still_reports_allowed_models():
+    """Review regression (P3b Task 1, fix round 1). onprem_only,
+    allowed_regions={eu}, allowed_models={a model that is neither}; A declares
+    us, B declares eu. A is refused first by region, so it STAYS in the
+    first-fail `ctx.allowed_models` -- reading scope off that set reported
+    A={allowed_regions}, B={allowed_models}, whose minimum core is
+    {allowed_regions, allowed_models}. The true minimum is {allowed_models}:
+    app scope refuses both."""
+    reg = _dh_registry({
+        "a-8b": _declared_onprem("a-8b", region="us"),
+        "b-8b": _declared_onprem("b-8b", region="eu"),
+    })
+    policy = AppPolicyView(residency="onprem_only",
+                           allowed_regions=frozenset({"eu"}),
+                           allowed_models=frozenset({"x-model"}))
+    ctx = _dh_ctx(reg, policy)
+    assert "a-8b" in ctx.allowed_models    # first-fail authority, unchanged
+
+    m = violation_matrix(_DH_S, reg, ctx, tenant_id="acme")
+    assert m.state == {}
+    assert m.available == {"a-8b": {"allowed_regions", "allowed_models"},
+                           "b-8b": {"allowed_models"}}
+    # Every available candidate is hit by {allowed_models} alone.
+    assert all("allowed_models" in v for v in m.available.values())
+    # And the first-fail seam is untouched: A still reads region first.
+    fs = feasible_set(_DH_S, reg, ctx, tenant_id="acme")
+    assert {r.name: r.code for r in fs.rejected} == {
+        "a-8b": "region_not_allowed", "b-8b": "app_scope"}
 
 
 # --- stage 2: every data-handling rule, together -----------------------------
@@ -219,26 +255,43 @@ def test_empty_pool_state():
 
 
 # --- the agreement property --------------------------------------------------
+#
+# Declarations vary per example on EVERY candidate, cloud included, and a
+# fresh registry is built for each example from them -- so the context
+# (`build_context`, which precomputes the first-fail `ctx.allowed_models` from
+# the pool's declarations) and the candidates it is evaluated against always
+# agree, exactly as they do on the request path.
 
-_H_REG = _registry({
-    "local-8b": _declared_onprem("local-8b", tier="cheap", region="us",
-                                 prompt_retention="none", accepts_raw_sensitive=True),
-    "local-32b": {**_declared_onprem("local-32b", tier="mid", region="eu",
-                                     prompt_retention="retained",
-                                     accepts_raw_sensitive=False),
-                  "allowed_app_ids": ["acme"]},
-})
-_H_POOL = list(_H_REG.effective_pool())
-_H_NAMES = sorted(c.name for c in _H_POOL)
+_ONPREM_ROWS = {"local-8b": "cheap", "local-32b": "mid"}   # local-32b is allowlisted to acme
+_CLOUD_NAMES = sorted(c.name for c in S.routing.model_pool)
+_H_NAMES = sorted([*_ONPREM_ROWS, *_CLOUD_NAMES])
 _TIERS = ["cheap", "mid", "frontier"]
 _PROVIDERS = ["onprem", "azure", "bedrock"]
 
 _opt_subset = lambda xs: st.none() | st.frozensets(st.sampled_from(xs))  # noqa: E731
-_declaration = st.fixed_dictionaries({
-    "region": st.sampled_from([None, "us", "eu", "unknown"]),
-    "prompt_retention": st.sampled_from([None, "none", "retained", "unknown"]),
-    "accepts_raw_sensitive": st.sampled_from([None, "true", "false", "unknown"]),
-})
+_region = st.sampled_from([None, "us", "eu", "unknown"])
+_retention = st.sampled_from([None, "none", "retained", "unknown"])
+# An onboarded row stores accepts_raw_sensitive as a bool; a YAML pool entry
+# as a token. Both include "declared nothing".
+_onprem_decl = st.fixed_dictionaries({
+    "region": _region, "prompt_retention": _retention,
+    "accepts_raw_sensitive": st.sampled_from([None, True, False])})
+_cloud_decl = st.fixed_dictionaries({
+    "region": _region, "prompt_retention": _retention,
+    "accepts_raw_sensitive": st.sampled_from([None, "true", "false", "unknown"])})
+
+
+def _world(onprem_decls, cloud_decls):
+    """Settings + a real registry whose effective pool carries exactly these
+    declarations, built with the repo's own row builder and registry builder."""
+    pool = [c.model_copy(update=cloud_decls[c.name]) for c in S.routing.model_pool]
+    settings = S.model_copy(update={
+        "routing": S.routing.model_copy(update={"model_pool": pool})})
+    rows = {}
+    for slug, tier in _ONPREM_ROWS.items():
+        rows[slug] = _declared_onprem(slug, tier=tier, **onprem_decls[slug])
+    rows["local-32b"]["allowed_app_ids"] = ["acme"]
+    return settings, _dh_registry(rows, settings)
 
 
 @hsettings(max_examples=200, deadline=None,
@@ -253,55 +306,56 @@ _declaration = st.fixed_dictionaries({
        sensitive=st.booleans(),
        pin=st.none() | st.sampled_from(_H_NAMES),
        tenant_id=st.sampled_from(["acme", "other"]),
-       declarations=st.lists(_declaration, min_size=len(_H_POOL),
-                             max_size=len(_H_POOL)),
+       onprem_decls=st.fixed_dictionaries({n: _onprem_decl for n in _ONPREM_ROWS}),
+       cloud_decls=st.fixed_dictionaries({n: _cloud_decl for n in _CLOUD_NAMES}),
        exclude=st.frozensets(st.sampled_from(_H_NAMES)),
        open_circuits=st.frozensets(st.sampled_from(_H_NAMES)),
        via_policy=st.booleans())
 def test_agreement_with_candidate_rejection(residency, allowed_providers, allowed_tiers,
                                             allowed_models, allowed_regions,
                                             require_no_retention, model_input, sensitive,
-                                            pin, tenant_id, declarations, exclude,
-                                            open_circuits, via_policy):
+                                            pin, tenant_id, onprem_decls, cloud_decls,
+                                            exclude, open_circuits, via_policy):
     """For every candidate with no state: candidate_rejection is None  <=>  violations empty;
-    when not None, CODE_TO_IDS[code] intersects violations."""
+    when not None, CODE_TO_IDS[code] intersects violations. And the context-side
+    violation matrix is EXACT: it equals the violation sets computed with the
+    policy view's own scope."""
+    settings, reg = _world(onprem_decls, cloud_decls)
     policy = AppPolicyView(residency=residency, allowed_providers=allowed_providers,
                            allowed_tiers=allowed_tiers, allowed_models=allowed_models,
                            allowed_regions=allowed_regions,
                            require_no_retention=require_no_retention,
                            model_input=model_input)
-    ctx = _ctx(_H_REG, policy, tenant_id=tenant_id, requested_model=pin)
-    if sensitive:  # the raw-sensitive rule needs a classified-sensitive request
-        from app.policy.context import build_context
-        ctx = build_context(S, "req-1", tenant_id, list(_SSN), None,
-                            app_policy=policy, registry=_H_REG,
-                            model_input=model_input)
-        if pin is not None:
-            ctx = ctx.model_copy(update={"requested_model": pin})
+    from app.policy.context import build_context
+    # The raw-sensitive rule needs a classified-sensitive request.
+    ctx = build_context(settings, "req-1", tenant_id, list(_SSN) if sensitive else [],
+                        None, app_policy=policy, registry=reg, model_input=model_input)
+    if pin is not None:
+        ctx = ctx.model_copy(update={"requested_model": pin})
 
     if via_policy:
         # The policy-side authority: no pin, no request-shaped raw-sensitive.
-        providers, onprem = _resolve_placement(S, _H_REG, policy)
+        providers, onprem = _resolve_placement(settings, reg, policy)
         scope, in_scope = Scope.from_policy(policy), _policy_scope(policy)
-        dh, requested = DataHandling.from_policy(S, policy), None
+        dh, requested = DataHandling.from_policy(settings, policy), None
     else:
-        providers, onprem = _resolve_placement(S, _H_REG, ctx)
+        providers, onprem = _resolve_placement(settings, reg, ctx)
         scope, in_scope = Scope.from_context(ctx), _ctx_scope(ctx)
         dh, requested = DataHandling.from_context(ctx), ctx.requested_model
 
-    # Declarations vary per example on EVERY candidate, cloud included.
-    pool = [c.model_copy(update=d) for c, d in zip(_H_POOL, declarations)]
+    pool = reg.effective_pool()
+    assert sorted(c.name for c in pool) == _H_NAMES
     for c in pool:
-        if candidate_state(c, exclude=exclude, registry=_H_REG,
+        if candidate_state(c, exclude=exclude, registry=reg,
                            open_circuits=open_circuits) is not None:
             continue
         v = candidate_violations(
             c, allowed_providers=providers, onprem_only=onprem, scope=scope,
-            requested_model=requested, registry=_H_REG, tenant_id=tenant_id,
+            requested_model=requested, registry=reg, tenant_id=tenant_id,
             data_handling=dh)
         r = candidate_rejection(
             c, allowed_providers=providers, onprem_only=onprem, in_scope=in_scope,
-            requested_model=requested, exclude=exclude, registry=_H_REG,
+            requested_model=requested, exclude=exclude, registry=reg,
             tenant_id=tenant_id, data_handling=dh, open_circuits=open_circuits)
         assert v <= REQUIREMENT_IDS
         assert not (v & STATE_IDS)
@@ -313,14 +367,25 @@ def test_agreement_with_candidate_rejection(residency, allowed_providers, allowe
         if onprem and c.provider != "onprem":
             assert "residency" in v
 
+    if via_policy:
+        return
     # The matrix over the registry's own pool agrees with the live seam.
-    if not via_policy:
-        m = violation_matrix(S, _H_REG, ctx, tenant_id=tenant_id, exclude=exclude,
-                             open_circuits=open_circuits)
-        fs = feasible_set(S, _H_REG, ctx, tenant_id=tenant_id, exclude=exclude,
-                          open_circuits=open_circuits)
-        assert {n for n, v in m.available.items() if not v} == {c.name for c in fs.eligible}
-        in_state = {n for names in m.state.values() for n in names}
-        assert in_state.isdisjoint(m.available)
-        assert in_state | set(m.available) == set(m.candidates) == set(_H_NAMES)
-        assert (m.allowed_providers, m.onprem_only) == (providers, onprem)
+    m = violation_matrix(settings, reg, ctx, tenant_id=tenant_id, exclude=exclude,
+                         open_circuits=open_circuits)
+    fs = feasible_set(settings, reg, ctx, tenant_id=tenant_id, exclude=exclude,
+                      open_circuits=open_circuits)
+    assert {n for n, v in m.available.items() if not v} == {c.name for c in fs.eligible}
+    in_state = {n for names in m.state.values() for n in names}
+    assert in_state.isdisjoint(m.available)
+    assert in_state | set(m.available) == set(m.candidates) == set(_H_NAMES)
+    assert (m.allowed_providers, m.onprem_only) == (providers, onprem)
+    # EXACT: for every available candidate the context-side set equals the one
+    # computed with the policy view's own scope (same placement and data
+    # handling as the context -- its residency may have been escalated by a
+    # detected entity, which the stored policy does not show).
+    exact = Scope.from_policy(policy)
+    for name, v in m.available.items():
+        assert v == candidate_violations(
+            m.candidates[name], allowed_providers=providers, onprem_only=onprem,
+            scope=exact, requested_model=ctx.requested_model, registry=reg,
+            tenant_id=tenant_id, data_handling=DataHandling.from_context(ctx)), name

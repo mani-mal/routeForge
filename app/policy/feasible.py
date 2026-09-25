@@ -273,39 +273,32 @@ class DataHandling:
 
 @dataclass(frozen=True)
 class Scope:
-    """The app-scope stage's input (stage 4 in the table above): which tiers
-    and which models the application admits. `None` means no constraint.
+    """The app-scope stage's requirements (stage 4 in the table above): which
+    tiers and which models the application admits. `None` means no
+    constraint. Read by `candidate_violations` to name EXACTLY which scope
+    requirement a candidate violates -- `allowed_tiers`, `allowed_models`, or
+    both.
 
-    **How the split maps, per authority** -- they are not symmetric, and the
-    asymmetry is the context's, not this class's:
+    Both constructors are exact: they carry the app's own two lists.
+    `Scope.from_policy` reads them off the `AppPolicyView`;
+    `Scope.from_context` reads `ctx.app_allowed_tiers` /
+    `ctx.app_allowed_models`, which `build_context` copies from that same view
+    (`None` when there is no app policy).
 
-    * `Scope.from_policy(app_policy)` is exact: `allowed_tiers` and
-      `allowed_models` are the app's own two lists, so a candidate outside
-      the tiers violates `allowed_tiers` and one outside the models violates
-      `allowed_models` -- both, if both refuse it.
-    * `Scope.from_context(ctx)` cannot split. The context never carries the
-      app's `allowed_tiers`; it carries `ctx.allowed_models`, the set
-      `build_context` computed as the pool MINUS every stage-1 (placement) and
-      app-scope rejection. So from a context `allowed_tiers` is `None`,
-      `allowed_models` is that precomputed set, and a tier refusal is
-      reported as `allowed_models`. Enforcement is unchanged -- the set is
-      honoured unconditionally, exactly as `_ctx_scope` always did (its
-      docstring says why it is never gated on `ctx.model_scope_active`).
-    * `placement_masked` records the other consequence of that precomputation:
-      because `ctx.allowed_models` already dropped every placement-refused
-      name, a candidate that fails placement is absent from it WHATEVER the
-      app's scope says. For such a candidate the absence carries no scope
-      information, so `candidate_violations` does not report `allowed_models`
-      for it (reporting it would name a requirement that did not refuse the
-      candidate -- a false conflict). It never changes `tier_in_scope` /
-      `model_in_scope`, so the first-fail seam, which checks placement first
-      and never consults scope for a placement-refused candidate, is
-      unaffected.
+    **It is NOT built from `ctx.allowed_models`.** That set stays the
+    first-fail authority -- `_ctx_scope` enforces it, unchanged -- but it is
+    built from first-fail CODES (`build_context` subtracts only the
+    placement- and app-scope-coded rejections), so it cannot answer "does app
+    scope refuse this candidate?" for a candidate an earlier stage refused
+    first: a placement-refused name is absent from it whatever the scope
+    says, and a stage-2-refused name is present in it whatever the scope
+    says. Reading violations off it therefore both invents and misses
+    `allowed_models` violations, and a core built on those is not the true
+    minimum (spec §2.4).
     """
 
     allowed_tiers: frozenset[str] | None = None
     allowed_models: frozenset[str] | None = None
-    placement_masked: bool = False
 
     @classmethod
     def from_policy(cls, app_policy: "AppPolicyView | None") -> "Scope":
@@ -316,8 +309,8 @@ class Scope:
 
     @classmethod
     def from_context(cls, ctx: ExecutionPolicyContext) -> "Scope":
-        return cls(allowed_tiers=None, allowed_models=ctx.allowed_models,
-                   placement_masked=True)
+        return cls(allowed_tiers=ctx.app_allowed_tiers,
+                   allowed_models=ctx.app_allowed_models)
 
 
 def tier_in_scope(c: PoolCandidate, scope: Scope) -> bool:
@@ -537,7 +530,9 @@ def _ctx_scope(ctx: ExecutionPolicyContext) -> Callable[[PoolCandidate], bool]:
     carries a binding `allowed_models`, and one that carries an empty set has
     no eligible candidate and is rejected (fail closed), never routed.
     """
-    scope = Scope.from_context(ctx)
+    # First-fail enforcement reads the PRECOMPUTED set, never the raw lists
+    # `Scope.from_context` carries -- see `Scope` for why the two differ.
+    scope = Scope(allowed_tiers=None, allowed_models=ctx.allowed_models)
 
     def ok(c: PoolCandidate) -> bool:
         return tier_in_scope(c, scope) and model_in_scope(c, scope)
@@ -682,19 +677,14 @@ def candidate_violations(c: PoolCandidate, *, allowed_providers: frozenset[str] 
     the two readings of stage 1 coincide.
     """
     v: set[str] = set()
-    placement_failed = False
     if onprem_only and c.provider not in ONPREM_ONLY_PROVIDERS:
         v.add(REQ_RESIDENCY)
-        placement_failed = True
     elif not provider_placeable(c, allowed_providers):
         v.add(REQ_ALLOWED_PROVIDERS)
-        placement_failed = True
     v |= _data_handling_violations(c, data_handling)
     if not tier_in_scope(c, scope):
         v.add(REQ_ALLOWED_TIERS)
-    # See `Scope.placement_masked`: a context's precomputed allowed_models says
-    # nothing about app scope for a placement-refused candidate.
-    if not model_in_scope(c, scope) and not (placement_failed and scope.placement_masked):
+    if not model_in_scope(c, scope):
         v.add(REQ_ALLOWED_MODELS)
     if not_requested(c, requested_model):
         v.add(REQ_REQUESTED_MODEL)

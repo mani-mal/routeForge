@@ -134,6 +134,14 @@ class ExecutionPolicyContext(BaseModel):
     # `allowed_models` above is binding either way -- there is no flag, default
     # or otherwise, that can turn eligibility off.
     model_scope_active: bool = False
+    # P3b: the app's OWN scope lists, exactly as the app policy stores them
+    # (`None` = no constraint, and `None` for a caller with no app policy).
+    # Content-free policy values. Read ONLY by `app/policy/feasible.py::
+    # Scope.from_context` to report which scope requirement a candidate
+    # violates (`allowed_tiers` vs `allowed_models`); enforcement still reads
+    # `allowed_models` above, which stays the first-fail authority.
+    app_allowed_tiers: frozenset[str] | None = None
+    app_allowed_models: frozenset[str] | None = None
     requested_model: str | None = None
     # P2b-3: the client's validated workload slug (`app/apps/outcomes.
     # parse_workload`), content-free. It selects which `model_quality` row the

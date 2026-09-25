@@ -257,6 +257,10 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
         allowed_providers=frozenset(allowed),
         allowed_models=allowed_models,
         model_scope_active=model_scope_active,
+        app_allowed_tiers=(app_policy.allowed_tiers
+                           if app_policy is not None else None),
+        app_allowed_models=(app_policy.allowed_models
+                            if app_policy is not None else None),
         max_cost_usd=(app_policy.max_cost_usd_per_request
                       if app_policy is not None
                       and app_policy.max_cost_usd_per_request is not None
