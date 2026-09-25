@@ -227,7 +227,7 @@ the export window).
 | `baseline` | the fidelity check — `rows_compared`, `agreement`, `warning`, `by_app`, `top_disagreements` (§5) |
 | `totals`, `by_app.<id>`, `by_workload.<label>` | each the same block: `requests`, `route_changed`, `newly_rejected`, `newly_served`, `cost_usd` (`{current, proposed, delta}` — each arm's routed rows), `cost_usd_both_routed` (same shape, over only the rows routed in **both** arms), `latency_ms.p50`/`.p95` (same shape), `quality_mean` (same shape), `onprem_share` (`{current, proposed}`) |
 | `moves` | top 20 `{from, to, count}` model-pair moves; `(rejected)` is a legal `from`/`to` value |
-| `new_rejections` | `{by_app: {...}, by_code: {...}}` — rows that were `routed` under `current` and `rejected` under `proposed` |
+| `new_rejections` | `{by_app: {...}, by_code: {...}, by_core: {...}}` — rows that were `routed` under `current` and `rejected` under `proposed`. `by_core` (P3b) groups by the `proposed` arm's minimal conflicting core: requirement ids joined with `+` (e.g. `"residency+requested_model"`), in `REQUIREMENT_ORDER`; when the core itself is empty it falls back to `"(state:" + ",".join(core_state) + ")"`; when both are empty (the router's own core computation failed) it is `"(unknown)"`. See `docs/reference/conflicting-core.md`. |
 | `affected_apps` | apps with any `route_changed`, `newly_rejected` or `newly_served` row |
 | `sources` | per arm, a count of `latency_source`/`quality_source` values (`observed`/`signal`/`tier_default`, `published`/`tier_default`/`calibrated`/`customer`) across routed rows |
 | `per_day` | `{cost_usd: {current, proposed, delta}}` divided by the export window in days; `null` when the window is under 1 day |
@@ -242,10 +242,11 @@ Opens with the caveat, verbatim, as a blockquote:
 > state or caching.
 
 Then, in order: a baseline warning (only if `agreement < 0.90`), **Headline** (the `totals`
-metrics table), **New rejections** (by app, by code — or "None."), **Moves** (from → to →
-count — or "None."), **By app** (one subsection per app, same metrics table), **By workload**
-(same, per workload label), **Latency and quality sources**, **Excluded rows** (reason →
-count).
+metrics table), **New rejections** (by app, by code, then **by conflicting core** — a
+`| core | count |` table, sorted by count descending then core key — or "None." when there
+are none), **Moves** (from → to → count — or "None."), **By app** (one subsection per app,
+same metrics table), **By workload** (same, per workload label), **Latency and quality
+sources**, **Excluded rows** (reason → count).
 
 **Read the two cost rows together.** `cost_usd` sums each arm over the rows *that arm*
 routed, so a row the proposal newly rejects simply disappears from the proposed sum — it

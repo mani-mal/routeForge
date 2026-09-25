@@ -101,7 +101,7 @@ a `K` of smallest size.
 {
   "requirements": [
     {"id": "residency", "security": true, "source": "sensitivity_rule",
-     "detail": {"value": "onprem_only", "rule_entities": ["US_SSN"]},
+     "detail": {"value": "onprem_only", "entities": ["US_SSN"]},
      "label": "must run on-premises (raised by sensitivity rule on US_SSN)",
      "hints": ["Onboard an on-premises endpoint that also satisfies the other requirements listed here."]},
     {"id": "requested_model", "security": false, "source": "request",
