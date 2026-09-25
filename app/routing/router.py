@@ -56,13 +56,24 @@ def _explain(rejected) -> str:
                      for reason, n in counts.most_common())
 
 
-def expected_output_tokens(settings: Settings, params: dict | None) -> int:
-    """Output tokens to price a request at: the client's own cap, else the
-    deployment's `budgets.default_estimated_output_tokens`."""
+def client_output_cap(params: dict | None) -> int | None:
+    """The client's own output-token cap -- `max_completion_tokens`, else
+    `max_tokens`, only when truthy -- or None when the client set neither.
+    The one reading of the cap: `expected_output_tokens` prices at it and the
+    outcome recorder (B55) stores it, so the two can never disagree."""
     p = params or {}
     for key in ("max_completion_tokens", "max_tokens"):
         if p.get(key):
             return int(p[key])
+    return None
+
+
+def expected_output_tokens(settings: Settings, params: dict | None) -> int:
+    """Output tokens to price a request at: the client's own cap, else the
+    deployment's `budgets.default_estimated_output_tokens`."""
+    cap = client_output_cap(params)
+    if cap is not None:
+        return cap
     return int(settings.policy.budgets["default_estimated_output_tokens"])
 
 

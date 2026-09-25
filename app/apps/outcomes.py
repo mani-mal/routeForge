@@ -116,7 +116,7 @@ def prompt_bucket(tokens: int) -> str:
     return ">64k"
 
 
-def outcome_context(ctx) -> dict:
+def outcome_context(ctx, *, max_tokens: int | None = None) -> dict:
     """The content-free policy features of an `ExecutionPolicyContext`,
     shared verbatim by `build_ok_outcome` and `build_failure_outcome` since
     both are known the moment the gate has run, win or lose downstream.
@@ -128,6 +128,12 @@ def outcome_context(ctx) -> dict:
         "onprem_only": ctx.onprem_only,
         "detected_entity_types": sorted(set(ctx.detected_entities)),
         "app_policy_version": ctx.app_policy_version,
+        # B55: the client's model pin (None = unpinned; the gate already maps
+        # `model: "auto"` to None) and its output-token cap (None = no cap;
+        # the caller reads it with `app/routing/router.py::client_output_cap`).
+        # A model slug and an int -- content-free.
+        "requested_model": ctx.requested_model,
+        "max_tokens": max_tokens,
     }
 
 
@@ -271,6 +277,8 @@ def _policy_features(outcome_ctx: dict) -> dict:
         "risk_class": outcome_ctx.get("risk_class"),
         "onprem_only": outcome_ctx.get("onprem_only"),
         "detected_entity_types": list(outcome_ctx.get("detected_entity_types") or []),
+        "requested_model": outcome_ctx.get("requested_model"),
+        "max_tokens": outcome_ctx.get("max_tokens"),
     }
 
 

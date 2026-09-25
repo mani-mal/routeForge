@@ -178,7 +178,17 @@ def test_outcome_context_sorts_and_dedupes_entity_types():
         "onprem_only": True,
         "detected_entity_types": ["EMAIL_ADDRESS", "US_SSN"],
         "app_policy_version": "apv-1",
+        "requested_model": None,
+        "max_tokens": None,
     }
+
+
+def test_outcome_context_carries_pin_and_output_cap():
+    """B55: the client's pin rides on the context; the output cap is handed in."""
+    ctx = _ctx().model_copy(update={"requested_model": "onprem/qwen-7b"})
+    got = outcome_context(ctx, max_tokens=64)
+    assert got["requested_model"] == "onprem/qwen-7b"
+    assert got["max_tokens"] == 64
 
 
 # --- build_ok_outcome -----------------------------------------------------
