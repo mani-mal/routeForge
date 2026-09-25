@@ -263,6 +263,56 @@ def _error_status_detail(exc: BaseException) -> tuple[int, str, str | None] | No
     return None
 
 
+def _error_extra(exc: BaseException) -> dict | None:
+    """Extra keys for the inner `error` object of a serving exception's
+    envelope (P3b): a `NoEligibleCandidate` carrying a minimal conflicting
+    core gets `conflicting_core` (`ConflictingCore.to_dict()`, content-free).
+    Shared by the plain HTTP path and the keepalive stream's error frame, like
+    `_error_status_detail`. Never raises: the core explains a rejection, it
+    must never break the response that reports it."""
+    core = getattr(exc, "core", None) if isinstance(exc, NoEligibleCandidate) else None
+    if core is None:
+        return None
+    try:
+        return {"conflicting_core": core.to_dict()}
+    except Exception:
+        logging.getLogger("serving.api").warning(
+            "conflicting core serialization failed (omitted)", exc_info=True)
+        return None
+
+
+def _core_record(core) -> dict | None:
+    """`core.to_record()`, or None when there is no core or it cannot be
+    serialized -- a broken core must never cost the outcome row itself."""
+    if core is None:
+        return None
+    try:
+        return core.to_record()
+    except Exception:
+        logging.getLogger("serving.obs").warning(
+            "conflicting core record failed (omitted)", exc_info=True)
+        return None
+
+
+def _log_no_eligible(exc: BaseException, request_id: str) -> None:
+    """The structured log line for a `no_eligible` request (P3b). No Langfuse
+    trace is exported for a request that fails before a response exists
+    (`export_trace` runs only in `_finalize`), so this JSON line -- keyed on
+    `request_id` -- is where the conflicting core reaches the logs. It carries
+    `ConflictingCore.to_record()` only (no label, no hints): content-free."""
+    if not isinstance(exc, NoEligibleCandidate):
+        return
+    core = getattr(exc, "core", None)
+    try:
+        record = _core_record(core)
+        logging.getLogger("serving.api").info(json.dumps(
+            {"event": "no_eligible_model", "request_id": request_id,
+             "conflicting_core": record}, sort_keys=True))
+    except Exception:
+        logging.getLogger("serving.api").warning(
+            "no_eligible log line failed request=%s", request_id, exc_info=True)
+
+
 class ClientDisconnected(Exception):
     """The client went away before a complete answer was ready."""
 
@@ -434,6 +484,7 @@ async def _record_failure_outcome(request: Request, status: str, *, tenant: str,
                                   internals: dict | None = None,
                                   attempts: tuple[str, ...] = (),
                                   rejected: tuple = (),
+                                  core=None,
                                   workload: str | None = None,
                                   workload_source: str = "none") -> None:
     """Build and write a failed request's outcome row. Content-free: the
@@ -441,7 +492,9 @@ async def _record_failure_outcome(request: Request, status: str, *, tenant: str,
     tried, and the `{name, code}` of each policy rejection -- never the
     exception's message. A `verify_failed` row is attributed from the
     reason-free trace `Pipeline.run` stashed in `internals["outcome_trace"]`
-    before refusing the response (a model was served; step 9 refused it)."""
+    before refusing the response (a model was served; step 9 refused it).
+    `core` is a `no_eligible` request's `ConflictingCore` (P3b), stored in
+    its content-free `to_record()` shape."""
     try:
         s = s if s is not None else request.app.state.settings
         internals = internals or {}
@@ -456,7 +509,8 @@ async def _record_failure_outcome(request: Request, status: str, *, tenant: str,
             endpoint_registry_version=_registry_version(request),
             workload=workload, workload_source=workload_source,
             attempts=tuple(attempts), rejected=tuple(rejected),
-            latency_ms=(time.monotonic() - started) * 1000, **served)
+            latency_ms=(time.monotonic() - started) * 1000,
+            conflicting_core=_core_record(core), **served)
     except Exception:
         logging.getLogger("serving.obs").warning(
             "outcome record failed request=%s", request_id, exc_info=True)
@@ -494,6 +548,9 @@ async def _record_exception_outcome(request: Request, exc: BaseException, *,
         # takes `{name, code}` mappings (the router trace's shape).
         rejected=tuple({"name": name, "code": code}
                        for name, code in getattr(exc, "rejected", ())),
+        # P3b: a `NoEligibleCandidate`'s minimal conflicting core (None for
+        # every other exception, and for a router whose core failed).
+        core=getattr(exc, "core", None) if isinstance(exc, NoEligibleCandidate) else None,
         workload=workload, workload_source=workload_source)
 
 
@@ -705,10 +762,11 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
             logging.getLogger("serving.api").warning(
                 "request %s failed with %d: %s", request_id, mapped[0], mapped[1])
         metrics.observe_request("-", "rejected")
+        _log_no_eligible(e, request_id)
         await _record_exception_outcome(
             request, e, tenant=tenant, request_id=request_id, started=started,
             s=s, internals=internals, **outcome_kw)
-        raise ApiError(mapped[0], mapped[1], code=mapped[2])
+        raise ApiError(mapped[0], mapped[1], code=mapped[2], extra=_error_extra(e))
     await _finalize(request, resp, body=body, tenant=tenant, app_policy=app_policy,
                     app_langfuse=app_langfuse, profile=profile,
                     session_id=session_id, s=s, request_id=request_id,
@@ -1172,6 +1230,7 @@ async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
                     logging.getLogger("serving.api").warning(
                         "request %s failed with %d: %s", request_id, mapped[0], mapped[1])
                 metrics.observe_request("-", "rejected")
+                _log_no_eligible(e, request_id)
             # Shielded for the same reason `_finalize` is below: a
             # disconnect landing mid-write must not lose the row. Same
             # recorder as the plain HTTP path (usage `error` row for a backend
@@ -1181,7 +1240,7 @@ async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
                     request, e, tenant=tenant, request_id=request_id,
                     started=started, s=s, internals=internals,
                     workload=workload, workload_source=workload_source)
-            yield sse_error_frame(*mapped)
+            yield sse_error_frame(*mapped, extra=_error_extra(e))
             yield SSE_DONE
             return
         # Shielded (ledger T2, deferred minor): `_finalize` writes the `ok`

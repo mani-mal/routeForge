@@ -4,6 +4,11 @@ unavailable" (B1). Subclasses are chosen so existing pytest.raises(ValueError/
 RuntimeError) callers keep passing."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.policy.core import ConflictingCore
+
 
 class PolicyGateError(Exception):
     """The identity/privacy/policy gate (or its detector) failed to evaluate.
@@ -21,11 +26,20 @@ class NoEligibleCandidate(ValueError):
     `app/apps/outcomes.py`'s failure builder; `code` is `None` where the
     raising stage has no stable code of its own, e.g. the router's own
     budget filter). Keyword-only, defaulted, so every existing
-    `NoEligibleCandidate("msg")` construction keeps working unchanged."""
+    `NoEligibleCandidate("msg")` construction keeps working unchanged.
 
-    def __init__(self, *args, rejected: tuple = ()) -> None:
+    `core` (P3b) is the minimal conflicting core (`app/policy/core.py::
+    ConflictingCore`): the smallest set of requirement ids no candidate
+    satisfies together, plus endpoint state. Content-free. Every
+    `NoEligibleCandidate` the Router raises carries one; `None` for other
+    raisers, and for the Router only if computing the core itself failed --
+    the core explains a rejection, it never decides one."""
+
+    def __init__(self, *args, rejected: tuple = (),
+                 core: "ConflictingCore | None" = None) -> None:
         super().__init__(*args)
         self.rejected = tuple(rejected)
+        self.core = core
 
 
 class BackendUnavailable(RuntimeError):

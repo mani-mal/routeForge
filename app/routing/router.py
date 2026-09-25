@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -7,7 +8,26 @@ from typing import TYPE_CHECKING
 from app.config.schema import PoolCandidate, Settings
 from app.errors import NoEligibleCandidate
 from app.models import ExecutionPolicyContext, RejectedCandidate
-from app.policy.feasible import CIRCUIT_OPEN, DATA_HANDLING_HINTS, feasible_set
+from app.policy.core import (
+    REQ_MAX_COST_USD_PER_REQUEST,
+    REQ_RISK_FLOOR,
+    ConflictingCore,
+    build_core,
+)
+from app.policy.feasible import (
+    CIRCUIT_OPEN,
+    DATA_HANDLING_HINTS,
+    REQ_ALLOWED_MODELS,
+    REQ_ALLOWED_PROVIDERS,
+    REQ_ALLOWED_REGIONS,
+    REQ_ALLOWED_TIERS,
+    REQ_REQUESTED_MODEL,
+    REQ_RESIDENCY,
+    ViolationMatrix,
+    _placement_providers,
+    feasible_set,
+    violation_matrix,
+)
 from app.routing.pricing import price_call
 from app.routing.quality import QualityResolver
 from app.routing.signals import SignalStore
@@ -16,6 +36,8 @@ from app.routing.strategy import RoutingStrategy, build_strategy
 if TYPE_CHECKING:
     from app.apps.registry import ModelRegistry
     from app.routing.strategy import RankResult
+
+log = logging.getLogger("serving.routing")
 
 _ORDER = {"cheap": 0, "mid": 1, "frontier": 2}
 
@@ -54,6 +76,55 @@ def _explain(rejected) -> str:
     counts = Counter(r.reason for r in rejected)
     return "; ".join(f"{n} {reason} ({_fix_hint(reason)})"
                      for reason, n in counts.most_common())
+
+
+def _with_core(message: str, core: ConflictingCore | None) -> str:
+    """The rejection message, unchanged, plus ` [<core summary>]` when a core
+    was computed (P3b)."""
+    return f"{message} [{core.summary()}]" if core is not None else message
+
+
+def _policy_core_inputs(ctx: ExecutionPolicyContext, m: ViolationMatrix, *,
+                        deployment_capacity: frozenset[str] | None = None,
+                        ) -> tuple[dict[str, dict], dict[str, str]]:
+    """`details` and `sources` for a policy-empty core. Content-free: policy
+    values, model slugs and entity TYPES only -- never request text.
+    `build_core` reads only the entries for ids that end up in the core.
+
+    `deployment_capacity` is the placement the DEPLOYMENT alone would allow
+    -- `app/policy/feasible.py::_placement_providers` computed with no app
+    policy, so it reflects only `serving.providers.*.enabled` and on-prem
+    health, never the app's own narrowing. When the resolved
+    `allowed_providers` (`m.allowed_providers`) is empty AND that deployment
+    capacity is ALSO empty, the app's own restriction (whatever it is)
+    cannot be why nothing is left -- the deployment kill switch already
+    emptied it before the app got a say -- so the requirement's source reads
+    "deployment" instead of the default "app_policy" (final review finding
+    1, 2026-09-25)."""
+    residency: dict = {"value": "onprem_only"}
+    sources: dict[str, str] = {}
+    # `onprem_only` came from a sensitivity rule when the app's OWN residency
+    # (pre-escalation, carried on the context by `build_context`) is not
+    # `onprem_only` AND a rule actually raised it -- `escalation_entities`
+    # names that rule's matched entity types (not every detected type). A
+    # context without them (hand-built, or no rule fired) reads as the app's
+    # -- never as a rule it cannot name.
+    if (ctx.onprem_only and ctx.escalation_entities
+            and ctx.app_residency != "onprem_only"):
+        sources[REQ_RESIDENCY] = "sensitivity_rule"
+        residency["entities"] = list(ctx.escalation_entities)   # types only
+    if (not m.allowed_providers and deployment_capacity is not None
+            and not deployment_capacity):
+        sources[REQ_ALLOWED_PROVIDERS] = "deployment"
+    details = {
+        REQ_RESIDENCY: residency,
+        REQ_ALLOWED_PROVIDERS: {"providers": sorted(m.allowed_providers)},
+        REQ_ALLOWED_REGIONS: {"regions": sorted(ctx.allowed_regions or ())},
+        REQ_ALLOWED_TIERS: {"tiers": sorted(ctx.app_allowed_tiers or ())},
+        REQ_ALLOWED_MODELS: {"models": sorted(ctx.app_allowed_models or ())},
+        REQ_REQUESTED_MODEL: {"value": ctx.requested_model},
+    }
+    return details, sources
 
 
 def client_output_cap(params: dict | None) -> int | None:
@@ -159,6 +230,110 @@ class Router:
         return self._select(ctx, tokens_after, complexity, min_tier, exclude,
                             output_tokens, open_circuits)
 
+    # --- P3b: the minimal conflicting core (app/policy/core.py) --------------
+    #
+    # The core EXPLAINS a rejection the router has already decided; it never
+    # decides one. It is computed only at a raise site, after the routing
+    # decision is final, and through `_safe_core`, so a failure here can only
+    # cost the explanation (`core=None`, logged at ERROR), never change which
+    # exception is raised or let a request through.
+
+    @staticmethod
+    def _safe_core(compute) -> ConflictingCore | None:
+        try:
+            return compute()
+        except Exception:
+            log.exception("conflicting core computation failed; raising "
+                          "NoEligibleCandidate without a core")
+            return None
+
+    def _policy_core(self, ctx: ExecutionPolicyContext,
+                     exclude: frozenset[str]) -> ConflictingCore:
+        """The policy-empty core (spec §2.4): over every AVAILABLE pool
+        candidate, with endpoint state reported separately. No open circuits:
+        the router's policy set is computed without them (stage 7 only labels
+        the chosen tier's final candidates), so the breaker never empties it
+        and circuits are not state here. The empty-pool case is the same call;
+        the matrix reports `no_endpoints`."""
+        m = violation_matrix(self._s, self._reg, ctx, tenant_id=ctx.tenant_id,
+                             exclude=exclude, open_circuits=frozenset())
+        # Only a hand-built context can refuse an available candidate through
+        # `ctx.allowed_models` while carrying no `app_allowed_*` to name why:
+        # such a candidate violates nothing the matrix can express. Build the
+        # core from the explainable candidates and say so -- never crash the
+        # 422 over it.
+        unexplained = sorted(n for n, v in m.available.items() if not v)
+        if unexplained:
+            log.warning("conflicting core: available candidates %s were refused "
+                        "without a nameable requirement (context carries no "
+                        "app_allowed_tiers/app_allowed_models); core built from "
+                        "the rest", unexplained)
+        violations = {n: v for n, v in m.available.items() if v}
+        # The deployment's OWN placement capacity, ignoring the app's
+        # narrowing entirely (`app_policy=None` short-circuits it) -- see
+        # `_policy_core_inputs`'s docstring.
+        deployment_capacity = frozenset(_placement_providers(
+            self._s, "onprem_only" if ctx.onprem_only else "any", None, self._reg))
+        details, sources = _policy_core_inputs(
+            ctx, m, deployment_capacity=deployment_capacity)
+        return build_core(violations, state=m.state, details=details, sources=sources)
+
+    def _budget_core(self, ctx: ExecutionPolicyContext, allowed: list[PoolCandidate],
+                     *, tier_pick: str, floor: str, tokens_after: int,
+                     out_tokens: int, min_tier: str | None = None) -> ConflictingCore:
+        """The budget-empty core (spec §2.3): over the policy-eligible
+        candidates at or below the picked tier (the router's budget search
+        space plus the lower tiers it refused). Each violates the cost cap
+        when its estimate exceeds it, and the risk floor when its tier is below
+        the EFFECTIVE floor -- the requested floor clamped down to the best
+        allowed tier, the same clamp the router's target applies. No state:
+        open circuits never block budget (the within-tier bypass handles them).
+
+        `min_tier` is the caller's confidence-escalation floor (the same one
+        `_select` folded into `floor`), passed through ONLY so this can name
+        it when it -- not the request's own risk class -- is what set the
+        effective floor (final review finding 2, 2026-09-25): source
+        "escalation" instead of the default "risk_class", detail gains
+        `min_tier` alongside `floor`.
+        """
+        best = max(_ORDER[c.tier] for c in allowed)
+        effective_floor = (floor if _ORDER[floor] <= best
+                           else next(t for t, o in _ORDER.items() if o == best))
+        violations: dict[str, frozenset[str]] = {}
+        over_estimates: list[float] = []   # estimates of the cost violators only
+        for c in allowed:
+            if _ORDER[c.tier] > _ORDER[tier_pick]:
+                continue
+            est = self._est_cost(c, tokens_after, out_tokens)
+            v: set[str] = set()
+            if est > ctx.max_cost_usd:
+                v.add(REQ_MAX_COST_USD_PER_REQUEST)
+                over_estimates.append(est)
+            if _ORDER[c.tier] < _ORDER[effective_floor]:
+                v.add(REQ_RISK_FLOOR)
+            if not v:
+                raise AssertionError(
+                    f"budget core: candidate {c.name} (tier {c.tier}) violates neither "
+                    f"max_cost_usd_per_request nor risk_floor (floor {effective_floor}, "
+                    f"picked tier {tier_pick}), yet the budget stage found no "
+                    "candidate -- the router's budget fallback and this core disagree")
+            violations[c.name] = frozenset(v)
+        # `cheapest_estimate` is over the candidates that VIOLATE the cap, so it
+        # never reads below the cap beside "violates cost" (a below-floor
+        # candidate that fits is refused by the floor, not the budget).
+        details: dict[str, dict] = {
+            REQ_RISK_FLOOR: {"floor": effective_floor, "risk_class": ctx.risk_class},
+        }
+        sources: dict[str, str] = {}
+        risk_class_floor = self._s.routing.risk_floors[ctx.risk_class]
+        if min_tier is not None and _ORDER[min_tier] > _ORDER[risk_class_floor]:
+            sources[REQ_RISK_FLOOR] = "escalation"
+            details[REQ_RISK_FLOOR]["min_tier"] = min_tier
+        if over_estimates:
+            details[REQ_MAX_COST_USD_PER_REQUEST] = {
+                "cap": ctx.max_cost_usd, "cheapest_estimate": min(over_estimates)}
+        return build_core(violations, state={}, details=details, sources=sources)
+
     def _select(self, ctx: ExecutionPolicyContext, tokens_after: int,
                complexity: float, min_tier: str | None,
                exclude: frozenset[str],
@@ -193,13 +368,20 @@ class Router:
                               code=r.code)
             for r in feasible.rejected]
         if not allowed:
+            # P3b: explain the rejection with its minimal conflicting core.
+            core = self._safe_core(lambda: self._policy_core(ctx, exclude))
             if not feasible.rejected:   # nothing filtered because there was nothing
                 raise NoEligibleCandidate(
-                    "no candidates after residency filter: the model pool is empty; "
-                    "onboard a model (residency cannot be satisfied by an empty pool)")
+                    _with_core(
+                        "no candidates after residency filter: the model pool is empty; "
+                        "onboard a model (residency cannot be satisfied by an empty pool)",
+                        core),
+                    core=core)
             raise NoEligibleCandidate(
-                f"no candidates after residency filter: {_explain(rejected)}",
-                rejected=tuple((r.name, r.code) for r in rejected))
+                _with_core(f"no candidates after residency filter: {_explain(rejected)}",
+                           core),
+                rejected=tuple((r.name, r.code) for r in rejected),
+                core=core)
 
         # 2. target tier from complexity + risk floor + escalation, clamped to
         #    the best residency-permitted tier
@@ -214,6 +396,7 @@ class Router:
         avail = sorted({c.tier for c in allowed}, key=lambda t: _ORDER[t])
         # the clamp above guarantees a match exists; avail[-1] is a defensive fallback
         tier_pick = next((t for t in avail if _ORDER[t] >= _ORDER[target]), avail[-1])
+        picked_tier = tier_pick   # before any budget fallback moves it (P3b core)
 
         fallback_from: str | None = None
         # 3. keep only the target tier; 4. drop over-budget
@@ -269,13 +452,21 @@ class Router:
                 skipped.append(t)
         if not eligible:
             cheapest, cheapest_est = min(over, key=lambda ce: ce[1])
+            # P3b: `floor` was set by the fallback block above, which always
+            # runs before this one (both are guarded by `not eligible`).
+            core = self._safe_core(lambda: self._budget_core(
+                ctx, allowed, tier_pick=picked_tier, floor=floor,
+                tokens_after=tokens_after, out_tokens=out_tokens, min_tier=min_tier))
             raise NoEligibleCandidate(
-                f"no candidates after budget filter: cheapest candidate {cheapest.name} "
-                f"(tier {cheapest.tier}) is estimated at ${cheapest_est:.4f} "
-                f"({tokens_after} prompt + {out_tokens} output tokens), over the per-request "
-                f"cap ${ctx.max_cost_usd:.4f}. Raise the application's "
-                "max_cost_usd_per_request, lower max_tokens, or lower the model's price.",
-                rejected=tuple((c.name, None) for c, _e in over))
+                _with_core(
+                    f"no candidates after budget filter: cheapest candidate {cheapest.name} "
+                    f"(tier {cheapest.tier}) is estimated at ${cheapest_est:.4f} "
+                    f"({tokens_after} prompt + {out_tokens} output tokens), over the "
+                    f"per-request cap ${ctx.max_cost_usd:.4f}. Raise the application's "
+                    "max_cost_usd_per_request, lower max_tokens, or lower the model's price.",
+                    core),
+                rejected=tuple((c.name, None) for c, _e in over),
+                core=core)
 
         # 4b. drop open circuits among the chosen tier's final candidates. The
         #     tier is already fixed; if every one of them is open, bypass the

@@ -32,7 +32,7 @@ SSE_KEEPALIVE = ": keepalive\n\n"
 
 
 def sse_error_frame(status: int, detail: str, code: str | None = None,
-                    type: str | None = None) -> str:
+                    type: str | None = None, *, extra: dict | None = None) -> str:
     """A failure after the SSE response already started (status 200 is on the
     wire). OpenAI SDK stream parsers raise APIError on a data frame carrying an
     `error` object.
@@ -43,7 +43,7 @@ def sse_error_frame(status: int, detail: str, code: str | None = None,
     and the integer HTTP status; they are now the same OpenAI values the HTTP
     body carries.
     """
-    return sse_frame(error_payload(status, detail, code=code, type=type))
+    return sse_frame(error_payload(status, detail, code=code, type=type, extra=extra))
 
 
 def openai_chunk(request_id: str, model: str, *, delta: str | None = None,

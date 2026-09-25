@@ -311,6 +311,12 @@ class RoutingOutcome(Base):
     # needs the ALTERs in docs/reference/routing-outcomes.md.
     requested_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
     max_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # P3b: the minimal conflicting core of a `no_eligible` row
+    # (`ConflictingCore.to_record()`: requirement ids/security/source/detail,
+    # endpoint state, candidates considered -- content-free); null on every
+    # other status. Added after the table shipped: a deployed DB needs
+    # `ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS conflicting_core JSON;`.
+    conflicting_core: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 class OutcomeFeedback(Base):

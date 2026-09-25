@@ -374,6 +374,77 @@ def test_select_rows_malformed_pin_or_cap_is_missing_features(over):
     assert rows == [] and excluded["missing_features"] == 1
 
 
+# --- Task 5 (P3b): simulator groups new rejections by conflicting core ------
+
+def test_summarize_counts_new_rejections_by_core():
+    """Removing app-a's only allowed model (local-mid) leaves local-cheap and
+    local-big as the available candidates; both violate
+    allowed_models=["local-mid"] and nothing else, so the minimal conflicting
+    core is exactly {allowed_models}. Verified by calling the router directly
+    (scn.router.select) on this exact scenario and inspecting
+    NoEligibleCandidate.core.ids(), which returned ('allowed_models',)."""
+    snap = make_snapshot(apps=[app_entry("app-a", allowed_models=["local-mid"])])
+    results, excluded = _run(_rows(3), snap, {"schema": P,
+                                              "endpoints": {"remove": ["local-mid"]}})
+    sim = summarize(results, excluded, inputs=_INPUTS, edits={})
+    assert sim["new_rejections"]["by_core"] == {"allowed_models": 3}
+
+
+def test_summarize_disabled_pinned_model_groups_by_requested_model_core():
+    """Disabling the pinned model (local-big) makes it state `disabled` --
+    excluded from the core computation's available pool (spec §2.2). The
+    remaining candidates (local-cheap, local-mid) all violate the pin
+    (`requested_model`), so the core is {requested_model} and the state is
+    {disabled: [local-big]}. Verified by calling the router directly on this
+    exact scenario: NoEligibleCandidate.core.ids() == ('requested_model',),
+    .state_ids() == ('disabled',). Because the core is non-empty, the by_core
+    key uses "+".join(core) ("requested_model"), never the "(state:...)"
+    fallback."""
+    pinned = make_row("p", "app-a", requested_model="local-big",
+                      attempts=["local-big"], chosen="local-big")
+    results, excluded = _run([pinned], make_snapshot(),
+                             {"schema": P, "endpoints": {"disable": ["local-big"]}})
+    sim = summarize(results, excluded, inputs=_INPUTS, edits={})
+    assert sim["new_rejections"]["by_core"] == {"requested_model": 1}
+
+
+def test_summarize_empty_core_falls_back_to_state_key():
+    """The default snapshot routes fine (three onprem models); a proposal
+    that removes every one of them leaves the proposed effective pool
+    literally empty -- there is no *available* candidate for the core
+    computation to reason about (spec §2.2), so the core is empty and the
+    rejection is explained purely by state. Verified directly by calling the
+    router on this exact scenario: NoEligibleCandidate.core.ids() == (),
+    .state_ids() == ('no_endpoints',). Per spec the by_core key then falls
+    back to "(state:" + ",".join(core_state) + ")"."""
+    results, excluded = _run([make_row("x", "app-a")], make_snapshot(), {"schema": P,
+        "endpoints": {"remove": ["local-cheap", "local-mid", "local-big"]}})
+    sim = summarize(results, excluded, inputs=_INPUTS, edits={})
+    assert sim["new_rejections"]["by_core"] == {"(state:no_endpoints)": 1}
+
+
+def test_arm_result_core_empty_for_routed_row():
+    results, _ = _run(_rows(1), make_snapshot(), {"schema": P})
+    (r,) = results
+    assert r.current.core == () and r.current.core_state == ()
+    assert r.proposed.core == () and r.proposed.core_state == ()
+
+
+def test_report_by_conflicting_core_table_present():
+    snap = make_snapshot(apps=[app_entry("app-a", allowed_models=["local-mid"])])
+    results, excluded = _run(_rows(3), snap, {"schema": P,
+                                              "endpoints": {"remove": ["local-mid"]}})
+    md = render_report(summarize(results, excluded, inputs=_INPUTS, edits={}))
+    assert "By conflicting core" in md
+    assert "| allowed_models | 3 |" in md
+
+
+def test_report_by_conflicting_core_table_absent_when_no_new_rejections():
+    results, excluded = _run(_rows(), make_snapshot(), {"schema": P})
+    md = render_report(summarize(results, excluded, inputs=_INPUTS, edits={}))
+    assert "By conflicting core" not in md
+
+
 def test_recorded_max_tokens_reaches_the_budget_check():
     """Only local-big exists: 200 prompt tokens at the default 512-token output
     estimate costs ~0.0035 USD (under the 0.01 cap); a recorded 100k-token

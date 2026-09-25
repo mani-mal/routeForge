@@ -183,6 +183,11 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
     residency = (_stricter(rule.residency, app_residency) if escalate_residency
                  else app_residency)
     onprem_only = residency == "onprem_only"
+    # P3b explanation only: the matched rule's entity types, and only when that
+    # rule actually raised residency above the app's own.
+    escalation_entities = (tuple(sorted(etypes & set(rule.entities or ())))
+                           if escalate_residency and residency != app_residency
+                           else ())
     allowed = _placement_providers(settings, residency, app_policy, registry)
 
     # The one eligibility filter (`app/policy/feasible.py`), given the placement
@@ -256,7 +261,15 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
         onprem_only=onprem_only,
         allowed_providers=frozenset(allowed),
         allowed_models=allowed_models,
+        # P3b: the app's own residency, pre-escalation -- explanation only
+        # (the conflicting core's `residency` source), never placement.
+        app_residency=app_residency,
+        escalation_entities=escalation_entities,
         model_scope_active=model_scope_active,
+        app_allowed_tiers=(app_policy.allowed_tiers
+                           if app_policy is not None else None),
+        app_allowed_models=(app_policy.allowed_models
+                            if app_policy is not None else None),
         max_cost_usd=(app_policy.max_cost_usd_per_request
                       if app_policy is not None
                       and app_policy.max_cost_usd_per_request is not None

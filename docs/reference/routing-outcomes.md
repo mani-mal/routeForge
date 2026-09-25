@@ -66,6 +66,21 @@ ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS max_tokens INTEGER;
 Rows written before the ALTER keep both columns null; the policy simulator replays those
 unpinned, at the default output estimate (`docs/reference/policy-simulator.md`).
 
+**Upgrade: `conflicting_core` (P3b, 2026-09-25).** `routing_outcomes` gained one nullable
+JSON column (§3.2). `create_all` never adds a column to a table that already exists, so a
+database that already has `routing_outcomes` (the Spark) needs it added by hand. **Run this
+before rolling the image**: the ORM names the column in every `INSERT` and `SELECT` on the
+table, so against an unmigrated table every outcome write fails (swallowed, so serving
+continues, but no rows are recorded) and every read of it -- the `/v1/feedback` outcome
+lookup, the admin export, the report -- errors until the ALTER runs.
+
+```sql
+ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS conflicting_core JSON;
+```
+
+Rows written before the ALTER keep the column null, same as any `no_eligible` row the
+router's core computation itself failed to explain (`app/routing/router.py::_safe_core`).
+
 ## 2. Content-free by contract
 
 Both tables hold **ids, enum values, numbers, entity types and version hashes only.** They
@@ -170,6 +185,7 @@ filled on it exactly as on an `ok` row.
 | `prompt_tokens`, `completion_tokens` | int | From the response `usage` (on `verify_failed`, the served attempt's). `0` on other failure rows. |
 | `verify_required`, `verify_performed`, `verify_passed` | bool, nullable | From the trace's `verify` record. On `verify_failed` rows `true`, `true`, `false`. Null on other failure rows. |
 | `verify_mode` | enum, nullable | See below. `failed` on `verify_failed` rows; null on other failure rows. |
+| `conflicting_core` | JSON, nullable | A `no_eligible` row's minimal conflicting core (P3b): `ConflictingCore.to_record()` — requirement ids/`security`/`source`/`detail`, endpoint state, `candidates_considered`; no `label`, no `hints`. Content-free. Null on every other status, and null when the router's own core computation failed (`core=None`). See `docs/reference/conflicting-core.md`. Added 2026-09-25 (P3b). |
 
 **`verify_mode`** is derived from the `verify` record, checking the reason first:
 
@@ -196,7 +212,10 @@ exception (`NoEligibleCandidate.rejected`):
 | The pool is empty (no model onboarded, none in YAML) | `[]` |
 
 So the budget case and the empty-pool case are distinguishable only by `rejected` being
-non-empty with null codes.
+non-empty with null codes. `conflicting_core` (P3b) names the same rejection more
+precisely — the minimal set of requirements no available candidate met together, with
+endpoint state (disabled, empty pool, …) kept separate — for both the eligibility case and
+the budget case; see `docs/reference/conflicting-core.md`.
 
 ### 3.4 Semantic-cache hits
 

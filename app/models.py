@@ -134,6 +134,30 @@ class ExecutionPolicyContext(BaseModel):
     # `allowed_models` above is binding either way -- there is no flag, default
     # or otherwise, that can turn eligibility off.
     model_scope_active: bool = False
+    # P3b: the app's OWN scope lists, exactly as the app policy stores them
+    # (`None` = no constraint, and `None` for a caller with no app policy).
+    # Content-free policy values. Read ONLY by `app/policy/feasible.py::
+    # Scope.from_context` to report which scope requirement a candidate
+    # violates (`allowed_tiers` vs `allowed_models`); enforcement still reads
+    # `allowed_models` above, which stays the first-fail authority.
+    app_allowed_tiers: frozenset[str] | None = None
+    app_allowed_models: frozenset[str] | None = None
+    # P3b: the application's OWN resolved residency token (`any` |
+    # `private_cloud_ok` | `onprem_only`), BEFORE any sensitivity-rule
+    # escalation -- set once in `build_context`. Content-free. Read ONLY by
+    # the router's conflicting core to say whether `onprem_only` came from the
+    # app (`app_residency`) or was raised by a sensitivity rule
+    # (`sensitivity_rule`). Never a placement input: `onprem_only` /
+    # `allowed_providers` above are the only placement authority. `None` for a
+    # hand-built context (the core then reports `app_residency`).
+    app_residency: str | None = None
+    # P3b: the entity TYPES of the sensitivity rule that actually RAISED
+    # residency above `app_residency` for this request -- the detected types
+    # that rule matched on, sorted. `()` when no rule raised residency
+    # (escalation off, or the rule's residency is no stricter than the
+    # app's). Content-free; explanation only (the core's `residency`
+    # source/detail), never a placement input.
+    escalation_entities: tuple[str, ...] = ()
     requested_model: str | None = None
     # P2b-3: the client's validated workload slug (`app/apps/outcomes.
     # parse_workload`), content-free. It selects which `model_quality` row the

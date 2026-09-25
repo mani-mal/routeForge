@@ -219,6 +219,14 @@ class ModelRegistry:
         r = self._onboarded().get(slug)
         return (r.endpoint, r.api_key_env) if r is not None else None
 
+    def disabled_onboarded(self) -> tuple[str, ...]:
+        """Sorted slugs of onboarded rows the admin has disabled. They are
+        absent from `effective_pool()`; this exists ONLY so an explanation
+        (P3b's conflicting core, `app/policy/feasible.py::violation_matrix`)
+        can report them as `disabled` state. Never an eligibility input."""
+        return tuple(sorted(slug for slug, r in self._onboarded().items()
+                            if not r.enabled))
+
     def is_enabled(self, slug: str) -> bool:
         r = self._onboarded().get(slug)
         return True if r is None else r.enabled

@@ -2083,3 +2083,80 @@ routing input hid behind a plausible-looking report. The check made it visible b
 could act on a wrong prediction. Any future routing input that the outcome row does not
 record will fail the same way, so extend the outcome row whenever the router starts reading
 something new.
+
+## 16. The minimal conflicting core (P3b)
+
+§15's simulator answers "what changes for the traffic I already have?" It says nothing
+about a request that is rejected today: an empty feasible set's 422 used to name only the
+first-failed stage of each candidate, leaving an operator to work out by hand which
+requirements actually conflict. P3b names that set directly. Design:
+`docs/superpowers/specs/2026-09-25-conflicting-core-design.md`. Field-level reference:
+[`docs/reference/conflicting-core.md`](../reference/conflicting-core.md). Code:
+`app/policy/core.py` (pure computation), `app/policy/feasible.py`
+(`candidate_violations`/`violation_matrix`), `app/routing/router.py` (the two raise sites).
+
+### 16.1 The model
+
+The **minimal conflicting core** is a minimum hitting set over a violation matrix. Every
+available pool candidate (one not in a §16.3-below *state*) contributes the set of
+requirement ids it violates — `V(c)`, from `app/policy/feasible.py::candidate_violations`
+for the policy case, or the router's own two budget predicates
+(`max_cost_usd_per_request`, `risk_floor`) for the budget case. The feasible set is empty
+exactly when every `V(c)` is non-empty. A **conflicting core** `K` is a set of requirement
+ids that intersects every `V(c)`; the **minimal** conflicting core is such a `K` of smallest
+size (`app/policy/core.py::minimum_hitting_set`).
+
+A minimum hitting set is automatically **irreducible**: dropping any of its ids leaves some
+candidate whose `V(c)` is disjoint from the rest of `K`, i.e. a candidate violating nothing
+the smaller set names. That is what lets the core be read as "these are exactly the
+requirements standing in the way" rather than a superset that includes an id no candidate
+actually needs relaxed.
+
+### 16.2 Why exact search is exact at this size
+
+Minimum hitting set is NP-hard in general — the reason most systems that compute one settle
+for a greedy or approximate cover. P3b does not need an approximation, because the
+alphabet is fixed and small: `REQUIREMENT_ORDER` names at most 11 requirement ids (§2.1 of
+the design). Exhaustive search over `2^11 - 1 = 2047` non-empty subsets, tried in
+increasing size via `itertools.combinations`, is a brute-force computation that completes
+in microseconds — there is no scale at which this stops being cheap, because the universe
+size is bounded by the number of *requirement kinds* the product defines, not by the pool
+size, the number of candidates, or traffic volume. Ties are broken by `REQUIREMENT_ORDER`
+(the design's own table order), so the result is deterministic and does not depend on pool
+iteration order — the same conflict always names the same core, whichever order the pool
+happens to be enumerated in.
+
+### 16.3 Invariants §5.1–§5.12, and the test that pins each
+
+| # | Invariant | Pinned by |
+|---|---|---|
+| 5.1–5.3 | Covering (every available candidate's `V(c)` meets the core), minimum (no smaller set covers, checked against a brute-force oracle), irreducible (dropping any core id leaves an uncovered candidate) | `tests/test_conflicting_core.py::test_covering_minimum_irreducible` (Hypothesis) |
+| 5.4 | Agreement with the live seam: `candidate_rejection(c)` is `None` exactly when `candidate_violations(c)` is empty; when not `None`, its code maps to one of the violated ids | `tests/test_policy_violations.py::test_agreement_with_candidate_rejection` (Hypothesis) |
+| 5.5 | Order independence: shuffling the pool gives an identical core | `tests/test_conflicting_core.py::test_order_independent` (Hypothesis) |
+| 5.6 | State is never in the core: a pool of only disabled/circuit-open/prior-failure candidates gives `core == []` and `state` lists them; an empty pool gives `state: [no_endpoints]` | `tests/test_conflicting_core.py::test_state_only_core_is_empty`, `tests/test_policy_violations.py::test_empty_pool_state`, `tests/test_router_conflicting_core.py::test_empty_pool_is_no_endpoints_state`, `test_a_disabled_only_pool_reads_disabled_not_no_endpoints` |
+| 5.7 | Security hints never relax: every `security: true` id's hint templates fail a denylist check ("remove", "disable", "relax", "lower", "allow cloud", …) | `tests/test_conflicting_core.py::test_security_hints_never_relax` |
+| 5.8 | Worked examples: `onprem_only` + a pinned cloud model gives `{residency, requested_model}`; `allowed_regions` + `require_no_retention` against endpoints each satisfying only one gives `{allowed_regions, require_no_retention}`; a budget case with every in-floor candidate over cap and a cheaper candidate below floor gives `{max_cost_usd_per_request, risk_floor}`; a sensitivity-rule escalation names the rule's entity types | `tests/test_conflicting_core.py::test_worked_example_onprem_pin`; `tests/test_router_conflicting_core.py::test_onprem_only_with_a_pin_to_neither_gives_residency_and_requested_model`, `test_region_and_retention_each_met_by_a_different_endpoint`, `test_budget_floor_over_cap_and_cheap_below_floor`, `test_sensitivity_rule_escalation_names_the_entity_types` |
+| 5.9 | Live 422: an `onprem_only` app with no on-prem model gives `error.conflicting_core.requirements[0].id == "residency"` in a B49-valid envelope, `code` staying `no_eligible_model` | `tests/test_conflicting_core_api.py::test_422_body_carries_the_conflicting_core`, `test_422_envelope_keeps_every_b49_field` |
+| 5.10 | Outcome row and trace surface: a `no_eligible` outcome row carries `conflicting_core`, the export includes it, and the structured `serving.api` log line carries it (no Langfuse trace exists for a request that never reaches `_finalize`) | `tests/test_conflicting_core_api.py::test_outcome_row_records_the_core`, `test_export_line_includes_the_core`, `test_failed_request_log_line_carries_the_core`, `test_keepalive_stream_error_frame_carries_the_core` |
+| 5.11 | Simulator: a proposal that removes the only model satisfying a pin gives `by_core == {"requested_model": n}` (or the real computed core), and the report groups new rejections by core | `tests/eval/test_simulate.py::test_summarize_counts_new_rejections_by_core`, `test_summarize_disabled_pinned_model_groups_by_requested_model_core`, `test_summarize_empty_core_falls_back_to_state_key`, `test_report_by_conflicting_core_table_present`, `test_report_by_conflicting_core_table_absent_when_no_new_rejections` |
+| 5.12 | Isolation and content-freeness: no `detail` field ever holds request content — a prompt seeded with a unique marker appears in none of the 422 core, the log line, or the outcome row | `tests/test_conflicting_core_api.py::test_conflicting_core_is_content_free` |
+
+Robustness beyond the numbered invariants: a core computation failure never changes which
+exception is raised or lets a request through — it only costs the explanation
+(`core=None`, logged at `ERROR`) — pinned by
+`tests/test_router_conflicting_core.py::test_core_failure_is_fail_safe`. A hand-built
+context that refuses a candidate through `ctx.allowed_models` while naming no
+`app_allowed_tiers`/`app_allowed_models` produces an unexplained candidate that is dropped
+from the matrix (with a warning), never crashing the 422 —
+`test_hand_built_context_with_an_unexplained_rejection_does_not_crash`. And the budget
+core's own internal consistency is asserted, not assumed: a candidate the matrix builds
+that violates neither cost nor the risk floor would mean the router's budget fallback and
+the core disagree, and `_budget_core` raises loudly rather than build a silently wrong core
+— `test_budget_core_asserts_on_a_candidate_violating_neither`.
+
+### 16.4 Spark example
+
+Pending the Spark verification after deploy.
+
+| case | core |
+|---|---|

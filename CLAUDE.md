@@ -198,7 +198,11 @@ also writes a content-free `routing_outcomes` record (plus local feedback scores
 nothing reads back into routing — see `docs/reference/routing-outcomes.md`. Since P3a,
 `GET /admin/config-snapshot` exports a content-free config snapshot that the offline
 `scripts/policy_simulate.py` replays those records against, to predict a policy change's
-effect before anyone applies it — see `docs/reference/policy-simulator.md`.
+effect before anyone applies it — see `docs/reference/policy-simulator.md`. Since P3b, an
+empty feasible set's 422 names the minimal conflicting core — the smallest set of
+requirements no available endpoint meets together, with endpoint state kept separate and
+remediation hints that never relax a security requirement — see
+`docs/reference/conflicting-core.md`.
 
 ## Configuration — everything switchable at startup
 

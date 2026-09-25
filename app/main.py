@@ -467,7 +467,8 @@ def create_app() -> FastAPI:
             status_code=exc.status_code,
             content=error_payload(exc.status_code, str(exc.detail),
                                   code=getattr(exc, "openai_code", None),
-                                  type=getattr(exc, "openai_type", None)),
+                                  type=getattr(exc, "openai_type", None),
+                                  extra=getattr(exc, "openai_extra", None)),
             headers=getattr(exc, "headers", None))
 
     @app.exception_handler(RequestValidationError)
