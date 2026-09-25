@@ -127,10 +127,12 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
-## B55 — Outcome rows don't record the pinned model or `max_tokens`
+## B55 — Outcome rows don't record the pinned model or `max_tokens`  ✅ RESOLVED (2026-09-24)
 
 **Severity:** low (fidelity of an offline tool only; no effect on production routing).
-**Found:** 2026-09-24, P3a policy-simulator build. **Open, deferred.**
+**Found:** 2026-09-24, P3a policy-simulator build. Confirmed by the first real Spark run:
+baseline agreement 0.0206 (190/194 rows recorded `qwen3.8-27b`, which Qwen Code pins, and
+replayed unpinned to `nemotron-3.5-lightning`).
 
 `routing_outcomes` records what the router decided and what was served, but not two things
 the request itself carried: a client's pinned `model` (when the app is allowed to pin one)
@@ -154,6 +156,28 @@ populated from the request at the same point the other decision fields are writt
 an `ALTER` on every deployed database that already has the table (per
 `docs/reference/routing-outcomes.md` §1, `create_all` never adds a column to an existing
 table).
+
+**Resolution.** `RoutingOutcome` has `requested_model` (`VARCHAR(100)`, null = unpinned /
+`model: "auto"`) and `max_tokens` (`INTEGER`, the client's `max_completion_tokens` else
+`max_tokens`, read by `app/routing/router.py::client_output_cap`, the same reading the router
+prices at). Both are set in `outcome_context` on the `run` and `run_stream` paths, so every
+status that writes a row carries them, and the export includes them. The simulator
+(`app/eval/simulate.py::simulate_row`) re-applies the pin to the rebuilt context and passes
+the cap to `Router.select`; rows without the keys (older exports) replay unpinned.
+
+**Deploy.** Run before rolling the image (against an unmigrated table every outcome write
+fails, swallowed, and every read of it -- export, `/v1/feedback` lookup -- errors):
+
+```sql
+ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS requested_model VARCHAR(100);
+ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS max_tokens INTEGER;
+```
+
+Tests: `tests/test_outcome_pin.py` (real HTTP: ok/backend_failed/no_eligible/stream rows,
+export), `tests/eval/test_simulate.py` (pinned replay, removal → `newly_rejected`, old rows,
+malformed fields, `max_tokens` reaches the budget check),
+`tests/eval/test_policy_simulate_cli.py::test_live_round_trip_pinned_baseline_is_perfect`
+(0.25 agreement before the simulator fix, 1.0 after).
 
 ## B54 — onboarded on-prem models scored at the 0.5 quality floor regardless of tier or published quality  ✅ RESOLVED (2026-09-24)
 

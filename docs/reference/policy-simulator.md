@@ -46,6 +46,15 @@ curl -s -b "rf_admin_session=<session>" \
 
 `rf_admin_session` is the cookie the console sets at admin login.
 
+Two per-row fields make a replay faithful to the request itself (B55, 2026-09-24):
+`requested_model` — the client's model pin, re-applied to the rebuilt context exactly as the
+gate applies it, so a pinned row replays to its pin (and a proposal that removes or
+disables the pinned model rejects it, `not_requested`); and `max_tokens` — the client's
+output-token cap, which the router prices the row at (`expected_output_tokens`), so the
+per-request budget check sees the real cap. Both are null for an unpinned or uncapped
+request. **Rows exported before these fields existed lack both keys**; such a row is still
+simulated, unpinned and at the deployment's default output-token estimate.
+
 ### 1.2 The config snapshot
 
 Everything a routing decision reads — settings, the onboarded pool, per-app policy,
@@ -214,7 +223,7 @@ the export window).
 | `simulation_id` | first 16 hex characters of the sha256 over the canonical `inputs` block |
 | `inputs` | `export_sha256`, `snapshot_sha256`, `proposal_sha256`, `proposal_title`, `routing_policy_version`, `registry_version`, `snapshot_generated_at`, `serving_policy` (the four posture values every app was compiled under — the snapshot's), `window` (`{start, end}` over the simulated rows' `ts`, or `null`) |
 | `edits` | the proposal, minus `schema`/`title`, keys sorted — exactly what was asked for |
-| `rows` | `simulated` (count) and `excluded` (count per reason: `cache_hit`, `unknown_status`, `unknown_app`, `missing_features`). `missing_features` counts a row whose `request_id`, `complexity`, `prompt_tokens` (numeric), `completion_tokens` (numeric or null), `detected_entity_types` (list of strings or null; the key must be present), `workload`, `attempts` or `ts` is missing or mistyped — a malformed row is counted, never a crash. A non-object export line is a skipped-line warning. |
+| `rows` | `simulated` (count) and `excluded` (count per reason: `cache_hit`, `unknown_status`, `unknown_app`, `missing_features`). `missing_features` counts a row whose `request_id`, `complexity`, `prompt_tokens` (numeric), `completion_tokens` (numeric or null), `detected_entity_types` (list of strings or null; the key must be present), `workload`, `attempts` or `ts` is missing or mistyped, or whose `requested_model` (non-empty string or null) or `max_tokens` (integer > 0 or null) is mistyped — these two may be absent (an older export) — a malformed row is counted, never a crash. A non-object export line is a skipped-line warning. |
 | `baseline` | the fidelity check — `rows_compared`, `agreement`, `warning`, `by_app`, `top_disagreements` (§5) |
 | `totals`, `by_app.<id>`, `by_workload.<label>` | each the same block: `requests`, `route_changed`, `newly_rejected`, `newly_served`, `cost_usd` (`{current, proposed, delta}` — each arm's routed rows), `cost_usd_both_routed` (same shape, over only the rows routed in **both** arms), `latency_ms.p50`/`.p95` (same shape), `quality_mean` (same shape), `onprem_share` (`{current, proposed}`) |
 | `moves` | top 20 `{from, to, count}` model-pair moves; `(rejected)` is a legal `from`/`to` value |
@@ -230,7 +239,7 @@ Opens with the caveat, verbatim, as a blockquote:
 > **Simulation only.** Nothing in this report has been applied. It predicts the first routing
 > decision of recorded requests under the proposal, using the real eligibility and routing
 > code and a frozen snapshot of signals. It does not model failover, escalation, breaker
-> state, request pins or caching.
+> state or caching.
 
 Then, in order: a baseline warning (only if `agreement < 0.90`), **Headline** (the `totals`
 metrics table), **New rejections** (by app, by code — or "None."), **Moves** (from → to →
@@ -260,9 +269,11 @@ Agreement below 90% prints a warning at the top of `report.md`.
 
 - **Drift since the export window** — onboarding, price or signal changes between when the
   traffic was served and when the snapshot was taken.
-- **The unrecorded pin and `max_tokens`** (B55, §6 below) — a pinned request replays as an
-  ordinary routed request, and every row prices at the deployment's default output-token
-  estimate rather than its real `max_tokens`.
+- **Rows exported before B55** (2026-09-24) — they carry no `requested_model` or
+  `max_tokens`, so a pinned request among them replays unpinned and prices at the default
+  output-token estimate. The first real Spark run (before the fix) measured 0.0206
+  agreement for exactly this reason: Qwen Code pins its model, and 190 of 194 rows were
+  replayed unpinned to a different model.
 - **Circuit-breaker state** — a request served while a circuit was open replays with no open
   circuits (§6).
 
@@ -291,14 +302,12 @@ From spec §2, plus what the build settled during P3a:
   `context_window` when scoring. The proposal field is still validated and applied to the
   scenario's registry; a first-decision replay simply cannot show what a call-time rejection
   would have done.
-- **B55 — pinned requests and `max_tokens` are not recorded, so they cannot be replayed.**
-  `routing_outcomes` does not currently record a request's pinned model or its `max_tokens`.
-  The simulator therefore replays every request as if it were unpinned (an ordinary routed
-  decision, never a `model_not_found` pinned-model rejection), and prices every row's
-  completion at the deployment's default output-token estimate
-  (`expected_output_tokens(settings, None)`), never the request's real cap. This lowers
-  baseline agreement for pinned or large-`max_tokens` traffic. See `docs/backlog/bugs.md` B55
-  for the deferred fix (two nullable columns, needs an `ALTER`).
+- **Pinned-model rejections are not in the input.** A pin the app may not use is a
+  `model_not_found` 422 that writes no outcome row (`docs/reference/routing-outcomes.md`
+  §3.1), so there is nothing to replay for it. Pins that *were* served are replayed (§1.1).
+- **Rows exported before B55 replay unpinned** at the default output-token estimate (§1.1,
+  §5). A deployed database needs the two `ALTER`s in `docs/reference/routing-outcomes.md` §1
+  before new rows carry the fields.
 
 ## 7. Security: the snapshot is content-free and secret-free
 
