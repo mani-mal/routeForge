@@ -2051,8 +2051,9 @@ round trip, and serving isolation — are pinned by `tests/eval/test_scenario.py
 
 These are real runs on the DGX Spark deployment (2026-09-25). Each run used the Spark's own
 `/admin/config-snapshot` and `/admin/outcomes/export`, and the CLI ran offline on a laptop.
-The on-prem pool had five models: `llama3.2:latest`, `local-8b`, `nemotron-3.5-lightning`
-and `qwen3.8-27b` in the cheap tier, and `local-32b` in the mid tier. Every model was priced
+The on-prem pool had five onboarded models: `llama3.2:latest`, `nemotron-3.5-lightning`,
+`qwen3.8-27b` and an operator-onboarded 8B test model in the cheap tier, and a 32B test model
+in the mid tier. Every model was priced
 at $0, so every cost figure is 0 and Δcost/day is not informative.
 
 | run | proposal | simulated | agreement | route_changed | newly_rejected | Δcost/day |
