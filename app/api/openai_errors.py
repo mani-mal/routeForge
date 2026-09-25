@@ -59,15 +59,20 @@ def error_type_for_status(status: int) -> str:
 
 
 def error_payload(status: int, message: str, *, code: str | None = None,
-                  type: str | None = None) -> dict:
+                  type: str | None = None, extra: dict | None = None) -> dict:
     """The response body for a `/v1/*` failure.
 
     `param` is always present and null: the OpenAI SDK reads it off the inner
     `error` object, and an absent key and a null key are not the same thing to
     every client. RouteForge never attributes a failure to one request field,
     so it is never populated.
+
+    `extra` merges additional content-free keys into the inner `error` object
+    (P3b: `conflicting_core` on a `no_eligible_model` 422). It never
+    overrides the four standard keys.
     """
-    return {"error": {"message": message,
+    return {"error": {**(extra or {}),
+                      "message": message,
                       "type": type or error_type_for_status(status),
                       "param": None,
                       "code": code}}
@@ -84,7 +89,10 @@ class ApiError(HTTPException):
     """
 
     def __init__(self, status_code: int, detail: str, *,
-                 code: str | None = None, type: str | None = None) -> None:
+                 code: str | None = None, type: str | None = None,
+                 extra: dict | None = None) -> None:
         super().__init__(status_code, detail)
         self.openai_code = code
         self.openai_type = type
+        # Extra keys for the inner `error` object (see `error_payload`).
+        self.openai_extra = extra

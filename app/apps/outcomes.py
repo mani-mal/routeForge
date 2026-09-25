@@ -266,6 +266,8 @@ def build_ok_outcome(resp: dict, *, request_id: str, application_id: str,
         "latency_ms": sum(e.get("latency_ms", 0.0) for e in trace),
         "prompt_tokens": prompt_tokens,
         "completion_tokens": usage.get("completion_tokens", 0),
+        # P3b: only a `no_eligible` row has a conflicting core.
+        "conflicting_core": None,
     }
     row.update(trace_features(trace))
     return row
@@ -348,7 +350,8 @@ def build_failure_outcome(*, status: str, request_id: str, application_id: str,
                            trace: list[dict] | None = None,
                            prompt_tokens: int = 0,
                            completion_tokens: int = 0,
-                           cost_usd: float = 0.0) -> dict:
+                           cost_usd: float = 0.0,
+                           conflicting_core: dict | None = None) -> dict:
     """A `routing_outcomes` row for a request that never reached (or never
     completed) a served response. Fills what it is given -- `status`, the
     ids/versions, the policy-context features (known once the gate ran,
@@ -369,6 +372,11 @@ def build_failure_outcome(*, status: str, request_id: str, application_id: str,
     `trace_features`, exactly as for an `ok` row, and `prompt_tokens`/
     `completion_tokens`/`cost_usd` are the served attempt's real figures
     (`prompt_tokens_bucket` follows). `attempts`/`rejected` are then ignored.
+
+    `conflicting_core` (a `no_eligible` row, P3b): the minimal conflicting
+    core in `ConflictingCore.to_record()` shape -- requirement ids and their
+    content-free details, endpoint state, and a count. Stored as given; the
+    caller passes `None` for every other status.
     """
     row = {
         "request_id": request_id,
@@ -399,6 +407,7 @@ def build_failure_outcome(*, status: str, request_id: str, application_id: str,
         "verify_performed": None,
         "verify_passed": None,
         "verify_mode": None,
+        "conflicting_core": conflicting_core,
     }
     if trace is not None:
         row.update(trace_features(trace))
