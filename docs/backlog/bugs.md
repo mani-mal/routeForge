@@ -127,6 +127,62 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
+## B57 — RouteForge configures no logging, so every `serving.*` INFO record is dropped in deployment
+
+**Severity:** medium (observability; no effect on routing or privacy).
+**Found:** 2026-09-25, P3b live verification on the Spark.
+
+**What happens.** Nothing in `app/` or the deploy files calls `logging.basicConfig`,
+`dictConfig` or `setLevel`. The root logger therefore stays at Python's default WARNING level
+with no handler. Every `logging.getLogger("serving.*").info(...)` record is dropped:
+- the P3b `no_eligible_model` structured line (`app/api/routes.py::_log_no_eligible`);
+- the client-disconnect line (`_record_cancelled`);
+- the other INFO lines in the same file.
+
+WARNING and above reach stderr only through Python's last-resort handler, as a bare message
+with no logger name, level, timestamp or JSON.
+
+**Evidence.** On the Spark, the api container logged zero `serving.*` lines in 24 hours. The P3b
+check sent two `no_eligible` requests: both 422 bodies and both outcome rows carried the core,
+but no log line appeared.
+
+**Effect.** CLAUDE.md promises "structured JSON logs with a `request_id`". That promise does not
+hold in deployment. Tests pass because pytest's `caplog` captures records whatever the handler
+configuration.
+
+**Fix (proposed).** Configure logging once at app start, in `create_app`:
+- add a stderr handler for the `serving` logger namespace;
+- set its level from an env var (e.g. `SP_LOG_LEVEL`, default `INFO`);
+- leave the root and third-party loggers at WARNING, because litellm is very chatty at INFO.
+
+Add a test that a `serving.api` INFO record reaches the configured handler.
+
+## B56 — first-fail `ctx.allowed_models` can admit an out-of-scope model if an endpoint declaration changes between the gate and the router
+
+**Severity:** low (a timing window measured in milliseconds; placement is not affected).
+**Found:** 2026-09-25, P3b Task 1 review.
+
+**What happens.** `build_context` builds `ctx.allowed_models` from each candidate's
+**first-fail** code. It removes names whose first failure is `residency` or `app_scope`. A
+model that is outside the app's `allowed_models` / `allowed_tiers` but was first refused at
+stage 2 (region, retention, raw-sensitive) therefore stays in the set.
+
+**Effect.** Suppose an operator changes that endpoint's data-handling declaration so it now
+passes stage 2, and the change lands in the window between the gate building the context and
+the router running `feasible_set`. The router's `_ctx_scope` check (`c.name in
+ctx.allowed_models`) then admits the model although the app's scope excludes it.
+- Placement is re-checked at the router, so rule 3 (`onprem_only`) and rule 8 are not
+  affected.
+- Only non-security app scope can be bypassed, and only inside that window.
+- The same window exists for a registry disable or an `allowed_app_ids` change, whose
+  `model_scope` code is also not subtracted.
+
+**Fix (proposed).** Since P3b the context carries the app's own compiled
+`app_allowed_tiers` / `app_allowed_models`. `_ctx_scope` can additionally require
+`Scope.from_context(ctx)`. That can only narrow the set, and it is a no-op when no race
+happens. Add a regression test that mutates the declaration after `build_context` and asserts
+the router refuses the model.
+
 ## B55 — Outcome rows don't record the pinned model or `max_tokens`  ✅ RESOLVED (2026-09-24)
 
 **Severity:** low (fidelity of an offline tool only; no effect on production routing).
