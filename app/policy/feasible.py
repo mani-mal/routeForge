@@ -737,7 +737,13 @@ def violation_matrix(settings: Settings, registry: "ModelRegistry | None",
     (`_resolve_placement`, B52 included), `DataHandling.from_context`,
     `ctx.requested_model` and the context's scope.
 
-    An empty pool is `state == {"no_endpoints": ()}` and `available == {}`.
+    Onboarded rows the admin has DISABLED are not in the effective pool, so
+    they are reported from `registry.disabled_onboarded()` (those this app may
+    use) under `state["disabled"]` -- explanation only: they never enter
+    `available`, `candidates`, or any eligibility path, and "re-enable it" is
+    the actionable fact. `no_endpoints` (`state == {"no_endpoints": ()}`,
+    `available == {}`) only when the pool is empty AND no such disabled row
+    exists.
     """
     pool = _pool(settings, registry)
     providers, onprem = _resolve_placement(settings, registry, ctx)
@@ -756,8 +762,13 @@ def violation_matrix(settings: Settings, registry: "ModelRegistry | None",
             c, allowed_providers=providers, onprem_only=onprem, scope=scope,
             requested_model=ctx.requested_model, registry=registry,
             tenant_id=tenant_id, data_handling=data_handling)
-    state = {s: tuple(sorted(names)) for s, names in by_state.items()}
-    if not pool:
+    if registry is not None:
+        disabled_rows = [slug for slug in registry.disabled_onboarded()
+                         if registry.is_allowed_for_app(slug, tenant_id)]
+        if disabled_rows:
+            by_state.setdefault(STATE_DISABLED, []).extend(disabled_rows)
+    state = {s: tuple(sorted(set(names))) for s, names in by_state.items()}
+    if not pool and not state:
         state = {STATE_NO_ENDPOINTS: ()}
     return ViolationMatrix(available=available, state=state,
                            candidates={c.name: c for c in pool},

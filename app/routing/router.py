@@ -92,12 +92,14 @@ def _policy_core_inputs(ctx: ExecutionPolicyContext,
     sources: dict[str, str] = {}
     # `onprem_only` came from a sensitivity rule when the app's OWN residency
     # (pre-escalation, carried on the context by `build_context`) is not
-    # `onprem_only`. A hand-built context without `app_residency` cannot tell,
-    # so it reads as the app's -- never as a rule it cannot name.
-    if (ctx.onprem_only and ctx.app_residency is not None
+    # `onprem_only` AND a rule actually raised it -- `escalation_entities`
+    # names that rule's matched entity types (not every detected type). A
+    # context without them (hand-built, or no rule fired) reads as the app's
+    # -- never as a rule it cannot name.
+    if (ctx.onprem_only and ctx.escalation_entities
             and ctx.app_residency != "onprem_only"):
         sources[REQ_RESIDENCY] = "sensitivity_rule"
-        residency["entities"] = sorted(ctx.detected_entities)   # types only
+        residency["entities"] = list(ctx.escalation_entities)   # types only
     details = {
         REQ_RESIDENCY: residency,
         REQ_ALLOWED_PROVIDERS: {"providers": sorted(m.allowed_providers)},
@@ -269,15 +271,15 @@ class Router:
         effective_floor = (floor if _ORDER[floor] <= best
                            else next(t for t, o in _ORDER.items() if o == best))
         violations: dict[str, frozenset[str]] = {}
-        estimates: list[float] = []
+        over_estimates: list[float] = []   # estimates of the cost violators only
         for c in allowed:
             if _ORDER[c.tier] > _ORDER[tier_pick]:
                 continue
             est = self._est_cost(c, tokens_after, out_tokens)
-            estimates.append(est)
             v: set[str] = set()
             if est > ctx.max_cost_usd:
                 v.add(REQ_MAX_COST_USD_PER_REQUEST)
+                over_estimates.append(est)
             if _ORDER[c.tier] < _ORDER[effective_floor]:
                 v.add(REQ_RISK_FLOOR)
             if not v:
@@ -287,11 +289,15 @@ class Router:
                     f"picked tier {tier_pick}), yet the budget stage found no "
                     "candidate -- the router's budget fallback and this core disagree")
             violations[c.name] = frozenset(v)
-        details = {
-            REQ_MAX_COST_USD_PER_REQUEST: {"cap": ctx.max_cost_usd,
-                                           "cheapest_estimate": min(estimates)},
+        # `cheapest_estimate` is over the candidates that VIOLATE the cap, so it
+        # never reads below the cap beside "violates cost" (a below-floor
+        # candidate that fits is refused by the floor, not the budget).
+        details: dict[str, dict] = {
             REQ_RISK_FLOOR: {"floor": effective_floor, "risk_class": ctx.risk_class},
         }
+        if over_estimates:
+            details[REQ_MAX_COST_USD_PER_REQUEST] = {
+                "cap": ctx.max_cost_usd, "cheapest_estimate": min(over_estimates)}
         return build_core(violations, state={}, details=details, sources={})
 
     def _select(self, ctx: ExecutionPolicyContext, tokens_after: int,

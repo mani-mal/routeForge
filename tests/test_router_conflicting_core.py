@@ -146,8 +146,10 @@ def test_budget_floor_over_cap_and_cheap_below_floor():
     assert by_id["risk_floor"].detail == {"floor": "frontier", "risk_class": "high"}
     cost = by_id["max_cost_usd_per_request"].detail
     assert cost["cap"] == pytest.approx(0.01)
-    # the cheapest estimate over the matrix candidates is the cheap one
-    assert cost["cheapest_estimate"] < 0.01
+    # the cheapest estimate among the COST VIOLATORS -- never the below-floor
+    # candidate that fits, which would read below the cap beside "violates cost"
+    assert cost["cheapest_estimate"] > cost["cap"]
+    assert cost["cheapest_estimate"] == pytest.approx((20 + 512) * 1000.0 / 1e6)
     assert err.core.candidates_considered == 2
 
 
@@ -171,14 +173,43 @@ def test_empty_pool_is_no_endpoints_state():
     assert str(err).startswith("no candidates after residency filter: the model pool is empty")
 
 
-def test_a_row_already_disabled_is_not_in_the_pool_so_reads_no_endpoints():
-    """`ModelRegistry.effective_pool()` drops a row that is disabled when it is
-    read, so a pool whose only row is disabled IS an empty pool."""
+def test_a_disabled_only_pool_reads_disabled_not_no_endpoints():
+    """`effective_pool()` drops a disabled row, but the actionable fact is
+    "re-enable it", so the core reports it as `disabled` state (via
+    `ModelRegistry.disabled_onboarded()`), not `no_endpoints`."""
     reg = _registry(S_ONPREM, {"off": _onprem("off", enabled=False)})
     err = _raise(S_ONPREM, reg, _ctx(S_ONPREM, reg, AppPolicyView(residency="onprem_only")))
 
     assert err.core.ids() == ()
+    assert err.core.state_ids() == ("disabled",)
+    assert err.core.state == (("disabled", ("off",)),)
+
+
+def test_onprem_only_with_its_only_onprem_model_disabled_and_cloud_enabled():
+    reg = _registry(S_CLOUD, {"off": _onprem("off", enabled=False)})
+    err = _raise(S_CLOUD, reg, _ctx(S_CLOUD, reg, AppPolicyView(residency="onprem_only")))
+
+    assert err.core.ids() == ("residency",)
+    assert err.core.state_ids() == ("disabled",)
+    assert err.core.state == (("disabled", ("off",)),)
+    # explanation only: the disabled row is never a candidate
+    assert err.core.candidates_considered == 2   # the two cloud models
+
+
+def test_a_disabled_row_restricted_to_another_app_is_not_reported():
+    rows = {"off": dict(_onprem("off", enabled=False), allowed_app_ids=["other-app"])}
+    reg = _registry(S_ONPREM, rows)
+    err = _raise(S_ONPREM, reg, _ctx(S_ONPREM, reg, AppPolicyView()))
     assert err.core.state_ids() == ("no_endpoints",)
+
+
+def test_disabled_rows_do_not_touch_eligibility():
+    from app.policy.feasible import feasible_set
+    reg = _registry(S_ONPREM, {"on": _onprem("on"), "off": _onprem("off", enabled=False)})
+    assert reg.disabled_onboarded() == ("off",)
+    fs = feasible_set(S_ONPREM, reg, AppPolicyView(), tenant_id="acme")
+    assert {c.name for c in fs.eligible} == {"on"}
+    assert fs.rejected == ()
 
 
 def test_only_a_disabled_model_is_disabled_state():
@@ -222,10 +253,35 @@ def test_sensitivity_rule_escalation_names_the_entity_types():
     assert "123-45-6789" not in str(err)
 
 
+def test_escalation_names_only_the_rule_that_raised_residency():
+    """SSN + PERSON: the SSN rule raises residency; PERSON is detected but is
+    not that rule's entity, so it is not named."""
+    reg = _registry(S_CLOUD, {})
+    ents = [Entity(type="US_SSN", start=0, end=11, value="123-45-6789"),
+            Entity(type="PERSON", start=12, end=20, value="Jane Doe")]
+    ctx = _ctx(S_CLOUD, reg, AppPolicyView(residency="any"), entities=ents)
+    assert ctx.detected_entities == ("PERSON", "US_SSN")
+    assert ctx.escalation_entities == ("US_SSN",)
+    err = _raise(S_CLOUD, reg, ctx)
+    req = err.core.requirements[0]
+    assert req.source == "sensitivity_rule"
+    assert req.detail["entities"] == ["US_SSN"]
+
+
+def test_no_escalation_when_the_rule_does_not_raise_residency():
+    reg = _registry(S_CLOUD, {})
+    ssn = [Entity(type="US_SSN", start=0, end=11, value="123-45-6789")]
+    ctx = build_context(S_CLOUD, "req-1", "acme", ssn, None,
+                        app_policy=AppPolicyView(residency="any"), registry=reg,
+                        escalate_residency=False)
+    assert ctx.escalation_entities == ()
+
+
 def test_app_residency_onprem_only_is_not_attributed_to_a_rule():
     reg = _registry(S_CLOUD, {})
     ssn = [Entity(type="US_SSN", start=0, end=11, value="123-45-6789")]
     ctx = _ctx(S_CLOUD, reg, AppPolicyView(residency="onprem_only"), entities=ssn)
+    assert ctx.escalation_entities == ()
     err = _raise(S_CLOUD, reg, ctx)
     req = err.core.requirements[0]
     assert req.source == "app_residency"
