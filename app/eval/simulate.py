@@ -65,6 +65,8 @@ class ArmResult:
     latency_source: str | None    # "observed" | "signal" | "tier_default"
     quality: float | None
     quality_source: str | None
+    core: tuple[str, ...] = ()       # P3b: NoEligibleCandidate.core.ids(), () when routed
+    core_state: tuple[str, ...] = () # P3b: NoEligibleCandidate.core.state_ids(), () when routed
 
 
 @dataclass(frozen=True)
@@ -163,9 +165,10 @@ def observed_latencies(records: list[dict]) -> dict[str, float]:
     return {model: float(statistics.median(vals)) for model, vals in samples.items()}
 
 
-def _rejected(eligible: tuple[str, ...], codes: tuple[str, ...]) -> ArmResult:
+def _rejected(eligible: tuple[str, ...], codes: tuple[str, ...], *,
+              core: tuple[str, ...] = (), core_state: tuple[str, ...] = ()) -> ArmResult:
     return ArmResult("rejected", None, None, None, eligible, codes,
-                     None, None, None, None, None)
+                     None, None, None, None, None, core, core_state)
 
 
 def simulate_row(scn: Scenario, row: dict, observed: dict[str, float]) -> ArmResult:
@@ -200,11 +203,17 @@ def simulate_row(scn: Scenario, row: dict, observed: dict[str, float]) -> ArmRes
                                      complexity=float(row["complexity"]),
                                      output_tokens=output_tokens)
     except NoEligibleCandidate as exc:
+        # P3b: the router attaches the minimal conflicting core to every
+        # NoEligibleCandidate it raises (None only if computing the core
+        # itself failed) -- carry it through so the summary can group
+        # rejections by why, not just by code.
+        core = exc.core.ids() if exc.core else ()
+        core_state = exc.core.state_ids() if exc.core else ()
         if not exc.rejected:
-            return _rejected(eligible, ("empty_pool",))
+            return _rejected(eligible, ("empty_pool",), core=core, core_state=core_state)
         fallback = "over_budget" if "budget filter" in str(exc) else "unspecified"
         codes = tuple(sorted({code or fallback for _name, code in exc.rejected}))
-        return _rejected(eligible, codes)
+        return _rejected(eligible, codes, core=core, core_state=core_state)
     except ContextWindowExceeded:
         return _rejected(eligible, ("context_window",))
 
@@ -380,15 +389,28 @@ def _moves(results: list[RowResult]) -> list[dict]:
     return [{"from": frm, "to": to, "count": n} for (frm, to), n in top]
 
 
+def _core_key(core: tuple[str, ...], core_state: tuple[str, ...]) -> str:
+    """The `by_core` grouping key for one rejected arm (P3b design §5.11):
+    the requirement ids joined with "+" when the core is non-empty, else the
+    state ids in the same parenthesised form, else "(unknown)" when the
+    router's core computation itself failed and both are empty."""
+    if core:
+        return "+".join(core)
+    if core_state:
+        return "(state:" + ",".join(core_state) + ")"
+    return "(unknown)"
+
 def _new_rejections(results: list[RowResult]) -> dict:
     by_app: Counter = Counter()
     by_code: Counter = Counter()
+    by_core: Counter = Counter()
     for r in results:
         if _newly_rejected(r):
             by_app[r.row["application_id"]] += 1
             for code in r.proposed.reject_codes:
                 by_code[code] += 1
-    return {"by_app": dict(by_app), "by_code": dict(by_code)}
+            by_core[_core_key(r.proposed.core, r.proposed.core_state)] += 1
+    return {"by_app": dict(by_app), "by_code": dict(by_code), "by_core": dict(by_core)}
 
 
 def _sources(results: list[RowResult]) -> dict:
@@ -524,6 +546,13 @@ def render_report(sim: dict) -> str:
         lines.append("|---|---|")
         for code in sorted(new_rej["by_code"]):
             lines.append(f"| {code} | {new_rej['by_code'][code]} |")
+        lines.append("")
+        lines.append("**By conflicting core**")
+        lines.append("")
+        lines.append("| core | count |")
+        lines.append("|---|---|")
+        for key, count in sorted(new_rej["by_core"].items(), key=lambda kv: (-kv[1], kv[0])):
+            lines.append(f"| {key} | {count} |")
     lines.append("")
 
     lines.append("## Moves")
