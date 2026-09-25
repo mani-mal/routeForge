@@ -292,3 +292,26 @@ def test_select_rows_missing_keys_and_unhashables():
 def test_observed_latencies_ignores_malformed_attempts():
     assert observed_latencies([make_row("r1", "a", attempts=5),
                                make_row("r2", "a", attempts=[["x"]], chosen=["x"])]) == {}
+
+
+def test_cost_usd_both_routed_excludes_newly_rejected_rows():             # M1
+    """A newly rejected row drops out of the proposed `cost_usd` and looks
+    like a saving; `cost_usd_both_routed` compares only rows routed in BOTH
+    arms, so removing app-a's only model shows zero like-for-like change."""
+    snap = make_snapshot(apps=[app_entry("app-a", allowed_models=["local-mid"]),
+                               app_entry("app-b")])
+    rows = _rows(3, "app-a") + [make_row(f"b{i}", "app-b", ts=f"2026-09-20T13:00:0{i}+00:00")
+                                for i in range(3)]
+    results, excluded = _run(rows, snap, {"schema": P, "endpoints": {"remove": ["local-mid"]}})
+    sim = summarize(results, excluded, inputs=_INPUTS, edits={})
+    t = sim["totals"]
+    assert t["newly_rejected"] == 3
+    assert t["cost_usd"]["delta"] < 0                       # the misleading "saving"
+    both = t["cost_usd_both_routed"]
+    assert set(both) == {"current", "proposed", "delta"}
+    assert both["delta"] == 0 and both["current"] == both["proposed"] > 0
+    assert sim["by_app"]["app-a"]["cost_usd_both_routed"]["current"] == 0
+    assert "cost_usd_both_routed" in next(iter(sim["by_workload"].values()))
+    report = render_report(sim)
+    headline = report.split("## Headline")[1].split("## New rejections")[0]
+    assert "cost_usd (both routed)" in headline

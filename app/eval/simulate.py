@@ -270,7 +270,7 @@ def _delta(current: float | None, proposed: float | None) -> dict:
 
 def _bucket_stats(rows: list[RowResult]) -> dict:
     """The `{requests, route_changed, newly_rejected, newly_served, cost_usd,
-    latency_ms, quality_mean, onprem_share}` block shared by `totals`,
+    cost_usd_both_routed, latency_ms, quality_mean, onprem_share}` block shared by `totals`,
     `by_app.<app>` and `by_workload.<workload>` (spec §8)."""
     cost = {}
     lat_p50 = {}
@@ -288,12 +288,21 @@ def _bucket_stats(rows: list[RowResult]) -> dict:
         onprem_share[arm] = ((sum(1 for a in routed if a.provider == "onprem") / len(routed))
                               if routed else None)
 
+    # Like-for-like cost: only rows routed in BOTH arms. `cost_usd` above
+    # sums each arm's routed rows, so a newly rejected row simply drops out
+    # of the proposed sum and reads as a saving (P3a final review, M1).
+    both = [r for r in rows
+            if r.current.outcome == "routed" and r.proposed.outcome == "routed"]
+    both_current = sum(r.current.cost_usd or 0.0 for r in both)
+    both_proposed = sum(r.proposed.cost_usd or 0.0 for r in both)
+
     return {
         "requests": len(rows),
         "route_changed": sum(1 for r in rows if _route_changed(r)),
         "newly_rejected": sum(1 for r in rows if _newly_rejected(r)),
         "newly_served": sum(1 for r in rows if _newly_served(r)),
         "cost_usd": _delta(cost["current"], cost["proposed"]),
+        "cost_usd_both_routed": _delta(both_current, both_proposed),
         "latency_ms": {"p50": _delta(lat_p50["current"], lat_p50["proposed"]),
                        "p95": _delta(lat_p95["current"], lat_p95["proposed"])},
         "quality_mean": _delta(quality["current"], quality["proposed"]),
@@ -441,6 +450,9 @@ def _metrics_table(stats: dict) -> list[str]:
     ]
     c = stats["cost_usd"]
     lines.append(f"| cost_usd | {_fmt(c['current'])} | {_fmt(c['proposed'])} | {_fmt(c['delta'])} |")
+    b = stats["cost_usd_both_routed"]
+    lines.append(f"| cost_usd (both routed) | {_fmt(b['current'])} | {_fmt(b['proposed'])} | "
+                f"{_fmt(b['delta'])} |")
     p50 = stats["latency_ms"]["p50"]
     lines.append(f"| latency_ms p50 | {_fmt(p50['current'])} | {_fmt(p50['proposed'])} | "
                 f"{_fmt(p50['delta'])} |")

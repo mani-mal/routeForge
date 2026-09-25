@@ -66,7 +66,8 @@ curl -s -b "rf_admin_session=<session>" \
 ```
 
 `GET /admin/config-snapshot` is read-only and admin-only (`require_admin`; `401` without the
-session cookie). It calls `state.registry.ensure_loaded(state.db)` before snapshotting
+session cookie). `require_admin` is session-cookie only, so every non-admin caller — including
+one presenting an application API token — gets `401`; there is no `403` case. It calls `state.registry.ensure_loaded(state.db)` before snapshotting
 (`app/api/admin_routes.py:1288`), so a snapshot taken before any request has reached the
 registry still lists onboarded models instead of an empty pool.
 
@@ -215,7 +216,7 @@ the export window).
 | `edits` | the proposal, minus `schema`/`title`, keys sorted — exactly what was asked for |
 | `rows` | `simulated` (count) and `excluded` (count per reason: `cache_hit`, `unknown_status`, `unknown_app`, `missing_features`). `missing_features` counts a row whose `request_id`, `complexity`, `prompt_tokens` (numeric), `completion_tokens` (numeric or null), `detected_entity_types` (list of strings or null; the key must be present), `workload`, `attempts` or `ts` is missing or mistyped — a malformed row is counted, never a crash. A non-object export line is a skipped-line warning. |
 | `baseline` | the fidelity check — `rows_compared`, `agreement`, `warning`, `by_app`, `top_disagreements` (§5) |
-| `totals`, `by_app.<id>`, `by_workload.<label>` | each the same block: `requests`, `route_changed`, `newly_rejected`, `newly_served`, `cost_usd` (`{current, proposed, delta}`), `latency_ms.p50`/`.p95` (same shape), `quality_mean` (same shape), `onprem_share` (`{current, proposed}`) |
+| `totals`, `by_app.<id>`, `by_workload.<label>` | each the same block: `requests`, `route_changed`, `newly_rejected`, `newly_served`, `cost_usd` (`{current, proposed, delta}` — each arm's routed rows), `cost_usd_both_routed` (same shape, over only the rows routed in **both** arms), `latency_ms.p50`/`.p95` (same shape), `quality_mean` (same shape), `onprem_share` (`{current, proposed}`) |
 | `moves` | top 20 `{from, to, count}` model-pair moves; `(rejected)` is a legal `from`/`to` value |
 | `new_rejections` | `{by_app: {...}, by_code: {...}}` — rows that were `routed` under `current` and `rejected` under `proposed` |
 | `affected_apps` | apps with any `route_changed`, `newly_rejected` or `newly_served` row |
@@ -236,6 +237,13 @@ metrics table), **New rejections** (by app, by code — or "None."), **Moves** (
 count — or "None."), **By app** (one subsection per app, same metrics table), **By workload**
 (same, per workload label), **Latency and quality sources**, **Excluded rows** (reason →
 count).
+
+**Read the two cost rows together.** `cost_usd` sums each arm over the rows *that arm*
+routed, so a row the proposal newly rejects simply disappears from the proposed sum — it
+reads as a saving when it is really a request that would no longer be served.
+`cost_usd (both routed)` sums only the rows routed under **both** arms, so its delta is the
+like-for-like cost change. When `newly_rejected` is non-zero, trust the both-routed delta
+for cost, and read `newly_rejected` for the service loss.
 
 ## 5. Fidelity: the baseline check
 

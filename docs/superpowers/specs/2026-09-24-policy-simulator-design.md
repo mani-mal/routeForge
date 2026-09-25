@@ -273,6 +273,9 @@ Each is built the same way:
     - `route_changed`;
     - `newly_rejected`, `newly_served`;
     - `cost_usd`: current, proposed and delta;
+    - `cost_usd_both_routed`: current, proposed and delta over only the rows routed in
+      **both** arms — the like-for-like cost change. (`cost_usd` sums each arm's routed rows,
+      so a newly rejected row drops out of the proposed sum and reads as a saving.)
     - `latency_ms` p50 and p95: current, proposed, delta;
     - `quality_mean`: current, proposed, delta;
     - `onprem_share`: current and proposed.
@@ -308,7 +311,7 @@ It continues with:
 ## 9. Invariants and tests
 
 The tests go in `tests/eval/test_simulate.py`, `tests/eval/test_scenario.py` and
-`tests/api/test_config_snapshot.py`.
+`tests/test_config_snapshot.py`.
 
 1. **Empty proposal ⇒ zero change.** Every row routes identically in both arms, and every
    delta is exactly 0.
@@ -335,7 +338,9 @@ The tests go in `tests/eval/test_simulate.py`, `tests/eval/test_scenario.py` and
    - an undeclared provider;
    - an invalid tier or price;
    - a bad schema major.
-10. **Snapshot.** The endpoint is admin-only (401 without auth, 403 for a non-admin token).
+10. **Snapshot.** The endpoint is admin-only: 401 without an admin session. (`require_admin`
+    is session-cookie only — there is no admin *token* — so every non-admin caller, including
+    one presenting an application API token, gets 401; there is no 403 case.)
     The document has none of the excluded keys and none of the seeded secret values. The
     round trip holds: a scenario built from a snapshot of a test app reproduces that app's
     live `feasible_set`.
