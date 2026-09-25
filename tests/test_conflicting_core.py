@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import itertools
-import random
 
 import pytest
 from hypothesis import given, settings as hsettings, strategies as st
@@ -77,3 +76,48 @@ def test_to_record_drops_label_and_hints():
     core = build_core({"x": frozenset({"residency"})}, state={}, details={}, sources={})
     rec = core.to_record()
     assert "label" not in rec["requirements"][0] and "hints" not in rec["requirements"][0]
+
+def test_label_joins_list_and_set_details_review_finding_1():
+    core = build_core({"x": frozenset({"residency"})}, state={},
+                      details={"residency": {"value": "onprem_only",
+                                              "entities": ["US_SSN", "US_DRIVER_LICENSE"]}},
+                      sources={"residency": "sensitivity_rule"})
+    assert core.requirements[0].label == (
+        "must run on-premises (raised by sensitivity rule on US_SSN, US_DRIVER_LICENSE)")
+
+    core = build_core({"x": frozenset({"allowed_providers"})}, state={},
+                      details={"allowed_providers": {"providers": ["onprem", "azure"]}},
+                      sources={})
+    assert core.requirements[0].label == "provider must be one of onprem, azure"
+
+    core = build_core({"x": frozenset({"allowed_regions"})}, state={},
+                      details={"allowed_regions": {"regions": ["eu", "us"]}},
+                      sources={})
+    assert core.requirements[0].label == "endpoint region must be one of eu, us"
+
+    core = build_core({"x": frozenset({"allowed_tiers"})}, state={},
+                      details={"allowed_tiers": {"tiers": ["mid", "frontier"]}},
+                      sources={})
+    assert core.requirements[0].label == "tier must be one of mid, frontier"
+
+    core = build_core({"x": frozenset({"allowed_models"})}, state={},
+                      details={"allowed_models": {"models": ["m1", "m2"]}},
+                      sources={})
+    assert core.requirements[0].label == "model must be one of m1, m2"
+
+def test_summary_shows_primary_detail_per_id_review_finding_2():
+    core = build_core(
+        {"a": frozenset({"allowed_regions"}), "b": frozenset({"max_cost_usd_per_request"}),
+         "c": frozenset({"risk_floor"}), "d": frozenset({"require_no_retention"})},
+        state={},
+        details={"allowed_regions": {"regions": ["eu", "us"]},
+                 "max_cost_usd_per_request": {"cap": 0.05},
+                 "risk_floor": {"floor": "mid"}},
+        sources={})
+    text = core.summary()
+    assert "allowed_regions (eu, us)" in text
+    assert "max_cost_usd_per_request (cap $0.0500)" in text
+    assert "risk_floor (>= mid)" in text
+    # no detail supplied for require_no_retention -> bare id, no parenthetical
+    assert "require_no_retention" in text
+    assert "require_no_retention (" not in text

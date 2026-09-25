@@ -106,11 +106,25 @@ DEFAULT_SOURCE: dict[str, str] = {
 def _fmt(template: str, detail: dict) -> str:
     """`template.format(**detail)`, falling back to the raw template text
     when a referenced key is missing rather than raising -- a `detail` the
-    caller under-populated must still produce a readable label."""
+    caller under-populated must still produce a readable label. List/tuple
+    values are joined with ", " in their given order (e.g. `providers`,
+    `regions`, `tiers`, `models`); set/frozenset values are joined sorted,
+    since a set has no order of its own -- otherwise a list-valued detail
+    would render as its Python repr (`['onprem', 'azure']`) instead of
+    operator-facing text ("onprem, azure")."""
     try:
-        return template.format(**detail)
+        joined = {k: _joined(v) for k, v in detail.items()}
+        return template.format(**joined)
     except (KeyError, IndexError):
         return template
+
+
+def _joined(value: object) -> object:
+    if isinstance(value, (list, tuple)):
+        return ", ".join(str(v) for v in value)
+    if isinstance(value, (set, frozenset)):
+        return ", ".join(sorted(str(v) for v in value))
+    return value
 
 
 def _residency_label(detail: dict, source: str) -> str:
@@ -181,6 +195,34 @@ _HINT_TEMPLATES: dict[str, tuple[str, ...]] = {
 }
 
 
+# The detail key that carries a requirement's "what would satisfy this"
+# list, for ids whose detail has no single `value` -- used by `summary()`.
+_PRIMARY_LIST_KEY: dict[str, str] = {
+    REQ_ALLOWED_PROVIDERS: "providers",
+    REQ_ALLOWED_REGIONS: "regions",
+    REQ_ALLOWED_TIERS: "tiers",
+    REQ_ALLOWED_MODELS: "models",
+}
+
+
+def _summary_detail(req_id: str, detail: dict) -> str | None:
+    """The short parenthetical for one requirement in `summary()`, or `None`
+    for a bare id (empty/irrelevant detail). `value` (e.g. `residency`,
+    `requested_model`) always wins when present, even alongside other keys
+    such as `residency`'s `entities` -- the summary line names what must
+    hold, not why."""
+    if "value" in detail:
+        return str(detail["value"])
+    list_key = _PRIMARY_LIST_KEY.get(req_id)
+    if list_key and list_key in detail:
+        return _joined(detail[list_key])
+    if req_id == REQ_MAX_COST_USD_PER_REQUEST and "cap" in detail:
+        return f"cap ${detail['cap']:.4f}"
+    if req_id == REQ_RISK_FLOOR and "floor" in detail:
+        return f">= {detail['floor']}"
+    return None
+
+
 @dataclass(frozen=True)
 class Requirement:
     id: str
@@ -228,8 +270,10 @@ class ConflictingCore:
         return record
 
     def summary(self) -> str:
-        parts = [f"{r.id} ({r.detail['value']})" if "value" in r.detail else r.id
-                 for r in self.requirements]
+        parts = []
+        for r in self.requirements:
+            detail = _summary_detail(r.id, r.detail)
+            parts.append(f"{r.id} ({detail})" if detail is not None else r.id)
         return "no endpoint satisfies all of: " + ", ".join(parts)
 
 
