@@ -315,3 +315,76 @@ def test_cost_usd_both_routed_excludes_newly_rejected_rows():             # M1
     report = render_report(sim)
     headline = report.split("## Headline")[1].split("## New rejections")[0]
     assert "cost_usd (both routed)" in headline
+
+
+# --- B55: recorded pin and output cap ----------------------------------------
+
+def test_pinned_row_replays_to_the_pinned_model():
+    """Unpinned, a 0.1-complexity row routes to local-cheap; pinned to
+    local-big it must replay to local-big (as the gate would), and the
+    baseline agrees with the recorded first attempt."""
+    unpinned = make_row("u", "app-a", complexity=0.1)
+    pinned = make_row("p", "app-a", complexity=0.1, requested_model="local-big",
+                      attempts=["local-big"], chosen="local-big")
+    results, excluded = _run([unpinned, pinned], make_snapshot(), {"schema": P})
+    by = {r.row["request_id"]: r for r in results}
+    assert by["u"].current.model == "local-cheap"
+    assert by["p"].current.model == "local-big"
+    assert by["p"].current.eligible == ("local-big",)
+    sim = summarize(*_run([pinned], make_snapshot(), {"schema": P}),
+                    inputs=_INPUTS, edits={})
+    assert sim["baseline"]["agreement"] == 1.0
+
+
+def test_null_pin_replays_unpinned():
+    row = make_row("n", "app-a", complexity=0.1, requested_model=None, max_tokens=None)
+    (r,), _ = _run([row], make_snapshot(), {"schema": P})
+    assert r.current.model == "local-cheap"
+
+
+def test_removing_the_pinned_model_newly_rejects_the_row():
+    pinned = make_row("p", "app-a", requested_model="local-big",
+                      attempts=["local-big"], chosen="local-big")
+    (r,), _ = _run([pinned], make_snapshot(),
+                   {"schema": P, "endpoints": {"remove": ["local-big"]}})
+    assert (r.current.outcome, r.proposed.outcome) == ("routed", "rejected")
+    assert r.proposed.reject_codes == ("not_requested",)
+    sim = summarize(*_run([pinned], make_snapshot(),
+                          {"schema": P, "endpoints": {"remove": ["local-big"]}}),
+                    inputs=_INPUTS, edits={})
+    assert sim["totals"]["newly_rejected"] == 1
+
+
+def test_old_export_row_without_the_keys_still_simulates_unpinned():
+    row = make_row("old", "app-a", complexity=0.1)
+    assert "requested_model" not in row and "max_tokens" not in row
+    rows, excluded = select_rows([row], {"app-a"})
+    assert len(rows) == 1 and excluded["missing_features"] == 0
+    (r,), _ = _run([row], make_snapshot(), {"schema": P})
+    assert r.current.model == "local-cheap"
+
+
+@pytest.mark.parametrize("over", [
+    {"requested_model": 5}, {"requested_model": ["local-big"]},
+    {"max_tokens": "64"}, {"max_tokens": 0}, {"max_tokens": -3},
+    {"max_tokens": True}, {"max_tokens": 1.5},
+])
+def test_select_rows_malformed_pin_or_cap_is_missing_features(over):
+    rows, excluded = select_rows([make_row("r1", "app-a", **over)], {"app-a"})
+    assert rows == [] and excluded["missing_features"] == 1
+
+
+def test_recorded_max_tokens_reaches_the_budget_check():
+    """Only local-big exists: 200 prompt tokens at the default 512-token output
+    estimate costs ~0.0035 USD (under the 0.01 cap); a recorded 100k-token
+    client cap prices at ~0.6 USD and is rejected over budget."""
+    snap = make_snapshot(onboarded=[onboarded_row("local-big", "frontier")],
+                         apps=[app_entry("app-a", max_cost_usd_per_request=0.01)])
+    no_cap = make_row("nc", "app-a", attempts=["local-big"], chosen="local-big")
+    big_cap = make_row("bc", "app-a", attempts=["local-big"], chosen="local-big",
+                       max_tokens=100_000)
+    results, _ = _run([no_cap, big_cap], snap, {"schema": P})
+    by = {r.row["request_id"]: r for r in results}
+    assert by["nc"].current.outcome == "routed"
+    assert by["bc"].current.outcome == "rejected"
+    assert "over_budget" in by["bc"].current.reject_codes

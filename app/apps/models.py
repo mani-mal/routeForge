@@ -304,6 +304,13 @@ class RoutingOutcome(Base):
     verify_performed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     verify_passed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     verify_mode: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # B55: the client's model pin (null = unpinned / `model: "auto"`) and its
+    # output-token cap (`max_completion_tokens` else `max_tokens`; null = none
+    # set), so the policy simulator replays a pinned request pinned and prices
+    # it at the client's own cap. Added after the table shipped: a deployed DB
+    # needs the ALTERs in docs/reference/routing-outcomes.md.
+    requested_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    max_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class OutcomeFeedback(Base):

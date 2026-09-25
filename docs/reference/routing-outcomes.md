@@ -50,6 +50,22 @@ CREATE INDEX IF NOT EXISTS ix_outcome_feedback_app_request
     ON outcome_feedback (application_id, request_id);
 ```
 
+**Upgrade: `requested_model` and `max_tokens` (B55, 2026-09-24).** `routing_outcomes`
+gained two nullable columns (§3.2). `create_all` never adds a column to a table that
+already exists, so a database that already has `routing_outcomes` (the Spark) needs them
+added by hand. **Run these before rolling the image**: the ORM names both columns in every
+`INSERT` and `SELECT` on the table, so against an unmigrated table every outcome write fails
+(swallowed, so serving continues, but no rows are recorded) and every read of it -- the
+export, the `/v1/feedback` outcome lookup, the report -- errors until the ALTERs run.
+
+```sql
+ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS requested_model VARCHAR(100);
+ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS max_tokens INTEGER;
+```
+
+Rows written before the ALTER keep both columns null; the policy simulator replays those
+unpinned, at the default output estimate (`docs/reference/policy-simulator.md`).
+
 ## 2. Content-free by contract
 
 Both tables hold **ids, enum values, numbers, entity types and version hashes only.** They
@@ -140,6 +156,8 @@ filled on it exactly as on an `ok` row.
 | `risk_class` | str | From the gate. |
 | `onprem_only` | bool | From the gate. |
 | `detected_entity_types` | JSON list[str] | Entity **types** the gate detected (`US_SSN`, `EMAIL_ADDRESS`), sorted and de-duplicated. Never values. |
+| `requested_model` | str, nullable | The model slug the client pinned in the request's `model` field. Null when the request was unpinned (`model: "auto"` or omitted -- the gate's own meaning of "auto"). Written on every status, failure rows included. A pin the app may not use is a `model_not_found` 422 and writes no row (§3.1). Added 2026-09-24 (B55). |
+| `max_tokens` | int, nullable | The client's output-token cap: `max_completion_tokens` if set, else `max_tokens` -- the same value the router prices the request at (`app/routing/router.py::client_output_cap`). Null when the client set neither (the router then prices at `budgets.default_estimated_output_tokens`). Written on every status. Added 2026-09-24 (B55). |
 | `eligible` | JSON list[str] | The names the **first routing decision** (§3.5) **scored** (`scoring.candidates`): the candidates left after the eligibility filters and the router's own tier, budget and circuit filters. Falls back to `[chosen]` when the hop carries no scoring record. `[]` on failure rows other than `verify_failed`. |
 | `rejected` | JSON list[{name, code}] | Candidates excluded, `{name, code}` only. On `ok` and `verify_failed` rows: the first routing decision's (§3.5) rejected list. An eligibility-stage rejection carries its stable code (`residency`, `region_not_allowed`, `circuit_open`, …); the router's own later filters (tier, budget, lower score) have `code: null`. A scored candidate that lost appears in both `eligible` and `rejected` (code null). On `no_eligible` rows, see §3.3. |
 | `attempts` | JSON list[str] | Models tried, in hop order, including failed hops. `ok`: each failed gateway hop's first-scored candidate and each router hop's chosen model. `verify_failed`: read from the served attempt's trace, as for `ok`. `backend_failed` and `context_overflow`: the models the gateway attempted; a real-token stream has exactly one. `[]` on `no_eligible`. |

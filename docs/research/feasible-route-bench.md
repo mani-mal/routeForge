@@ -2014,9 +2014,12 @@ well as `proposed` — and diffs simulated against simulated.
 The reason is the same fidelity gap every offline-replay tool in this programme has to
 account for (§13.3, §14.3): a simulated re-run of `current` does not perfectly reproduce
 what was logged, because time has passed since the export window — endpoints get onboarded
-or removed, prices change, signals move — and because two fields the outcome record does
-not carry (a pinned model, `max_tokens`; B55, §15.4's sibling doc) make some rows replay
-differently than they were served. If the headline number were logged-vs-simulated, every
+or removed, prices change, signals move — and because two fields the outcome record did
+not carry until B55 (a pinned model, `max_tokens`) made some rows replay differently than
+they were served. The first real Spark run measured baseline agreement of 0.0206 for exactly
+that reason: Qwen Code pins its model, so 190 of 194 rows recorded one model and replayed
+unpinned to another (B55; fixed 2026-09-24, and rows exported before the fix still replay
+unpinned). If the headline number were logged-vs-simulated, every
 one of those fidelity losses would show up mixed into the "effect of the proposal" figure,
 with no way to tell how much of a cost or route-change delta was the proposal and how much
 was drift. Simulating both arms cancels that: whatever fidelity loss the `current` arm
@@ -2036,7 +2039,7 @@ as a caveat on the headline, never to compute it.
 | 9.4 | Removing the sole eligible model for an app turns exactly those rows `newly_rejected` | `tests/eval/test_simulate.py::test_sole_model_removal_rejects_exactly_those_rows` |
 | 9.5 | Repricing one model without changing any route moves `cost_usd.delta` by exactly Σ(Δprice × tokens) over the rows it served | `tests/eval/test_simulate.py::test_price_change_moves_cost_exactly` |
 | 9.6 | A proposed `sensitivity_rules` edit that escalates a recorded entity type to `onprem_only` moves exactly the rows carrying that type (and is exercised non-vacuously, moving a cloud-served row on-prem) | `tests/eval/test_simulate.py::test_sensitivity_rule_replays_recorded_entity_types`, `test_proposed_rule_on_custom_entity_moves_cloud_row_onprem` |
-| 9.7 | Baseline fidelity: a scenario built from a **live** snapshot, replayed against a **live** export from the same app, reaches 100% agreement with the served model | `tests/eval/test_policy_simulate_cli.py::test_live_round_trip_baseline_is_perfect` |
+| 9.7 | Baseline fidelity: a scenario built from a **live** snapshot, replayed against a **live** export from the same app, reaches 100% agreement with the served model — pinned requests included (B55) | `tests/eval/test_policy_simulate_cli.py::test_live_round_trip_baseline_is_perfect`, `test_live_round_trip_pinned_baseline_is_perfect` |
 | 9.8 | Determinism: two runs over the same three inputs give byte-identical `simulation.json` | `tests/eval/test_simulate.py::test_summarize_deterministic`; end to end, `tests/eval/test_policy_simulate_cli.py::test_cli_writes_deterministic_outputs` |
 
 (§9.9–§9.11 — load-error locations, the snapshot's admin gate/content-free shape/live

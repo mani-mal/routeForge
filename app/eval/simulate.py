@@ -44,6 +44,7 @@ from app.models import Entity
 from app.policy.context import build_context
 from app.policy.feasible import feasible_set
 from app.routing.pricing import price_call
+from app.routing.router import expected_output_tokens
 
 SIMULATED_STATUSES = frozenset({"ok", "backend_failed", "verify_failed",
                                 "no_eligible", "context_overflow"})
@@ -102,6 +103,14 @@ def _has_features(row: dict) -> bool:
                  or _is_str_list(row.get("detected_entity_types")))
             and (row.get("workload") is None or isinstance(row["workload"], str))
             and (row.get("attempts") is None or _is_str_list(row["attempts"]))
+            # B55: absent (an export from before the columns existed) or null
+            # means unpinned / no client cap.
+            and (row.get("requested_model") is None
+                 or (isinstance(row["requested_model"], str) and bool(row["requested_model"])))
+            and (row.get("max_tokens") is None
+                 or (isinstance(row["max_tokens"], int)
+                     and not isinstance(row["max_tokens"], bool)
+                     and row["max_tokens"] > 0))
             and _valid_ts(row.get("ts")))
 
 
@@ -112,7 +121,10 @@ def select_rows(records: list[dict], app_ids: set[str]) -> tuple[list[dict], dic
     `missing_features` covers a missing or mistyped `request_id`,
     `complexity`, `prompt_tokens`, `completion_tokens`, `workload`,
     `attempts`, `ts`, or `detected_entity_types` (list of strings, or null
-    -- but the key must be present)."""
+    -- but the key must be present), and a mistyped `requested_model`
+    (non-empty string or null) or `max_tokens` (int > 0 or null). Those two
+    (B55) may be ABSENT: an export from before they were recorded replays
+    unpinned at the default output estimate."""
     excluded = {reason: 0 for reason in EXCLUSION_REASONS}
     kept: list[dict] = []
     for row in records:
@@ -169,13 +181,24 @@ def simulate_row(scn: Scenario, row: dict, observed: dict[str, float]) -> ArmRes
         content_integrity=app.eff.protection.content_integrity,
         model_input=app.eff.protection.model_input,
         workload=row.get("workload"))
+    # B55: re-apply the client's recorded pin exactly as the gate does
+    # (app/policy/gate.py: `model: "auto"` -> None). A null or absent pin
+    # replays unpinned. feasible_set and the router then admit only the
+    # pinned model, so a proposal that drops it rejects the row.
+    ctx = ctx.model_copy(update={"requested_model": row.get("requested_model")})
     eligible = tuple(sorted(
         c.name for c in feasible_set(scn.settings, scn.registry, ctx,
                                      tenant_id=row["application_id"]).eligible))
     prompt_tokens = int(row["prompt_tokens"])
     try:
+        # B55: price at the client's recorded output cap, as the live
+        # gateway does (`expected_output_tokens(settings, params)`); no cap
+        # recorded -> the deployment's default estimate.
+        output_tokens = expected_output_tokens(
+            scn.settings, {"max_tokens": row["max_tokens"]} if row.get("max_tokens") else None)
         decision = scn.router.select(ctx, tokens_after=prompt_tokens,
-                                     complexity=float(row["complexity"]))
+                                     complexity=float(row["complexity"]),
+                                     output_tokens=output_tokens)
     except NoEligibleCandidate as exc:
         if not exc.rejected:
             return _rejected(eligible, ("empty_pool",))
@@ -242,7 +265,7 @@ REPORT_CAVEAT = (
     "**Simulation only.** Nothing in this report has been applied. It predicts the first routing\n"
     "decision of recorded requests under the proposal, using the real eligibility and routing\n"
     "code and a frozen snapshot of signals. It does not model failover, escalation, breaker\n"
-    "state, request pins or caching."
+    "state or caching."
 )
 
 

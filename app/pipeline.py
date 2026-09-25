@@ -23,6 +23,7 @@ from app.policy.feasible import feasible_set
 from app.policy.detectors import Detector, detection_ran, make_detector
 from app.policy.effective import EffectiveDetector, FilteredDetector
 from app.policy.gate import Gate, Representations, redact_tool_calls_with_entities
+from app.routing.router import client_output_cap
 from app.apps.privacy import AppPrivacyProfile, effective_rules
 from app.compression import CompressionResult, compress
 from app.compression.ccr import CCRStore
@@ -735,7 +736,8 @@ class Pipeline:
         # failure builder needs it either way. `complexity` is folded in once
         # compression has run, below.
         if internals is not None:
-            internals["outcome_ctx"] = outcome_context(ctx)
+            internals["outcome_ctx"] = outcome_context(
+                ctx, max_tokens=client_output_cap(request.generation_params()))
         self._publish_telemetry_views(internals, reps)
         policy_mode = self._policy_mode_stamp(eff)
         # The egress axis, read once and handed to every consumer that returns
@@ -1177,7 +1179,8 @@ class Pipeline:
         # set right after `ctx` exists so it survives a later routing
         # failure. `complexity` is folded in once compression has run, below.
         if internals is not None:
-            internals["outcome_ctx"] = outcome_context(ctx)
+            internals["outcome_ctx"] = outcome_context(
+                ctx, max_tokens=client_output_cap(request.generation_params()))
         self._publish_telemetry_views(internals, reps)
         policy_mode = self._policy_mode_stamp(eff)
         # Same egress axis run() reads, selecting the detector `incremental_
