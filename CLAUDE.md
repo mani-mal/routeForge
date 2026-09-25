@@ -195,7 +195,10 @@ seeding replays the per-attempt `endpoint_observations` log (endpoint health
 only — no tenant or content), so a seeded signal is a reconstruction, across
 replicas, of what the live stores saw, at its true age. Since P2b-2, every routed request
 also writes a content-free `routing_outcomes` record (plus local feedback scores) that
-nothing reads back into routing — see `docs/reference/routing-outcomes.md`.
+nothing reads back into routing — see `docs/reference/routing-outcomes.md`. Since P3a,
+`GET /admin/config-snapshot` exports a content-free config snapshot that the offline
+`scripts/policy_simulate.py` replays those records against, to predict a policy change's
+effect before anyone applies it — see `docs/reference/policy-simulator.md`.
 
 ## Configuration — everything switchable at startup
 

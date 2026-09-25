@@ -11,9 +11,11 @@ P1b (`app/policy/feasible.py`), P2a ([`routing-signal-provenance.md`](routing-si
 signal hardening (`SignalStore.replay`).
 **Slice:** P2b-1, the offline harness. P2b-2 (production outcome records) was built on
 2026-09-23 (§13). P2b-3 — offline, human-approved quality calibration, the first thing
-built on top of the P2b-2 dataset — was built on 2026-09-24 (§14). §13.4's other
-prerequisites for online exploration (propensity logging, a denser label, a workload
-taxonomy) remain not built.
+built on top of the P2b-2 dataset — was built on 2026-09-24 (§14). P3a — the offline
+policy counterfactual simulator, which replays P2b-2 records through the real eligibility
+and routing code under a proposed config edit — was also built on 2026-09-24 (§15).
+§13.4's other prerequisites for online exploration (propensity logging, a denser label, a
+workload taxonomy) remain not built.
 **Audience:** whoever writes the paper.
 
 This is the evidence file, not the paper. It records what was built, what the first runs
@@ -1966,3 +1968,86 @@ recommend/apply loop on top of the served-arm dataset:
    one manually before applying, but nothing enforces it.
 6. **The served model on cache hits** (§13.4 item 6) — a cache hit still credits no model
    in the P2b-3 estimator either, for the same reason §13.1 gives.
+
+## 15. Policy counterfactual simulator (P3a)
+
+§13 gave RouteForge a dataset of what actually happened. §14 taught it to recommend a
+narrow correction (a quality score) from that dataset. Neither answers the operator's
+day-to-day question: "if I tighten this app's residency, or drop this endpoint, or reprice
+that model, what changes for the traffic I already have?" P3a is that offline answer. This
+section records the simulator as built on `feat/policy-simulator`. Design:
+`docs/superpowers/specs/2026-09-24-policy-simulator-design.md`. Field-level reference:
+[`docs/reference/policy-simulator.md`](../reference/policy-simulator.md). Code:
+`app/apps/snapshot.py`, `app/api/admin_routes.py` (`GET /admin/config-snapshot`),
+`app/eval/scenario.py`, `app/eval/proposal.py`, `app/eval/simulate.py`,
+`scripts/policy_simulate.py`. **Not deployed**, so — like §13 before it was deployed —
+this section reports what the code does, not a production result.
+
+### 15.1 The model
+
+A **counterfactual over recorded traffic**, not a new estimator. Every simulated row is a
+real P2b-2 outcome record; the simulator rebuilds that request's policy context
+(`build_context`) and re-runs the actual eligibility filter (`feasible_set`) and the actual
+router (`Router.select`) against it — the same functions the serving process calls on a
+live request, imported and called directly, never reimplemented. What varies is the
+**config** the two calls run under:
+
+- `current` runs against the config snapshot exactly as `GET /admin/config-snapshot`
+  exported it;
+- `proposed` runs against that same snapshot with an operator-written policy proposal
+  applied (`apply_proposal`, a pure function returning a new, deep-copied snapshot
+  document).
+
+Only the request's **first routing decision** is replayed — no failover, no
+confidence-escalation, no circuit-breaker state, no re-run of PII detection (recorded
+entity **types** are replayed as given). Both arms share one frozen reading of
+`SignalStore` (`FrozenSignals`, built once from the snapshot's `signals` block and never
+aged), so a signal difference between the two arms is impossible by construction — it can
+only ever be the proposal's effect.
+
+### 15.2 The two-arm design, and why logged-vs-simulated is avoided
+
+The obvious naive design compares the **logged** outcome (what production actually did)
+against a **simulated** `proposed` arm. P3a instead simulates **both** arms — `current` as
+well as `proposed` — and diffs simulated against simulated.
+
+The reason is the same fidelity gap every offline-replay tool in this programme has to
+account for (§13.3, §14.3): a simulated re-run of `current` does not perfectly reproduce
+what was logged, because time has passed since the export window — endpoints get onboarded
+or removed, prices change, signals move — and because two fields the outcome record does
+not carry (a pinned model, `max_tokens`; B55, §15.4's sibling doc) make some rows replay
+differently than they were served. If the headline number were logged-vs-simulated, every
+one of those fidelity losses would show up mixed into the "effect of the proposal" figure,
+with no way to tell how much of a cost or route-change delta was the proposal and how much
+was drift. Simulating both arms cancels that: whatever fidelity loss the `current` arm
+carries, the `proposed` arm carries the identical loss, because it is built from the same
+snapshot, the same frozen signals and the same rows — so a `current`-vs-`proposed` delta
+isolates the proposal's effect. The **separate** baseline check
+(`current`-vs-*logged*, §5 of the reference doc) still exists, but only to report fidelity
+as a caveat on the headline, never to compute it.
+
+### 15.3 Invariants §9.1–§9.8, and the test that pins each
+
+| # | Invariant | Pinned by |
+|---|---|---|
+| 9.1 | An empty proposal predicts zero change: every row routes identically in both arms | `tests/eval/test_simulate.py::test_empty_proposal_zero_change` |
+| 9.2 | Stricter never widens — a Hypothesis property: tightening residency, narrowing an allow-list, adding `allowed_regions`, setting `require_no_retention: true`, or removing/disabling an endpoint can only ever leave `proposed`'s eligible set a subset of `current`'s | `tests/eval/test_simulate.py::test_stricter_never_widens` |
+| 9.3 | Residency is absolute in simulation too: tightening an app to `onprem_only` gives no `proposed` pick a cloud provider, and rows with no on-prem candidate become `newly_rejected` | `tests/eval/test_simulate.py::test_onprem_only_never_cloud_and_rejects_without_onprem` |
+| 9.4 | Removing the sole eligible model for an app turns exactly those rows `newly_rejected` | `tests/eval/test_simulate.py::test_sole_model_removal_rejects_exactly_those_rows` |
+| 9.5 | Repricing one model without changing any route moves `cost_usd.delta` by exactly Σ(Δprice × tokens) over the rows it served | `tests/eval/test_simulate.py::test_price_change_moves_cost_exactly` |
+| 9.6 | A proposed `sensitivity_rules` edit that escalates a recorded entity type to `onprem_only` moves exactly the rows carrying that type (and is exercised non-vacuously, moving a cloud-served row on-prem) | `tests/eval/test_simulate.py::test_sensitivity_rule_replays_recorded_entity_types`, `test_proposed_rule_on_custom_entity_moves_cloud_row_onprem` |
+| 9.7 | Baseline fidelity: a scenario built from a **live** snapshot, replayed against a **live** export from the same app, reaches 100% agreement with the served model | `tests/eval/test_policy_simulate_cli.py::test_live_round_trip_baseline_is_perfect` |
+| 9.8 | Determinism: two runs over the same three inputs give byte-identical `simulation.json` | `tests/eval/test_simulate.py::test_summarize_deterministic`; end to end, `tests/eval/test_policy_simulate_cli.py::test_cli_writes_deterministic_outputs` |
+
+(§9.9–§9.11 — load-error locations, the snapshot's admin gate/content-free shape/live
+round trip, and serving isolation — are pinned by `tests/eval/test_scenario.py`,
+`tests/eval/test_proposal.py`, `tests/test_config_snapshot.py` and
+`tests/eval/test_isolation.py`; see the reference doc and the spec for the full mapping.)
+
+### 15.4 Results
+
+Pending the Spark run after deploy — see §15.4.
+
+| proposal | simulated | agreement | route_changed | newly_rejected | Δcost/day |
+|---|---|---|---|---|---|
+| | | | | | |

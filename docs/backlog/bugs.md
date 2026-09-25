@@ -127,6 +127,34 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
+## B55 — Outcome rows don't record the pinned model or `max_tokens`
+
+**Severity:** low (fidelity of an offline tool only; no effect on production routing).
+**Found:** 2026-09-24, P3a policy-simulator build. **Open, deferred.**
+
+`routing_outcomes` records what the router decided and what was served, but not two things
+the request itself carried: a client's pinned `model` (when the app is allowed to pin one)
+and its `max_tokens` (or `max_completion_tokens`). Neither is a routing-decision output, so
+neither had a reason to be captured before there was a consumer that needed to replay a
+request from its outcome row alone.
+
+**Effect.** The P3a policy simulator (`app/eval/simulate.py`, `docs/reference/policy-simulator.md`
+§6) replays each outcome row's first routing decision through the real eligibility and
+routing code. With no pinned model recorded, every row replays as an ordinary routed
+decision — a pinned request that would have hit `model_not_found` (or simply bypassed the
+router entirely) is indistinguishable from one that was never pinned. With no `max_tokens`
+recorded, every row prices its completion at the deployment's default output-token estimate
+(`expected_output_tokens(settings, None)`) rather than the request's real cap. Both lower
+the simulator's baseline agreement (`docs/reference/policy-simulator.md` §5) for traffic
+that pins models or sets a non-default `max_tokens`, and both are pure replay-fidelity
+losses — they change nothing about what was actually served or how it was billed.
+
+**Fix.** Two nullable `routing_outcomes` columns, `requested_model` and `max_tokens`,
+populated from the request at the same point the other decision fields are written. Needs
+an `ALTER` on every deployed database that already has the table (per
+`docs/reference/routing-outcomes.md` §1, `create_all` never adds a column to an existing
+table).
+
 ## B54 — onboarded on-prem models scored at the 0.5 quality floor regardless of tier or published quality  ✅ RESOLVED (2026-09-24)
 
 **Severity:** low–medium (ranking only; never eligibility or placement).
