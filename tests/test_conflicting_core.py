@@ -105,6 +105,40 @@ def test_label_joins_list_and_set_details_review_finding_1():
                       sources={})
     assert core.requirements[0].label == "model must be one of m1, m2"
 
+def test_empty_collection_detail_renders_none_final_findings_1():
+    """Final review finding 1: an EMPTY list/set detail must render as
+    "(none)", not "" -- both in the requirement's label and in summary()'s
+    parenthetical."""
+    core = build_core({"x": frozenset({"allowed_providers"})}, state={},
+                      details={"allowed_providers": {"providers": []}},
+                      sources={})
+    assert core.requirements[0].label == "provider must be one of (none)"
+    assert "allowed_providers (none)" in core.summary()
+    assert "allowed_providers ()" not in core.summary()
+
+    core2 = build_core({"x": frozenset({"allowed_regions"})}, state={},
+                       details={"allowed_regions": {"regions": frozenset()}},
+                       sources={})
+    assert core2.requirements[0].label == "endpoint region must be one of (none)"
+
+
+def test_risk_floor_escalation_label_final_findings_2():
+    """Final review finding 2: source == "escalation" gets its own risk_floor
+    label variant naming confidence escalation, not the risk-class wording."""
+    core = build_core({"x": frozenset({"risk_floor"})}, state={},
+                      details={"risk_floor": {"floor": "mid", "risk_class": "low",
+                                              "min_tier": "mid"}},
+                      sources={"risk_floor": "escalation"})
+    assert core.requirements[0].label == "tier must be at least mid (confidence escalation)"
+    assert core.requirements[0].source == "escalation"
+
+    # unescalated risk_floor keeps the risk-class wording
+    core2 = build_core({"x": frozenset({"risk_floor"})}, state={},
+                       details={"risk_floor": {"floor": "frontier", "risk_class": "high"}},
+                       sources={})
+    assert core2.requirements[0].label == "tier must be at least frontier for risk class high"
+
+
 def test_summary_shows_primary_detail_per_id_review_finding_2():
     core = build_core(
         {"a": frozenset({"allowed_regions"}), "b": frozenset({"max_cost_usd_per_request"}),

@@ -55,7 +55,7 @@ fixes both the alphabet and the tie-break order for the minimum-hitting-set sear
 | id | fires on a candidate when | security | source |
 |---|---|---|---|
 | `residency` | resolved residency is `onprem_only` and the provider is not on-prem | yes | `app_residency`, or `sensitivity_rule` (the rule's entity **types** only) |
-| `allowed_providers` | the provider is outside the resolved placement set (app `allowed_providers`, enabled providers, on-prem availability) for a non-`onprem_only` residency | yes | `app_policy` |
+| `allowed_providers` | the provider is outside the resolved placement set (app `allowed_providers`, enabled providers, on-prem availability) for a non-`onprem_only` residency | yes | `app_policy`, or `deployment` when the resolved set is empty AND the deployment's own placement capacity — ignoring the app's own `allowed_providers` entirely — is already empty (the `providers.*.enabled` kill switch or no healthy on-prem endpoint) |
 | `allowed_regions` | stage-2 region rule: the app set `allowed_regions` and the endpoint's declared region is not in it (`unknown` excludes) | yes | `app_policy` |
 | `require_no_retention` | stage-2 retention rule: the app requires no retention and the endpoint declares other than `none` (`unknown` excludes) | yes | `app_policy` |
 | `raw_sensitive` | stage-2 raw-sensitive rule: the request sends unredacted sensitive content and the endpoint declares `accepts_raw_sensitive: false` (only a declared `false` fires this — `unknown` does **not** exclude, unlike the two rows above) | yes | `app_policy` |
@@ -64,7 +64,7 @@ fixes both the alphabet and the tie-break order for the minimum-hitting-set sear
 | `endpoint_app_allowlist` | the onboarded endpoint's `allowed_app_ids` excludes this app | no | `endpoint` |
 | `requested_model` | the request pins a different model | no | `request` |
 | `max_cost_usd_per_request` | the router's pre-call estimate for this candidate exceeds the cap (§6) | no | `app_policy` |
-| `risk_floor` | the candidate's tier is below the effective risk floor (§6) | yes | `risk_class` (the source string names no rule even when an escalation set the floor — see §7) |
+| `risk_floor` | the candidate's tier is below the effective risk floor (§6) | yes | `risk_class`, or `escalation` when a confidence-escalation `min_tier` — not the request's own risk class — is what set the effective floor (§6); the detail then also carries `min_tier` alongside `floor` |
 
 `SECURITY_IDS` (`app/policy/core.py`) is exactly the six ids marked `security: true` above:
 `residency`, `allowed_providers`, `allowed_regions`, `require_no_retention`, `raw_sensitive`,
@@ -123,6 +123,11 @@ disabled row exists
   slugs, the budget cap/estimate, entity **types** — never request content or matched text
   (`tests/test_conflicting_core_api.py::test_conflicting_core_is_content_free`).
 - **`hints`** come from a fixed template per id (§5).
+- **An empty list/set detail renders as `(none)`**, in both the requirement's `label` (e.g.
+  `"provider must be one of (none)"`) and `summary()`'s parenthetical (e.g. `"no endpoint
+  satisfies all of: allowed_providers (none)"`) — never as an empty string, so an operator
+  reading either never sees a dangling "must be one of " with nothing after it
+  (`app/policy/core.py::_joined`).
 - **`state`** groups the pool's own model slugs by state id, sorted.
 - **`candidates_considered`** is the number of available candidates whose violation set
   fed the minimum-hitting-set search (§1's policy case, or the §6 budget search space). It
@@ -241,14 +246,10 @@ picked:
 
 ## 7. Known limits — what the shipped build does not (yet) do exactly
 
-- **`allowed_providers` and `max_cost_usd_per_request`'s `source` always reads
-  `app_policy`**, even on a deployment installed at the deployment ceiling rather than set
-  per-app. `app/policy/core.py::DEFAULT_SOURCE` has no `"deployment"` value; the two ids the
-  spec named `app_policy` / `deployment` both resolve to `app_policy` in the shipped build.
-- **`risk_floor`'s detail always names `risk_class`**, even when an escalation's own
-  `min_tier` — not the risk class's own floor — is what actually set the effective floor.
-  `_budget_core`'s detail is `{"floor": effective_floor, "risk_class": ctx.risk_class}`
-  unconditionally; there is no separate "an escalation rule set this" source.
+- **`max_cost_usd_per_request`'s `source` always reads `app_policy`**, even on a deployment
+  installed at the deployment ceiling rather than set per-app. `app/policy/core.py::DEFAULT_SOURCE`
+  has no `"deployment"` value for this id, unlike `allowed_providers` (§2), which does
+  distinguish the deployment-emptied case.
 - **`cheapest_estimate` is the cheapest among the candidates that violate the cap** (§6),
   not the cheapest candidate overall.
 

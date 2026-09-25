@@ -400,6 +400,7 @@ def _core_key(core: tuple[str, ...], core_state: tuple[str, ...]) -> str:
         return "(state:" + ",".join(core_state) + ")"
     return "(unknown)"
 
+
 def _new_rejections(results: list[RowResult]) -> dict:
     by_app: Counter = Counter()
     by_code: Counter = Counter()

@@ -119,11 +119,16 @@ def _fmt(template: str, detail: dict) -> str:
         return template
 
 
-def _joined(value: object) -> object:
+def _joined(value: object, *, empty: str = "(none)") -> object:
+    """`empty` is already parenthesised for label use (`_fmt`, where the
+    template has no parens of its own around the placeholder); `summary()`
+    passes the bare `"none"` instead, since its own `f"{id} ({detail})"`
+    wrapping supplies the parens -- otherwise an empty collection would
+    double up as "id ((none))"."""
     if isinstance(value, (list, tuple)):
-        return ", ".join(str(v) for v in value)
+        return ", ".join(str(v) for v in value) if value else empty
     if isinstance(value, (set, frozenset)):
-        return ", ".join(sorted(str(v) for v in value))
+        return ", ".join(sorted(str(v) for v in value)) if value else empty
     return value
 
 
@@ -132,6 +137,16 @@ def _residency_label(detail: dict, source: str) -> str:
     if source == "sensitivity_rule":
         label += _fmt(" (raised by sensitivity rule on {entities})", detail)
     return label
+
+
+def _risk_floor_label(detail: dict, source: str) -> str:
+    """The escalation variant (finding 2, 2026-09-25 final review): when a
+    confidence-escalation `min_tier` -- not the request's own risk class --
+    set the effective floor, name that instead of the risk class, which the
+    escalated request may not even carry a stricter one for."""
+    if source == "escalation":
+        return _fmt("tier must be at least {floor} (confidence escalation)", detail)
+    return _fmt("tier must be at least {floor} for risk class {risk_class}", detail)
 
 
 _LABEL_TEMPLATES: dict[str, object] = {
@@ -145,7 +160,7 @@ _LABEL_TEMPLATES: dict[str, object] = {
     REQ_ENDPOINT_APP_ALLOWLIST: "endpoint must allow this application",
     REQ_REQUESTED_MODEL: "request pins model {value}",
     REQ_MAX_COST_USD_PER_REQUEST: "estimated cost must be at most ${cap:.4f} per request",
-    REQ_RISK_FLOOR: "tier must be at least {floor} for risk class {risk_class}",
+    REQ_RISK_FLOOR: _risk_floor_label,
 }
 
 
@@ -215,7 +230,7 @@ def _summary_detail(req_id: str, detail: dict) -> str | None:
         return str(detail["value"])
     list_key = _PRIMARY_LIST_KEY.get(req_id)
     if list_key and list_key in detail:
-        return _joined(detail[list_key])
+        return _joined(detail[list_key], empty="none")
     if req_id == REQ_MAX_COST_USD_PER_REQUEST and "cap" in detail:
         return f"cap ${detail['cap']:.4f}"
     if req_id == REQ_RISK_FLOOR and "floor" in detail:

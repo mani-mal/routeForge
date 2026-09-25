@@ -69,9 +69,10 @@ unpinned, at the default output estimate (`docs/reference/policy-simulator.md`).
 **Upgrade: `conflicting_core` (P3b, 2026-09-25).** `routing_outcomes` gained one nullable
 JSON column (§3.2). `create_all` never adds a column to a table that already exists, so a
 database that already has `routing_outcomes` (the Spark) needs it added by hand. **Run this
-before rolling the image**: the ORM names the column in every `INSERT`/`SELECT` on the
+before rolling the image**: the ORM names the column in every `INSERT` and `SELECT` on the
 table, so against an unmigrated table every outcome write fails (swallowed, so serving
-continues, but no rows are recorded) until the ALTER runs.
+continues, but no rows are recorded) and every read of it -- the `/v1/feedback` outcome
+lookup, the admin export, the report -- errors until the ALTER runs.
 
 ```sql
 ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS conflicting_core JSON;

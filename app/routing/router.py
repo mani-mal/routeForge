@@ -24,6 +24,7 @@ from app.policy.feasible import (
     REQ_REQUESTED_MODEL,
     REQ_RESIDENCY,
     ViolationMatrix,
+    _placement_providers,
     feasible_set,
     violation_matrix,
 )
@@ -83,11 +84,23 @@ def _with_core(message: str, core: ConflictingCore | None) -> str:
     return f"{message} [{core.summary()}]" if core is not None else message
 
 
-def _policy_core_inputs(ctx: ExecutionPolicyContext,
-                        m: ViolationMatrix) -> tuple[dict[str, dict], dict[str, str]]:
+def _policy_core_inputs(ctx: ExecutionPolicyContext, m: ViolationMatrix, *,
+                        deployment_capacity: frozenset[str] | None = None,
+                        ) -> tuple[dict[str, dict], dict[str, str]]:
     """`details` and `sources` for a policy-empty core. Content-free: policy
     values, model slugs and entity TYPES only -- never request text.
-    `build_core` reads only the entries for ids that end up in the core."""
+    `build_core` reads only the entries for ids that end up in the core.
+
+    `deployment_capacity` is the placement the DEPLOYMENT alone would allow
+    -- `app/policy/feasible.py::_placement_providers` computed with no app
+    policy, so it reflects only `serving.providers.*.enabled` and on-prem
+    health, never the app's own narrowing. When the resolved
+    `allowed_providers` (`m.allowed_providers`) is empty AND that deployment
+    capacity is ALSO empty, the app's own restriction (whatever it is)
+    cannot be why nothing is left -- the deployment kill switch already
+    emptied it before the app got a say -- so the requirement's source reads
+    "deployment" instead of the default "app_policy" (final review finding
+    1, 2026-09-25)."""
     residency: dict = {"value": "onprem_only"}
     sources: dict[str, str] = {}
     # `onprem_only` came from a sensitivity rule when the app's OWN residency
@@ -100,6 +113,9 @@ def _policy_core_inputs(ctx: ExecutionPolicyContext,
             and ctx.app_residency != "onprem_only"):
         sources[REQ_RESIDENCY] = "sensitivity_rule"
         residency["entities"] = list(ctx.escalation_entities)   # types only
+    if (not m.allowed_providers and deployment_capacity is not None
+            and not deployment_capacity):
+        sources[REQ_ALLOWED_PROVIDERS] = "deployment"
     details = {
         REQ_RESIDENCY: residency,
         REQ_ALLOWED_PROVIDERS: {"providers": sorted(m.allowed_providers)},
@@ -253,12 +269,18 @@ class Router:
                         "app_allowed_tiers/app_allowed_models); core built from "
                         "the rest", unexplained)
         violations = {n: v for n, v in m.available.items() if v}
-        details, sources = _policy_core_inputs(ctx, m)
+        # The deployment's OWN placement capacity, ignoring the app's
+        # narrowing entirely (`app_policy=None` short-circuits it) -- see
+        # `_policy_core_inputs`'s docstring.
+        deployment_capacity = frozenset(_placement_providers(
+            self._s, "onprem_only" if ctx.onprem_only else "any", None, self._reg))
+        details, sources = _policy_core_inputs(
+            ctx, m, deployment_capacity=deployment_capacity)
         return build_core(violations, state=m.state, details=details, sources=sources)
 
     def _budget_core(self, ctx: ExecutionPolicyContext, allowed: list[PoolCandidate],
                      *, tier_pick: str, floor: str, tokens_after: int,
-                     out_tokens: int) -> ConflictingCore:
+                     out_tokens: int, min_tier: str | None = None) -> ConflictingCore:
         """The budget-empty core (spec §2.3): over the policy-eligible
         candidates at or below the picked tier (the router's budget search
         space plus the lower tiers it refused). Each violates the cost cap
@@ -266,6 +288,13 @@ class Router:
         the EFFECTIVE floor -- the requested floor clamped down to the best
         allowed tier, the same clamp the router's target applies. No state:
         open circuits never block budget (the within-tier bypass handles them).
+
+        `min_tier` is the caller's confidence-escalation floor (the same one
+        `_select` folded into `floor`), passed through ONLY so this can name
+        it when it -- not the request's own risk class -- is what set the
+        effective floor (final review finding 2, 2026-09-25): source
+        "escalation" instead of the default "risk_class", detail gains
+        `min_tier` alongside `floor`.
         """
         best = max(_ORDER[c.tier] for c in allowed)
         effective_floor = (floor if _ORDER[floor] <= best
@@ -295,10 +324,15 @@ class Router:
         details: dict[str, dict] = {
             REQ_RISK_FLOOR: {"floor": effective_floor, "risk_class": ctx.risk_class},
         }
+        sources: dict[str, str] = {}
+        risk_class_floor = self._s.routing.risk_floors[ctx.risk_class]
+        if min_tier is not None and _ORDER[min_tier] > _ORDER[risk_class_floor]:
+            sources[REQ_RISK_FLOOR] = "escalation"
+            details[REQ_RISK_FLOOR]["min_tier"] = min_tier
         if over_estimates:
             details[REQ_MAX_COST_USD_PER_REQUEST] = {
                 "cap": ctx.max_cost_usd, "cheapest_estimate": min(over_estimates)}
-        return build_core(violations, state={}, details=details, sources={})
+        return build_core(violations, state={}, details=details, sources=sources)
 
     def _select(self, ctx: ExecutionPolicyContext, tokens_after: int,
                complexity: float, min_tier: str | None,
@@ -422,7 +456,7 @@ class Router:
             # runs before this one (both are guarded by `not eligible`).
             core = self._safe_core(lambda: self._budget_core(
                 ctx, allowed, tier_pick=picked_tier, floor=floor,
-                tokens_after=tokens_after, out_tokens=out_tokens))
+                tokens_after=tokens_after, out_tokens=out_tokens, min_tier=min_tier))
             raise NoEligibleCandidate(
                 _with_core(
                     f"no candidates after budget filter: cheapest candidate {cheapest.name} "

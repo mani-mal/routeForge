@@ -346,6 +346,82 @@ def test_hand_built_context_with_an_unexplained_rejection_does_not_crash(caplog)
     assert "local-8b" in caplog.text
 
 
+# --- final review 2026-09-25: findings 1 and 2 ---------------------------
+
+def test_allowed_providers_empty_source_is_deployment_final_findings_1():
+    """The deployment's onprem kill switch (`providers.onprem.enabled=false`)
+    empties `allowed_providers` even though an onboarded onprem row exists
+    and the app itself declares no restriction -- the requirement's source
+    should read "deployment", not the default "app_policy", and the empty
+    `providers` list should render "(none)"."""
+    prov = dict(S_ONPREM.serving.providers)
+    prov["onprem"] = prov["onprem"].model_copy(update={"enabled": False})
+    settings = S_ONPREM.model_copy(
+        update={"serving": S_ONPREM.serving.model_copy(update={"providers": prov})})
+    reg = _registry(settings, {"local-8b": _onprem("local-8b")})
+    ctx = _ctx(settings, reg, AppPolicyView(residency="any"))
+    assert ctx.onprem_only is False
+    err = _raise(settings, reg, ctx)
+
+    assert err.core.ids() == ("allowed_providers",)
+    req = err.core.requirements[0]
+    assert req.source == "deployment"
+    assert req.detail == {"providers": []}
+    assert req.label == "provider must be one of (none)"
+
+
+def test_allowed_providers_empty_by_app_restriction_alone_stays_app_policy_final_findings_1():
+    """A non-empty deployment `enabled` set (onprem, ignoring the app),
+    narrowed to nothing by the app's OWN `allowed_providers` naming a
+    provider the deployment never enabled, is not the deployment's fault --
+    the default source stays "app_policy"."""
+    reg = _registry(S_ONPREM, {"local-8b": _onprem("local-8b")})
+    ctx = _ctx(S_ONPREM, reg, AppPolicyView(allowed_providers=frozenset({"azure"}),
+                                            residency="any"))
+    assert ctx.onprem_only is False
+    err = _raise(S_ONPREM, reg, ctx)
+
+    assert err.core.ids() == ("allowed_providers",)
+    req = err.core.requirements[0]
+    assert req.source == "app_policy"
+    assert req.detail == {"providers": []}
+
+
+def test_budget_core_escalation_sets_risk_floor_source_final_findings_2():
+    """When a confidence-escalation `min_tier` -- not the request's own risk
+    floor -- is what set the effective floor, the risk_floor requirement's
+    source reads "escalation" and its detail carries `min_tier`."""
+    reg = _budget_registry(with_cheap=True)
+    ctx = _ctx(S_ONPREM, reg, AppPolicyView(max_cost_usd_per_request=0.01))
+    assert ctx.risk_class == "low"   # risk_floors[low] == "cheap"
+    r = Router(S_ONPREM, registry=reg)
+    allowed = list(reg.effective_pool())
+    core = r._budget_core(ctx, allowed, tier_pick="frontier", floor="mid",
+                          tokens_after=20, out_tokens=512, min_tier="mid")
+
+    by_id = {req.id: req for req in core.requirements}
+    assert by_id["risk_floor"].source == "escalation"
+    assert by_id["risk_floor"].detail["min_tier"] == "mid"
+    assert by_id["risk_floor"].detail["floor"] == "mid"
+    assert by_id["risk_floor"].label == "tier must be at least mid (confidence escalation)"
+
+
+def test_budget_core_no_escalation_keeps_default_risk_floor_source_final_findings_2():
+    """The request's own risk floor -- no min_tier, or a min_tier no higher
+    than the risk floor -- keeps the default source and label untouched."""
+    reg = _budget_registry(with_cheap=True)
+    ctx = _high_risk_ctx(reg)   # risk_class high -> risk_floors[high] == "frontier"
+    r = Router(S_ONPREM, registry=reg)
+    allowed = list(reg.effective_pool())
+    core = r._budget_core(ctx, allowed, tier_pick="frontier", floor="frontier",
+                          tokens_after=20, out_tokens=512, min_tier="mid")
+
+    by_id = {req.id: req for req in core.requirements}
+    assert by_id["risk_floor"].source == "risk_class"   # DEFAULT_SOURCE, unchanged
+    assert "min_tier" not in by_id["risk_floor"].detail
+    assert by_id["risk_floor"].label == "tier must be at least frontier for risk class high"
+
+
 def test_budget_core_asserts_on_a_candidate_violating_neither():
     """By construction the budget raise has no candidate that fits the cap AND
     sits at or above the floor. If one ever appears, that is a router bug:

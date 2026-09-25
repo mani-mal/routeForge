@@ -1,6 +1,6 @@
 # P3b: the minimal conflicting core
 
-**Date:** 2026-09-25 · **Status:** approved design, not built
+**Date:** 2026-09-25 · **Status:** built (see docs/reference/conflicting-core.md)
 **Priority:** 3b (handoff doc §29 and §37 "Empty feasible sets include a minimal conflicting
 core when possible"; "Security constraints are never automatically relaxed").
 **Follows:** P1b `FeasibleSet` (`app/policy/feasible.py`), the B49 error envelope
@@ -143,6 +143,18 @@ a `K` of smallest size.
 - **Context-window 400s.** The gateway enforces these, not eligibility, the same limitation
   as P3a.
 - **Capabilities the registry does not model yet,** such as vision.
+
+**As built:** the trace channel is not `sp.conflicting_core` on a Langfuse span -- a
+`no_eligible` request fails before a response exists, and `export_trace` only runs in
+`_finalize`, so it exports no Langfuse trace at all. The core instead reaches the logs as a
+structured `serving.api` log line (`{"event": "no_eligible_model", "request_id": ...,
+"conflicting_core": ...}`, `app/api/routes.py::_log_no_eligible`), content-free
+(`ConflictingCore.to_record()`, no label/hints). `ExecutionPolicyContext` carries
+`app_allowed_tiers` / `app_allowed_models` / `app_residency` / `escalation_entities` so the
+core can name an `allowed_tiers`/`allowed_models` scope violation and a residency
+`sensitivity_rule` source without re-deriving either from the app policy. Onboarded rows an
+admin has disabled appear under `state` as `disabled` (`ModelRegistry.disabled_onboarded()`),
+never `no_endpoints`, since "re-enable it" is the actionable fact.
 
 ## 5. Invariants and tests
 
