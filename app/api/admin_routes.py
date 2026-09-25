@@ -24,6 +24,7 @@ from app.apps.models import OutcomeFeedback, RoutingOutcome
 from app.apps.policy_lint import price_warnings
 from app.apps.probe import probe_endpoint
 from app.apps.policy import AppPolicyView, policy_view_from
+from app.apps.snapshot import build_config_snapshot
 from app.apps.tokens import new_token
 from app.policy.compile import (PolicyViolation, check_invariants, compile_policy,
                                 validate_effective)
@@ -1265,6 +1266,31 @@ async def export_outcomes(
         _export_lines(request.app.state.db, since=since_dt, until=until_dt,
                       application_id=application_id, limit=limit),
         media_type="application/x-ndjson")
+
+
+# --- policy simulator snapshot (P3a) -----------------------------------------
+
+@admin_router.get("/config-snapshot")
+async def config_snapshot(request: Request, _: str = Depends(require_admin)) -> dict:
+    """Content-free, secret-free snapshot of everything a routing decision
+    reads (P3a spec §4), for the offline policy simulator
+    (`scripts/policy_simulate.py`). Read-only: it changes nothing."""
+    state = request.app.state
+    # Outside the session block below (same reason as the other admin routes
+    # that call this): registry.ensure_loaded() opens its own db.session(),
+    # which would deadlock on the non-reentrant SQLite write-lock if nested
+    # inside the one below. Without this, a registry that's never taken a
+    # live request yet (registry.py: "lazily loaded on the first request")
+    # snapshots as an empty effective pool/registry_version even though
+    # `onboarded` (read straight from the DB, not the registry) is accurate
+    # -- exactly the discrepancy the P3a round-trip test (spec §9.10) exists
+    # to catch.
+    await state.registry.ensure_loaded(state.db)
+    async with state.db.session() as session:
+        return await build_config_snapshot(
+            session, settings=state.settings, registry=state.registry,
+            quality=state.quality, signals=state.signals,
+            now=dt.datetime.now(dt.timezone.utc))
 
 
 # --- quality calibration (P2b-3 Task 5) -------------------------------------

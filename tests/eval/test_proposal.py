@@ -1,0 +1,156 @@
+"""P3a Task 3: proposal validation and application (spec §5)."""
+from __future__ import annotations
+
+import copy
+import json
+
+import pytest
+
+from app.eval.proposal import ProposalError, apply_proposal, load_proposal
+from tests.eval.sim_fixtures import app_entry, make_snapshot
+
+P = "routeforge.policy-proposal/v1"
+
+
+def test_empty_proposal_is_identity():
+    snap = make_snapshot()
+    assert apply_proposal(snap, {"schema": P}) == snap
+
+
+def test_inputs_never_mutated():
+    snap, prop = make_snapshot(), {"schema": P, "apps": {"app-a": {"residency": "onprem_only"}}}
+    s0, p0 = copy.deepcopy(snap), copy.deepcopy(prop)
+    apply_proposal(snap, prop)
+    assert (snap, prop) == (s0, p0)
+
+
+def test_app_edit_replaces_only_named_fields():
+    snap = make_snapshot(apps=[app_entry("app-a", allowed_tiers=["cheap"])])
+    out = apply_proposal(snap, {"schema": P, "apps": {"app-a": {
+        "residency": "onprem_only", "allowed_regions": ["eu", "onprem"]}}})
+    pol = out["apps"][0]["policy"]
+    assert pol["residency"] == "onprem_only"
+    assert pol["allowed_regions"] == ["eu", "onprem"]
+    assert pol["allowed_tiers"] == ["cheap"]
+
+
+def test_endpoint_ops_and_prices():
+    out = apply_proposal(make_snapshot(), {"schema": P,
+        "endpoints": {"add": [{"slug": "new-mid", "provider": "onprem", "tier": "mid",
+                               "price": {"input": 0.3, "output": 0.6, "cached_input": None}}],
+                      "remove": ["local-big"], "disable": ["local-cheap"]},
+        "prices": {"local-mid": {"input": 9.0, "output": 9.0, "cached_input": None}}})
+    by = {o["slug"]: o for o in out["onboarded"]}
+    assert "local-big" not in by and by["new-mid"]["enabled"] is True
+    assert by["local-cheap"]["enabled"] is False
+    assert (by["local-mid"]["price_input"], by["local-mid"]["price_output"]) == (9.0, 9.0)
+    assert [o["slug"] for o in out["onboarded"]] == sorted(by)
+
+
+def test_remove_drops_quality_entries():
+    snap = make_snapshot(quality={"customer": [], "calibrated": [
+        {"model": "local-big", "workload": None, "score": 0.9, "set_id": "s"}]})
+    out = apply_proposal(snap, {"schema": P, "endpoints": {"remove": ["local-big"]}})
+    assert out["quality"]["calibrated"] == []
+
+
+@pytest.mark.parametrize("prop,where", [
+    ({"schema": "routeforge.policy-proposal/v2"}, "schema"),
+    ({"schema": P, "bogus": 1}, "bogus"),
+    ({"schema": P, "apps": {"nope": {"residency": "any"}}}, "apps.nope"),
+    ({"schema": P, "apps": {"app-a": {"residencyy": "any"}}}, "apps.app-a.residencyy"),
+    ({"schema": P, "apps": {"app-a": {"residency": "moon"}}}, "apps.app-a.residency"),
+    ({"schema": P, "apps": {"app-a": {"allowed_tiers": ["strong"]}}}, "apps.app-a.allowed_tiers"),
+    ({"schema": P, "providers": {"nosuch": {"enabled": True}}}, "providers.nosuch"),
+    ({"schema": P, "endpoints": {"remove": ["ghost"]}}, "endpoints.remove.ghost"),
+    ({"schema": P, "endpoints": {"remove": ["local-mid"], "disable": ["local-mid"]}},
+     "endpoints.local-mid"),
+    ({"schema": P, "endpoints": {"add": [{"slug": "local-mid", "provider": "onprem",
+      "tier": "mid", "price": {"input": 1, "output": 1, "cached_input": None}}]}},
+     "endpoints.add.local-mid"),
+    ({"schema": P, "prices": {"local-mid": {"input": -1, "output": 1, "cached_input": None}}},
+     "prices.local-mid"),
+])
+def test_errors_name_the_location(prop, where):
+    with pytest.raises(ProposalError) as exc:
+        apply_proposal(make_snapshot(), prop)
+    assert str(exc.value).startswith(where)
+
+
+def test_load_proposal_rejects_unknown_key(tmp_path):
+    p = tmp_path / "p.json"
+    p.write_text(json.dumps({"schema": P, "apss": {}}))
+    with pytest.raises(ProposalError) as exc:
+        load_proposal(str(p))
+    assert str(exc.value).startswith("apss")
+
+
+# --- P3a final review fixes ----------------------------------------------------
+
+_ADD = {"slug": "new-mid", "provider": "onprem", "tier": "mid",
+        "price": {"input": 0.3, "output": 0.6, "cached_input": None}}
+
+
+@pytest.mark.parametrize("prop,where", [
+    # Important 2: the admin write path refuses these; so must a proposal.
+    ({"schema": P, "apps": {"app-a": {"allowed_regions": []}}}, "apps.app-a.allowed_regions"),
+    ({"schema": P, "apps": {"app-a": {"allowed_regions": [""]}}}, "apps.app-a.allowed_regions"),
+    ({"schema": P, "apps": {"app-a": {"allowed_regions": ["  "]}}}, "apps.app-a.allowed_regions"),
+    ({"schema": P, "apps": {"app-a": {"allowed_providers": ["onprm"]}}},
+     "apps.app-a.allowed_providers"),
+    ({"schema": P, "apps": {"app-a": {"allowed_providers": []}}}, "apps.app-a.allowed_providers"),
+    ({"schema": P, "apps": {"app-a": {"allowed_tiers": []}}}, "apps.app-a.allowed_tiers"),
+    ({"schema": P, "apps": {"app-a": {"allowed_models": []}}}, "apps.app-a.allowed_models"),
+    ({"schema": P, "apps": {"app-a": {"allowed_models": ["ghost"]}}}, "apps.app-a.allowed_models"),
+    ({"schema": P, "endpoints": {"add": [{**_ADD, "region": 5}]}}, "endpoints.add.new-mid.region"),
+    ({"schema": P, "endpoints": {"update": {"local-mid": {"region": ["eu"]}}}},
+     "endpoints.update.local-mid.region"),
+    # Important 3: malformed shapes are a named ProposalError, never a traceback.
+    ({"schema": P, "apps": []}, "apps"),
+    ({"schema": P, "prices": []}, "prices"),
+    ({"schema": P, "providers": []}, "providers"),
+    ({"schema": P, "endpoints": []}, "endpoints"),
+    ({"schema": P, "endpoints": {"update": []}}, "endpoints.update"),
+    ({"schema": P, "endpoints": {"add": {}}}, "endpoints.add"),
+    ({"schema": P, "endpoints": {"remove": [{"slug": "x"}]}}, "endpoints.remove[0]"),
+    ({"schema": P, "endpoints": {"disable": "local-mid"}}, "endpoints.disable"),
+    ({"schema": P, "endpoints": {"add": [{**_ADD, "slug": ["x"]}]}}, "endpoints.add[0].slug"),
+    ({"schema": P, "endpoints": {"add": [{**_ADD, "allowed_app_ids": [["app-a"]]}]}},
+     "endpoints.add.new-mid.allowed_app_ids"),
+    ({"schema": P, "apps": {"app-a": {"allowed_tiers": [["cheap"]]}}}, "apps.app-a.allowed_tiers"),
+    ({"schema": P, "apps": {"app-a": {"allowed_regions": [{"r": 1}]}}},
+     "apps.app-a.allowed_regions"),
+    ({"schema": P, "apps": {"app-a": {"sensitivity_rules": 5}}}, "apps.app-a.sensitivity_rules"),
+    ({"schema": P, "apps": {"app-a": {"sensitivity_rules": [5]}}},
+     "apps.app-a.sensitivity_rules[0]"),
+    ({"schema": P, "apps": {"app-a": []}}, "apps.app-a"),
+    ({"schema": P, "prices": {"local-mid": []}}, "prices.local-mid"),
+])
+def test_final_review_errors_name_the_field(prop, where):
+    with pytest.raises(ProposalError) as exc:
+        apply_proposal(make_snapshot(), prop)
+    assert exc.value.where == where, str(exc.value)
+
+
+def test_allowed_models_accepts_pool_onboarded_and_added_slugs():         # Important 2
+    yaml_model = make_snapshot()["settings"]["routing"]["model_pool"][0]["name"]
+    out = apply_proposal(make_snapshot(), {"schema": P,
+        "endpoints": {"add": [_ADD]},
+        "apps": {"app-a": {"allowed_models": ["new-mid", "local-mid", yaml_model],
+                           "allowed_providers": ["onprem"],
+                           "allowed_regions": ["EU"]}}})
+    pol = out["apps"][0]["policy"]
+    assert pol["allowed_models"] == sorted(["new-mid", "local-mid", yaml_model])
+
+
+def test_unchanged_stored_value_is_not_rechecked():                       # admin parity
+    """The admin path only checks values a write CHANGES: re-sending a
+    stored allowlist that names a since-retired slug must not block."""
+    snap = make_snapshot(apps=[app_entry("app-a", allowed_models=["retired"])])
+    apply_proposal(snap, {"schema": P, "apps": {"app-a": {"allowed_models": ["retired"]}}})
+
+
+def test_region_string_or_null_accepted():
+    apply_proposal(make_snapshot(), {"schema": P,
+        "endpoints": {"add": [{**_ADD, "region": None}],
+                      "update": {"local-mid": {"region": "eu"}}}})

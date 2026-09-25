@@ -1,0 +1,550 @@
+"""Policy simulator replay engine (P3a, spec §7): offline, operator-run.
+
+Replays each recorded P2b-2 outcome row's **FIRST routing decision only**
+through the real serving code -- `build_context` -> `feasible_set` ->
+`Router.select` -- under **both** arms:
+
+- `current`  = the config snapshot as exported;
+- `proposed` = the snapshot with a policy proposal applied.
+
+Both arms are simulated, so the headline diff is always simulated-vs-simulated
+and drift since the export window affects both sides equally. Nothing here
+touches the network or a deployment database: each scenario owns a scratch
+in-memory SQLite registry (`app/eval/scenario.py`) and a frozen signal
+reading shared by both arms.
+
+Deliberate non-goals (spec §2):
+- no live dry-run of an admin write;
+- no explanation of why a proposal rejects (P3b), no shadow prices or
+  uncertainty ranges (P3c);
+- no re-running PII detection -- recorded entity TYPES are replayed as-is;
+- no daily-spend / RPM admission simulation;
+- no circuit-breaker state (both arms run with no open circuits);
+- no confidence-escalation or failover replay -- only the first decision.
+
+Only `NoEligibleCandidate` and `ContextWindowExceeded` are recorded as
+rejections. Any other exception propagates: a simulator bug must surface,
+never be recorded as a rejected request.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import statistics
+from collections import Counter
+from dataclasses import dataclass
+from datetime import datetime
+
+from app.config.schema import Settings
+from app.errors import ContextWindowExceeded, NoEligibleCandidate
+from app.eval.outcomes import UNTAGGED_WORKLOAD, _fmt, _mean, _nearest_rank, _round6
+from app.eval.proposal import apply_proposal
+from app.eval.scenario import Scenario, build_scenario, close_scenario
+from app.models import Entity
+from app.policy.context import build_context
+from app.policy.feasible import feasible_set
+from app.routing.pricing import price_call
+
+SIMULATED_STATUSES = frozenset({"ok", "backend_failed", "verify_failed",
+                                "no_eligible", "context_overflow"})
+
+EXCLUSION_REASONS = ("cache_hit", "unknown_status", "unknown_app", "missing_features")
+
+
+@dataclass(frozen=True)
+class ArmResult:
+    outcome: str                  # "routed" | "rejected"
+    model: str | None
+    provider: str | None
+    tier: str | None
+    eligible: tuple[str, ...]     # policy-eligible names (feasible_set), sorted
+    reject_codes: tuple[str, ...] # sorted, empty when routed
+    cost_usd: float | None
+    latency_ms: float | None
+    latency_source: str | None    # "observed" | "signal" | "tier_default"
+    quality: float | None
+    quality_source: str | None
+
+
+@dataclass(frozen=True)
+class RowResult:
+    row: dict
+    current: ArmResult
+    proposed: ArmResult
+
+
+def _is_str_list(value) -> bool:
+    return isinstance(value, list) and all(isinstance(v, str) for v in value)
+
+
+def _valid_ts(ts) -> bool:
+    if ts is None:
+        return True
+    if not isinstance(ts, str):
+        return False
+    try:
+        _parse_ts(ts)
+    except ValueError:
+        return False
+    return True
+
+
+def _has_features(row: dict) -> bool:
+    """Every field replay and the summary read is present and well-typed:
+    a malformed export row is counted under `missing_features`, never a
+    `KeyError`/`ValueError` traceback (spec §8: bad input is exit 2 or a
+    counted exclusion, not a crash)."""
+    return (isinstance(row.get("request_id"), str) and bool(row["request_id"])
+            and _is_number(row.get("complexity"))
+            and _is_number(row.get("prompt_tokens"))
+            and (row.get("completion_tokens") is None or _is_number(row["completion_tokens"]))
+            and (row.get("detected_entity_types", ...) is None
+                 or _is_str_list(row.get("detected_entity_types")))
+            and (row.get("workload") is None or isinstance(row["workload"], str))
+            and (row.get("attempts") is None or _is_str_list(row["attempts"]))
+            and _valid_ts(row.get("ts")))
+
+
+def select_rows(records: list[dict], app_ids: set[str]) -> tuple[list[dict], dict[str, int]]:
+    """The rows to simulate, sorted by `(ts, request_id)`, plus a count per
+    exclusion reason. Every excluded row is counted under exactly one reason
+    (first match, in `EXCLUSION_REASONS` order) -- never silently dropped.
+    `missing_features` covers a missing or mistyped `request_id`,
+    `complexity`, `prompt_tokens`, `completion_tokens`, `workload`,
+    `attempts`, `ts`, or `detected_entity_types` (list of strings, or null
+    -- but the key must be present)."""
+    excluded = {reason: 0 for reason in EXCLUSION_REASONS}
+    kept: list[dict] = []
+    for row in records:
+        status = row.get("status")
+        app_id = row.get("application_id")
+        if row.get("cache_hit"):
+            excluded["cache_hit"] += 1
+        elif not isinstance(status, str) or status not in SIMULATED_STATUSES:
+            excluded["unknown_status"] += 1
+        elif not isinstance(app_id, str) or app_id not in app_ids:
+            excluded["unknown_app"] += 1
+        elif not _has_features(row):
+            excluded["missing_features"] += 1
+        else:
+            kept.append(row)
+    kept.sort(key=lambda r: (r.get("ts") or "", r["request_id"]))
+    return kept, excluded
+
+
+def _is_number(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def observed_latencies(records: list[dict]) -> dict[str, float]:
+    """Median observed `latency_ms` per model, over `ok` rows the model served
+    on a single, first attempt -- the only rows whose latency is that one
+    model's alone (a failover row's latency includes the failed attempts)."""
+    samples: dict[str, list[float]] = {}
+    for row in records:
+        attempts = row.get("attempts") or []
+        if row.get("status") != "ok" or not _is_str_list(attempts) or len(attempts) != 1:
+            continue
+        if row.get("chosen") != attempts[0] or not _is_number(row.get("latency_ms")):
+            continue
+        samples.setdefault(attempts[0], []).append(float(row["latency_ms"]))
+    return {model: float(statistics.median(vals)) for model, vals in samples.items()}
+
+
+def _rejected(eligible: tuple[str, ...], codes: tuple[str, ...]) -> ArmResult:
+    return ArmResult("rejected", None, None, None, eligible, codes,
+                     None, None, None, None, None)
+
+
+def simulate_row(scn: Scenario, row: dict, observed: dict[str, float]) -> ArmResult:
+    """One row's first routing decision under one scenario."""
+    app = scn.apps[row["application_id"]]
+    # Placeholder entities: only `.type` is read on the context path.
+    entities = [Entity(type=t, start=0, end=0, value="")
+                for t in row["detected_entity_types"] or []]
+    ctx = build_context(
+        scn.settings, row["request_id"], row["application_id"], entities, None,
+        app_policy=app.view, app_rules=app.rules, registry=scn.registry,
+        escalate_residency=app.eff.escalate_residency_on_detection,
+        content_integrity=app.eff.protection.content_integrity,
+        model_input=app.eff.protection.model_input,
+        workload=row.get("workload"))
+    eligible = tuple(sorted(
+        c.name for c in feasible_set(scn.settings, scn.registry, ctx,
+                                     tenant_id=row["application_id"]).eligible))
+    prompt_tokens = int(row["prompt_tokens"])
+    try:
+        decision = scn.router.select(ctx, tokens_after=prompt_tokens,
+                                     complexity=float(row["complexity"]))
+    except NoEligibleCandidate as exc:
+        if not exc.rejected:
+            return _rejected(eligible, ("empty_pool",))
+        fallback = "over_budget" if "budget filter" in str(exc) else "unspecified"
+        codes = tuple(sorted({code or fallback for _name, code in exc.rejected}))
+        return _rejected(eligible, codes)
+    except ContextWindowExceeded:
+        return _rejected(eligible, ("context_window",))
+
+    pick = decision.chosen
+    cost = price_call(scn.registry.price_for(pick.name),
+                      prompt_tokens=prompt_tokens,
+                      completion_tokens=int(row.get("completion_tokens") or 0),
+                      cached_prompt_tokens=0)
+    if pick.name in observed:
+        latency, latency_source = observed[pick.name], "observed"
+    else:
+        snap = scn.signals.snapshot_latency(pick.name)
+        if snap is not None:
+            latency, latency_source = snap, "signal"
+        else:
+            latency = scn.signals.latency(pick.name, pick.tier).value
+            latency_source = "tier_default"
+    q = scn.quality.resolve(pick.name, row.get("workload"))
+    return ArmResult("routed", pick.name, pick.provider, pick.tier, eligible, (),
+                     cost, latency, latency_source, q.score, q.source)
+
+
+def run_rows(records: list[dict], current: Scenario,
+             proposed: Scenario) -> tuple[list[RowResult], dict[str, int]]:
+    """Simulate every selectable row under both scenarios. Observed latencies
+    come from ALL records (not only the selected ones) and are shared by both
+    arms; only apps present in both scenarios are simulated."""
+    observed = observed_latencies(records)
+    app_ids = set(current.apps) & set(proposed.apps)
+    rows, excluded = select_rows(records, app_ids)
+    results = [RowResult(row, simulate_row(current, row, observed),
+                         simulate_row(proposed, row, observed))
+               for row in rows]
+    return results, excluded
+
+
+async def simulate(records: list[dict], snapshot: dict, proposal: dict, *,
+                   base: Settings) -> tuple[list[RowResult], dict[str, int]]:
+    """Build both scenarios from one base `Settings`, replay, close both."""
+    proposed_doc = apply_proposal(snapshot, proposal, base=base)
+    current = await build_scenario(snapshot, base=base)
+    try:
+        proposed = await build_scenario(proposed_doc, base=base)
+        try:
+            return run_rows(records, current, proposed)
+        finally:
+            await close_scenario(proposed)
+    finally:
+        await close_scenario(current)
+
+
+# --- summary and report (spec §8) -------------------------------------------
+
+#: The report's opening blockquote, verbatim from spec §8, one string per
+#: source line (without the leading "> " -- `render_report` adds that on
+#: every line so a multi-line quote stays a single blockquote).
+REPORT_CAVEAT = (
+    "**Simulation only.** Nothing in this report has been applied. It predicts the first routing\n"
+    "decision of recorded requests under the proposal, using the real eligibility and routing\n"
+    "code and a frozen snapshot of signals. It does not model failover, escalation, breaker\n"
+    "state, request pins or caching."
+)
+
+
+def _parse_ts(ts: str) -> datetime:
+    return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+
+
+def _route_changed(r: RowResult) -> bool:
+    return (r.current.outcome == "routed" and r.proposed.outcome == "routed"
+            and r.current.model != r.proposed.model)
+
+
+def _newly_rejected(r: RowResult) -> bool:
+    return r.current.outcome == "routed" and r.proposed.outcome == "rejected"
+
+
+def _newly_served(r: RowResult) -> bool:
+    return r.current.outcome == "rejected" and r.proposed.outcome == "routed"
+
+
+def _delta(current: float | None, proposed: float | None) -> dict:
+    delta = proposed - current if current is not None and proposed is not None else None
+    return {"current": current, "proposed": proposed, "delta": delta}
+
+
+def _bucket_stats(rows: list[RowResult]) -> dict:
+    """The `{requests, route_changed, newly_rejected, newly_served, cost_usd,
+    cost_usd_both_routed, latency_ms, quality_mean, onprem_share}` block shared by `totals`,
+    `by_app.<app>` and `by_workload.<workload>` (spec §8)."""
+    cost = {}
+    lat_p50 = {}
+    lat_p95 = {}
+    quality = {}
+    onprem_share = {}
+    for arm in ("current", "proposed"):
+        routed = [getattr(r, arm) for r in rows if getattr(r, arm).outcome == "routed"]
+        cost[arm] = sum(a.cost_usd or 0.0 for a in routed)
+        latencies = sorted(a.latency_ms for a in routed if a.latency_ms is not None)
+        lat_p50[arm] = _nearest_rank(latencies, 50)
+        lat_p95[arm] = _nearest_rank(latencies, 95)
+        q_vals = [a.quality for a in routed if a.quality is not None]
+        quality[arm] = _mean(q_vals)
+        onprem_share[arm] = ((sum(1 for a in routed if a.provider == "onprem") / len(routed))
+                              if routed else None)
+
+    # Like-for-like cost: only rows routed in BOTH arms. `cost_usd` above
+    # sums each arm's routed rows, so a newly rejected row simply drops out
+    # of the proposed sum and reads as a saving (P3a final review, M1).
+    both = [r for r in rows
+            if r.current.outcome == "routed" and r.proposed.outcome == "routed"]
+    both_current = sum(r.current.cost_usd or 0.0 for r in both)
+    both_proposed = sum(r.proposed.cost_usd or 0.0 for r in both)
+
+    return {
+        "requests": len(rows),
+        "route_changed": sum(1 for r in rows if _route_changed(r)),
+        "newly_rejected": sum(1 for r in rows if _newly_rejected(r)),
+        "newly_served": sum(1 for r in rows if _newly_served(r)),
+        "cost_usd": _delta(cost["current"], cost["proposed"]),
+        "cost_usd_both_routed": _delta(both_current, both_proposed),
+        "latency_ms": {"p50": _delta(lat_p50["current"], lat_p50["proposed"]),
+                       "p95": _delta(lat_p95["current"], lat_p95["proposed"])},
+        "quality_mean": _delta(quality["current"], quality["proposed"]),
+        "onprem_share": {"current": onprem_share["current"], "proposed": onprem_share["proposed"]},
+    }
+
+
+def _baseline(results: list[RowResult]) -> dict:
+    """Fidelity check (spec §7): does the `current` arm's pick agree with the
+    recorded first attempt, over simulated `ok` rows with a recorded
+    attempt. Never compares `proposed` -- the headline diff is always
+    `current` vs `proposed`, both simulated."""
+    compared = [r for r in results
+                if r.row.get("status") == "ok" and (r.row.get("attempts") or [])]
+    rows_compared = len(compared)
+    agreement = None
+    by_app: dict[str, float] = {}
+    disagreements: Counter = Counter()
+    if rows_compared:
+        agree_count = sum(1 for r in compared if r.current.model == r.row["attempts"][0])
+        agreement = agree_count / rows_compared
+        for app_id in sorted({r.row["application_id"] for r in compared}):
+            sub = [r for r in compared if r.row["application_id"] == app_id]
+            by_app[app_id] = sum(
+                1 for r in sub if r.current.model == r.row["attempts"][0]) / len(sub)
+        for r in compared:
+            recorded = r.row["attempts"][0]
+            simulated = r.current.model or "(rejected)"
+            if recorded != simulated:
+                disagreements[(recorded, simulated)] += 1
+
+    top = sorted(disagreements.items(), key=lambda kv: (-kv[1], kv[0][0], kv[0][1]))[:10]
+    top_disagreements = [{"recorded": rec, "simulated": sim, "count": n}
+                         for (rec, sim), n in top]
+    return {
+        "rows_compared": rows_compared,
+        "agreement": agreement,
+        "warning": agreement is not None and agreement < 0.90,
+        "by_app": by_app,
+        "top_disagreements": top_disagreements,
+    }
+
+
+def _moves(results: list[RowResult]) -> list[dict]:
+    counts: Counter = Counter()
+    for r in results:
+        frm = r.current.model or "(rejected)"
+        to = r.proposed.model or "(rejected)"
+        if frm != to:
+            counts[(frm, to)] += 1
+    top = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0][0], kv[0][1]))[:20]
+    return [{"from": frm, "to": to, "count": n} for (frm, to), n in top]
+
+
+def _new_rejections(results: list[RowResult]) -> dict:
+    by_app: Counter = Counter()
+    by_code: Counter = Counter()
+    for r in results:
+        if _newly_rejected(r):
+            by_app[r.row["application_id"]] += 1
+            for code in r.proposed.reject_codes:
+                by_code[code] += 1
+    return {"by_app": dict(by_app), "by_code": dict(by_code)}
+
+
+def _sources(results: list[RowResult]) -> dict:
+    out: dict[str, dict] = {}
+    for arm in ("current", "proposed"):
+        latency: Counter = Counter()
+        quality: Counter = Counter()
+        for r in results:
+            a = getattr(r, arm)
+            if a.outcome == "routed":
+                latency[a.latency_source] += 1
+                quality[a.quality_source] += 1
+        out[arm] = {"latency": dict(latency), "quality": dict(quality)}
+    return out
+
+
+def _window(results: list[RowResult]) -> dict | None:
+    ts_list = [r.row["ts"] for r in results if r.row.get("ts")]
+    if not ts_list:
+        return None
+    ts_list = sorted(ts_list, key=_parse_ts)
+    return {"start": ts_list[0], "end": ts_list[-1]}
+
+
+def _per_day(window: dict | None, cost_usd: dict) -> dict | None:
+    if window is None:
+        return None
+    days = (_parse_ts(window["end"]) - _parse_ts(window["start"])).total_seconds() / 86400
+    if days < 1:
+        return None
+    return {"cost_usd": {k: (v / days if v is not None else None) for k, v in cost_usd.items()}}
+
+
+def summarize(results: list[RowResult], excluded: dict[str, int], *, inputs: dict,
+             edits: dict) -> dict:
+    """The deterministic `simulation.json` document (spec §8). `inputs` is
+    the caller's partial input record (no `window` yet -- this function
+    computes it from the simulated rows and adds it before hashing, so
+    `simulation_id` covers the window too)."""
+    full_inputs = dict(inputs)
+    full_inputs["window"] = _window(results)
+    simulation_id = hashlib.sha256(
+        json.dumps(full_inputs, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+
+    by_app_ids = sorted({r.row["application_id"] for r in results})
+    by_workload_labels = sorted({r.row.get("workload") or UNTAGGED_WORKLOAD for r in results})
+    totals = _bucket_stats(results)
+
+    sim = {
+        "schema": "routeforge.simulation/v1",
+        "simulation_id": simulation_id,
+        "inputs": full_inputs,
+        "edits": edits,
+        "rows": {"simulated": len(results), "excluded": dict(excluded)},
+        "baseline": _baseline(results),
+        "totals": totals,
+        "by_app": {app_id: _bucket_stats([r for r in results
+                                          if r.row["application_id"] == app_id])
+                  for app_id in by_app_ids},
+        "by_workload": {wl: _bucket_stats([r for r in results
+                                           if (r.row.get("workload") or UNTAGGED_WORKLOAD) == wl])
+                       for wl in by_workload_labels},
+        "moves": _moves(results),
+        "new_rejections": _new_rejections(results),
+        "affected_apps": sorted({r.row["application_id"] for r in results
+                                 if _route_changed(r) or _newly_rejected(r)
+                                 or _newly_served(r)}),
+        "sources": _sources(results),
+        "per_day": _per_day(full_inputs["window"], totals["cost_usd"]),
+    }
+    return _round6(sim)
+
+
+def _metrics_table(stats: dict) -> list[str]:
+    lines = [
+        f"requests: {stats['requests']} &middot; route_changed: {stats['route_changed']} "
+        f"&middot; newly_rejected: {stats['newly_rejected']} "
+        f"&middot; newly_served: {stats['newly_served']}",
+        "",
+        "| metric | current | proposed | delta |",
+        "|---|---|---|---|",
+    ]
+    c = stats["cost_usd"]
+    lines.append(f"| cost_usd | {_fmt(c['current'])} | {_fmt(c['proposed'])} | {_fmt(c['delta'])} |")
+    b = stats["cost_usd_both_routed"]
+    lines.append(f"| cost_usd (both routed) | {_fmt(b['current'])} | {_fmt(b['proposed'])} | "
+                f"{_fmt(b['delta'])} |")
+    p50 = stats["latency_ms"]["p50"]
+    lines.append(f"| latency_ms p50 | {_fmt(p50['current'])} | {_fmt(p50['proposed'])} | "
+                f"{_fmt(p50['delta'])} |")
+    p95 = stats["latency_ms"]["p95"]
+    lines.append(f"| latency_ms p95 | {_fmt(p95['current'])} | {_fmt(p95['proposed'])} | "
+                f"{_fmt(p95['delta'])} |")
+    q = stats["quality_mean"]
+    lines.append(f"| quality_mean | {_fmt(q['current'])} | {_fmt(q['proposed'])} | {_fmt(q['delta'])} |")
+    o = stats["onprem_share"]
+    lines.append(f"| onprem_share | {_fmt(o['current'])} | {_fmt(o['proposed'])} | n/a |")
+    return lines
+
+
+def render_report(sim: dict) -> str:
+    """The `report.md` document (spec §8), in the order: caveat, baseline
+    warning, headline, new rejections, moves, by-app, by-workload,
+    latency/quality sources, excluded rows."""
+    lines: list[str] = ["> " + line for line in REPORT_CAVEAT.split("\n")]
+    lines.append("")
+
+    baseline = sim["baseline"]
+    if baseline["warning"]:
+        lines.append(
+            f"> **Warning:** baseline agreement is only {baseline['agreement'] * 100:.1f}% "
+            f"across {baseline['rows_compared']} compared rows (below the 90% threshold). "
+            "Treat the headline diff as noisier than usual -- see spec §7 for causes.")
+        lines.append("")
+
+    lines.append("## Headline")
+    lines.append("")
+    lines += _metrics_table(sim["totals"])
+    lines.append("")
+
+    lines.append("## New rejections")
+    lines.append("")
+    new_rej = sim["new_rejections"]
+    if not new_rej["by_app"] and not new_rej["by_code"]:
+        lines.append("None.")
+    else:
+        lines.append("| app | count |")
+        lines.append("|---|---|")
+        for app_id in sorted(new_rej["by_app"]):
+            lines.append(f"| {app_id} | {new_rej['by_app'][app_id]} |")
+        lines.append("")
+        lines.append("| code | count |")
+        lines.append("|---|---|")
+        for code in sorted(new_rej["by_code"]):
+            lines.append(f"| {code} | {new_rej['by_code'][code]} |")
+    lines.append("")
+
+    lines.append("## Moves")
+    lines.append("")
+    if not sim["moves"]:
+        lines.append("None.")
+    else:
+        lines.append("| from | to | count |")
+        lines.append("|---|---|---|")
+        for move in sim["moves"]:
+            lines.append(f"| {move['from']} | {move['to']} | {move['count']} |")
+    lines.append("")
+
+    lines.append("## By app")
+    lines.append("")
+    for app_id in sorted(sim["by_app"]):
+        lines.append(f"### {app_id}")
+        lines.append("")
+        lines += _metrics_table(sim["by_app"][app_id])
+        lines.append("")
+
+    lines.append("## By workload")
+    lines.append("")
+    for wl in sorted(sim["by_workload"]):
+        lines.append(f"### {wl}")
+        lines.append("")
+        lines += _metrics_table(sim["by_workload"][wl])
+        lines.append("")
+
+    lines.append("## Latency and quality sources")
+    lines.append("")
+    sources = sim["sources"]
+    for arm in ("current", "proposed"):
+        lines.append(f"### {arm}")
+        lines.append(f"- latency: {sources[arm]['latency']}")
+        lines.append(f"- quality: {sources[arm]['quality']}")
+    lines.append("")
+
+    lines.append("## Excluded rows")
+    lines.append("")
+    excluded = sim["rows"]["excluded"]
+    lines.append("| reason | count |")
+    lines.append("|---|---|")
+    for reason in sorted(excluded):
+        lines.append(f"| {reason} | {excluded[reason]} |")
+
+    return "\n".join(lines) + "\n"
