@@ -2049,8 +2049,36 @@ round trip, and serving isolation — are pinned by `tests/eval/test_scenario.py
 
 ### 15.4 Results
 
-Pending the Spark run after deploy — see §15.4.
+These are real runs on the DGX Spark deployment (2026-09-25). Each run used the Spark's own
+`/admin/config-snapshot` and `/admin/outcomes/export`, and the CLI ran offline on a laptop.
+The on-prem pool had five models: `llama3.2:latest`, `local-8b`, `nemotron-3.5-lightning`
+and `qwen3.8-27b` in the cheap tier, and `local-32b` in the mid tier. Every model was priced
+at $0, so every cost figure is 0 and Δcost/day is not informative.
 
-| proposal | simulated | agreement | route_changed | newly_rejected | Δcost/day |
-|---|---|---|---|---|---|
-| | | | | | |
+| run | proposal | simulated | agreement | route_changed | newly_rejected | Δcost/day |
+|---|---|---|---|---|---|---|
+| A: before B55 (P3a only) | empty | 194 | 0.0206 | 0 | 0 | 0 |
+| B: after B55, fresh rows | empty | 5 | 1.0 | 0 | 0 | 0 |
+| C: after B55, fresh rows | disable `qwen3.8-27b` | 5 | 1.0 | 0 | 3 | 0 |
+
+- **Run A:** a day of Qwen Code traffic from app `kit-gtm`. In 190 of 194 rows the recorded
+  pick (`qwen3.8-27b`) disagreed with the simulated pick (`nemotron-3.5-lightning`).
+  - The client pins `model: qwen3.8-27b`. The outcome rows did not record the pin, so replay
+    routed the requests unpinned.
+  - The baseline check caught this: the report opened with the agreement warning.
+  - This is **B55**, fixed in PR #73. Outcome rows now record `requested_model` and
+    `max_tokens`, and replay applies both.
+- **Run B:** five fresh requests from a throwaway app.
+  - Three were pinned to `qwen3.8-27b`, and two used `model: auto`, which routed to
+    `llama3.2:latest`. All five had `max_tokens: 8`.
+  - Every simulated pick matched the served one.
+- **Run C:** the same rows with `qwen3.8-27b` disabled.
+  - The three pinned rows became `newly_rejected`, with code `not_requested`.
+  - The two unpinned rows did not move.
+  - With `--fail-on-new-rejections` the CLI exited 3.
+
+**Lesson:** the baseline agreement check paid for itself on its first real run. An unrecorded
+routing input hid behind a plausible-looking report. The check made it visible before anyone
+could act on a wrong prediction. Any future routing input that the outcome row does not
+record will fail the same way, so extend the outcome row whenever the router starts reading
+something new.
