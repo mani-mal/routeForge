@@ -1,6 +1,7 @@
 """P3a Task 5: the CLI end to end, including the live-app baseline (§9.7)."""
 from __future__ import annotations
 
+import importlib.util
 import json
 import shutil
 import subprocess
@@ -17,6 +18,17 @@ from tests.test_admin_api import _login
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "policy_simulate.py"
 P = "routeforge.policy-proposal/v1"
+
+
+def _load_policy_simulate():
+    """Import `scripts/policy_simulate.py` as a module, in-process, so a
+    test can monkeypatch a name the module looks up (e.g. `shadow_prices`)
+    and then call `main()` directly. `_run_cli`'s subprocess invocation runs
+    in a separate process, so nothing monkeypatched here would reach it."""
+    spec = importlib.util.spec_from_file_location("policy_simulate", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _run_cli(tmp_path, export_lines, snapshot, proposal, *extra):
@@ -192,6 +204,137 @@ def test_cli_malformed_input_exits_2_naming_location(tmp_path, kind, where):  # 
     assert where in proc.stderr
     if kind == "config_dir":
         assert "--config-dir" in proc.stderr
+
+
+def _run_cli_no_proposal(tmp_path, export_lines, snapshot, *extra):
+    exp, snap = tmp_path / "e.ndjson", tmp_path / "s.json"
+    exp.write_text("".join(json.dumps(line) + "\n" for line in export_lines))
+    snap.write_text(json.dumps(snapshot))
+    out = tmp_path / "out"
+    proc = subprocess.run([sys.executable, str(SCRIPT), "--export", str(exp),
+                           "--snapshot", str(snap), "--out", str(out), *extra],
+                          capture_output=True, text=True, cwd=ROOT,
+                          env={**__import__("os").environ,
+                               "LITELLM_LOCAL_MODEL_COST_MAP": "True"})
+    return proc, out
+
+
+# --- P3c-1 Task 3: shadow prices in the CLI -----------------------------------
+
+def test_shadow_prices_without_proposal(tmp_path):
+    from tests.eval.sim_fixtures import app_entry
+    snap = make_snapshot(apps=[app_entry("app-a", allowed_models=["ghost-model"])])
+    lines = [_line(make_row(f"r{i}", "app-a")) for i in range(3)]
+    proc, out = _run_cli_no_proposal(tmp_path, lines, snap, "--shadow-prices")
+    assert proc.returncode == 0, proc.stderr
+    sim = json.loads((out / "simulation.json").read_text())
+    assert "shadow_prices" in sim and sim["shadow_prices"]["constraints"]
+    assert sim["inputs"]["proposal_sha256"] is None
+    assert sim["inputs"]["proposal_title"] is None
+    report = (out / "report.md").read_text()
+    assert "## Shadow prices" in report
+    assert "What each constraint costs" in report
+
+
+def test_shadow_prices_with_proposal_appends_to_p3a_output(tmp_path):
+    from tests.eval.sim_fixtures import app_entry
+    snap = make_snapshot(apps=[app_entry("app-a", allowed_models=["ghost-model"])])
+    lines = [_line(make_row("r1", "app-a"))]
+    proc, out = _run_cli(tmp_path, lines, snap, {"schema": P}, "--shadow-prices")
+    assert proc.returncode == 0, proc.stderr
+    sim = json.loads((out / "simulation.json").read_text())
+    assert sim["shadow_prices"]["baseline"] == "snapshot+proposal"
+    assert "totals" in sim  # P3a output still present
+    report = (out / "report.md").read_text()
+    assert report.startswith("> **Simulation only.**")
+    assert "## Shadow prices" in report
+
+
+def test_max_relaxations_zero_exits_2(tmp_path):
+    proc, _ = _run_cli(tmp_path, [], make_snapshot(), {"schema": P},
+                       "--shadow-prices", "--max-relaxations", "0")
+    assert proc.returncode == 2, proc.stderr
+
+
+def test_neither_proposal_nor_shadow_prices_exits_2(tmp_path):
+    proc, _ = _run_cli_no_proposal(tmp_path, [], make_snapshot())
+    assert proc.returncode == 2, proc.stderr
+
+
+def test_shadow_prices_cli_deterministic(tmp_path):
+    from tests.eval.sim_fixtures import app_entry
+    snap = make_snapshot(apps=[app_entry("app-a", allowed_tiers=["frontier"])])
+    lines = [_line(make_row("r1", "app-a"))]
+    proc, out = _run_cli_no_proposal(tmp_path, lines, snap, "--shadow-prices")
+    assert proc.returncode == 0, proc.stderr
+    first = (out / "simulation.json").read_text()
+    proc2, _ = _run_cli_no_proposal(tmp_path, lines, snap, "--shadow-prices")
+    assert proc2.returncode == 0 and (out / "simulation.json").read_text() == first
+
+
+def test_live_round_trip_shadow_prices_allowed_tiers(tmp_path):
+    # Seeded on-prem models are local-8b (cheap) and local-32b (mid)
+    # (app/apps/bootstrap.py); no model is seeded in "frontier", so an app
+    # restricted to that tier gets a 422 on every request.
+    with TestClient(create_app()) as c:
+        _login(c)
+        created = c.post("/admin/applications", json={"id": "shadow-app", "name": "Shadow"})
+        assert created.status_code == 200, created.text
+        token = created.json()["token"]
+        put = c.put("/admin/applications/shadow-app/policy",
+                    json={"allowed_tiers": ["frontier"]})
+        assert put.status_code == 200, put.text
+        for _ in range(2):
+            resp = c.post("/v1/chat/completions", headers={"Authorization": f"Bearer {token}"},
+                          json={"messages": [{"role": "user", "content": "hello"}]})
+            assert resp.status_code == 422, resp.text
+        snapshot = c.get("/admin/config-snapshot").json()
+        export = [json.loads(x) for x in
+                  c.get("/admin/outcomes/export").text.strip().splitlines()]
+    proc, out = _run_cli_no_proposal(tmp_path, export, snapshot, "--shadow-prices")
+    assert proc.returncode == 0, proc.stderr
+    sim = json.loads((out / "simulation.json").read_text())
+    entries = [e for e in sim["shadow_prices"]["constraints"]
+              if e["requirement"] == "allowed_tiers" and e["scope"] == {"app": "shadow-app"}]
+    assert len(entries) == 1, sim["shadow_prices"]["constraints"]
+    assert entries[0]["rejections_avoided"] == 2
+
+
+def test_shadow_invariant_breach_exits_2(tmp_path, monkeypatch, capsys):
+    # Fix round 1 (reviewer finding): scripts/policy_simulate.py:140-145 --
+    # a `ShadowInvariantError` from `shadow_prices` must exit 2 with
+    # "internal invariant" on stderr. Patched in-process on the name the
+    # script module actually looks up (imported there as
+    # `from app.eval.shadow import ... shadow_prices`, so it lives as
+    # `policy_simulate.shadow_prices`), and `main()` is called directly --
+    # `_run_cli`'s subprocess invocation runs in a separate process, so a
+    # monkeypatch here would never reach it.
+    from app.eval.shadow import ShadowInvariantError
+
+    ps = _load_policy_simulate()
+
+    async def _boom(*_a, **_k):
+        raise ShadowInvariantError("boom")
+    monkeypatch.setattr(ps, "shadow_prices", _boom)
+
+    exp, snap = tmp_path / "e.ndjson", tmp_path / "s.json"
+    exp.write_text("")
+    snap.write_text(json.dumps(make_snapshot()))
+    out = tmp_path / "out"
+
+    rc = ps.main(["--export", str(exp), "--snapshot", str(snap), "--out", str(out),
+                 "--shadow-prices"])
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "error: internal invariant" in captured.err
+    assert "boom" in captured.err
+    # The script only calls `out.mkdir` and writes simulation.json/report.md
+    # after the try/except around simulate()/shadow_prices() returns
+    # normally (scripts/policy_simulate.py:153+); an invariant breach
+    # returns 2 from inside that except block, before `out` is even
+    # created.
+    assert not out.exists()
+    assert not (out / "simulation.json").exists()
 
 
 def test_cli_malformed_export_rows_are_counted(tmp_path):                 # Important 3
