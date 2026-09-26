@@ -157,7 +157,7 @@ configuration.
 
 Add a test that a `serving.api` INFO record reaches the configured handler.
 
-## B56 — first-fail `ctx.allowed_models` can admit an out-of-scope model if an endpoint declaration changes between the gate and the router
+## B56 — first-fail `ctx.allowed_models` can admit an out-of-scope model if an endpoint declaration changes between the gate and the router  ✅ RESOLVED (2026-09-26)
 
 **Severity:** low (a timing window measured in milliseconds; placement is not affected).
 **Found:** 2026-09-25, P3b Task 1 review.
@@ -182,6 +182,29 @@ ctx.allowed_models`) then admits the model although the app's scope excludes it.
 `Scope.from_context(ctx)`. That can only narrow the set, and it is a no-op when no race
 happens. Add a regression test that mutates the declaration after `build_context` and asserts
 the router refuses the model.
+
+**Resolution.** `app/policy/feasible.py::_ctx_scope` now requires both the first-fail set
+`ctx.allowed_models` **and** the app's exact scope, `Scope.from_context(ctx)` (the compiled
+`app_allowed_tiers` / `app_allowed_models` the context has carried since P3b; `None` = no
+constraint). The extra check can only narrow. Without a race it is a no-op: every name the
+exact scope refuses was already refused by placement, a data-handling declaration or app
+scope. It lives inside the app-scope stage, so `candidate_rejection` codes, reasons and
+order are unchanged: a candidate it refuses reads `app_scope` / "not permitted for
+application", as before. Contexts with no app lists (internal paths, hand-built test
+contexts) are unaffected. The same change closes the window for the `allowed_models` /
+`allowed_tiers` part of the registry-disable and `allowed_app_ids` variants noted above.
+Those two gates are also re-checked at the router by their own stage (`model_scope`).
+
+Tests: `tests/test_b56_scope_race.py`. This file builds a real registry and a real
+`build_context` for an app with `allowed_models={A}` and `allowed_regions={eu}`. Endpoint B
+declares `us` when the context is built, so it is region-refused and stays in
+`ctx.allowed_models`. B is then re-declared `eu` and the registry refreshed before
+`feasible_set` / `Router.select` run on the same context. B is now refused as `app_scope`
+and A is chosen. Before the fix B was eligible and, being cheaper, would have been chosen
+(the test failed RED on exactly that assertion). The Hypothesis agreement property in
+`tests/test_policy_violations.py` passes unchanged.
+
+**Deploy.** Code only: no schema change, no `ALTER`, no config change.
 
 ## B55 — Outcome rows don't record the pinned model or `max_tokens`  ✅ RESOLVED (2026-09-24)
 
