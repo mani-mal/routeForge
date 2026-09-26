@@ -362,3 +362,67 @@ def test_ranking_full_order_with_tie_break():
     assert order == [("allowed_tiers", {"app": "a"}),
                      ("allowed_tiers", {"app": "b"}),
                      ("allowed_models", {"app": "c"})]
+
+
+# --- Task 3: render (spec §5) -------------------------------------------------
+
+from app.eval.shadow import SHADOW_CAVEAT, render_shadow_section  # noqa: E402
+
+
+def _shadow_entry(requirement, *, app="a", security=False, rejections_avoided=0,
+                  route_changed=0, cost_saved_per_day=None, both_delta=0.0):
+    return {
+        "requirement": requirement, "scope": {"app": app}, "security": security,
+        "relaxed_to": "null", "rows_in_scope": 5, "route_changed": route_changed,
+        "rejections_avoided": rejections_avoided,
+        "cost_usd": {"baseline": 1.0, "relaxed": 0.5, "delta": -0.5},
+        "cost_usd_both_routed": {"baseline": 1.0, "relaxed": 0.5, "delta": both_delta},
+        "cost_saved_per_day": cost_saved_per_day,
+        "quality_mean_delta": 0.01, "latency_p50_delta": -12.5,
+        "onprem_share": {"baseline": 0.5, "relaxed": 0.9},
+        "affected_apps": [app], "moves": [],
+    }
+
+
+def test_shadow_caveat_matches_spec_text():
+    assert SHADOW_CAVEAT == (
+        "**What each constraint costs.** Each row relaxes ONE constraint for one app "
+        "(or endpoint) and\nreplays the same recorded traffic. Nothing is applied. "
+        "Security constraints are shown as the\ncost of a protection — they are "
+        "never a recommendation to relax them.")
+
+
+def test_render_shadow_section_has_caveat_headings_and_footer():
+    block = {"baseline": "snapshot", "evaluated": 2, "skipped_by_cap": 1, "non_binding": 3,
+             "constraints": [_shadow_entry("allowed_tiers", cost_saved_per_day=1.5),
+                             _shadow_entry("residency", security=True,
+                                          rejections_avoided=1)]}
+    text = render_shadow_section(block)
+    assert text.startswith("## Shadow prices\n")
+    for line in SHADOW_CAVEAT.split("\n"):
+        assert f"> {line}" in text
+    assert "### Operational constraints" in text
+    assert "### Cost of protection" in text
+    assert "| allowed_tiers |" in text
+    assert "| residency |" in text
+    assert "price of a protection — not a recommendation" in text
+    assert "Non-binding: 3" in text and "skipped by cap: 1" in text
+
+
+def test_render_shadow_section_empty_tables_read_none():
+    block = {"baseline": "snapshot", "evaluated": 0, "skipped_by_cap": 0, "non_binding": 0,
+             "constraints": []}
+    text = render_shadow_section(block)
+    assert text.count("None.") == 2
+
+
+def test_render_shadow_section_operational_and_protection_are_separated():
+    block = {"baseline": "snapshot", "evaluated": 1, "skipped_by_cap": 0, "non_binding": 0,
+             "constraints": [_shadow_entry("allowed_tiers", security=False)]}
+    text = render_shadow_section(block)
+    op_idx = text.index("### Operational constraints")
+    prot_idx = text.index("### Cost of protection")
+    assert op_idx < text.index("allowed_tiers") < prot_idx
+    prot_section = text[prot_idx:]
+    assert "None." in prot_section
+    assert "price of a protection" not in text[:prot_idx]

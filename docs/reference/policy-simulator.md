@@ -14,16 +14,17 @@ database, and touches nothing on the running deployment. The review artifact is 
 human still makes the change through the normal admin path (`PUT`ing app policy, onboarding or
 removing an endpoint, editing prices).
 
-- Design: `docs/superpowers/specs/2026-09-24-policy-simulator-design.md`.
+- Design: `docs/superpowers/specs/2026-09-24-policy-simulator-design.md`. Shadow prices (§8)
+  are `docs/superpowers/specs/2026-09-26-shadow-prices-design.md` (P3c-1).
 - Research notes (the model, the two-arm design, the invariants):
-  `docs/research/feasible-route-bench.md` §15.
+  `docs/research/feasible-route-bench.md` §15; shadow prices §17.
 - Prerequisite datasets: `docs/reference/routing-outcomes.md` (P2b-2, the export this reads)
   and `docs/reference/quality-calibration.md` (P2b-3, the quality ladder replay uses).
 
 Code: `app/apps/snapshot.py` (snapshot builder), `app/api/admin_routes.py`
 (`GET /admin/config-snapshot`), `app/eval/scenario.py` (snapshot/proposal → scenario),
 `app/eval/proposal.py` (proposal load/validate/apply), `app/eval/simulate.py` (replay +
-report), `scripts/policy_simulate.py` (CLI).
+report), `app/eval/shadow.py` (shadow prices, P3c-1), `scripts/policy_simulate.py` (CLI).
 
 ## 1. Three inputs
 
@@ -190,17 +191,22 @@ uv run python scripts/policy_simulate.py \
 |---|---|---|
 | `--export` | required | `routing_outcomes` NDJSON export file |
 | `--snapshot` | required | `GET /admin/config-snapshot` JSON file |
-| `--proposal` | required | `routeforge.policy-proposal/v1` JSON file |
+| `--proposal` | required unless `--shadow-prices` | `routeforge.policy-proposal/v1` JSON file |
 | `--out` | required | output directory (created if missing) |
 | `--config-dir` | `config` | the base config directory the snapshot is overlaid onto. The snapshot replaces `routing`/`pricing`/`policy` wholesale and overrides each declared provider's data-handling fields and the four `serving_policy` posture values, so the base only supplies what no routing decision reads (and the set of declared providers). |
 | `--fail-on-new-rejections` | off | exit `3` instead of `0` when the proposal newly rejects any simulated row (for CI/GitOps gating) |
+| `--shadow-prices` | off | price what each constraint costs (P3c-1, §8 below); makes `--proposal` optional |
+| `--max-relaxations` | `50` | cap on relaxations `--shadow-prices` evaluates, must be `>= 1` (exit `2` otherwise) |
+
+`--proposal` is required unless `--shadow-prices` is given — with neither, the CLI exits `2`
+(an argparse usage error, since there is nothing to simulate).
 
 **Exit codes** (`scripts/policy_simulate.py`):
 
 | Code | Meaning |
 |---|---|
 | `0` | `simulation.json` and `report.md` written |
-| `2` | an input failed to load, validate or apply — a bad export, an invalid proposal (unknown key, bad value, a container of the wrong type), a malformed snapshot (a missing or mistyped nested key, named by its dotted path), a snapshot that loads structurally but fails **deep** validation during `simulate()` (for example a provider the running deployment's own `config/` never declared), or a `--config-dir` that cannot load (missing key, bad YAML, a failed config lint). Nothing is written; the offending location is on stderr — never a traceback. |
+| `2` | an input failed to load, validate or apply — a bad export, an invalid proposal (unknown key, bad value, a container of the wrong type), a malformed snapshot (a missing or mistyped nested key, named by its dotted path), a snapshot that loads structurally but fails **deep** validation during `simulate()`/`shadow_prices()` (for example a provider the running deployment's own `config/` never declared), a `--config-dir` that cannot load (missing key, bad YAML, a failed config lint), neither `--proposal` nor `--shadow-prices` given, `--max-relaxations < 1`, or a shadow-prices monotonicity invariant breach (`ShadowInvariantError`, printed as `error: internal invariant: ...` — spec §3; this should never happen in practice, since every relaxation only widens eligibility, so it means a bug, not a reportable finding). Nothing is written; the offending location is on stderr — never a traceback. |
 | `3` | the proposal introduces new rejections and `--fail-on-new-rejections` was passed |
 
 The CLI is file-based only: no DB, no `app.api` import, no network
@@ -289,8 +295,11 @@ From spec §2, plus what the build settled during P3a:
 
 - **No live dry-run of an admin write.** The simulator adds one read-only endpoint
   (`GET /admin/config-snapshot`) and no other serving behaviour.
-- **No explanation of why a proposal rejects a request** (P3b) and **no shadow prices,
-  alternative scenarios, capacity model or uncertainty ranges** (P3c).
+- **No explanation of why a proposal rejects a request** and **no shadow prices** were P3a's
+  limits. The minimal conflicting core (P3b) now explains a rejection — see
+  `docs/reference/conflicting-core.md`. Shadow prices (P3c-1, §8 below) now price what each
+  individual constraint costs. **Alternative scenarios, a capacity model and uncertainty
+  ranges** remain out of scope (P3c-2 through P3c-4).
 - **No re-running PII detection.** Recorded `detected_entity_types` are replayed as-is, so a
   proposal cannot change `pii_detection`, a denylist, exempt patterns or recognizers.
 - **No daily-spend or RPM admission simulation** — those are admission limits, not routing.
@@ -337,3 +346,166 @@ Because the export is content-free too (§2 of `docs/reference/routing-outcomes.
 three files a simulation run needs — export, snapshot, proposal — can be moved off the
 deployment (to a laptop, a CI job) without carrying request content or credentials with
 them.
+
+## 8. Shadow prices (P3c-1)
+
+Design: `docs/superpowers/specs/2026-09-26-shadow-prices-design.md`. Research notes (the
+model, scoped attribution, the monotonicity invariant): `docs/research/feasible-route-bench.md`
+§17. Code: `app/eval/shadow.py` (`Relaxation`, `enumerate_relaxations`, `shadow_prices`,
+`render_shadow_section`), wired into `scripts/policy_simulate.py` by `--shadow-prices`.
+
+### 8.1 What it answers
+
+§§1–7 answer "what would this specific proposal change?" Shadow prices answer a different
+question over the same recorded traffic: **for each constraint an app actually has set,
+what would relaxing just that one constraint change?** Every requirement an app's policy
+currently enforces is priced, one at a time, by replaying the same rows through the real
+eligibility (`feasible_set`) and routing (`Router`) code with only that one requirement
+loosened — cost, rejections avoided, quality, latency and on-prem share, same as the §4
+metrics. Constraints tied to a security requirement are priced too, but reported
+separately, as the **cost of a protection** — never as a recommendation to relax anything,
+and nothing is ever applied (handoff §37: "Security constraints are never automatically
+relaxed").
+
+`--proposal` becomes optional with `--shadow-prices`: without one, the constraints an app
+sets **today** are priced against the snapshot as exported. With one, the baseline is the
+snapshot **with the proposal already applied**, so an operator can price what a *proposed*
+policy would still be costing before adopting it.
+
+### 8.2 The relaxation table
+
+One relaxation is one requirement, relaxed for one scope (an app, or one onboarded endpoint
+for `endpoint_app_allowlist`). The requirement ids and the security flag are the same ones
+P3b's minimal conflicting core uses (`app/policy/core.py::REQUIREMENT_ORDER`,
+`SECURITY_IDS` — never restated here).
+
+| requirement id | scope | relaxed to | rows re-simulated |
+|---|---|---|---|
+| `residency` (security) | app | the app's `residency: any` **and** `escalate_residency_on_detection: false` | that app's |
+| `allowed_providers` (security) | app | `null` | that app's |
+| `allowed_regions` (security) | app | `null` | that app's |
+| `require_no_retention` (security) | app | `false` | that app's |
+| `raw_sensitive` (security) | app | every `accepts_raw_sensitive: false` declaration flipped to `true` — covers onboarded rows, `settings.providers.*` and `settings.routing.model_pool[*]` | that app's |
+| `allowed_tiers` | app | `null` | that app's |
+| `allowed_models` | app | `null` | that app's |
+| `endpoint_app_allowlist` | endpoint | that onboarded row's `allowed_app_ids: null` | **all** rows |
+| `requested_model` | app | that app's rows replayed with `requested_model: null` | that app's |
+| `max_cost_usd_per_request` | app | `1e12` | that app's |
+| `risk_floor` (security) | app | every `settings.routing.risk_floors` entry set to `cheap` | that app's |
+
+A relaxation is only a **candidate** when the constraint is actually set for that app (or,
+for `endpoint_app_allowlist`, when the endpoint has a non-null `allowed_app_ids`) —
+`max_cost_usd_per_request` is the one exception, always a candidate, because the deployment
+default always applies. Candidates are enumerated deterministically: app id, then
+`REQUIREMENT_ORDER`, then endpoint slug. `--max-relaxations N` (default 50) caps how many
+are evaluated; when the cap cuts the list short, `skipped_by_cap` in the block and the
+report footer say how many.
+
+A relaxation whose rows all route identically under both arms is **non-binding** — counted
+in `non_binding`, never listed in either table.
+
+### 8.3 The scoping rule
+
+Every relaxation except `endpoint_app_allowlist` re-simulates only the scoped app's rows,
+**even the two that edit deployment-wide data**: `raw_sensitive`'s endpoint/provider/
+model-pool declarations are shared across every app, and `risk_floor`'s `risk_floors` map
+is global. For those two, the *document* edit is still global, but only the app being
+priced has its rows re-simulated — every other app's rows are left out of scope by
+construction, so the price stays attributable to the one app it was priced for, never
+smeared across every app the shared data happens to also affect. `endpoint_app_allowlist`
+is the one exception: it is scoped to an **endpoint**, not an app, and re-simulates every
+row, because any app's requests could route to that endpoint.
+
+### 8.4 Metrics
+
+Per relaxation, the baseline arm is compared with the relaxed arm over the re-simulated
+rows, using the same per-row `ArmResult` and bucket-stat helpers §4 uses:
+`rows_in_scope`, `route_changed`, `rejections_avoided` (the `newly_served` count),
+`cost_usd` (baseline/relaxed/delta over each arm's routed rows), `cost_usd_both_routed`
+(same shape, only rows routed in both arms), `cost_saved_per_day`, `quality_mean_delta`,
+`latency_p50_delta`, `onprem_share` (baseline/relaxed), `affected_apps` and the top 5
+`moves`.
+
+**Why `cost_saved_per_day` is like-for-like.** `cost_usd` sums each arm over the rows *that
+arm* routed — so a row the relaxation newly serves (a `rejections_avoided` row) simply adds
+to the relaxed side's sum, the same way a proposal's newly rejected row silently drops out
+of §4's `cost_usd`. Read on its own, that makes relaxing a constraint that serves more
+traffic look like it *costs* more, which is true in the sense that more requests are now
+served, but says nothing about whether the constraint was expensive **for the traffic
+already being served**. `cost_saved_per_day` answers the narrower, actionable question:
+`-cost_usd_both_routed.delta / window_days`, over only the rows routed under **both** arms.
+A row the relaxation newly serves never enters this number — its cost is in `cost_usd`,
+not here. `cost_usd_both_routed` is reported alongside it so both readings are visible.
+`window_days` is the **export window** — the span of every simulated row, not just this
+relaxation's scoped rows — so every relaxation's per-day figure is comparable against every
+other's; it is `null` (and so is `cost_saved_per_day`) when that window is under a day.
+
+**The monotonicity invariant.** Every relaxation can only widen what an app may use: for
+every re-simulated row, the relaxed eligible set is a superset of the baseline eligible
+set, and a row routed at baseline is never rejected under the relaxation. A test enforces
+both (Hypothesis, `tests/eval/test_shadow.py::test_monotonic_for_random_policies`); a
+breach is `ShadowInvariantError`, which is never a reportable finding — the CLI exits `2`
+naming it (§3 above), because it means a bug in the relaxation logic, not a real result.
+
+### 8.5 The two tables and the non-recommendation rule
+
+`report.md`'s "Shadow prices" section opens with this caveat, verbatim:
+
+> **What each constraint costs.** Each row relaxes ONE constraint for one app (or endpoint) and
+> replays the same recorded traffic. Nothing is applied. Security constraints are shown as the
+> cost of a protection — they are never a recommendation to relax them.
+
+Then two ranked tables over the same columns — requirement, scope, rows, route changed,
+rejections avoided, cost saved/day (falling back to `cost_usd_both_routed`'s delta when the
+export window is under a day), Δquality, Δp50 ms, on-prem share (baseline→relaxed):
+
+- **Operational constraints** — every binding non-security requirement.
+- **Cost of protection** — every binding security requirement (`SECURITY_IDS`), with one
+  extra column on every row, always the literal text `price of a protection — not a
+  recommendation`. This label is not cosmetic: it is the one place in the report a security
+  finding could be misread as "relax this", and the row says otherwise every time.
+
+Either table reads "None." when it has no binding entries. Both are ranked by the same key:
+`(-(cost_saved_per_day if not None else -cost_usd_both_routed.delta), -rejections_avoided,
+requirement, scope_key)` — the biggest like-for-like saving first (falling back to the raw
+both-routed delta when the export window is under a day and there is no per-day figure),
+then the most rejections avoided, then a deterministic tie-break on requirement id and
+scope. A footer gives the non-binding count and the number skipped by the cap:
+`Non-binding: N · skipped by cap: M`.
+
+**`simulation.json`'s `shadow_prices` block** carries the same data as a nested object:
+`baseline` (`"snapshot"` or `"snapshot+proposal"`), `evaluated`, `skipped_by_cap`,
+`non_binding`, and `constraints` — the list of binding entries, each with `requirement`,
+`scope` (`{"app": ...}` or `{"endpoint": ...}`), `security`, `relaxed_to`, and the §8.4
+metrics. It is deterministic the same way the rest of `simulation.json` is: sorted keys,
+floats rounded to 6 places.
+
+**With no `--proposal`**, `simulation.json` is just `{"schema": "routeforge.simulation/v1",
+"inputs": {...}, "shadow_prices": block}` — the `inputs` block is the same shape as §4.1's,
+with `proposal_sha256` and `proposal_title` both `null` (there is no proposal to hash or
+title), and there is no `totals`/`by_app`/`by_workload`/`baseline`/`moves`/`new_rejections`
+section, because there is no baseline-vs-proposal comparison to report. `report.md` is just
+the §4.2 caveat followed by the "Shadow prices" section. **With `--proposal`**, the ordinary
+P3a output is unchanged in full, `shadow_prices` is added as one more top-level key, and the
+"Shadow prices" section is appended to the end of the report.
+
+### 8.6 Flags
+
+See the `--shadow-prices` and `--max-relaxations` rows in §3's flag table and exit-code
+table above.
+
+### 8.7 Limits
+
+From spec §2, deliberate non-goals for this sub-project:
+
+- **One constraint at a time.** Every relaxation is evaluated independently, against the
+  same baseline. It says nothing about relaxing two constraints together — that interaction
+  (joint relaxations) is P3c-2, scenarios.
+- **No uncertainty.** Every figure is a point estimate from replaying the recorded rows
+  once; there is no confidence interval or sensitivity range. That is P3c-3.
+- **No capacity effects.** A relaxation that would route far more traffic onto one endpoint
+  is priced as if that endpoint has unlimited headroom — there is no queueing, saturation
+  or capacity model. That is P3c-4.
+- Every §6 non-goal above still applies to shadow prices too: no live dry-run, no
+  re-running PII detection, no daily-spend/RPM admission, no circuit-breaker state, no
+  confidence-escalation/failover replay.

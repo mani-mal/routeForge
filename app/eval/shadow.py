@@ -30,7 +30,7 @@ import copy
 from dataclasses import dataclass
 
 from app.config.schema import Settings
-from app.eval.outcomes import _round6
+from app.eval.outcomes import _fmt, _round6
 from app.eval.scenario import build_scenario, close_scenario
 from app.eval.simulate import (
     RowResult,
@@ -61,7 +61,8 @@ from app.policy.core import (
     SECURITY_IDS,
 )
 
-__all__ = ["Relaxation", "ShadowInvariantError", "enumerate_relaxations", "shadow_prices"]
+__all__ = ["Relaxation", "SHADOW_CAVEAT", "ShadowInvariantError", "enumerate_relaxations",
+           "render_shadow_section", "shadow_prices"]
 
 
 @dataclass(frozen=True)
@@ -439,3 +440,92 @@ async def shadow_prices(records: list[dict], baseline_doc: dict, *, base: Settin
                         "constraints": constraints})
     finally:
         await close_scenario(baseline)
+
+
+# --- render (spec §5 "report.md section") -------------------------------------
+
+#: The shadow-prices section's opening blockquote, verbatim from spec §5, one
+#: string per source line (without the leading "> " -- `render_shadow_section`
+#: adds that on every line, the same convention as `simulate.REPORT_CAVEAT`).
+SHADOW_CAVEAT = (
+    "**What each constraint costs.** Each row relaxes ONE constraint for one app "
+    "(or endpoint) and\n"
+    "replays the same recorded traffic. Nothing is applied. Security constraints "
+    "are shown as the\n"
+    "cost of a protection — they are never a recommendation to relax them."
+)
+
+_PROTECTION_LABEL = "price of a protection — not a recommendation"
+
+_SHADOW_COLUMNS = ("requirement", "scope", "rows", "route changed", "rejections avoided",
+                   "cost saved/day (or Δcost both-routed)", "Δquality",
+                   "Δp50 ms", "on-prem share (baseline→relaxed)")
+
+
+def _scope_str(scope: dict) -> str:
+    key, value = next(iter(scope.items()))
+    return f"{key}:{value}"
+
+
+def _cost_cell(entry: dict) -> str:
+    per_day = entry["cost_saved_per_day"]
+    if per_day is not None:
+        return f"{_fmt(per_day)}/day"
+    return f"{_fmt(entry['cost_usd_both_routed']['delta'])} (both-routed)"
+
+
+def _shadow_row(entry: dict, *, security: bool) -> str:
+    onprem = entry["onprem_share"]
+    cells = [
+        entry["requirement"],
+        _scope_str(entry["scope"]),
+        str(entry["rows_in_scope"]),
+        str(entry["route_changed"]),
+        str(entry["rejections_avoided"]),
+        _cost_cell(entry),
+        _fmt(entry["quality_mean_delta"]),
+        _fmt(entry["latency_p50_delta"]),
+        f"{_fmt(onprem['baseline'])}→{_fmt(onprem['relaxed'])}",
+    ]
+    if security:
+        cells.append(_PROTECTION_LABEL)
+    return "| " + " | ".join(cells) + " |"
+
+
+def _shadow_table(entries: list[dict], *, security: bool) -> list[str]:
+    if not entries:
+        return ["None."]
+    columns = list(_SHADOW_COLUMNS) + (["label"] if security else [])
+    lines = ["| " + " | ".join(columns) + " |",
+             "|" + "---|" * len(columns)]
+    lines += [_shadow_row(e, security=security) for e in entries]
+    return lines
+
+
+def render_shadow_section(block: dict) -> str:
+    """The `report.md` "Shadow prices" section (spec §5): the caveat, then
+    the operational-constraints table, then the cost-of-protection table
+    (every row labelled, never a recommendation), then a non-binding/skipped
+    footer."""
+    lines: list[str] = ["## Shadow prices", ""]
+    lines += ["> " + line for line in SHADOW_CAVEAT.split("\n")]
+    lines.append("")
+
+    constraints = block["constraints"]
+    operational = [c for c in constraints if not c["security"]]
+    protection = [c for c in constraints if c["security"]]
+
+    lines.append("### Operational constraints")
+    lines.append("")
+    lines += _shadow_table(operational, security=False)
+    lines.append("")
+
+    lines.append("### Cost of protection")
+    lines.append("")
+    lines += _shadow_table(protection, security=True)
+    lines.append("")
+
+    lines.append(f"Non-binding: {block['non_binding']} · "
+                f"skipped by cap: {block['skipped_by_cap']}")
+
+    return "\n".join(lines) + "\n"

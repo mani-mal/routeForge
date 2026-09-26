@@ -2171,3 +2171,134 @@ models in the cheap and mid tiers, with no region declared; cloud providers were
 - The `serving.api` `no_eligible_model` log line did **not** reach the container log. RouteForge
   configures no logging handler, so every `serving.*` INFO record is dropped in deployment.
   This is filed as B57; the 422 and the outcome row are the working channels until it is fixed.
+
+## 17. Shadow prices (P3c-1)
+
+§15's simulator answers "what would this specific proposal change?" §16's minimal conflicting
+core answers "why is this one request rejected today?" Neither answers a question an operator
+routinely has *before* writing any proposal: of everything an app's policy currently
+constrains, **which constraint is actually expensive, and which is cheap?** Design:
+`docs/superpowers/specs/2026-09-26-shadow-prices-design.md`. Field-level reference:
+[`docs/reference/policy-simulator.md`](../reference/policy-simulator.md) §8. Code:
+`app/eval/shadow.py` (`Relaxation`, `enumerate_relaxations`, `shadow_prices`,
+`render_shadow_section`), wired into `scripts/policy_simulate.py` by `--shadow-prices`.
+
+### 17.1 The model
+
+A **shadow price**, in the operations-research sense this borrows its name from, is what one
+unit of relaxing a binding constraint would be worth. P3c-1 computes an empirical version of
+that idea directly, with no linear-programming dual and no model of the objective beyond "the
+same cost/quality/latency/on-prem-share metrics §15 already uses": for each requirement an
+app's policy currently enforces, build a copy of the baseline config with **only that one
+requirement relaxed** (the spec §3 table — `residency` widens to `any` with escalation off,
+an allow-list clears to `null`, `raw_sensitive` flips every `false` declaration to `true`,
+`max_cost_usd_per_request` widens to `1e12`, `risk_floor` flattens every tier to `cheap`, …),
+replay the same recorded rows through the real `feasible_set`/`Router` code under that one
+relaxed config, and diff against the baseline arm the exact same way §15's `current` vs
+`proposed` arms are diffed. Every relaxation is priced independently, against the same
+baseline — never against each other's relaxed config — so two prices can always be read side
+by side without wondering whether one relaxation's effect leaked into another's number.
+Candidates are enumerated deterministically (app id, then P3b's `REQUIREMENT_ORDER`, then
+endpoint slug) and capped by `--max-relaxations` (default 50); a relaxation whose rows all
+route identically under both arms is **non-binding** and is counted, not listed — the two
+report tables only ever show constraints that actually did something to the replayed traffic.
+
+Security requirements (`app/policy/core.py::SECURITY_IDS` — `residency`, `allowed_providers`,
+`allowed_regions`, `require_no_retention`, `raw_sensitive`, `risk_floor`) are priced through
+the identical mechanism as operational ones, but reported in a separate table, every row
+carrying the literal label `price of a protection — not a recommendation`. This follows
+handoff §37 ("Security constraints are never automatically relaxed") to its logical
+conclusion for a *measurement* tool: pricing a protection is legitimate and useful — an
+operator should be able to see what `onprem_only` is costing them — but nothing about
+computing that number may look like, or be usable as, a one-click "relax this" action. The
+CLI never writes anything back; every relaxed doc is a `copy.deepcopy` discarded at the end of
+that one relaxation's evaluation.
+
+### 17.2 Scoped attribution and why
+
+Two of the eleven relaxations edit data that is not app-scoped at all: `raw_sensitive` flips
+declarations on onboarded rows and on `settings.providers.*`/`settings.routing.model_pool[*]`,
+all of which are shared by every app in the deployment; `risk_floor` flattens
+`settings.routing.risk_floors`, a single global map. Editing the *document* for either has to
+be global — there is no per-app copy of an endpoint's declared `accepts_raw_sensitive` or of
+the risk-floor table to edit instead. But re-simulating **every** app's rows under that edit
+would misattribute the price: if flipping `raw_sensitive` globally also happens to change an
+unrelated app B's routing (because B independently has some other reason a candidate was
+excluded, and this relaxation coincidentally frees a different one up), that effect is not
+what was being priced — it is noise from data those two relaxations happen to share, not the
+cost of *this app's* `raw_sensitive` constraint. `Relaxation.apply` (`app/eval/shadow.py`)
+resolves this by editing the document globally but filtering `rows` down to only the app being
+priced before returning them for re-simulation — every other app's rows are left out of scope
+by construction, never even replayed under that relaxed doc, so the price is attributable to
+exactly one app for every relaxation except one.
+
+`endpoint_app_allowlist` is the deliberate exception, scoped to an **endpoint**, not an app:
+`allowed_app_ids` names which apps may use one onboarded endpoint, so relaxing it can free up
+that endpoint for *any* app whose other requirements it now satisfies — there is no single app
+to attribute the price to, so all rows are back in scope for that one relaxation. This is the
+same distinction P3b's core computation draws between a requirement's *scope* and its
+*security* flag: scope is about which rows a relaxation's price can honestly claim to explain,
+independent of whether the requirement is a protection.
+
+Pinned by `tests/eval/test_shadow.py::test_apply_never_mutates_and_scopes_rows` (app-scoped:
+never mutates the input, scopes to one app's rows), `test_each_relaxation_edits_the_right_place`
+(every requirement edits the document location the table says), `test_endpoint_relaxation_scopes_all_rows`
+and `test_endpoint_allowlist_resimulates_all_rows` (endpoint-scoped: all rows re-simulated, but
+`affected_apps` still names only the apps that actually moved), and
+`test_residency_relaxation_is_security_and_scoped` (an app-scoped security relaxation never
+touches a second app's rows or count).
+
+### 17.3 The monotonicity invariant and test names
+
+Every relaxation only ever *widens* what an app may use — nothing in the spec §3 table can
+narrow eligibility. That gives a checkable invariant, over every re-simulated row: the relaxed
+eligible set is a superset of the baseline eligible set, and a row routed at baseline is never
+rejected under the relaxation. If a run ever produces a row that violates either half, it means
+a bug in the relaxation logic itself (an `_APPLIERS` entry that narrows something, or a scoping
+mistake that re-simulates a row outside the relaxation's actual effect) — never a real finding,
+so it is not reported as one. `_check_monotone` (`app/eval/shadow.py`) raises
+`ShadowInvariantError` on either violation, and `scripts/policy_simulate.py` maps that straight
+to exit `2` with `error: internal invariant: ...` on stderr — the same "never a traceback, name
+what broke" contract every other input-validation failure in this CLI already has.
+
+The invariant is pinned four ways:
+
+- **Property-based, across random fixtures and every relaxation kind:**
+  `tests/eval/test_shadow.py::test_monotonic_for_random_policies` (Hypothesis, 25 examples per
+  run) — random per-app policies (residency, allowed tiers, allowed regions,
+  require-no-retention, max-cost) crossed with random detected entity types and complexity,
+  asserting every produced entry has `route_changed + rejections_avoided > 0` (the non-binding
+  ones would never even reach the invariant check) and that `shadow_prices` never raises.
+- **The "lost eligible candidate" branch in isolation:**
+  `test_invariant_lost_eligible_raises_alone` — a monkeypatched relaxed arm that drops one
+  eligible candidate (while staying routed) raises with `"lost eligible candidate"` in the
+  message, and nothing else fires.
+- **The "routed → rejected" branch in isolation:**
+  `test_invariant_routed_to_rejected_raises_alone` — a monkeypatched relaxed arm that flips a
+  baseline-routed row to rejected (eligible set untouched) raises with `"was routed to .*
+  but rejected"`, and nothing else fires.
+- **Both branches together, undifferentiated:** `test_invariant_breach_raises` — the original
+  regression test, an arbitrary monkeypatched rejection on every relaxed-arm call.
+
+Determinism — the same three inputs give byte-identical `simulation.json` — is pinned by
+`test_deterministic` (the block alone) and, end to end through the CLI,
+`test_shadow_prices_cli_deterministic` (`tests/eval/test_policy_simulate_cli.py`). The
+like-for-like cost accounting (§8.4 of the reference doc) is pinned by
+`test_block_shape_and_cost_per_day_like_for_like`, `test_cost_saved_per_day_is_like_for_like`,
+`test_cost_saved_per_day_null_under_one_day_and_ranking` and
+`test_cost_saved_per_day_uses_the_full_export_window`; the full ranking order (including the
+scope-key tie-break) by `test_ranking_full_order_with_tie_break`. The CLI wiring — optional
+`--proposal`, the two `simulation.json`/`report.md` shapes, `--max-relaxations` validation and
+the live round trip — is pinned by `tests/eval/test_policy_simulate_cli.py`:
+`test_shadow_prices_without_proposal`, `test_shadow_prices_with_proposal_appends_to_p3a_output`,
+`test_max_relaxations_zero_exits_2`, `test_neither_proposal_nor_shadow_prices_exits_2` and
+`test_live_round_trip_shadow_prices_allowed_tiers` (a real app restricted to a tier with no
+seeded model gets two real 422s, and the shadow-priced `allowed_tiers` entry reports
+`rejections_avoided == 2`).
+
+### 17.4 Results
+
+Pending the Spark run after deploy.
+
+| constraint | scope | rejections avoided | cost saved/day | security |
+|---|---|---|---|---|

@@ -194,6 +194,100 @@ def test_cli_malformed_input_exits_2_naming_location(tmp_path, kind, where):  # 
         assert "--config-dir" in proc.stderr
 
 
+def _run_cli_no_proposal(tmp_path, export_lines, snapshot, *extra):
+    exp, snap = tmp_path / "e.ndjson", tmp_path / "s.json"
+    exp.write_text("".join(json.dumps(line) + "\n" for line in export_lines))
+    snap.write_text(json.dumps(snapshot))
+    out = tmp_path / "out"
+    proc = subprocess.run([sys.executable, str(SCRIPT), "--export", str(exp),
+                           "--snapshot", str(snap), "--out", str(out), *extra],
+                          capture_output=True, text=True, cwd=ROOT,
+                          env={**__import__("os").environ,
+                               "LITELLM_LOCAL_MODEL_COST_MAP": "True"})
+    return proc, out
+
+
+# --- P3c-1 Task 3: shadow prices in the CLI -----------------------------------
+
+def test_shadow_prices_without_proposal(tmp_path):
+    from tests.eval.sim_fixtures import app_entry
+    snap = make_snapshot(apps=[app_entry("app-a", allowed_models=["ghost-model"])])
+    lines = [_line(make_row(f"r{i}", "app-a")) for i in range(3)]
+    proc, out = _run_cli_no_proposal(tmp_path, lines, snap, "--shadow-prices")
+    assert proc.returncode == 0, proc.stderr
+    sim = json.loads((out / "simulation.json").read_text())
+    assert "shadow_prices" in sim and sim["shadow_prices"]["constraints"]
+    assert sim["inputs"]["proposal_sha256"] is None
+    assert sim["inputs"]["proposal_title"] is None
+    report = (out / "report.md").read_text()
+    assert "## Shadow prices" in report
+    assert "What each constraint costs" in report
+
+
+def test_shadow_prices_with_proposal_appends_to_p3a_output(tmp_path):
+    from tests.eval.sim_fixtures import app_entry
+    snap = make_snapshot(apps=[app_entry("app-a", allowed_models=["ghost-model"])])
+    lines = [_line(make_row("r1", "app-a"))]
+    proc, out = _run_cli(tmp_path, lines, snap, {"schema": P}, "--shadow-prices")
+    assert proc.returncode == 0, proc.stderr
+    sim = json.loads((out / "simulation.json").read_text())
+    assert sim["shadow_prices"]["baseline"] == "snapshot+proposal"
+    assert "totals" in sim  # P3a output still present
+    report = (out / "report.md").read_text()
+    assert report.startswith("> **Simulation only.**")
+    assert "## Shadow prices" in report
+
+
+def test_max_relaxations_zero_exits_2(tmp_path):
+    proc, _ = _run_cli(tmp_path, [], make_snapshot(), {"schema": P},
+                       "--shadow-prices", "--max-relaxations", "0")
+    assert proc.returncode == 2, proc.stderr
+
+
+def test_neither_proposal_nor_shadow_prices_exits_2(tmp_path):
+    proc, _ = _run_cli_no_proposal(tmp_path, [], make_snapshot())
+    assert proc.returncode == 2, proc.stderr
+
+
+def test_shadow_prices_cli_deterministic(tmp_path):
+    from tests.eval.sim_fixtures import app_entry
+    snap = make_snapshot(apps=[app_entry("app-a", allowed_tiers=["frontier"])])
+    lines = [_line(make_row("r1", "app-a"))]
+    proc, out = _run_cli_no_proposal(tmp_path, lines, snap, "--shadow-prices")
+    assert proc.returncode == 0, proc.stderr
+    first = (out / "simulation.json").read_text()
+    proc2, _ = _run_cli_no_proposal(tmp_path, lines, snap, "--shadow-prices")
+    assert proc2.returncode == 0 and (out / "simulation.json").read_text() == first
+
+
+def test_live_round_trip_shadow_prices_allowed_tiers(tmp_path):
+    # Seeded on-prem models are local-8b (cheap) and local-32b (mid)
+    # (app/apps/bootstrap.py); no model is seeded in "frontier", so an app
+    # restricted to that tier gets a 422 on every request.
+    with TestClient(create_app()) as c:
+        _login(c)
+        created = c.post("/admin/applications", json={"id": "shadow-app", "name": "Shadow"})
+        assert created.status_code == 200, created.text
+        token = created.json()["token"]
+        put = c.put("/admin/applications/shadow-app/policy",
+                    json={"allowed_tiers": ["frontier"]})
+        assert put.status_code == 200, put.text
+        for _ in range(2):
+            resp = c.post("/v1/chat/completions", headers={"Authorization": f"Bearer {token}"},
+                          json={"messages": [{"role": "user", "content": "hello"}]})
+            assert resp.status_code == 422, resp.text
+        snapshot = c.get("/admin/config-snapshot").json()
+        export = [json.loads(x) for x in
+                  c.get("/admin/outcomes/export").text.strip().splitlines()]
+    proc, out = _run_cli_no_proposal(tmp_path, export, snapshot, "--shadow-prices")
+    assert proc.returncode == 0, proc.stderr
+    sim = json.loads((out / "simulation.json").read_text())
+    entries = [e for e in sim["shadow_prices"]["constraints"]
+              if e["requirement"] == "allowed_tiers" and e["scope"] == {"app": "shadow-app"}]
+    assert len(entries) == 1, sim["shadow_prices"]["constraints"]
+    assert entries[0]["rejections_avoided"] == 2
+
+
 def test_cli_malformed_export_rows_are_counted(tmp_path):                 # Important 3
     bad_types = make_row("r2", "app-a")
     del bad_types["detected_entity_types"]
