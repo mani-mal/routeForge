@@ -29,6 +29,20 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass
 
+from app.config.schema import Settings
+from app.eval.outcomes import _round6
+from app.eval.scenario import build_scenario, close_scenario
+from app.eval.simulate import (
+    RowResult,
+    _bucket_stats,
+    _moves,
+    _parse_ts,
+    _window,
+    observed_latencies,
+    select_rows,
+    simulate_row,
+)
+
 from app.policy.core import (
     REQ_ALLOWED_MODELS,
     REQ_ALLOWED_PROVIDERS,
@@ -45,7 +59,7 @@ from app.policy.core import (
     SECURITY_IDS,
 )
 
-__all__ = ["Relaxation", "enumerate_relaxations"]
+__all__ = ["Relaxation", "ShadowInvariantError", "enumerate_relaxations", "shadow_prices"]
 
 
 @dataclass(frozen=True)
@@ -295,3 +309,128 @@ def enumerate_relaxations(doc: dict, rows: list[dict], *, cap: int = 50
 
     skipped = max(0, len(candidates) - cap)
     return candidates[:cap], skipped
+
+
+# --- evaluation (spec §3 invariant, §4 metrics, §5 block) ---------------------
+
+
+class ShadowInvariantError(RuntimeError):
+    """A relaxation narrowed eligibility or rejected a baseline-routed row.
+    Every relaxation only ever widens what an app may use (spec §3), so this
+    is an internal-invariant failure, never a reportable result: the CLI
+    exits 2 on it."""
+
+
+def _check_monotone(rel: Relaxation, request_id: str, base, relaxed) -> None:
+    missing = sorted(set(base.eligible) - set(relaxed.eligible))
+    if missing:
+        raise ShadowInvariantError(
+            f"{rel.requirement}@{rel.scope_key()}: row {request_id} lost eligible "
+            f"candidate(s) {missing} under the relaxation")
+    if base.outcome == "routed" and relaxed.outcome == "rejected":
+        raise ShadowInvariantError(
+            f"{rel.requirement}@{rel.scope_key()}: row {request_id} was routed to "
+            f"{base.model!r} at baseline but rejected under the relaxation "
+            f"({', '.join(relaxed.reject_codes) or 'no code'})")
+
+
+def _renamed(delta: dict) -> dict:
+    """P3a's `{current, proposed, delta}` in the shadow block's words."""
+    return {"baseline": delta["current"], "relaxed": delta["proposed"], "delta": delta["delta"]}
+
+
+def _window_days(results: list[RowResult]) -> float | None:
+    window = _window(results)
+    if window is None:
+        return None
+    days = (_parse_ts(window["end"]) - _parse_ts(window["start"])).total_seconds() / 86400
+    return days if days >= 1 else None
+
+
+def _entry(rel: Relaxation, results: list[RowResult], stats: dict) -> dict:
+    both = _renamed(stats["cost_usd_both_routed"])
+    days = _window_days(results)
+    # Like-for-like (plan ruling): only rows routed in BOTH arms count, so a
+    # row the relaxation newly serves is not read as added cost.
+    per_day = -both["delta"] / days if days is not None and both["delta"] is not None else None
+    scope = {"endpoint": rel.endpoint} if rel.requirement == REQ_ENDPOINT_APP_ALLOWLIST \
+        else {"app": rel.app}
+    changed = [r for r in results
+               if (r.current.outcome == "routed" and r.proposed.outcome == "routed"
+                   and r.current.model != r.proposed.model)
+               or (r.current.outcome == "rejected" and r.proposed.outcome == "routed")]
+    return {
+        "requirement": rel.requirement,
+        "scope": scope,
+        "security": rel.security,
+        "relaxed_to": rel.relaxed_to,
+        "rows_in_scope": stats["requests"],
+        "route_changed": stats["route_changed"],
+        "rejections_avoided": stats["newly_served"],
+        "cost_usd": _renamed(stats["cost_usd"]),
+        "cost_usd_both_routed": both,
+        "cost_saved_per_day": per_day,
+        "quality_mean_delta": stats["quality_mean"]["delta"],
+        "latency_p50_delta": stats["latency_ms"]["p50"]["delta"],
+        "onprem_share": {"baseline": stats["onprem_share"]["current"],
+                         "relaxed": stats["onprem_share"]["proposed"]},
+        "affected_apps": sorted({r.row["application_id"] for r in changed}),
+        "moves": _moves(results)[:5],
+    }
+
+
+def _rank_key(entry: dict) -> tuple:
+    saved = entry["cost_saved_per_day"]
+    if saved is None:
+        saved = -(entry["cost_usd_both_routed"]["delta"] or 0.0)
+    scope = entry["scope"]
+    scope_key = f"endpoint:{scope['endpoint']}" if "endpoint" in scope else f"app:{scope['app']}"
+    return (-saved, -entry["rejections_avoided"], entry["requirement"], scope_key)
+
+
+async def shadow_prices(records: list[dict], baseline_doc: dict, *, base: Settings,
+                        cap: int = 50, baseline_label: str = "snapshot") -> dict:
+    """The spec §5 `shadow_prices` block for `baseline_doc` (the snapshot,
+    or the snapshot with a proposal already applied -- the caller decides and
+    says which in `baseline_label`).
+
+    The baseline scenario is built and simulated once. Each relaxation then
+    builds its own scenario and re-simulates only its in-scope rows (spec §3
+    scoping rule); every re-simulated row is checked against the
+    monotonicity invariant, and a breach raises `ShadowInvariantError`.
+    Relaxations that change no row's outcome are counted as `non_binding`,
+    not listed."""
+    observed = observed_latencies(records)
+    baseline = await build_scenario(baseline_doc, base=base)
+    try:
+        rows, _excluded = select_rows(records, set(baseline.apps))
+        base_arm = {row["request_id"]: simulate_row(baseline, row, observed) for row in rows}
+        rels, skipped = enumerate_relaxations(baseline_doc, rows, cap=cap)
+
+        constraints: list[dict] = []
+        non_binding = 0
+        for rel in rels:
+            doc_r, scoped = rel.apply(baseline_doc, rows)
+            relaxed = await build_scenario(doc_r, base=base)
+            try:
+                results: list[RowResult] = []
+                for row in scoped:
+                    request_id = row["request_id"]
+                    ra = simulate_row(relaxed, row, observed)
+                    _check_monotone(rel, request_id, base_arm[request_id], ra)
+                    results.append(RowResult(row, base_arm[request_id], ra))
+            finally:
+                await close_scenario(relaxed)
+
+            stats = _bucket_stats(results)
+            if stats["route_changed"] + stats["newly_served"] > 0:
+                constraints.append(_round6(_entry(rel, results, stats)))
+            else:
+                non_binding += 1
+
+        constraints.sort(key=_rank_key)
+        return _round6({"baseline": baseline_label, "evaluated": len(rels),
+                        "skipped_by_cap": skipped, "non_binding": non_binding,
+                        "constraints": constraints})
+    finally:
+        await close_scenario(baseline)

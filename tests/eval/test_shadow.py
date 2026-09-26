@@ -88,3 +88,193 @@ def test_endpoint_relaxation_scopes_all_rows():
     rows = [make_row("r1", "a"), make_row("r2", "b")]
     _, scoped = Relaxation("endpoint_app_allowlist", None, "local-cheap", "null").apply(snap, rows)
     assert len(scoped) == 2
+
+
+# --- Task 2: evaluation, metrics, monotonicity -------------------------------
+
+import asyncio
+
+import pytest
+from hypothesis import HealthCheck, given, settings as hsettings, strategies as st
+
+from app.eval.shadow import ShadowInvariantError, shadow_prices
+from tests.eval.sim_fixtures import BASE_SETTINGS
+
+
+def _run(records, doc, **kw):
+    return asyncio.run(shadow_prices(records, doc, base=BASE_SETTINGS, **kw))
+
+
+def _entry(block, requirement, app=None, endpoint=None):
+    for c in block["constraints"]:
+        if c["requirement"] == requirement and c["scope"] == (
+                {"app": app} if app else {"endpoint": endpoint}):
+            return c
+    return None
+
+
+def test_binding_allowed_models_avoids_rejections():
+    snap = make_snapshot(apps=[app_entry("a", allowed_models=["ghost-model"])])
+    rows = [make_row(f"r{i}", "a", ts=f"2026-09-20T12:00:0{i}+00:00") for i in range(3)]
+    block = _run(rows, snap)
+    e = _entry(block, "allowed_models", app="a")
+    assert e and e["rejections_avoided"] == 3 and e["security"] is False
+
+
+def test_non_binding_is_counted_not_listed():
+    snap = make_snapshot(apps=[app_entry("a", allowed_tiers=["cheap", "mid", "frontier"])])
+    block = _run([make_row("r1", "a")], snap)
+    assert _entry(block, "allowed_tiers", app="a") is None
+    assert block["non_binding"] >= 1
+
+
+def test_residency_relaxation_is_security_and_scoped():
+    snap = make_snapshot(providers={"azure": {"enabled": True}}, onboarded=[],
+                         apps=[app_entry("a", residency="onprem_only"), app_entry("b")])
+    rows = [make_row("ra", "a"), make_row("rb", "b")]
+    block = _run(rows, snap)
+    e = _entry(block, "residency", app="a")
+    assert e and e["security"] is True and e["rejections_avoided"] == 1
+    assert e["rows_in_scope"] == 1 and e["affected_apps"] == ["a"]
+
+
+def test_invariant_breach_raises(monkeypatch):
+    import dataclasses
+
+    import app.eval.shadow as shadow
+    real = shadow.simulate_row
+    calls = {"n": 0}
+
+    def fake(scn, row, observed):
+        arm = real(scn, row, observed)
+        calls["n"] += 1
+        if calls["n"] > 1:   # every relaxed-arm call reports a rejection
+            return dataclasses.replace(arm, outcome="rejected", model=None, provider=None,
+                                       tier=None, eligible=())
+        return arm
+    monkeypatch.setattr(shadow, "simulate_row", fake)
+    snap = make_snapshot(apps=[app_entry("a")])
+    with pytest.raises(ShadowInvariantError):
+        _run([make_row("r1", "a")], snap)
+
+
+def test_deterministic():
+    snap = make_snapshot(apps=[app_entry("a", allowed_models=["ghost-model"], residency="onprem_only")])
+    rows = [make_row("r1", "a"), make_row("r2", "a")]
+    import json
+    assert json.dumps(_run(rows, snap), sort_keys=True) == json.dumps(_run(rows, snap), sort_keys=True)
+
+
+def test_block_shape_and_cost_per_day_like_for_like():
+    # Two-day window; allowed_tiers pins app "a" to frontier, relaxing it
+    # moves every row to the cheap tier -- a positive like-for-like saving.
+    snap = make_snapshot(apps=[app_entry("a", allowed_tiers=["frontier"])])
+    rows = [make_row("r1", "a", ts="2026-09-18T12:00:00+00:00"),
+            make_row("r2", "a", ts="2026-09-20T12:00:00+00:00")]
+    block = _run(rows, snap)
+    assert block["baseline"] == "snapshot" and block["skipped_by_cap"] == 0
+    assert block["evaluated"] == len(enumerate_relaxations(snap, rows)[0])
+    e = _entry(block, "allowed_tiers", app="a")
+    assert e["route_changed"] == 2 and e["rejections_avoided"] == 0
+    both = e["cost_usd_both_routed"]
+    assert both["delta"] < 0
+    assert e["cost_saved_per_day"] == pytest.approx(-both["delta"] / 2, abs=1e-6)
+    assert set(e["cost_usd"]) == {"baseline", "relaxed", "delta"}
+    assert e["onprem_share"] == {"baseline": 1.0, "relaxed": 1.0}
+    assert e["moves"] == [{"from": "local-big", "to": "local-cheap", "count": 2}]
+    assert e["relaxed_to"] == "null"
+
+
+def test_cost_saved_per_day_null_under_one_day_and_ranking():
+    snap = make_snapshot(apps=[app_entry("a", allowed_tiers=["frontier"],
+                                         allowed_models=["ghost-model", "local-big",
+                                                         "local-cheap", "local-mid"])])
+    block = _run([make_row("r1", "a")], snap)
+    e = _entry(block, "allowed_tiers", app="a")
+    assert e["cost_saved_per_day"] is None
+    # Ranked by -(saving) first: allowed_tiers (saves) precedes any
+    # non-saving binding entry.
+    keys = [(c["requirement"], c["scope"]) for c in block["constraints"]]
+    assert keys[0] == ("allowed_tiers", {"app": "a"})
+
+
+def test_cap_is_reported():
+    snap = make_snapshot(apps=[app_entry("a", residency="onprem_only", allowed_tiers=["cheap"],
+                                         allowed_models=["local-mid"])])
+    block = _run([make_row("r1", "a")], snap, cap=2, baseline_label="snapshot+proposal")
+    assert block["evaluated"] == 2 and block["skipped_by_cap"] >= 1
+    assert block["baseline"] == "snapshot+proposal"
+
+
+def test_endpoint_allowlist_resimulates_all_rows():
+    snap = make_snapshot(onboarded=[onboarded_row("local-cheap", "cheap", allowed_app_ids=["a"]),
+                                    onboarded_row("local-big", "frontier")],
+                         apps=[app_entry("a"), app_entry("b")])
+    rows = [make_row("ra", "a"), make_row("rb", "b")]
+    block = _run(rows, snap)
+    e = _entry(block, "endpoint_app_allowlist", endpoint="local-cheap")
+    assert e and e["rows_in_scope"] == 2 and e["affected_apps"] == ["b"]
+    from app.policy.core import SECURITY_IDS
+    assert e["security"] is ("endpoint_app_allowlist" in SECURITY_IDS)
+
+
+# Raw sensitive: an app whose compiled model_input is `raw` and whose row
+# carries a detected entity classified above `public` "sends raw sensitive
+# content" (app/policy/context.py); an endpoint declaring
+# accepts_raw_sensitive=false is then excluded (app/policy/feasible.py).
+# The declaration here lives on the DEPLOYMENT side -- settings.providers.*
+# or settings.routing.model_pool[*] -- not on an onboarded row. Escalation
+# is off so the detected entity does not also tighten residency to
+# onprem_only (which would keep the row rejected for a second reason and
+# make raw_sensitive non-binding on its own).
+
+def _raw_app(app_id):
+    return app_entry(app_id, model_input="raw", escalate_residency_on_detection=False)
+
+
+def test_raw_sensitive_from_provider_declaration_binds():
+    snap = make_snapshot(onboarded=[],
+                         providers={"azure": {"enabled": True, "accepts_raw_sensitive": "false"}},
+                         apps=[_raw_app("a"), app_entry("b")])
+    rows = [make_row("ra", "a", detected_entity_types=["US_SSN"]),
+            make_row("rb", "b", detected_entity_types=["US_SSN"])]
+    rels, _ = enumerate_relaxations(snap, rows)
+    assert ("raw_sensitive", "a", None) in _ids(rels)
+    block = _run(rows, snap)
+    e = _entry(block, "raw_sensitive", app="a")
+    assert e and e["rejections_avoided"] == 1 and e["security"] is True
+    assert e["rows_in_scope"] == 1 and e["affected_apps"] == ["a"]
+    assert e["moves"] == [{"from": "(rejected)", "to": "azure-gpt-mid", "count": 1}]
+
+
+def test_raw_sensitive_from_model_pool_declaration_binds():
+    snap = make_snapshot(onboarded=[], providers={"azure": {"enabled": True}},
+                         apps=[_raw_app("a")])
+    for entry in snap["settings"]["routing"]["model_pool"]:
+        entry["accepts_raw_sensitive"] = "false"
+    rows = [make_row("ra", "a", detected_entity_types=["US_SSN"])]
+    rels, _ = enumerate_relaxations(snap, rows)
+    assert ("raw_sensitive", "a", None) in _ids(rels)
+    e = _entry(_run(rows, snap), "raw_sensitive", app="a")
+    assert e and e["rejections_avoided"] == 1
+
+
+_POLICY = st.fixed_dictionaries({}, optional={
+    "residency": st.sampled_from(["any", "onprem_only"]),
+    "allowed_tiers": st.lists(st.sampled_from(["cheap", "mid", "frontier"]), min_size=1, unique=True),
+    "allowed_regions": st.just(["eu"]),
+    "require_no_retention": st.just(True),
+    "max_cost_usd_per_request": st.sampled_from([1e-9, 0.01, 1.0]),
+})
+
+
+@hsettings(max_examples=25, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(policy=_POLICY, etypes=st.lists(st.sampled_from(["US_SSN", "PERSON"]), unique=True, max_size=2),
+       complexity=st.floats(0.0, 3.0))
+def test_monotonic_for_random_policies(policy, etypes, complexity):   # spec §7.4
+    snap = make_snapshot(providers={"azure": {"enabled": True}},
+                         apps=[app_entry("a", **policy)])
+    rows = [make_row("h", "a", detected_entity_types=etypes, complexity=complexity)]
+    block = _run(rows, snap)   # raises ShadowInvariantError on any breach
+    for c in block["constraints"]:
+        assert c["route_changed"] + c["rejections_avoided"] > 0
