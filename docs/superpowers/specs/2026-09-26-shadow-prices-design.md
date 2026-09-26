@@ -92,7 +92,10 @@ using P3a's existing per-row `ArmResult` and bucket-stat helpers. The metrics ar
 - `route_changed`;
 - `rejections_avoided`, the P3a `newly_served`;
 - `cost_usd`: baseline, relaxed and delta;
-- `cost_saved_per_day`: `-delta / window_days`, or null when the export window is under 1 day;
+- `cost_usd_both_routed`: baseline, relaxed and delta over rows routed in both arms;
+- `cost_saved_per_day`: `-(both-routed delta) / window_days`, or null when the export window is
+  under 1 day. This is like-for-like, so rows the relaxation newly serves are not counted as
+  added cost; their cost is in `cost_usd`;
 - `quality_mean` delta;
 - `latency_ms.p50` delta;
 - `onprem_share`: baseline and relaxed;
