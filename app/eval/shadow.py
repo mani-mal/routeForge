@@ -29,13 +29,16 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass
 
-from app.config.schema import Settings
+from collections import Counter
+
+from app.config.schema import PolicyCfg, Settings
 from app.eval.outcomes import _fmt, _round6
-from app.eval.scenario import build_scenario, close_scenario
+from app.eval.scenario import app_rules, build_scenario, close_scenario
 from app.eval.simulate import (
     RowResult,
     _bucket_stats,
     _moves,
+    _newly_rejected,
     _newly_served,
     _parse_ts,
     _route_changed,
@@ -60,8 +63,9 @@ from app.policy.core import (
     REQUIREMENT_ORDER,
     SECURITY_IDS,
 )
+from app.policy.context import match_sensitivity_rule
 
-__all__ = ["Relaxation", "SHADOW_CAVEAT", "ShadowInvariantError", "enumerate_relaxations",
+__all__ = ["NEWLY_REJECTED_NOTE", "Relaxation", "SHADOW_CAVEAT", "ShadowInvariantError", "enumerate_relaxations",
            "render_shadow_section", "shadow_prices"]
 
 
@@ -139,16 +143,20 @@ def _is_declared_false(value: object) -> bool:
     """`accepts_raw_sensitive` is a bool on onboarded rows (the DB column)
     but a `"true" | "false" | "unknown"` string on `settings.providers.*`
     and `settings.routing.model_pool[*]` (the YAML declaration shape,
-    P1b) -- `false` covers both spellings."""
-    return value is False or value == "false"
+    P1b) -- `false` covers both. Strings are normalised the way
+    `app/policy/feasible.py::_declared` reads them (stripped, lowercased),
+    so `"False"` and `" FALSE "` count: serving enforces them as false."""
+    if isinstance(value, bool):
+        return value is False
+    return value is not None and str(value).strip().lower() == "false"
 
 
 def _flipped(value: object) -> object:
-    if value is False:
-        return True
-    if value == "false":
-        return "true"
-    return value
+    """The true value in the declaration's own shape: bool `True` for a bool
+    field, the string `"true"` for a string field."""
+    if not _is_declared_false(value):
+        return value
+    return True if isinstance(value, bool) else "true"
 
 
 def _apply_raw_sensitive(rel: Relaxation, doc: dict) -> None:
@@ -226,7 +234,8 @@ def _any_raw_sensitive_false(doc: dict) -> bool:
                for e in doc["settings"]["routing"]["model_pool"])
 
 
-def _applies_residency(doc: dict, policy: dict, app_rows: list[dict]) -> bool:
+def _applies_residency(doc: dict, entry: dict, app_rows: list[dict]) -> bool:
+    policy = entry.get("policy", {})
     residency = policy.get("residency")
     if residency is not None and residency != "any":
         return True
@@ -237,30 +246,46 @@ def _applies_residency(doc: dict, policy: dict, app_rows: list[dict]) -> bool:
 
 
 def _applies_null_field(field: str):
-    def _applies(doc: dict, policy: dict, app_rows: list[dict]) -> bool:
-        return policy.get(field) is not None
+    def _applies(doc: dict, entry: dict, app_rows: list[dict]) -> bool:
+        return entry.get("policy", {}).get(field) is not None
     return _applies
 
 
-def _applies_require_no_retention(doc: dict, policy: dict, app_rows: list[dict]) -> bool:
-    return policy.get("require_no_retention") is True
+def _applies_require_no_retention(doc: dict, entry: dict, app_rows: list[dict]) -> bool:
+    return entry.get("policy", {}).get("require_no_retention") is True
 
 
-def _applies_raw_sensitive(doc: dict, policy: dict, app_rows: list[dict]) -> bool:
+def _applies_raw_sensitive(doc: dict, entry: dict, app_rows: list[dict]) -> bool:
     return _any_raw_sensitive_false(doc)
 
 
-def _applies_requested_model(doc: dict, policy: dict, app_rows: list[dict]) -> bool:
+def _applies_requested_model(doc: dict, entry: dict, app_rows: list[dict]) -> bool:
     return any(row.get("requested_model") for row in app_rows)
 
 
-def _applies_max_cost(doc: dict, policy: dict, app_rows: list[dict]) -> bool:
+def _applies_max_cost(doc: dict, entry: dict, app_rows: list[dict]) -> bool:
     return True
 
 
-def _applies_risk_floor(doc: dict, policy: dict, app_rows: list[dict]) -> bool:
+def _replay_risk_class(doc: dict, entry: dict, row: dict) -> str:
+    """The risk class replay gives `row` -- recomputed from its
+    `detected_entity_types` against the app's resolved sensitivity rules in
+    THIS doc (`scenario.app_rules` + `match_sensitivity_rule`, exactly what
+    `simulate_row` -> `build_context` uses), never the recorded
+    `risk_class`, which reflects the rules at record time and ignores a
+    proposal's edit. Only `settings.policy` is needed, so it is validated
+    alone rather than building (and linting) a full `Settings`."""
+    settings = Settings.model_construct(
+        policy=PolicyCfg.model_validate(doc["settings"]["policy"]))
+    rules = app_rules(entry, settings)
+    etypes = set(row.get("detected_entity_types") or [])
+    return match_sensitivity_rule(settings, rules, etypes).risk_class
+
+
+def _applies_risk_floor(doc: dict, entry: dict, app_rows: list[dict]) -> bool:
     risk_floors = doc["settings"]["routing"]["risk_floors"]
-    return any(risk_floors.get(row.get("risk_class"), "cheap") != "cheap" for row in app_rows)
+    return any(risk_floors.get(_replay_risk_class(doc, entry, row), "cheap") != "cheap"
+               for row in app_rows)
 
 
 # Per-app checks, in `REQUIREMENT_ORDER` with `endpoint_app_allowlist`
@@ -299,9 +324,8 @@ def enumerate_relaxations(doc: dict, rows: list[dict], *, cap: int = 50
         app_rows = rows_by_app.get(app_id)
         if not app_rows:
             continue
-        policy = entry.get("policy", {})
         for req_id in _APP_RULE_ORDER:
-            if _APPLIES[req_id](doc, policy, app_rows):
+            if _APPLIES[req_id](doc, entry, app_rows):
                 candidates.append(Relaxation(req_id, app_id, None, _RELAXED_TO[req_id]))
 
     for row in sorted(doc["onboarded"], key=lambda o: o["slug"]):
@@ -318,23 +342,37 @@ def enumerate_relaxations(doc: dict, rows: list[dict], *, cap: int = 50
 
 
 class ShadowInvariantError(RuntimeError):
-    """A relaxation narrowed eligibility or rejected a baseline-routed row.
-    Every relaxation only ever widens what an app may use (spec §3), so this
-    is an internal-invariant failure, never a reportable result: the CLI
-    exits 2 on it."""
+    """A relaxation narrowed a row's eligible set. Every relaxation only ever
+    widens what `feasible_set` admits (spec §3), so this is an
+    internal-invariant failure, never a reportable result: the CLI exits 2
+    on it.
+
+    It is the ONLY hard invariant. A relaxation may still newly REJECT a
+    baseline-routed row -- the router is not monotone in the feasible set
+    (rule 8 clamps the target tier to the best allowed tier, a wider allowed
+    set can lift it to the risk floor, and the budget fallback never goes
+    below the floor) -- so that is reported as `newly_rejected`, not raised
+    (spec §3, as-built amendment 2026-09-26)."""
 
 
-def _check_monotone(rel: Relaxation, request_id: str, base, relaxed) -> None:
+def _check_eligible_superset(rel: Relaxation, request_id: str, base, relaxed) -> None:
     missing = sorted(set(base.eligible) - set(relaxed.eligible))
     if missing:
         raise ShadowInvariantError(
             f"{rel.requirement}@{rel.scope_key()}: row {request_id} lost eligible "
             f"candidate(s) {missing} under the relaxation")
-    if base.outcome == "routed" and relaxed.outcome == "rejected":
-        raise ShadowInvariantError(
-            f"{rel.requirement}@{rel.scope_key()}: row {request_id} was routed to "
-            f"{base.model!r} at baseline but rejected under the relaxation "
-            f"({', '.join(relaxed.reject_codes) or 'no code'})")
+
+
+def _newly_rejected_reasons(results: list[RowResult]) -> dict[str, int]:
+    """`{reject code: rows}` over the rows routed at baseline and rejected
+    under the relaxation, keyed by the relaxed arm's `reject_codes` (a row
+    with several codes counts once under each), sorted by code."""
+    counts: Counter = Counter()
+    for r in results:
+        if _newly_rejected(r):
+            for code in r.proposed.reject_codes or ("unspecified",):
+                counts[code] += 1
+    return dict(sorted(counts.items()))
 
 
 def _renamed(delta: dict) -> dict:
@@ -360,7 +398,8 @@ def _entry(rel: Relaxation, results: list[RowResult], stats: dict,
     per_day = -both["delta"] / days if days is not None and both["delta"] is not None else None
     scope = {"endpoint": rel.endpoint} if rel.requirement == REQ_ENDPOINT_APP_ALLOWLIST \
         else {"app": rel.app}
-    changed = [r for r in results if _route_changed(r) or _newly_served(r)]
+    changed = [r for r in results
+               if _route_changed(r) or _newly_served(r) or _newly_rejected(r)]
     return {
         "requirement": rel.requirement,
         "scope": scope,
@@ -369,6 +408,8 @@ def _entry(rel: Relaxation, results: list[RowResult], stats: dict,
         "rows_in_scope": stats["requests"],
         "route_changed": stats["route_changed"],
         "rejections_avoided": stats["newly_served"],
+        "newly_rejected": stats["newly_rejected"],
+        "newly_rejected_reasons": _newly_rejected_reasons(results),
         "cost_usd": _renamed(stats["cost_usd"]),
         "cost_usd_both_routed": both,
         "cost_saved_per_day": per_day,
@@ -399,9 +440,11 @@ async def shadow_prices(records: list[dict], baseline_doc: dict, *, base: Settin
     The baseline scenario is built and simulated once. Each relaxation then
     builds its own scenario and re-simulates only its in-scope rows (spec §3
     scoping rule); every re-simulated row is checked against the
-    monotonicity invariant, and a breach raises `ShadowInvariantError`.
-    Relaxations that change no row's outcome are counted as `non_binding`,
-    not listed."""
+    eligible-superset invariant, and a breach raises `ShadowInvariantError`.
+    A baseline-routed row the relaxation rejects is reported
+    (`newly_rejected`, `newly_rejected_reasons`), not raised. A relaxation
+    is binding when it changes a route, avoids a rejection or newly rejects
+    a row; the rest are counted as `non_binding`, not listed."""
     observed = observed_latencies(records)
     baseline = await build_scenario(baseline_doc, base=base)
     try:
@@ -423,13 +466,13 @@ async def shadow_prices(records: list[dict], baseline_doc: dict, *, base: Settin
                 for row in scoped:
                     request_id = row["request_id"]
                     ra = simulate_row(relaxed, row, observed)
-                    _check_monotone(rel, request_id, base_arm[request_id], ra)
+                    _check_eligible_superset(rel, request_id, base_arm[request_id], ra)
                     results.append(RowResult(row, base_arm[request_id], ra))
             finally:
                 await close_scenario(relaxed)
 
             stats = _bucket_stats(results)
-            if stats["route_changed"] + stats["newly_served"] > 0:
+            if stats["route_changed"] + stats["newly_served"] + stats["newly_rejected"] > 0:
                 constraints.append(_round6(_entry(rel, results, stats, days)))
             else:
                 non_binding += 1
@@ -455,9 +498,16 @@ SHADOW_CAVEAT = (
     "cost of a protection — they are never a recommendation to relax them."
 )
 
+#: The sentence under the two tables (final-fix ruling C1, verbatim).
+NEWLY_REJECTED_NOTE = (
+    "Relaxing a constraint can newly reject a row: a wider allowed set can lift "
+    "the target to the risk floor, and the budget fallback never goes below the floor."
+)
+
 _PROTECTION_LABEL = "price of a protection — not a recommendation"
 
 _SHADOW_COLUMNS = ("requirement", "scope", "rows", "route changed", "rejections avoided",
+                   "newly rejected",
                    "cost saved/day (or Δcost both-routed)", "Δquality",
                    "Δp50 ms", "on-prem share (baseline→relaxed)")
 
@@ -482,6 +532,7 @@ def _shadow_row(entry: dict, *, security: bool) -> str:
         str(entry["rows_in_scope"]),
         str(entry["route_changed"]),
         str(entry["rejections_avoided"]),
+        str(entry["newly_rejected"]),
         _cost_cell(entry),
         _fmt(entry["quality_mean_delta"]),
         _fmt(entry["latency_p50_delta"]),
@@ -505,8 +556,8 @@ def _shadow_table(entries: list[dict], *, security: bool) -> list[str]:
 def render_shadow_section(block: dict) -> str:
     """The `report.md` "Shadow prices" section (spec §5): the caveat, then
     the operational-constraints table, then the cost-of-protection table
-    (every row labelled, never a recommendation), then a non-binding/skipped
-    footer."""
+    (every row labelled, never a recommendation), then the newly-rejected
+    note, then a non-binding/skipped footer."""
     lines: list[str] = ["## Shadow prices", ""]
     lines += ["> " + line for line in SHADOW_CAVEAT.split("\n")]
     lines.append("")
@@ -523,6 +574,9 @@ def render_shadow_section(block: dict) -> str:
     lines.append("### Cost of protection")
     lines.append("")
     lines += _shadow_table(protection, security=True)
+    lines.append("")
+
+    lines.append(NEWLY_REJECTED_NOTE)
     lines.append("")
 
     lines.append(f"Non-binding: {block['non_binding']} · "

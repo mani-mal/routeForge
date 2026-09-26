@@ -95,7 +95,7 @@ def test_endpoint_relaxation_scopes_all_rows():
 import asyncio
 
 import pytest
-from hypothesis import HealthCheck, given, settings as hsettings, strategies as st
+from hypothesis import HealthCheck, example, given, settings as hsettings, strategies as st
 
 from app.eval.shadow import ShadowInvariantError, shadow_prices
 from tests.eval.sim_fixtures import BASE_SETTINGS
@@ -264,20 +264,67 @@ _POLICY = st.fixed_dictionaries({}, optional={
     "allowed_tiers": st.lists(st.sampled_from(["cheap", "mid", "frontier"]), min_size=1, unique=True),
     "allowed_regions": st.just(["eu"]),
     "require_no_retention": st.just(True),
-    "max_cost_usd_per_request": st.sampled_from([1e-9, 0.01, 1.0]),
+    # 0.001 / 0.002 at 1000 prompt tokens: the cheap tier fits, the risk
+    # floor's tier does not (the final-fix C1 counterexamples).
+    "max_cost_usd_per_request": st.sampled_from([1e-9, 0.001, 0.002, 0.01, 1.0]),
 })
+
+
+def _relaxed_arms_newly_rejected(rows, snap, rel):
+    """Recompute, row by row, how many scoped rows `rel` turns from routed
+    into rejected -- independently of `shadow_prices`' own bookkeeping."""
+    from app.eval.scenario import build_scenario, close_scenario
+    from app.eval.simulate import simulate_row
+
+    async def go():
+        base = await build_scenario(snap, base=BASE_SETTINGS)
+        doc_r, scoped = rel.apply(snap, rows)
+        relaxed = await build_scenario(doc_r, base=BASE_SETTINGS)
+        try:
+            by_id = {r["request_id"]: r for r in rows}
+            n, codes = 0, {}
+            for row in scoped:
+                b = simulate_row(base, by_id[row["request_id"]], {})
+                r = simulate_row(relaxed, row, {})
+                assert set(b.eligible) <= set(r.eligible)
+                if b.outcome == "routed" and r.outcome == "rejected":
+                    n += 1
+                    for code in r.reject_codes:
+                        codes[code] = codes.get(code, 0) + 1
+            return n, codes
+        finally:
+            await close_scenario(relaxed)
+            await close_scenario(base)
+    return asyncio.run(go())
 
 
 @hsettings(max_examples=25, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(policy=_POLICY, etypes=st.lists(st.sampled_from(["US_SSN", "PERSON"]), unique=True, max_size=2),
-       complexity=st.floats(0.0, 3.0))
-def test_monotonic_for_random_policies(policy, etypes, complexity):   # spec §7.4
-    snap = make_snapshot(providers={"azure": {"enabled": True}},
-                         apps=[app_entry("a", **policy)])
-    rows = [make_row("h", "a", detected_entity_types=etypes, complexity=complexity)]
-    block = _run(rows, snap)   # raises ShadowInvariantError on any breach
+       complexity=st.floats(0.0, 3.0), prompt_tokens=st.sampled_from([200, 1000]),
+       bedrock=st.booleans())
+@example(policy={"allowed_tiers": ["cheap"], "max_cost_usd_per_request": 0.001},
+         etypes=["US_SSN"], complexity=0.1, prompt_tokens=1000, bedrock=False)   # Case A
+@example(policy={"residency": "onprem_only", "max_cost_usd_per_request": 0.002},
+         etypes=["US_SSN"], complexity=0.1, prompt_tokens=1000, bedrock=True)    # Case B
+def test_eligible_superset_for_random_policies(policy, etypes, complexity, prompt_tokens,
+                                               bedrock):   # spec §7.4 (as amended)
+    providers = {"azure": {"enabled": True}}
+    if bedrock:
+        providers["bedrock"] = {"enabled": True}
+    snap = make_snapshot(providers=providers, apps=[app_entry("a", **policy)])
+    rows = [make_row("h", "a", detected_entity_types=etypes, complexity=complexity,
+                     prompt_tokens=prompt_tokens)]
+    block = _run(rows, snap)   # raises ShadowInvariantError on a superset breach only
+    rels = {(r.requirement, r.scope_key()): r for r in enumerate_relaxations(snap, rows)[0]}
     for c in block["constraints"]:
-        assert c["route_changed"] + c["rejections_avoided"] > 0
+        assert c["route_changed"] + c["rejections_avoided"] + c["newly_rejected"] > 0
+        assert c["newly_rejected"] >= 0
+        assert sum(c["newly_rejected_reasons"].values()) >= c["newly_rejected"]
+        scope = c["scope"]
+        key = f"endpoint:{scope['endpoint']}" if "endpoint" in scope else f"app:{scope['app']}"
+        n, codes = _relaxed_arms_newly_rejected(rows, snap, rels[(c["requirement"], key)])
+        assert c["newly_rejected"] == n
+        assert c["newly_rejected_reasons"] == dict(sorted(codes.items()))
 
 
 # --- Task 2 fix round 1 -------------------------------------------------------
@@ -296,14 +343,19 @@ def _fake_relaxed_arm(monkeypatch, mutate):
     monkeypatch.setattr(shadow, "simulate_row", fake)
 
 
-def test_invariant_routed_to_rejected_raises_alone(monkeypatch):
+def test_routed_to_rejected_is_reported_not_raised(monkeypatch):
     import dataclasses
-    # Eligible set kept intact: only the routed -> rejected branch can fire.
+    # Eligible set kept intact: a routed -> rejected row is a reportable
+    # result (final-fix C1), not an invariant breach.
     _fake_relaxed_arm(monkeypatch, lambda arm: dataclasses.replace(
-        arm, outcome="rejected", model=None, provider=None, tier=None))
+        arm, outcome="rejected", model=None, provider=None, tier=None,
+        reject_codes=("over_budget",)))
     snap = make_snapshot(apps=[app_entry("a")])
-    with pytest.raises(ShadowInvariantError, match="was routed to .* but rejected"):
-        _run([make_row("r1", "a")], snap)
+    block = _run([make_row("r1", "a")], snap)   # must not raise
+    e = _entry(block, "max_cost_usd_per_request", app="a")
+    assert e and e["newly_rejected"] == 1
+    assert e["newly_rejected_reasons"] == {"over_budget": 1}
+    assert e["route_changed"] == 0 and e["rejections_avoided"] == 0
 
 
 def test_invariant_lost_eligible_raises_alone(monkeypatch):
@@ -375,6 +427,7 @@ def _shadow_entry(requirement, *, app="a", security=False, rejections_avoided=0,
         "requirement": requirement, "scope": {"app": app}, "security": security,
         "relaxed_to": "null", "rows_in_scope": 5, "route_changed": route_changed,
         "rejections_avoided": rejections_avoided,
+        "newly_rejected": 0, "newly_rejected_reasons": {},
         "cost_usd": {"baseline": 1.0, "relaxed": 0.5, "delta": -0.5},
         "cost_usd_both_routed": {"baseline": 1.0, "relaxed": 0.5, "delta": both_delta},
         "cost_saved_per_day": cost_saved_per_day,
@@ -426,3 +479,137 @@ def test_render_shadow_section_operational_and_protection_are_separated():
     prot_section = text[prot_idx:]
     assert "None." in prot_section
     assert "price of a protection" not in text[:prot_idx]
+
+
+# --- final fix wave: C1 (newly rejected), M1, M2 ------------------------------
+
+
+def _high_risk_row():
+    return make_row("r1", "a", detected_entity_types=["US_SSN"], risk_class="high",
+                    prompt_tokens=1000)
+
+
+def test_case_a_allowed_tiers_relaxation_newly_rejects_over_budget():
+    # allowed_tiers=[cheap] clamps the high-risk target to cheap (rule 8),
+    # which fits the 0.001 budget. Relaxing allowed_tiers makes the frontier
+    # floor eligible; the target lifts to it, it is over budget, and the
+    # budget fallback never drops below the floor -> rejected.
+    snap = make_snapshot(apps=[app_entry("a", allowed_tiers=["cheap"],
+                                         max_cost_usd_per_request=0.001)])
+    block = _run([_high_risk_row()], snap)   # must not raise
+    e = _entry(block, "allowed_tiers", app="a")
+    assert e is not None                     # binding on newly_rejected alone
+    assert e["newly_rejected"] == 1
+    assert e["newly_rejected_reasons"] == {"over_budget": 1}
+    assert e["route_changed"] == 0 and e["rejections_avoided"] == 0
+    assert e["moves"] == [{"from": "local-cheap", "to": "(rejected)", "count": 1}]
+
+
+def test_case_b_hospital_residency_relaxation_newly_rejects_over_budget():
+    # The hospital persona: onprem_only, high-risk SSN, on-prem has cheap +
+    # mid only, cloud frontier enabled. Baseline clamps to the best allowed
+    # on-prem tier (mid) and routes. Relaxing residency makes the cloud
+    # frontier floor eligible; it is over the 0.002 budget -> rejected.
+    snap = make_snapshot(providers={"azure": {"enabled": True}, "bedrock": {"enabled": True}},
+                         onboarded=[onboarded_row("local-cheap", "cheap"),
+                                    onboarded_row("local-mid", "mid")],
+                         apps=[app_entry("a", residency="onprem_only",
+                                         max_cost_usd_per_request=0.002)])
+    block = _run([_high_risk_row()], snap)   # must not raise
+    e = _entry(block, "residency", app="a")
+    assert e is not None and e["security"] is True
+    assert e["newly_rejected"] == 1
+    assert e["newly_rejected_reasons"] == {"over_budget": 1}
+    assert e["route_changed"] == 0 and e["rejections_avoided"] == 0
+
+
+def test_newly_rejected_fields_on_every_entry():
+    snap = make_snapshot(apps=[app_entry("a", allowed_tiers=["frontier"])])
+    e = _entry(_run([make_row("r1", "a")], snap), "allowed_tiers", app="a")
+    assert e["newly_rejected"] == 0 and e["newly_rejected_reasons"] == {}
+
+
+def test_render_has_newly_rejected_column_and_note():
+    from app.eval.shadow import NEWLY_REJECTED_NOTE
+    entry = _shadow_entry("allowed_tiers", cost_saved_per_day=1.5)
+    entry.update(newly_rejected=2, newly_rejected_reasons={"over_budget": 2})
+    prot = _shadow_entry("residency", security=True)
+    block = {"baseline": "snapshot", "evaluated": 2, "skipped_by_cap": 0, "non_binding": 0,
+             "constraints": [entry, prot]}
+    text = render_shadow_section(block)
+    headers = [line for line in text.splitlines() if line.startswith("| requirement |")]
+    assert len(headers) == 2 and all("| newly rejected |" in h for h in headers)
+    assert "| rejections avoided | newly rejected |" in headers[0]
+    assert "| allowed_tiers | app:a | 5 | 0 | 0 | 2 |" in text
+    assert NEWLY_REJECTED_NOTE == (
+        "Relaxing a constraint can newly reject a row: a wider allowed set can lift "
+        "the target to the risk floor, and the budget fallback never goes below the floor.")
+    assert NEWLY_REJECTED_NOTE in text
+    assert text.index("### Cost of protection") < text.index(NEWLY_REJECTED_NOTE) \
+        < text.index("Non-binding:")
+
+
+# M1: `feasible._declared` strips and lowercases, so any spelling of "false"
+# is enforced as false -- the relaxation must see (and flip) it too.
+
+@pytest.mark.parametrize("spelling", ["False", " FALSE ", "false"])
+def test_raw_sensitive_declaration_is_case_and_space_insensitive(spelling):
+    snap = make_snapshot(providers={"azure": {"enabled": True, "accepts_raw_sensitive": spelling}},
+                         apps=[_raw_app("a")])
+    rows = [make_row("ra", "a", detected_entity_types=["US_SSN"])]
+    rels, _ = enumerate_relaxations(snap, rows)
+    assert ("raw_sensitive", "a", None) in _ids(rels)
+    doc, _ = Relaxation("raw_sensitive", "a", None, "true").apply(snap, rows)
+    assert doc["settings"]["providers"]["azure"]["accepts_raw_sensitive"] == "true"
+
+
+def test_raw_sensitive_capitalised_false_binds():
+    snap = make_snapshot(onboarded=[],
+                         providers={"azure": {"enabled": True, "accepts_raw_sensitive": "False"}},
+                         apps=[_raw_app("a")])
+    rows = [make_row("ra", "a", detected_entity_types=["US_SSN"])]
+    e = _entry(_run(rows, snap), "raw_sensitive", app="a")
+    assert e and e["rejections_avoided"] == 1
+
+
+def test_raw_sensitive_flip_keeps_the_field_shape():
+    snap = make_snapshot(onboarded=[onboarded_row("local-cheap", "cheap",
+                                                  accepts_raw_sensitive=False)],
+                         providers={"azure": {"enabled": True, "accepts_raw_sensitive": "FALSE"}},
+                         apps=[app_entry("a")])
+    doc, _ = Relaxation("raw_sensitive", "a", None, "true").apply(snap, [make_row("r1", "a")])
+    assert doc["onboarded"][0]["accepts_raw_sensitive"] is True
+    assert doc["settings"]["providers"]["azure"]["accepts_raw_sensitive"] == "true"
+
+
+# M2: risk_floor candidacy uses the risk class replay derives from the
+# row's entities and the doc's rules, never the recorded `risk_class`.
+
+def test_risk_floor_candidate_without_recorded_risk_class():
+    snap = make_snapshot(apps=[app_entry("a")])
+    row = make_row("r1", "a", detected_entity_types=["US_SSN"])
+    del row["risk_class"]
+    rels, _ = enumerate_relaxations(snap, [row])
+    assert ("risk_floor", "a", None) in _ids(rels)
+
+
+def test_risk_floor_candidacy_respects_a_proposal_rule_change():
+    from app.eval.proposal import apply_proposal
+    snap = make_snapshot(apps=[app_entry("a")])
+    # Recorded as high risk under the old rules ...
+    row = make_row("r1", "a", detected_entity_types=["US_SSN"], risk_class="high")
+    assert ("risk_floor", "a", None) in _ids(enumerate_relaxations(snap, [row])[0])
+    # ... but the proposal gives app "a" its own rules, classifying US_SSN low.
+    low = {"entities": ["US_SSN"], "sensitivity": "internal", "risk_class": "low",
+           "residency": "any", "require_verification": False}
+    doc = apply_proposal(snap, {"schema": "routeforge.policy-proposal/v1",
+                                "apps": {"a": {"sensitivity_rules": [low]}}},
+                         base=BASE_SETTINGS)
+    assert ("risk_floor", "a", None) not in _ids(enumerate_relaxations(doc, [row])[0])
+    # And the reverse: recorded low, the proposal makes PERSON high risk.
+    high = dict(low, entities=["PERSON"], sensitivity="restricted", risk_class="high")
+    row2 = make_row("r2", "a", detected_entity_types=["PERSON"], risk_class="low")
+    doc2 = apply_proposal(snap, {"schema": "routeforge.policy-proposal/v1",
+                                 "apps": {"a": {"sensitivity_rules": [high]}}},
+                          base=BASE_SETTINGS)
+    assert ("risk_floor", "a", None) in _ids(enumerate_relaxations(doc2, [row2])[0])

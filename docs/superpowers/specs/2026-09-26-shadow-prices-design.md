@@ -65,23 +65,39 @@ it re-simulates all rows.
 - `allowed_providers`, `allowed_regions`, `allowed_tiers` and `allowed_models` when set
   (non-null);
 - `require_no_retention` when `true`;
-- `raw_sensitive` when any endpoint declares `accepts_raw_sensitive: false`;
+- `raw_sensitive` when any endpoint declares `accepts_raw_sensitive: false` (a bool, or a
+  string that is `false` once stripped and lowercased, as serving reads it);
 - `requested_model` when any of its rows carries a `requested_model`;
 - `max_cost_usd_per_request` always, because the deployment default always applies;
-- `risk_floor` when any of its rows' risk floor is above `cheap`.
+- `risk_floor` when any of its rows' risk floor is above `cheap`. The row's risk class is the
+  one replay derives (its `detected_entity_types` against the app's resolved sensitivity rules
+  in the baseline doc), not the recorded `risk_class`, so a proposal's rule change is respected.
 
 Also, `endpoint_app_allowlist` for each onboarded endpoint with a non-null `allowed_app_ids`.
 
 `--max-relaxations N` (default 50) caps the number evaluated. When the cap cuts the list short,
 the report says how many were skipped.
 
-**Invariant (monotonicity).** Every relaxation only widens eligibility. For every re-simulated
-row:
-- the relaxed eligible set is a superset of the baseline eligible set;
-- a baseline-routed row is never rejected under the relaxation.
+**Invariant (eligible superset).** Every relaxation only widens eligibility. For every
+re-simulated row, the relaxed eligible set (`feasible_set`) is a superset of the baseline
+eligible set. A test enforces it. A breach raises `ShadowInvariantError`, and the CLI exits 2
+with an internal-invariant error rather than reporting it.
 
-A test enforces both. `newly_rejected` is therefore always 0. If a run ever sees a non-zero
-value, the CLI exits 2 with an internal-invariant error rather than reporting it.
+A baseline-routed row **can** be rejected under a relaxation. That is a reportable result
+(`newly_rejected`, §4), not an invariant breach.
+
+> **As-built amendment (2026-09-26).** This section originally stated a second invariant: "a
+> baseline-routed row is never rejected under the relaxation", so `newly_rejected` would always
+> be 0. That was false. The eligible set is monotone in the relaxation, but the router is not
+> monotone in the eligible set. Rule 8 clamps a high-risk row's target tier to the best
+> *allowed* tier, which can sit below the risk floor. When a relaxation makes the floor tier
+> eligible, the target becomes that tier. If the floor tier is over the app's budget, the
+> budget fallback in `app/routing/router.py` will not drop below the floor, so the row is
+> rejected `over_budget`. The final review found two cases: `allowed_tiers: [cheap]` with a
+> 0.001 budget (Case A), and the hospital persona — `onprem_only`, on-prem cheap and mid only,
+> a cloud frontier enabled, a 0.002 budget, relaxing `residency` (Case B). Both are ordinary
+> configurations, and the original check raised `ShadowInvariantError` on them. The fix keeps
+> the eligible-superset check as the only hard invariant and reports the rest.
 
 ## 4. Metrics
 
@@ -91,6 +107,10 @@ using P3a's existing per-row `ArmResult` and bucket-stat helpers. The metrics ar
 - `rows_in_scope`;
 - `route_changed`;
 - `rejections_avoided`, the P3a `newly_served`;
+- `newly_rejected`, the rows routed at baseline and rejected when relaxed (§3, as-built
+  amendment);
+- `newly_rejected_reasons`, a sorted `{reject code: rows}` map over those rows, from the
+  relaxed arm's reject codes (a row with several codes counts under each);
 - `cost_usd`: baseline, relaxed and delta;
 - `cost_usd_both_routed`: baseline, relaxed and delta over rows routed in both arms;
 - `cost_saved_per_day`: `-(both-routed delta) / window_days`, or null when the export window is
@@ -99,11 +119,12 @@ using P3a's existing per-row `ArmResult` and bucket-stat helpers. The metrics ar
 - `quality_mean` delta;
 - `latency_ms.p50` delta;
 - `onprem_share`: baseline and relaxed;
-- `affected_apps`: the apps with any route change or avoided rejection;
+- `affected_apps`: the apps with any route change, avoided rejection or new rejection;
 - `moves`: the top 5 `(from → to)` pairs.
 
-A relaxation whose rows all route identically is **non-binding**. Non-binding relaxations are
-counted, not listed.
+A relaxation is **binding** when any of `route_changed`, `rejections_avoided` or
+`newly_rejected` is non-zero. A relaxation whose rows all route identically is
+**non-binding**. Non-binding relaxations are counted, not listed.
 
 ## 5. Output
 
@@ -124,6 +145,7 @@ counted, not listed.
     {"requirement": "allowed_tiers", "scope": {"app": "acme"}, "security": false,
      "relaxed_to": "null",
      "rows_in_scope": 120, "route_changed": 30, "rejections_avoided": 4,
+     "newly_rejected": 1, "newly_rejected_reasons": {"over_budget": 1},
      "cost_usd": {"baseline": …, "relaxed": …, "delta": …}, "cost_saved_per_day": …,
      "quality_mean_delta": …, "latency_p50_delta": …,
      "onprem_share": {"baseline": …, "relaxed": …},
@@ -148,6 +170,10 @@ It then has two tables:
 - **Cost of protection:** security ids, the same columns, each row labelled "price of a
   protection — not a recommendation".
 
+Both tables carry a "Newly rejected" column. Under the tables, one sentence, verbatim:
+"Relaxing a constraint can newly reject a row: a wider allowed set can lift the target to the
+risk floor, and the budget fallback never goes below the floor."
+
 A footer gives the non-binding count and the number skipped by the cap.
 
 ## 6. Components
@@ -155,7 +181,7 @@ A footer gives the non-binding count and the number skipped by the cap.
 | Unit | File | Role |
 |---|---|---|
 | Relaxations | `app/eval/shadow.py` (new) | A `Relaxation` dataclass holding `requirement`, `scope`, `relaxed_to`, and a `apply(doc, rows) -> (doc, rows_in_scope)` function. `enumerate_relaxations(doc, rows, *, cap)` enumerates candidates. |
-| Evaluation | `app/eval/shadow.py` | `async shadow_prices(records, baseline_doc, *, base, cap) -> dict`. It builds the baseline scenario once. Per relaxation it builds the relaxed scenario, re-simulates the in-scope rows with `simulate_row`, checks the monotonicity invariant, and computes the §4 metrics. Every scenario is closed in a `finally`. |
+| Evaluation | `app/eval/shadow.py` | `async shadow_prices(records, baseline_doc, *, base, cap) -> dict`. It builds the baseline scenario once. Per relaxation it builds the relaxed scenario, re-simulates the in-scope rows with `simulate_row`, checks the eligible-superset invariant, and computes the §4 metrics. Every scenario is closed in a `finally`. |
 | Summary and render | `app/eval/shadow.py` | `render_shadow_section(block) -> str` |
 | CLI | `scripts/policy_simulate.py` | The two flags, wiring, and exit code 2 on an invariant breach. |
 
@@ -169,8 +195,12 @@ A footer gives the non-binding count and the number skipped by the cap.
    gives zero deltas and is counted in `non_binding`, not listed.
 3. **Scoping.** Relaxing app A's `residency` never re-simulates or changes app B's rows. The
    same holds for `risk_floor` and `raw_sensitive`, which edit shared data.
-4. **Monotonicity (Hypothesis).** Across random fixtures and relaxations, the relaxed eligible
-   set is a superset of the baseline set and `newly_rejected == 0`.
+4. **Eligible superset (Hypothesis).** Across random fixtures and relaxations, the relaxed
+   eligible set is a superset of the baseline set. `newly_rejected >= 0` and matches a
+   row-by-row recount of the arms. The strategy reaches "cheap fits, the floor tier does not"
+   (a tight budget, a high-risk entity and a large prompt). Deterministic tests pin Case A and
+   Case B (§3 amendment): no raise, binding, `newly_rejected == 1`, reason `over_budget`.
+   *(As-built amendment 2026-09-26: this item originally asserted `newly_rejected == 0`.)*
 5. **Security separation.** Security ids appear only in the protection table, and the caveat
    and per-row label are present.
 6. **Cap.** `--max-relaxations 2` evaluates 2 and reports the rest as skipped.
@@ -187,7 +217,7 @@ A footer gives the non-binding count and the number skipped by the cap.
   relaxation table, the scoping rule, the metrics, the two tables and the non-recommendation
   rule.
 - `docs/research/feasible-route-bench.md` §17: the model (one-at-a-time relaxation over
-  recorded traffic, scoped attribution), the monotonicity invariant, and a Spark results slot
+  recorded traffic, scoped attribution), the eligible-superset invariant (and the §3 amendment's counterexample), and a Spark results slot
   ("Pending the Spark run").
 
 ## 9. Deployment

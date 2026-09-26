@@ -206,7 +206,7 @@ uv run python scripts/policy_simulate.py \
 | Code | Meaning |
 |---|---|
 | `0` | `simulation.json` and `report.md` written |
-| `2` | an input failed to load, validate or apply — a bad export, an invalid proposal (unknown key, bad value, a container of the wrong type), a malformed snapshot (a missing or mistyped nested key, named by its dotted path), a snapshot that loads structurally but fails **deep** validation during `simulate()`/`shadow_prices()` (for example a provider the running deployment's own `config/` never declared), a `--config-dir` that cannot load (missing key, bad YAML, a failed config lint), neither `--proposal` nor `--shadow-prices` given, `--max-relaxations < 1`, or a shadow-prices monotonicity invariant breach (`ShadowInvariantError`, printed as `error: internal invariant: ...` — spec §3; this should never happen in practice, since every relaxation only widens eligibility, so it means a bug, not a reportable finding). Nothing is written; the offending location is on stderr — never a traceback. |
+| `2` | an input failed to load, validate or apply — a bad export, an invalid proposal (unknown key, bad value, a container of the wrong type), a malformed snapshot (a missing or mistyped nested key, named by its dotted path), a snapshot that loads structurally but fails **deep** validation during `simulate()`/`shadow_prices()` (for example a provider the running deployment's own `config/` never declared), a `--config-dir` that cannot load (missing key, bad YAML, a failed config lint), neither `--proposal` nor `--shadow-prices` given, `--max-relaxations < 1`, or a shadow-prices eligible-superset invariant breach (`ShadowInvariantError`, printed as `error: internal invariant: ...` — spec §3; a relaxation narrowed some row's eligible set, which should never happen since every relaxation only widens eligibility, so it means a bug, not a reportable finding). A relaxation that newly **rejects** a baseline-routed row is *not* a breach — it is reported as `newly_rejected` (§8.4) and exits `0`. Nothing is written; the offending location is on stderr — never a traceback. |
 | `3` | the proposal introduces new rejections and `--fail-on-new-rejections` was passed |
 
 The CLI is file-based only: no DB, no `app.api` import, no network
@@ -350,7 +350,7 @@ them.
 ## 8. Shadow prices (P3c-1)
 
 Design: `docs/superpowers/specs/2026-09-26-shadow-prices-design.md`. Research notes (the
-model, scoped attribution, the monotonicity invariant): `docs/research/feasible-route-bench.md`
+model, scoped attribution, the eligible-superset invariant and its counterexample): `docs/research/feasible-route-bench.md`
 §17. Code: `app/eval/shadow.py` (`Relaxation`, `enumerate_relaxations`, `shadow_prices`,
 `render_shadow_section`), wired into `scripts/policy_simulate.py` by `--shadow-prices`.
 
@@ -396,13 +396,20 @@ P3b's minimal conflicting core uses (`app/policy/core.py::REQUIREMENT_ORDER`,
 A relaxation is only a **candidate** when the constraint is actually set for that app (or,
 for `endpoint_app_allowlist`, when the endpoint has a non-null `allowed_app_ids`) —
 `max_cost_usd_per_request` is the one exception, always a candidate, because the deployment
-default always applies. Candidates are enumerated deterministically: app id, then
+default always applies. `raw_sensitive` counts a declaration as `false` the way serving
+enforces it: a bool `false`, or any string that is `false` once stripped and lowercased
+(`"False"`, `" FALSE "`); the flip keeps the field's shape (bool `true`, or the string
+`"true"`). `risk_floor` is a candidate when a row's risk floor is above `cheap`, using the
+risk class replay derives from the row's `detected_entity_types` and the app's resolved
+sensitivity rules in the baseline doc — never the recorded `risk_class`, so a `--proposal`
+rule change is respected. Candidates are enumerated deterministically: app id, then
 `REQUIREMENT_ORDER`, then endpoint slug. `--max-relaxations N` (default 50) caps how many
 are evaluated; when the cap cuts the list short, `skipped_by_cap` in the block and the
 report footer say how many.
 
 A relaxation whose rows all route identically under both arms is **non-binding** — counted
-in `non_binding`, never listed in either table.
+in `non_binding`, never listed in either table. A relaxation is **binding** when any of
+`route_changed`, `rejections_avoided` or `newly_rejected` is non-zero.
 
 ### 8.3 The scoping rule
 
@@ -421,7 +428,9 @@ row, because any app's requests could route to that endpoint.
 Per relaxation, the baseline arm is compared with the relaxed arm over the re-simulated
 rows, using the same per-row `ArmResult` and bucket-stat helpers §4 uses:
 `rows_in_scope`, `route_changed`, `rejections_avoided` (the `newly_served` count),
-`cost_usd` (baseline/relaxed/delta over each arm's routed rows), `cost_usd_both_routed`
+`newly_rejected` (rows routed at baseline and rejected when relaxed — see the invariant
+below), `newly_rejected_reasons` (a sorted `{reject code: rows}` map over those rows, from
+the relaxed arm's reject codes, e.g. `{"over_budget": 1}`), `cost_usd` (baseline/relaxed/delta over each arm's routed rows), `cost_usd_both_routed`
 (same shape, only rows routed in both arms), `cost_saved_per_day`, `quality_mean_delta`,
 `latency_p50_delta`, `onprem_share` (baseline/relaxed), `affected_apps` and the top 5
 `moves`.
@@ -440,12 +449,26 @@ not here. `cost_usd_both_routed` is reported alongside it so both readings are v
 relaxation's scoped rows — so every relaxation's per-day figure is comparable against every
 other's; it is `null` (and so is `cost_saved_per_day`) when that window is under a day.
 
-**The monotonicity invariant.** Every relaxation can only widen what an app may use: for
-every re-simulated row, the relaxed eligible set is a superset of the baseline eligible
-set, and a row routed at baseline is never rejected under the relaxation. A test enforces
-both (Hypothesis, `tests/eval/test_shadow.py::test_monotonic_for_random_policies`); a
-breach is `ShadowInvariantError`, which is never a reportable finding — the CLI exits `2`
-naming it (§3 above), because it means a bug in the relaxation logic, not a real result.
+**The eligible-superset invariant.** Every relaxation can only widen what an app may use:
+for every re-simulated row, the relaxed eligible set (`feasible_set`) is a superset of the
+baseline eligible set. That is the only hard invariant. A test enforces it (Hypothesis,
+`tests/eval/test_shadow.py::test_eligible_superset_for_random_policies`); a breach is
+`ShadowInvariantError`, which is never a reportable finding — the CLI exits `2` naming it
+(§3 above), because it means a bug in the relaxation logic, not a real result.
+
+**A relaxation can newly reject a row — reported, not raised.** The *router* is not
+monotone in the feasible set, so "a row routed at baseline is never rejected when relaxed"
+does **not** hold. Rule 8 clamps a high-risk row's target tier to the best *allowed* tier,
+which can sit below the risk floor. When a relaxation makes the floor tier eligible, the
+target lifts to that tier; if it is over the app's `max_cost_usd_per_request`, the budget
+fallback will not drop below the floor, and the row is rejected `over_budget`. The hospital
+persona is the canonical case: `onprem_only`, a high-risk SSN, on-prem serving only cheap
+and mid, a cloud frontier enabled, and a tight budget. At baseline the row clamps to the
+on-prem mid tier and routes; relaxing `residency` makes the cloud frontier floor eligible,
+it is over budget, and the row is rejected. Each entry therefore reports `newly_rejected`
+and `newly_rejected_reasons`, and such a relaxation is binding. (Amended 2026-09-26: the
+original design claimed the routed→rejected half as an invariant; it was wrong. See
+`docs/research/feasible-route-bench.md` §17.3.)
 
 ### 8.5 The two tables and the non-recommendation rule
 
@@ -456,7 +479,7 @@ naming it (§3 above), because it means a bug in the relaxation logic, not a rea
 > cost of a protection — they are never a recommendation to relax them.
 
 Then two ranked tables over the same columns — requirement, scope, rows, route changed,
-rejections avoided, cost saved/day (falling back to `cost_usd_both_routed`'s delta when the
+rejections avoided, newly rejected, cost saved/day (falling back to `cost_usd_both_routed`'s delta when the
 export window is under a day), Δquality, Δp50 ms, on-prem share (baseline→relaxed):
 
 - **Operational constraints** — every binding non-security requirement.
@@ -470,8 +493,10 @@ Either table reads "None." when it has no binding entries. Both are ranked by th
 requirement, scope_key)` — the biggest like-for-like saving first (falling back to the raw
 both-routed delta when the export window is under a day and there is no per-day figure),
 then the most rejections avoided, then a deterministic tie-break on requirement id and
-scope. A footer gives the non-binding count and the number skipped by the cap:
-`Non-binding: N · skipped by cap: M`.
+scope. Under the tables sits one sentence, verbatim: "Relaxing a constraint can newly
+reject a row: a wider allowed set can lift the target to the risk floor, and the budget
+fallback never goes below the floor." A footer then gives the non-binding count and the
+number skipped by the cap: `Non-binding: N · skipped by cap: M`.
 
 **`simulation.json`'s `shadow_prices` block** carries the same data as a nested object:
 `baseline` (`"snapshot"` or `"snapshot+proposal"`), `evaluated`, `skipped_by_cap`,

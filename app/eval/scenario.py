@@ -356,6 +356,25 @@ def _app_policy_view(policy: dict, app_id: str) -> AppPolicyView:
     return AppPolicyView(**converted)
 
 
+def app_rules(entry: dict, settings: Settings) -> list[SensitivityRuleView]:
+    """One snapshot app entry's resolved sensitivity rules -- its own
+    `sensitivity_rules` if any, else `settings.policy`'s, always ending in
+    the public catch-all (`effective_rules`). The replay's rule list for
+    that app; public so offline callers classify rows exactly as replay
+    does (P3c-1 `risk_floor` candidacy). Only `settings.policy` is read."""
+    profile = AppPrivacyProfile(
+        recognizers=(),
+        rules=tuple(
+            SensitivityRuleView(
+                entities=frozenset(r["entities"]),
+                sensitivity=r["sensitivity"],
+                risk_class=r["risk_class"],
+                residency=r["residency"],
+                require_verification=r["require_verification"])
+            for r in entry["sensitivity_rules"]))
+    return effective_rules(profile, settings)
+
+
 async def build_scenario(doc: dict, *, base: Settings) -> Scenario:
     settings = build_settings(doc, base)   # runs validate_snapshot first
     canonical_tiers = set(settings.routing.tiers)
@@ -417,17 +436,7 @@ async def build_scenario(doc: dict, *, base: Settings) -> Scenario:
         for entry in doc["apps"]:
             app_id = entry["application_id"]
             view = _app_policy_view(entry["policy"], app_id)
-            profile = AppPrivacyProfile(
-                recognizers=(),
-                rules=tuple(
-                    SensitivityRuleView(
-                        entities=frozenset(r["entities"]),
-                        sensitivity=r["sensitivity"],
-                        risk_class=r["risk_class"],
-                        residency=r["residency"],
-                        require_verification=r["require_verification"])
-                    for r in entry["sensitivity_rules"]))
-            rules = effective_rules(profile, settings)
+            rules = app_rules(entry, settings)
             eff = compile_policy(view, settings)
             apps[app_id] = AppScenario(
                 application_id=app_id, name=entry["name"], view=view, rules=rules, eff=eff)

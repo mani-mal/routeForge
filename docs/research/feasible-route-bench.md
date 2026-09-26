@@ -2248,37 +2248,87 @@ and `test_endpoint_allowlist_resimulates_all_rows` (endpoint-scoped: all rows re
 `test_residency_relaxation_is_security_and_scoped` (an app-scoped security relaxation never
 touches a second app's rows or count).
 
-### 17.3 The monotonicity invariant and test names
+### 17.3 The eligible-superset invariant, a counterexample, and test names
 
 Every relaxation only ever *widens* what an app may use — nothing in the spec §3 table can
-narrow eligibility. That gives a checkable invariant, over every re-simulated row: the relaxed
-eligible set is a superset of the baseline eligible set, and a row routed at baseline is never
-rejected under the relaxation. If a run ever produces a row that violates either half, it means
-a bug in the relaxation logic itself (an `_APPLIERS` entry that narrows something, or a scoping
-mistake that re-simulates a row outside the relaxation's actual effect) — never a real finding,
-so it is not reported as one. `_check_monotone` (`app/eval/shadow.py`) raises
-`ShadowInvariantError` on either violation, and `scripts/policy_simulate.py` maps that straight
-to exit `2` with `error: internal invariant: ...` on stderr — the same "never a traceback, name
-what broke" contract every other input-validation failure in this CLI already has.
+narrow eligibility. That gives a checkable invariant over every re-simulated row: **the
+relaxed eligible set (`feasible_set`) is a superset of the baseline eligible set.** A row that
+violates it means a bug in the relaxation logic itself (an `_APPLIERS` entry that narrows
+something, or a scoping mistake) — never a real finding, so it is not reported as one.
+`_check_eligible_superset` (`app/eval/shadow.py`) raises `ShadowInvariantError`, and
+`scripts/policy_simulate.py` maps that straight to exit `2` with `error: internal invariant:
+...` on stderr — the same "never a traceback, name what broke" contract every other
+input-validation failure in this CLI already has. This is the only hard invariant.
 
-The invariant is pinned four ways:
+**Counterexample: the original claim was wrong.** The design (commit `9205c18`, and the spec
+§3 as first written) claimed a second half: "a row routed at baseline is never rejected under
+the relaxation", so `newly_rejected` would always be 0 and any non-zero value would exit 2.
+That is false. Eligibility is monotone in the relaxation, but **the router is not monotone in
+the eligible set.** The model, from `app/routing/router.py`:
+
+- *Target.* The target tier is `max(complexity tier, risk_floors[risk_class], escalation
+  min_tier)`.
+- *The clamp (rule 8, residency beats the risk floor).* If the target is above the best tier
+  among the policy-allowed candidates, it is clamped down to that best allowed tier — which
+  can sit **below** the risk floor. This is what keeps a high-risk `onprem_only` request on
+  prem instead of lifting it to a cloud tier.
+- *The budget fallback.* If every candidate at the picked tier is over
+  `max_cost_usd_per_request`, the router steps down to the most capable cheaper allowed tier
+  that fits — but only down to `floor = max(risk floor, escalation min_tier)`, never below
+  it. When the clamp already put the pick below the floor, there is nothing to step to.
+
+So a relaxation that makes the floor tier eligible **removes the clamp**: the target lifts to
+the floor tier, which a tight budget cannot afford, and the fallback cannot go below the
+floor. The row that routed at baseline is now rejected `over_budget`. The final review found
+it on ordinary fixtures and, with it, the product's most important persona:
+
+- **Case B — the hospital persona.** App `a` is `onprem_only` with
+  `max_cost_usd_per_request: 0.002`. On-prem serving has onboarded only a cheap and a mid
+  endpoint; Azure and Bedrock are enabled, with a cloud frontier model. One row: a detected
+  `US_SSN` (high risk, floor `frontier`), 1000 prompt tokens, complexity 0.1. At baseline the
+  eligible set is the two on-prem endpoints; the target clamps from `frontier` to `mid`, the
+  mid endpoint fits the budget, and the row routes to it. Relaxing `residency` (to `any`,
+  escalation off) makes the cloud models eligible — a strict superset, so the invariant
+  holds. The target is no longer clamped: it is `frontier`, the frontier model is over the
+  0.002 cap, the fallback floor is `frontier`, and the row is rejected `over_budget`.
+- **Case A.** `allowed_tiers: [cheap]`, `max_cost_usd_per_request: 0.001`, the same high-risk
+  row. At baseline the target clamps to `cheap` and routes. Relaxing `allowed_tiers` makes the
+  frontier floor eligible, and the row is rejected `over_budget` the same way.
+
+Both are ordinary configurations, and the shipped check raised `ShadowInvariantError` on them
+— an operator pricing their hospital app's residency would have got exit 2 instead of an
+answer. The router is behaving as designed (rule 8 plus a floor-respecting budget); the error
+was the claim. The as-built fix (spec §3 amendment, 2026-09-26) keeps the eligible-superset
+check as the only hard invariant and **reports** the other half: each entry carries
+`newly_rejected` and `newly_rejected_reasons` (`{"over_budget": 1}` in both cases), such an
+entry is binding, and `report.md` prints a "Newly rejected" column plus a one-line
+explanation under the tables. Read as a shadow price, a newly rejected row is a real finding:
+it says the constraint was silently *holding the risk floor down* for that app, and relaxing
+it alone would expose a budget that cannot pay for the floor.
+
+The invariant and the reported half are pinned five ways:
 
 - **Property-based, across random fixtures and every relaxation kind:**
-  `tests/eval/test_shadow.py::test_monotonic_for_random_policies` (Hypothesis, 25 examples per
-  run) — random per-app policies (residency, allowed tiers, allowed regions,
-  require-no-retention, max-cost) crossed with random detected entity types and complexity,
-  asserting every produced entry has `route_changed + rejections_avoided > 0` (the non-binding
-  ones would never even reach the invariant check) and that `shadow_prices` never raises.
+  `tests/eval/test_shadow.py::test_eligible_superset_for_random_policies` (Hypothesis, 25
+  examples per run, plus Cases A and B as explicit `@example`s) — random per-app policies
+  (residency, allowed tiers, allowed regions, require-no-retention, a max cost that includes
+  the tight 0.001/0.002 budgets) crossed with random detected entity types, complexity, a 200
+  or 1000-token prompt and Bedrock on or off. It asserts `shadow_prices` never raises, every
+  entry is binding, and each entry's `newly_rejected` and `newly_rejected_reasons` match an
+  independent row-by-row recount of the two arms (which also re-checks the superset).
+- **The two counterexamples, deterministically:** `test_case_a_allowed_tiers_relaxation_newly_rejects_over_budget`
+  and `test_case_b_hospital_residency_relaxation_newly_rejects_over_budget` — no raise, the
+  entry is binding with `newly_rejected == 1` and reason `over_budget`.
+- **Routed → rejected is reported, not raised:** `test_routed_to_rejected_is_reported_not_raised`
+  — a monkeypatched relaxed arm that flips a baseline-routed row to rejected (eligible set
+  untouched) produces a binding entry with `newly_rejected == 1`. It replaces the former
+  `test_invariant_routed_to_rejected_raises_alone`.
 - **The "lost eligible candidate" branch in isolation:**
   `test_invariant_lost_eligible_raises_alone` — a monkeypatched relaxed arm that drops one
-  eligible candidate (while staying routed) raises with `"lost eligible candidate"` in the
-  message, and nothing else fires.
-- **The "routed → rejected" branch in isolation:**
-  `test_invariant_routed_to_rejected_raises_alone` — a monkeypatched relaxed arm that flips a
-  baseline-routed row to rejected (eligible set untouched) raises with `"was routed to .*
-  but rejected"`, and nothing else fires.
-- **Both branches together, undifferentiated:** `test_invariant_breach_raises` — the original
-  regression test, an arbitrary monkeypatched rejection on every relaxed-arm call.
+  eligible candidate (while staying routed) raises with `"lost eligible candidate"`.
+- **The CLI exit code:** `tests/eval/test_policy_simulate_cli.py` still injects a
+  `ShadowInvariantError` and asserts exit `2`; `test_invariant_breach_raises` (an arbitrary
+  monkeypatched relaxed arm that also empties the eligible set) still raises.
 
 Determinism — the same three inputs give byte-identical `simulation.json` — is pinned by
 `test_deterministic` (the block alone) and, end to end through the CLI,
