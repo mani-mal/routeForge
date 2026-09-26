@@ -36,7 +36,9 @@ from app.eval.simulate import (
     RowResult,
     _bucket_stats,
     _moves,
+    _newly_served,
     _parse_ts,
+    _route_changed,
     _window,
     observed_latencies,
     select_rows,
@@ -347,18 +349,17 @@ def _window_days(results: list[RowResult]) -> float | None:
     return days if days >= 1 else None
 
 
-def _entry(rel: Relaxation, results: list[RowResult], stats: dict) -> dict:
+def _entry(rel: Relaxation, results: list[RowResult], stats: dict,
+           days: float | None) -> dict:
+    """`days` is the EXPORT window (every selected row, spec §4), the same
+    for every relaxation -- not the window of this relaxation's scoped rows."""
     both = _renamed(stats["cost_usd_both_routed"])
-    days = _window_days(results)
     # Like-for-like (plan ruling): only rows routed in BOTH arms count, so a
     # row the relaxation newly serves is not read as added cost.
     per_day = -both["delta"] / days if days is not None and both["delta"] is not None else None
     scope = {"endpoint": rel.endpoint} if rel.requirement == REQ_ENDPOINT_APP_ALLOWLIST \
         else {"app": rel.app}
-    changed = [r for r in results
-               if (r.current.outcome == "routed" and r.proposed.outcome == "routed"
-                   and r.current.model != r.proposed.model)
-               or (r.current.outcome == "rejected" and r.proposed.outcome == "routed")]
+    changed = [r for r in results if _route_changed(r) or _newly_served(r)]
     return {
         "requirement": rel.requirement,
         "scope": scope,
@@ -405,6 +406,10 @@ async def shadow_prices(records: list[dict], baseline_doc: dict, *, base: Settin
     try:
         rows, _excluded = select_rows(records, set(baseline.apps))
         base_arm = {row["request_id"]: simulate_row(baseline, row, observed) for row in rows}
+        # The export window spans every selected row, whichever app sent it
+        # (spec §4); one value serves every relaxation's per-day figure.
+        days = _window_days([RowResult(row, base_arm[row["request_id"]],
+                                       base_arm[row["request_id"]]) for row in rows])
         rels, skipped = enumerate_relaxations(baseline_doc, rows, cap=cap)
 
         constraints: list[dict] = []
@@ -424,7 +429,7 @@ async def shadow_prices(records: list[dict], baseline_doc: dict, *, base: Settin
 
             stats = _bucket_stats(results)
             if stats["route_changed"] + stats["newly_served"] > 0:
-                constraints.append(_round6(_entry(rel, results, stats)))
+                constraints.append(_round6(_entry(rel, results, stats, days)))
             else:
                 non_binding += 1
 

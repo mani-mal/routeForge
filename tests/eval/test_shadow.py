@@ -278,3 +278,87 @@ def test_monotonic_for_random_policies(policy, etypes, complexity):   # spec §7
     block = _run(rows, snap)   # raises ShadowInvariantError on any breach
     for c in block["constraints"]:
         assert c["route_changed"] + c["rejections_avoided"] > 0
+
+
+# --- Task 2 fix round 1 -------------------------------------------------------
+
+def _fake_relaxed_arm(monkeypatch, mutate):
+    """Route every relaxed-arm `simulate_row` call (all but the first, the
+    baseline) through `mutate(arm)`."""
+    import app.eval.shadow as shadow
+    real = shadow.simulate_row
+    calls = {"n": 0}
+
+    def fake(scn, row, observed):
+        arm = real(scn, row, observed)
+        calls["n"] += 1
+        return mutate(arm) if calls["n"] > 1 else arm
+    monkeypatch.setattr(shadow, "simulate_row", fake)
+
+
+def test_invariant_routed_to_rejected_raises_alone(monkeypatch):
+    import dataclasses
+    # Eligible set kept intact: only the routed -> rejected branch can fire.
+    _fake_relaxed_arm(monkeypatch, lambda arm: dataclasses.replace(
+        arm, outcome="rejected", model=None, provider=None, tier=None))
+    snap = make_snapshot(apps=[app_entry("a")])
+    with pytest.raises(ShadowInvariantError, match="was routed to .* but rejected"):
+        _run([make_row("r1", "a")], snap)
+
+
+def test_invariant_lost_eligible_raises_alone(monkeypatch):
+    import dataclasses
+    # Still routed: only the eligible-superset branch can fire.
+    _fake_relaxed_arm(monkeypatch, lambda arm: dataclasses.replace(
+        arm, eligible=arm.eligible[1:]))
+    snap = make_snapshot(apps=[app_entry("a")])
+    with pytest.raises(ShadowInvariantError, match="lost eligible candidate"):
+        _run([make_row("r1", "a")], snap)
+
+
+def test_cost_saved_per_day_is_like_for_like():
+    # allowed_models=[local-big]: r1 routes to local-big and is rerouted to
+    # local-cheap by the relaxation; r2 pins local-cheap, so it is rejected
+    # at baseline and newly served. cost_usd counts r2's new cost,
+    # cost_usd_both_routed does not.
+    snap = make_snapshot(apps=[app_entry("a", allowed_models=["local-big"])])
+    rows = [make_row("r1", "a", ts="2026-09-18T12:00:00+00:00"),
+            make_row("r2", "a", ts="2026-09-20T12:00:00+00:00",
+                     requested_model="local-cheap")]
+    e = _entry(_run(rows, snap), "allowed_models", app="a")
+    assert e["route_changed"] == 1 and e["rejections_avoided"] == 1
+    days = 2.0
+    both, alll = e["cost_usd_both_routed"]["delta"], e["cost_usd"]["delta"]
+    assert both != alll
+    assert e["cost_saved_per_day"] == pytest.approx(-both / days, abs=1e-6)
+    assert e["cost_saved_per_day"] != pytest.approx(-alll / days, abs=1e-6)
+
+
+def test_cost_saved_per_day_uses_the_full_export_window():
+    # App "a" is active for one hour; app "b" spans three days. The export
+    # window is three days, so a's relaxation gets a per-day figure over it.
+    snap = make_snapshot(apps=[app_entry("a", allowed_tiers=["frontier"]), app_entry("b")])
+    rows = [make_row("b1", "b", ts="2026-09-17T12:00:00+00:00"),
+            make_row("a1", "a", ts="2026-09-19T12:00:00+00:00"),
+            make_row("a2", "a", ts="2026-09-19T13:00:00+00:00"),
+            make_row("b2", "b", ts="2026-09-20T12:00:00+00:00")]
+    e = _entry(_run(rows, snap), "allowed_tiers", app="a")
+    assert e["rows_in_scope"] == 2
+    both = e["cost_usd_both_routed"]["delta"]
+    assert both < 0
+    assert e["cost_saved_per_day"] == pytest.approx(-both / 3.0, abs=1e-6)
+
+
+def test_ranking_full_order_with_tie_break():
+    # a and b are identical (same saving, same rejections, same requirement)
+    # -> tie broken by scope key app:a < app:b. c only avoids rejections
+    # (like-for-like saving 0), so it ranks after both.
+    snap = make_snapshot(apps=[app_entry("b", allowed_tiers=["frontier"]),
+                               app_entry("a", allowed_tiers=["frontier"]),
+                               app_entry("c", allowed_models=["ghost-model"])])
+    rows = [make_row("rb", "b"), make_row("ra", "a"), make_row("rc", "c")]
+    block = _run(rows, snap)
+    order = [(c["requirement"], c["scope"]) for c in block["constraints"]]
+    assert order == [("allowed_tiers", {"app": "a"}),
+                     ("allowed_tiers", {"app": "b"}),
+                     ("allowed_models", {"app": "c"})]
