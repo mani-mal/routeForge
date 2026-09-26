@@ -50,6 +50,8 @@ services:
       # no default secret: unset -> a random per-process key (ids reset on
       # restart). A single-replica local demo doesn't need this set.
       SP_SESSION_ID_KEY: ${SP_SESSION_ID_KEY:-}
+      # Level of the serving.* log lines on stderr (B57): DEBUG|INFO|WARNING|ERROR.
+      SP_LOG_LEVEL: ${SP_LOG_LEVEL:-INFO}
     depends_on:
       langfuse-web: {condition: service_started}
     healthcheck:

@@ -127,7 +127,7 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
-## B57 — RouteForge configures no logging, so every `serving.*` INFO record is dropped in deployment
+## B57 — RouteForge configures no logging, so every `serving.*` INFO record is dropped in deployment  ✅ RESOLVED (2026-09-26)
 
 **Severity:** medium (observability; no effect on routing or privacy).
 **Found:** 2026-09-25, P3b live verification on the Spark.
@@ -156,6 +156,42 @@ configuration.
 - leave the root and third-party loggers at WARNING, because litellm is very chatty at INFO.
 
 Add a test that a `serving.api` INFO record reaches the configured handler.
+
+**Resolution.** `create_app()` now calls `app/obs/log_config.py::configure_logging` as its
+first line. It does four things:
+- attaches one stderr handler to the `serving` logger, one line per record:
+  `<time> <LEVEL> <logger> <message>`. The structured lines already carry JSON in the message.
+- sets the `serving` logger's level from `SP_LOG_LEVEL`. The default is `INFO`; an unknown
+  value falls back to `INFO` and logs a warning.
+- is idempotent. The handler is named, so repeated `create_app()` calls never stack handlers.
+- leaves the root logger and every third-party logger (litellm) untouched.
+
+The handler resolves `sys.stderr` at emit time, like `logging.lastResort`, so it never writes
+to a stream a test runner has since closed.
+
+`propagate` stays `True`, and this is deliberate. pytest's `caplog` listens on the root logger,
+so `propagate = False` would blind every existing caplog test. A plain `uvicorn app.main:app`
+process has no root handler, so nothing prints twice: uvicorn configures only its own
+`uvicorn.*` loggers. Verified locally: each startup and prune INFO line appears once. A
+deployment that adds its own root handler would see serving lines once per handler.
+
+Docs: `SP_LOG_LEVEL` is added to `.env.example`, `deploy/spark/.env.example` and both compose
+files (`${SP_LOG_LEVEL:-INFO}`). `docs/reference/conflicting-core.md` §1 now says the
+`no_eligible_model` line reaches stderr.
+
+Tests: `tests/test_logging_config.py`. These tests read what the handler wrote to stderr
+(`capsys`), not caplog:
+- a `serving.api` INFO record is printed;
+- two `create_app()` calls leave exactly one handler;
+- the root and litellm loggers are untouched;
+- `SP_LOG_LEVEL=WARNING` suppresses INFO;
+- an invalid level falls back to INFO with a warning;
+- the P3b `no_eligible_model` line is printed end to end through `TestClient` for an app with
+  an empty feasible set.
+
+**Deploy.** Code only: no schema change and no `ALTER`. After the next image roll,
+`docker compose logs api` should show `INFO serving.*` lines. Set `SP_LOG_LEVEL=WARNING` to
+quieten them.
 
 ## B56 — first-fail `ctx.allowed_models` can admit an out-of-scope model if an endpoint declaration changes between the gate and the router  ✅ RESOLVED (2026-09-26)
 
