@@ -45,6 +45,11 @@ The core explains a rejection; it never decides one.
    request that fails with no eligible candidate never reaches `_finalize`, so
    `export_trace` never runs and no trace exists for it to sit on. The log line, keyed on
    `request_id`, is the only place the core reaches anything trace-adjacent today.
+   Since B57 (2026-09-26) the line actually reaches the process's stderr in deployment:
+   `create_app()` calls `app/obs/log_config.py::configure_logging`, which attaches one
+   stderr handler to the `serving` logger at `SP_LOG_LEVEL` (default `INFO`). Before that,
+   nothing configured logging and every `serving.*` INFO record — this line included — was
+   dropped. The line is printed as `<time> INFO serving.api {"event": "no_eligible_model", …}`.
 
 ## 2. The requirement table
 

@@ -286,7 +286,8 @@ class Scope:
     (`None` when there is no app policy).
 
     **It is NOT built from `ctx.allowed_models`.** That set stays the
-    first-fail authority -- `_ctx_scope` enforces it, unchanged -- but it is
+    first-fail authority -- `_ctx_scope` enforces it (and, since B56, this
+    exact scope alongside it) -- but it is
     built from first-fail CODES (`build_context` subtracts only the
     placement- and app-scope-coded rejections), so it cannot answer "does app
     scope refuse this candidate?" for a candidate an earlier stage refused
@@ -514,12 +515,27 @@ def _policy_scope(app_policy: "AppPolicyView | None") -> Callable[[PoolCandidate
 def _ctx_scope(ctx: ExecutionPolicyContext) -> Callable[[PoolCandidate], bool]:
     """Stage 3 for a caller that holds only the context.
 
-    The context does not carry the app's `allowed_tiers`/`allowed_models`; it
-    carries the set those produced -- `ctx.allowed_models`, which
-    `build_context` computes from stages 1 and 3 of this same filter (and from
-    nothing else, so that a name missing from it means *app scope refused it*
-    and stage 5 keeps its own, more specific reasons). `Scope.from_context`
-    documents how that maps onto the tiers/models split.
+    Two checks, both required, and neither can widen the other:
+
+    * the precomputed FIRST-FAIL set `ctx.allowed_models`, which
+      `build_context` computes from stages 1 and 3 of this same filter (and
+      from nothing else, so that a name missing from it means *placement or
+      app scope refused it* and stage 5 keeps its own, more specific reasons);
+    * the app's EXACT scope, `Scope.from_context(ctx)` -- the app's own
+      compiled `allowed_tiers` / `allowed_models`, which the context has
+      carried since P3b (`None` = no constraint, as on internal paths and
+      hand-built contexts).
+
+    Why both (B56): the first-fail set is built from first-fail CODES, so a
+    model outside the app's scope that stage 2 (region / retention /
+    raw-sensitive) refused first stays IN it. If that endpoint's declaration
+    changed between the gate building the context and the router running
+    `feasible_set`, the first-fail set alone admitted the out-of-scope model.
+    The exact check closes that window. With no race it is a no-op -- every
+    name the exact scope refuses was already refused, by placement, by the
+    data-handling declarations or by this stage -- and it lives inside this
+    stage, so a candidate it refuses reads `app_scope` / "not permitted for
+    application" exactly as before.
 
     It is honoured unconditionally. Not gated on `ctx.model_scope_active` --
     that flag says whether the app narrowed anything (the console reads it),
@@ -530,12 +546,12 @@ def _ctx_scope(ctx: ExecutionPolicyContext) -> Callable[[PoolCandidate], bool]:
     carries a binding `allowed_models`, and one that carries an empty set has
     no eligible candidate and is rejected (fail closed), never routed.
     """
-    # First-fail enforcement reads the PRECOMPUTED set, never the raw lists
-    # `Scope.from_context` carries -- see `Scope` for why the two differ.
-    scope = Scope(allowed_tiers=None, allowed_models=ctx.allowed_models)
+    first_fail = Scope(allowed_tiers=None, allowed_models=ctx.allowed_models)
+    exact = Scope.from_context(ctx)
 
     def ok(c: PoolCandidate) -> bool:
-        return tier_in_scope(c, scope) and model_in_scope(c, scope)
+        return (tier_in_scope(c, first_fail) and model_in_scope(c, first_fail)
+                and tier_in_scope(c, exact) and model_in_scope(c, exact))
     return ok
 
 

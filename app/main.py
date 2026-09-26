@@ -33,6 +33,7 @@ from app.gateway.backends.factory import resolve_backend
 from app.gateway.breaker import CircuitBreaker
 from app.gateway.gateway import Gateway
 from app.memory.store import DeterministicMemoryStore
+from app.obs.log_config import configure_logging
 from app.pipeline import Pipeline
 from app.policy.detectors import make_detector
 from app.policy.gate import Gate
@@ -240,6 +241,9 @@ async def _quality_loop(app: FastAPI) -> None:
 
 
 def create_app() -> FastAPI:
+    # B57: first, so every startup line below (and every serving.* INFO line
+    # after it) reaches stderr. Idempotent; touches only the `serving` logger.
+    configure_logging()
     settings = load_settings()
     enforce(settings)
     from app.obs.otel import init_tracing

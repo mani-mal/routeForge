@@ -127,7 +127,7 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
-## B57 — RouteForge configures no logging, so every `serving.*` INFO record is dropped in deployment
+## B57 — RouteForge configures no logging, so every `serving.*` INFO record is dropped in deployment  ✅ RESOLVED (2026-09-26)
 
 **Severity:** medium (observability; no effect on routing or privacy).
 **Found:** 2026-09-25, P3b live verification on the Spark.
@@ -157,7 +157,43 @@ configuration.
 
 Add a test that a `serving.api` INFO record reaches the configured handler.
 
-## B56 — first-fail `ctx.allowed_models` can admit an out-of-scope model if an endpoint declaration changes between the gate and the router
+**Resolution.** `create_app()` now calls `app/obs/log_config.py::configure_logging` as its
+first line. It does four things:
+- attaches one stderr handler to the `serving` logger, one line per record:
+  `<time> <LEVEL> <logger> <message>`. The structured lines already carry JSON in the message.
+- sets the `serving` logger's level from `SP_LOG_LEVEL`. The default is `INFO`; an unknown
+  value falls back to `INFO` and logs a warning.
+- is idempotent. The handler is named, so repeated `create_app()` calls never stack handlers.
+- leaves the root logger and every third-party logger (litellm) untouched.
+
+The handler resolves `sys.stderr` at emit time, like `logging.lastResort`, so it never writes
+to a stream a test runner has since closed.
+
+`propagate` stays `True`, and this is deliberate. pytest's `caplog` listens on the root logger,
+so `propagate = False` would blind every existing caplog test. A plain `uvicorn app.main:app`
+process has no root handler, so nothing prints twice: uvicorn configures only its own
+`uvicorn.*` loggers. Verified locally: each startup and prune INFO line appears once. A
+deployment that adds its own root handler would see serving lines once per handler.
+
+Docs: `SP_LOG_LEVEL` is added to `.env.example`, `deploy/spark/.env.example` and both compose
+files (`${SP_LOG_LEVEL:-INFO}`). `docs/reference/conflicting-core.md` §1 now says the
+`no_eligible_model` line reaches stderr.
+
+Tests: `tests/test_logging_config.py`. These tests read what the handler wrote to stderr
+(`capsys`), not caplog:
+- a `serving.api` INFO record is printed;
+- two `create_app()` calls leave exactly one handler;
+- the root and litellm loggers are untouched;
+- `SP_LOG_LEVEL=WARNING` suppresses INFO;
+- an invalid level falls back to INFO with a warning;
+- the P3b `no_eligible_model` line is printed end to end through `TestClient` for an app with
+  an empty feasible set.
+
+**Deploy.** Code only: no schema change and no `ALTER`. After the next image roll,
+`docker compose logs api` should show `INFO serving.*` lines. Set `SP_LOG_LEVEL=WARNING` to
+quieten them.
+
+## B56 — first-fail `ctx.allowed_models` can admit an out-of-scope model if an endpoint declaration changes between the gate and the router  ✅ RESOLVED (2026-09-26)
 
 **Severity:** low (a timing window measured in milliseconds; placement is not affected).
 **Found:** 2026-09-25, P3b Task 1 review.
@@ -182,6 +218,29 @@ ctx.allowed_models`) then admits the model although the app's scope excludes it.
 `Scope.from_context(ctx)`. That can only narrow the set, and it is a no-op when no race
 happens. Add a regression test that mutates the declaration after `build_context` and asserts
 the router refuses the model.
+
+**Resolution.** `app/policy/feasible.py::_ctx_scope` now requires both the first-fail set
+`ctx.allowed_models` **and** the app's exact scope, `Scope.from_context(ctx)` (the compiled
+`app_allowed_tiers` / `app_allowed_models` the context has carried since P3b; `None` = no
+constraint). The extra check can only narrow. Without a race it is a no-op: every name the
+exact scope refuses was already refused by placement, a data-handling declaration or app
+scope. It lives inside the app-scope stage, so `candidate_rejection` codes, reasons and
+order are unchanged: a candidate it refuses reads `app_scope` / "not permitted for
+application", as before. Contexts with no app lists (internal paths, hand-built test
+contexts) are unaffected. The same change closes the window for the `allowed_models` /
+`allowed_tiers` part of the registry-disable and `allowed_app_ids` variants noted above.
+Those two gates are also re-checked at the router by their own stage (`model_scope`).
+
+Tests: `tests/test_b56_scope_race.py`. This file builds a real registry and a real
+`build_context` for an app with `allowed_models={A}` and `allowed_regions={eu}`. Endpoint B
+declares `us` when the context is built, so it is region-refused and stays in
+`ctx.allowed_models`. B is then re-declared `eu` and the registry refreshed before
+`feasible_set` / `Router.select` run on the same context. B is now refused as `app_scope`
+and A is chosen. Before the fix B was eligible and, being cheaper, would have been chosen
+(the test failed RED on exactly that assertion). The Hypothesis agreement property in
+`tests/test_policy_violations.py` passes unchanged.
+
+**Deploy.** Code only: no schema change, no `ALTER`, no config change.
 
 ## B55 — Outcome rows don't record the pinned model or `max_tokens`  ✅ RESOLVED (2026-09-24)
 
