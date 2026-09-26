@@ -613,3 +613,12 @@ def test_risk_floor_candidacy_respects_a_proposal_rule_change():
                                  "apps": {"a": {"sensitivity_rules": [high]}}},
                           base=BASE_SETTINGS)
     assert ("risk_floor", "a", None) in _ids(enumerate_relaxations(doc2, [row2])[0])
+
+
+def test_zero_saving_never_renders_as_negative_zero():
+    # Spark run, 2026-09-26: an unpinned relaxation between two unpriced
+    # on-prem models gave -(0.0) / days = -0.0, rendered "-0/day".
+    import math
+    from app.eval.outcomes import _round6
+    assert math.copysign(1.0, _round6(-0.0)) == 1.0
+    assert math.copysign(1.0, _round6({"x": [-1e-9]})["x"][0]) == 1.0

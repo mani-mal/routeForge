@@ -102,11 +102,13 @@ def load_export(path: str) -> tuple[list[dict], list[str]]:
 def _round6(value):
     """Round every float leaf in `value` to 6 dp; recurse through dict and
     list containers, pass everything else through unchanged. `bool` is
-    excluded explicitly since `isinstance(True, int)` is True."""
+    excluded explicitly since `isinstance(True, int)` is True. A signed zero
+    is normalised to `0.0`, so a zero saving never renders as "-0"."""
     if isinstance(value, bool):
         return value
     if isinstance(value, float):
-        return round(value, 6)
+        rounded = round(value, 6)
+        return 0.0 if rounded == 0.0 else rounded
     if isinstance(value, dict):
         return {k: _round6(v) for k, v in value.items()}
     if isinstance(value, list):
