@@ -2348,7 +2348,45 @@ seeded model gets two real 422s, and the shadow-priced `allowed_tiers` entry rep
 
 ### 17.4 Results
 
-Pending the Spark run after deploy.
+Run on 2026-09-26 against the DGX Spark after PR #79 was deployed (`4bfb0b3`). Inputs:
+`GET /admin/config-snapshot` (`snapshot_sha256` `aeaa4647…`, `routing_policy_version`
+`6e6fe2027862`) and a 30-day `GET /admin/outcomes/export`: 521 rows, all from one app
+(`kit-gtm`), recorded 2026-09-24 00:44 to 2026-09-26 16:21 UTC. Command:
+`policy_simulate.py --shadow-prices`, no proposal, so the baseline is the snapshot.
 
-| constraint | scope | rejections avoided | cost saved/day | security |
-|---|---|---|---|---|
+**Pre-B55 rows must be excluded.** The first 221 rows predate B55 (§15.4): they carry no
+`requested_model`, although the client pinned `qwen3.8-27b` on them as on every later row. The
+simulator replays them unpinned, so the baseline arm already disagrees with what was recorded
+there. Over all 521 rows, shadow prices reported a binding `allowed_models` for `kit-gtm`: 221
+route changes, −0.66 USD/day, +0.10 quality. That entry is entirely an artefact of those 221
+rows, and it disappears when they are removed. This is the same lesson as §15.4: a price is
+only as good as the baseline's agreement with the record, and the shadow-price report does
+not re-check that agreement itself. Run a no-op `--proposal` first and read
+`baseline_agreement`, or cut the export at the first B55-era row, as here.
+
+The result on the 300 B55-era rows (2026-09-25 01:25 onward):
+
+| constraint | scope | rows | route changed | rejections avoided | newly rejected | cost saved/day | Δp50 | security |
+|---|---|---|---|---|---|---|---|---|
+| `requested_model` | app `kit-gtm` | 300 | 300 | 0 | 0 | 0 | −26.3 s | no |
+
+Evaluated 4, non-binding 3, skipped by cap 0. No security constraint binds, so the
+cost-of-protection table is empty.
+
+What it says:
+
+- **The one constraint that binds is the client's own pin.** `kit-gtm` (Qwen Code) pins
+  `qwen3.8-27b` on every request. Unpinned, the router would send all 300 to
+  `nemotron-3.5-lightning`.
+- **The price of the pin is latency, not money.** Both models are unpriced on-prem endpoints,
+  so the cost delta is exactly zero. The median replayed latency would fall by 26.3 s. That is
+  the frozen measured p50 of the two endpoints in the snapshot, not a controlled comparison.
+- **Quality reads as unchanged (Δ 0) only because both candidates sit on the tier-default
+  quality prior.** No calibration set has been applied (P2b-3), so the simulator cannot say
+  whether the faster model is good enough for a coding agent. That decision stays with the
+  operator.
+- **This run did not exercise the §17.3 counterexample.** No high-risk rows appear in this
+  traffic, and newly rejected is 0 everywhere.
+
+A zero saving first rendered as `-0/day`. `-(0.0) / days` is a signed zero. It is fixed in
+the same change as these results (`_round6` now normalises `-0.0`).
