@@ -1,6 +1,7 @@
 """P3a Task 5: the CLI end to end, including the live-app baseline (§9.7)."""
 from __future__ import annotations
 
+import importlib.util
 import json
 import shutil
 import subprocess
@@ -17,6 +18,17 @@ from tests.test_admin_api import _login
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "policy_simulate.py"
 P = "routeforge.policy-proposal/v1"
+
+
+def _load_policy_simulate():
+    """Import `scripts/policy_simulate.py` as a module, in-process, so a
+    test can monkeypatch a name the module looks up (e.g. `shadow_prices`)
+    and then call `main()` directly. `_run_cli`'s subprocess invocation runs
+    in a separate process, so nothing monkeypatched here would reach it."""
+    spec = importlib.util.spec_from_file_location("policy_simulate", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _run_cli(tmp_path, export_lines, snapshot, proposal, *extra):
@@ -286,6 +298,43 @@ def test_live_round_trip_shadow_prices_allowed_tiers(tmp_path):
               if e["requirement"] == "allowed_tiers" and e["scope"] == {"app": "shadow-app"}]
     assert len(entries) == 1, sim["shadow_prices"]["constraints"]
     assert entries[0]["rejections_avoided"] == 2
+
+
+def test_shadow_invariant_breach_exits_2(tmp_path, monkeypatch, capsys):
+    # Fix round 1 (reviewer finding): scripts/policy_simulate.py:140-145 --
+    # a `ShadowInvariantError` from `shadow_prices` must exit 2 with
+    # "internal invariant" on stderr. Patched in-process on the name the
+    # script module actually looks up (imported there as
+    # `from app.eval.shadow import ... shadow_prices`, so it lives as
+    # `policy_simulate.shadow_prices`), and `main()` is called directly --
+    # `_run_cli`'s subprocess invocation runs in a separate process, so a
+    # monkeypatch here would never reach it.
+    from app.eval.shadow import ShadowInvariantError
+
+    ps = _load_policy_simulate()
+
+    async def _boom(*_a, **_k):
+        raise ShadowInvariantError("boom")
+    monkeypatch.setattr(ps, "shadow_prices", _boom)
+
+    exp, snap = tmp_path / "e.ndjson", tmp_path / "s.json"
+    exp.write_text("")
+    snap.write_text(json.dumps(make_snapshot()))
+    out = tmp_path / "out"
+
+    rc = ps.main(["--export", str(exp), "--snapshot", str(snap), "--out", str(out),
+                 "--shadow-prices"])
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "error: internal invariant" in captured.err
+    assert "boom" in captured.err
+    # The script only calls `out.mkdir` and writes simulation.json/report.md
+    # after the try/except around simulate()/shadow_prices() returns
+    # normally (scripts/policy_simulate.py:153+); an invariant breach
+    # returns 2 from inside that except block, before `out` is even
+    # created.
+    assert not out.exists()
+    assert not (out / "simulation.json").exists()
 
 
 def test_cli_malformed_export_rows_are_counted(tmp_path):                 # Important 3
