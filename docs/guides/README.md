@@ -22,6 +22,9 @@ with an onboarded model and a registered application:
    onboarding an application end to end.
 6. [`langfuse-per-app-projects.md`](langfuse-per-app-projects.md) — give an
    application its own Langfuse project (shared, manual, or auto-provisioned).
+7. [`per-user-access-to-a-shared-model.md`](per-user-access-to-a-shared-model.md) —
+   give many users their own key to one self-hosted model (one app per user), the
+   settings for coding agents, and today's limits (streaming, TPM).
 
 ## Application-developer reading path
 

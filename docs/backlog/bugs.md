@@ -127,6 +127,53 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
+## B59 — FEATURE: per-app tokens-per-minute / concurrency limits, and a limiter shared across replicas  🔴 OPEN
+
+**Severity:** medium (fairness on a shared model; no effect on privacy or routing correctness).
+**Found:** 2026-09-27, evaluating RouteForge as the per-user key gateway for a shared
+8-GPU GLM 5.3 vLLM deployment (see `docs/guides/per-user-access-to-a-shared-model.md`).
+
+**What's missing.**
+- The only per-app rate lever is `max_rpm`. On a shared model the scarce resource is
+  KV cache, which is measured in tokens. A coding agent's request routinely carries 100K+
+  prompt tokens, so an RPM cap does not stop one user's agent loop from monopolising the
+  shared queue. `max_spend_usd_per_day` and `max_cost_usd_per_request` (with nominal
+  prices) are a coarse daily substitute, not per-minute fairness.
+- `RateLimiter` (`app/apps/policy.py`) is in-process and in-memory. Its docstring puts
+  multi-node deployment "out of scope", but Helm supports `replicaCount.api > 1`. With N
+  replicas, the effective limit is `N × max_rpm`, and a pod restart resets the window.
+
+**Wanted.** Per-app `max_tpm` (prompt + completion, charged when the request is admitted
+from the estimated prompt tokens and reconciled on completion) and `max_concurrent`
+(in-flight requests). Both should be backed by the DB, or by a shared store that already
+exists, so that limits hold across replicas. Reply 429 with `Retry-After`, in the OpenAI
+error envelope (B49). LiteLLM Proxy's per-key TPM/RPM/parallel limits are the reference
+behaviour operators will compare against.
+
+## B58 — FEATURE: live token streaming for tool-bearing requests (coding agents)  🔴 OPEN
+
+**Severity:** medium (UX; answers are correct, but nothing appears until generation finishes).
+**Found:** 2026-09-27, same evaluation as B59.
+
+**What happens.** Streaming passes backend tokens through live only when the request is
+not `onprem_only`, not `require_verification`, **and not a tool conversation**.
+`app/pipeline.py::_is_tool_conversation` is true whenever the request offers `tools`.
+Tool-bearing requests fall back to the buffered `pipeline.run` and then emit the finished
+answer as SSE frames (PR #41, which fixed lost `tool_calls`). OpenCode, Claude-Code-style
+clients and most IDE agents send `tools` on **every** request. For them, every turn is
+buffered, whatever the app's `stream_mode`. Keepalive frames prevent client timeouts, but
+on a large model, long answers show nothing for tens of seconds.
+
+**Wanted.** Stream text deltas live while assembling `tool_calls` deltas, passing them
+through as OpenAI streaming `tool_calls` chunks (index/id/function.arguments fragments).
+Tool-call arguments must still be classified and redacted per PR #49 whenever
+`model_input`/`client_output` is `redact`. That argues for streaming live only under
+`client_output: raw` (passthrough) at first, and holding back the `tool_calls` portion
+under `redact`. The step-9 floor (`onprem_only` / `require_verification` → verified) is
+a separate question. For an `onprem_only` + `passthrough` app, whether that floor should
+still apply is an owner decision, since rule 2a says posture, not placement, decides
+protection.
+
 ## B57 — RouteForge configures no logging, so every `serving.*` INFO record is dropped in deployment  ✅ RESOLVED (2026-09-26)
 
 **Severity:** medium (observability; no effect on routing or privacy).
