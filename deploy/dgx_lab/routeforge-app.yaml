@@ -1,12 +1,12 @@
 ##
 ## routeForge API + UI for the DGX lab.
 ##
-## The API points at the in-cluster vLLM (local-8b) and Langfuse deployed by the
-## sibling manifests in this directory. Only serving.yaml is overridden (via a
-## ConfigMap subPath mount) — policy/routing/pricing stay baked into the image,
-## matching the Helm chart's config-ownership split. base_url and
-## allow_backend_fallback are NOT env-overridable in the loader, which is why the
-## whole serving.yaml is mounted rather than set through env vars.
+## Pure router: no model server is deployed here. The on-prem pool boots empty;
+## onboard endpoints at runtime (console Infrastructure -> Onboard, or
+## POST /admin/infra/models — docs/guides/onboarding-models.md). Config is the
+## image's own config/*.yaml; the only deployment-specific value, the Langfuse
+## host, comes from LANGFUSE_HOST. Langfuse + its Postgres (also RouteForge's
+## application/token/usage DB) come from the sibling langfuse.yaml.
 ##
 ## Images live in ghcr.io/mani-mal (private) — the ghcr-pull secret must exist:
 ##   kubectl create secret docker-registry ghcr-pull -n runai-routeforge \
@@ -15,77 +15,12 @@
 ## Deploy:
 ##   kubectl apply -f deploy/dgx_lab/routeforge-app.yaml -n runai-routeforge
 ##
-## UI:  http://10.89.197.201:30800
-## API: http://10.89.197.201:30808   (/health, /v1/chat/completions, /api/*)
+## UI:  http://10.89.195.201:30800
+## API: http://10.89.195.201:30808   (/health, /v1/chat/completions, /api/*)
 ##
 apiVersion: v1
 kind: List
 items:
-
-# --- serving.yaml override (infra switches only) -----------------------------
-# inference_backend:vllm points every onprem LLM call at the in-cluster vLLM via
-# LiteLLM. mock is gone (LiteLLM gateway swap, 2026-07-30): an unreachable vLLM at
-# boot is a fail-closed sys.exit(1), never a silent fallback — allow_backend_fallback
-# no longer exists. Every ENABLED provider must carry a litellm_prefix map (the
-# config lint fails the boot otherwise), which is why the providers block below is
-# fully specified rather than {enabled: true}.
-- apiVersion: v1
-  kind: ConfigMap
-  metadata:
-    name: routeforge-serving-config
-  data:
-    serving.yaml: |
-      inference_backend: vllm
-
-      vllm:
-        base_url: http://vllm-local-8b:8000/v1
-        timeout_s: 60
-
-      dynamo:
-        endpoint: http://dynamo-frontend:8080
-        router_mode: kv
-        timeout_s: 60
-
-      context_optimization:
-        enabled: false
-        mode: library
-        proxy_url: http://headroom:8787
-        min_tokens: 2000
-        bypass_on:
-          high_risk: true
-          restricted_sensitivity: true
-          user_prompt: true
-        ccr:
-          enabled: true
-          residency: local_only
-          ttl_hours: 24
-          export_to_telemetry: false
-        cache_alignment: true
-
-      policy:
-        pii_detection: presidio
-        fail_closed: true
-
-      observability:
-        langfuse:
-          enabled: true
-          host: http://langfuse-web:3000
-          redact_on_export: true
-
-      # LiteLLM egress map. onprem enabled -> MUST have litellm_prefix (openai, for
-      # the vLLM OpenAI-compatible endpoint above); its api key reads SP_ONPREM_API_KEY
-      # (unset -> LiteLLMBackend defaults to sk-noauth, which vLLM accepts). azure/
-      # bedrock disabled here; their prefixes are declared for a one-flag enable later.
-      providers:
-        onprem:  {enabled: true,  litellm_prefix: openai,  api_key_env: SP_ONPREM_API_KEY}
-        azure:   {enabled: false, litellm_prefix: azure,   api_base_env: AZURE_API_BASE, api_key_env: AZURE_API_KEY, api_version_env: AZURE_API_VERSION}
-        bedrock: {enabled: false, litellm_prefix: bedrock}
-
-      server:
-        host: 0.0.0.0
-        port: 8080
-        stream_decisions: true
-        reject_stream_requests: true
 
 # --- API ---------------------------------------------------------------------
 - apiVersion: apps/v1
@@ -99,13 +34,26 @@ items:
       matchLabels: {app: routeforge-api}
     template:
       metadata:
-        labels: {app: routeforge-api}
+        labels: {app: routeforge-api, runai/node-pool: default}
       spec:
+        # runai/node-pool: default (pod label above) is required too: this
+        # project's defaultNodePools is [h200s], and Run:ai otherwise injects a
+        # gpu.product=NVIDIA-H200 affinity that contradicts the one below.
+        # CPU-only: land on the control-plane nodes, never the GPU node (110-pod
+        # kubelet cap there). See the deploy-to-dgx skill.
+        tolerations:
+        - {key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule}
+        affinity:
+          nodeAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+              - matchExpressions:
+                - {key: nvidia.com/gpu.present, operator: DoesNotExist}
         imagePullSecrets:
         - name: ghcr-pull
         containers:
         - name: api
-          image: ghcr.io/mani-mal/serving-plane-api:0.9.0
+          image: ghcr.io/mani-mal/serving-plane-api:0.25.0
           ports: [{name: http, containerPort: 8080}]
           env:
           - {name: SP_SERVER_PORT, value: "8080"}
@@ -122,6 +70,10 @@ items:
           # boot failure here because the `hospital` tenant is onprem_only (the
           # capture_io residency lint). Default (serving.yaml) is off => blank Input.
           - {name: SP_CAPTURE_IO, value: "redacted"}
+          # The image's config/serving.yaml reads ${LANGFUSE_HOST}. Setting it alone
+          # does NOT turn on per-app project provisioning (that also needs the
+          # LANGFUSE_ORG_* pair below).
+          - {name: LANGFUSE_HOST, value: "http://langfuse-web:3000"}
           # Langfuse export credentials (demo keys seeded by langfuse.yaml).
           - name: LANGFUSE_PUBLIC_KEY
             valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: LANGFUSE_PUBLIC_KEY}}
@@ -130,16 +82,21 @@ items:
           # Browser-reachable Langfuse URL for the UI's "Langfuse trace" deep-link.
           # host (serving.yaml) is the in-cluster OTLP name; this is the NodePort a
           # laptop browser actually hits. Must match langfuse.yaml's NEXTAUTH_URL.
-          - {name: LANGFUSE_PUBLIC_URL, value: "http://10.89.197.201:30300"}
+          - {name: LANGFUSE_PUBLIC_URL, value: "http://10.89.195.201:30300"}
           # Multi-tenant application/token/usage store (spec 2026-07-25): reuse
           # the in-cluster Langfuse Postgres. routeForge's tables (applications,
           # app_tokens, app_policies, usage_records, admin_users) coexist with
           # Langfuse's under distinct names. Needs the image's `postgres` extra
           # (asyncpg) — build with EXTRAS including `postgres`.
           - {name: DATABASE_URL, value: "postgresql+asyncpg://postgres:postgres@langfuse-postgres:5432/postgres"}
-          # Admin dashboard login. CHANGE THESE — demo defaults only.
-          - {name: ADMIN_EMAIL, value: "admin@routeforge.local"}
-          - {name: ADMIN_PASSWORD, value: "changeme"}
+          # Admin console login, from a Secret created out of band (never in git):
+          #   kubectl -n runai-routeforge create secret generic routeforge-admin \
+          #     --from-literal=ADMIN_EMAIL=admin@routeforge.local \
+          #     --from-literal=ADMIN_PASSWORD="$(openssl rand -base64 18)"
+          - name: ADMIN_EMAIL
+            valueFrom: {secretKeyRef: {name: routeforge-admin, key: ADMIN_EMAIL}}
+          - name: ADMIN_PASSWORD
+            valueFrom: {secretKeyRef: {name: routeforge-admin, key: ADMIN_PASSWORD}}
           # Optional: to auto-provision a Langfuse PROJECT per application on
           # onboard (POST /admin/applications), set the in-cluster Langfuse host
           # plus an organization-scoped API key pair (Langfuse org settings ->
@@ -154,10 +111,6 @@ items:
           # per-app project secrets at rest.
           - name: ENCRYPTION_KEY
             valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: ENCRYPTION_KEY}}
-          volumeMounts:
-          - name: serving-config
-            mountPath: /app/config/serving.yaml
-            subPath: serving.yaml
           resources:
             requests: {cpu: "500m", memory: 2Gi}
             # Presidio (spaCy en_core_web_lg) + the NAT/LangChain stack are
@@ -174,10 +127,6 @@ items:
           livenessProbe:
             httpGet: {path: /health, port: 8080}
             periodSeconds: 30
-        volumes:
-        - name: serving-config
-          configMap:
-            name: routeforge-serving-config
 
 # Service named `api` so the UI's nginx.conf (proxy_pass http://api:8080)
 # resolves it unmodified.
@@ -251,13 +200,26 @@ items:
       matchLabels: {app: routeforge-ui}
     template:
       metadata:
-        labels: {app: routeforge-ui}
+        labels: {app: routeforge-ui, runai/node-pool: default}
       spec:
+        # runai/node-pool: default (pod label above) is required too: this
+        # project's defaultNodePools is [h200s], and Run:ai otherwise injects a
+        # gpu.product=NVIDIA-H200 affinity that contradicts the one below.
+        # CPU-only: land on the control-plane nodes, never the GPU node (110-pod
+        # kubelet cap there). See the deploy-to-dgx skill.
+        tolerations:
+        - {key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule}
+        affinity:
+          nodeAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+              - matchExpressions:
+                - {key: nvidia.com/gpu.present, operator: DoesNotExist}
         imagePullSecrets:
         - name: ghcr-pull
         containers:
         - name: ui
-          image: ghcr.io/mani-mal/serving-plane-ui:0.9.0
+          image: ghcr.io/mani-mal/serving-plane-ui:0.25.0
           ports: [{name: http, containerPort: 80}]
           resources:
             requests: {cpu: "50m", memory: 64Mi}
