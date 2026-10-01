@@ -45,8 +45,11 @@ RUN EXTRA_FLAGS=""; \
 # model is NOT a pip dependency — without this the presidio build installs
 # cleanly and then dies on the first request with OSError: [E050] Can't find
 # model 'en_core_web_lg'. Only paid for when presidio is actually requested.
+# `spacy download` shells out to pip, which a uv-built venv does not contain,
+# so seed pip into the venv first.
 RUN case ",${EXTRAS}," in \
-      *,presidio,*) /app/.venv/bin/python -m spacy download en_core_web_lg ;; \
+      *,presidio,*) uv pip install --python /app/.venv/bin/python pip \
+                    && /app/.venv/bin/python -m spacy download en_core_web_lg ;; \
       *) echo "presidio extra not requested; skipping spaCy model" ;; \
     esac
 

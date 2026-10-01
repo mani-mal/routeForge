@@ -12,7 +12,7 @@
 ## Delete:
 ##   kubectl delete -f deploy/dgx_lab/langfuse.yaml -n runai-routeforge
 ##
-## UI:  http://10.89.197.201:30300   login demo@example.com / demodemo
+## UI:  http://10.89.195.201:30300   login demo@example.com / demodemo
 ## In-cluster host for the API's LANGFUSE_HOST: http://langfuse-web:3000
 ##
 ## NOTE ON CREDENTIALS: everything in the Secret below is demo-only, matching
@@ -52,7 +52,7 @@ items:
     name: langfuse-postgres
   spec:
     accessModes: [ReadWriteOnce]
-    storageClassName: local-path
+    storageClassName: pure-nfs1
     resources:
       requests:
         storage: 20Gi
@@ -68,8 +68,21 @@ items:
       matchLabels: {app: langfuse-postgres}
     template:
       metadata:
-        labels: {app: langfuse-postgres}
+        labels: {app: langfuse-postgres, runai/node-pool: default}
       spec:
+        # runai/node-pool: default (pod label above) is required too: this
+        # project's defaultNodePools is [h200s], and Run:ai otherwise injects a
+        # gpu.product=NVIDIA-H200 affinity that contradicts the one below.
+        # CPU-only: land on the control-plane nodes, never the GPU node (110-pod
+        # kubelet cap there). See the deploy-to-dgx skill.
+        tolerations:
+        - {key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule}
+        affinity:
+          nodeAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+              - matchExpressions:
+                - {key: nvidia.com/gpu.present, operator: DoesNotExist}
         containers:
         - name: postgres
           image: postgres:16
@@ -102,7 +115,7 @@ items:
     name: langfuse-clickhouse
   spec:
     accessModes: [ReadWriteOnce]
-    storageClassName: local-path
+    storageClassName: pure-nfs1
     resources:
       requests:
         storage: 50Gi
@@ -118,8 +131,21 @@ items:
       matchLabels: {app: langfuse-clickhouse}
     template:
       metadata:
-        labels: {app: langfuse-clickhouse}
+        labels: {app: langfuse-clickhouse, runai/node-pool: default}
       spec:
+        # runai/node-pool: default (pod label above) is required too: this
+        # project's defaultNodePools is [h200s], and Run:ai otherwise injects a
+        # gpu.product=NVIDIA-H200 affinity that contradicts the one below.
+        # CPU-only: land on the control-plane nodes, never the GPU node (110-pod
+        # kubelet cap there). See the deploy-to-dgx skill.
+        tolerations:
+        - {key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule}
+        affinity:
+          nodeAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+              - matchExpressions:
+                - {key: nvidia.com/gpu.present, operator: DoesNotExist}
         containers:
         - name: clickhouse
           image: clickhouse/clickhouse-server:24
@@ -159,8 +185,21 @@ items:
       matchLabels: {app: langfuse-redis}
     template:
       metadata:
-        labels: {app: langfuse-redis}
+        labels: {app: langfuse-redis, runai/node-pool: default}
       spec:
+        # runai/node-pool: default (pod label above) is required too: this
+        # project's defaultNodePools is [h200s], and Run:ai otherwise injects a
+        # gpu.product=NVIDIA-H200 affinity that contradicts the one below.
+        # CPU-only: land on the control-plane nodes, never the GPU node (110-pod
+        # kubelet cap there). See the deploy-to-dgx skill.
+        tolerations:
+        - {key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule}
+        affinity:
+          nodeAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+              - matchExpressions:
+                - {key: nvidia.com/gpu.present, operator: DoesNotExist}
         containers:
         - name: redis
           image: redis:7
@@ -183,7 +222,7 @@ items:
     name: langfuse-minio
   spec:
     accessModes: [ReadWriteOnce]
-    storageClassName: local-path
+    storageClassName: pure-nfs1
     resources:
       requests:
         storage: 20Gi
@@ -199,12 +238,31 @@ items:
       matchLabels: {app: langfuse-minio}
     template:
       metadata:
-        labels: {app: langfuse-minio}
+        labels: {app: langfuse-minio, runai/node-pool: default}
       spec:
+        # runai/node-pool: default (pod label above) is required too: this
+        # project's defaultNodePools is [h200s], and Run:ai otherwise injects a
+        # gpu.product=NVIDIA-H200 affinity that contradicts the one below.
+        # CPU-only: land on the control-plane nodes, never the GPU node (110-pod
+        # kubelet cap there). See the deploy-to-dgx skill.
+        tolerations:
+        - {key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule}
+        affinity:
+          nodeAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+              - matchExpressions:
+                - {key: nvidia.com/gpu.present, operator: DoesNotExist}
         containers:
         - name: minio
-          image: minio/minio
-          args: ["server", "/data", "--console-address", ":9001"]
+          # MinIO stopped publishing community images (docker.io/minio/* is gone,
+          # quay.io/minio/* now 401s). bitnamilegacy is a frozen, pullable build —
+          # fine for this lab's Langfuse event uploads; pin, never :latest.
+          image: bitnamilegacy/minio:2025.7.23-debian-12-r5
+          command: ["minio", "server", "/data", "--console-address", ":9001"]
+          # bitnami runs as uid 1001, which can't write the pure-nfs1 volume;
+          # run as root like the upstream minio/minio image did.
+          securityContext: {runAsUser: 0}
           env:
           - name: MINIO_ROOT_USER
             valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: MINIO_ROOT_USER}}
@@ -239,11 +297,26 @@ items:
   spec:
     backoffLimit: 10
     template:
+      metadata:
+        labels: {runai/node-pool: default}
       spec:
+        # runai/node-pool: default (pod label above) is required too: this
+        # project's defaultNodePools is [h200s], and Run:ai otherwise injects a
+        # gpu.product=NVIDIA-H200 affinity that contradicts the one below.
+        # CPU-only: land on the control-plane nodes, never the GPU node (110-pod
+        # kubelet cap there). See the deploy-to-dgx skill.
+        tolerations:
+        - {key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule}
+        affinity:
+          nodeAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+              - matchExpressions:
+                - {key: nvidia.com/gpu.present, operator: DoesNotExist}
         restartPolicy: OnFailure
         containers:
         - name: mc
-          image: minio/mc
+          image: bitnamilegacy/minio-client:2025.7.21-debian-12-r3
           command: ["/bin/sh", "-c"]
           args:
           - |
@@ -253,6 +326,7 @@ items:
             mc mb --ignore-existing local/langfuse
             echo 'bucket ready'
           env:
+          - {name: MC_CONFIG_DIR, value: /tmp/.mc}   # image runs non-root, HOME not writable
           - name: MINIO_ROOT_USER
             valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: MINIO_ROOT_USER}}
           - name: MINIO_ROOT_PASSWORD
@@ -270,8 +344,21 @@ items:
       matchLabels: {app: langfuse-web}
     template:
       metadata:
-        labels: {app: langfuse-web}
+        labels: {app: langfuse-web, runai/node-pool: default}
       spec:
+        # runai/node-pool: default (pod label above) is required too: this
+        # project's defaultNodePools is [h200s], and Run:ai otherwise injects a
+        # gpu.product=NVIDIA-H200 affinity that contradicts the one below.
+        # CPU-only: land on the control-plane nodes, never the GPU node (110-pod
+        # kubelet cap there). See the deploy-to-dgx skill.
+        tolerations:
+        - {key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule}
+        affinity:
+          nodeAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+              - matchExpressions:
+                - {key: nvidia.com/gpu.present, operator: DoesNotExist}
         containers:
         - name: web
           image: langfuse/langfuse:3
@@ -294,7 +381,7 @@ items:
             valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: MINIO_ROOT_PASSWORD}}
           - {name: LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE, value: "true"}
           # Must match the URL the browser actually uses, or auth redirects break.
-          - {name: NEXTAUTH_URL, value: "http://10.89.197.201:30300"}
+          - {name: NEXTAUTH_URL, value: "http://10.89.195.201:30300"}
           - name: NEXTAUTH_SECRET
             valueFrom: {secretKeyRef: {name: langfuse-demo-creds, key: NEXTAUTH_SECRET}}
           - name: SALT
@@ -348,8 +435,21 @@ items:
       matchLabels: {app: langfuse-worker}
     template:
       metadata:
-        labels: {app: langfuse-worker}
+        labels: {app: langfuse-worker, runai/node-pool: default}
       spec:
+        # runai/node-pool: default (pod label above) is required too: this
+        # project's defaultNodePools is [h200s], and Run:ai otherwise injects a
+        # gpu.product=NVIDIA-H200 affinity that contradicts the one below.
+        # CPU-only: land on the control-plane nodes, never the GPU node (110-pod
+        # kubelet cap there). See the deploy-to-dgx skill.
+        tolerations:
+        - {key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule}
+        affinity:
+          nodeAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+              - matchExpressions:
+                - {key: nvidia.com/gpu.present, operator: DoesNotExist}
         containers:
         - name: worker
           image: langfuse/langfuse-worker:3
