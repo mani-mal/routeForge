@@ -17,6 +17,14 @@ over the simulated rows.
 - **Deterministic.** Same rows, plan and Python minor version give the same
   numbers. Nothing here reads a clock or the global `random` state.
 
+**Quality labels.** Where a routed row's quality is a P2b-3 calibrated
+score AND the operator passed the recommendation file that set was applied
+from (`--quality-posteriors`), each replicate also draws that
+`(model, workload)` unit's quality from its Beta posterior -- one draw per
+unit per replicate, shared by both arms and every scenario. A published or
+tier-default quality has no stated uncertainty and none is invented: it
+stays a point, and the block says how many rows that is.
+
 The range is sampling variability of the recorded rows under this replay
 model, and nothing else -- `UNCERTAINTY_CAVEAT` and `NOT_COVERED` say what
 it leaves out, and every report prints the caveat.
@@ -28,13 +36,16 @@ Never imported by serving code (`tests/eval/test_isolation.py`).
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import random
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from app.eval.calibration import recommendation_set_id
 from app.eval.outcomes import _round6
-from app.eval.simulate import RowResult, _bucket_stats, _parse_ts, _route_changed
+from app.eval.simulate import ArmResult, RowResult, _bucket_stats, _parse_ts, _route_changed
 
 METHOD = "stratified_paired_row_bootstrap"
 STRATA = "application_id"
@@ -45,6 +56,33 @@ NOT_COVERED = ("replay_model_error", "admission_estimate_error", "unrecorded_inp
 
 MAX_REPLICATES = 20000
 _COUNTS = ("route_changed", "newly_rejected", "newly_served")
+ARMS = ("current", "proposed")
+
+_RECOMMENDATION_PREFIX = "routeforge.quality-recommendation/"
+_RECOMMENDATION_MAJOR = "v1"
+
+#: `(set_id, model, workload)`; workload None is the `(model, *)` unit.
+PosteriorKey = tuple[str, str, str | None]
+
+
+class UncertaintyError(ValueError):
+    """A `--quality-posteriors` file failed to load or validate. Names the
+    file and the offending location, like `SnapshotError`."""
+
+    def __init__(self, where: str, message: str) -> None:
+        self.where = where
+        self.message = message
+        super().__init__(f"{where}: {message}")
+
+
+@dataclass(frozen=True)
+class Posterior:
+    """One calibrated unit's `Beta(alpha, beta)`, and the mean that was
+    applied as its score."""
+
+    alpha: float
+    beta: float
+    mean: float
 
 
 @dataclass(frozen=True)
@@ -55,6 +93,10 @@ class UncertaintyPlan:
     interval: float = 0.90
     seed: int = 0
     min_rows: int = 30
+    # `load_posteriors`' two results: the units, and one `(set_id, sha256)`
+    # per file. Empty when no `--quality-posteriors` file was given.
+    posteriors: dict[PosteriorKey, Posterior] = field(default_factory=dict)
+    posterior_files: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         if (not isinstance(self.replicates, int) or isinstance(self.replicates, bool)
@@ -101,16 +143,102 @@ def window_days(window: dict | None) -> float | None:
     return days if days >= 1 else None
 
 
-def _arm_sig(arm) -> tuple:
+def _finite(value) -> bool:
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(value))
+
+
+def load_posteriors(paths: list[str]
+                    ) -> tuple[dict[PosteriorKey, Posterior], tuple[tuple[str, str], ...]]:
+    """Read `routeforge.quality-recommendation/v1` files (P2b-3's
+    `recommendation.json`). Returns the `recommended` units' posteriors keyed
+    `(set_id, model, workload)`, and one `(set_id, sha256 of the file)` per
+    distinct file, sorted.
+
+    A file's `set_id` must equal the hash of its own content
+    (`calibration.recommendation_set_id`): that is the same check the admin
+    API ran when the set was applied, so a file that passes it and whose
+    `set_id` is in the snapshot IS the set the snapshot's score came from.
+    Units that were not `recommended` were never applied and are skipped.
+    Raises `UncertaintyError` naming the file and the location."""
+    posteriors: dict[PosteriorKey, Posterior] = {}
+    files: set[tuple[str, str]] = set()
+    for path in paths:
+        with open(path, "rb") as f:
+            raw = f.read()
+        try:
+            rec = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise UncertaintyError(path, f"invalid JSON: {exc}") from exc
+        if not isinstance(rec, dict):
+            raise UncertaintyError(path, "must be an object")
+        schema = rec.get("schema")
+        if (not isinstance(schema, str) or not schema.startswith(_RECOMMENDATION_PREFIX)
+                or schema[len(_RECOMMENDATION_PREFIX):].split(".", 1)[0]
+                != _RECOMMENDATION_MAJOR):
+            raise UncertaintyError(
+                f"{path}: schema",
+                f"must be {_RECOMMENDATION_PREFIX}{_RECOMMENDATION_MAJOR}; got {schema!r}")
+        set_id = rec.get("set_id")
+        if not isinstance(set_id, str) or set_id != recommendation_set_id(rec):
+            raise UncertaintyError(f"{path}: set_id",
+                                   "does not match the file's own content")
+        units = rec.get("units")
+        if not isinstance(units, list):
+            raise UncertaintyError(f"{path}: units", "must be a list")
+        for i, unit in enumerate(units):
+            where = f"{path}: units[{i}]"
+            if not isinstance(unit, dict):
+                raise UncertaintyError(where, "must be an object")
+            if unit.get("status") != "recommended":
+                continue
+            model, workload = unit.get("model"), unit.get("workload")
+            if not isinstance(model, str) or not model:
+                raise UncertaintyError(f"{where}.model", "must be a non-empty string")
+            if workload is not None and not isinstance(workload, str):
+                raise UncertaintyError(f"{where}.workload", "must be null or a string")
+            for key in ("alpha", "beta"):
+                if not _finite(unit.get(key)) or unit[key] <= 0:
+                    raise UncertaintyError(f"{where}.{key}", "must be a finite number > 0")
+            if not _finite(unit.get("mean")) or not 0.0 <= unit["mean"] <= 1.0:
+                raise UncertaintyError(f"{where}.mean", "must be a finite number in [0, 1]")
+            posteriors[(set_id, model, workload)] = Posterior(
+                float(unit["alpha"]), float(unit["beta"]), float(unit["mean"]))
+        files.add((set_id, hashlib.sha256(raw).hexdigest()))
+    return posteriors, tuple(sorted(files))
+
+
+def posterior_key(arm: ArmResult, row: dict,
+                  posteriors: dict[PosteriorKey, Posterior]) -> PosteriorKey | None:
+    """The posterior behind this arm's quality, or None when it has none: the
+    arm is not routed, its quality is not `calibrated`, or no loaded unit of
+    that set matches. The resolver's own order is followed -- the row's
+    workload, then `(model, *)` -- and the unit's mean must be the score the
+    arm carries, so a file can never attach to a score it did not produce."""
+    if (arm.outcome != "routed" or arm.quality_source != "calibrated"
+            or arm.quality_set_id is None or arm.quality is None):
+        return None
+    for workload in (row.get("workload"), None):
+        key = (arm.quality_set_id, arm.model, workload)
+        post = posteriors.get(key)
+        if post is not None and abs(post.mean - arm.quality) <= 1e-6:
+            return key
+    return None
+
+
+def _arm_sig(arm: ArmResult, row: dict, posteriors: dict[PosteriorKey, Posterior]) -> tuple:
     """Everything a figure reads from one arm of one row EXCEPT its cost:
-    `(routed, on-prem, latency_ms, quality)`. Latency and quality are
-    properties of the picked model, so rows share a small number of these."""
+    `(routed, on-prem, latency_ms, quality, posterior key)`. Latency and
+    quality are properties of the picked model (and workload), so rows share
+    a small number of these."""
     if arm.outcome != "routed":
-        return (False, False, None, None)
-    return (True, arm.provider == "onprem", arm.latency_ms, arm.quality)
+        return (False, False, None, None, None)
+    return (True, arm.provider == "onprem", arm.latency_ms, arm.quality,
+            posterior_key(arm, row, posteriors))
 
 
-def _strata(results: list[RowResult]) -> tuple[list[_Stratum], list[tuple]]:
+def _strata(results: list[RowResult], posteriors: dict[PosteriorKey, Posterior]
+           ) -> tuple[list[_Stratum], list[tuple]]:
     """One stratum per application (sorted by id), plus the class table.
 
     A row's CLASS is `(current signature, proposed signature, route
@@ -128,7 +256,8 @@ def _strata(results: list[RowResult]) -> tuple[list[_Stratum], list[tuple]]:
         cls: list[int] = []
         columns: tuple[list[float], ...] = ([], [], [], [])
         for r in by_app[app]:
-            key = (_arm_sig(r.current), _arm_sig(r.proposed), _route_changed(r))
+            key = (_arm_sig(r.current, r.row, posteriors),
+                   _arm_sig(r.proposed, r.row, posteriors), _route_changed(r))
             cls.append(classes.setdefault(key, len(classes)))
             current = (r.current.cost_usd or 0.0) if r.current.outcome == "routed" else 0.0
             proposed = (r.proposed.cost_usd or 0.0) if r.proposed.outcome == "routed" else 0.0
@@ -173,10 +302,13 @@ def _put(out: dict, name: str, current: float | None, proposed: float | None) ->
 
 
 def _figures(n: int, counts: dict[int, int], costs: list[float], classes: list[tuple],
-             days: float | None) -> dict[str, float | None]:
+             days: float | None, qdraw: dict[PosteriorKey, float] | None = None
+             ) -> dict[str, float | None]:
     """Every figure of one bucket, from its class counts and four cost sums.
     The same definitions as `simulate._bucket_stats`, stated on counts;
-    `tests/eval/test_uncertainty.py` pins the two against each other."""
+    `tests/eval/test_uncertainty.py` pins the two against each other.
+    `qdraw` is this replicate's quality draw per posterior key; without it
+    (the point estimate) every quality is the score the arm carries."""
     tally = dict.fromkeys(_COUNTS, 0)
     routed, onprem, q_n = [0, 0], [0, 0], [0, 0]
     q_sum = [0.0, 0.0]
@@ -189,7 +321,7 @@ def _figures(n: int, counts: dict[int, int], costs: list[float], classes: list[t
             tally["newly_rejected"] += m
         if proposed[0] and not current[0]:
             tally["newly_served"] += m
-        for a, (is_routed, is_onprem, lat, quality) in enumerate((current, proposed)):
+        for a, (is_routed, is_onprem, lat, quality, post) in enumerate((current, proposed)):
             if not is_routed:
                 continue
             routed[a] += m
@@ -198,7 +330,7 @@ def _figures(n: int, counts: dict[int, int], costs: list[float], classes: list[t
             if lat is not None:
                 latency[a][lat] = latency[a].get(lat, 0) + m
             if quality is not None:
-                q_sum[a] += m * quality
+                q_sum[a] += m * (quality if post is None or qdraw is None else qdraw[post])
                 q_n[a] += m
 
     out: dict[str, float | None] = {}
@@ -229,6 +361,15 @@ def draw_indices(seed: int, replicate: int, app: str, n: int) -> list[int]:
     return random.Random(f"{seed}:{replicate}:app:{app}").choices(range(n), k=n)
 
 
+def draw_quality(seed: int, replicate: int, key: PosteriorKey, post: Posterior) -> float:
+    """Replicate `replicate`'s quality for one calibrated unit: one draw from
+    its `Beta(alpha, beta)`, a function of the arguments alone, so both arms
+    and every scenario use the same value in the same replicate."""
+    set_id, model, workload = key
+    rng = random.Random(f"{seed}:{replicate}:quality:{set_id}:{model}:{workload or '*'}")
+    return rng.betavariate(post.alpha, post.beta)
+
+
 def _record(samples: dict[str, list], figures: dict[str, float | None]) -> None:
     for name, value in figures.items():
         samples.setdefault(name, []).append(value)
@@ -241,14 +382,17 @@ def run_bootstrap(results: list[RowResult], plan: UncertaintyPlan, *,
     the totals. A bucket with fewer than `plan.min_rows` rows gets no
     samples; its rows are still drawn, because they are part of the totals.
     With fewer than `min_rows` rows in all, nothing is drawn."""
-    strata, classes = _strata(results)
+    strata, classes = _strata(results, plan.posteriors)
     n_total = len(results)
+    used = sorted({sig[4] for cls in classes for sig in cls[:2] if sig[4] is not None},
+                  key=lambda k: (k[0], k[1], k[2] or ""))
     if n_total < plan.min_rows:
         return Bootstrap(n_total, None, {s.app: (s.n, None) for s in strata})
     totals: dict[str, list] = {}
     by_app: dict[str, tuple[int, dict[str, list] | None]] = {
         s.app: (s.n, {} if s.n >= plan.min_rows else None) for s in strata}
     for b in range(plan.replicates):
+        qdraw = {key: draw_quality(plan.seed, b, key, plan.posteriors[key]) for key in used}
         total_counts: Counter = Counter()
         total_costs = [0.0, 0.0, 0.0, 0.0]
         for s in strata:
@@ -258,11 +402,11 @@ def run_bootstrap(results: list[RowResult], plan: UncertaintyPlan, *,
             costs = [sums[i] for i in s.col_of]
             app_samples = by_app[s.app][1]
             if app_samples is not None:
-                _record(app_samples, _figures(s.n, counts, costs, classes, None))
+                _record(app_samples, _figures(s.n, counts, costs, classes, None, qdraw))
             total_counts.update(counts)
             for j, value in enumerate(costs):
                 total_costs[j] += value
-        _record(totals, _figures(n_total, total_counts, total_costs, classes, days))
+        _record(totals, _figures(n_total, total_counts, total_costs, classes, days, qdraw))
     return Bootstrap(n_total, totals, by_app)
 
 
@@ -366,12 +510,30 @@ def _count_outside(node) -> int:
     return 0
 
 
+def quality_coverage(results: list[RowResult], plan: UncertaintyPlan) -> dict:
+    """Per arm: `routed` rows that carry a quality, how many of those have a
+    `calibrated` quality, and how many of THOSE have a loaded posterior. The
+    quality range carries label uncertainty for `posterior` rows only; the
+    rest contribute a point."""
+    out = {}
+    for name in ARMS:
+        arms = [(getattr(r, name), r.row) for r in results]
+        routed = [(a, row) for a, row in arms if a.outcome == "routed" and a.quality is not None]
+        out[name] = {
+            "routed": len(routed),
+            "calibrated": sum(1 for a, _row in routed if a.quality_source == "calibrated"),
+            "posterior": sum(1 for a, row in routed
+                             if posterior_key(a, row, plan.posteriors) is not None)}
+    return out
+
+
 def results_block(results: list[RowResult], plan: UncertaintyPlan, *,
                   days: float | None = None) -> dict:
     """The ranges for ONE proposal's rows: `totals`, `by_app` (sorted),
-    `per_day` (None without a window of at least a day) and
-    `points_outside_interval`. Points come from `simulate._bucket_stats`,
-    so a leaf's `point` is the figure the document already carries."""
+    `per_day` (None without a window of at least a day), `quality_posterior`
+    (`quality_coverage`) and `points_outside_interval`. Points come from
+    `simulate._bucket_stats`, so a leaf's `point` is the figure the document
+    already carries."""
     boot = run_bootstrap(results, plan, days=days)
     totals = _bucket(boot.n, _flatten(_bucket_stats(results), boot.n, days), boot.totals, plan)
     per_day = totals.pop("per_day", None)
@@ -382,17 +544,21 @@ def results_block(results: list[RowResult], plan: UncertaintyPlan, *,
               for app, (n, samples) in boot.by_app.items()}
     block = {"totals": totals, "by_app": by_app, "per_day": per_day}
     block["points_outside_interval"] = _count_outside(block)
+    block["quality_posterior"] = quality_coverage(results, plan)
     return block
 
 
 def plan_inputs(plan: UncertaintyPlan) -> dict:
     """What enters a document's `inputs` (and so its id) with `--uncertainty`."""
     return {"replicates": plan.replicates, "interval": plan.interval, "seed": plan.seed,
-            "min_rows": plan.min_rows}
+            "min_rows": plan.min_rows,
+            "quality_posteriors_sha256": [sha for _set_id, sha in plan.posterior_files]}
 
 
 def plan_block(plan: UncertaintyPlan) -> dict:
     """The head of every `uncertainty` block: how the ranges were made and
     what they leave out."""
-    return {"method": METHOD, "strata": STRATA, **plan_inputs(plan),
+    return {"method": METHOD, "strata": STRATA, "replicates": plan.replicates,
+            "interval": plan.interval, "seed": plan.seed, "min_rows": plan.min_rows,
+            "quality_posterior_sets": [set_id for set_id, _sha in plan.posterior_files],
             "not_covered": list(NOT_COVERED)}

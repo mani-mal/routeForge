@@ -112,7 +112,7 @@ def test_engine_figures_equal_bucket_stats(build):
     Drawing each row exactly once must give `_bucket_stats`' own numbers,
     for the totals and for each app."""
     results = build()
-    strata, classes = _strata(results)
+    strata, classes = _strata(results, {})
     expected = _flatten(_bucket_stats(results), len(results), 2.0)
     got = _identity_figures(strata, classes, 2.0)
     # This one figure divides a delta ROUNDED to 6 dp (it mirrors the
@@ -129,7 +129,7 @@ def test_engine_figures_equal_bucket_stats(build):
 
 def test_equal_cost_columns_are_stored_once():
     """An app the proposal does not touch has one distinct cost column."""
-    strata, _classes = _strata(_synthetic())
+    strata, _classes = _strata(_synthetic(), {})
     untouched = next(s for s in strata if s.app == "app-0")
     assert len(untouched.cols) == 1 and untouched.col_of == (0, 0, 0, 0)
     touched = next(s for s in strata if s.app == "app-1")
@@ -333,8 +333,10 @@ def test_u7_too_few_rows_in_all_draws_nothing():                           # U7
 
 def test_u7_no_rows_at_all():                                              # U7
     block = results_block([], UncertaintyPlan())
+    empty = {"routed": 0, "calibrated": 0, "posterior": 0}
     assert block == {"totals": {"insufficient_data": True, "n": 0}, "by_app": {},
-                     "per_day": None, "points_outside_interval": 0}
+                     "per_day": None, "points_outside_interval": 0,
+                     "quality_posterior": {"current": empty, "proposed": empty}}
 
 
 def test_min_rows_is_inclusive():
@@ -443,10 +445,12 @@ def test_plan_refuses_values_out_of_range(kwargs):
 
 def test_plan_block_and_inputs():
     plan = UncertaintyPlan(replicates=250, interval=0.8, seed=4, min_rows=10)
-    assert plan_inputs(plan) == {"replicates": 250, "interval": 0.8, "seed": 4, "min_rows": 10}
+    assert plan_inputs(plan) == {"replicates": 250, "interval": 0.8, "seed": 4, "min_rows": 10,
+                                 "quality_posteriors_sha256": []}
     assert plan_block(plan) == {
         "method": METHOD, "strata": "application_id", "replicates": 250, "interval": 0.8,
-        "seed": 4, "min_rows": 10, "not_covered": list(NOT_COVERED)}
+        "seed": 4, "min_rows": 10, "quality_posterior_sets": [],
+        "not_covered": list(NOT_COVERED)}
     assert UncertaintyPlan() == UncertaintyPlan(replicates=1000, interval=0.90, seed=0,
                                                 min_rows=30)
 
