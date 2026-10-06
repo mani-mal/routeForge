@@ -548,6 +548,31 @@ def results_block(results: list[RowResult], plan: UncertaintyPlan, *,
     return block
 
 
+def table_ranges(block: dict) -> dict:
+    """The leaves behind one scenario's comparison-table row, under the
+    table's own column keys (`scenarios._table_row`): the like-for-like cost
+    deltas, the three counts, the latency and quality deltas and the two
+    on-prem shares. `{"insufficient_data": true, "n"}` when the totals have
+    no ranges. `overflow_hops` and `affected_apps` have no range."""
+    totals = block["totals"]
+    if totals.get("insufficient_data"):
+        return dict(totals)
+    per_day = block["per_day"]
+    return {
+        "cost_per_day_delta_usd": (per_day["cost_usd_both_routed"]["delta"]
+                                   if per_day is not None else None),
+        "cost_delta_usd": totals["cost_usd_both_routed"]["delta"],
+        "route_changed": totals["route_changed"],
+        "newly_rejected": totals["newly_rejected"],
+        "newly_served": totals["newly_served"],
+        "latency_p50_delta_ms": totals["latency_ms"]["p50"]["delta"],
+        "latency_p95_delta_ms": totals["latency_ms"]["p95"]["delta"],
+        "quality_mean_delta": totals["quality_mean"]["delta"],
+        "onprem_share_current": totals["onprem_share"]["current"],
+        "onprem_share_proposed": totals["onprem_share"]["proposed"],
+    }
+
+
 def plan_inputs(plan: UncertaintyPlan) -> dict:
     """What enters a document's `inputs` (and so its id) with `--uncertainty`."""
     return {"replicates": plan.replicates, "interval": plan.interval, "seed": plan.seed,

@@ -8,6 +8,11 @@ recorded traffic against the same `current` arm (`app/eval/simulate.py`).
 RouteForge never picks, ranks or recommends a scenario: they are reported in
 file order, and nothing is applied (handoff §28).
 
+With an `UncertaintyPlan` (P3c-3) every scenario also gets ranges
+(`app/eval/uncertainty.py`), under one `uncertainty` key. Every scenario is
+resampled with the same draws, so the ranges of two scenarios are over the
+same resampled traffic. A range is not a ranking either.
+
 Never imported by serving code (`tests/eval/test_isolation.py`).
 """
 from __future__ import annotations
@@ -28,6 +33,10 @@ from app.eval.simulate import (CACHED_SHARE_NOTE, REPORT_CAVEAT, _assumption_ite
                                _excluded_lines, _fidelity_notes, _metrics_table,
                                _move_lines, _new_rejection_lines, _per_day, arm_results,
                                run_rows, summarize)
+from app.eval.uncertainty import (UncertaintyPlan, bucket_lines, caveat_lines,
+                                  insufficient_text, method_line, outside_line, plan_block,
+                                  quality_line, results_block, table_ranges, window_days,
+                                  with_range)
 
 SCHEMA = "routeforge.policy-scenarios/v1"
 COMPARISON_SCHEMA = "routeforge.scenario-comparison/v1"
@@ -177,23 +186,31 @@ class Comparison:
     baseline: dict         # the `current` arm's fidelity block
     window: dict | None    # {"start", "end"} over the simulated rows' `ts`
     scenarios: list[dict]  # file order: {"name", "edits", "assumptions", "summary"}
+    # P3c-3: `plan_block` plus `scenarios`, one `{"name", ...results_block,
+    # "table"}` per scenario in file order. None without a plan.
+    uncertainty: dict | None = None
 
 
 async def compare(records: list[dict], snapshot: dict, scenarios_doc: dict, *,
-                  base: Settings, since: datetime | None = None) -> Comparison:
+                  base: Settings, since: datetime | None = None,
+                  uncertainty: UncertaintyPlan | None = None) -> Comparison:
     """Replay every scenario against ONE shared `current` arm (spec §7).
 
     Every proposal is validated and applied before anything is replayed
     (`apply_scenarios`, all-or-nothing). The `current` scenario is built and
     simulated once; each proposed scenario is then built, replayed and
     closed in file order, so at most one proposed scenario is open at a
-    time. Nothing is ranked, and nothing is applied to a deployment."""
+    time. Nothing is ranked, and nothing is applied to a deployment.
+
+    `uncertainty` (P3c-3) adds each scenario's ranges, bootstrapped from the
+    rows it was just replayed over -- no row is simulated a second time."""
     applied = apply_scenarios(snapshot, scenarios_doc, base=base)
     current = await build_scenario(snapshot, base=base)
     try:
         current_results = arm_results(records, current, since=since)
         shared: tuple[dict, dict, dict | None] | None = None
         entries: list[dict] = []
+        ranges: list[dict] = []
         for item in applied:
             proposed = await build_scenario(item.doc, base=base)
             try:
@@ -221,10 +238,17 @@ async def compare(records: list[dict], snapshot: dict, scenarios_doc: dict, *,
                 "assumptions": sim["assumptions"],
                 "summary": {k: v for k, v in sim.items() if k not in _LIFTED},
             })
+            if uncertainty is not None:
+                block = results_block(results, uncertainty,
+                                      days=window_days(sim["inputs"]["window"]))
+                ranges.append({"name": item.name, **block, "table": table_ranges(block)})
     finally:
         await close_scenario(current)
     rows, baseline, window = shared      # a file always holds at least one scenario
-    return Comparison(rows=rows, baseline=baseline, window=window, scenarios=entries)
+    return Comparison(
+        rows=rows, baseline=baseline, window=window, scenarios=entries,
+        uncertainty=(None if uncertainty is None
+                     else {**plan_block(uncertainty), "scenarios": ranges}))
 
 
 # --- output (spec §8) ----------------------------------------------------------
@@ -271,7 +295,7 @@ def comparison_doc(comparison: Comparison, *, inputs: dict) -> dict:
     full_inputs["window"] = comparison.window
     comparison_id = hashlib.sha256(
         json.dumps(full_inputs, sort_keys=True).encode("utf-8")).hexdigest()[:16]
-    return _round6({
+    doc = {
         "schema": COMPARISON_SCHEMA,
         "comparison_id": comparison_id,
         "inputs": full_inputs,
@@ -279,7 +303,11 @@ def comparison_doc(comparison: Comparison, *, inputs: dict) -> dict:
         "baseline": comparison.baseline,
         "scenarios": comparison.scenarios,
         "table": [_table_row(entry, comparison.window) for entry in comparison.scenarios],
-    })
+    }
+    if comparison.uncertainty is not None:
+        # The ONE key `--uncertainty` adds; every key above is unchanged.
+        doc["uncertainty"] = comparison.uncertainty
+    return _round6(doc)
 
 
 _TABLE_COLUMNS = ("scenario", "Δcost/day USD", "Δcost USD", "route changed", "newly rejected",
@@ -350,22 +378,57 @@ def _agreement_lines(doc: dict) -> list[str]:
     return lines
 
 
-def _comparison_row(row: dict) -> str:
+def _comparison_row(row: dict, ranges: dict | None = None) -> str:
+    """One table row. `ranges` (P3c-3, `uncertainty.table_ranges`) puts
+    `[lo, hi]` after each figure that has one; without it, or when the
+    scenario has too few rows for a range, the cells are the points alone."""
+    if ranges is None or ranges.get("insufficient_data"):
+        ranges = {}
+
+    def cell(key: str, text: str) -> str:
+        return with_range(text, ranges.get(key))
+
     cells = [
         row["name"],
-        _fmt(row["cost_per_day_delta_usd"]),
-        _fmt(row["cost_delta_usd"]),
-        str(row["route_changed"]),
-        str(row["newly_rejected"]),
-        str(row["newly_served"]),
-        _fmt(row["latency_p50_delta_ms"]),
-        _fmt(row["latency_p95_delta_ms"]),
-        _fmt(row["quality_mean_delta"]),
+        cell("cost_per_day_delta_usd", _fmt(row["cost_per_day_delta_usd"])),
+        cell("cost_delta_usd", _fmt(row["cost_delta_usd"])),
+        cell("route_changed", str(row["route_changed"])),
+        cell("newly_rejected", str(row["newly_rejected"])),
+        cell("newly_served", str(row["newly_served"])),
+        cell("latency_p50_delta_ms", _fmt(row["latency_p50_delta_ms"])),
+        cell("latency_p95_delta_ms", _fmt(row["latency_p95_delta_ms"])),
+        cell("quality_mean_delta", _fmt(row["quality_mean_delta"])),
         f"{_fmt(row['onprem_share_current'])}→{_fmt(row['onprem_share_proposed'])}",
         str(row["overflow_hops"]),
         ", ".join(row["affected_apps"]) or "none",
     ]
     return "| " + " | ".join(cells) + " |"
+
+
+#: Printed with the ranges, verbatim (P3c-3 spec §10, invariant U11).
+RANGE_NOT_RANKING_NOTE = (
+    "In the table above, `[lo, hi]` after a figure is its range. A range is not a ranking: "
+    "overlapping ranges do not make two scenarios equal, and separate ranges do not make "
+    "one of them the one to choose."
+)
+
+
+def _uncertainty_lines(block: dict) -> list[str]:
+    """The comparison report's "Uncertainty ranges" section: the caveat, how
+    the ranges were made, then one line per scenario in FILE order -- its
+    quality coverage, or that it has too few rows."""
+    lines = ["## Uncertainty ranges", ""]
+    lines += caveat_lines()
+    lines += ["", method_line(block), "", RANGE_NOT_RANKING_NOTE, ""]
+    for entry in block["scenarios"]:
+        if entry["totals"].get("insufficient_data"):
+            lines.append(f"- **{entry['name']}** -- {insufficient_text(entry['totals'])}")
+            continue
+        text = quality_line(entry["quality_posterior"])
+        outside = outside_line(entry["points_outside_interval"])
+        lines.append(f"- **{entry['name']}** -- {text}" + (f" {outside}" if outside else ""))
+    lines.append("")
+    return lines
 
 
 def render_comparison(doc: dict) -> str:
@@ -386,14 +449,19 @@ def render_comparison(doc: dict) -> str:
 
     lines.append("## Comparison")
     lines.append("")
+    uncertainty = doc.get("uncertainty")
+    ranges = {entry["name"]: entry for entry in uncertainty["scenarios"]} if uncertainty else {}
     lines.append("| " + " | ".join(_TABLE_COLUMNS) + " |")
     lines.append("|" + "---|" * len(_TABLE_COLUMNS))
-    lines += [_comparison_row(row) for row in doc["table"]]
+    lines += [_comparison_row(row, ranges[row["name"]]["table"] if ranges else None)
+              for row in doc["table"]]
     lines.append("")
     lines.append(NO_RANKING_NOTE)
     lines.append("")
     lines.append(LIKE_FOR_LIKE_NOTE)
     lines.append("")
+    if uncertainty:
+        lines += _uncertainty_lines(uncertainty)
 
     assuming = [(entry["name"], _assumption_items(entry["assumptions"]))
                 for entry in doc["scenarios"]]
@@ -414,6 +482,20 @@ def render_comparison(doc: dict) -> str:
         lines.append("")
         lines += _metrics_table(summary["totals"])
         lines.append("")
+        if uncertainty:
+            lines.append("### Ranges")
+            lines.append("")
+            lines += bucket_lines(ranges[entry["name"]]["totals"], uncertainty["interval"])
+            lines.append("")
+            small = [f"{app_id} (n = {bucket['n']})"
+                     for app_id, bucket in sorted(ranges[entry["name"]]["by_app"].items())
+                     if bucket.get("insufficient_data")]
+            if small:
+                lines.append("Per-app ranges are in `comparison.json`. Insufficient data: "
+                             + ", ".join(small) + ".")
+            else:
+                lines.append("Per-app ranges are in `comparison.json`.")
+            lines.append("")
         lines.append("### Moves")
         lines.append("")
         lines += _move_lines(summary["moves"])
