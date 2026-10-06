@@ -636,3 +636,78 @@ def test_live_round_trip_scenarios_empty_scenario_is_a_perfect_noop(tmp_path):
     assert doc["rows"]["simulated"] == 4 and doc["baseline"]["agreement"] == 1.0
     (row,) = doc["table"]
     assert (row["route_changed"], row["newly_rejected"], row["cost_delta_usd"]) == (0, 0, 0)
+
+
+# --- B60: --min-agreement gates on the lower of model and outcome agreement ----
+
+def _rejected(request_id, **over):
+    """An export row for a request rejected at the per-request budget, as
+    serving writes it since B60: no backend usage, the router's token count."""
+    row = dict(status="no_eligible", complexity=1.0, prompt_tokens=0, completion_tokens=0,
+               routing_tokens=3000, max_tokens=16, attempts=[], chosen=None)
+    row.update(over)
+    return make_row(request_id, "app-a", **row)
+
+
+def _mixed_outcome_lines():
+    """3 served rows replay picks correctly + 2 recorded budget rejections."""
+    return [_line(make_row(f"ok{i}", "app-a")) for i in range(3)] + \
+           [_line(_rejected(f"rej{i}")) for i in range(2)]
+
+
+def _cap_snapshot(cap):
+    return make_snapshot(apps=[app_entry("app-a", max_cost_usd_per_request=cap)])
+
+
+def test_r12_min_agreement_exits_4_on_outcome_disagreement(tmp_path):      # R12
+    """Model agreement is 1.0 (every served row replays to its model), but
+    the snapshot's cap is above the estimate, so replay ROUTES the two
+    recorded rejections: outcome agreement 0.6. The gate takes the lower."""
+    proc, out = _run_cli(tmp_path, _mixed_outcome_lines(), _cap_snapshot(100.0),
+                         {"schema": P}, "--min-agreement", "0.9")
+    assert proc.returncode == 4, proc.stderr
+    assert "baseline agreement 1 over 3 compared rows" in proc.stderr
+    assert "outcome agreement 0.6 over 5 simulated rows" in proc.stderr
+    assert "2 recorded rejected but routed, 0 recorded routed but rejected" in proc.stderr
+    assert "--min-agreement 0.9" in proc.stderr
+    assert not out.exists()                       # no directory, no files
+
+
+def test_min_agreement_passes_when_rejections_are_reproduced(tmp_path):
+    proc, out = _run_cli(tmp_path, _mixed_outcome_lines(), _cap_snapshot(0.0002),
+                         {"schema": P, "apps": {"app-a": {"max_cost_usd_per_request": 1}}},
+                         "--min-agreement", "1.0")
+    assert proc.returncode == 0, proc.stderr
+    sim = json.loads((out / "simulation.json").read_text())
+    assert sim["baseline"]["agreement"] == sim["baseline"]["outcome_agreement"] == 1.0
+    assert sim["totals"]["newly_served"] == 2
+    assert sim["rows"]["estimated_tokens"] == 2
+    assert "outcome 100.0% over 5 simulated rows." in (out / "report.md").read_text()
+
+
+def test_min_agreement_outcome_gate_applies_to_scenarios_and_shadow_prices(tmp_path):
+    proc, out = _run_cli_scenarios(tmp_path, _mixed_outcome_lines(), _cap_snapshot(100.0),
+                                   _scenarios(("noop", {})), "--min-agreement", "0.9")
+    assert proc.returncode == 4, proc.stderr
+    assert "outcome agreement 0.6 over 5 simulated rows" in proc.stderr and not out.exists()
+    proc, out = _run_cli_no_proposal(tmp_path, _mixed_outcome_lines(), _cap_snapshot(100.0),
+                                     "--shadow-prices", "--min-agreement", "0.9")
+    assert proc.returncode == 4, proc.stderr
+    assert "outcome agreement 0.6 over 5 simulated rows" in proc.stderr and not out.exists()
+
+
+def test_cli_counts_prefix_rejected_rows_as_missing_routing_tokens(tmp_path):
+    """An export taken before the column existed: its rejected rows carry no
+    size, so they are excluded and counted -- never replayed as empty prompts
+    (which is what made a raised budget show nothing to rescue)."""
+    old = [_line({k: v for k, v in _rejected(f"rej{i}").items() if k != "routing_tokens"})
+           for i in range(2)]
+    lines = [_line(make_row(f"ok{i}", "app-a")) for i in range(3)] + old
+    proc, out = _run_cli(tmp_path, lines, _cap_snapshot(0.0002),
+                         {"schema": P, "apps": {"app-a": {"max_cost_usd_per_request": 1}}})
+    assert proc.returncode == 0, proc.stderr
+    sim = json.loads((out / "simulation.json").read_text())
+    assert sim["rows"]["simulated"] == 3
+    assert sim["rows"]["excluded"]["missing_routing_tokens"] == 2
+    assert sim["totals"]["newly_served"] == 0
+    assert "| missing_routing_tokens | 2 |" in (out / "report.md").read_text()

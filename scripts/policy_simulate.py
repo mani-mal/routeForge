@@ -28,8 +28,9 @@ File-based only: no DB, no `app.api`, no serving import
 Exit codes: 0 output written; 2 an input file failed to load, validate or
 apply, or the flags do not combine; 3 the proposal (or any scenario)
 introduces new rejections and `--fail-on-new-rejections` is set (for
-CI/GitOps gating); 4 the baseline's agreement with the record is below
-`--min-agreement` (nothing is written).
+CI/GitOps gating); 4 the baseline's agreement with the record -- the lower
+of model agreement and outcome agreement -- is below `--min-agreement`
+(nothing is written).
 """
 from __future__ import annotations
 
@@ -93,17 +94,30 @@ def _parser() -> argparse.ArgumentParser:
                         "(counted as before_since). Applies to every mode.")
     p.add_argument("--min-agreement", type=float, default=None, metavar="X",
                    help="0..1; exit 4 and write nothing when the baseline's agreement "
-                        "with the recorded first attempts is below X (or not computable)")
+                        "with the record is below X (or not computable). The lower of two "
+                        "rates is compared: model agreement (first pick vs the recorded "
+                        "first attempt) and outcome agreement (routed/rejected vs the "
+                        "recorded status)")
     return p
 
 
+def _shown(rate: float | None) -> str:
+    return "n/a" if rate is None else f"{rate:.6g}"
+
+
 def _below_min_agreement(baseline: dict, minimum: float) -> int:
-    """Print why the `--min-agreement` gate refused the run; return exit 4."""
-    agreement = baseline["agreement"]
-    shown = "n/a" if agreement is None else f"{agreement:.6g}"
-    print(f"policy_simulate: baseline agreement {shown} over "
-          f"{baseline['rows_compared']} compared rows is below --min-agreement "
-          f"{minimum:g}; nothing written", file=sys.stderr)
+    """Print why the `--min-agreement` gate refused the run; return exit 4.
+    Both rates and both outcome-disagreement counts are named, so the
+    operator can tell a wrong-model replay (B55) from a wrong-outcome one
+    (B60) without re-running."""
+    print(f"policy_simulate: baseline agreement {_shown(baseline['agreement'])} over "
+          f"{baseline['rows_compared']} compared rows, outcome agreement "
+          f"{_shown(baseline['outcome_agreement'])} over "
+          f"{baseline['outcome_rows_compared']} simulated rows "
+          f"({baseline['recorded_rejected_but_routed']} recorded rejected but routed, "
+          f"{baseline['recorded_routed_but_rejected']} recorded routed but rejected): "
+          f"below --min-agreement {minimum:g} (the lower of the two is compared; n/a "
+          "never passes); nothing written", file=sys.stderr)
     return 4
 
 

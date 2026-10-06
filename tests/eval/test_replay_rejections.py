@@ -19,8 +19,8 @@ from hypothesis import HealthCheck, given, settings as hsettings, strategies as 
 import app.eval.simulate as simulate_mod
 from app.eval.outcomes import load_export
 from app.eval.simulate import (EXCLUSION_REASONS, RECORDED_OUTCOME, SIMULATED_STATUSES,
-                               agreement_ok, baseline_check, gate_agreement, replay_tokens,
-                               select_rows, simulate, summarize)
+                               agreement_ok, baseline_check, gate_agreement, render_report,
+                               replay_tokens, select_rows, simulate, summarize)
 from tests.eval.sim_fixtures import (BASE_SETTINGS, app_entry, make_row, make_snapshot,
                                      onboarded_row)
 
@@ -411,3 +411,63 @@ def test_baseline_check_carries_the_outcome_fields():
     snap = _snap(cap=100.0)
     assert asyncio.run(baseline_check(rows, snap, base=BASE_SETTINGS)) == \
         _baseline_of(rows, snap)
+
+
+# --- report.md shows both agreements (spec §7.3) ------------------------------
+
+def _report(records, snap, prop=None):
+    results, excluded = _run(records, snap, prop)
+    return render_report(summarize(results, excluded, inputs=_INPUTS, edits={}))
+
+
+def test_report_always_states_both_agreements():
+    """Printed on a clean run too: B60 went unnoticed because a report with
+    nothing wrong to warn about said nothing about agreement at all."""
+    rows = [make_row(f"ok{i}", "app-a") for i in range(3)] + [_rejected_row("rej")]
+    report = _report(rows, _snap())
+    assert ("Baseline agreement: model 100.0% over 3 compared rows; "
+            "outcome 100.0% over 4 simulated rows.") in report
+    assert "**Warning:**" not in report
+    assert "replay as routed" not in report and "replay as rejected" not in report
+    # ...but the estimate is always labelled when a row is sized from it.
+    assert "> **Note:** 1 row(s) had no backend token count" in report
+    assert "an estimate, not a bill" in report
+
+
+def test_report_without_estimated_rows_has_no_estimate_note():
+    report = _report([make_row("ok1", "app-a")], _snap())
+    assert "no backend token count" not in report
+    assert "outcome 100.0% over 1 simulated rows." in report
+
+
+def test_report_warns_and_counts_rejections_replay_routes():
+    rows = [make_row(f"ok{i}", "app-a") for i in range(3)] + \
+           [_rejected_row(f"rej{i}") for i in range(2)]
+    report = _report(rows, _snap(cap=100.0))
+    assert "model 100.0% over 3 compared rows; outcome 60.0% over 5 simulated rows." in report
+    assert ("> **Warning:** baseline outcome agreement is only 60.0% across 5 simulated "
+            "rows (below the 90% threshold).") in report
+    assert "> **Note:** 2 of 2 recorded rejection(s) replay as routed." in report
+    # the banner sits above the headline, like the model-agreement warning
+    assert report.index("recorded rejection(s) replay as routed") < report.index("## Headline")
+
+
+def test_report_notes_a_diluted_disagreement_without_a_warning():
+    rows = [make_row(f"ok{i}", "app-a") for i in range(28)] + \
+           [_rejected_row(f"rej{i}") for i in range(2)]
+    report = _report(rows, _snap(cap=100.0))
+    assert "outcome 93.3% over 30 simulated rows." in report
+    assert "baseline outcome agreement is only" not in report        # above 90%
+    assert "> **Note:** 2 of 2 recorded rejection(s) replay as routed." in report
+
+
+def test_report_counts_routes_replay_rejects():
+    snap = make_snapshot(apps=[app_entry("app-a", max_cost_usd_per_request=1e-9)])
+    report = _report([make_row("ok1", "app-a"), make_row("ok2", "app-a")], snap)
+    assert "> **Note:** 2 of 2 row(s) recorded as routed replay as rejected." in report
+
+
+def test_report_states_agreement_as_na_when_not_computable():
+    row = make_row("bf", "app-a", status="backend_failed", prompt_tokens=0, routing_tokens=200)
+    report = _report([row], make_snapshot())
+    assert "model n/a over 0 compared rows; outcome 100.0% over 1 simulated rows." in report

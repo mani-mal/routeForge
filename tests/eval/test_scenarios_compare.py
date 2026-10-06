@@ -438,3 +438,58 @@ def test_report_cached_share_note_and_no_title():
 def test_report_has_no_assumptions_section_when_nothing_is_assumed():
     report = render_comparison(_document(_rows(), _snap(), _doc(("empty", {}))))
     assert "## Assumptions" not in report
+
+
+# --- B60: the banner shows outcome agreement next to model agreement -----------
+
+def _budget_rows():
+    """`chat` serves 4 rows; `claims` has 2 served rows and 2 the record says
+    were rejected at its per-request budget (3000 routing tokens, 16 output)."""
+    rows = [make_row(f"c{i}", "chat") for i in range(4)]
+    rows += [make_row(f"k{i}", "claims") for i in range(2)]
+    rows += [make_row(f"x{i}", "claims", status="no_eligible", complexity=1.0,
+                      prompt_tokens=0, completion_tokens=0, routing_tokens=3000,
+                      max_tokens=16, attempts=[], chosen=None) for i in range(2)]
+    return rows
+
+
+def _budget_snap(cap):
+    return make_snapshot(apps=[app_entry("claims", max_cost_usd_per_request=cap),
+                               app_entry("chat")])
+
+
+def test_report_banner_shows_outcome_agreement_when_rejections_are_reproduced():
+    doc = _document(_budget_rows(), _budget_snap(0.0002),
+                    _doc(("raise-cap", {"apps": {"claims": {"max_cost_usd_per_request": 1}}})))
+    assert doc["baseline"]["outcome_agreement"] == 1.0
+    assert doc["table"][0]["newly_served"] == 2
+    assert doc["rows"]["estimated_tokens"] == 2
+    report = render_comparison(doc)
+    assert "**Baseline agreement: 100.0%** over 6 compared rows." in report
+    assert ("**Outcome agreement: 100.0%** over 8 simulated rows (routed or rejected, "
+            "against each row's recorded status).") in report
+    assert "Per app (outcome): chat 100.0% · claims 100.0%" in report
+    assert "replay as routed" not in report
+    assert "**Note:** 2 row(s) had no backend token count" in report
+    assert report.index("**Outcome agreement") < report.index("## Comparison")
+
+
+def test_report_banner_warns_and_counts_rejections_replay_routes():
+    """The snapshot's cap is already above the estimate, so replay routes the
+    two recorded rejections: model agreement is blind to it, the outcome
+    banner is not, and `claims` is the app marked."""
+    doc = _document(_budget_rows(), _budget_snap(100.0), _doc(("empty", {})))
+    assert doc["baseline"]["agreement"] == 1.0 and doc["baseline"]["warning"] is False
+    report = render_comparison(doc)
+    assert "**Outcome agreement: 75.0%** over 8 simulated rows" in report
+    assert "⚠ **Warning:** outcome agreement is below the 90% threshold." in report
+    assert "Per app (outcome): chat 100.0% · claims 50.0% ⚠" in report
+    assert "**Note:** 2 of 2 recorded rejection(s) replay as routed." in report
+    assert "⚠ **Warning:** below the 90% threshold" not in report   # model agreement is fine
+
+
+def test_report_banner_shows_outcome_agreement_without_comparable_model_rows():
+    rows = [make_row("r", "chat", status="backend_failed")]
+    report = render_comparison(_document(rows, _snap(), _doc(("empty", {}))))
+    assert "**Baseline agreement: n/a**" in report
+    assert "**Outcome agreement: 100.0%** over 1 simulated rows" in report

@@ -984,14 +984,64 @@ def _excluded_lines(excluded: dict) -> list[str]:
     return lines
 
 
+def _rate(value: float | None) -> str:
+    """An agreement rate for a report: `87.5%`, or `n/a` when not computable."""
+    return "n/a" if value is None else f"{value * 100:.1f}%"
+
+
+def _agreement_line(baseline: dict) -> str:
+    """Both baseline agreements on one line (B60) -- printed on every
+    report, not only when one of them is low: a replay nobody was told
+    about is how B60 went unnoticed."""
+    return (f"Baseline agreement: model {_rate(baseline['agreement'])} over "
+            f"{baseline['rows_compared']} compared rows; outcome "
+            f"{_rate(baseline['outcome_agreement'])} over "
+            f"{baseline['outcome_rows_compared']} simulated rows.")
+
+
+def _fidelity_notes(baseline: dict, rows: dict) -> list[str]:
+    """Plain sentences both reports print under the agreement banner (B60),
+    one per condition that holds; empty when none does.
+
+    The two outcome disagreement counts are printed with their own
+    denominators whenever they are non-zero, whatever `outcome_agreement`
+    is: rejections are usually a small share of traffic, so every one of
+    them can replay wrong while the rate stays above the 90% threshold."""
+    notes: list[str] = []
+    rejected = baseline["recorded_rejected"]
+    wrongly_routed = baseline["recorded_rejected_but_routed"]
+    if wrongly_routed:
+        notes.append(
+            f"{wrongly_routed} of {rejected} recorded rejection(s) replay as routed. Replay "
+            "does not reproduce them, so \"newly served\" is understated for these rows -- "
+            "check for drift since the export window (a budget, a declared context window "
+            "or an endpoint's state).")
+    wrongly_rejected = baseline["recorded_routed_but_rejected"]
+    if wrongly_rejected:
+        notes.append(
+            f"{wrongly_rejected} of {baseline['outcome_rows_compared'] - rejected} row(s) "
+            "recorded as routed replay as rejected. \"newly rejected\" is understated for "
+            "these rows -- check for drift since the export window.")
+    estimated = rows.get("estimated_tokens", 0)
+    if estimated:
+        notes.append(
+            f"{estimated} row(s) had no backend token count (rejected, or failed before a "
+            "response). Replay sizes and prices them from RouteForge's own routing token "
+            "count and output-token estimate -- an estimate, not a bill.")
+    return notes
+
+
 def render_report(sim: dict) -> str:
-    """The `report.md` document (spec §8), in the order: caveat, baseline
-    warning, headline, new rejections, moves, by-app, by-workload,
-    latency/quality sources, excluded rows."""
+    """The `report.md` document (spec §8), in the order: caveat, the two
+    baseline agreements, baseline warnings and notes, headline, new
+    rejections, moves, by-app, by-workload, latency/quality sources,
+    excluded rows."""
     lines: list[str] = ["> " + line for line in REPORT_CAVEAT.split("\n")]
     lines.append("")
 
     baseline = sim["baseline"]
+    lines.append(_agreement_line(baseline))
+    lines.append("")
     if baseline["warning"]:
         lines.append(
             f"> **Warning:** baseline agreement is only {baseline['agreement'] * 100:.1f}% "
@@ -1003,6 +1053,16 @@ def render_report(sim: dict) -> str:
             f"> **Note:** {baseline['overflow_contradicted']} row(s) served by an endpoint "
             "replay predicts would overflow -- check that endpoint's declared "
             "context_window.")
+        lines.append("")
+    if baseline["outcome_warning"]:
+        lines.append(
+            f"> **Warning:** baseline outcome agreement is only "
+            f"{baseline['outcome_agreement'] * 100:.1f}% across "
+            f"{baseline['outcome_rows_compared']} simulated rows (below the 90% threshold). "
+            "Replay serves or rejects requests differently from the record this often.")
+        lines.append("")
+    for note in _fidelity_notes(baseline, sim["rows"]):
+        lines.append(f"> **Note:** {note}")
         lines.append("")
 
     lines += _assumption_lines(sim["assumptions"])
