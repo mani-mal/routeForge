@@ -368,3 +368,50 @@ def test_request_validation_error_does_not_echo_the_rejected_value(client) -> No
                           "max_tokens": "supersecretvalue"})
     assert r.status_code == 422
     assert "supersecretvalue" not in r.text
+
+
+# --- B60: recording the routing token count adds nothing to the wire ----------
+
+_SUPPORT_TICKET = (
+    "Ticket 48213 (priority: high). Customer reports that order ORD-2026-0917 "
+    "shipped to the wrong depot on 2026-09-30; the carrier scan shows it at "
+    "the Leeds hub. Summarise the ticket in two sentences and propose the "
+    "next action for the support agent. ") * 40      # ~2500 routing tokens
+
+
+def test_outcome_recording_adds_nothing_to_the_success_wire(client, monkeypatch):
+    """Serving-path change (B60: `app/pipeline.py` now publishes
+    `routing_tokens` for the outcome row). The consumer contract: the
+    response is still a valid OpenAI `ChatCompletion`, the new field appears
+    nowhere in it, and the model was sent exactly the client's message."""
+    monkeypatch.setattr(litellm_backend, "acompletion",
+                        make_recording_acompletion(make_response(content="Two sentences.")))
+    r = client.post("/v1/chat/completions", headers=_AUTH, json={
+        "messages": [{"role": "user", "content": _SUPPORT_TICKET}], "max_tokens": 64})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    _validate_openai(body)
+    assert body["choices"][0]["message"]["content"] == "Two sentences."
+    assert "routing_tokens" not in r.text
+    wire = "".join(str(m.get("content") or "") for m in CALLS[-1]["messages"])
+    assert wire == _SUPPORT_TICKET                   # nothing redacted, nothing added
+
+
+def test_outcome_recording_adds_nothing_to_the_rejection_wire() -> None:
+    """The other direction: a request rejected for its size (per-request
+    budget) still returns the B49 envelope with exactly its existing keys --
+    the count that the outcome row now records is not echoed to the client."""
+    from tests.onboarding.harness import conformance_client, onboard
+
+    with conformance_client() as c:
+        app = onboard(c, "wire-budget", max_cost_usd_per_request=0.00001)
+        r = app.chat({"messages": [{"role": "user", "content": _SUPPORT_TICKET}],
+                      "max_tokens": 64})
+    assert r.status_code == 422, r.text
+    assert set(r.json()) == {"error"}
+    err = v1_error(r)
+    assert set(err) == {"message", "type", "param", "code", "conflicting_core"}
+    assert err["type"] == "invalid_request_error" and err["param"] is None
+    assert err["code"] == "no_eligible_model"
+    assert set(err["conflicting_core"]) == {"requirements", "state", "candidates_considered"}
+    assert "routing_tokens" not in r.text
