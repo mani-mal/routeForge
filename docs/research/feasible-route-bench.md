@@ -2555,7 +2555,7 @@ baseline check did not notice. This section records the fix. Design:
 [`docs/reference/routing-outcomes.md`](../reference/routing-outcomes.md) §3.2 and
 [`docs/reference/policy-simulator.md`](../reference/policy-simulator.md) §5, §6. Code:
 `app/pipeline.py` and `app/apps/outcomes.py` (the record), `app/eval/simulate.py` (replay and
-agreement). **Not deployed**; this section reports what the code does. The results are to be
+agreement). **Deployed to the DGX lab on 2026-10-06** (api `0.27.0`); not on the Spark. §19.4.1 has the first live results; the remaining ones are to be
 measured (§19.4).
 
 ### 19.1 The model
@@ -2627,25 +2627,72 @@ the number it was given live.
 
 ### 19.4 Results
 
-**TO MEASURE.** The experiment is the DGX lab re-run of the 2026-10-06 scenarios (§18.4.1):
-the same application, endpoint, prices and per-request cap, the same six scenarios, on rows
-recorded after the upgrade (`--since` at the first of them).
+#### 19.4.1 DGX lab re-run, 2026-10-06 (after the upgrade)
+
+**Setup.** The §18.4.1 deployment after `ALTER TABLE routing_outcomes ADD COLUMN IF NOT
+EXISTS routing_tokens INTEGER` and the roll to api `0.27.0` (`main` through PR #86): the same
+application (`paper-test`), endpoint (`qwen3-coder-next`, $10/$10 per 1M, declared window
+262144), per-request cap ($0.05), the same 24 requests and the same six scenarios. Replay
+used `--since 2026-10-06T20:07:37Z` (the first post-upgrade row) and `--min-agreement 0.9`.
+Artifacts: `docs/research/results/b60-dgx-lab-2026-10-06/` (`comparison_id
+c7d945359f55993d`). One app, one endpoint, one pass: a check that the defect is closed on
+real records, not a workload study.
 
 | measurement | value |
 |---|---|
-| requests rejected live with core `max_cost_usd_per_request` | TO MEASURE |
-| of those, rejected by the `current` arm (`recorded_rejected` − `recorded_rejected_but_routed`) | TO MEASURE |
-| model agreement, rows compared | TO MEASURE |
-| outcome agreement, rows simulated | TO MEASURE |
-| `raise-request-budget` (cap 0.05 → 0.5): newly served | TO MEASURE |
-| `raise-request-budget`: cost of the rescued rows (admission estimate) | TO MEASURE |
-| `rows.estimated_tokens` | TO MEASURE |
-| the pre-upgrade export from §18.4.1 replayed with the new code: `missing_routing_tokens` | TO MEASURE |
-| `routing_tokens` against `prompt_tokens` on served rows (how far RouteForge's count is from the backend's) | TO MEASURE |
+| requests rejected live with core `max_cost_usd_per_request` | 7 of 24 |
+| of those, rejected by the `current` arm | 7 of 7 (`recorded_rejected_but_routed` = 0) |
+| model agreement, rows compared | 1.0 over 17 |
+| outcome agreement, rows simulated | 1.0 over 24 (`recorded_routed_but_rejected` = 0) |
+| `raise-request-budget` (cap 0.05 → 0.5): newly served | 7 (before the fix: 0) |
+| `raise-request-budget`: cost of the rescued rows (admission estimate) | +0.69024 USD on a current-arm total of 0.14204 |
+| `cheaper-price` (0.5 / 1.5 per 1M): newly served | 7; both-routed cost −0.134583 USD (−94.7%) |
+| `smaller-prompts-0.6` (`token_scale: 0.6`): newly served | 3 of 7; both-routed cost −0.0554 USD (−39.0%) |
+| `window-2000`: newly rejected | 2 (`context_window`), 2 overflow hops |
+| `rows.estimated_tokens` | 7 (the seven rejected rows) |
+| `overflow_contradicted` | 0 |
+| the pre-upgrade export from §18.4.1 replayed with the new code | 7 rows under `missing_routing_tokens`, 18 simulated, `raise-request-budget` newly served 0 — the rejections are now excluded and counted instead of replayed as empty prompts |
 
-The last row matters for the paper: replay sizes a rejected row with RouteForge's count, and
-the gap between the two counts on served rows is the only evidence of how good an estimate
-that is.
+Both agreements were 1.0 before the fix as well (§18.4.1). What changed is that the outcome
+measure now exists and is computed over the rejected rows too: before, the seven rejections
+were replayed as routed and nothing counted it.
+
+**`routing_tokens` against the backend's `prompt_tokens`, served rows.** Five distinct
+prompt sizes were served (17 rows):
+
+| `routing_tokens` (RouteForge, `len // 4`) | `prompt_tokens` (vLLM, Qwen tokenizer) | ratio |
+|---|---|---|
+| 16 | 23 | 0.70 |
+| 896 | 584 | 1.53 |
+| 1776 | 1145 | 1.55 |
+| 2656 | 1705 | 1.56 |
+| 3536 | 2265 | 1.56 |
+
+Summed over the 17 served rows: 21392 against 13849, a ratio of 1.54. On this text —
+repeated English prose, which tokenises unusually well — RouteForge's character-based count
+is about half again the backend's for anything past a few hundred tokens, and below it for a
+very short prompt (the chat template's overhead).
+
+**Consequence, observed (B64).** The smallest rejected request had `routing_tokens` 5296,
+which with the 48-token output estimate priced at $0.05344 against the $0.05 cap. If the 1.55
+ratio holds at that size, the backend would have counted about 3400 prompt tokens, a cost of
+about $0.035 — under the cap. So the live admission check rejected requests that would
+probably have cost less than the limit. This is an inference from the served rows' ratio, not
+a measurement: the rejected requests were never sent. It also bounds how far to trust a
+rescued row's cost in this section: it is priced from the same over-count.
+
+**What this run does not show.** One synthetic text, one tokenizer, one endpoint. The ratio
+will differ for code, for non-English text and for other tokenizers. No route changes (one
+endpoint). No `context_overflow`, `backend_failed` or `verify_failed` row occurred, so those
+classes are exercised only by the test suite.
+
+#### 19.4.2 Still to measure
+
+| measurement | value |
+|---|---|
+| `routing_tokens` / `prompt_tokens` on real application traffic (code, mixed languages) | TO MEASURE |
+| outcome agreement on an export containing `context_overflow` and `backend_failed` rows | TO MEASURE |
+| the same re-run on the Spark | TO MEASURE (the Spark has not had the ALTER or the image) |
 
 ### 19.5 Limits
 
