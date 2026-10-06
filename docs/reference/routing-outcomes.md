@@ -81,6 +81,39 @@ ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS conflicting_core JSON;
 Rows written before the ALTER keep the column null, same as any `no_eligible` row the
 router's core computation itself failed to explain (`app/routing/router.py::_safe_core`).
 
+**Upgrade: `routing_tokens` (B60, 2026-10-06).** `routing_outcomes` gained one nullable
+integer column (§3.2). `create_all` never adds a column to a table that already exists, so a
+database that already has `routing_outcomes` (the Spark, the DGX lab) needs it added by hand.
+**Run this before rolling the image.** The application still boots against an unmigrated
+table and still serves: the ORM names the column in every `INSERT` and `SELECT` on the
+table, so every outcome write fails (swallowed, logged as `outcome record failed`, so serving
+continues, but no rows are recorded) and reads of the table fail until the ALTER runs. The
+admin export returns an empty stream: the error is raised after the `200` header has been
+sent, so it shows in the server log, not in the status code. The `/v1/feedback` outcome
+lookup errors.
+
+PostgreSQL:
+
+```sql
+ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS routing_tokens INTEGER;
+```
+
+SQLite (it has no `IF NOT EXISTS` for `ADD COLUMN`; a second run fails with
+`duplicate column name`, which is harmless):
+
+```sql
+ALTER TABLE routing_outcomes ADD COLUMN routing_tokens INTEGER;
+```
+
+Rows written before the ALTER keep the column null. The policy simulator replays a served
+row from before it as it always did, and **excludes** a rejected or failed one, counted under
+`missing_routing_tokens` (`docs/reference/policy-simulator.md` §6).
+
+That the application boots and serves against the unmigrated table, records nothing, and
+records again after the SQLite statement is pinned by
+`tests/test_outcome_routing_tokens.py::test_r13_unmigrated_table_serving_continues_and_the_documented_alter_repairs_it`
+(a SQLite file, three real boots). The PostgreSQL statement is not run by any test.
+
 ## 2. Content-free by contract
 
 Both tables hold **ids, enum values, numbers, entity types and version hashes only.** They
@@ -95,7 +128,8 @@ Enforced by:
 
 | What | Test |
 |---|---|
-| No column on either table has a name that suggests text (`prompt_text`, `completion`, `content`, `message`, `comment`, `corrected`, `reason`, `error`); token counts are the only exemptions | `tests/test_outcome_store.py::test_schema_is_content_free` |
+| No column on either table has a name that suggests text (`prompt_text`, `completion`, `content`, `message`, `comment`, `corrected`, `reason`, `error`); token counts are the only exemptions. `routing_tokens` is a nullable integer | `tests/test_outcome_store.py::test_schema_is_content_free` |
+| A request **rejected** for its size, carrying a marker, an SSN and an e-mail address, writes a row with none of them; `routing_tokens` is an integer count | `tests/test_outcome_routing_tokens.py::test_r1_rejected_row_with_pii_carries_a_count_and_no_content` |
 | A served request that contains an SSN and an e-mail address writes a row with neither value in any column; the entity **types** remain | `tests/test_outcome_hooks.py::test_outcome_row_carries_no_request_content` |
 | The builder copies no text from the response or the trace | `tests/test_outcome_builder.py::test_build_ok_outcome_is_content_free` |
 | `rejected` keeps `name` and `code` only, never `reason` | `tests/test_outcome_builder.py::test_build_failure_outcome_no_eligible_stores_only_name_and_code` |
@@ -103,9 +137,15 @@ Enforced by:
 | Feedback `comment` and `corrected_output` text is never stored locally | `tests/test_outcome_feedback.py::test_comment_and_corrected_output_text_never_stored_locally` |
 | `workload` and categorical feedback values are regex-validated slugs of at most 64 characters | `tests/test_outcome_builder.py::test_parse_workload_*`, `tests/test_outcome_feedback.py::test_bad_categorical_value_is_refused` |
 
-The SSN/e-mail test covers a served (`ok`) row. Failure rows are built from the same
-outcome context and from candidate names and codes only, and the builder tests cover them,
-but no end-to-end test sends PII through a failing request.
+Failure rows are built from the same outcome context as served ones, and from candidate
+names and codes only. End-to-end tests send PII through a served request, a `no_eligible`
+request and a `verify_failed` one.
+
+**Token counts are lengths, not content.** `prompt_tokens`, `completion_tokens`,
+`prompt_tokens_bucket`, `complexity` and `routing_tokens` say how large a request was and
+nothing about what it said. They are a side channel on length only. Since `routing_tokens`
+(B60) that length is recorded for rejected requests too, where before only the capped
+`complexity` was.
 
 The one field a client controls is `workload`. The slug format limits what fits there, but
 it cannot stop a client from encoding personal data in a slug. Clients must not do that
@@ -166,6 +206,7 @@ filled on it exactly as on an `ok` row.
 | `workload_source` | enum | `client` (a valid tag was supplied), `none` (nothing supplied) or `invalid` (supplied but rejected; `workload` is then null). |
 | `tier_target` | str, nullable | The **first routing decision's** own target tier (§3.5). A failed gateway hop records it too, so after a failover it is the failed attempt's target; it is never borrowed from a later hop (a trace from before 2026-09-23 whose failed hop lacks it reads null). The target is the tier after the complexity rule, risk floor, escalation and the clamp to the best residency-allowed tier, and **before** the budget fallback. The served tier can be lower when the budget fallback stepped down. Null on failure rows other than `verify_failed`. |
 | `complexity` | float, nullable | The router's complexity input, `tokens_after / 2000` (post-compression tokens). Written on failure rows too when compression ran before the failure. Null on a semantic-cache hit. |
+| `routing_tokens` | int, nullable | The token count the router was given: `tokens_after`, RouteForge's **own** count of the model-facing messages (and, on a tool conversation, the replayed tool-call arguments and the tool schemas) after the gate and after step-5 compression. It is the number `complexity` is derived from, the per-request budget is checked against and the cost term of the score is computed from. **Not the backend's count**: that is `prompt_tokens`, and the two differ on almost every request. Written on **every** status, rejected rows included, so the policy simulator can replay a rejected request at its real size. Null on a semantic-cache hit (no router ran) and on rows written before the column existed. A count, never text (§2). Added 2026-10-06 (B60). |
 | `prompt_tokens_bucket` | enum, nullable | `<1k`, `1k-4k`, `4k-16k`, `16k-64k` or `>64k`, over the response's `usage.prompt_tokens`. Lower bound inclusive: exactly 1000 tokens is `1k-4k`. Null on failure rows other than `verify_failed`. |
 | `sensitivity` | enum | `public`, `internal`, `confidential` or `restricted`, from the gate. |
 | `risk_class` | str | From the gate. |
@@ -182,7 +223,7 @@ filled on it exactly as on an `ok` row.
 | `cache_hit` | bool | True when a semantic-cache entry served the request (§3.4). False otherwise, and on every failure row. |
 | `cost_usd` | float | The total cost across hops (`cost.total_usd`). On `verify_failed` rows the served attempt's cost, which was incurred. `0` on other failure rows. |
 | `latency_ms` | float | **Two definitions.** `ok` rows: the sum of the trace records' `latency_ms` (the same figure the usage row carries). Failure rows: wall-clock time from the start of the request handler to the failure, which includes authentication and gate time. Do not pool the two. |
-| `prompt_tokens`, `completion_tokens` | int | From the response `usage` (on `verify_failed`, the served attempt's). `0` on other failure rows. |
+| `prompt_tokens`, `completion_tokens` | int | The **backend's** billed counts, from the response `usage` (on `verify_failed`, the served attempt's). `0` on other failure rows: no backend answered, so nothing was billed. For how large such a request was, read `routing_tokens`. |
 | `verify_required`, `verify_performed`, `verify_passed` | bool, nullable | From the trace's `verify` record. On `verify_failed` rows `true`, `true`, `false`. Null on other failure rows. |
 | `verify_mode` | enum, nullable | See below. `failed` on `verify_failed` rows; null on other failure rows. |
 | `conflicting_core` | JSON, nullable | A `no_eligible` row's minimal conflicting core (P3b): `ConflictingCore.to_record()` — requirement ids/`security`/`source`/`detail`, endpoint state, `candidates_considered`; no `label`, no `hints`. Content-free. Null on every other status, and null when the router's own core computation failed (`core=None`). See `docs/reference/conflicting-core.md`. Added 2026-09-25 (P3b). |
@@ -221,8 +262,8 @@ the budget case; see `docs/reference/conflicting-core.md`.
 
 A request served from the semantic cache is recorded as `ok`, but its trace has no router
 hop (only the `verify` and `cache` records). So a cache-hit row has `cache_hit: true`, and
-`chosen`, `tier_target`, `scoring` and `complexity` are null, and `eligible` and `attempts`
-are `[]`. The model that produced the cached answer is not recorded. The report puts these
+`chosen`, `tier_target`, `scoring`, `complexity` and `routing_tokens` are null (the hit
+returns before compression), and `eligible` and `attempts` are `[]`. The model that produced the cached answer is not recorded. The report puts these
 rows in their own chosen bucket, `(cache)`: never in an endpoint's bucket (that endpoint
 did not answer), and never in `(none)` (the request was served).
 
@@ -370,7 +411,7 @@ per page by `(application_id, request_id)`, never by `request_id` alone.
              "attempts": ["qwen3.8-27b"], "chosen": "qwen3.8-27b",
              "scoring": {"weights": {…}, "candidates": [{"name": "qwen3.8-27b", "score": …, …}, …], …},
              "circuit_bypass": false, "cache_hit": false, "cost_usd": 0.00021, "latency_ms": 3620.4,
-             "prompt_tokens": 812, "completion_tokens": 140,
+             "prompt_tokens": 812, "completion_tokens": 140, "routing_tokens": 820,
              "verify_required": true, "verify_performed": true, "verify_passed": true,
              "verify_mode": "verified"},
  "feedback": [{"score_name": "quality", "value": 0.8, "source": "app",

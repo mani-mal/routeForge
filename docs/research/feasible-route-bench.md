@@ -2546,3 +2546,113 @@ a per-request model. Nothing here supports a claim about routing quality or savi
 The triad needs at least two eligible endpoints with different placement (an on-prem and a
 cloud or second on-prem endpoint) and persona traffic with PII; the DGX lab has one endpoint
 today.
+
+## 19. Replayable rejections: the routing token count on the record (B60)
+
+§18.4.1 found that the simulator replays a live-rejected request as routed, and that the
+baseline check did not notice. This section records the fix. Design:
+`docs/superpowers/specs/2026-10-06-replayable-rejections-design.md`. Reference:
+[`docs/reference/routing-outcomes.md`](../reference/routing-outcomes.md) §3.2 and
+[`docs/reference/policy-simulator.md`](../reference/policy-simulator.md) §5, §6. Code:
+`app/pipeline.py` and `app/apps/outcomes.py` (the record), `app/eval/simulate.py` (replay and
+agreement). **Not deployed**; this section reports what the code does. The results are to be
+measured (§19.4).
+
+### 19.1 The model
+
+A routing decision is a function of the request's features and the configuration. The
+simulator can replay a decision only if every feature the decision read is on the record.
+§13.1 lists what an outcome row holds. Two rounds of replay have each found a feature that
+was read by the decision and missing from the row:
+
+| Feature | Read by | Missing until | Symptom while missing |
+|---|---|---|---|
+| the client's model pin, its output cap | eligibility (the pin stage), the budget check | B55 (§15.4) | replay picked a different **model** |
+| the token count the router was given | the budget check, the cost term of the score | B60 (this section) | replay **served** a request the record says was rejected |
+
+The second gap hid behind a property of the record. `prompt_tokens` is the backend's billed
+count, so it is zero on a row no backend answered. For a served row it is a usable stand-in
+for the router's count. For a rejected row it says the prompt was empty, and an empty prompt
+fits any per-request budget and any context window.
+
+- **Two counts, two meanings.** `routing_tokens` is RouteForge's own count, made after the
+  gate and after compression and before any backend is called. It is what admission and
+  scoring read. `prompt_tokens` is what the backend counted and billed. Replay gives the
+  router the first and prices the call at the second.
+- **A row no backend answered is an estimate.** It has no billed count and no completion.
+  When an arm routes it, replay prices it at the pair the live budget check priced it at:
+  its routing tokens and the router's output estimate. That is the admission estimate, not a
+  bill, and the output counts such rows.
+- **A row with no size is not replayed.** A rejected or failed row from before the fix is
+  excluded and counted. Replaying it as an empty prompt is the defect, so there is no
+  degraded mode for it.
+- **Agreement has two parts.** Model agreement compares the first pick with the recorded
+  first attempt, over served rows. Outcome agreement compares routed-or-rejected with the
+  recorded status's class, over every simulated row. Each is blind to the other's failure:
+  B55 was invisible to an outcome check (every row still routed), and B60 was invisible to a
+  model check (it only looks at served rows).
+
+### 19.2 Why outcome agreement needs a count beside it
+
+Rejected requests are usually a small share of traffic. Outcome agreement is taken over all
+simulated rows, so every rejection can replay wrong while the rate stays high: 2 wrong out
+of 30 rows is 93%. The number that says whether a "newly served" figure can be trusted is
+the count out of the recorded rejections. So `recorded_rejected_but_routed` is reported with
+`recorded_rejected`, and a non-zero count prints a note whatever the rate is
+(`tests/eval/test_replay_rejections.py::test_diluted_outcome_agreement_still_reports_every_rejection_wrong`).
+`--min-agreement` gates on the lower of the two rates; it is diluted in the same way, and
+only `--min-agreement 1.0` refuses every disagreement. A per-class threshold was not added.
+
+### 19.3 Invariants, and the test that pins each
+
+| # | Invariant | Pinned by |
+|---|---|---|
+| R1 | The table is still content-free: `routing_tokens` is a nullable integer, and a rejected request carrying a marker, an SSN and an e-mail address writes none of them | `tests/test_outcome_store.py::test_schema_is_content_free`; `tests/test_outcome_routing_tokens.py::test_r1_rejected_row_with_pii_carries_a_count_and_no_content` |
+| R2 | A served row replays to an identical `ArmResult` when `routing_tokens == prompt_tokens`, in both arms, under any `token_scale` | `tests/eval/test_replay_rejections.py::test_r2_served_row_replay_is_unchanged_when_the_counts_coincide` (Hypothesis) |
+| R3 | A request rejected live for its per-request budget is rejected in the `current` arm under the same snapshot | `tests/eval/test_replay_rejections.py::test_r3_budget_rejected_row_is_rejected_in_the_current_arm`; live: `tests/eval/test_policy_simulate_cli.py::test_live_round_trip_budget_rejections_replay_as_rejected` |
+| R4 | Raising the cap in a proposal newly serves it, costed at the admission estimate | `tests/eval/test_replay_rejections.py::test_r4_raising_the_cap_newly_serves_it_at_the_admission_estimate`; live: the same round-trip test |
+| R5 | Outcome agreement is 1.0 on a live round trip that contains rejections | `tests/eval/test_policy_simulate_cli.py::test_live_round_trip_budget_rejections_replay_as_rejected`, `::test_live_round_trip_scenarios_show_the_rescued_rejections` |
+| R6 | A rejected or failed row with no recorded size is excluded, counted, and reaches no arm | `tests/eval/test_replay_rejections.py::test_r6_unsized_rows_are_excluded_and_counted_never_routed`; live export: `tests/eval/test_policy_simulate_cli.py::test_live_export_stripped_of_routing_tokens_excludes_the_rejections` |
+| R7 | No serving module imports `app.eval` | `tests/eval/test_isolation.py::test_no_serving_module_imports_app_eval` |
+| R8 | The OpenAI wire shape is unchanged: success validates against the SDK model, the rejection envelope keeps exactly its keys, the new field appears in neither | `tests/test_openai_compat.py::test_outcome_recording_adds_nothing_to_the_success_wire`, `::test_outcome_recording_adds_nothing_to_the_rejection_wire` |
+| R9 | An export without the field loads, and its served rows replay as before | `tests/eval/test_replay_rejections.py::test_r9_export_without_the_field_still_loads_and_replays_served_rows` |
+| R10 | The recorded value is the `tokens_after` the router was called with, on every status; null on a semantic-cache hit | `tests/test_outcome_routing_tokens.py` (one test per status, each against a spy on `Router.select`), `::test_semantic_cache_hit_row_has_null_routing_tokens` |
+| R11 | Every status serving can write has a recorded outcome class | `tests/eval/test_replay_rejections.py::test_r11_every_status_has_a_recorded_outcome_class` |
+| R12 | `--min-agreement` takes the lower of model and outcome agreement | `tests/eval/test_replay_rejections.py::test_r12_gate_takes_the_lower_of_the_two`; `tests/eval/test_policy_simulate_cli.py::test_r12_min_agreement_exits_4_on_outcome_disagreement` |
+| R13 | An unmigrated table does not break serving, and the documented `ALTER` repairs it | `tests/test_outcome_routing_tokens.py::test_r13_unmigrated_table_serving_continues_and_the_documented_alter_repairs_it` |
+
+R2 states exactly what "unchanged" means. When the two counts differ, a served row's route
+can legitimately differ from what replay produced before, because the router is now given
+the number it was given live.
+
+### 19.4 Results
+
+**TO MEASURE.** The experiment is the DGX lab re-run of the 2026-10-06 scenarios (§18.4.1):
+the same application, endpoint, prices and per-request cap, the same six scenarios, on rows
+recorded after the upgrade (`--since` at the first of them).
+
+| measurement | value |
+|---|---|
+| requests rejected live with core `max_cost_usd_per_request` | TO MEASURE |
+| of those, rejected by the `current` arm (`recorded_rejected` − `recorded_rejected_but_routed`) | TO MEASURE |
+| model agreement, rows compared | TO MEASURE |
+| outcome agreement, rows simulated | TO MEASURE |
+| `raise-request-budget` (cap 0.05 → 0.5): newly served | TO MEASURE |
+| `raise-request-budget`: cost of the rescued rows (admission estimate) | TO MEASURE |
+| `rows.estimated_tokens` | TO MEASURE |
+| the pre-upgrade export from §18.4.1 replayed with the new code: `missing_routing_tokens` | TO MEASURE |
+| `routing_tokens` against `prompt_tokens` on served rows (how far RouteForge's count is from the backend's) | TO MEASURE |
+
+The last row matters for the paper: replay sizes a rejected row with RouteForge's count, and
+the gap between the two counts on served rows is the only evidence of how good an estimate
+that is.
+
+### 19.5 Limits
+
+- A recorded `context_overflow` is reproduced only on an endpoint with a declared context
+  window, and with RouteForge's token count rather than the backend's.
+- A rescued request's cost is the admission estimate. Where the client's output cap is far
+  above what it would have generated, the estimate overstates the cost.
+- Nothing here replays failover, escalation, breaker state or daily-spend and RPM admission.
+  A request refused for its daily budget or its rate limit writes no outcome row at all.
+- A `backend_failed` row is costed as if the call had succeeded.
