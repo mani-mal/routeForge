@@ -15,7 +15,8 @@ human still makes the change through the normal admin path (`PUT`ing app policy,
 removing an endpoint, editing prices).
 
 - Design: `docs/superpowers/specs/2026-09-24-policy-simulator-design.md`. Shadow prices (§8)
-  are `docs/superpowers/specs/2026-09-26-shadow-prices-design.md` (P3c-1).
+  are `docs/superpowers/specs/2026-09-26-shadow-prices-design.md` (P3c-1). Uncertainty ranges
+  (§10) are `docs/superpowers/specs/2026-10-06-p3c3-uncertainty-design.md` (P3c-3).
 - Research notes (the model, the two-arm design, the invariants):
   `docs/research/feasible-route-bench.md` §15; shadow prices §17.
 - Prerequisite datasets: `docs/reference/routing-outcomes.md` (P2b-2, the export this reads)
@@ -24,7 +25,8 @@ removing an endpoint, editing prices).
 Code: `app/apps/snapshot.py` (snapshot builder), `app/api/admin_routes.py`
 (`GET /admin/config-snapshot`), `app/eval/scenario.py` (snapshot/proposal → scenario),
 `app/eval/proposal.py` (proposal load/validate/apply), `app/eval/simulate.py` (replay +
-report), `app/eval/shadow.py` (shadow prices, P3c-1), `scripts/policy_simulate.py` (CLI).
+report), `app/eval/shadow.py` (shadow prices, P3c-1), `app/eval/uncertainty.py` (ranges,
+P3c-3), `scripts/policy_simulate.py` (CLI).
 
 ## 1. Three inputs
 
@@ -228,7 +230,9 @@ assumptions into the `current` arm.
 uv run python scripts/policy_simulate.py \
   --export outcomes.ndjson --snapshot snapshot.json --proposal proposal.json \
   --out results/sim \
-  [--config-dir config] [--fail-on-new-rejections]
+  [--config-dir config] [--fail-on-new-rejections] \
+  [--uncertainty [--bootstrap N] [--interval P] [--seed S] [--min-rows K]
+                 [--quality-posteriors FILE ...]]
 ```
 
 | Flag | Default | Meaning |
@@ -244,6 +248,8 @@ uv run python scripts/policy_simulate.py \
 | `--scenarios` | off | a `routeforge.policy-scenarios/v1` file; compares its scenarios side by side (§9). Cannot be combined with `--proposal` or `--shadow-prices` (exit `2`) |
 | `--since` | off | ISO-8601 UTC timestamp. Rows with `ts` before it are excluded and counted as `before_since`. Applies to every mode. A value with no offset is read as UTC |
 | `--min-agreement` | off | `0 ≤ X ≤ 1`. Compared with the **lower** of the two baseline agreements (§5): model agreement and outcome agreement. If either is not computable, or the lower one is below `X`, print both and exit `4` before any file or directory is written. Applies to every mode |
+| `--uncertainty` | off | add a range to every headline figure (P3c-3, §10): a percentile interval from a bootstrap over the simulated rows. Sampling variability only. Applies to every mode |
+| `--bootstrap`, `--interval`, `--seed`, `--min-rows`, `--quality-posteriors` | `1000`, `0.90`, `0`, `30`, none | tuning for `--uncertainty` (§10.3); each is exit `2` without it |
 
 `--proposal` is required unless `--shadow-prices` or `--scenarios` is given — with none of
 the three, the CLI exits `2` (an argparse usage error, since there is nothing to simulate).
@@ -253,7 +259,7 @@ the three, the CLI exits `2` (an argparse usage error, since there is nothing to
 | Code | Meaning |
 |---|---|
 | `0` | `simulation.json` and `report.md` written (`--proposal`, or `--shadow-prices` alone); `comparison.json` and `report.md` written (`--scenarios`, §9.4) |
-| `2` | an input failed to load, validate or apply — a bad export, an invalid proposal (unknown key, bad value, a container of the wrong type), a malformed snapshot (a missing or mistyped nested key, named by its dotted path), a snapshot that loads structurally but fails **deep** validation during `simulate()`/`shadow_prices()` (for example a provider the running deployment's own `config/` never declared), a `--config-dir` that cannot load (missing key, bad YAML, a failed config lint), neither `--proposal` nor `--shadow-prices` given, `--max-relaxations < 1`, or a shadow-prices eligible-superset invariant breach (`ShadowInvariantError`, printed as `error: internal invariant: ...` — spec §3; a relaxation narrowed some row's eligible set, which should never happen since every relaxation only widens eligibility, so it means a bug, not a reportable finding). A relaxation that newly **rejects** a baseline-routed row is *not* a breach — it is reported as `newly_rejected` (§8.4) and exits `0`. `--scenarios` combined with `--proposal` or `--shadow-prices` (an argparse usage error), neither `--proposal` nor `--shadow-prices` nor `--scenarios` given (also an argparse usage error), an invalid scenarios file (named `scenarios[<i>](<name>).proposal.<path>`), a `--since` that is not a timestamp, a `--min-agreement` outside `[0, 1]`, and a `--scenarios` comparison invariant breach (`ComparisonInvariantError`, printed as `error: internal invariant: ...` — two scenarios disagreed about the rows, excluded counts or baseline they share by construction, which means a bug, never a reportable result) are also exit `2`. Nothing is written; the offending location is on stderr — never a traceback. |
+| `2` | an input failed to load, validate or apply — a bad export, an invalid proposal (unknown key, bad value, a container of the wrong type), a malformed snapshot (a missing or mistyped nested key, named by its dotted path), a snapshot that loads structurally but fails **deep** validation during `simulate()`/`shadow_prices()` (for example a provider the running deployment's own `config/` never declared), a `--config-dir` that cannot load (missing key, bad YAML, a failed config lint), neither `--proposal` nor `--shadow-prices` given, `--max-relaxations < 1`, or a shadow-prices eligible-superset invariant breach (`ShadowInvariantError`, printed as `error: internal invariant: ...` — spec §3; a relaxation narrowed some row's eligible set, which should never happen since every relaxation only widens eligibility, so it means a bug, not a reportable finding). A relaxation that newly **rejects** a baseline-routed row is *not* a breach — it is reported as `newly_rejected` (§8.4) and exits `0`. `--scenarios` combined with `--proposal` or `--shadow-prices` (an argparse usage error), neither `--proposal` nor `--shadow-prices` nor `--scenarios` given (also an argparse usage error), an invalid scenarios file (named `scenarios[<i>](<name>).proposal.<path>`), a `--since` that is not a timestamp, a `--min-agreement` outside `[0, 1]`, and a `--scenarios` comparison invariant breach (`ComparisonInvariantError`, printed as `error: internal invariant: ...` — two scenarios disagreed about the rows, excluded counts or baseline they share by construction, which means a bug, never a reportable result) are also exit `2`. So are an `--uncertainty` tuning flag given without `--uncertainty`, a tuning value out of range, and a `--quality-posteriors` file that does not load or does not match its own `set_id` (§10.3). Nothing is written; the offending location is on stderr — never a traceback. |
 | `3` | the proposal (or any scenario) introduces new rejections and `--fail-on-new-rejections` was passed |
 | `4` | the lower of model agreement and outcome agreement (§5) is below `--min-agreement`, or there is no comparable row. Nothing is written. The message names both rates and both outcome-disagreement counts |
 
@@ -275,7 +281,7 @@ the export window).
 |---|---|
 | `schema` | `"routeforge.simulation/v1"` |
 | `simulation_id` | first 16 hex characters of the sha256 over the canonical `inputs` block |
-| `inputs` | `export_sha256`, `snapshot_sha256`, `proposal_sha256`, `proposal_title`, `routing_policy_version`, `registry_version`, `snapshot_generated_at`, `serving_policy` (the four posture values every app was compiled under — the snapshot's), `window` (`{start, end}` over the simulated rows' `ts`, or `null`), `since` (the `--since` cut as an ISO string, or `null`) |
+| `inputs` | `export_sha256`, `snapshot_sha256`, `proposal_sha256`, `proposal_title`, `routing_policy_version`, `registry_version`, `snapshot_generated_at`, `serving_policy` (the four posture values every app was compiled under — the snapshot's), `window` (`{start, end}` over the simulated rows' `ts`, or `null`), `since` (the `--since` cut as an ISO string, or `null`). With `--uncertainty` only: `uncertainty` (§10.7); the key is absent otherwise |
 | `edits` | the proposal, minus `schema`/`title`, keys sorted — exactly what was asked for |
 | `rows` | `simulated` (count), `estimated_tokens` (simulated rows with no backend token count, sized and priced from `routing_tokens` — §6) and `excluded` (count per reason, first match wins: `before_since`, `cache_hit`, `unknown_status`, `unknown_app`, `missing_features`, `missing_routing_tokens`). `missing_routing_tokens` counts a well-formed row that records no size: not `ok`, no `routing_tokens`, and `prompt_tokens` zero — a rejected or failed row from before B60. A mistyped `routing_tokens` (anything but an integer ≥ 0 or null) is `missing_features`. `missing_features` counts a row whose `request_id`, `complexity`, `prompt_tokens` (numeric), `completion_tokens` (numeric or null), `detected_entity_types` (list of strings or null; the key must be present), `workload`, `attempts` or `ts` is missing or mistyped, or whose `requested_model` (non-empty string or null) or `max_tokens` (integer > 0 or null) is mistyped — these two may be absent (an older export) — a malformed row is counted, never a crash. A non-object export line is a skipped-line warning. |
 | `baseline` | the fidelity check (§5). Model agreement: `rows_compared`, `agreement`, `warning`, `by_app`, `top_disagreements`, `overflow_contradicted`. Outcome agreement: `outcome_rows_compared`, `outcome_agreement`, `outcome_warning`, `recorded_rejected`, `recorded_rejected_but_routed`, `recorded_routed_but_rejected`, and `outcome_by_app.<id>` (`rows`, `agreement` and the same three counts) |
@@ -286,6 +292,7 @@ the export window).
 | `sources` | per arm, a count of `latency_source`/`quality_source` values (`observed`/`signal`/`tier_default`/`proposal`, `published`/`tier_default`/`calibrated`/`customer`) across routed rows |
 | `per_day` | `{cost_usd: {current, proposed, delta}}` divided by the export window in days; `null` when the window is under 1 day |
 | `assumptions` | always present: `token_scale`, `cached_share`, `latency_ms` (each a map, empty when the proposal sets none) and `saturated_complexity_estimated` (rows whose scaled complexity is an estimate) |
+| `uncertainty` | only with `--uncertainty`: a range for every figure of `totals`, `by_app` and `per_day` (§10.7). No other field changes when it is present |
 
 ### 4.2 `report.md`
 
@@ -305,7 +312,8 @@ metrics table), **New rejections** (by app, by code, then **by conflicting core*
 `| core | count |` table, sorted by count descending then core key — or "None." when there
 are none), **Moves** (from → to → count — or "None."), **By app** (one subsection per app,
 same metrics table), **By workload** (same, per workload label), **Latency and quality
-sources**, **Excluded rows** (reason → count).
+sources**, **Excluded rows** (reason → count). With `--uncertainty`, an **Uncertainty ranges**
+section follows (§10.8); everything before it is unchanged.
 
 **Read the two cost rows together.** `cost_usd` sums each arm over the rows *that arm*
 routed, so a row the proposal newly rejects simply disappears from the proposed sum — it
@@ -399,8 +407,9 @@ From spec §2, plus what the build settled during P3a:
 - **No explanation of why a proposal rejects a request** and **no shadow prices** were P3a's
   limits. The minimal conflicting core (P3b) now explains a rejection — see
   `docs/reference/conflicting-core.md`. Shadow prices (P3c-1, §8 below) now price what each
-  individual constraint costs. Alternative scenarios are §9 (P3c-2). **A capacity model and
-  uncertainty ranges** remain out of scope (P3c-3, P3c-4).
+  individual constraint costs. Alternative scenarios are §9 (P3c-2). Uncertainty ranges are
+  §10 (P3c-3): sampling variability only, and none of the limits in this section is inside
+  them. **A capacity model** remains out of scope (P3c-4).
 - **Two token counts, used for two things (B60, fixed 2026-10-06).** The router is given the
   row's `routing_tokens` — RouteForge's own count, the number the live router was given — so
   the per-request budget check and the cost term of the score see what they saw live. The
@@ -704,8 +713,9 @@ From spec §2, deliberate non-goals for this sub-project:
 - **One constraint at a time.** Every relaxation is evaluated independently, against the
   same baseline. It says nothing about relaxing two constraints together — that interaction
   (joint relaxations) is P3c-2, scenarios.
-- **No uncertainty.** Every figure is a point estimate from replaying the recorded rows
-  once; there is no confidence interval or sensitivity range. That is P3c-3.
+- **A point estimate unless asked.** Every figure is a point estimate from replaying the
+  recorded rows once. `--uncertainty` adds a range for each binding relaxation's cost and
+  counts (§10); it is sampling variability only, not a sensitivity analysis.
 - **No capacity effects.** A relaxation that would route far more traffic onto one endpoint
   is priced as if that endpoint has unlimited headroom — there is no queueing, saturation
   or capacity model. That is P3c-4.
@@ -803,8 +813,199 @@ excluded rows.
 
 ### 9.6 Limits
 
-- No uncertainty ranges (P3c-3) and no capacity or overload model (P3c-4).
+- No capacity or overload model (P3c-4). Ranges are opt-in (`--uncertainty`, §10) and are
+  sampling variability only.
 - `--scenarios` cannot be combined with `--shadow-prices`.
 - `token_scale` on a saturated row and every `cached_share` are assumptions; the report
   labels both.
 - Every §6 limit applies to every scenario.
+
+## 10. Uncertainty ranges (P3c-3)
+
+Design: `docs/superpowers/specs/2026-10-06-p3c3-uncertainty-design.md`. Research notes:
+`docs/research/feasible-route-bench.md` §20. Code: `app/eval/uncertainty.py`
+(`UncertaintyPlan`, `run_bootstrap`, `results_block`, `load_posteriors`,
+`render_uncertainty_section`), wired into `app/eval/scenarios.py`, `app/eval/shadow.py` and
+`scripts/policy_simulate.py`.
+
+### 10.1 What it answers
+
+Every figure in §4, §8 and §9 is a point estimate from one replay of one export. "Cost −39%"
+reads the same on 24 rows and on 2 million. `--uncertainty` puts a range beside each headline
+figure, so a reader can see how much the figure would move if the same traffic had produced a
+different sample of the same size.
+
+It is **off by default**. Without the flag every output file is byte-identical to what it was
+before this feature (pinned by `tests/eval/test_uncertainty_golden.py`). With it, the
+documents gain keys and no existing key or value changes.
+
+### 10.2 What the range is — and is not
+
+Every report that shows a range prints this, verbatim:
+
+> **Ranges show sampling variability only.** Each range is a percentile interval from
+> resampling the recorded rows with replacement, within each application, under this replay
+> model. It does not include replay model error (first-decision replay, frozen signals,
+> predicted overflow), the error of the admission estimate for rows no backend answered,
+> inputs that were not recorded, or future traffic shift. Replay gives each endpoint one
+> latency, so a latency range reflects only which endpoints the resampled rows used. A narrow
+> range on a biased replay is still biased.
+
+The block's `not_covered` list carries the same five exclusions as ids:
+`replay_model_error`, `admission_estimate_error`, `unrecorded_inputs`, `traffic_shift`,
+`per_request_latency`. Check the baseline agreements (§5) for bias; the range says nothing
+about it.
+
+### 10.3 Running it
+
+```bash
+uv run python scripts/policy_simulate.py \
+  --export outcomes.ndjson --snapshot snapshot.json --proposal proposal.json \
+  --out results/sim --uncertainty \
+  [--bootstrap 1000] [--interval 0.90] [--seed 0] [--min-rows 30] \
+  [--quality-posteriors recommendation.json ...]
+```
+
+The same flags work with `--scenarios` and with `--shadow-prices`.
+
+| Flag | Default | Valid | Meaning |
+|---|---|---|---|
+| `--uncertainty` | off | | compute and write ranges |
+| `--bootstrap` | `1000` | integer, 1 to 20000 | bootstrap resamples |
+| `--interval` | `0.90` | strictly between 0 and 1 | level of the interval |
+| `--seed` | `0` | integer ≥ 0 | seed; the same seed gives the same ranges |
+| `--min-rows` | `30` | integer ≥ 1 | a bucket with fewer rows gets "insufficient data" (§10.6) |
+| `--quality-posteriors` | none | repeatable | a P2b-3 `recommendation.json` that was applied (§10.5) |
+
+A tuning flag given without `--uncertainty`, a value out of range, or a posterior file that
+does not load is exit `2`; nothing is written. `--min-agreement` is checked before any
+resampling starts, in every mode.
+
+### 10.4 The method
+
+- **Rows are resampled, never re-simulated.** Each row is replayed once, as always. A
+  resample draws row positions with replacement and recomputes the figures.
+- **Within each application.** An app with `n` rows is resampled to exactly `n` rows from its
+  own rows, so a per-app figure is defined in every resample and the mix of traffic between
+  apps is held at what was recorded.
+- **Paired.** The rows drawn for an app in resample `b` depend only on the seed, `b`, the app
+  and its row count. Both arms, every scenario and every shadow-price relaxation therefore see
+  the same resampled rows, and a delta's range is the range of the difference over the same
+  rows. A proposal that changes nothing has every delta range at exactly `[0, 0]`.
+- **Percentile interval.** With `N` resamples and level `P`, `lo` and `hi` are the
+  `floor((1 − P)/2 · N) + 1`-th smallest and largest values.
+
+It assumes the rows of one application are exchangeable and independent over the export
+window. Neither is true of real traffic: the calls of one agent loop are related to each
+other, and traffic shifts within a window. Both make the true uncertainty larger than the
+range shown. There is no day-block resampling.
+
+### 10.5 Quality labels (`--quality-posteriors`)
+
+A quality that came from P2b-3 calibration (`docs/reference/quality-calibration.md`) is the
+mean of a Beta posterior. The snapshot carries the mean and the `set_id`, not the Beta's
+parameters. They are in the `recommendation.json` the set was applied from, so pass that
+file:
+
+```bash
+--uncertainty --quality-posteriors results/quality/recommendation.json
+```
+
+- The file must match its own `set_id` (a hash of its content — the check the admin API ran
+  at apply time). An edited file is refused.
+- In each resample, each calibrated `(model, workload)` unit of that set gets one quality
+  drawn from its posterior, used for every row that resolves to that unit, in both arms.
+- A published or tier-default quality has no stated uncertainty and gets none: it stays a
+  point.
+- The report says how much is covered: "Quality uncertainty covers k of n routed rows …; the
+  rest use a point prior." `uncertainty.quality_posterior` has the same counts per arm
+  (`routed`, `calibrated`, `posterior`).
+- A file for a set the snapshot does not hold is ignored with a warning on stderr.
+
+### 10.6 Insufficient data, zero counts, flags on a leaf
+
+- **`insufficient data (n = k)`.** A bucket with fewer than `--min-rows` rows has no range:
+  the JSON carries `{"insufficient_data": true, "n": k}`. That applies to an app, to the
+  totals, to a scenario and to a shadow-price relaxation's rows in scope.
+- **A zero count is not "no risk".** If no row is newly rejected, no resample has one: the
+  range is `[0, 0]` for 24 rows and for 2 million. So the share's leaf also carries
+  `zero_bound = 1 − (1 − P)^(1/n)` — the largest rate at which `n` independent rows would
+  still show none with probability `1 − P` — and the report prints it in a sentence. It is
+  about `2.3 / n` at the default level (9.2% for 24 rows).
+- **`point_outside: true`.** A percentile interval does not promise to contain the point
+  estimate. When it does not, the leaf says so and the report marks the row. Nothing is
+  widened.
+- **`undefined_replicates: k`.** A figure that does not exist in some resample (an arm with
+  no routed row there) has no range: `lo` and `hi` are null.
+
+### 10.7 Output
+
+The added keys, and the only ones: `uncertainty`, `inputs.uncertainty`, and — with shadow
+prices — `shadow_prices.uncertainty`.
+
+**A leaf** is `{"point", "lo", "hi"}`, plus the flags of §10.6 when they apply. `point` is the
+figure the document already carries at the same path.
+
+**`inputs.uncertainty`** is `{replicates, interval, seed, min_rows,
+quality_posteriors_sha256}`, so `simulation_id` / `comparison_id` differ between two runs that
+differ in any of them, and between a run with the flag and one without.
+
+**`simulation.json` → `uncertainty`:**
+
+| Field | Contents |
+|---|---|
+| `method`, `strata` | `"stratified_paired_row_bootstrap"`, `"application_id"` |
+| `replicates`, `interval`, `seed`, `min_rows` | the plan |
+| `quality_posterior_sets` | the `set_id` of each posterior file |
+| `not_covered` | the five ids of §10.2 |
+| `totals`, `by_app.<id>` | a bucket: `n` and one leaf per figure — `cost_usd` and `cost_usd_both_routed` (`current`, `proposed`, `delta`), `route_changed`, `newly_rejected`, `newly_served` and each one's `_share`, `latency_ms.p50`/`.p95` (`current`, `proposed`, `delta`), `quality_mean` (same), `onprem_share` (`current`, `proposed`) — or `{insufficient_data, n}` |
+| `per_day` | `cost_usd` (`current`, `proposed`, `delta`) and `cost_usd_both_routed.delta`, each a leaf; `null` when the window is under a day |
+| `quality_posterior` | per arm: `routed`, `calibrated`, `posterior` (§10.5) |
+| `points_outside_interval` | how many leaves carry `point_outside` |
+
+With `--shadow-prices` and no `--proposal` the block holds only its first four rows.
+`by_workload` and `overflow_hops` have no range.
+
+**`shadow_prices.uncertainty`** is `{interval, constraints}`. `constraints` is parallel to
+`shadow_prices.constraints` (same order); each entry has `requirement`, `scope`, `security`,
+`n` and leaves for `route_changed`, `rejections_avoided`, `newly_rejected`,
+`cost_usd_both_routed_delta` and `cost_saved_per_day` (`null` under a one-day window), or
+`insufficient_data`.
+
+**`comparison.json` → `uncertainty`** has the same head and `scenarios`, in file order: each
+entry is `name` plus the `simulation.json` fields above for that scenario, plus `table` — the
+leaves behind that scenario's comparison-table row, under the table's own column keys.
+
+### 10.8 Reports
+
+- **Single proposal.** The report is unchanged, followed by an **Uncertainty ranges** section:
+  the caveat, one sentence on the method, the quality coverage, then a `figure | point |
+  range` table for the totals, the per-day figures and each app.
+- **Scenario comparison.** In the comparison table each figure is followed by its range,
+  `-0.02895 [-0.034024, -0.023268]`. An **Uncertainty ranges** section follows the table, and
+  each scenario's section gains a **Ranges** table. The table stays in file order. A range is
+  not a ranking: overlapping ranges do not make two scenarios equal, and separate ranges do
+  not make one of them the one to choose.
+- **Shadow prices.** A **Ranges** table follows the two existing tables. A security
+  constraint's row keeps its `price of a protection — not a recommendation` label there too.
+
+### 10.9 Cost
+
+Pure Python, proportional to resamples × rows. Measured on synthetic rows (Python 3.12, one
+core of a laptop CPU): 100,000 rows × 1000 resamples in about 25 seconds; 1,000,000 rows at
+about 0.7 seconds per resample, so about 12 minutes at the default. Each scenario and each
+binding relaxation is resampled separately. For a very large export lower `--bootstrap` or cut
+the export with `--since`.
+
+### 10.10 Limits
+
+- Everything in §10.2 and §10.4. In particular the range is too narrow when rows are
+  correlated, and it knows nothing about a traffic shift.
+- Thirty rows is a convention for `--min-rows`, not a guarantee that a range is reliable at
+  31.
+- No ranges per workload, on `overflow_hops`, on the baseline agreements, or on non-binding
+  relaxations.
+- Quality-label uncertainty needs the recommendation file; it is not read from the snapshot.
+- Results are reproducible on the same Python minor version; the standard library's random
+  streams are not guaranteed identical across versions.
+- No capacity or overload model (P3c-4).

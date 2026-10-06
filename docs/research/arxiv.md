@@ -316,7 +316,81 @@ literature doesn't model".
   traffic mix with realistic shares (60/25/10/5). Report the comparison table. Also: static
   4-request test vs traffic-weighted replay — the HO §33 "static tests underestimate" claim.
 
-### 4.2 P3c-3 uncertainty ranges — *spec pending*
+### 4.2 P3c-3 uncertainty ranges (spec `docs/superpowers/specs/2026-10-06-p3c3-uncertainty-design.md`)
+
+- **Claim:** a counterfactual policy report over recorded traffic can carry a range on every
+  figure at the cost of a resample, not a re-simulation — and the range must be published
+  with an explicit statement of what it excludes, because the dominant error in such a
+  simulator is replay bias, which no resampling of the same rows can see.
+- **Method (FB §20.1):** replay each row once under both arms; bootstrap the **rows**,
+  stratified by application, with replacement; percentile interval. The draw for an
+  application in a replicate is a function of (seed, replicate, application, row count) only,
+  which gives common random numbers across the two arms, across every scenario of a
+  comparison and across every shadow-price relaxation without holding them in memory together.
+  A delta's range is the range of the paired difference.
+- **What the interval covers:** sampling variability of the recorded rows, per application,
+  under the replay model. Where a route's quality is a P2b-3 calibrated score, the Beta
+  posterior is drawn once per unit per replicate (shared by both arms), so the quality range
+  also carries label uncertainty (FB §20.3).
+- **What it does not cover (state this in the paper, FB §20.2):** replay model error
+  (first-decision replay, frozen signals, predicted overflow); the admission estimate for
+  rows no backend answered (1.54× the backend's count on the one run that measured it, FB
+  §19.4.1); unrecorded inputs (B55, B60); traffic shift; per-request latency variation (replay
+  assigns one latency per endpoint). **A narrow range on a biased replay is still biased** —
+  the range and the baseline agreement answer different questions.
+- **Findings from the design, usable as paper points:**
+  - *The bootstrap cannot express a zero count.* "0 newly rejected" has range `[0, 0]` on 24
+    rows and on 2 million. An analytic bound `1 − (1 − P)^(1/n)` is reported beside it; by
+    Jensen's inequality it holds for the stratified totals as well as per application (FB
+    §20.4). 9.2% for 24 rows.
+  - *Label uncertainty cancels in a paired delta.* A request that stays on the same model
+    contributes exactly zero to the quality delta in every replicate; label uncertainty
+    enters only through the rows that change model.
+  - *Quality with no calibration has no interval at all.* The output reports the share of
+    rows whose quality has a posterior, rather than inventing a spread for a published score
+    or a tier default. This is the honest state of HO open question 10.
+  - *A percentile interval need not contain its point.* It is flagged, not widened.
+  - *The posterior parameters were recoverable without a serving change*, because the
+    calibration file is content-addressed by the same hash the admin API verified at apply
+    time.
+- **Invariants to cite, with the test that pins each** (full table: FB §20.5):
+  U1 `test_u1_output_without_the_flag_is_byte_identical`; U2
+  `test_u2_same_plan_same_block_and_the_seed_changes_it`; U3
+  `test_u3_every_point_is_inside_its_range_or_is_flagged`; U4
+  `test_u4_noop_proposal_has_every_delta_range_exactly_zero`,
+  `test_u4_a_relaxation_is_resampled_with_the_same_draws_as_a_proposal`; U5
+  `test_u5_ranges_narrow_as_the_rows_are_replicated`; U6
+  `test_u6_a_one_row_app_is_present_in_every_replicate`; U7
+  `test_u7_a_small_app_gets_no_range_and_says_how_many_rows`; U8
+  `test_u8_one_calibrated_unit_gives_the_posteriors_own_interval`; U9
+  `test_u9_caveat_is_the_spec_text`; U10 `test_u10_the_id_tells_plans_apart`; U11
+  `test_u11_ranges_add_no_ranking_key_and_keep_file_order`; U12
+  `test_no_serving_module_imports_app_eval`; U13 `test_engine_figures_equal_bucket_stats`.
+- **Synthetic numbers only so far (FB §20.6.1) — do not present as an evaluation:** 100,000
+  rows × 1000 replicates in about 25 s, 1,000,000 rows at about 0.7 s per replicate, pure Python;
+  a `Beta(41, 9)` posterior's 90% interval reproduced to within 0.01.
+- **Experiments for the DGX lab (all TO MEASURE):**
+  - **E9a — width against sample size.** Persona-generated traffic at 500, 5,000 and 50,000
+    rows through the same six scenarios as E7b; report the width of each delta's range and
+    fit against `1/√n`. Include the 24-row export as the "insufficient data" case.
+  - **E9b — empirical coverage.** Split a large export into disjoint halves, repeatedly; how
+    often does the 90% range from one half contain the other half's point estimate. This is
+    the test of the method on real records.
+  - **E9c — coverage under dependence.** The same on traffic produced by agent loops (many
+    related calls per task). Expected: under-coverage, by an amount worth reporting; it
+    motivates a cluster bootstrap over tasks, which needs a session identifier (the same
+    missing field as R3, §5).
+  - **E9d — label uncertainty.** After one real calibration round, the quality range with and
+    without `--quality-posteriors`, and the share of routed rows covered.
+- **Limits:** independence within an application is assumed and false; no block or cluster
+  bootstrap; percentile interval, not BCa; `--min-rows 30` is a convention; reproducible per
+  Python minor version. **Found in review, not yet fixed on this branch:** a stratified
+  bootstrap draws each stratum's rows independently, which understates each stratum's
+  variance by a factor of `(n_a − 1)/n_a`; pooling many small strata compounds it, so the
+  **totals** range is too narrow when the export has many small applications, even though
+  each app's own range is unaffected. Measured on a synthetic 240-row export, width relative
+  to normal theory: 1 app × 240 rows → 1.02; 8 × 30 → 0.92; 80 × 3 → 0.84; 120 × 2 → 0.67;
+  240 × 1 → 0.00 (FB §20.7). A follow-up commit on this branch is expected to address it.
 ### 4.3 P3c-4 capacity model — *spec pending* (HO §25 "230% of capacity" example)
 ### 4.4 Replay fidelity
 
@@ -417,7 +491,11 @@ literature doesn't model".
 | E7b | Rejected rows replay as routed (B60) | FB §18.4.1, §19.4.1 | done: defect observed (7 of 7 rejections replayed as routed), fixed, re-run on post-upgrade rows — 7 of 7 rejected in replay, outcome agreement 1.0 over 24, raise-budget newly serves 7 |
 | E7c | Token-estimate gap and over-rejection (B64) | FB §19.4.1 | first measurement: routing/backend = 1.54 on 17 served rows (synthetic prose); real traffic **TO MEASURE** |
 | E8 | Healthcare scenario triad, traffic-weighted vs static | P3c-2 | **TO MEASURE** |
-| E9+ | uncertainty, capacity, fidelity, P2 metrics, R2/R3/R4 | §4–§5 | specs pending |
+| E9a | Range width against sample size (500 / 5,000 / 50,000 rows; 24-row case) | §4.2, FB §20.6.2 | **TO MEASURE** |
+| E9b | Empirical coverage of the 90% range on split halves of a real export | §4.2, FB §20.6.2 | **TO MEASURE** |
+| E9c | Coverage under dependence (agent-loop traffic) | §4.2, FB §20.6.2 | **TO MEASURE** |
+| E9d | Quality range with and without calibration posteriors | §4.2, FB §20.6.2 | **TO MEASURE** |
+| E10+ | capacity, fidelity, P2 metrics, R2/R3/R4 | §4–§5 | specs pending |
 
 **Data caveat for every live number:** the Spark serves one app (`kit-gtm`, Qwen Code), all
 models priced $0 (FB §17.4). The DGX lab (the test target from 2026-10-06) has one priced
@@ -435,6 +513,10 @@ before writing the evaluation section.
 - Simulated quality is an input (FB §6.1); deterministic graders; synthetic single-turn cases.
 - Single tenant, single seed live runs; $0 prices on the Spark.
 - Replay is first-decision only (until §4.4), with frozen signals; cached tokens not recorded.
+- Uncertainty ranges (§4.2) are sampling variability under an independence assumption that
+  agent traffic violates; they exclude replay bias by construction. Coverage on real records
+  is unmeasured (E9b, E9c). A stratified bootstrap also understates the **totals** range with
+  many small applications (synthetic measurement, FB §20.7); a fix is not yet landed.
 - Endpoint declarations (region, retention) are operator-declared; RouteForge enforces the
   declaration and cannot verify a provider's contractual claim (CLAUDE.md).
 - Patent/prior-art scan incomplete; arXiv leads unverified.
