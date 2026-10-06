@@ -16,10 +16,14 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
+from datetime import datetime
 
 from app.config.schema import Settings
 from app.eval.proposal import (SCHEMA as PROPOSAL_SCHEMA, ProposalError, _validate_keys,
-                               _validate_schema, apply_proposal)
+                               _validate_schema, apply_proposal, assumptions_block,
+                               normalized_edits)
+from app.eval.scenario import build_scenario, close_scenario
+from app.eval.simulate import arm_results, run_rows, summarize
 
 SCHEMA = "routeforge.policy-scenarios/v1"
 _SCHEMA_PREFIX = "routeforge.policy-scenarios/"
@@ -145,3 +149,74 @@ def apply_scenarios(snapshot: dict, doc: dict, *, base: Settings) -> list[Applie
                 exc.message) from exc
         applied.append(AppliedScenario(entry["name"], proposal, applied_doc))
     return applied
+
+
+# --- engine (spec §7) ----------------------------------------------------------
+
+# The parts of a P3a `simulation.json` body that are NOT per scenario: the
+# first three belong to the document as a whole, `rows` and `baseline` are
+# the shared `current` arm's and are lifted to the top level, and `edits` /
+# `assumptions` sit beside each scenario's `summary`.
+_LIFTED = ("schema", "simulation_id", "inputs", "rows", "baseline", "edits", "assumptions")
+
+
+class ComparisonInvariantError(RuntimeError):
+    """Two scenarios disagreed about something they share by construction --
+    the selected rows, the excluded counts or the `current` arm's baseline.
+    Never a reportable result: it means a bug, and the CLI exits 2."""
+
+
+@dataclass(frozen=True)
+class Comparison:
+    rows: dict             # {"simulated": N, "excluded": {...}} -- the same for every scenario
+    baseline: dict         # the `current` arm's fidelity block
+    window: dict | None    # {"start", "end"} over the simulated rows' `ts`
+    scenarios: list[dict]  # file order: {"name", "edits", "assumptions", "summary"}
+
+
+async def compare(records: list[dict], snapshot: dict, scenarios_doc: dict, *,
+                  base: Settings, since: datetime | None = None) -> Comparison:
+    """Replay every scenario against ONE shared `current` arm (spec §7).
+
+    Every proposal is validated and applied before anything is replayed
+    (`apply_scenarios`, all-or-nothing). The `current` scenario is built and
+    simulated once; each proposed scenario is then built, replayed and
+    closed in file order, so at most one proposed scenario is open at a
+    time. Nothing is ranked, and nothing is applied to a deployment."""
+    applied = apply_scenarios(snapshot, scenarios_doc, base=base)
+    current = await build_scenario(snapshot, base=base)
+    try:
+        current_results = arm_results(records, current, since=since)
+        shared: tuple[dict, dict, dict | None] | None = None
+        entries: list[dict] = []
+        for item in applied:
+            proposed = await build_scenario(item.doc, base=base)
+            try:
+                # A proposal only edits apps in place (spec §7.4), so every
+                # scenario simulates exactly the snapshot's apps.
+                if set(proposed.apps) != set(current.apps):
+                    raise ComparisonInvariantError(
+                        f"scenario {item.name!r} changed the set of applications")
+                results, excluded = run_rows(records, current, proposed, since=since,
+                                             current_results=current_results)
+            finally:
+                await close_scenario(proposed)
+            sim = summarize(results, excluded, inputs={},
+                            edits=normalized_edits(item.proposal),
+                            assumptions=assumptions_block(item.proposal))
+            head = (sim["rows"], sim["baseline"], sim["inputs"]["window"])
+            if shared is None:
+                shared = head
+            elif head != shared:
+                raise ComparisonInvariantError(
+                    f"scenario {item.name!r} saw different rows or a different baseline")
+            entries.append({
+                "name": item.name,
+                "edits": sim["edits"],
+                "assumptions": sim["assumptions"],
+                "summary": {k: v for k, v in sim.items() if k not in _LIFTED},
+            })
+    finally:
+        await close_scenario(current)
+    rows, baseline, window = shared      # a file always holds at least one scenario
+    return Comparison(rows=rows, baseline=baseline, window=window, scenarios=entries)

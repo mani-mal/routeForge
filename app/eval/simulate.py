@@ -366,18 +366,37 @@ def simulate_row(scn: Scenario, row: dict, observed: dict[str, float]) -> ArmRes
                      attempted=(*overflowed, pick.name))
 
 
+def arm_results(records: list[dict], scn: Scenario, *,
+                since: datetime | None = None) -> dict[str, ArmResult]:
+    """One scenario's `ArmResult` for every selectable row, keyed by
+    `request_id` -- the `current` arm, computed once and handed to
+    `run_rows(current_results=...)` when several proposals are replayed
+    against the same snapshot (P3c-2 spec §7). Rows that repeat a
+    `request_id` (two overlapping exports concatenated) are the same
+    recorded request, so they share one entry."""
+    observed = observed_latencies([r for r in records if not _before_since(r, since)])
+    rows, _excluded = select_rows(records, set(scn.apps), since=since)
+    return {row["request_id"]: simulate_row(scn, row, observed) for row in rows}
+
+
 def run_rows(records: list[dict], current: Scenario, proposed: Scenario, *,
-             since: datetime | None = None) -> tuple[list[RowResult], dict[str, int]]:
+             since: datetime | None = None,
+             current_results: dict[str, ArmResult] | None = None
+             ) -> tuple[list[RowResult], dict[str, int]]:
     """Simulate every selectable row under both scenarios. Observed latencies
     come from every record in the window (not only the selected ones) and
     are shared by both arms; only apps present in both scenarios are
     simulated. `since` cuts the export first: a row before it is counted
     `before_since` and feeds nothing, so the result equals a run over an
-    export that never held those rows."""
+    export that never held those rows. `current_results` is an optional
+    precomputed `current` arm (`arm_results(records, current, since=since)`);
+    without it the arm is simulated here, row by row, as before."""
     observed = observed_latencies([r for r in records if not _before_since(r, since)])
     app_ids = set(current.apps) & set(proposed.apps)
     rows, excluded = select_rows(records, app_ids, since=since)
-    results = [RowResult(row, simulate_row(current, row, observed),
+    results = [RowResult(row,
+                         (current_results[row["request_id"]] if current_results is not None
+                          else simulate_row(current, row, observed)),
                          simulate_row(proposed, row, observed))
                for row in rows]
     return results, excluded
