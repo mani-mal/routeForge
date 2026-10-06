@@ -305,6 +305,31 @@ async def simulate(records: list[dict], snapshot: dict, proposal: dict, *,
         await close_scenario(current)
 
 
+async def baseline_check(records: list[dict], snapshot: dict, *, base: Settings,
+                         since: datetime | None = None) -> dict:
+    """The fidelity block (`_baseline`) for the snapshot AS EXPORTED, with no
+    proposal: build the one scenario, replay each selectable row once, close.
+    For a caller that has no `summarize()` output to read the block from
+    (`--shadow-prices` without `--proposal`) but still has to gate on
+    agreement (P3c-2 spec §6, `--min-agreement`)."""
+    current = await build_scenario(snapshot, base=base)
+    try:
+        observed = observed_latencies([r for r in records if not _before_since(r, since)])
+        rows, _excluded = select_rows(records, set(current.apps), since=since)
+        arms = [simulate_row(current, row, observed) for row in rows]
+    finally:
+        await close_scenario(current)
+    return _round6(_baseline([RowResult(row, arm, arm) for row, arm in zip(rows, arms)]))
+
+
+def agreement_ok(baseline: dict, minimum: float) -> bool:
+    """The `--min-agreement` gate: False when the baseline has no comparable
+    row (`agreement` is None -- nothing vouches for the replay) or agrees
+    with the record less often than `minimum`."""
+    agreement = baseline["agreement"]
+    return agreement is not None and agreement >= minimum
+
+
 # --- summary and report (spec §8) -------------------------------------------
 
 #: The report's opening blockquote, verbatim from spec §8, one string per

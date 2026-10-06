@@ -393,3 +393,65 @@ def test_cli_bad_since_exits_2(tmp_path):
     assert proc.returncode == 2, proc.stderr
     assert "--since" in proc.stderr and "Traceback" not in proc.stderr
     assert not out.exists()
+
+
+# --- P3c-2 Task 2: --min-agreement (spec §6, S11) -----------------------------
+
+def _disagreeing_lines(n=4):
+    """Unpinned rows the record says local-big served; replay sends a
+    0.1-complexity row to local-cheap, so baseline agreement is 0.0."""
+    return [_line(make_row(f"r{i}", "app-a", attempts=["local-big"], chosen="local-big"))
+            for i in range(n)]
+
+
+def test_s11_min_agreement_exits_4_and_writes_nothing(tmp_path):          # S11
+    proc, out = _run_cli(tmp_path, _disagreeing_lines(), make_snapshot(), {"schema": P},
+                         "--min-agreement", "0.9")
+    assert proc.returncode == 4, proc.stderr
+    assert "baseline agreement 0 over 4 compared rows" in proc.stderr
+    assert "--min-agreement 0.9" in proc.stderr
+    assert not out.exists()                       # no directory, no files
+
+
+def test_min_agreement_met_writes_as_usual(tmp_path):
+    lines = [_line(make_row(f"r{i}", "app-a")) for i in range(3)]      # agreement 1.0
+    proc, out = _run_cli(tmp_path, lines, make_snapshot(), {"schema": P},
+                         "--min-agreement", "1.0")
+    assert proc.returncode == 0, proc.stderr
+    assert (out / "simulation.json").exists()
+
+
+def test_min_agreement_with_no_comparable_rows_exits_4(tmp_path):         # Review Focus 5
+    """No `ok` row with a recorded attempt: agreement is None. Nothing
+    vouches for the replay, so the gate refuses -- it never reads None as 1."""
+    lines = [_line(make_row("r1", "app-a", status="backend_failed"))]
+    proc, out = _run_cli(tmp_path, lines, make_snapshot(), {"schema": P},
+                         "--min-agreement", "0")
+    assert proc.returncode == 4, proc.stderr
+    assert "baseline agreement n/a over 0 compared rows" in proc.stderr
+    assert not out.exists()
+
+
+def test_min_agreement_gates_shadow_prices_without_a_proposal(tmp_path):
+    proc, out = _run_cli_no_proposal(tmp_path, _disagreeing_lines(), make_snapshot(),
+                                     "--shadow-prices", "--min-agreement", "0.5")
+    assert proc.returncode == 4, proc.stderr
+    assert not out.exists()
+    ok, out2 = _run_cli_no_proposal(tmp_path, _disagreeing_lines(), make_snapshot(),
+                                    "--shadow-prices", "--min-agreement", "0")
+    assert ok.returncode == 0, ok.stderr
+
+
+def test_min_agreement_wins_over_fail_on_new_rejections(tmp_path):
+    prop = {"schema": P, "endpoints": {"remove": ["local-cheap"]}}
+    proc, out = _run_cli(tmp_path, _disagreeing_lines(), make_snapshot(), prop,
+                         "--min-agreement", "0.9", "--fail-on-new-rejections")
+    assert proc.returncode == 4 and not out.exists()
+
+
+@pytest.mark.parametrize("bad", ["-0.1", "1.5", "nan"])
+def test_min_agreement_out_of_range_exits_2(tmp_path, bad):
+    proc, out = _run_cli(tmp_path, [], make_snapshot(), {"schema": P},
+                         f"--min-agreement={bad}")
+    assert proc.returncode == 2, proc.stderr
+    assert "--min-agreement" in proc.stderr and not out.exists()

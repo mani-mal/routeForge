@@ -6,9 +6,10 @@ import asyncio
 import pytest
 from hypothesis import HealthCheck, given, settings as hsettings, strategies as st
 
-from app.eval.simulate import (EXCLUSION_REASONS, REPORT_CAVEAT, observed_latencies,
-                               parse_since, render_report, select_rows, simulate,
-                               simulate_row, summarize)
+from app.eval.simulate import (EXCLUSION_REASONS, REPORT_CAVEAT, agreement_ok,
+                               baseline_check, observed_latencies, parse_since,
+                               render_report, select_rows, simulate, simulate_row,
+                               summarize)
 from tests.eval.sim_fixtures import (BASE_SETTINGS, app_entry, make_row, make_snapshot,
                                      onboarded_row)
 
@@ -527,3 +528,22 @@ def test_since_row_without_ts_is_missing_features_not_simulated():         # Rev
 def test_parse_since_rejects_non_timestamps(bad):
     with pytest.raises(ValueError):
         parse_since(bad)
+
+
+# --- P3c-2 Task 2: the agreement gate's inputs (spec §6) ----------------------
+
+def test_baseline_check_equals_the_summarized_baseline():
+    """`baseline_check` (no proposal) and `summarize()["baseline"]` (empty
+    proposal) are the same block: both replay the snapshot as exported."""
+    rows = _rows(4) + [make_row("d", "app-a", attempts=["local-big"], chosen="local-big")]
+    sim = summarize(*_run(rows, make_snapshot(), {"schema": P}), inputs=_INPUTS, edits={})
+    assert asyncio.run(baseline_check(rows, make_snapshot(), base=BASE_SETTINGS)) \
+        == sim["baseline"]
+
+
+@pytest.mark.parametrize("agreement,minimum,ok", [
+    (1.0, 1.0, True), (0.9, 0.9, True), (0.899999, 0.9, False),
+    (0.0, 0.0, True), (None, 0.0, False),
+])
+def test_agreement_ok(agreement, minimum, ok):
+    assert agreement_ok({"agreement": agreement, "rows_compared": 0}, minimum) is ok
