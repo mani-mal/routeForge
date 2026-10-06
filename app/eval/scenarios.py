@@ -19,13 +19,18 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from app.config.schema import Settings
+from app.eval.outcomes import _fmt, _round6
 from app.eval.proposal import (SCHEMA as PROPOSAL_SCHEMA, ProposalError, _validate_keys,
                                _validate_schema, apply_proposal, assumptions_block,
                                normalized_edits)
 from app.eval.scenario import build_scenario, close_scenario
-from app.eval.simulate import arm_results, run_rows, summarize
+from app.eval.simulate import (CACHED_SHARE_NOTE, REPORT_CAVEAT, _assumption_items,
+                               _excluded_lines, _metrics_table, _move_lines,
+                               _new_rejection_lines, _per_day, arm_results, run_rows,
+                               summarize)
 
 SCHEMA = "routeforge.policy-scenarios/v1"
+COMPARISON_SCHEMA = "routeforge.scenario-comparison/v1"
 _SCHEMA_PREFIX = "routeforge.policy-scenarios/"
 _SCHEMA_MAJOR = "v1"
 
@@ -220,3 +225,178 @@ async def compare(records: list[dict], snapshot: dict, scenarios_doc: dict, *,
         await close_scenario(current)
     rows, baseline, window = shared      # a file always holds at least one scenario
     return Comparison(rows=rows, baseline=baseline, window=window, scenarios=entries)
+
+
+# --- output (spec §8) ----------------------------------------------------------
+
+#: Printed under the comparison table, verbatim (spec §8, invariant S8).
+NO_RANKING_NOTE = "Listed in file order. RouteForge does not rank or recommend scenarios."
+
+#: Why the table's two cost columns can be read across scenarios.
+LIKE_FOR_LIKE_NOTE = (
+    "Cost columns compare only the rows routed in both arms. A row a scenario newly rejects "
+    "is counted under \"newly rejected\", never as a saving."
+)
+
+
+def _table_row(entry: dict, window: dict | None) -> dict:
+    """One comparison-table row. Exactly these keys -- there is no rank,
+    score or recommendation field, by design (S8)."""
+    summary = entry["summary"]
+    totals = summary["totals"]
+    like_for_like = totals["cost_usd_both_routed"]
+    per_day = _per_day(window, like_for_like)
+    return {
+        "name": entry["name"],
+        "cost_per_day_delta_usd": per_day["cost_usd"]["delta"] if per_day else None,
+        "cost_delta_usd": like_for_like["delta"],
+        "route_changed": totals["route_changed"],
+        "newly_rejected": totals["newly_rejected"],
+        "newly_served": totals["newly_served"],
+        "latency_p50_delta_ms": totals["latency_ms"]["p50"]["delta"],
+        "latency_p95_delta_ms": totals["latency_ms"]["p95"]["delta"],
+        "quality_mean_delta": totals["quality_mean"]["delta"],
+        "onprem_share_current": totals["onprem_share"]["current"],
+        "onprem_share_proposed": totals["onprem_share"]["proposed"],
+        "overflow_hops": totals["overflow_hops"]["proposed"],
+        "affected_apps": summary["affected_apps"],
+    }
+
+
+def comparison_doc(comparison: Comparison, *, inputs: dict) -> dict:
+    """The deterministic `comparison.json` document (spec §8). `inputs` is
+    the caller's partial input record; `window` is added here, before
+    hashing, exactly as `simulate.summarize` does for `simulation_id`."""
+    full_inputs = dict(inputs)
+    full_inputs["window"] = comparison.window
+    comparison_id = hashlib.sha256(
+        json.dumps(full_inputs, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+    return _round6({
+        "schema": COMPARISON_SCHEMA,
+        "comparison_id": comparison_id,
+        "inputs": full_inputs,
+        "rows": comparison.rows,
+        "baseline": comparison.baseline,
+        "scenarios": comparison.scenarios,
+        "table": [_table_row(entry, comparison.window) for entry in comparison.scenarios],
+    })
+
+
+_TABLE_COLUMNS = ("scenario", "Δcost/day USD", "Δcost USD", "route changed", "newly rejected",
+                  "newly served", "Δp50 ms", "Δp95 ms", "Δquality",
+                  "on-prem share (current→proposed)", "overflow hops", "affected apps")
+
+
+def _pct(value: float) -> str:
+    return f"{value * 100:.1f}%"
+
+
+def _agreement_lines(doc: dict) -> list[str]:
+    """The agreement banner: overall, per app, a warning under 90%, and the
+    `--since` cut when one was applied."""
+    baseline = doc["baseline"]
+    lines = ["## Baseline agreement", ""]
+    if baseline["agreement"] is None:
+        lines.append("**Baseline agreement: n/a** -- no served row with a recorded first "
+                     "attempt to compare. Nothing vouches for this replay.")
+    else:
+        lines.append(f"**Baseline agreement: {_pct(baseline['agreement'])}** over "
+                     f"{baseline['rows_compared']} compared rows.")
+        if baseline["warning"]:
+            lines.append("")
+            lines.append("⚠ **Warning:** below the 90% threshold. Every scenario row below "
+                         "rests on a replay that disagrees with the record this often.")
+        if baseline["by_app"]:
+            lines.append("")
+            lines.append("Per app: " + " · ".join(
+                f"{app_id} {_pct(rate)}" + (" ⚠" if rate < 0.90 else "")
+                for app_id, rate in sorted(baseline["by_app"].items())))
+    since = doc["inputs"].get("since")
+    if since is not None:
+        lines.append("")
+        lines.append(f"Rows before `--since {since}` excluded: "
+                     f"{doc['rows']['excluded'].get('before_since', 0)}.")
+    lines.append("")
+    return lines
+
+
+def _comparison_row(row: dict) -> str:
+    cells = [
+        row["name"],
+        _fmt(row["cost_per_day_delta_usd"]),
+        _fmt(row["cost_delta_usd"]),
+        str(row["route_changed"]),
+        str(row["newly_rejected"]),
+        str(row["newly_served"]),
+        _fmt(row["latency_p50_delta_ms"]),
+        _fmt(row["latency_p95_delta_ms"]),
+        _fmt(row["quality_mean_delta"]),
+        f"{_fmt(row['onprem_share_current'])}→{_fmt(row['onprem_share_proposed'])}",
+        str(row["overflow_hops"]),
+        ", ".join(row["affected_apps"]) or "none",
+    ]
+    return "| " + " | ".join(cells) + " |"
+
+
+def render_comparison(doc: dict) -> str:
+    """`report.md` for a comparison (spec §8): the caveat, the agreement
+    banner, ONE table in file order, the assumptions each scenario makes,
+    then a short section per scenario, then the excluded rows. Built from
+    the `comparison.json` document alone."""
+    lines: list[str] = ["> " + line for line in REPORT_CAVEAT.split("\n")]
+    lines.append("")
+    title = doc["inputs"].get("title")
+    lines.append(f"# Scenario comparison: {title}" if title else "# Scenario comparison")
+    lines.append("")
+    lines.append(f"{doc['rows']['simulated']} rows simulated, "
+                 f"{len(doc['scenarios'])} scenario(s), one shared current arm.")
+    lines.append("")
+
+    lines += _agreement_lines(doc)
+
+    lines.append("## Comparison")
+    lines.append("")
+    lines.append("| " + " | ".join(_TABLE_COLUMNS) + " |")
+    lines.append("|" + "---|" * len(_TABLE_COLUMNS))
+    lines += [_comparison_row(row) for row in doc["table"]]
+    lines.append("")
+    lines.append(NO_RANKING_NOTE)
+    lines.append("")
+    lines.append(LIKE_FOR_LIKE_NOTE)
+    lines.append("")
+
+    assuming = [(entry["name"], _assumption_items(entry["assumptions"]))
+                for entry in doc["scenarios"]]
+    assuming = [(name, items) for name, items in assuming if items]
+    if assuming:
+        lines.append("## Assumptions")
+        lines.append("")
+        for name, items in assuming:
+            lines.append(f"- **{name}** -- " + "; ".join(items))
+        if any(entry["assumptions"]["cached_share"] for entry in doc["scenarios"]):
+            lines.append("")
+            lines.append(CACHED_SHARE_NOTE)
+        lines.append("")
+
+    for entry in doc["scenarios"]:
+        summary = entry["summary"]
+        lines.append(f"## Scenario: {entry['name']}")
+        lines.append("")
+        lines += _metrics_table(summary["totals"])
+        lines.append("")
+        lines.append("### Moves")
+        lines.append("")
+        lines += _move_lines(summary["moves"])
+        lines.append("")
+        lines.append("### New rejections")
+        lines.append("")
+        lines += _new_rejection_lines(summary["new_rejections"])
+        lines.append("")
+        lines.append("Affected apps: " + (", ".join(summary["affected_apps"]) or "none"))
+        lines.append("")
+
+    lines.append("## Excluded rows")
+    lines.append("")
+    lines += _excluded_lines(doc["rows"]["excluded"])
+
+    return "\n".join(lines) + "\n"

@@ -218,3 +218,213 @@ def test_scenarios_are_closed_when_a_replay_raises(monkeypatch):
     with pytest.raises(RuntimeError, match="replay failed"):
         _compare(_rows(), _snap(), _doc(*_TRIAD))
     assert len(closed) == 2                          # the one proposed scenario, then current
+
+
+# --- Task 9: comparison.json and report.md (spec §8) ---------------------------
+
+import json  # noqa: E402
+
+from app.eval.scenarios import (COMPARISON_SCHEMA, LIKE_FOR_LIKE_NOTE,  # noqa: E402
+                                NO_RANKING_NOTE, comparison_doc, render_comparison)
+from app.eval.simulate import REPORT_CAVEAT  # noqa: E402
+
+_INPUTS = {"export_sha256": "e", "snapshot_sha256": "s", "scenarios_sha256": "c",
+           "title": "Healthcare on-prem options", "routing_policy_version": "v",
+           "registry_version": "r", "snapshot_generated_at": "2026-09-24T00:00:00Z",
+           "serving_policy": {}, "since": None}
+
+_TABLE_KEYS = {"name", "cost_per_day_delta_usd", "cost_delta_usd", "route_changed",
+               "newly_rejected", "newly_served", "latency_p50_delta_ms",
+               "latency_p95_delta_ms", "quality_mean_delta", "onprem_share_current",
+               "onprem_share_proposed", "overflow_hops", "affected_apps"}
+
+
+def _document(records, snap, doc, inputs=None, **kw):
+    return comparison_doc(_compare(records, snap, doc, **kw), inputs=inputs or _INPUTS)
+
+
+def test_s1_empty_scenario_is_a_noop():                                    # S1
+    doc = _document(_rows(), _snap(), _doc(("empty", {}), ("also-empty", {"title": "x"})))
+    assert len(doc["table"]) == 2
+    for row in doc["table"]:
+        assert row["cost_per_day_delta_usd"] == 0 and row["cost_delta_usd"] == 0
+        assert (row["route_changed"], row["newly_rejected"], row["newly_served"]) == (0, 0, 0)
+        assert row["latency_p50_delta_ms"] == 0 and row["latency_p95_delta_ms"] == 0
+        assert row["quality_mean_delta"] == 0
+        assert row["onprem_share_current"] == row["onprem_share_proposed"]
+        assert row["overflow_hops"] == 0 and row["affected_apps"] == []
+    for entry in doc["scenarios"]:
+        assert entry["edits"] == {} and entry["summary"]["moves"] == []
+        assert entry["summary"]["totals"]["cost_usd"]["delta"] == 0
+
+
+def test_s3_order_independence():                                          # S3
+    """Permuting the scenarios permutes the table rows and changes nothing
+    else: each scenario's block, the rows and the baseline are identical."""
+    forward = _document(_rows(), _snap(), _doc(*_TRIAD))
+    backward = _document(_rows(), _snap(), _doc(*reversed(_TRIAD)))
+    assert [e["name"] for e in forward["scenarios"]] == [n for n, _ in _TRIAD]
+    assert [e["name"] for e in backward["scenarios"]] == [n for n, _ in reversed(_TRIAD)]
+    assert {e["name"]: e for e in forward["scenarios"]} == \
+           {e["name"]: e for e in backward["scenarios"]}
+    assert forward["table"] == list(reversed(backward["table"]))
+    for key in ("rows", "baseline", "inputs", "comparison_id"):
+        assert forward[key] == backward[key], key
+
+
+def _keys(value):
+    if isinstance(value, dict):
+        for key, inner in value.items():
+            yield key
+            yield from _keys(inner)
+    elif isinstance(value, list):
+        for inner in value:
+            yield from _keys(inner)
+
+
+def test_s8_no_ranking_and_file_order():                                   # S8
+    """The file is not in cost order, and the output must not put it in one.
+    No field anywhere ranks, scores or recommends."""
+    doc = _document(_rows(), _snap(), _doc(*_TRIAD))
+    assert [row["name"] for row in doc["table"]] == [n for n, _ in _TRIAD]
+    assert [e["name"] for e in doc["scenarios"]] == [n for n, _ in _TRIAD]
+    costs = [row["cost_delta_usd"] for row in doc["table"]]
+    assert costs != sorted(costs) and costs != sorted(costs, reverse=True)   # not sorted by cost
+    for row in doc["table"]:
+        assert set(row) == _TABLE_KEYS
+    banned = ("rank", "recommend", "best", "winner", "prefer", "score")
+    assert not [k for k in _keys(doc) if any(word in k.lower() for word in banned)]
+    report = render_comparison(doc)
+    assert NO_RANKING_NOTE in report
+    positions = [report.index(f"| {n} |") for n, _ in _TRIAD]
+    assert positions == sorted(positions)
+    sections = [report.index(f"## Scenario: {n}") for n, _ in _TRIAD]
+    assert sections == sorted(sections)
+
+
+def test_comparison_doc_shape():
+    doc = _document(_rows(), _snap(), _doc(*_TRIAD))
+    assert set(doc) == {"schema", "comparison_id", "inputs", "rows", "baseline",
+                        "scenarios", "table"}
+    assert doc["schema"] == COMPARISON_SCHEMA and len(doc["comparison_id"]) == 16
+    assert set(doc["inputs"]) == set(_INPUTS) | {"window"}
+    assert doc["inputs"]["window"] == {"start": "2026-09-20T12:00:00+00:00",
+                                       "end": "2026-09-22T12:00:11+00:00"}
+    assert doc["rows"]["simulated"] == 12
+    assert "agreement" in doc["baseline"]                      # lifted out of every scenario
+    assert all("baseline" not in e["summary"] for e in doc["scenarios"])
+
+
+def test_table_values_and_like_for_like_cost():
+    """The table reads the scenario's own totals. Its cost columns are the
+    both-routed (like-for-like) delta, so a scenario that newly rejects rows
+    does not look cheaper for it."""
+    snap = make_snapshot(apps=[app_entry("claims", allowed_models=["local-mid"]),
+                               app_entry("chat")])
+    doc = _document(_rows(), snap, _doc(("drop-mid", {"endpoints": {"remove": ["local-mid"]}})))
+    (row,), (entry,) = doc["table"], doc["scenarios"]
+    totals = entry["summary"]["totals"]
+    assert row["newly_rejected"] == totals["newly_rejected"] == 6
+    assert totals["cost_usd"]["delta"] < 0                     # the misleading "saving"
+    assert row["cost_delta_usd"] == totals["cost_usd_both_routed"]["delta"]
+    assert row["cost_delta_usd"] != totals["cost_usd"]["delta"]    # not the all-routed delta
+    assert row["affected_apps"] == entry["summary"]["affected_apps"]
+    assert row["overflow_hops"] == totals["overflow_hops"]["proposed"]
+    assert row["onprem_share_proposed"] == totals["onprem_share"]["proposed"]
+    assert row["latency_p95_delta_ms"] == totals["latency_ms"]["p95"]["delta"]
+
+
+def test_cost_per_day_divides_the_like_for_like_delta_by_the_window():
+    """The window is 2 days and 11 seconds: 2.000127 days."""
+    doc = _document(_rows(), _snap(), _doc(*_TRIAD))
+    for row in doc["table"]:
+        assert row["cost_delta_usd"] != 0
+        assert row["cost_per_day_delta_usd"] == pytest.approx(
+            row["cost_delta_usd"] / (2 + 11 / 86400), abs=1e-6)
+
+
+def test_cost_per_day_is_null_under_a_one_day_window():
+    doc = _document(_rows(days=1), _snap(), _doc(*_TRIAD))
+    assert all(row["cost_per_day_delta_usd"] is None for row in doc["table"])
+    assert "| all-onprem | n/a |" in render_comparison(doc)
+
+
+def test_comparison_is_deterministic_and_id_follows_inputs():
+    one = _document(_rows(), _snap(), _doc(*_TRIAD))
+    two = _document(_rows(), _snap(), _doc(*_TRIAD))
+    assert json.dumps(one, sort_keys=True) == json.dumps(two, sort_keys=True)
+    assert render_comparison(one) == render_comparison(two)
+    other = _document(_rows(), _snap(), _doc(*_TRIAD),
+                      inputs={**_INPUTS, "since": "2026-09-01T00:00:00+00:00"})
+    assert other["comparison_id"] != one["comparison_id"]
+
+
+# --- report.md -------------------------------------------------------------------
+
+def test_report_structure():
+    report = render_comparison(_document(_rows(), _snap(), _doc(*_TRIAD)))
+    assert report.startswith("> " + REPORT_CAVEAT.split("\n")[0])
+    assert "plus deterministic context-window overflow" in report
+    order = ["# Scenario comparison: Healthcare on-prem options", "## Baseline agreement",
+             "## Comparison", NO_RANKING_NOTE, LIKE_FOR_LIKE_NOTE, "## Assumptions",
+             "## Scenario: all-onprem", "## Scenario: smaller-prompts",
+             "## Scenario: onprem+2nd-gpu", "## Excluded rows"]
+    positions = [report.index(marker) for marker in order]
+    assert positions == sorted(positions)
+    assert report.count("## Comparison") == 1                  # ONE table
+    assert "- **smaller-prompts** -- token_scale: claims=0.4; rows whose saturated" in report
+    assert "- **onprem+2nd-gpu** -- latency_ms: local-mid-2=90" in report
+    assert "- **all-onprem**" not in report                    # it assumes nothing
+    assert "### Moves" in report and "### New rejections" in report
+    assert "Affected apps: claims" in report
+
+
+def test_report_names_the_since_cut():
+    since = parse_since("2026-09-21T00:00:00Z")
+    doc = _document(_rows(), _snap(), _doc(*_TRIAD), since=since,
+                    inputs={**_INPUTS, "since": since.isoformat()})
+    report = render_comparison(doc)
+    assert "Rows before `--since 2026-09-21T00:00:00+00:00` excluded: 4." in report
+    assert "| before_since | 4 |" in report
+
+
+def test_report_agreement_banner_warns_and_marks_apps():
+    """`chat` rows record the model replay picks; `claims` rows record one it
+    never would. Overall 50%: a warning, and `claims` is marked."""
+    rows = []
+    for row in _rows():
+        if row["application_id"] == "claims":
+            row.update(attempts=["local-big"], chosen="local-big", complexity=0.05)
+        else:
+            row.update(complexity=0.05, attempts=["local-cheap"], chosen="local-cheap")
+        rows.append(row)
+    doc = _document(rows, _snap(), _doc(("empty", {})))
+    assert doc["baseline"]["by_app"] == {"chat": 1.0, "claims": 0.0}
+    assert doc["baseline"]["warning"] is True
+    report = render_comparison(doc)
+    assert "**Baseline agreement: 50.0%** over 12 compared rows." in report
+    assert "⚠ **Warning:** below the 90% threshold" in report
+    assert "Per app: chat 100.0% · claims 0.0% ⚠" in report
+    assert "Rows before `--since" not in report
+
+
+def test_report_agreement_banner_without_comparable_rows():
+    rows = [make_row("r", "chat", status="backend_failed")]
+    doc = _document(rows, _snap(), _doc(("empty", {})))
+    assert doc["baseline"]["agreement"] is None
+    assert "**Baseline agreement: n/a**" in render_comparison(doc)
+
+
+def test_report_cached_share_note_and_no_title():
+    doc = _document(_rows(), _snap(),
+                    _doc(("cached", {"workload": {"cached_share": 0.5}}), title=None),
+                    inputs={**_INPUTS, "title": None})
+    report = render_comparison(doc)
+    assert "# Scenario comparison\n" in report
+    assert "- **cached** -- cached_share: *=0.5" in report
+    assert "`cached_share` is an assumption" in report
+
+
+def test_report_has_no_assumptions_section_when_nothing_is_assumed():
+    report = render_comparison(_document(_rows(), _snap(), _doc(("empty", {}))))
+    assert "## Assumptions" not in report

@@ -766,6 +766,47 @@ def _assumption_lines(block: dict) -> list[str]:
     return lines
 
 
+def _new_rejection_lines(new_rej: dict) -> list[str]:
+    """The body of a "New rejections" section: by app, by code, then by
+    conflicting core -- or "None."."""
+    if not new_rej["by_app"] and not new_rej["by_code"]:
+        return ["None."]
+    lines = ["| app | count |", "|---|---|"]
+    for app_id in sorted(new_rej["by_app"]):
+        lines.append(f"| {app_id} | {new_rej['by_app'][app_id]} |")
+    lines.append("")
+    lines.append("| code | count |")
+    lines.append("|---|---|")
+    for code in sorted(new_rej["by_code"]):
+        lines.append(f"| {code} | {new_rej['by_code'][code]} |")
+    lines.append("")
+    lines.append("**By conflicting core**")
+    lines.append("")
+    lines.append("| core | count |")
+    lines.append("|---|---|")
+    for key, count in sorted(new_rej["by_core"].items(), key=lambda kv: (-kv[1], kv[0])):
+        lines.append(f"| {key} | {count} |")
+    return lines
+
+
+def _move_lines(moves: list[dict]) -> list[str]:
+    """The body of a "Moves" section: from -> to -> count, or "None."."""
+    if not moves:
+        return ["None."]
+    lines = ["| from | to | count |", "|---|---|---|"]
+    for move in moves:
+        lines.append(f"| {move['from']} | {move['to']} | {move['count']} |")
+    return lines
+
+
+def _excluded_lines(excluded: dict) -> list[str]:
+    """The body of an "Excluded rows" section: reason -> count."""
+    lines = ["| reason | count |", "|---|---|"]
+    for reason in sorted(excluded):
+        lines.append(f"| {reason} | {excluded[reason]} |")
+    return lines
+
+
 def render_report(sim: dict) -> str:
     """The `report.md` document (spec §8), in the order: caveat, baseline
     warning, headline, new rejections, moves, by-app, by-workload,
@@ -790,37 +831,12 @@ def render_report(sim: dict) -> str:
 
     lines.append("## New rejections")
     lines.append("")
-    new_rej = sim["new_rejections"]
-    if not new_rej["by_app"] and not new_rej["by_code"]:
-        lines.append("None.")
-    else:
-        lines.append("| app | count |")
-        lines.append("|---|---|")
-        for app_id in sorted(new_rej["by_app"]):
-            lines.append(f"| {app_id} | {new_rej['by_app'][app_id]} |")
-        lines.append("")
-        lines.append("| code | count |")
-        lines.append("|---|---|")
-        for code in sorted(new_rej["by_code"]):
-            lines.append(f"| {code} | {new_rej['by_code'][code]} |")
-        lines.append("")
-        lines.append("**By conflicting core**")
-        lines.append("")
-        lines.append("| core | count |")
-        lines.append("|---|---|")
-        for key, count in sorted(new_rej["by_core"].items(), key=lambda kv: (-kv[1], kv[0])):
-            lines.append(f"| {key} | {count} |")
+    lines += _new_rejection_lines(sim["new_rejections"])
     lines.append("")
 
     lines.append("## Moves")
     lines.append("")
-    if not sim["moves"]:
-        lines.append("None.")
-    else:
-        lines.append("| from | to | count |")
-        lines.append("|---|---|---|")
-        for move in sim["moves"]:
-            lines.append(f"| {move['from']} | {move['to']} | {move['count']} |")
+    lines += _move_lines(sim["moves"])
     lines.append("")
 
     lines.append("## By app")
@@ -850,10 +866,6 @@ def render_report(sim: dict) -> str:
 
     lines.append("## Excluded rows")
     lines.append("")
-    excluded = sim["rows"]["excluded"]
-    lines.append("| reason | count |")
-    lines.append("|---|---|")
-    for reason in sorted(excluded):
-        lines.append(f"| {reason} | {excluded[reason]} |")
+    lines += _excluded_lines(sim["rows"]["excluded"])
 
     return "\n".join(lines) + "\n"
