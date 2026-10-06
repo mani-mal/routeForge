@@ -249,3 +249,34 @@ snapshot/export fixtures.
   Spark results).
 - `docs/research/arxiv.md` §P3c-2 (claims, findings, experiments to run).
 - `docs/roadmap/priorities-1-3-status.md`: move P3c-2 to Built.
+
+## Amendments (as built)
+
+The plan (`docs/superpowers/plans/2026-10-05-p3c2-scenarios.md`, "Deviations from spec")
+records 13 deviations the build made from this spec, each kept intentional and pinned by a
+test. One line each:
+
+1. `ArmResult` gains `attempted`; `overflow_hops` is derived from it, not named alone (§5).
+2. Baseline agreement should not move from context-window replay, not rise as §5 expected.
+3. `token_scale` leaves a zero-token row at zero rather than flooring it to 1 (§4.1).
+4. Saturated complexity is bounded below by `scale`: `min(1, max(scale, prompt_tokens' / 2000))`,
+   not `min(1, prompt_tokens' / 2000)` (§4.1).
+5. An asserted `latency_ms` is scored as a measurement (feeding the peer prior too), and is
+   ignored by scoring when `routing.signals.enabled` is false, rather than always feeding both
+   as §4.2 says.
+6. S4's latency clause holds only where the router's term and the replayed latency coincide
+   (a measured snapshot signal, no observed rows) — not universally.
+7. `--since` cuts the export itself, including observed latencies, not just excluding rows
+   from the comparison (§6).
+8. `simulation.json` gains `inputs.since` and a top-level `assumptions` block for
+   single-proposal runs too, not only `comparison.json` as listed.
+9. `--min-agreement` also gates `--shadow-prices` without `--proposal`, via a new
+   `baseline_check`, which the spec did not anticipate.
+10. The comparison table's two cost columns are explicitly like-for-like
+    (`cost_usd_both_routed.delta` and its per-day figure), where §8 did not say which delta.
+11. Loading is two functions, `load_scenarios` (shape only) and `apply_scenarios` (validates
+    against the snapshot), not one.
+12. Test placement differs from §10: S4–S6 live in `test_proposal_workload.py`, S7 in
+    `test_replay_overflow.py`, S10/S11 in the existing P3a test files.
+13. A context-window rejection is keyed `(context_window)` in `new_rejections.by_core`, not
+    left to fall through to `(unknown)`.

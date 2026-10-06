@@ -137,10 +137,11 @@ predict zero change in every row (spec §9.1).
 `endpoints.add.<slug>`, …). Every value is validated against the snapshot **before**
 anything is applied — loading is all-or-nothing.
 
-**Top level (`_TOP_KEYS`):** `schema`, `title`, `apps`, `providers`, `endpoints`, `prices`.
-Every container must be the documented type — `apps`, `providers`, `prices`,
-`endpoints` and `endpoints.update` objects; `endpoints.add` a list of objects;
-`remove`/`disable`/`enable` lists of slug strings — or loading fails naming the path.
+**Top level (`_TOP_KEYS`):** `schema`, `title`, `apps`, `providers`, `endpoints`, `prices`,
+`workload`. Every container must be the documented type — `apps`, `providers`, `prices`,
+`endpoints`, `endpoints.update`, `workload` and `workload.apps` objects; `endpoints.add` a
+list of objects; `remove`/`disable`/`enable` lists of slug strings — or loading fails naming
+the path.
 
 **`apps.<application_id>`** — the app must already be in the snapshot. A field not named in
 the edit is left as-is; `null` means "set to null" (inherit), the same meaning the admin
@@ -170,13 +171,41 @@ appear in at most one of these operations.
 
 | Operation | Validation |
 |---|---|
-| `add` (list of objects) | Keys: `slug`, `provider`, `tier`, `price`, `region`, `prompt_retention`, `accepts_raw_sensitive`, `context_window`, `quality`, `allowed_app_ids`. `slug` must be new — not an existing onboarded row or a priced YAML pool model. `provider` must be declared. `tier` must be canonical. `price.input`/`price.output` must be finite ≥ 0; `price.cached_input` null or finite ≥ 0. `prompt_retention` null or one of `none`/`retained`/`unknown`. `accepts_raw_sensitive` null or bool. `context_window` null or an int `> 0`. `quality` null or a finite value in `[0, 1]`. `allowed_app_ids` null or a list of application ids that exist in the snapshot. `region` must be a string or `null`; the token itself is customer vocabulary and is not checked against a list (admin parity). |
+| `add` (list of objects) | Keys: `slug`, `provider`, `tier`, `price`, `region`, `prompt_retention`, `accepts_raw_sensitive`, `context_window`, `quality`, `allowed_app_ids`, `latency_ms`. `slug` must be new — not an existing onboarded row or a priced YAML pool model. `provider` must be declared. `tier` must be canonical. `price.input`/`price.output` must be finite ≥ 0; `price.cached_input` null or finite ≥ 0. `prompt_retention` null or one of `none`/`retained`/`unknown`. `accepts_raw_sensitive` null or bool. `context_window` null or an int `> 0`. `quality` null or a finite value in `[0, 1]`. `allowed_app_ids` null or a list of application ids that exist in the snapshot. `region` must be a string or `null`; the token itself is customer vocabulary and is not checked against a list (admin parity). `latency_ms` null or finite `> 0`. |
 | `remove`, `disable`, `enable` (lists of slugs) | Each slug must already be an onboarded row. |
-| `update` (map slug → fields) | Same slug requirement. Fields: `tier`, `region`, `prompt_retention`, `accepts_raw_sensitive`, `context_window`, `allowed_app_ids` — validated the same way as `add`'s matching field, only when the field is present (`region`: string or `null`). |
+| `update` (map slug → fields) | Same slug requirement. Fields: `tier`, `region`, `prompt_retention`, `accepts_raw_sensitive`, `context_window`, `allowed_app_ids`, `latency_ms` — validated the same way as `add`'s matching field, only when the field is present (`region`: string or `null`). `update` also accepts a priced YAML pool model; `latency_ms` is the only field allowed on one. |
 
 **`prices.<slug>`** — `{"input", "output", "cached_input"}`, same price validation as
 `endpoints.add[].price`. The slug must be an onboarded row not being removed in this same
 proposal, or a priced YAML pool model.
+
+**`workload`** (P3c-2) — assumptions about the traffic itself, not configuration. They apply
+to the `proposed` arm only; the `current` arm always replays rows as recorded.
+
+| Key | Validation | Effect in replay |
+|---|---|---|
+| `token_scale` | Finite, `0 < x ≤ 10`. Default `1.0`. | Before routing and pricing: `prompt_tokens' = max(1, round(prompt_tokens × scale))` (a row that recorded 0 prompt tokens stays 0); `completion_tokens` unchanged. A recorded `complexity` below 1 becomes `min(1, complexity × scale)`, which is exact. A saturated complexity (1.0) hides the real token count, so it becomes `min(1, max(scale, prompt_tokens' / 2000))`; when the scale is below 1 that is an estimate, and the row is counted in `assumptions.saturated_complexity_estimated`. |
+| `cached_share` | Finite, `0 ≤ x ≤ 1`. Default `0`. | That fraction of the (scaled) prompt tokens is priced at the endpoint's cached-input price. An endpoint with no declared cached price bills them at the input price. The router still estimates with zero cached tokens, so this moves cost, never a route. |
+| `apps.<application_id>` | The app must be in the snapshot. Same two keys. | Overrides the global value for that app. |
+
+Outcome rows do not record cached tokens, so any non-zero `cached_share` is an assumption
+and the report says so.
+
+**`endpoints.add[].latency_ms` and `endpoints.update.<slug>.latency_ms`** (P3c-2) — an
+operator-asserted latency in milliseconds: finite `> 0`, or `null` for "no override". Use it
+to model a serving-engine or hardware change; RouteForge cannot see the serving engine, so
+this is an assertion, not a measurement. It becomes the replayed latency of that endpoint
+(`latency_source: "proposal"`, ahead of observed, signal and tier-default latency) and the
+router's latency scoring term, where it is treated exactly as a measurement would be —
+including as the same-tier peer prior for unmeasured endpoints. When
+`routing.signals.enabled` is false the live router ignores measured latency, so the assertion
+then changes the replayed latency only.
+
+**Where assumptions live.** `apply_proposal` writes them into the applied document as a
+top-level `assumptions` block: `{"token_scale": {"*": x, "<app>": y}, "cached_share": {...},
+"latency_ms": {"<slug>": ms}}`, absent when the proposal sets none. A snapshot **file** that
+already contains `assumptions` is a load error, so a hand-edited snapshot cannot put
+assumptions into the `current` arm.
 
 ## 3. Running the CLI
 
@@ -191,23 +220,27 @@ uv run python scripts/policy_simulate.py \
 |---|---|---|
 | `--export` | required | `routing_outcomes` NDJSON export file |
 | `--snapshot` | required | `GET /admin/config-snapshot` JSON file |
-| `--proposal` | required unless `--shadow-prices` | `routeforge.policy-proposal/v1` JSON file |
+| `--proposal` | required unless `--shadow-prices` or `--scenarios` | `routeforge.policy-proposal/v1` JSON file |
 | `--out` | required | output directory (created if missing) |
 | `--config-dir` | `config` | the base config directory the snapshot is overlaid onto. The snapshot replaces `routing`/`pricing`/`policy` wholesale and overrides each declared provider's data-handling fields and the four `serving_policy` posture values, so the base only supplies what no routing decision reads (and the set of declared providers). |
-| `--fail-on-new-rejections` | off | exit `3` instead of `0` when the proposal newly rejects any simulated row (for CI/GitOps gating) |
+| `--fail-on-new-rejections` | off | exit `3` instead of `0` when the proposal (or any scenario) newly rejects any simulated row (for CI/GitOps gating) |
 | `--shadow-prices` | off | price what each constraint costs (P3c-1, §8 below); makes `--proposal` optional |
 | `--max-relaxations` | `50` | cap on relaxations `--shadow-prices` evaluates, must be `>= 1` (exit `2` otherwise) |
+| `--scenarios` | off | a `routeforge.policy-scenarios/v1` file; compares its scenarios side by side (§9). Cannot be combined with `--proposal` or `--shadow-prices` (exit `2`) |
+| `--since` | off | ISO-8601 UTC timestamp. Rows with `ts` before it are excluded and counted as `before_since`. Applies to every mode. A value with no offset is read as UTC |
+| `--min-agreement` | off | `0 ≤ X ≤ 1`. If baseline agreement (§5) is not computable or is below `X`, print it and exit `4` before any file or directory is written. Applies to every mode |
 
-`--proposal` is required unless `--shadow-prices` is given — with neither, the CLI exits `2`
-(an argparse usage error, since there is nothing to simulate).
+`--proposal` is required unless `--shadow-prices` or `--scenarios` is given — with none of
+the three, the CLI exits `2` (an argparse usage error, since there is nothing to simulate).
 
 **Exit codes** (`scripts/policy_simulate.py`):
 
 | Code | Meaning |
 |---|---|
 | `0` | `simulation.json` and `report.md` written |
-| `2` | an input failed to load, validate or apply — a bad export, an invalid proposal (unknown key, bad value, a container of the wrong type), a malformed snapshot (a missing or mistyped nested key, named by its dotted path), a snapshot that loads structurally but fails **deep** validation during `simulate()`/`shadow_prices()` (for example a provider the running deployment's own `config/` never declared), a `--config-dir` that cannot load (missing key, bad YAML, a failed config lint), neither `--proposal` nor `--shadow-prices` given, `--max-relaxations < 1`, or a shadow-prices eligible-superset invariant breach (`ShadowInvariantError`, printed as `error: internal invariant: ...` — spec §3; a relaxation narrowed some row's eligible set, which should never happen since every relaxation only widens eligibility, so it means a bug, not a reportable finding). A relaxation that newly **rejects** a baseline-routed row is *not* a breach — it is reported as `newly_rejected` (§8.4) and exits `0`. Nothing is written; the offending location is on stderr — never a traceback. |
-| `3` | the proposal introduces new rejections and `--fail-on-new-rejections` was passed |
+| `2` | an input failed to load, validate or apply — a bad export, an invalid proposal (unknown key, bad value, a container of the wrong type), a malformed snapshot (a missing or mistyped nested key, named by its dotted path), a snapshot that loads structurally but fails **deep** validation during `simulate()`/`shadow_prices()` (for example a provider the running deployment's own `config/` never declared), a `--config-dir` that cannot load (missing key, bad YAML, a failed config lint), neither `--proposal` nor `--shadow-prices` given, `--max-relaxations < 1`, or a shadow-prices eligible-superset invariant breach (`ShadowInvariantError`, printed as `error: internal invariant: ...` — spec §3; a relaxation narrowed some row's eligible set, which should never happen since every relaxation only widens eligibility, so it means a bug, not a reportable finding). A relaxation that newly **rejects** a baseline-routed row is *not* a breach — it is reported as `newly_rejected` (§8.4) and exits `0`. `--scenarios` combined with `--proposal` or `--shadow-prices`, an invalid scenarios file (named `scenarios[<i>] (<name>).proposal.<path>`), a `--since` that is not a timestamp, a `--min-agreement` outside `[0, 1]` are also exit `2`. Nothing is written; the offending location is on stderr — never a traceback. |
+| `3` | the proposal (or any scenario) introduces new rejections and `--fail-on-new-rejections` was passed |
+| `4` | baseline agreement is below `--min-agreement`, or there is no comparable row. Nothing is written |
 
 The CLI is file-based only: no DB, no `app.api` import, no network
 (`tests/eval/test_isolation.py` pins that `app/eval` is never imported by serving code, and
@@ -227,27 +260,29 @@ the export window).
 |---|---|
 | `schema` | `"routeforge.simulation/v1"` |
 | `simulation_id` | first 16 hex characters of the sha256 over the canonical `inputs` block |
-| `inputs` | `export_sha256`, `snapshot_sha256`, `proposal_sha256`, `proposal_title`, `routing_policy_version`, `registry_version`, `snapshot_generated_at`, `serving_policy` (the four posture values every app was compiled under — the snapshot's), `window` (`{start, end}` over the simulated rows' `ts`, or `null`) |
+| `inputs` | `export_sha256`, `snapshot_sha256`, `proposal_sha256`, `proposal_title`, `routing_policy_version`, `registry_version`, `snapshot_generated_at`, `serving_policy` (the four posture values every app was compiled under — the snapshot's), `window` (`{start, end}` over the simulated rows' `ts`, or `null`), `since` (the `--since` cut as an ISO string, or `null`) |
 | `edits` | the proposal, minus `schema`/`title`, keys sorted — exactly what was asked for |
-| `rows` | `simulated` (count) and `excluded` (count per reason: `cache_hit`, `unknown_status`, `unknown_app`, `missing_features`). `missing_features` counts a row whose `request_id`, `complexity`, `prompt_tokens` (numeric), `completion_tokens` (numeric or null), `detected_entity_types` (list of strings or null; the key must be present), `workload`, `attempts` or `ts` is missing or mistyped, or whose `requested_model` (non-empty string or null) or `max_tokens` (integer > 0 or null) is mistyped — these two may be absent (an older export) — a malformed row is counted, never a crash. A non-object export line is a skipped-line warning. |
+| `rows` | `simulated` (count) and `excluded` (count per reason: `before_since` (first), `cache_hit`, `unknown_status`, `unknown_app`, `missing_features`). `missing_features` counts a row whose `request_id`, `complexity`, `prompt_tokens` (numeric), `completion_tokens` (numeric or null), `detected_entity_types` (list of strings or null; the key must be present), `workload`, `attempts` or `ts` is missing or mistyped, or whose `requested_model` (non-empty string or null) or `max_tokens` (integer > 0 or null) is mistyped — these two may be absent (an older export) — a malformed row is counted, never a crash. A non-object export line is a skipped-line warning. |
 | `baseline` | the fidelity check — `rows_compared`, `agreement`, `warning`, `by_app`, `top_disagreements` (§5) |
-| `totals`, `by_app.<id>`, `by_workload.<label>` | each the same block: `requests`, `route_changed`, `newly_rejected`, `newly_served`, `cost_usd` (`{current, proposed, delta}` — each arm's routed rows), `cost_usd_both_routed` (same shape, over only the rows routed in **both** arms), `latency_ms.p50`/`.p95` (same shape), `quality_mean` (same shape), `onprem_share` (`{current, proposed}`) |
+| `totals`, `by_app.<id>`, `by_workload.<label>` | each the same block: `requests`, `route_changed`, `newly_rejected`, `newly_served`, `cost_usd` (`{current, proposed, delta}` — each arm's routed rows), `cost_usd_both_routed` (same shape, over only the rows routed in **both** arms), `latency_ms.p50`/`.p95` (same shape), `quality_mean` (same shape), `onprem_share` (`{current, proposed}`), `overflow_hops` (`{current, proposed}`) |
 | `moves` | top 20 `{from, to, count}` model-pair moves; `(rejected)` is a legal `from`/`to` value |
 | `new_rejections` | `{by_app: {...}, by_code: {...}, by_core: {...}}` — rows that were `routed` under `current` and `rejected` under `proposed`. `by_core` (P3b) groups by the `proposed` arm's minimal conflicting core: requirement ids joined with `+` (e.g. `"residency+requested_model"`), in `REQUIREMENT_ORDER`; when the core itself is empty it falls back to `"(state:" + ",".join(core_state) + ")"`; when both are empty (the router's own core computation failed) it is `"(unknown)"`. See `docs/reference/conflicting-core.md`. |
 | `affected_apps` | apps with any `route_changed`, `newly_rejected` or `newly_served` row |
-| `sources` | per arm, a count of `latency_source`/`quality_source` values (`observed`/`signal`/`tier_default`, `published`/`tier_default`/`calibrated`/`customer`) across routed rows |
+| `sources` | per arm, a count of `latency_source`/`quality_source` values (`observed`/`signal`/`tier_default`/`proposal`, `published`/`tier_default`/`calibrated`/`customer`) across routed rows |
 | `per_day` | `{cost_usd: {current, proposed, delta}}` divided by the export window in days; `null` when the window is under 1 day |
+| `assumptions` | always present: `token_scale`, `cached_share`, `latency_ms` (each a map, empty when the proposal sets none) and `saturated_complexity_estimated` (rows whose scaled complexity is an estimate) |
 
 ### 4.2 `report.md`
 
 Opens with the caveat, verbatim, as a blockquote:
 
 > **Simulation only.** Nothing in this report has been applied. It predicts the first routing
-> decision of recorded requests under the proposal, using the real eligibility and routing
-> code and a frozen snapshot of signals. It does not model failover, escalation, breaker
-> state or caching.
+> decision of recorded requests under the proposal, plus deterministic context-window overflow
+> re-selection, using the real eligibility and routing code and a frozen snapshot of signals.
+> It does not model other failover, escalation, breaker state or caching.
 
-Then, in order: a baseline warning (only if `agreement < 0.90`), **Headline** (the `totals`
+Then, in order: a baseline warning (only if `agreement < 0.90`), an **Assumptions** section
+(only when the proposal sets `workload` or `latency_ms`), **Headline** (the `totals`
 metrics table), **New rejections** (by app, by code, then **by conflicting core** — a
 `| core | count |` table, sorted by count descending then core key — or "None." when there
 are none), **Moves** (from → to → count — or "None."), **By app** (one subsection per app,
@@ -271,6 +306,12 @@ For every simulated `ok` row that carries a recorded first attempt (`row["attemp
 `current` arm's pick is compared with `attempts[0]`. The report shows the overall agreement
 rate, the rate per app, and the top 10 `recorded → simulated` disagreement pairs by count.
 Agreement below 90% prints a warning at the top of `report.md`.
+
+The comparison is between **first decisions**: the model the `current` arm selected first,
+before any context-window re-selection (§6), against the recorded first attempt. A row the
+`current` arm rejects always counts as a disagreement. `--min-agreement X` turns this check
+into a gate (exit `4`), and `--since TS` is the way to cut an export at the first row a
+replay can be trusted for — for example the first row recorded after B55.
 
 **What lowers it:**
 
@@ -298,20 +339,27 @@ From spec §2, plus what the build settled during P3a:
 - **No explanation of why a proposal rejects a request** and **no shadow prices** were P3a's
   limits. The minimal conflicting core (P3b) now explains a rejection — see
   `docs/reference/conflicting-core.md`. Shadow prices (P3c-1, §8 below) now price what each
-  individual constraint costs. **Alternative scenarios, a capacity model and uncertainty
-  ranges** remain out of scope (P3c-2 through P3c-4).
+  individual constraint costs. Alternative scenarios are §9 (P3c-2). **A capacity model and
+  uncertainty ranges** remain out of scope (P3c-3, P3c-4).
 - **No re-running PII detection.** Recorded `detected_entity_types` are replayed as-is, so a
   proposal cannot change `pii_detection`, a denylist, exempt patterns or recognizers.
 - **No daily-spend or RPM admission simulation** — those are admission limits, not routing.
 - **No circuit-breaker state.** Both arms run with no circuits open.
 - **No confidence-escalation or failover replay.** Only the request's first routing decision
   is simulated; later hops are never replayed.
-- **A proposed change to an endpoint's `context_window` has no visible effect.** Context-window
-  enforcement (`ContextWindowExceeded`) happens at gateway call time
-  (`app/gateway/gateway.py`), not in eligibility or routing — the router never reads
-  `context_window` when scoring. The proposal field is still validated and applied to the
-  scenario's registry; a first-decision replay simply cannot show what a call-time rejection
-  would have done.
+- **Context-window overflow is replayed; other failover is not.** Both arms mirror the
+  gateway's overflow handling: if the pick declares a `context_window` and
+  `prompt_tokens + output_tokens` exceeds it, the pick is excluded and the router selects
+  again, at most `routing.max_failover_attempts` extra times — the live bound. If every
+  reachable candidate overflows, the row is rejected with code `context_window` (live: a 400).
+  An undeclared window (`null`) never overflows. The endpoint served after the hops is the one
+  costed, and `overflow_hops` counts the hops. So a proposed `context_window` change now has a
+  visible effect.
+- **Recorded `context_overflow` rows are still not reproduced.** A failure row records
+  `prompt_tokens: 0`, so replay sees a prompt that fits any window. Rows that were served
+  carry their real token count and are replayed faithfully.
+- **Cached tokens are an assumption, not a record.** Outcome rows do not record cached
+  prompt tokens. Both arms price none as cached unless a proposal sets `workload.cached_share`.
 - **Pinned-model rejections are not in the input.** A pin the app may not use is a
   `model_not_found` 422 that writes no outcome row (`docs/reference/routing-outcomes.md`
   §3.1), so there is nothing to replay for it. Pins that *were* served are replayed (§1.1).
@@ -534,3 +582,97 @@ From spec §2, deliberate non-goals for this sub-project:
 - Every §6 non-goal above still applies to shadow prices too: no live dry-run, no
   re-running PII detection, no daily-spend/RPM admission, no circuit-breaker state, no
   confidence-escalation/failover replay.
+
+## 9. Scenario comparison (P3c-2)
+
+Design: `docs/superpowers/specs/2026-10-05-p3c2-scenarios-design.md`. Research notes:
+`docs/research/feasible-route-bench.md` §18. Code: `app/eval/scenarios.py`
+(`load_scenarios`, `apply_scenarios`, `compare`, `comparison_doc`, `render_comparison`),
+wired into `scripts/policy_simulate.py` by `--scenarios`.
+
+### 9.1 What it answers
+
+An administrator has several candidate changes and wants their predicted effects next to
+each other, over the same recorded traffic and the same baseline. Each scenario is replayed
+against one shared `current` arm.
+
+**RouteForge never picks, ranks or recommends a scenario.** Scenarios are listed in file
+order, no output field ranks or scores them, and nothing is applied.
+
+### 9.2 The scenarios file
+
+```json
+{
+  "schema": "routeforge.policy-scenarios/v1",
+  "title": "Healthcare on-prem options",
+  "scenarios": [
+    {"name": "all-onprem",     "proposal": {"apps": {"claims": {"residency": "onprem_only"}}}},
+    {"name": "raw-pii-onprem", "proposal": {"apps": {"claims": {"escalate_residency_on_detection": true}}}},
+    {"name": "smaller-prompts", "proposal": {"workload": {"apps": {"claims": {"token_scale": 0.6}}}}}
+  ]
+}
+```
+
+- Top-level keys: `schema`, `title` (optional string), `scenarios`. Any other key is a load
+  error naming it.
+- `scenarios`: 1 to 20 objects, each with exactly `name` and `proposal`.
+- `name`: 1 to 64 characters of `[A-Za-z0-9._+-]`, unique within the file.
+- `proposal`: a v1 proposal body (§2). `schema` is optional inside it.
+- Loading is all-or-nothing. Every scenario is validated against the snapshot before any
+  replay starts. An error is named `scenarios[<i>] (<name>).proposal.<dotted path>` and the
+  CLI exits `2` with nothing written.
+- An empty body `{}` is a valid scenario and predicts zero change.
+
+### 9.3 Running it
+
+```bash
+uv run python scripts/policy_simulate.py \
+  --export outcomes.ndjson --snapshot snapshot.json --scenarios scenarios.json \
+  --out results/cmp [--since 2026-09-25T01:25:00Z] [--min-agreement 0.9] \
+  [--fail-on-new-rejections]
+```
+
+`--out` receives `comparison.json` and `report.md`. With `--fail-on-new-rejections` the CLI
+exits `3` if any scenario newly rejects a row (the files are still written).
+
+### 9.4 `comparison.json`
+
+Schema `routeforge.scenario-comparison/v1`. Deterministic: sorted keys, floats rounded to 6
+places.
+
+| Field | Contents |
+|---|---|
+| `comparison_id` | first 16 hex characters of the sha256 over `inputs` |
+| `inputs` | `export_sha256`, `snapshot_sha256`, `scenarios_sha256`, `title`, `routing_policy_version`, `registry_version`, `snapshot_generated_at`, `serving_policy`, `since`, `window` |
+| `rows` | `simulated` and `excluded` — the same for every scenario |
+| `baseline` | the fidelity block of §5, computed once from the shared `current` arm |
+| `scenarios` | file order. Each: `name`, `edits`, `assumptions`, and `summary` — the §4.1 body (`totals`, `by_app`, `by_workload`, `moves`, `new_rejections`, `affected_apps`, `sources`, `per_day`) |
+| `table` | file order. One row per scenario: `name`, `cost_per_day_delta_usd`, `cost_delta_usd`, `route_changed`, `newly_rejected`, `newly_served`, `latency_p50_delta_ms`, `latency_p95_delta_ms`, `quality_mean_delta`, `onprem_share_current`, `onprem_share_proposed`, `overflow_hops`, `affected_apps` |
+
+**The table's cost columns are like-for-like.** `cost_delta_usd` is
+`totals.cost_usd_both_routed.delta` — only rows routed in both arms — and
+`cost_per_day_delta_usd` is that divided by the export window in days (`null` under one day).
+A scenario that newly rejects rows therefore never looks cheaper because of it; read
+`newly_rejected` for the service loss. The all-routed delta is in each scenario's
+`summary.totals.cost_usd`. `overflow_hops` is the scenario arm's total.
+
+A scenarios file with one scenario gives exactly the per-scenario numbers that `--proposal`
+gives for the same body.
+
+### 9.5 `report.md`
+
+In order: the §4.2 caveat; the title; a **baseline agreement** banner (overall rate, a ⚠
+warning under 90%, the rate per app, and the `--since` cut when one was given); **one
+comparison table** in file order, followed by the sentence "Listed in file order. RouteForge
+does not rank or recommend scenarios." and the like-for-like note; an **Assumptions** line
+for each scenario that sets `workload` or `latency_ms`; a short section per scenario
+(metrics, moves, new rejections by app, code and conflicting core, affected apps); and the
+excluded rows.
+
+### 9.6 Limits
+
+- No uncertainty ranges (P3c-3) and no capacity or overload model (P3c-4).
+- `--scenarios` cannot be combined with `--shadow-prices`.
+- `token_scale` on a saturated row and every `cached_share` are assumptions; the report
+  labels both.
+- Every §6 limit applies to every scenario.

@@ -2390,3 +2390,85 @@ What it says:
 
 A zero saving first rendered as `-0/day`. `-(0.0) / days` is a signed zero. It is fixed in
 the same change as these results (`_round6` now normalises `-0.0`).
+
+## 18. Alternative scenarios (P3c-2)
+
+§15 replays one proposal. §17 prices one constraint at a time. Neither lets an administrator
+put several joint changes next to each other. P3c-2 does. Design:
+`docs/superpowers/specs/2026-10-05-p3c2-scenarios-design.md`. Reference:
+[`docs/reference/policy-simulator.md`](../reference/policy-simulator.md) §9. Code:
+`app/eval/scenarios.py`, with the new replay behaviour in `app/eval/simulate.py`,
+`app/eval/proposal.py` and `app/eval/scenario.py`. **Not deployed**; this section reports
+what the code does.
+
+### 18.1 The model
+
+- **One shared baseline.** The `current` arm is built and simulated once. Each scenario is a
+  v1 proposal body, applied with `apply_proposal` and replayed against that same arm. Baseline
+  agreement is a property of the `current` arm, so it is reported once.
+- **No ranking.** Scenarios are reported in file order. No field ranks, scores or recommends
+  (handoff §28).
+- **Assumptions are separate from configuration.** A proposal can now assume a token scale, a
+  cached-prompt share and a per-endpoint latency. They are carried in an `assumptions` block
+  that only `apply_proposal` writes, and only the scenario arm reads. The diff therefore
+  isolates their effect.
+- **Token scale.** Complexity is `min(1, tokens / 2000)` live. Below saturation it is linear,
+  so scaling is exact. At saturation the true token count is hidden; it was at least 2000, so
+  the scaled complexity is at least `scale`. Replay uses
+  `min(1, max(scale, prompt_tokens' / 2000))` and counts the row as an estimate when scaling
+  down. The spec's simpler formula can go *down* when scaling *up*, because the recorded
+  prompt tokens are the backend's count, not the router's.
+- **Asserted latency.** Scored as a measurement, so it also supplies the same-tier peer prior.
+  Otherwise re-asserting the current value could remove a prior and move a route.
+- **Context-window overflow.** Both arms mirror the gateway: exclude the overflowing pick,
+  select again, at most `max_failover_attempts` extra times. This is the first later-hop
+  behaviour replayed. It is safe to replay because it is a pure function of declared data.
+
+### 18.2 Two things the design expected that the code does not give
+
+- **Agreement does not rise.** The design expected overflow replay to raise baseline
+  agreement. The baseline compares first decisions over served rows, and overflow replay does
+  not change the first decision. `ArmResult.attempted` exists so the comparison stays on the
+  first decision; without it a correctly reproduced overflow failover would count as a
+  disagreement and agreement would fall.
+- **Recorded overflow rejections are not reproduced.** A failure row records
+  `prompt_tokens: 0`, so replay sees a prompt that fits any window. Reproducing those rows
+  needs the outcome row to record the prompt size on failure — a serving change, not made
+  here. This is the §15.4 lesson again: replay can only be as faithful as the row.
+
+### 18.3 Invariants, and the test that pins each
+
+| # | Invariant | Pinned by |
+|---|---|---|
+| S1 | An empty scenario predicts zero in every delta column | `tests/eval/test_scenarios_compare.py::test_s1_empty_scenario_is_a_noop` |
+| S2 | One scenario gives exactly what `--proposal` gives | `tests/eval/test_scenarios_compare.py::test_s2_single_scenario_equals_single_proposal`; `tests/eval/test_policy_simulate_cli.py::test_cli_single_scenario_matches_the_proposal_run` |
+| S3 | Permuting scenarios permutes the table and nothing else | `tests/eval/test_scenarios_compare.py::test_s3_order_independence` |
+| S4 | Neutral assumptions change no route and no cost | `tests/eval/test_proposal_workload.py::test_s4_neutral_workload_changes_nothing`, `::test_s4_neutral_latency_changes_no_route_or_cost`, `::test_neutral_latency_keeps_the_peer_prior_it_supplies` |
+| S5 | With routing fixed, cost is non-decreasing in `token_scale` | `tests/eval/test_proposal_workload.py::test_s5_cost_monotone_in_token_scale` |
+| S6 | Cost is non-increasing in `cached_share`; unchanged with no cached price | `tests/eval/test_proposal_workload.py::test_s6_cached_share_never_raises_cost`, `::test_s6_cached_share_without_declared_price_is_neutral` |
+| S7 | An overflowing pick is never served; an undeclared window never overflows; all-overflow is a `context_window` rejection | `tests/eval/test_replay_overflow.py::test_s7_overflowing_pick_is_never_served` (Hypothesis), `::test_s7_undeclared_window_never_overflows`, `::test_s7_all_overflow_rejects_context_window`, `::test_bound_is_max_failover_attempts_exactly_as_live` |
+| S8 | No ranking field; file order | `tests/eval/test_scenarios_compare.py::test_s8_no_ranking_and_file_order` |
+| S9 | Tightening never widens eligibility, per scenario; `onprem_only` stays absolute | `tests/eval/test_scenarios_compare.py::test_s9_scenario_proposals_never_widen_eligibility` (Hypothesis) |
+| S10 | Rows before `--since` are excluded, counted, and feed nothing | `tests/eval/test_simulate.py::test_s10_since_excludes_and_counts_old_rows`, `::test_since_equals_a_precut_export` |
+| S11 | Agreement below `--min-agreement` exits 4 and writes nothing | `tests/eval/test_policy_simulate_cli.py::test_s11_min_agreement_exits_4_and_writes_nothing` |
+
+S4's latency clause holds where the router's latency term and the replayed latency are the
+same number. Replay's ladder is observed → signal → tier default; the router's is signal →
+peer prior → tier default. The test uses a measured snapshot signal with no observed rows,
+where they coincide.
+
+### 18.4 Results
+
+**TO MEASURE.** No live run has been made; nothing below is a result yet. These numbers are
+legitimately unmeasured, not omitted.
+
+| measurement | value |
+|---|---|
+| Spark export, baseline agreement before overflow replay | TO MEASURE |
+| Spark export, baseline agreement after overflow replay (§18.2 predicts no change) | TO MEASURE |
+| Spark export, rows with `overflow_hops > 0` in the current arm | TO MEASURE |
+| Healthcare triad (all on-prem / raw-PII-only on-prem / all on-prem + second endpoint) on persona traffic: the comparison table | TO MEASURE |
+| Static 4-request test vs traffic-weighted replay of the same triad | TO MEASURE |
+
+Caveat for when they are measured: the Spark serves one app with every model priced at $0
+(§17.4), so cost columns there will be zero. A priced, multi-app result needs persona traffic.

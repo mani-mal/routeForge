@@ -268,12 +268,22 @@ literature doesn't model".
   the R2 lever), `workload.cached_share` (assumption, labelled), per-endpoint `latency_ms`
   (vLLM↔Dynamo or hardware change, operator-asserted), and deterministic context-window
   overflow re-selection in both arms.
-- **Invariants to cite:** S1 empty ⇒ zero; S2 one-scenario ≡ `--proposal`; S3 order
-  independence; S4 neutral assumptions; S5 cost monotone in `token_scale` at fixed route;
-  S6 cost non-increasing in `cached_share`; S7 overflowing pick never served; S8 no ranking;
-  S10/S11 `--since` and `--min-agreement`.
-- **Expected finding to check:** context-window replay should *raise* baseline agreement on
-  rows that overflowed live. **TO MEASURE** (before/after agreement on the Spark export).
+- **Invariants to cite, with the test that pins each** (full table: FB §18.3):
+  S1 `test_s1_empty_scenario_is_a_noop`; S2 `test_s2_single_scenario_equals_single_proposal`;
+  S3 `test_s3_order_independence`; S4 `test_s4_neutral_workload_changes_nothing` and
+  `test_s4_neutral_latency_changes_no_route_or_cost`; S5 `test_s5_cost_monotone_in_token_scale`;
+  S6 `test_s6_cached_share_never_raises_cost`; S7 `test_s7_overflowing_pick_is_never_served`;
+  S8 `test_s8_no_ranking_and_file_order`; S9
+  `test_s9_scenario_proposals_never_widen_eligibility`; S10
+  `test_s10_since_excludes_and_counts_old_rows`; S11
+  `test_s11_min_agreement_exits_4_and_writes_nothing`.
+- **Findings from the build (FB §18.2):** the saturated-complexity rule needs a lower bound of
+  `scale`, or scaling tokens up can lower complexity; an asserted latency must be scored as a
+  measurement, or re-asserting the current value can move a route through the peer prior.
+- **Expected finding, revised:** the design expected context-window replay to *raise* baseline
+  agreement. By construction it should leave it unchanged: the baseline compares first
+  decisions, and failure rows record `prompt_tokens: 0`, so recorded overflows cannot be
+  reproduced (FB §18.2). **TO MEASURE** (before/after agreement on the Spark export).
 - **Experiment E-P3c2 (TO MEASURE):** the HO §25/§28 healthcare triad as three scenarios
   (all-on-prem / raw-PII-only on-prem / all-on-prem + second endpoint) on a persona-generated
   traffic mix with realistic shares (60/25/10/5). Report the comparison table. Also: static
