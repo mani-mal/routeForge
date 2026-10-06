@@ -1,9 +1,8 @@
 # Priorities 1–3: what is built and what remains
 
-**As of 2026-10-06**, `main` is at `4605136` (through PR #83, the DGX cluster rebuild
-redeploy). The DGX Spark runs `4bfb0b3` (through PR #79); Run:ai was rebuilt and
-redeployed separately by PR #83. P3c-2 (below) is built on branch `feat/p3c2-scenarios`,
-not yet merged — PR pending.
+**As of 2026-10-06**, `main` is through PR #84 (P3c-2, alternative scenarios). The DGX
+Spark runs `4bfb0b3` (through PR #79). The DGX lab (Run:ai) cluster was rebuilt and
+redeployed by PR #83, and is the deployment target for P3c-2 onward (api/ui `0.26.0`).
 
 This is the status of the program set out in `docs/new/RouteForge-Priorities-1-3-LLM-Handoff.md`
 (the "handoff"). Each shipped slice went through the same pipeline: design spec
@@ -61,7 +60,7 @@ Handoff §37 Priority 2 criteria met:
 | **P3b** minimal conflicting core | #76, #77 | An empty feasible set's 422, the outcome row, and the simulator name the smallest set of requirements no endpoint meets together. Endpoint state (disabled, circuit open, …) is kept separate. Remediation hints never relax a security requirement. | `docs/reference/conflicting-core.md`, research §16 |
 | B56 / B57 | #78 | The exact app scope is enforced at the router; the `serving` logger actually prints in deployment | |
 | **P3c-1** shadow prices | #79, #80 | `policy_simulate.py --shadow-prices` relaxes one constraint at a time, per app, and prices it (cost/day, rejections avoided, newly rejected, quality, latency, on-prem share). Security constraints appear only as "cost of protection", never as a recommendation. | `docs/reference/policy-simulator.md` §8, research §17 |
-| **P3c-2** alternative scenarios | PR pending | `policy_simulate.py --scenarios` replays several administrator-written scenarios against one shared baseline and writes one comparison table, in file order, never ranked. Proposals can assume a token scale, a cached-prompt share and a per-endpoint latency. Replay mirrors the gateway's context-window overflow re-selection. `--since` cuts old rows; `--min-agreement` refuses a run whose baseline disagrees with the record. | `docs/reference/policy-simulator.md` §9, research §18 |
+| **P3c-2** alternative scenarios | #84 | `policy_simulate.py --scenarios` replays several administrator-written scenarios against one shared baseline and writes one comparison table, in file order, never ranked. Proposals can assume a token scale, a cached-prompt share and a per-endpoint latency. Replay mirrors the gateway's context-window overflow re-selection. `--since` cuts old rows; `--min-agreement` refuses a run whose baseline disagrees with the record. | `docs/reference/policy-simulator.md` §9, research §18 |
 
 Handoff §37 Priority 3 criteria met:
 - simulation never activates anything;
