@@ -127,6 +127,28 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
+## B64 — The admission cost estimate over-counts tokens, so the per-request budget rejects requests that would cost less than the cap  🔴 OPEN
+
+**Severity:** medium (requests refused that the operator's own cap would allow; no privacy
+effect — it errs towards refusing).
+**Found:** 2026-10-06, the B60 re-run on the DGX lab (`docs/research/feasible-route-bench.md`
+§19.4.1), made visible by recording `routing_tokens` next to the backend's `prompt_tokens`.
+
+The per-request budget check prices RouteForge's own token count (`count_tokens`, roughly
+`len(text) // 4`). On 17 served rows that count was 1.54× what vLLM reported for the same
+prompts (21392 vs 13849; 1.53–1.56 above ~600 backend tokens). The smallest rejected request
+was estimated at $0.05344 against a $0.05 cap; at the backend's count it would have cost
+about $0.035. Inference, not measurement — the rejected requests were never sent — and the
+text was repeated English prose with one tokenizer.
+
+**Wanted (pick after measuring on real traffic):** (1) report the ratio per endpoint from
+served rows (both counts are now on every row) and show it in the outcomes report; (2) let
+the operator choose the estimate's stance per app — conservative (today) or calibrated by the
+endpoint's measured ratio — never below a floor that could under-estimate; (3) say in the
+422's `max_cost_usd_per_request` detail that the figure is an estimate from RouteForge's
+count. Any change here touches admission, so it needs its own spec and the consumer-contract
+checks.
+
 ## B63 — `--shadow-prices` with no `--proposal` carries no `rows` block, so excluded and estimated counts are invisible  🔴 OPEN
 
 **Severity:** low (reporting gap; no effect on the prices themselves).
@@ -183,7 +205,7 @@ then stored in `onboarded_models.api_key_env` in clear text and displayed in the
 var set in the API pod?") instead of a bare "unreachable"; (4) say next to the slug field that
 it must equal the model id the endpoint serves.
 
-## B60 — Rejected outcome rows record `prompt_tokens: 0`, so the policy simulator replays live-rejected requests as routed  ✅ RESOLVED IN CODE — NOT DEPLOYED (2026-10-06)
+## B60 — Rejected outcome rows record `prompt_tokens: 0`, so the policy simulator replays live-rejected requests as routed  ✅ RESOLVED (2026-10-06, PR #86; live on the DGX lab api 0.27.0)
 
 **Severity:** medium-high for the simulator (wrong answer for a whole scenario class; no
 effect on serving).
@@ -210,9 +232,11 @@ served all 7. Baseline agreement stayed 1.0, because `_baseline` compares `ok` r
 3. Until then: document in `docs/reference/policy-simulator.md` §6 that rejected rows replay
    with zero tokens and that budget and context-window scenarios cannot show rescued requests.
 
-**Resolution.** Resolved in code; NOT deployed and NOT verified live — needs the `ALTER` on
-each deployed database (`docs/reference/routing-outcomes.md` §1), then the research §19.4
-re-run. (The controller updates this line again after the deploy.) Design:
+**Resolution.** Merged in PR #86 and deployed to the DGX lab on 2026-10-06 (the `ALTER` was
+run first; api `0.27.0`). Verified live there: the 7 budget-rejected requests are rejected in
+replay, outcome agreement is 1.0 over 24 rows, and `raise-request-budget` newly serves 7
+(`docs/research/feasible-route-bench.md` §19.4.1). **Not on the Spark** — it still needs the
+`ALTER` (`docs/reference/routing-outcomes.md` §1) and the image. Design:
 `docs/superpowers/specs/2026-10-06-replayable-rejections-design.md`.
 
 - **Serving.** `RoutingOutcome` has `routing_tokens` (`INTEGER`, nullable): the `tokens_after`

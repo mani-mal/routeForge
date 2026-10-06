@@ -360,10 +360,25 @@ literature doesn't model".
   requests under 2000 tokens it was already recoverable from `complexity`. It adds a length
   side channel for rejected requests, and that is all it adds (reference
   `routing-outcomes.md` §2).
-- **Experiment E7b (TO MEASURE, FB §19.4):** re-run the 2026-10-06 DGX lab scenarios on rows
-  recorded after the upgrade. Report outcome agreement, the unreproduced-rejection count,
-  newly served under `raise-request-budget`, and the gap between `routing_tokens` and
-  `prompt_tokens` on served rows. No number exists yet.
+- **Experiment E7b — done on the DGX lab, 2026-10-06 (FB §19.4.1).** Same app, endpoint,
+  cap, 24 requests and six scenarios as the run that found the defect, on rows recorded after
+  the upgrade (artifacts: `docs/research/results/b60-dgx-lab-2026-10-06/`). 7 of 24 requests
+  rejected live for budget; the current arm rejects 7 of 7; outcome agreement 1.0 over 24
+  rows, model agreement 1.0 over 17. `raise-request-budget` newly serves **7** (before the
+  fix: 0); a 95% price cut also newly serves 7; `token_scale: 0.6` newly serves 3. The
+  pre-upgrade export replayed with the new code puts its 7 rejections under
+  `missing_routing_tokens` instead of routing them. Usable as a before/after pair for the
+  paper; it is one app and one endpoint, so present it as a defect-closure check.
+- **Measured gap between the two token counts (FB §19.4.1) — and a second finding (B64).**
+  On the 17 served rows RouteForge's `len // 4` count was 1.54× the backend's (21392 vs
+  13849; 1.53–1.56 for prompts of 600+ backend tokens, 0.70 for a 23-token prompt). The
+  admission estimate is built on the larger number, so the budget check is conservative: the
+  smallest rejected request (estimate $0.05344, cap $0.05) would probably have cost about
+  $0.035 at the backend's count. That is an inference from the served rows' ratio — the
+  rejected requests were never sent — and the ratio is for repeated English prose with one
+  tokenizer. Paper angle: *a cost gate is only as accurate as its token estimate; a
+  conservative estimate turns into silent over-rejection, which is invisible unless both
+  counts are on the record.* Real-traffic ratio is still **TO MEASURE**.
 - **Limits:** a rescued request is costed at its admission estimate; a served row an
   endpoint reported no usage for (e.g. a stream whose endpoint sent no usage block) is
   replayed the same way, at its admission estimate, not a bill; a recorded `context_overflow`
@@ -399,7 +414,8 @@ literature doesn't model".
 | E5 | Replay agreement before/after B55 | FB §15.4 | done |
 | E6 | Shadow-price non-monotonicity counterexample, live | FB §17.3 | **TO MEASURE** (not exercised live) |
 | E7 | Context-window replay effect on agreement | P3c-2, FB §18.4.1 | first run done (no overflow in the export: agreement 1.0, 0 hops); with real overflow failovers **TO MEASURE** |
-| E7b | Rejected rows replay as routed (B60) | FB §18.4.1, §19.4 | defect observed live: 7 of 7 budget rejections replayed as routed. Fix built (§4.4.1); the re-run on post-upgrade rows — outcome agreement, unreproduced rejections, newly served, `routing_tokens` vs `prompt_tokens` — is **TO MEASURE** |
+| E7b | Rejected rows replay as routed (B60) | FB §18.4.1, §19.4.1 | done: defect observed (7 of 7 rejections replayed as routed), fixed, re-run on post-upgrade rows — 7 of 7 rejected in replay, outcome agreement 1.0 over 24, raise-budget newly serves 7 |
+| E7c | Token-estimate gap and over-rejection (B64) | FB §19.4.1 | first measurement: routing/backend = 1.54 on 17 served rows (synthetic prose); real traffic **TO MEASURE** |
 | E8 | Healthcare scenario triad, traffic-weighted vs static | P3c-2 | **TO MEASURE** |
 | E9+ | uncertainty, capacity, fidelity, P2 metrics, R2/R3/R4 | §4–§5 | specs pending |
 
