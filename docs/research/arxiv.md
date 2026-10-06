@@ -283,7 +283,9 @@ literature doesn't model".
 - **Expected finding, revised:** the design expected context-window replay to *raise* baseline
   agreement. By construction it should leave it unchanged: the baseline compares first
   decisions, and failure rows record `prompt_tokens: 0`, so recorded overflows cannot be
-  reproduced (FB §18.2). **TO MEASURE** (before/after agreement on the Spark export).
+  reproduced (FB §18.2). Measured once so far (DGX lab, 2026-10-06, FB §18.4.1): agreement 1.0 over
+  18 `ok` rows, 0 overflow hops — an export with no overflow at all, so the before/after
+  comparison on real overflow failovers is still **TO MEASURE**.
 - **Final-review finding: a served pick's own predicted overflow was invisible to agreement.**
   The revised expectation above is about a reproduced FAILOVER, not about a record proving the
   first pick alone served the row while replay excludes that same pick as a predicted
@@ -291,9 +293,25 @@ literature doesn't model".
   overflow prediction (§4.1's new levers) contradicts what the record proves happened.
   `_baseline` now treats it as a disagreement and reports the count separately as
   `overflow_contradicted`: a direct fidelity check on each endpoint's declared
-  `context_window`, not a routing disagreement (FB §18.2 final-review addendum). **TO
-  MEASURE:** `ok` single-attempt rows the current arm's overflow replay contradicts, on the
-  Spark/DGX lab export.
+  `context_window`, not a routing disagreement (FB §18.2 final-review addendum). First
+  measurement (DGX lab, 2026-10-06): 0 of 18, with a 262144-token declared window; an export
+  from an endpoint with a tight declared window is still **TO MEASURE**.
+- **First live run (DGX lab, 2026-10-06, FB §18.4.1) — usable facts.** One app, one priced
+  endpoint (`qwen3-coder-next`, $10/$10 per 1M), 25 rows, six scenarios; artifacts in
+  `docs/research/results/p3c2-dgx-lab-2026-10-06/`. `no-change` is zero in every column on
+  live data (S1). `token_scale: 0.6` → cost −39.0% with no route change; repricing to
+  0.5/1.5 → −94.7%; shrinking the declared window to 2000 → 2 predicted `context_window`
+  rejections; asserted latency 5000 ms → Δp50 +4848.6 ms. Live 422s carried the minimal
+  conflicting core `max_cost_usd_per_request` (cap 0.05, estimate 0.05344). This is a
+  plumbing check, not a workload study — do not quote it as an evaluation.
+- **Negative result from that run (paper-worthy, B60): rejected requests are not replayable
+  today.** Rejected outcome rows record `prompt_tokens: 0`, so replay routes rows the record
+  says were rejected: the `raise-request-budget` scenario reported 0 newly served where live
+  it would have served 7, and baseline agreement stayed 1.0 because it only compares `ok`
+  rows. Lesson, same family as B55 (§3.7): *every input the admission and routing decision
+  read must be on the record for rejected requests too, and agreement must compare
+  outcomes (served vs rejected), not only the chosen model.* Fix is scoped into the
+  replay-fidelity slice (§4.4).
 - **Experiment E-P3c2 (TO MEASURE):** the HO §25/§28 healthcare triad as three scenarios
   (all-on-prem / raw-PII-only on-prem / all-on-prem + second endpoint) on a persona-generated
   traffic mix with realistic shares (60/25/10/5). Report the comparison table. Also: static
@@ -330,13 +348,17 @@ literature doesn't model".
 | E4 | Breaker wasted attempts | FB §12.4 | done (simulated only); live **TO MEASURE** |
 | E5 | Replay agreement before/after B55 | FB §15.4 | done |
 | E6 | Shadow-price non-monotonicity counterexample, live | FB §17.3 | **TO MEASURE** (not exercised live) |
-| E7 | Context-window replay effect on agreement | P3c-2 | **TO MEASURE** |
+| E7 | Context-window replay effect on agreement | P3c-2, FB §18.4.1 | first run done (no overflow in the export: agreement 1.0, 0 hops); with real overflow failovers **TO MEASURE** |
+| E7b | Rejected rows replay as routed (B60) | FB §18.4.1 | observed live: 7 of 7 budget rejections; fix pending |
 | E8 | Healthcare scenario triad, traffic-weighted vs static | P3c-2 | **TO MEASURE** |
 | E9+ | uncertainty, capacity, fidelity, P2 metrics, R2/R3/R4 | §4–§5 | specs pending |
 
-**Data caveat for every live number:** the Spark currently serves one app (`kit-gtm`, Qwen
-Code), all models priced $0 (FB §17.4). Multi-tenant and priced results need persona traffic
-or a second deployment — plan this before writing the evaluation section.
+**Data caveat for every live number:** the Spark serves one app (`kit-gtm`, Qwen Code), all
+models priced $0 (FB §17.4). The DGX lab (the test target from 2026-10-06) has one priced
+on-prem endpoint (`qwen3-coder-next`) and a synthetic test app. Neither has two endpoints
+with different placement, so no live result yet exercises a residency or region constraint.
+Multi-tenant, multi-endpoint results need persona traffic plus a second endpoint — plan this
+before writing the evaluation section.
 
 ---
 
