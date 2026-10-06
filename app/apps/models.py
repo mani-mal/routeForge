@@ -317,6 +317,14 @@ class RoutingOutcome(Base):
     # other status. Added after the table shipped: a deployed DB needs
     # `ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS conflicting_core JSON;`.
     conflicting_core: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # B60: the token count the router was given (`tokens_after`: RouteForge's
+    # own post-gate, post-compression count), on EVERY status -- so the policy
+    # simulator can replay a rejected request at its real size. Not the
+    # backend's billed count; that stays `prompt_tokens`. Null on a
+    # semantic-cache hit and on rows written before the column existed. Added
+    # after the table shipped: a deployed DB needs the ALTER in
+    # docs/reference/routing-outcomes.md.
+    routing_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class OutcomeFeedback(Base):
