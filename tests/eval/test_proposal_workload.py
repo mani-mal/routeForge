@@ -164,13 +164,15 @@ def _run(records, snap, prop):
 
 
 def _mixed_rows():
-    """Small, mid and saturated complexity; a failure row that recorded no
-    prompt tokens; a long prompt."""
+    """Small, mid and saturated complexity; a served row whose backend
+    reported no prompt tokens; a long prompt. (The zero-token row used to be
+    a `backend_failed` row. Since B60 a failure row with no recorded size is
+    excluded as `missing_routing_tokens`, so the zero-token case is carried
+    by a served row -- the only kind still replayed at zero.)"""
     return [make_row("small", "app-a", complexity=0.1, prompt_tokens=200),
             make_row("mid", "app-a", complexity=0.6, prompt_tokens=1200),
             make_row("sat", "app-a", complexity=1.0, prompt_tokens=3000),
-            make_row("zero", "app-a", complexity=0.2, prompt_tokens=0,
-                     status="backend_failed"),
+            make_row("zero", "app-a", complexity=0.2, prompt_tokens=0),
             make_row("long", "app-a", complexity=1.0, prompt_tokens=9000)]
 
 

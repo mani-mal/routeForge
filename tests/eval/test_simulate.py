@@ -91,11 +91,14 @@ def test_sensitivity_rule_replays_recorded_entity_types():                 # §9
 def test_select_rows_exclusions():
     recs = [make_row("a", "app-a"), make_row("b", "app-a", cache_hit=True),
             make_row("c", "app-a", status="weird"), make_row("d", "ghost"),
-            make_row("e", "app-a", complexity=None)]
+            make_row("e", "app-a", complexity=None),
+            # B60: a rejected row from before `routing_tokens` was recorded
+            make_row("f", "app-a", status="no_eligible", prompt_tokens=0)]
     rows, excluded = select_rows(recs, {"app-a"})
     assert [r["request_id"] for r in rows] == ["a"]
     assert excluded == {"before_since": 0, "cache_hit": 1, "unknown_status": 1,
-                        "unknown_app": 1, "missing_features": 1}
+                        "unknown_app": 1, "missing_features": 1,
+                        "missing_routing_tokens": 1}
 
 
 def test_observed_latency_median_single_attempt_ok_only():

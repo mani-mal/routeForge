@@ -52,9 +52,10 @@ SIMULATED_STATUSES = frozenset({"ok", "backend_failed", "verify_failed",
                                 "no_eligible", "context_overflow"})
 
 # `before_since` is checked first, so a row older than `--since` never reaches
-# the other checks (P3c-2 spec §6).
+# the other checks (P3c-2 spec §6). `missing_routing_tokens` (B60) is checked
+# last: only a well-formed row of a known app can be "well-formed but unsized".
 EXCLUSION_REASONS = ("before_since", "cache_hit", "unknown_status", "unknown_app",
-                     "missing_features")
+                     "missing_features", "missing_routing_tokens")
 
 
 @dataclass(frozen=True)
@@ -131,7 +132,24 @@ def _has_features(row: dict) -> bool:
                  or (isinstance(row["max_tokens"], int)
                      and not isinstance(row["max_tokens"], bool)
                      and row["max_tokens"] > 0))
+            # B60: absent (an export from before the column existed) or null
+            # (a cache hit) means "not recorded"; a recorded count is an int.
+            and (row.get("routing_tokens") is None
+                 or (isinstance(row["routing_tokens"], int)
+                     and not isinstance(row["routing_tokens"], bool)
+                     and row["routing_tokens"] >= 0))
             and _valid_ts(row.get("ts")))
+
+
+def _unsized(row: dict) -> bool:
+    """True for a well-formed row that records no size at all (B60): it was
+    not served (`status != "ok"`), it has no `routing_tokens`, and its
+    `prompt_tokens` is 0 because no backend answered. That is a rejected or
+    failed row written before `routing_tokens` existed. Replaying it would
+    replay an EMPTY prompt -- which fits any budget and any context window --
+    so it is excluded and counted instead. Call only after `_has_features`."""
+    return (row["status"] != "ok" and row.get("routing_tokens") is None
+            and row["prompt_tokens"] == 0)
 
 
 def parse_since(text: str) -> datetime:
@@ -175,7 +193,10 @@ def select_rows(records: list[dict], app_ids: set[str], *,
     -- but the key must be present), and a mistyped `requested_model`
     (non-empty string or null) or `max_tokens` (int > 0 or null). Those two
     (B55) may be ABSENT: an export from before they were recorded replays
-    unpinned at the default output estimate."""
+    unpinned at the default output estimate. A mistyped `routing_tokens`
+    (B60: int >= 0, null or absent) is `missing_features` too.
+    `missing_routing_tokens` (B60) is a well-formed row that records no size
+    (`_unsized`): never simulated as an empty prompt."""
     excluded = {reason: 0 for reason in EXCLUSION_REASONS}
     kept: list[dict] = []
     for row in records:
@@ -191,6 +212,8 @@ def select_rows(records: list[dict], app_ids: set[str], *,
             excluded["unknown_app"] += 1
         elif not _has_features(row) or (since is not None and row.get("ts") is None):
             excluded["missing_features"] += 1
+        elif _unsized(row):
+            excluded["missing_routing_tokens"] += 1
         else:
             kept.append(row)
     kept.sort(key=lambda r: (r.get("ts") or "", r["request_id"]))
@@ -231,14 +254,50 @@ def _rejected(eligible: tuple[str, ...], codes: tuple[str, ...], *,
 _COMPLEXITY_SATURATION_TOKENS = 2000
 
 
+def _scale_tokens(tokens: int, scale: float) -> int:
+    """A token count under `workload.token_scale`: `max(1, round(tokens *
+    scale))`, the identity at exactly 1.0. A count of 0 stays 0: flooring it
+    to 1 would make cost fall as the scale rises."""
+    if scale == 1.0:
+        return tokens
+    return max(1, round(tokens * scale)) if tokens > 0 else 0
+
+
+def replay_tokens(row: dict) -> tuple[int, int, bool]:
+    """`(routing_tokens, prompt_tokens, estimated)` for one selected row (B60).
+
+    Two different counts, used for two different things:
+
+    - `routing_tokens` is what `Router.select` is given -- the per-request
+      budget check and the cost term of the score. It is the row's recorded
+      `routing_tokens` (RouteForge's own count, the number the live router
+      was given), else the row's `prompt_tokens` as before the column
+      existed.
+    - `prompt_tokens` is what the routed call is priced at and what the
+      context-window check adds the output estimate to. It is the backend's
+      billed count when the row has one (`prompt_tokens > 0`), else the
+      routing count.
+
+    `estimated` is True when the row has a recorded `routing_tokens` but no
+    backend usage: a request that was rejected, or failed before any
+    response. Its replayed size and cost are then RouteForge's estimate, not
+    a bill, and the caller says so."""
+    billed = int(row["prompt_tokens"])
+    recorded = row.get("routing_tokens")
+    routing = billed if recorded is None else int(recorded)
+    if billed > 0:
+        return routing, billed, False
+    return routing, routing, recorded is not None
+
+
 def scaled_request(prompt_tokens: int, complexity: float,
                    scale: float) -> tuple[int, float, bool]:
     """`(prompt_tokens', complexity', estimated)` for one row under
     `workload.token_scale` (P3c-2 spec §4.1).
 
     - `scale == 1.0` is the identity, exactly.
-    - Tokens: `max(1, round(prompt_tokens * scale))`. A row that recorded no
-      prompt tokens (every failure row records 0) stays at 0: its size is
+    - Tokens: `_scale_tokens`. A row that recorded no
+      prompt tokens (a legacy zero-token row) stays at 0: its size is
       unknown, and flooring it to 1 would make cost fall as the scale rises.
     - Complexity below 1 is linear in the token count, so `complexity *
       scale` (capped at 1) is exact.
@@ -249,7 +308,7 @@ def scaled_request(prompt_tokens: int, complexity: float,
       scaling DOWN is an estimate, and `estimated` says so."""
     if scale == 1.0:
         return prompt_tokens, complexity, False
-    scaled = max(1, round(prompt_tokens * scale)) if prompt_tokens > 0 else 0
+    scaled = _scale_tokens(prompt_tokens, scale)
     if complexity < 1.0:
         return scaled, min(1.0, complexity * scale), False
     estimate = max(scale, scaled / _COMPLEXITY_SATURATION_TOKENS)
@@ -279,12 +338,17 @@ def simulate_row(scn: Scenario, row: dict, observed: dict[str, float]) -> ArmRes
     eligible = tuple(sorted(
         c.name for c in feasible_set(scn.settings, scn.registry, ctx,
                                      tenant_id=row["application_id"]).eligible))
+    # B60: the count the ROUTER is given and the count the call is PRICED and
+    # sized at are two numbers (`replay_tokens`). On a row from before
+    # `routing_tokens` was recorded they are the same number, as before.
+    routing_base, prompt_base, estimated_tokens = replay_tokens(row)
     # P3c-2: the scenario's workload assumptions, applied before routing and
     # pricing. A scenario built from a plain snapshot has none (scale 1.0,
     # share 0.0), so the `current` arm replays the row as recorded.
-    prompt_tokens, complexity, estimated = scaled_request(
-        int(row["prompt_tokens"]), float(row["complexity"]),
-        scn.assumptions.scale_for(row["application_id"]))
+    scale = scn.assumptions.scale_for(row["application_id"])
+    routing_tokens, complexity, estimated = scaled_request(
+        routing_base, float(row["complexity"]), scale)
+    prompt_tokens = _scale_tokens(prompt_base, scale)
     # B55: price at the client's recorded output cap, as the live gateway
     # does (`expected_output_tokens(settings, params)`); no cap recorded ->
     # the deployment's default estimate.
@@ -300,7 +364,7 @@ def simulate_row(scn: Scenario, row: dict, observed: dict[str, float]) -> ArmRes
     overflowed: list[str] = []          # picks that overflowed, in order
     while True:
         try:
-            decision = scn.router.select(ctx, tokens_after=prompt_tokens,
+            decision = scn.router.select(ctx, tokens_after=routing_tokens,
                                          complexity=complexity,
                                          output_tokens=output_tokens,
                                          exclude=frozenset(overflowed))
@@ -341,9 +405,16 @@ def simulate_row(scn: Scenario, row: dict, observed: dict[str, float]) -> ArmRes
     # route. `price_call` bills cached tokens at the input price when the
     # endpoint declares no cached price.
     cached_tokens = round(prompt_tokens * scn.assumptions.cached_for(row["application_id"]))
+    # B60: a row no backend answered has no completion count either. It is
+    # priced at the router's own output estimate -- with `prompt_tokens`
+    # above, the same pair the live per-request budget check priced it at --
+    # so a request a proposal rescues costs its admission estimate, not its
+    # prompt alone.
+    completion_tokens = (output_tokens if estimated_tokens
+                         else int(row.get("completion_tokens") or 0))
     cost = price_call(scn.registry.price_for(pick.name),
                       prompt_tokens=prompt_tokens,
-                      completion_tokens=int(row.get("completion_tokens") or 0),
+                      completion_tokens=completion_tokens,
                       cached_prompt_tokens=cached_tokens)
     asserted = scn.signals.proposed_latency(pick.name)
     if asserted is not None:
@@ -720,7 +791,10 @@ def summarize(results: list[RowResult], excluded: dict[str, int], *, inputs: dic
         "inputs": full_inputs,
         "edits": edits,
         "assumptions": _assumptions_summary(results, assumptions),
-        "rows": {"simulated": len(results), "excluded": dict(excluded)},
+        "rows": {"simulated": len(results), "excluded": dict(excluded),
+                 # B60: rows no backend answered, sized and priced from
+                 # RouteForge's own routing token count -- an estimate.
+                 "estimated_tokens": sum(1 for r in results if replay_tokens(r.row)[2])},
         "baseline": _baseline(results),
         "totals": totals,
         "by_app": {app_id: _bucket_stats([r for r in results
