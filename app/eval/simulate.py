@@ -289,9 +289,10 @@ def replay_tokens(row: dict) -> tuple[int, int, bool]:
       routing count.
 
     `estimated` is True when the row has a recorded `routing_tokens` but no
-    backend usage: a request that was rejected, or failed before any
-    response. Its replayed size and cost are then RouteForge's estimate, not
-    a bill, and the caller says so."""
+    backend usage: a request that was rejected, failed before any response,
+    or was served by a backend that reported no usage (a stream whose
+    endpoint sent no usage block). Its replayed size and cost are then
+    RouteForge's estimate, not a bill, and the caller says so."""
     billed = int(row["prompt_tokens"])
     recorded = row.get("routing_tokens")
     routing = billed if recorded is None else int(recorded)
@@ -415,10 +416,11 @@ def simulate_row(scn: Scenario, row: dict, observed: dict[str, float]) -> ArmRes
     # route. `price_call` bills cached tokens at the input price when the
     # endpoint declares no cached price.
     cached_tokens = round(prompt_tokens * scn.assumptions.cached_for(row["application_id"]))
-    # B60: a row no backend answered has no completion count either. It is
-    # priced at the router's own output estimate -- with `prompt_tokens`
-    # above, the same pair the live per-request budget check priced it at --
-    # so a request a proposal rescues costs its admission estimate, not its
+    # B60: a row with no backend token count (rejected, failed before a
+    # response, or served with no reported usage) has no completion count
+    # either. It is priced at the router's own output estimate -- with
+    # `prompt_tokens` above, the same pair the live per-request budget check
+    # priced it at -- so such a row costs its admission estimate, not its
     # prompt alone.
     completion_tokens = (output_tokens if estimated_tokens
                          else int(row.get("completion_tokens") or 0))
@@ -855,8 +857,10 @@ def summarize(results: list[RowResult], excluded: dict[str, int], *, inputs: dic
         "edits": edits,
         "assumptions": _assumptions_summary(results, assumptions),
         "rows": {"simulated": len(results), "excluded": dict(excluded),
-                 # B60: rows no backend answered, sized and priced from
-                 # RouteForge's own routing token count -- an estimate.
+                 # B60: rows with no backend token count -- rejected, failed
+                 # before a response, or served with no reported usage --
+                 # sized and priced from RouteForge's own routing token
+                 # count -- an estimate.
                  "estimated_tokens": sum(1 for r in results if replay_tokens(r.row)[2])},
         "baseline": _baseline(results),
         "totals": totals,
@@ -1025,9 +1029,10 @@ def _fidelity_notes(baseline: dict, rows: dict) -> list[str]:
     estimated = rows.get("estimated_tokens", 0)
     if estimated:
         notes.append(
-            f"{estimated} row(s) had no backend token count (rejected, or failed before a "
-            "response). Replay sizes and prices them from RouteForge's own routing token "
-            "count and output-token estimate -- an estimate, not a bill.")
+            f"{estimated} row(s) had no backend token count (rejected, failed before a "
+            "response, or served by a backend that reported no usage). Replay sizes and "
+            "prices them from RouteForge's own routing token count and output-token "
+            "estimate -- an estimate, not a bill.")
     return notes
 
 

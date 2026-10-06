@@ -144,6 +144,24 @@ def test_replay_tokens():
     assert replay_tokens(make_row("n", "app-a", routing_tokens=None)) == (200, 200, False)
 
 
+def test_served_row_with_no_backend_usage_is_sized_at_the_routing_count():
+    """Final review F4: a streamed request whose endpoint reported no usage
+    is `ok`, has `prompt_tokens: 0` (no bill), but a recorded
+    `routing_tokens`. `replay_tokens` must size it at the routing count for
+    BOTH numbers, `estimated` set -- the same admission-estimate treatment a
+    rejected row gets, not "rejected, or failed before a response" -- and
+    the row must count in `rows.estimated_tokens`."""
+    row = make_row("s", "app-a", prompt_tokens=0, completion_tokens=0,
+                   routing_tokens=3000, max_tokens=16,
+                   attempts=["local-cheap"], chosen="local-cheap")
+    assert replay_tokens(row) == (3000, 3000, True)
+    results, excluded = _run([row], _snap(cap=100.0))
+    (r,) = results
+    assert r.current.outcome == "routed"
+    sim = summarize(results, excluded, inputs=_INPUTS, edits={})
+    assert sim["rows"]["estimated_tokens"] == 1
+
+
 def test_served_row_is_routed_on_routing_tokens_and_priced_on_the_backend_count():
     """The backend billed 10 tokens; the router was given 3000. Under a cap
     of 0.002 the frontier estimate (0.006096) is over budget and the mid one

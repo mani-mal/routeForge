@@ -194,7 +194,7 @@ to the `proposed` arm only; the `current` arm always replays rows as recorded.
 
 | Key | Validation | Effect in replay |
 |---|---|---|
-| `token_scale` | Finite, `0 < x ≤ 10`. Default `1.0`. | Before routing and pricing: `prompt_tokens' = max(1, round(prompt_tokens × scale))` (a row that recorded 0 prompt tokens stays 0); `completion_tokens` unchanged. A recorded `complexity` below 1 becomes `min(1, complexity × scale)`, which is exact. A saturated complexity (1.0) hides the real token count, so it becomes `min(1, max(scale, prompt_tokens' / 2000))`; when the scale is below 1 that is an estimate, and the row is counted in `assumptions.saturated_complexity_estimated`. |
+| `token_scale` | Finite, `0 < x ≤ 10`. Default `1.0`. | Before routing and pricing, the same rule scales TWO counts independently (`app/eval/simulate.py`: `scaled_request` for the routing count, `_scale_tokens` for the pricing count): `x' = max(1, round(x × scale))`, a row that recorded a `0` count stays `0`. The **routing** count — what `Router.select` is given, the per-request budget check and the cost term of the score, and what a saturated complexity is re-estimated from — and the **pricing/context-window** count — what the routed call is priced at and the context-window check sizes against a candidate's declared window — scale separately. On a row recorded before `routing_tokens` existed, the routing count equals `prompt_tokens`, so the two scale identically, as before B60. `completion_tokens` is unchanged. A recorded `complexity` below 1 becomes `min(1, complexity × scale)`, which is exact. A saturated complexity (1.0) hides the real token count, so it becomes `min(1, max(scale, routing_tokens' / 2000))`; when the scale is below 1 that is an estimate, and the row is counted in `assumptions.saturated_complexity_estimated`. |
 | `cached_share` | Finite, `0 ≤ x ≤ 1`. Default `0`. | That fraction of the (scaled) prompt tokens is priced at the endpoint's cached-input price. An endpoint with no declared cached price bills them at the input price. The router still estimates with zero cached tokens, so this moves cost, never a route. |
 | `apps.<application_id>` | The app must be in the snapshot. Same two keys. | Overrides the global value for that app. |
 
@@ -407,20 +407,26 @@ From spec §2, plus what the build settled during P3a:
   routed call is priced, and the context-window check sized, at `prompt_tokens`, the
   backend's billed count. A row from before `routing_tokens` existed uses `prompt_tokens`
   for both, as before.
-- **A row no backend answered is an estimate.** A rejected row, or one that failed before any
-  response, has `prompt_tokens: 0` and no completion count. When an arm routes it, replay
-  prices it at its `routing_tokens` and at the router's output estimate (its recorded
-  `max_tokens`, else `default_estimated_output_tokens`) — the same pair the live per-request
-  budget check priced it at. So a request a proposal rescues is costed at its admission
-  estimate, which can overstate what it would really have cost. `rows.estimated_tokens`
-  counts these rows and the report says so. A `backend_failed` row is routed in both arms and
-  costed as if the call had succeeded; the failure itself is not replayed.
+- **A row with no backend token count is an estimate.** A rejected row, one that failed
+  before any response, or one an endpoint served but reported no usage for (a stream whose
+  endpoint sent no usage block) has `prompt_tokens: 0` and no completion count. When an arm
+  routes it, replay prices it at its `routing_tokens` and at the router's output estimate
+  (its recorded `max_tokens`, else `default_estimated_output_tokens`) — the same pair the live
+  per-request budget check priced it at. So a request a proposal rescues, or an already-`ok`
+  row an endpoint reported no usage for, is costed at its admission estimate, which can
+  overstate what it would really have cost. `rows.estimated_tokens` counts all of these rows
+  and the report says so. A `backend_failed` row is routed in both arms and costed as if the
+  call had succeeded; the failure itself is not replayed.
 - **Rejected and failed rows recorded before B60 are excluded**, counted as
   `missing_routing_tokens`. They record no size, and replaying them as empty prompts is what
   made a raised budget show nothing to rescue (first observed live on 2026-10-06,
   `docs/research/feasible-route-bench.md` §18.4.1). **This changes the output for an export
   that contains such rows**: fewer rows are simulated than before, and totals move. To
   simulate rejected requests, use rows recorded after the upgrade (`--since`).
+  `simulation_id`/`comparison_id` hash the `inputs` block, not the code, so the same id can
+  now name two different outputs for an export recorded before `routing_tokens` existed —
+  its unsized rejected/failed rows are excluded where an earlier build of this tool replayed
+  them as routed.
 - **No re-running PII detection.** Recorded `detected_entity_types` are replayed as-is, so a
   proposal cannot change `pii_detection`, a denylist, exempt patterns or recognizers.
 - **No daily-spend or RPM admission simulation** — those are admission limits, not routing.
@@ -672,6 +678,19 @@ section, because there is no baseline-vs-proposal comparison to report. `report.
 the §4.2 caveat followed by the "Shadow prices" section. **With `--proposal`**, the ordinary
 P3a output is unchanged in full, `shadow_prices` is added as one more top-level key, and the
 "Shadow prices" section is appended to the end of the report.
+
+**Shadow-prices-only hides the new exclusion and the estimated-row count (B63 backlog
+item).** `shadow_prices` selects rows the same way `simulate()` does (`select_rows`), so a
+row recorded before `routing_tokens` existed that is not `ok` and carries no size is excluded
+here too, counted as `missing_routing_tokens` — but with no `--proposal` there is no `rows`
+block in `simulation.json` or `report.md`, so this mode prints no count of how many rows were
+excluded or sized from an estimate. A `rejections_avoided` row's share of a constraint's
+`cost_usd` is still an admission estimate (its routing tokens plus the router's output-token
+estimate, §6), the same estimate `rows.estimated_tokens` would count if this mode reported
+it; `cost_saved_per_day` is unaffected, since it is computed only over rows routed in both
+arms. To see the excluded and estimated counts, run with `--proposal` alongside
+`--shadow-prices` — an empty proposal (`{"schema": "routeforge.policy-proposal/v1"}`)
+predicts no change and still produces the `rows` block.
 
 ### 8.6 Flags
 

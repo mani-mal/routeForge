@@ -364,8 +364,10 @@ literature doesn't model".
   recorded after the upgrade. Report outcome agreement, the unreproduced-rejection count,
   newly served under `raise-request-budget`, and the gap between `routing_tokens` and
   `prompt_tokens` on served rows. No number exists yet.
-- **Limits:** a rescued request is costed at its admission estimate; a recorded
-  `context_overflow` needs a declared window; RouteForge's token count is not the backend's.
+- **Limits:** a rescued request is costed at its admission estimate; a served row an
+  endpoint reported no usage for (e.g. a stream whose endpoint sent no usage block) is
+  replayed the same way, at its admission estimate, not a bill; a recorded `context_overflow`
+  needs a declared window; RouteForge's token count is not the backend's.
 
 #### 4.4.2 Still pending: failover/escalation, breaker state, spend/RPM admission — *spec pending*
 ### 4.5 Administrator review workflow — *spec pending* (closes HO §37 P3 "admin approval")

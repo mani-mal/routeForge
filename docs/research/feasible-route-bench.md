@@ -2652,7 +2652,9 @@ that is.
 - A recorded `context_overflow` is reproduced only on an endpoint with a declared context
   window, and with RouteForge's token count rather than the backend's.
 - A rescued request's cost is the admission estimate. Where the client's output cap is far
-  above what it would have generated, the estimate overstates the cost.
+  above what it would have generated, the estimate overstates the cost. The same estimate
+  prices an already-`ok` row an endpoint reported no usage for (e.g. a stream whose endpoint
+  sent no usage block) — it is replayed, not a bill either.
 - Nothing here replays failover, escalation, breaker state or daily-spend and RPM admission.
   A request refused for its daily budget or its rate limit writes no outcome row at all.
 - A `backend_failed` row is costed as if the call had succeeded.
