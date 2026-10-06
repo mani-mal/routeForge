@@ -6,7 +6,7 @@ EMPTY prompt, which fits any per-request budget and any context window, so
 its `current` arm ROUTED a request the record says was rejected -- and a
 proposal that raised the budget showed nothing to rescue.
 
-Invariants pinned here (spec §9): R2, R3, R4, R6, R9.
+Invariants pinned here (spec §9): R2, R3, R4, R6, R9, R11, R12.
 """
 from __future__ import annotations
 
@@ -18,8 +18,9 @@ from hypothesis import HealthCheck, given, settings as hsettings, strategies as 
 
 import app.eval.simulate as simulate_mod
 from app.eval.outcomes import load_export
-from app.eval.simulate import (EXCLUSION_REASONS, replay_tokens, select_rows, simulate,
-                               summarize)
+from app.eval.simulate import (EXCLUSION_REASONS, RECORDED_OUTCOME, SIMULATED_STATUSES,
+                               agreement_ok, baseline_check, gate_agreement, replay_tokens,
+                               select_rows, simulate, summarize)
 from tests.eval.sim_fixtures import (BASE_SETTINGS, app_entry, make_row, make_snapshot,
                                      onboarded_row)
 
@@ -298,3 +299,115 @@ def test_shadow_price_of_the_budget_now_shows_the_rejections_it_would_avoid():
     legacy = [_without_size(r) for r in rows[:3]] + rows[3:]
     assert _entry(asyncio.run(shadow_prices(legacy, _snap(), base=BASE_SETTINGS)),
                   "max_cost_usd_per_request", app="app-a") is None
+
+
+# --- outcome-level agreement (spec §7) ----------------------------------------
+
+def _baseline_of(records, snap, **kw):
+    results, excluded = _run(records, snap, **kw)
+    return summarize(results, excluded, inputs=_INPUTS, edits={})["baseline"]
+
+
+def test_r11_every_status_has_a_recorded_outcome_class():                  # R11
+    """The class table covers exactly the statuses serving can write. A
+    sixth status fails here until someone decides what its first routing
+    decision was."""
+    from app.apps.outcomes import STATUSES
+    assert set(RECORDED_OUTCOME) == set(STATUSES) == set(SIMULATED_STATUSES)
+    assert set(RECORDED_OUTCOME.values()) == {"routed", "rejected"}
+    assert {s for s, c in RECORDED_OUTCOME.items() if c == "rejected"} == \
+        {"no_eligible", "context_overflow"}
+
+
+def test_outcome_agreement_is_perfect_when_rejections_are_reproduced():
+    rows = [make_row(f"ok{i}", "app-a") for i in range(3)] + \
+           [_rejected_row(f"rej{i}") for i in range(2)]
+    b = _baseline_of(rows, _snap())
+    assert (b["agreement"], b["rows_compared"]) == (1.0, 3)        # model: `ok` rows only
+    assert (b["outcome_agreement"], b["outcome_rows_compared"]) == (1.0, 5)
+    assert b["outcome_warning"] is False
+    assert (b["recorded_rejected"], b["recorded_rejected_but_routed"],
+            b["recorded_routed_but_rejected"]) == (2, 0, 0)
+    assert b["outcome_by_app"] == {"app-a": {
+        "rows": 5, "agreement": 1.0, "recorded_rejected": 2,
+        "recorded_rejected_but_routed": 0, "recorded_routed_but_rejected": 0}}
+
+
+def test_a_recorded_rejection_that_replay_routes_is_counted():
+    """The B60 signature, made visible: the snapshot's cap is ABOVE the
+    estimate (it was raised after the traffic was recorded), so replay
+    routes rows the record says were rejected. Model agreement cannot see
+    it; outcome agreement and its count can."""
+    rows = [make_row(f"ok{i}", "app-a") for i in range(3)] + \
+           [_rejected_row(f"rej{i}") for i in range(2)]
+    b = _baseline_of(rows, _snap(cap=100.0))
+    assert b["agreement"] == 1.0 and b["warning"] is False         # blind to it
+    assert b["outcome_agreement"] == pytest.approx(3 / 5)
+    assert b["outcome_warning"] is True
+    assert (b["recorded_rejected"], b["recorded_rejected_but_routed"],
+            b["recorded_routed_but_rejected"]) == (2, 2, 0)
+
+
+def test_a_recorded_route_that_replay_rejects_is_counted_per_app():
+    """The reverse direction, and the per-app split: app-b's served rows are
+    over ITS cap in replay; app-a is untouched."""
+    snap = make_snapshot(apps=[app_entry("app-a"),
+                               app_entry("app-b", max_cost_usd_per_request=1e-9)])
+    rows = [make_row("a1", "app-a"), make_row("b1", "app-b"),
+            make_row("b2", "app-b", status="backend_failed", routing_tokens=200,
+                     prompt_tokens=0)]
+    b = _baseline_of(rows, snap)
+    assert b["recorded_routed_but_rejected"] == 2 and b["recorded_rejected_but_routed"] == 0
+    assert b["outcome_agreement"] == pytest.approx(1 / 3)
+    assert b["outcome_by_app"]["app-a"]["agreement"] == 1.0
+    assert b["outcome_by_app"]["app-b"] == {
+        "rows": 2, "agreement": 0.0, "recorded_rejected": 0,
+        "recorded_rejected_but_routed": 0, "recorded_routed_but_rejected": 2}
+
+
+def test_backend_failed_and_verify_failed_rows_are_recorded_as_routed():
+    """Their first decision was a route: replay routing them is agreement."""
+    rows = [make_row("ok1", "app-a"),
+            make_row("bf", "app-a", status="backend_failed", prompt_tokens=0,
+                     routing_tokens=200, chosen=None),
+            make_row("vf", "app-a", status="verify_failed", routing_tokens=200)]
+    b = _baseline_of(rows, make_snapshot())
+    assert (b["outcome_agreement"], b["outcome_rows_compared"]) == (1.0, 3)
+    assert b["recorded_rejected"] == 0
+
+
+def test_outcome_agreement_is_null_with_no_simulated_row():
+    b = _baseline_of([], make_snapshot())
+    assert b["outcome_agreement"] is None and b["outcome_rows_compared"] == 0
+    assert b["outcome_warning"] is False and b["outcome_by_app"] == {}
+
+
+def test_diluted_outcome_agreement_still_reports_every_rejection_wrong():
+    """Why the count is reported with its denominator: 2 of 2 rejections
+    replay wrong while outcome agreement is still above the 90% threshold."""
+    rows = [make_row(f"ok{i}", "app-a") for i in range(28)] + \
+           [_rejected_row(f"rej{i}") for i in range(2)]
+    b = _baseline_of(rows, _snap(cap=100.0))
+    assert b["outcome_agreement"] == pytest.approx(28 / 30) and b["outcome_warning"] is False
+    assert (b["recorded_rejected_but_routed"], b["recorded_rejected"]) == (2, 2)
+    assert agreement_ok(b, 0.9) is True and agreement_ok(b, 1.0) is False
+
+
+@pytest.mark.parametrize("agreement,outcome,gate", [
+    (1.0, 0.72, 0.72), (0.5, 1.0, 0.5), (1.0, 1.0, 1.0),
+    (None, 1.0, None), (1.0, None, None), (None, None, None),
+])
+def test_r12_gate_takes_the_lower_of_the_two(agreement, outcome, gate):    # R12
+    baseline = {"agreement": agreement, "outcome_agreement": outcome}
+    assert gate_agreement(baseline) == gate
+    assert agreement_ok(baseline, 0.9) is (gate is not None and gate >= 0.9)
+    assert agreement_ok(baseline, 0.0) is (gate is not None)   # n/a never passes
+
+
+def test_baseline_check_carries_the_outcome_fields():
+    """`--shadow-prices` without `--proposal` gates through `baseline_check`:
+    it must return the same block, outcome fields included."""
+    rows = [make_row("ok1", "app-a"), _rejected_row("rej1")]
+    snap = _snap(cap=100.0)
+    assert asyncio.run(baseline_check(rows, snap, base=BASE_SETTINGS)) == \
+        _baseline_of(rows, snap)

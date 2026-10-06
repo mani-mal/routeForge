@@ -549,4 +549,8 @@ def test_baseline_check_equals_the_summarized_baseline():
     (0.0, 0.0, True), (None, 0.0, False),
 ])
 def test_agreement_ok(agreement, minimum, ok):
-    assert agreement_ok({"agreement": agreement, "rows_compared": 0}, minimum) is ok
+    # Outcome agreement is perfect here, so model agreement alone decides
+    # (B60: the gate takes the lower of the two --
+    # tests/eval/test_replay_rejections.py::test_r12_gate_takes_the_lower_of_the_two).
+    assert agreement_ok({"agreement": agreement, "rows_compared": 0,
+                         "outcome_agreement": 1.0}, minimum) is ok

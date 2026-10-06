@@ -88,7 +88,12 @@ def test_scenarios_come_back_in_file_order_with_shared_rows_and_baseline():
     assert cmp.window == {"start": "2026-09-20T12:00:00+00:00",
                           "end": "2026-09-22T12:00:11+00:00"}
     assert set(cmp.baseline) == {"rows_compared", "agreement", "warning", "by_app",
-                                 "top_disagreements", "overflow_contradicted"}
+                                 "top_disagreements", "overflow_contradicted",
+                                 # B60: outcome-level agreement, shared like the rest
+                                 "outcome_rows_compared", "outcome_agreement",
+                                 "outcome_warning", "recorded_rejected",
+                                 "recorded_rejected_but_routed",
+                                 "recorded_routed_but_rejected", "outcome_by_app"}
     for entry in cmp.scenarios:
         assert set(entry) == {"name", "edits", "assumptions", "summary"}
         assert set(entry["summary"]) == {"totals", "by_app", "by_workload", "moves",

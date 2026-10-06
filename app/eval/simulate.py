@@ -51,6 +51,16 @@ from app.routing.router import expected_output_tokens
 SIMULATED_STATUSES = frozenset({"ok", "backend_failed", "verify_failed",
                                 "no_eligible", "context_overflow"})
 
+#: The outcome each status's FIRST routing decision had (B60), which is what an
+#: arm's `outcome` is compared with. `verify_failed` and `backend_failed` were
+#: routed -- a model was chosen, and step 9 or the backend failed afterwards.
+#: `no_eligible` is always a first-decision rejection. `context_overflow` was
+#: refused for size on every attempt; replay models that as a `context_window`
+#: rejection. tests/eval/test_replay_rejections.py pins this table to
+#: `app/apps/outcomes.py::STATUSES`, so a new status must be given a class.
+RECORDED_OUTCOME = {"ok": "routed", "verify_failed": "routed", "backend_failed": "routed",
+                    "no_eligible": "rejected", "context_overflow": "rejected"}
+
 # `before_since` is checked first, so a row older than `--since` never reaches
 # the other checks (P3c-2 spec §6). `missing_routing_tokens` (B60) is checked
 # last: only a well-formed row of a known app can be "well-formed but unsized".
@@ -506,12 +516,25 @@ async def baseline_check(records: list[dict], snapshot: dict, *, base: Settings,
     return _round6(_baseline([RowResult(row, arm, arm) for row, arm in zip(rows, arms)]))
 
 
+def gate_agreement(baseline: dict) -> float | None:
+    """The one rate `--min-agreement` is compared with: the LOWER of model
+    agreement and outcome agreement (B60). They catch different defects --
+    replay picked a different model (B55) / replay served a request the
+    record says was rejected (B60) -- and a replay is fit to use only if it
+    reproduces both, so neither may hide behind the other. None when either
+    is not computable: with no served row nothing vouches for the model
+    replay picks, however well the outcomes agree."""
+    agreement, outcome = baseline["agreement"], baseline["outcome_agreement"]
+    if agreement is None or outcome is None:
+        return None
+    return min(agreement, outcome)
+
+
 def agreement_ok(baseline: dict, minimum: float) -> bool:
-    """The `--min-agreement` gate: False when the baseline has no comparable
-    row (`agreement` is None -- nothing vouches for the replay) or agrees
-    with the record less often than `minimum`."""
-    agreement = baseline["agreement"]
-    return agreement is not None and agreement >= minimum
+    """The `--min-agreement` gate: False when `gate_agreement` is None
+    (nothing vouches for the replay) or below `minimum`."""
+    rate = gate_agreement(baseline)
+    return rate is not None and rate >= minimum
 
 
 # --- summary and report (spec §8) -------------------------------------------
@@ -639,11 +662,41 @@ def _agrees(r: RowResult) -> bool:
     return _first_pick(r.current) == r.row["attempts"][0]
 
 
+def _outcome_stats(rows: list[RowResult]) -> dict:
+    """Outcome-level agreement over `rows` (B60): does the `current` arm's
+    OUTCOME -- routed or rejected -- match the recorded status's class
+    (`RECORDED_OUTCOME`)? Over every simulated row, served or not.
+
+    `recorded_rejected_but_routed` is the B60 signature: replay serves a
+    request the record says was rejected, so a proposal can show nothing to
+    rescue. It is reported next to `recorded_rejected`, its denominator,
+    because rejections are usually a small share of traffic and `agreement`
+    alone would dilute them."""
+    recorded = [RECORDED_OUTCOME[r.row["status"]] for r in rows]
+    rejected_but_routed = sum(1 for r, rec in zip(rows, recorded)
+                              if rec == "rejected" and r.current.outcome == "routed")
+    routed_but_rejected = sum(1 for r, rec in zip(rows, recorded)
+                              if rec == "routed" and r.current.outcome == "rejected")
+    n = len(rows)
+    return {
+        "rows": n,
+        "agreement": (n - rejected_but_routed - routed_but_rejected) / n if n else None,
+        "recorded_rejected": sum(1 for rec in recorded if rec == "rejected"),
+        "recorded_rejected_but_routed": rejected_but_routed,
+        "recorded_routed_but_rejected": routed_but_rejected,
+    }
+
+
 def _baseline(results: list[RowResult]) -> dict:
     """Fidelity check (spec §7): does the `current` arm's pick agree with the
     recorded first attempt, over simulated `ok` rows with a recorded
     attempt. Never compares `proposed` -- the headline diff is always
     `current` vs `proposed`, both simulated.
+
+    Two measures (B60). `agreement` is MODEL agreement, as above. The
+    `outcome_*` fields are OUTCOME agreement (`_outcome_stats`), over every
+    simulated row: a recorded rejection the `current` arm routes is
+    invisible to model agreement, which only looks at `ok` rows.
 
     `overflow_contradicted` (final review) counts the subset of
     disagreements where the record proves the row's recorded first pick
@@ -675,6 +728,7 @@ def _baseline(results: list[RowResult]) -> dict:
     top = sorted(disagreements.items(), key=lambda kv: (-kv[1], kv[0][0], kv[0][1]))[:10]
     top_disagreements = [{"recorded": rec, "simulated": sim, "count": n}
                          for (rec, sim), n in top]
+    outcome = _outcome_stats(results)
     return {
         "rows_compared": rows_compared,
         "agreement": agreement,
@@ -682,6 +736,15 @@ def _baseline(results: list[RowResult]) -> dict:
         "by_app": by_app,
         "top_disagreements": top_disagreements,
         "overflow_contradicted": overflow_contradicted,
+        "outcome_rows_compared": outcome["rows"],
+        "outcome_agreement": outcome["agreement"],
+        "outcome_warning": outcome["agreement"] is not None and outcome["agreement"] < 0.90,
+        "recorded_rejected": outcome["recorded_rejected"],
+        "recorded_rejected_but_routed": outcome["recorded_rejected_but_routed"],
+        "recorded_routed_but_rejected": outcome["recorded_routed_but_rejected"],
+        "outcome_by_app": {
+            app_id: _outcome_stats([r for r in results if r.row["application_id"] == app_id])
+            for app_id in sorted({r.row["application_id"] for r in results})},
     }
 
 
