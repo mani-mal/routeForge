@@ -293,3 +293,160 @@ def test_malformed_assumptions_block_is_a_named_snapshot_error():
         with pytest.raises(SnapshotError) as exc:
             asyncio.run(build_scenario(doc, base=BASE_SETTINGS))
         assert exc.value.where == where
+
+
+# --- Task 5: asserted endpoint latency (spec §4.2) ----------------------------
+
+import dataclasses  # noqa: E402
+
+_ADD = {"slug": "new-mid", "provider": "onprem", "tier": "mid",
+        "price": {"input": 0.5, "output": 1.0, "cached_input": None}}
+_YAML_MODEL = "azure-gpt-mid"          # config/routing.yaml model_pool
+
+
+def _signal(ms, n=50):
+    return {"latency_ms": ms, "latency_n": n, "availability": 1.0, "availability_n": n}
+
+
+def _two_mids(**signals):
+    """Two mid-tier endpoints; `local-mid` is the cheaper, so it wins a tie."""
+    return make_snapshot(
+        onboarded=[onboarded_row("local-mid", "mid", price_input=0.4),
+                   onboarded_row("local-mid-2", "mid")],
+        signals=signals)
+
+
+def _mid_rows(n=3):
+    return [make_row(f"m{i}", "app-a", complexity=0.6) for i in range(n)]
+
+
+@pytest.mark.parametrize("value", [0, -5, "fast", True, [100], float("nan"), float("inf")])
+def test_latency_ms_must_be_positive_finite_or_null(value):
+    for prop, where in (
+            ({"endpoints": {"update": {"local-mid": {"latency_ms": value}}}},
+             "endpoints.update.local-mid.latency_ms"),
+            ({"endpoints": {"add": [{**_ADD, "latency_ms": value}]}},
+             "endpoints.add.new-mid.latency_ms"),
+            ({"endpoints": {"update": {_YAML_MODEL: {"latency_ms": value}}}},
+             f"endpoints.update.{_YAML_MODEL}.latency_ms")):
+        with pytest.raises(ProposalError) as exc:
+            _apply({"schema": P, **prop})
+        assert exc.value.where == where, str(exc.value)
+
+
+def test_latency_ms_goes_to_assumptions_never_onto_the_row():
+    snap = make_snapshot()
+    out = _apply({"schema": P, "endpoints": {
+        "add": [{**_ADD, "latency_ms": 40}],
+        "update": {"local-mid": {"latency_ms": 800, "region": "eu"},
+                   _YAML_MODEL: {"latency_ms": 250.5}}}}, snap)
+    assert out["assumptions"] == {"token_scale": {}, "cached_share": {}, "latency_ms": {
+        "new-mid": 40.0, "local-mid": 800.0, _YAML_MODEL: 250.5}}
+    by = {o["slug"]: o for o in out["onboarded"]}
+    assert by["local-mid"]["region"] == "eu"                 # the other update still lands
+    for row in out["onboarded"]:
+        assert "latency_ms" not in row
+    assert _YAML_MODEL not in by                             # a YAML model gains no row
+
+
+def test_latency_ms_null_is_no_override():                                # Review Focus 3
+    out = _apply({"schema": P, "endpoints": {
+        "add": [{**_ADD, "latency_ms": None}],
+        "update": {"local-mid": {"latency_ms": None}}}})
+    assert "assumptions" not in out
+
+
+@pytest.mark.parametrize("fields,where", [
+    ({"tier": "mid"}, f"endpoints.update.{_YAML_MODEL}.tier"),
+    ({"latency_ms": 100, "region": "eu"}, f"endpoints.update.{_YAML_MODEL}.region"),
+    ({"context_window": 4096}, f"endpoints.update.{_YAML_MODEL}.context_window"),
+])
+def test_yaml_pool_model_accepts_only_latency_ms(fields, where):          # Review Focus 3
+    with pytest.raises(ProposalError) as exc:
+        _apply({"schema": P, "endpoints": {"update": {_YAML_MODEL: fields}}})
+    assert exc.value.where == where
+
+
+def test_update_of_an_unknown_slug_is_still_refused():
+    with pytest.raises(ProposalError) as exc:
+        _apply({"schema": P, "endpoints": {"update": {"ghost": {"latency_ms": 100}}}})
+    assert exc.value.where == "endpoints.update.ghost"
+
+
+def test_asserted_latency_moves_the_route_and_the_replayed_latency():
+    """`local-mid` (300 ms measured) beats `local-mid-2` (600 ms). Asserting
+    5000 ms for it sends the mid rows to `local-mid-2`."""
+    snap = _two_mids(**{"local-mid": _signal(300.0), "local-mid-2": _signal(600.0)})
+    results, _ = _run(_mid_rows(), snap, {"schema": P, "endpoints": {
+        "update": {"local-mid": {"latency_ms": 5000}}}})
+    for r in results:
+        assert (r.current.model, r.proposed.model) == ("local-mid", "local-mid-2")
+        assert (r.proposed.latency_ms, r.proposed.latency_source) == (600.0, "signal")
+
+
+def test_asserted_latency_wins_over_observed_and_is_labelled_proposal():
+    """The export's own rows give `local-mid` an observed median (120 ms);
+    the assertion still wins, and the source says where it came from."""
+    rows = [make_row(f"m{i}", "app-a", complexity=0.6, attempts=["local-mid"],
+                     chosen="local-mid") for i in range(3)]
+    snap = make_snapshot(onboarded=[onboarded_row("local-mid", "mid")])
+    results, excluded = _run(rows, snap, {"schema": P, "endpoints": {
+        "update": {"local-mid": {"latency_ms": 42.5}}}})
+    for r in results:
+        assert (r.current.latency_ms, r.current.latency_source) == (120.0, "observed")
+        assert (r.proposed.latency_ms, r.proposed.latency_source) == (42.5, "proposal")
+    sim = summarize(results, excluded, inputs=_INPUTS, edits={})
+    assert sim["sources"]["proposed"]["latency"] == {"proposal": 3}
+    assert sim["totals"]["latency_ms"]["p50"]["delta"] == pytest.approx(42.5 - 120.0)
+
+
+def test_added_endpoint_with_latency_is_scored_and_replayed_at_it():
+    snap = _two_mids(**{"local-mid": _signal(300.0), "local-mid-2": _signal(600.0)})
+    results, _ = _run(_mid_rows(), snap, {"schema": P, "endpoints": {
+        "add": [{**_ADD, "price": {"input": 0.4, "output": 1.0, "cached_input": None},
+                 "latency_ms": 20}]}})
+    for r in results:
+        assert r.proposed.model == "new-mid"
+        assert (r.proposed.latency_ms, r.proposed.latency_source) == (20.0, "proposal")
+
+
+def test_s4_neutral_latency_changes_no_route_or_cost():                    # S4 (latency)
+    """Asserting the latency replay already uses -- here the snapshot's
+    measured signal, which is also the router's scoring term -- changes no
+    route, cost or latency. Only the source label differs."""
+    snap = _two_mids(**{"local-mid": _signal(300.0), "local-mid-2": _signal(600.0)})
+    results, _ = _run(_mid_rows(), snap, {"schema": P, "endpoints": {
+        "update": {"local-mid": {"latency_ms": 300.0}}}})
+    assert results
+    for r in results:
+        assert (r.current.model, r.current.latency_source) == ("local-mid", "signal")
+        assert r.proposed.latency_source == "proposal"
+        relabelled = dataclasses.replace(r.proposed, latency_source="signal")
+        assert relabelled == r.current
+
+
+def test_neutral_latency_keeps_the_peer_prior_it_supplies():              # Review Focus 3
+    """`local-mid` is the tier's only measured endpoint, so `local-mid-2`
+    is scored at its 3000 ms as a peer prior. Re-asserting 3000 ms must
+    leave that prior in place: were the assertion not scored as a
+    measurement, `local-mid-2` would fall back to the 500 ms tier default
+    and take every row."""
+    snap = _two_mids(**{"local-mid": _signal(3000.0)})
+    results, _ = _run(_mid_rows(), snap, {"schema": P, "endpoints": {
+        "update": {"local-mid": {"latency_ms": 3000.0}}}})
+    for r in results:
+        assert (r.current.model, r.proposed.model) == ("local-mid", "local-mid")
+
+
+def test_signals_disabled_assertion_feeds_latency_but_not_routing():      # Review Focus 3
+    """With `routing.signals.enabled: false` the live router ignores measured
+    latency, so an assertion must not move a route -- but the replayed
+    latency is still the asserted one."""
+    snap = _two_mids()
+    snap["settings"]["routing"]["signals"]["enabled"] = False
+    results, _ = _run(_mid_rows(), snap, {"schema": P, "endpoints": {
+        "update": {"local-mid": {"latency_ms": 60000}}}})
+    for r in results:
+        assert (r.current.model, r.proposed.model) == ("local-mid", "local-mid")
+        assert r.current.latency_source == "tier_default"
+        assert (r.proposed.latency_ms, r.proposed.latency_source) == (60000.0, "proposal")

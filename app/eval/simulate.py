@@ -65,7 +65,7 @@ class ArmResult:
     reject_codes: tuple[str, ...] # sorted, empty when routed
     cost_usd: float | None
     latency_ms: float | None
-    latency_source: str | None    # "observed" | "signal" | "tier_default"
+    latency_source: str | None    # "proposal" | "observed" | "signal" | "tier_default"
     quality: float | None
     quality_source: str | None
     core: tuple[str, ...] = ()       # P3b: NoEligibleCandidate.core.ids(), () when routed
@@ -307,7 +307,11 @@ def simulate_row(scn: Scenario, row: dict, observed: dict[str, float]) -> ArmRes
                       prompt_tokens=prompt_tokens,
                       completion_tokens=int(row.get("completion_tokens") or 0),
                       cached_prompt_tokens=cached_tokens)
-    if pick.name in observed:
+    asserted = scn.signals.proposed_latency(pick.name)
+    if asserted is not None:
+        # P3c-2 spec §4.2: the proposal's asserted latency wins every rung.
+        latency, latency_source = asserted, "proposal"
+    elif pick.name in observed:
         latency, latency_source = observed[pick.name], "observed"
     else:
         snap = scn.signals.snapshot_latency(pick.name)

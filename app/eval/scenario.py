@@ -300,6 +300,10 @@ class FrozenSignals:
 
     cfg: SignalsCfg
     values: dict[str, dict]
+    # P3c-2 spec §4.2: operator-asserted latency per endpoint, from the
+    # applied document's `assumptions.latency_ms`. Empty for the `current`
+    # arm.
+    overrides: dict[str, float] = field(default_factory=dict)
 
     def _tier_default(self, tier: str) -> float:
         return self.cfg.tier_latency_ms.get(tier, self.cfg.latency_scale_ms)
@@ -310,6 +314,14 @@ class FrozenSignals:
             return SignalValue(default, "disabled", 0)
         row = self.values.get(model)
         n = int(row["latency_n"]) if row else 0
+        if model in self.overrides:
+            # Scored exactly as a measurement would be -- it also serves as
+            # the same-tier peer prior for unmeasured endpoints
+            # (`strategy._with_peer_prior`), as a live measurement of this
+            # value would. So asserting the value already in use changes no
+            # route. Below the `enabled` check on purpose: a deployment with
+            # signals off ignores measured latency when scoring, live.
+            return SignalValue(self.overrides[model], "measured", n)
         if row is None or n < self.cfg.min_samples:
             return SignalValue(default, "tier_default", n)
         return SignalValue(float(row["latency_ms"]), "measured", n)
@@ -334,6 +346,12 @@ class FrozenSignals:
         if row is None or int(row["latency_n"]) < self.cfg.min_samples:
             return None
         return float(row["latency_ms"])
+
+    def proposed_latency(self, model: str) -> float | None:
+        """The proposal's asserted latency for `model`, or None. The replay
+        ladder's first rung: it wins over observed, signal and tier-default
+        latency, whether or not signals are enabled."""
+        return self.overrides.get(model)
 
 
 _ASSUMPTION_KEYS = ("token_scale", "cached_share", "latency_ms")
@@ -490,7 +508,8 @@ async def build_scenario(doc: dict, *, base: Settings) -> Scenario:
                 QualityScore(entry["score"], "calibrated", entry["set_id"]))
         quality.set_overrides(overrides)
 
-        signals = FrozenSignals(settings.routing.signals, doc["signals"])
+        signals = FrozenSignals(settings.routing.signals, doc["signals"],
+                                assumptions.latency_ms)
 
         apps: dict[str, AppScenario] = {}
         for entry in doc["apps"]:
