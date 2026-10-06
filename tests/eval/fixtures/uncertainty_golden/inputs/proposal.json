@@ -1,0 +1,9 @@
+{
+  "endpoints": {
+    "remove": [
+      "local-mid"
+    ]
+  },
+  "schema": "routeforge.policy-proposal/v1",
+  "title": "Drop the mid endpoint"
+}

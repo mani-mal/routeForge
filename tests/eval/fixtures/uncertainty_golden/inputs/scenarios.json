@@ -1,0 +1,28 @@
+{
+  "scenarios": [
+    {
+      "name": "no-change",
+      "proposal": {}
+    },
+    {
+      "name": "drop-mid",
+      "proposal": {
+        "endpoints": {
+          "remove": [
+            "local-mid"
+          ]
+        }
+      }
+    },
+    {
+      "name": "half-tokens",
+      "proposal": {
+        "workload": {
+          "token_scale": 0.5
+        }
+      }
+    }
+  ],
+  "schema": "routeforge.policy-scenarios/v1",
+  "title": "Golden options"
+}
