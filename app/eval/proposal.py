@@ -21,7 +21,7 @@ import math
 
 from app.config.loader import load_settings
 from app.config.schema import Settings
-from app.eval.scenario import _app_policy_view, build_settings
+from app.eval.scenario import ALL_APPS, SnapshotError, _app_policy_view, build_settings
 from app.policy.compile import (_OPERATOR_NAME, PolicyViolation, compile_policy,
                                 resolve_residency)
 from app.policy.enums import PROMPT_RETENTION_VALUES
@@ -30,7 +30,8 @@ SCHEMA = "routeforge.policy-proposal/v1"
 _SCHEMA_PREFIX = "routeforge.policy-proposal/"
 _SCHEMA_MAJOR = "v1"
 
-_TOP_KEYS = frozenset({"schema", "title", "apps", "providers", "endpoints", "prices"})
+_TOP_KEYS = frozenset({"schema", "title", "apps", "providers", "endpoints", "prices",
+                       "workload"})
 _APP_EDIT_KEYS = frozenset({
     "residency", "allowed_regions", "require_no_retention", "allowed_tiers",
     "allowed_providers", "allowed_models", "max_cost_usd_per_request",
@@ -47,12 +48,16 @@ _ENDPOINTS_KEYS = frozenset({"add", "remove", "disable", "enable", "update"})
 _ENDPOINT_ADD_KEYS = frozenset({
     "slug", "provider", "tier", "price", "region", "prompt_retention",
     "accepts_raw_sensitive", "context_window", "quality", "allowed_app_ids",
+    "latency_ms",
 })
 _ENDPOINT_UPDATE_KEYS = frozenset({
     "tier", "region", "prompt_retention", "accepts_raw_sensitive",
-    "context_window", "allowed_app_ids",
+    "context_window", "allowed_app_ids", "latency_ms",
 })
 _PRICE_KEYS = frozenset({"input", "output", "cached_input"})
+# P3c-2 (spec §4.1): assumptions about the traffic itself, global and per app.
+_WORKLOAD_KEYS = frozenset({"token_scale", "cached_share", "apps"})
+_WORKLOAD_APP_KEYS = frozenset({"token_scale", "cached_share"})
 _RULE_KEYS = frozenset(
     {"entities", "sensitivity", "risk_class", "residency", "require_verification"})
 
@@ -152,6 +157,11 @@ def _validate_keys(doc: dict) -> None:
     for slug, fields in _opt_dict(doc, "prices", "prices").items():
         _check_keys(fields, _PRICE_KEYS, f"prices.{slug}")
 
+    workload = _opt_dict(doc, "workload", "workload")
+    _check_keys(workload, _WORKLOAD_KEYS, "workload")
+    for app_id, fields in _opt_dict(workload, "apps", "workload.apps").items():
+        _check_keys(fields, _WORKLOAD_APP_KEYS, f"workload.apps.{app_id}")
+
 
 def load_proposal(path: str) -> tuple[dict, str]:
     """Read a policy-proposal JSON file. Returns `(doc, sha256 hex)` -- the
@@ -231,6 +241,13 @@ def _validate_context_window(loc: str, value) -> None:
     if value is not None and (not isinstance(value, int) or isinstance(value, bool)
                               or value <= 0):
         raise ProposalError(loc, "must be an int > 0 or null")
+
+
+def _validate_latency_ms(loc: str, value) -> None:
+    """P3c-2 spec §4.2: an operator-asserted latency. `null` means "no
+    override", so it is legal and writes nothing."""
+    if value is not None and not _finite_positive(value):
+        raise ProposalError(loc, "must be a finite number > 0, or null")
 
 
 def _validate_tier(loc: str, value, canonical_tiers: set[str]) -> None:
@@ -376,6 +393,7 @@ def _validate_endpoint_add(entry, onboarded_by_slug: dict, pricing_models: set[s
     if quality is not None and not (_finite_number(quality) and 0 <= quality <= 1):
         raise ProposalError(f"{loc}.quality", "must be null or a finite value in [0, 1]")
     _validate_allowed_app_ids(f"{loc}.allowed_app_ids", entry.get("allowed_app_ids"), app_ids)
+    _validate_latency_ms(f"{loc}.latency_ms", entry.get("latency_ms"))
 
 
 def _validate_endpoint_update(slug: str, fields: dict, canonical_tiers: set[str],
@@ -395,6 +413,26 @@ def _validate_endpoint_update(slug: str, fields: dict, canonical_tiers: set[str]
     if "allowed_app_ids" in fields:
         _validate_allowed_app_ids(
             f"{loc}.allowed_app_ids", fields["allowed_app_ids"], app_ids)
+    if "latency_ms" in fields:
+        _validate_latency_ms(f"{loc}.latency_ms", fields["latency_ms"])
+
+
+# --- workload validation (P3c-2 spec §4.1) -------------------------------------
+
+def _validate_workload_fields(loc: str, fields: dict) -> None:
+    """`token_scale` in (0, 10] and `cached_share` in [0, 1], each only when
+    present. A bool, a string, NaN and +/-inf are all refused: an assumption
+    that silently reads as "no change" is worse than a load error."""
+    if "token_scale" in fields:
+        value = fields["token_scale"]
+        if not (_finite_number(value) and 0 < value <= 10):
+            raise ProposalError(f"{loc}.token_scale",
+                                "must be a finite number > 0 and <= 10")
+    if "cached_share" in fields:
+        value = fields["cached_share"]
+        if not (_finite_number(value) and 0 <= value <= 1):
+            raise ProposalError(f"{loc}.cached_share",
+                                "must be a finite number in [0, 1]")
 
 
 # --- application -----------------------------------------------------------
@@ -404,6 +442,34 @@ def normalized_edits(proposal: dict) -> dict:
     echoed into `simulation.json` so the record shows what was asked for
     without the schema/title noise."""
     return {k: proposal[k] for k in sorted(proposal) if k not in ("schema", "title")}
+
+
+def assumptions_block(proposal: dict) -> dict | None:
+    """The `assumptions` block a VALIDATED proposal sets (P3c-2 spec §4.3):
+    `{"token_scale": {"*": x, "<app>": y}, "cached_share": {...},
+    "latency_ms": {"<slug>": ms}}`, or None when it sets none. All three keys
+    are always present in a block, so a reader never has to probe for one.
+    `apply_proposal` writes exactly this into the applied document; the CLI
+    and the scenario comparison echo it, like `normalized_edits`."""
+    workload = proposal.get("workload") or {}
+    block: dict[str, dict[str, float]] = {"token_scale": {}, "cached_share": {},
+                                          "latency_ms": {}}
+    for key in ("token_scale", "cached_share"):
+        if key in workload:
+            block[key][ALL_APPS] = float(workload[key])
+        for app_id, fields in sorted((workload.get("apps") or {}).items()):
+            if key in fields:
+                block[key][app_id] = float(fields[key])
+    # An asserted latency is an assumption about an endpoint, never a field
+    # of its row: it lives here, and only here (spec §4.2). `null` = none.
+    endpoints = proposal.get("endpoints") or {}
+    for entry in endpoints.get("add") or []:
+        if entry.get("latency_ms") is not None:
+            block["latency_ms"][entry["slug"]] = float(entry["latency_ms"])
+    for slug, fields in (endpoints.get("update") or {}).items():
+        if fields.get("latency_ms") is not None:
+            block["latency_ms"][slug] = float(fields["latency_ms"])
+    return block if any(block.values()) else None
 
 
 def _load_base_settings() -> Settings:
@@ -419,6 +485,14 @@ def apply_proposal(snapshot: dict, proposal: dict, *, base: Settings | None = No
     applied. Never mutates `snapshot` or `proposal`."""
     _validate_schema(proposal)
     _validate_keys(proposal)
+    # The block is only ever written below, so a document that already has
+    # one is a snapshot a proposal was already applied to (or a hand edit):
+    # applying a second proposal on top would silently merge two sets of
+    # assumptions (P3c-2 spec §4.3).
+    if "assumptions" in snapshot:
+        raise SnapshotError(
+            "assumptions", "is written only by apply_proposal; this snapshot already "
+            "has a proposal applied")
 
     settings = build_settings(snapshot, base if base is not None else _load_base_settings())
 
@@ -490,9 +564,23 @@ def apply_proposal(snapshot: dict, proposal: dict, *, base: Settings | None = No
         if slug not in onboarded_by_slug:
             raise ProposalError(f"endpoints.enable.{slug}", "not an onboarded endpoint")
     for slug, fields in update_map.items():
-        if slug not in onboarded_by_slug:
-            raise ProposalError(f"endpoints.update.{slug}", "not an onboarded endpoint")
-        _validate_endpoint_update(slug, fields, canonical_tiers, app_ids)
+        if slug in onboarded_by_slug:
+            _validate_endpoint_update(slug, fields, canonical_tiers, app_ids)
+        elif slug in pricing_models:
+            # A YAML pool model's tier, region and the rest are declared in
+            # routing.yaml, not on an onboarded row -- there is nothing here
+            # to update. An asserted latency is the one per-endpoint
+            # assumption a proposal may set on it (spec §4.2).
+            for field in fields:
+                if field != "latency_ms":
+                    raise ProposalError(
+                        f"endpoints.update.{slug}.{field}",
+                        "only latency_ms may be updated on a YAML pool model")
+            _validate_endpoint_update(slug, fields, canonical_tiers, app_ids)
+        else:
+            raise ProposalError(
+                f"endpoints.update.{slug}",
+                "not an onboarded endpoint or a priced YAML pool model")
 
     # -- prices --
     removed = set(remove_list)
@@ -503,6 +591,24 @@ def apply_proposal(snapshot: dict, proposal: dict, *, base: Settings | None = No
             raise ProposalError(
                 f"prices.{slug}", "not an onboarded endpoint or a priced model")
         _validate_price_fields(f"prices.{slug}", fields)
+
+    # -- workload --
+    workload = proposal.get("workload") or {}
+    _validate_workload_fields("workload", workload)
+    for app_id, fields in (workload.get("apps") or {}).items():
+        # ALL_APPS ("*") is the key `assumptions_block` writes the GLOBAL
+        # token_scale/cached_share under; an app literally named "*" would
+        # silently collide with it there (and in `Assumptions.scale_for`/
+        # `cached_for`'s ALL_APPS fallback) -- reserved outright, even when
+        # such an app exists in the snapshot (final review, F3).
+        if app_id == ALL_APPS:
+            raise ProposalError(
+                f"workload.apps.{app_id}",
+                "application id '*' is reserved for the global workload "
+                "assumption and cannot be set per-app")
+        if app_id not in apps_by_id:
+            raise ProposalError(f"workload.apps.{app_id}", "unknown application")
+        _validate_workload_fields(f"workload.apps.{app_id}", fields)
 
     # -- everything validated; apply on a deep copy, in spec order --
     out = copy.deepcopy(snapshot)
@@ -549,8 +655,10 @@ def apply_proposal(snapshot: dict, proposal: dict, *, base: Settings | None = No
     for slug in enable_list:
         onboarded_out[slug]["enabled"] = True
     for slug, fields in update_map.items():
-        row = onboarded_out[slug]
+        row = onboarded_out.get(slug)     # None for a YAML pool model: latency_ms only
         for field, value in fields.items():
+            if field == "latency_ms":
+                continue                  # an assumption, not a row field: assumptions_block
             row[field] = sorted(value) if field == "allowed_app_ids" and value is not None else value
 
     if removed:
@@ -582,5 +690,11 @@ def apply_proposal(snapshot: dict, proposal: dict, *, base: Settings | None = No
     # fields in place), so its list is never rebuilt either.
     if add_list or remove_list:
         out["onboarded"] = sorted(onboarded_out.values(), key=lambda o: o["slug"])
+
+    # Absent when the proposal sets none, so an empty proposal stays a true
+    # identity.
+    assumptions = assumptions_block(proposal)
+    if assumptions is not None:
+        out["assumptions"] = assumptions
 
     return out

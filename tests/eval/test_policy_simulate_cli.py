@@ -12,7 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
-from tests.eval.sim_fixtures import make_row, make_snapshot
+from tests.eval.sim_fixtures import app_entry, make_row, make_snapshot, onboarded_row
 from tests.test_admin_api import _login
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -350,3 +350,289 @@ def test_cli_malformed_export_rows_are_counted(tmp_path):                 # Impo
     assert sim["rows"]["simulated"] == 1
     assert sim["rows"]["excluded"]["missing_features"] == 3
     assert "line 5" in proc.stderr          # the non-object line is a skipped-line warning
+
+
+# --- P3c-2 Task 1: --since (spec §6, S10) -------------------------------------
+
+def _two_eras():
+    return [_line(make_row("old", "app-a", ts="2026-09-01T00:00:00+00:00")),
+            _line(make_row("new", "app-a", ts="2026-09-20T12:00:00+00:00"))]
+
+
+def test_cli_since_cuts_the_export_and_records_the_cut(tmp_path):         # S10
+    proc, out = _run_cli(tmp_path, _two_eras(), make_snapshot(), {"schema": P},
+                         "--since", "2026-09-10T00:00:00Z")
+    assert proc.returncode == 0, proc.stderr
+    sim = json.loads((out / "simulation.json").read_text())
+    assert sim["rows"]["simulated"] == 1
+    assert sim["rows"]["excluded"]["before_since"] == 1
+    assert sim["inputs"]["since"] == "2026-09-10T00:00:00+00:00"
+    assert "| before_since | 1 |" in (out / "report.md").read_text()
+    # a different cut is a different simulation
+    proc2, _ = _run_cli(tmp_path, _two_eras(), make_snapshot(), {"schema": P})
+    sim2 = json.loads((out / "simulation.json").read_text())
+    assert sim2["inputs"]["since"] is None and sim2["simulation_id"] != sim["simulation_id"]
+
+
+def test_cli_since_applies_to_shadow_prices_mode(tmp_path):
+    from tests.eval.sim_fixtures import app_entry
+    snap = make_snapshot(apps=[app_entry("app-a", allowed_tiers=["frontier"])])
+    proc, out = _run_cli_no_proposal(tmp_path, _two_eras(), snap, "--shadow-prices",
+                                     "--since", "2026-09-10T00:00:00Z")
+    assert proc.returncode == 0, proc.stderr
+    sim = json.loads((out / "simulation.json").read_text())
+    (entry,) = [e for e in sim["shadow_prices"]["constraints"]
+                if e["requirement"] == "allowed_tiers"]
+    assert entry["rows_in_scope"] == 1
+    assert sim["inputs"]["since"] == "2026-09-10T00:00:00+00:00"
+
+
+def test_cli_bad_since_exits_2(tmp_path):
+    proc, out = _run_cli(tmp_path, _two_eras(), make_snapshot(), {"schema": P},
+                         "--since", "last tuesday")
+    assert proc.returncode == 2, proc.stderr
+    assert "--since" in proc.stderr and "Traceback" not in proc.stderr
+    assert not out.exists()
+
+
+# --- P3c-2 Task 2: --min-agreement (spec §6, S11) -----------------------------
+
+def _disagreeing_lines(n=4):
+    """Unpinned rows the record says local-big served; replay sends a
+    0.1-complexity row to local-cheap, so baseline agreement is 0.0."""
+    return [_line(make_row(f"r{i}", "app-a", attempts=["local-big"], chosen="local-big"))
+            for i in range(n)]
+
+
+def test_s11_min_agreement_exits_4_and_writes_nothing(tmp_path):          # S11
+    proc, out = _run_cli(tmp_path, _disagreeing_lines(), make_snapshot(), {"schema": P},
+                         "--min-agreement", "0.9")
+    assert proc.returncode == 4, proc.stderr
+    assert "baseline agreement 0 over 4 compared rows" in proc.stderr
+    assert "--min-agreement 0.9" in proc.stderr
+    assert not out.exists()                       # no directory, no files
+
+
+def test_min_agreement_met_writes_as_usual(tmp_path):
+    lines = [_line(make_row(f"r{i}", "app-a")) for i in range(3)]      # agreement 1.0
+    proc, out = _run_cli(tmp_path, lines, make_snapshot(), {"schema": P},
+                         "--min-agreement", "1.0")
+    assert proc.returncode == 0, proc.stderr
+    assert (out / "simulation.json").exists()
+
+
+def test_min_agreement_with_no_comparable_rows_exits_4(tmp_path):         # Review Focus 5
+    """No `ok` row with a recorded attempt: agreement is None. Nothing
+    vouches for the replay, so the gate refuses -- it never reads None as 1."""
+    lines = [_line(make_row("r1", "app-a", status="backend_failed"))]
+    proc, out = _run_cli(tmp_path, lines, make_snapshot(), {"schema": P},
+                         "--min-agreement", "0")
+    assert proc.returncode == 4, proc.stderr
+    assert "baseline agreement n/a over 0 compared rows" in proc.stderr
+    assert not out.exists()
+
+
+def test_min_agreement_gates_shadow_prices_without_a_proposal(tmp_path):
+    proc, out = _run_cli_no_proposal(tmp_path, _disagreeing_lines(), make_snapshot(),
+                                     "--shadow-prices", "--min-agreement", "0.5")
+    assert proc.returncode == 4, proc.stderr
+    assert not out.exists()
+    ok, out2 = _run_cli_no_proposal(tmp_path, _disagreeing_lines(), make_snapshot(),
+                                    "--shadow-prices", "--min-agreement", "0")
+    assert ok.returncode == 0, ok.stderr
+
+
+def test_min_agreement_wins_over_fail_on_new_rejections(tmp_path):
+    prop = {"schema": P, "endpoints": {"remove": ["local-cheap"]}}
+    proc, out = _run_cli(tmp_path, _disagreeing_lines(), make_snapshot(), prop,
+                         "--min-agreement", "0.9", "--fail-on-new-rejections")
+    assert proc.returncode == 4 and not out.exists()
+
+
+@pytest.mark.parametrize("bad", ["-0.1", "1.5", "nan"])
+def test_min_agreement_out_of_range_exits_2(tmp_path, bad):
+    proc, out = _run_cli(tmp_path, [], make_snapshot(), {"schema": P},
+                         f"--min-agreement={bad}")
+    assert proc.returncode == 2, proc.stderr
+    assert "--min-agreement" in proc.stderr and not out.exists()
+
+
+def test_min_agreement_catches_an_overflow_contradicted_row(tmp_path):    # F1 final review
+    """4 `ok` rows the record says m1 ALONE served (one recorded attempt,
+    chosen == attempts[0]); m1's declared window is 1000 and the row is 900
+    prompt tokens, so replay's `current` arm excludes m1 as an overflow and
+    serves m2. First picks still match ("m1"), so before the fix agreement
+    read 1.0 with no warning -- `--min-agreement 1.0` must now refuse."""
+    snap = make_snapshot(
+        onboarded=[onboarded_row("m1", "mid", price_input=0.1, context_window=1000),
+                  onboarded_row("m2", "mid", price_input=0.2)],
+        apps=[app_entry("app-a", max_cost_usd_per_request=100.0)])
+    lines = [_line(make_row(f"r{i}", "app-a", complexity=0.6, prompt_tokens=900,
+                            attempts=["m1"], chosen="m1"))
+            for i in range(4)]
+    proc, out = _run_cli(tmp_path, lines, snap, {"schema": P},
+                         "--min-agreement", "1.0")
+    assert proc.returncode == 4, proc.stderr
+    assert not out.exists()
+
+
+# --- P3c-2 Task 10: --scenarios (spec §6, §8) ---------------------------------
+
+S = "routeforge.policy-scenarios/v1"
+
+
+def _scenarios(*pairs, title="Options"):
+    return {"schema": S, "title": title,
+            "scenarios": [{"name": n, "proposal": p} for n, p in pairs]}
+
+
+def _run_cli_scenarios(tmp_path, export_lines, snapshot, scenarios_doc, *extra):
+    exp, snap, scn = tmp_path / "e.ndjson", tmp_path / "s.json", tmp_path / "c.json"
+    exp.write_text("".join(json.dumps(line) + "\n" for line in export_lines))
+    snap.write_text(json.dumps(snapshot))
+    scn.write_text(json.dumps(scenarios_doc))
+    out = tmp_path / "out"
+    proc = subprocess.run([sys.executable, str(SCRIPT), "--export", str(exp),
+                           "--snapshot", str(snap), "--scenarios", str(scn),
+                           "--out", str(out), *extra],
+                          capture_output=True, text=True, cwd=ROOT,
+                          env={**__import__("os").environ,
+                               "LITELLM_LOCAL_MODEL_COST_MAP": "True"})
+    return proc, out
+
+
+def _mixed_lines(n=6):
+    return [_line(make_row(f"r{i}", "app-a", complexity=[0.05, 0.6, 1.0][i % 3],
+                           ts=f"2026-09-2{i % 3}T12:00:0{i}+00:00")) for i in range(n)]
+
+
+_PAIR = (("drop-mid", {"endpoints": {"remove": ["local-mid"]}}),
+         ("half-tokens", {"workload": {"token_scale": 0.5}}))
+
+
+def test_cli_scenarios_writes_comparison_and_report(tmp_path):
+    proc, out = _run_cli_scenarios(tmp_path, _mixed_lines(), make_snapshot(),
+                                   _scenarios(*_PAIR))
+    assert proc.returncode == 0, proc.stderr
+    assert sorted(p.name for p in out.iterdir()) == ["comparison.json", "report.md"]
+    doc = json.loads((out / "comparison.json").read_text())
+    assert doc["schema"] == "routeforge.scenario-comparison/v1"
+    assert doc["inputs"]["title"] == "Options" and len(doc["inputs"]["scenarios_sha256"]) == 64
+    assert doc["inputs"]["since"] is None
+    assert [row["name"] for row in doc["table"]] == ["drop-mid", "half-tokens"]   # file order
+    assert doc["rows"]["simulated"] == 6
+    report = (out / "report.md").read_text()
+    assert report.startswith("> **Simulation only.**")
+    assert "RouteForge does not rank or recommend scenarios." in report
+    assert "6 rows simulated under 2 scenario(s)" in proc.stdout
+
+
+def test_cli_scenarios_deterministic(tmp_path):
+    args = (tmp_path, _mixed_lines(), make_snapshot(), _scenarios(*_PAIR))
+    proc, out = _run_cli_scenarios(*args)
+    assert proc.returncode == 0, proc.stderr
+    first = ((out / "comparison.json").read_bytes(), (out / "report.md").read_bytes())
+    proc2, _ = _run_cli_scenarios(*args)
+    assert proc2.returncode == 0
+    assert ((out / "comparison.json").read_bytes(), (out / "report.md").read_bytes()) == first
+
+
+def test_cli_single_scenario_matches_the_proposal_run(tmp_path):          # S2, end to end
+    body = {"endpoints": {"remove": ["local-mid"]}, "workload": {"cached_share": 0.5}}
+    proc, out = _run_cli(tmp_path, _mixed_lines(), make_snapshot(), {"schema": P, **body})
+    assert proc.returncode == 0, proc.stderr
+    sim = json.loads((out / "simulation.json").read_text())
+    proc2, out2 = _run_cli_scenarios(tmp_path, _mixed_lines(), make_snapshot(),
+                                     _scenarios(("only", body)))
+    assert proc2.returncode == 0, proc2.stderr
+    doc = json.loads((out2 / "comparison.json").read_text())
+    (entry,) = doc["scenarios"]
+    assert (doc["rows"], doc["baseline"]) == (sim["rows"], sim["baseline"])
+    assert (entry["edits"], entry["assumptions"]) == (sim["edits"], sim["assumptions"])
+    for key, value in entry["summary"].items():
+        assert value == sim[key], key
+
+
+@pytest.mark.parametrize("extra", [["--shadow-prices"], ["--proposal", "PROPOSAL"]])
+def test_cli_scenarios_excludes_proposal_and_shadow_prices(tmp_path, extra):
+    prop = tmp_path / "p.json"
+    prop.write_text(json.dumps({"schema": P}))
+    extra = [str(prop) if x == "PROPOSAL" else x for x in extra]
+    proc, out = _run_cli_scenarios(tmp_path, _mixed_lines(), make_snapshot(),
+                                   _scenarios(*_PAIR), *extra)
+    assert proc.returncode == 2, proc.stderr
+    assert "--scenarios cannot be combined" in proc.stderr
+    assert not out.exists()
+
+
+def test_cli_scenarios_invalid_scenario_exits_2_naming_it(tmp_path):
+    bad = _scenarios(_PAIR[0], ("bad-one", {"workload": {"token_scale": 0}}))
+    proc, out = _run_cli_scenarios(tmp_path, _mixed_lines(), make_snapshot(), bad)
+    assert proc.returncode == 2, proc.stderr
+    assert "scenarios[1](bad-one).proposal.workload.token_scale" in proc.stderr
+    assert "Traceback" not in proc.stderr and not out.exists()
+
+
+def test_cli_scenarios_unknown_key_exits_2(tmp_path):
+    bad = _scenarios(*_PAIR)
+    bad["scenarios"][0]["recommended"] = True
+    proc, out = _run_cli_scenarios(tmp_path, _mixed_lines(), make_snapshot(), bad)
+    assert proc.returncode == 2 and "scenarios[0].recommended" in proc.stderr
+    assert not out.exists()
+
+
+def test_cli_scenarios_exit_3_when_any_scenario_newly_rejects(tmp_path):
+    from tests.eval.sim_fixtures import app_entry
+    snap = make_snapshot(apps=[app_entry("app-a", allowed_models=["local-mid"])])
+    doc = _scenarios(("harmless", {}), ("drop-mid", {"endpoints": {"remove": ["local-mid"]}}))
+    proc, out = _run_cli_scenarios(tmp_path, _mixed_lines(), snap, doc,
+                                   "--fail-on-new-rejections")
+    assert proc.returncode == 3, proc.stderr
+    assert (out / "comparison.json").exists()             # written, then gated
+    proc2, _ = _run_cli_scenarios(tmp_path, _mixed_lines(), snap, doc)
+    assert proc2.returncode == 0
+    proc3, _ = _run_cli_scenarios(tmp_path, _mixed_lines(), snap,
+                                  _scenarios(("harmless", {})), "--fail-on-new-rejections")
+    assert proc3.returncode == 0
+
+
+def test_cli_scenarios_min_agreement_exits_4_and_writes_nothing(tmp_path):
+    proc, out = _run_cli_scenarios(tmp_path, _disagreeing_lines(), make_snapshot(),
+                                   _scenarios(*_PAIR), "--min-agreement", "0.9")
+    assert proc.returncode == 4, proc.stderr
+    assert "baseline agreement 0 over 4 compared rows" in proc.stderr
+    assert not out.exists()
+
+
+def test_cli_scenarios_since(tmp_path):
+    proc, out = _run_cli_scenarios(tmp_path, _two_eras(), make_snapshot(), _scenarios(*_PAIR),
+                                   "--since", "2026-09-10T00:00:00Z")
+    assert proc.returncode == 0, proc.stderr
+    doc = json.loads((out / "comparison.json").read_text())
+    assert doc["rows"]["simulated"] == 1 and doc["rows"]["excluded"]["before_since"] == 1
+    assert doc["inputs"]["since"] == "2026-09-10T00:00:00+00:00"
+    assert "Rows before `--since 2026-09-10T00:00:00+00:00` excluded: 1." in \
+        (out / "report.md").read_text()
+
+
+def test_live_round_trip_scenarios_empty_scenario_is_a_perfect_noop(tmp_path):
+    """Live export + live snapshot, one empty scenario: the shared baseline
+    still agrees 100% with what was served (the overflow re-selection and
+    the first-decision baseline change nothing on real rows), and every
+    delta is zero."""
+    with TestClient(create_app()) as c:
+        for _ in range(4):
+            r = c.post("/v1/chat/completions", headers={"Authorization": "Bearer demo-key"},
+                       json={"messages": [{"role": "user", "content": "hello"}]})
+            assert r.status_code == 200, r.text
+        _login(c)
+        snapshot = c.get("/admin/config-snapshot").json()
+        export = [json.loads(x) for x in
+                  c.get("/admin/outcomes/export").text.strip().splitlines()]
+    proc, out = _run_cli_scenarios(tmp_path, export, snapshot, _scenarios(("noop", {})),
+                                   "--min-agreement", "1.0")
+    assert proc.returncode == 0, proc.stderr
+    doc = json.loads((out / "comparison.json").read_text())
+    assert doc["rows"]["simulated"] == 4 and doc["baseline"]["agreement"] == 1.0
+    (row,) = doc["table"]
+    assert (row["route_changed"], row["newly_rejected"], row["cost_delta_usd"]) == (0, 0, 0)

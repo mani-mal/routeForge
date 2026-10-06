@@ -3,12 +3,20 @@
     uv run python scripts/policy_simulate.py --export outcomes.ndjson \
         --snapshot snapshot.json --proposal proposal.json --out results/sim
 
+    uv run python scripts/policy_simulate.py --export outcomes.ndjson \
+        --snapshot snapshot.json --scenarios scenarios.json --out results/cmp
+
 Reads a `routing_outcomes` NDJSON export (`GET /admin/outcomes/export`), a
 config snapshot (`GET /admin/config-snapshot`) and an operator-written policy
 proposal (`routeforge.policy-proposal/v1`); replays every simulated row's
 first routing decision under the snapshot as exported (`current`) and the
 snapshot with the proposal applied (`proposed`); and writes a deterministic
 `simulation.json` plus a human-readable `report.md` into `--out`.
+
+With `--scenarios` (P3c-2) it instead replays every scenario of a
+`routeforge.policy-scenarios/v1` file against one shared `current` arm and
+writes `comparison.json` plus `report.md`. Scenarios are reported in file
+order; nothing ranks or recommends one.
 
 **Simulation only.** It never applies the proposal to a live deployment --
 see `app/eval/simulate.py::REPORT_CAVEAT` and spec §2/§7 for what this does
@@ -17,9 +25,11 @@ and does not model.
 File-based only: no DB, no `app.api`, no serving import
 (`tests/eval/test_isolation.py`).
 
-Exit codes: 0 simulation written; 2 an input file failed to load, validate
-or apply; 3 the proposal introduces new rejections and
-`--fail-on-new-rejections` is set (for CI/GitOps gating).
+Exit codes: 0 output written; 2 an input file failed to load, validate or
+apply, or the flags do not combine; 3 the proposal (or any scenario)
+introduces new rejections and `--fail-on-new-rejections` is set (for
+CI/GitOps gating); 4 the baseline's agreement with the record is below
+`--min-agreement` (nothing is written).
 """
 from __future__ import annotations
 
@@ -41,11 +51,18 @@ from app.config.lint import ConfigLintError  # noqa: E402
 from app.config.loader import load_settings  # noqa: E402
 from app.eval.outcomes import load_export  # noqa: E402
 from app.eval.proposal import (  # noqa: E402
-    ProposalError, apply_proposal, load_proposal, normalized_edits,
+    ProposalError, apply_proposal, assumptions_block, load_proposal, normalized_edits,
 )
 from app.eval.scenario import SnapshotError, load_snapshot  # noqa: E402
+from app.eval.scenarios import (  # noqa: E402
+    ComparisonInvariantError, ScenarioError, compare, comparison_doc, load_scenarios,
+    render_comparison,
+)
 from app.eval.shadow import ShadowInvariantError, render_shadow_section, shadow_prices  # noqa: E402
-from app.eval.simulate import REPORT_CAVEAT, render_report, simulate, summarize  # noqa: E402
+from app.eval.simulate import (  # noqa: E402
+    REPORT_CAVEAT, agreement_ok, baseline_check, parse_since, render_report, simulate,
+    summarize,
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -56,29 +73,107 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--snapshot", required=True, help="GET /admin/config-snapshot JSON file")
     p.add_argument("--proposal", default=None,
                    help="routeforge.policy-proposal/v1 JSON file "
-                        "(required unless --shadow-prices is given)")
+                        "(required unless --shadow-prices or --scenarios is given)")
+    p.add_argument("--scenarios", default=None,
+                   help="routeforge.policy-scenarios/v1 JSON file: compare its scenarios "
+                        "side by side (P3c-2). Not combinable with --proposal or "
+                        "--shadow-prices.")
     p.add_argument("--out", required=True, help="output directory")
     p.add_argument("--config-dir", default="config",
                    help="base config directory the snapshot is overlaid onto (default: config)")
     p.add_argument("--fail-on-new-rejections", action="store_true",
-                   help="exit 3 if the proposal newly rejects any simulated row")
+                   help="exit 3 if the proposal (or any scenario) newly rejects any "
+                        "simulated row")
     p.add_argument("--shadow-prices", action="store_true",
                    help="price what each constraint costs (P3c-1); makes --proposal optional")
     p.add_argument("--max-relaxations", type=int, default=50,
                    help="cap on relaxations evaluated with --shadow-prices (default: 50)")
+    p.add_argument("--since", default=None, metavar="TS",
+                   help="ISO-8601 UTC timestamp; rows before it are excluded "
+                        "(counted as before_since). Applies to every mode.")
+    p.add_argument("--min-agreement", type=float, default=None, metavar="X",
+                   help="0..1; exit 4 and write nothing when the baseline's agreement "
+                        "with the recorded first attempts is below X (or not computable)")
     return p
+
+
+def _below_min_agreement(baseline: dict, minimum: float) -> int:
+    """Print why the `--min-agreement` gate refused the run; return exit 4."""
+    agreement = baseline["agreement"]
+    shown = "n/a" if agreement is None else f"{agreement:.6g}"
+    print(f"policy_simulate: baseline agreement {shown} over "
+          f"{baseline['rows_compared']} compared rows is below --min-agreement "
+          f"{minimum:g}; nothing written", file=sys.stderr)
+    return 4
+
+
+def _compare_scenarios(args: argparse.Namespace, *, records: list[dict], warnings: list[str],
+                       snapshot: dict, scenarios_doc: dict, inputs: dict, base,
+                       since) -> int:
+    """`--scenarios` mode (P3c-2): replay every scenario against one shared
+    `current` arm, then write `comparison.json` and `report.md`."""
+    try:
+        comparison = asyncio.run(compare(records, snapshot, scenarios_doc, base=base,
+                                         since=since))
+    except (SnapshotError, ProposalError, ScenarioError) as exc:
+        # All-or-nothing (spec §3): one invalid scenario fails the whole
+        # file, named `scenarios[<i>](<name>).proposal.<path>`.
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except ComparisonInvariantError as exc:
+        print(f"error: internal invariant: {exc}", file=sys.stderr)
+        return 2
+
+    if args.min_agreement is not None and not agreement_ok(comparison.baseline,
+                                                           args.min_agreement):
+        return _below_min_agreement(comparison.baseline, args.min_agreement)
+
+    doc = comparison_doc(comparison, inputs=inputs)
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    comparison_path = out / "comparison.json"
+    report_path = out / "report.md"
+    comparison_path.write_text(json.dumps(doc, sort_keys=True, indent=2) + "\n",
+                               encoding="utf-8")
+    report_path.write_text(render_comparison(doc), encoding="utf-8")
+
+    print(f"policy_simulate: {doc['rows']['simulated']} rows simulated under "
+          f"{len(doc['scenarios'])} scenario(s) ({len(warnings)} export warnings) -> {out}")
+    print(str(comparison_path))
+    print(str(report_path))
+
+    if args.fail_on_new_rejections and any(row["newly_rejected"] > 0 for row in doc["table"]):
+        return 3
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
 
-    if not args.shadow_prices and not args.proposal:
-        parser.error("--proposal is required unless --shadow-prices is given")
+    if args.scenarios and (args.proposal or args.shadow_prices):
+        # Shadow prices of N scenarios is out of scope (P3c-2 spec §6).
+        parser.error("--scenarios cannot be combined with --proposal or --shadow-prices")
+    if not (args.shadow_prices or args.proposal or args.scenarios):
+        parser.error("--proposal is required unless --shadow-prices or --scenarios is given")
 
     if args.max_relaxations < 1:
         print("error: --max-relaxations must be >= 1", file=sys.stderr)
         return 2
+
+    # `not (0 <= x <= 1)` also refuses NaN, which compares false both ways.
+    if args.min_agreement is not None and not (0.0 <= args.min_agreement <= 1.0):
+        print("error: --min-agreement must be between 0 and 1", file=sys.stderr)
+        return 2
+
+    since = None
+    if args.since is not None:
+        try:
+            since = parse_since(args.since)
+        except ValueError:
+            print(f"error: --since {args.since!r}: not an ISO-8601 timestamp",
+                  file=sys.stderr)
+            return 2
 
     try:
         records, warnings = load_export(args.export)
@@ -97,7 +192,11 @@ def main(argv: list[str] | None = None) -> int:
         proposal, proposal_sha256 = (None, None)
         if args.proposal:
             proposal, proposal_sha256 = load_proposal(args.proposal)
-    except (SnapshotError, ProposalError, ValueError, OSError, json.JSONDecodeError) as exc:
+        scenarios_doc, scenarios_sha256 = (None, None)
+        if args.scenarios:
+            scenarios_doc, scenarios_sha256 = load_scenarios(args.scenarios)
+    except (SnapshotError, ProposalError, ScenarioError, ValueError, OSError,
+            json.JSONDecodeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
@@ -110,10 +209,55 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: --config-dir {args.config_dir}: {exc}", file=sys.stderr)
         return 2
 
+    # The deployment posture every app was compiled under -- the SNAPSHOT's
+    # values, never this machine's local config.
+    serving_policy = {k: snapshot["settings"]["serving_policy"][k]
+                      for k in SERVING_POLICY_FIELDS}
+    if args.scenarios:
+        return _compare_scenarios(
+            args, records=records, warnings=warnings, snapshot=snapshot,
+            scenarios_doc=scenarios_doc, base=base, since=since,
+            inputs={
+                "export_sha256": export_sha256,
+                "snapshot_sha256": snapshot_sha256,
+                "scenarios_sha256": scenarios_sha256,
+                "title": scenarios_doc.get("title"),
+                "routing_policy_version": snapshot["routing_policy_version"],
+                "registry_version": snapshot["registry_version"],
+                "snapshot_generated_at": snapshot["generated_at"],
+                "serving_policy": serving_policy,
+                "since": since.isoformat() if since is not None else None,
+            })
+
+    inputs = {
+        "export_sha256": export_sha256,
+        "snapshot_sha256": snapshot_sha256,
+        "proposal_sha256": proposal_sha256,
+        "proposal_title": proposal.get("title") if proposal else None,
+        "routing_policy_version": snapshot["routing_policy_version"],
+        "registry_version": snapshot["registry_version"],
+        "snapshot_generated_at": snapshot["generated_at"],
+        "serving_policy": serving_policy,
+        "since": since.isoformat() if since is not None else None,
+    }
+
     try:
-        results = excluded = None
+        sim = baseline = None
         if args.proposal:
-            results, excluded = asyncio.run(simulate(records, snapshot, proposal, base=base))
+            results, excluded = asyncio.run(simulate(records, snapshot, proposal, base=base,
+                                                     since=since))
+            sim = summarize(results, excluded, inputs=inputs, edits=normalized_edits(proposal),
+                            assumptions=assumptions_block(proposal))
+            baseline = sim["baseline"]
+        elif args.min_agreement is not None:
+            # `--shadow-prices` alone has no `summarize()` output to read the
+            # fidelity block from, so the gate replays the snapshot once.
+            baseline = asyncio.run(baseline_check(records, snapshot, base=base, since=since))
+
+        # The gate runs before the (expensive) shadow pass and before any
+        # output directory or file exists (P3c-2 spec §6).
+        if args.min_agreement is not None and not agreement_ok(baseline, args.min_agreement):
+            return _below_min_agreement(baseline, args.min_agreement)
 
         shadow_block = None
         if args.shadow_prices:
@@ -128,7 +272,7 @@ def main(argv: list[str] | None = None) -> int:
                 baseline_label = "snapshot"
             shadow_block = asyncio.run(shadow_prices(
                 records, baseline_doc, base=base, cap=args.max_relaxations,
-                baseline_label=baseline_label))
+                baseline_label=baseline_label, since=since))
     except (SnapshotError, ProposalError) as exc:
         # Spec §8 governs over the narrower "catch ProposalError" reading:
         # exit 2 is "an input file failed to load OR VALIDATE" -- a
@@ -145,28 +289,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: internal invariant: {exc}", file=sys.stderr)
         return 2
 
-    # The deployment posture every app was compiled under -- the SNAPSHOT's
-    # values, never this machine's local config.
-    serving_policy = {k: snapshot["settings"]["serving_policy"][k]
-                      for k in SERVING_POLICY_FIELDS}
-
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     sim_path = out / "simulation.json"
     report_path = out / "report.md"
 
     if args.proposal:
-        inputs = {
-            "export_sha256": export_sha256,
-            "snapshot_sha256": snapshot_sha256,
-            "proposal_sha256": proposal_sha256,
-            "proposal_title": proposal.get("title"),
-            "routing_policy_version": snapshot["routing_policy_version"],
-            "registry_version": snapshot["registry_version"],
-            "snapshot_generated_at": snapshot["generated_at"],
-            "serving_policy": serving_policy,
-        }
-        sim = summarize(results, excluded, inputs=inputs, edits=normalized_edits(proposal))
         report_text = render_report(sim)
         if shadow_block is not None:
             sim["shadow_prices"] = shadow_block
@@ -179,16 +307,6 @@ def main(argv: list[str] | None = None) -> int:
         # proposal sections do not exist (spec §5), so `simulation.json` is
         # just the inputs (proposal fields null) plus the shadow block, and
         # `report.md` is the P3a caveat followed by the shadow section.
-        inputs = {
-            "export_sha256": export_sha256,
-            "snapshot_sha256": snapshot_sha256,
-            "proposal_sha256": None,
-            "proposal_title": None,
-            "routing_policy_version": snapshot["routing_policy_version"],
-            "registry_version": snapshot["registry_version"],
-            "snapshot_generated_at": snapshot["generated_at"],
-            "serving_policy": serving_policy,
-        }
         sim = {"schema": "routeforge.simulation/v1", "inputs": inputs,
               "shadow_prices": shadow_block}
         caveat = "\n".join("> " + line for line in REPORT_CAVEAT.split("\n"))

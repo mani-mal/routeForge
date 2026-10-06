@@ -1,7 +1,8 @@
 # Priorities 1–3: what is built and what remains
 
-**As of 2026-09-27**, `main` is at `02c9284` (through PR #80). The DGX Spark runs `4bfb0b3`
-(through PR #79). PR #80 touched offline tooling only, so no redeploy is needed for it.
+**As of 2026-10-06**, `main` is through PR #84 (P3c-2, alternative scenarios). The DGX
+Spark runs `4bfb0b3` (through PR #79). The DGX lab (Run:ai) cluster was rebuilt and
+redeployed by PR #83, and is the deployment target for P3c-2 onward (api/ui `0.26.0`).
 
 This is the status of the program set out in `docs/new/RouteForge-Priorities-1-3-LLM-Handoff.md`
 (the "handoff"). Each shipped slice went through the same pipeline: design spec
@@ -59,6 +60,7 @@ Handoff §37 Priority 2 criteria met:
 | **P3b** minimal conflicting core | #76, #77 | An empty feasible set's 422, the outcome row, and the simulator name the smallest set of requirements no endpoint meets together. Endpoint state (disabled, circuit open, …) is kept separate. Remediation hints never relax a security requirement. | `docs/reference/conflicting-core.md`, research §16 |
 | B56 / B57 | #78 | The exact app scope is enforced at the router; the `serving` logger actually prints in deployment | |
 | **P3c-1** shadow prices | #79, #80 | `policy_simulate.py --shadow-prices` relaxes one constraint at a time, per app, and prices it (cost/day, rejections avoided, newly rejected, quality, latency, on-prem share). Security constraints appear only as "cost of protection", never as a recommendation. | `docs/reference/policy-simulator.md` §8, research §17 |
+| **P3c-2** alternative scenarios | #84 | `policy_simulate.py --scenarios` replays several administrator-written scenarios against one shared baseline and writes one comparison table, in file order, never ranked. Proposals can assume a token scale, a cached-prompt share and a per-endpoint latency. Replay mirrors the gateway's context-window overflow re-selection. `--since` cuts old rows; `--min-agreement` refuses a run whose baseline disagrees with the record. | `docs/reference/policy-simulator.md` §9, research §18 |
 
 Handoff §37 Priority 3 criteria met:
 - simulation never activates anything;
@@ -87,43 +89,32 @@ partly met: nothing is ever applied, but there is no approval workflow (see §2.
 
 ## 2. Still to build
 
-### 2.1 Priority 3 (in progress: P3c-2 is next)
+### 2.1 Priority 3 (in progress: P3c-3 is next)
 
 The owner-approved order is scenarios → uncertainty → capacity. Each needs its own
 brainstorm, spec, plan and build.
 
-1. **P3c-2 alternative scenarios** (handoff §28, §31). Compare several
-   administrator-written scenarios side by side against one baseline. Each scenario is a
-   joint set of changes, reusing the P3a proposal format. The report is one table: cost, route
-   changes, rejections, quality, latency and on-prem share per scenario. RouteForge never
-   picks one. **Open design questions:**
-   - One file with named scenarios, or several `--proposal` files?
-   - Should the report re-check baseline agreement? Section 1 shows why it should.
-   - Which handoff §30 changes the proposal format must gain first. It already supports
-     adding, removing, disabling and updating endpoints, price changes, and region and
-     retention changes. It lacks rate-limit changes, endpoint-health degradation, loss of a
-     fallback endpoint, post-redaction token-count changes, and cache-affinity or
-     cached-price changes.
-2. **P3c-3 uncertainty ranges** (handoff §36, open question 11). Today every figure is a
+1. **P3c-3 uncertainty ranges** (handoff §36, open question 11). Today every figure is a
    point estimate from one replay. Candidates:
    - bootstrap over recorded rows for cost, latency and rejections;
    - propagation of the P2b-3 quality confidence intervals;
    - a clear "insufficient data" state when an app has too few rows.
-3. **P3c-4 capacity model** (handoff §26, §31). Nothing today says "on-prem demand reaches
+2. **P3c-4 capacity model** (handoff §26, §31). Nothing today says "on-prem demand reaches
    230% of capacity". This needs a declared per-endpoint capacity (requests/s or tokens/s),
    either operator-declared or measured from the observation log. The simulator would then
    aggregate simulated load per endpoint per time bucket, and turn overload into a
    predicted-rejection figure.
-4. **Administrator review workflow** (handoff §36, Phase 3, last bullet). Simulator output
+3. **Administrator review workflow** (handoff §36, Phase 3, last bullet). Simulator output
    is a report file today. There is no console surface, sign-off record, or link from an
    approved simulation to the admin write that applies it.
-5. **Replay fidelity gaps** (reference `policy-simulator.md` §6), each a possible later
+4. **Replay fidelity gaps** (reference `policy-simulator.md` §6), each a possible later
    slice:
    - no failover or escalation replay (first decision only);
    - no breaker state;
    - no re-running of PII detection;
    - no daily-spend or RPM admission;
-   - `context_window` changes are invisible because they are enforced at call time;
+   - recorded `context_overflow` rows are not reproduced, because failure rows record no
+     prompt size (research §18.2);
    - quality for routes never historically served falls back to the tier default
      (handoff open question 10).
 
@@ -174,7 +165,7 @@ brainstorm, spec, plan and build.
 
 1. Read the handoff §28–§31, then `docs/reference/policy-simulator.md` §1–§8 and research
    §15–§17.
-2. Start P3c-2 with a design brainstorm (the three open questions in §2.1 item 1), then a
-   spec, plan and subagent build.
+2. Start P3c-3 (uncertainty ranges) with a design brainstorm, then a spec, plan and subagent
+   build.
 3. Before quoting any simulator number from the Spark, check baseline agreement, and exclude
    rows recorded before B55.

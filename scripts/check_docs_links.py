@@ -54,6 +54,13 @@ SELF = Path(__file__).resolve()
 MD_LINK = re.compile(r"\]\(\s*<?([^)>\s]+)>?\s*(?:\"[^\"]*\")?\s*\)")
 # [ref]: target — markdown reference-style link definitions.
 LINK_DEF = re.compile(r"^\[([^\]]+)\]:\s*(\S+)", re.MULTILINE)
+# `a[b](c)` — a single-backtick inline code span (never crosses a newline, so
+# this never jumps out of one line into the next, or across a ``` fence that
+# happens to share a line with other backticks). MD_LINK is backtick-blind, so
+# a literal code example that LOOKS like a markdown link (e.g. a dotted path
+# shown as `scenarios[0](name).proposal...`) would otherwise be flagged as a
+# broken link for its parenthesised "target".
+INLINE_CODE = re.compile(r"`[^`\n]*`")
 # docs/foo/bar.md mentioned in prose or a code comment.
 DOCS_FILE = re.compile(r"(?<![\w/.-])docs/[A-Za-z0-9_][A-Za-z0-9_./-]*\.md")
 # docs/foo/ or docs/foo/bar/ mentioned as a directory (one or more segments).
@@ -99,8 +106,9 @@ def check_internal() -> list[str]:
         if md.relative_to(ROOT).as_posix().startswith(SKIP_PREFIXES):
             continue
         text = md.read_text(encoding="utf-8", errors="replace")
-        raw_targets = list(MD_LINK.findall(text))
-        raw_targets += [target for _label, target in LINK_DEF.findall(text)]
+        scan_text = INLINE_CODE.sub("", text)
+        raw_targets = list(MD_LINK.findall(scan_text))
+        raw_targets += [target for _label, target in LINK_DEF.findall(scan_text)]
         for raw in raw_targets:
             resolved = _link_target(md, raw)
             if resolved is not None and not resolved.exists():

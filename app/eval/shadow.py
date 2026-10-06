@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
+from datetime import datetime
 
 from collections import Counter
 
@@ -36,6 +37,7 @@ from app.eval.outcomes import _fmt, _round6
 from app.eval.scenario import app_rules, build_scenario, close_scenario
 from app.eval.simulate import (
     RowResult,
+    _before_since,
     _bucket_stats,
     _moves,
     _newly_rejected,
@@ -432,7 +434,8 @@ def _rank_key(entry: dict) -> tuple:
 
 
 async def shadow_prices(records: list[dict], baseline_doc: dict, *, base: Settings,
-                        cap: int = 50, baseline_label: str = "snapshot") -> dict:
+                        cap: int = 50, baseline_label: str = "snapshot",
+                        since: datetime | None = None) -> dict:
     """The spec §5 `shadow_prices` block for `baseline_doc` (the snapshot,
     or the snapshot with a proposal already applied -- the caller decides and
     says which in `baseline_label`).
@@ -444,11 +447,12 @@ async def shadow_prices(records: list[dict], baseline_doc: dict, *, base: Settin
     A baseline-routed row the relaxation rejects is reported
     (`newly_rejected`, `newly_rejected_reasons`), not raised. A relaxation
     is binding when it changes a route, avoids a rejection or newly rejects
-    a row; the rest are counted as `non_binding`, not listed."""
-    observed = observed_latencies(records)
+    a row; the rest are counted as `non_binding`, not listed. `since` cuts
+    the export exactly as `simulate.run_rows` does (P3c-2)."""
+    observed = observed_latencies([r for r in records if not _before_since(r, since)])
     baseline = await build_scenario(baseline_doc, base=base)
     try:
-        rows, _excluded = select_rows(records, set(baseline.apps))
+        rows, _excluded = select_rows(records, set(baseline.apps), since=since)
         base_arm = {row["request_id"]: simulate_row(baseline, row, observed) for row in rows}
         # The export window spans every selected row, whichever app sent it
         # (spec §4); one value serves every relaxation's per-day figure.

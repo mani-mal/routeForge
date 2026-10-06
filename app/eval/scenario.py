@@ -12,7 +12,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-from dataclasses import dataclass, fields as dc_fields
+from dataclasses import dataclass, field, fields as dc_fields
 
 from pydantic import ValidationError
 
@@ -32,6 +32,10 @@ from app.routing.signals import SignalValue
 
 SCHEMA_PREFIX = "routeforge.config-snapshot/"
 SCHEMA_MAJOR = "v1"
+
+#: The key a global workload value is stored under in an applied document's
+#: `assumptions` block (P3c-2 spec §4.3); any other key is an application id.
+ALL_APPS = "*"
 
 _REQUIRED_TOP_KEYS = (
     "schema", "generated_at", "routing_policy_version", "registry_version",
@@ -69,6 +73,14 @@ def load_snapshot(path: str) -> tuple[dict, str]:
     except json.JSONDecodeError as exc:
         raise SnapshotError("file", f"invalid JSON: {exc}") from exc
     validate_snapshot(doc)
+    # `assumptions` is written only by `apply_proposal` (P3c-2 spec §4.3). A
+    # snapshot FILE that carries one was edited by hand: refuse it, so
+    # workload or latency assumptions can never be smuggled into the
+    # `current` arm.
+    if "assumptions" in doc:
+        raise SnapshotError(
+            "assumptions", "not allowed in a snapshot file; it is written only by "
+            "apply_proposal")
     return doc, digest
 
 
@@ -288,6 +300,10 @@ class FrozenSignals:
 
     cfg: SignalsCfg
     values: dict[str, dict]
+    # P3c-2 spec §4.2: operator-asserted latency per endpoint, from the
+    # applied document's `assumptions.latency_ms`. Empty for the `current`
+    # arm.
+    overrides: dict[str, float] = field(default_factory=dict)
 
     def _tier_default(self, tier: str) -> float:
         return self.cfg.tier_latency_ms.get(tier, self.cfg.latency_scale_ms)
@@ -298,6 +314,14 @@ class FrozenSignals:
             return SignalValue(default, "disabled", 0)
         row = self.values.get(model)
         n = int(row["latency_n"]) if row else 0
+        if model in self.overrides:
+            # Scored exactly as a measurement would be -- it also serves as
+            # the same-tier peer prior for unmeasured endpoints
+            # (`strategy._with_peer_prior`), as a live measurement of this
+            # value would. So asserting the value already in use changes no
+            # route. Below the `enabled` check on purpose: a deployment with
+            # signals off ignores measured latency when scoring, live.
+            return SignalValue(self.overrides[model], "measured", n)
         if row is None or n < self.cfg.min_samples:
             return SignalValue(default, "tier_default", n)
         return SignalValue(float(row["latency_ms"]), "measured", n)
@@ -323,6 +347,58 @@ class FrozenSignals:
             return None
         return float(row["latency_ms"])
 
+    def proposed_latency(self, model: str) -> float | None:
+        """The proposal's asserted latency for `model`, or None. The replay
+        ladder's first rung: it wins over observed, signal and tier-default
+        latency, whether or not signals are enabled."""
+        return self.overrides.get(model)
+
+
+_ASSUMPTION_KEYS = ("token_scale", "cached_share", "latency_ms")
+
+
+@dataclass(frozen=True)
+class Assumptions:
+    """What a proposal ASSUMES rather than configures (P3c-2 spec §4): a
+    token scale and a cached-prompt share per app (`ALL_APPS` holds the
+    global value), and an asserted latency per endpoint. Empty for a
+    scenario built from a plain snapshot, so the `current` arm never
+    carries any."""
+
+    token_scale: dict[str, float] = field(default_factory=dict)
+    cached_share: dict[str, float] = field(default_factory=dict)
+    latency_ms: dict[str, float] = field(default_factory=dict)
+
+    def scale_for(self, app_id: str) -> float:
+        """The app's own `token_scale`, else the global one, else 1.0."""
+        return self.token_scale.get(app_id, self.token_scale.get(ALL_APPS, 1.0))
+
+    def cached_for(self, app_id: str) -> float:
+        """The app's own `cached_share`, else the global one, else 0.0."""
+        return self.cached_share.get(app_id, self.cached_share.get(ALL_APPS, 0.0))
+
+
+def _assumptions(doc: dict) -> Assumptions:
+    """The applied document's `assumptions` block as an `Assumptions`; an
+    absent block is the empty one. The block is machine-written
+    (`apply_proposal`), so this only checks its shape -- the ranges were
+    validated where the proposal was."""
+    block = doc.get("assumptions")
+    if block is None:
+        return Assumptions()
+    _need_dict(block, "assumptions")
+    for key in block:
+        if key not in _ASSUMPTION_KEYS:
+            raise SnapshotError(f"assumptions.{key}", "unknown key")
+    maps: dict[str, dict[str, float]] = {}
+    for key in _ASSUMPTION_KEYS:
+        values = _need_dict(block.get(key, {}), f"assumptions.{key}")
+        for name, value in values.items():
+            if not _is_number(value):
+                raise SnapshotError(f"assumptions.{key}.{name}", "must be a number")
+        maps[key] = {name: float(value) for name, value in values.items()}
+    return Assumptions(**maps)
+
 
 @dataclass(frozen=True)
 class AppScenario:
@@ -342,6 +418,7 @@ class Scenario:
     apps: dict[str, AppScenario]
     router: Router
     db: Database
+    assumptions: Assumptions = field(default_factory=Assumptions)
 
 
 def _app_policy_view(policy: dict, app_id: str) -> AppPolicyView:
@@ -383,6 +460,7 @@ async def build_scenario(doc: dict, *, base: Settings) -> Scenario:
             raise SnapshotError(
                 f"onboarded.{row['slug']}.tier",
                 f"unknown tier {row['tier']!r}; legal tiers: {sorted(canonical_tiers)}")
+    assumptions = _assumptions(doc)   # before the scratch DB: a bad block leaks nothing
 
     db = Database(url="sqlite+aiosqlite://")
     await db.ensure_ready()
@@ -430,7 +508,8 @@ async def build_scenario(doc: dict, *, base: Settings) -> Scenario:
                 QualityScore(entry["score"], "calibrated", entry["set_id"]))
         quality.set_overrides(overrides)
 
-        signals = FrozenSignals(settings.routing.signals, doc["signals"])
+        signals = FrozenSignals(settings.routing.signals, doc["signals"],
+                                assumptions.latency_ms)
 
         apps: dict[str, AppScenario] = {}
         for entry in doc["apps"]:
@@ -444,7 +523,8 @@ async def build_scenario(doc: dict, *, base: Settings) -> Scenario:
         router = Router(settings, quality_resolver=quality, registry=registry, signals=signals)
 
         return Scenario(settings=settings, registry=registry, quality=quality,
-                        signals=signals, apps=apps, router=router, db=db)
+                        signals=signals, apps=apps, router=router, db=db,
+                        assumptions=assumptions)
     except BaseException:
         await db.dispose()
         raise

@@ -53,7 +53,7 @@ items:
         - name: ghcr-pull
         containers:
         - name: api
-          image: ghcr.io/mani-mal/serving-plane-api:0.25.0
+          image: ghcr.io/mani-mal/serving-plane-api:0.26.0
           ports: [{name: http, containerPort: 8080}]
           env:
           - {name: SP_SERVER_PORT, value: "8080"}
@@ -97,6 +97,15 @@ items:
             valueFrom: {secretKeyRef: {name: routeforge-admin, key: ADMIN_EMAIL}}
           - name: ADMIN_PASSWORD
             valueFrom: {secretKeyRef: {name: routeforge-admin, key: ADMIN_PASSWORD}}
+          # Bearer key for the onboarded `qwen3-coder-next` vLLM endpoint
+          # (http://qwen-coder.runai-glm-coding:8000/v1). The onboarding form's
+          # "api key env" field takes this variable's NAME, never the key itself.
+          # Secret created out of band (never in git):
+          #   kubectl -n runai-routeforge create secret generic qwen-coder-key \
+          #     --from-literal=SP_QWEN_CODER_API_KEY=<the vLLM --api-key>
+          # `optional: true` so the API still boots on a cluster without that model.
+          - name: SP_QWEN_CODER_API_KEY
+            valueFrom: {secretKeyRef: {name: qwen-coder-key, key: SP_QWEN_CODER_API_KEY, optional: true}}
           # Optional: to auto-provision a Langfuse PROJECT per application on
           # onboard (POST /admin/applications), set the in-cluster Langfuse host
           # plus an organization-scoped API key pair (Langfuse org settings ->
@@ -219,7 +228,7 @@ items:
         - name: ghcr-pull
         containers:
         - name: ui
-          image: ghcr.io/mani-mal/serving-plane-ui:0.25.0
+          image: ghcr.io/mani-mal/serving-plane-ui:0.26.0
           ports: [{name: http, containerPort: 80}]
           resources:
             requests: {cpu: "50m", memory: 64Mi}

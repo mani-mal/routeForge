@@ -6,8 +6,10 @@ import asyncio
 import pytest
 from hypothesis import HealthCheck, given, settings as hsettings, strategies as st
 
-from app.eval.simulate import (REPORT_CAVEAT, observed_latencies, render_report, select_rows,
-                               simulate, simulate_row, summarize)
+from app.eval.simulate import (EXCLUSION_REASONS, REPORT_CAVEAT, agreement_ok,
+                               baseline_check, observed_latencies, parse_since,
+                               render_report, select_rows, simulate, simulate_row,
+                               summarize)
 from tests.eval.sim_fixtures import (BASE_SETTINGS, app_entry, make_row, make_snapshot,
                                      onboarded_row)
 
@@ -92,8 +94,8 @@ def test_select_rows_exclusions():
             make_row("e", "app-a", complexity=None)]
     rows, excluded = select_rows(recs, {"app-a"})
     assert [r["request_id"] for r in rows] == ["a"]
-    assert excluded == {"cache_hit": 1, "unknown_status": 1, "unknown_app": 1,
-                        "missing_features": 1}
+    assert excluded == {"before_since": 0, "cache_hit": 1, "unknown_status": 1,
+                        "unknown_app": 1, "missing_features": 1}
 
 
 def test_observed_latency_median_single_attempt_ok_only():
@@ -459,3 +461,89 @@ def test_recorded_max_tokens_reaches_the_budget_check():
     assert by["nc"].current.outcome == "routed"
     assert by["bc"].current.outcome == "rejected"
     assert "over_budget" in by["bc"].current.reject_codes
+
+
+# --- P3c-2 Task 1: --since row cut (spec §6, S10) -----------------------------
+
+def _since_rows():
+    return [make_row("old1", "app-a", ts="2026-09-20T11:59:59+00:00"),
+            make_row("old2", "app-a", ts="2026-09-19T00:00:00+00:00", cache_hit=True),
+            make_row("edge", "app-a", ts="2026-09-20T12:00:00+00:00"),
+            make_row("new1", "app-a", ts="2026-09-21T00:00:00+00:00")]
+
+
+def test_s10_since_excludes_and_counts_old_rows():                         # S10
+    since = parse_since("2026-09-20T12:00:00Z")
+    results, excluded = asyncio.run(simulate(
+        _since_rows(), make_snapshot(), {"schema": P}, base=BASE_SETTINGS, since=since))
+    # none before the cut reaches replay; the boundary row (ts == since) does
+    assert [r.row["request_id"] for r in results] == ["edge", "new1"]
+    # before_since is checked FIRST: old2 is also a cache hit, counted once, here
+    assert excluded["before_since"] == 2 and excluded["cache_hit"] == 0
+    assert EXCLUSION_REASONS[0] == "before_since"
+
+
+def test_since_equals_a_precut_export():
+    """`--since` is a cut of the export: every number equals a run over an
+    export that never held the old rows -- including the observed-latency
+    medians, which an old row must not feed."""
+    old = make_row("old", "app-a", ts="2026-09-01T00:00:00+00:00", latency_ms=99999.0)
+    new = [make_row(f"n{i}", "app-a", ts=f"2026-09-20T12:00:0{i}+00:00") for i in range(3)]
+    since = parse_since("2026-09-10T00:00:00+00:00")
+    cut, cut_excluded = asyncio.run(simulate(
+        [old] + new, make_snapshot(), {"schema": P}, base=BASE_SETTINGS, since=since))
+    pre, _ = _run(new, make_snapshot(), {"schema": P})
+    assert [(r.row["request_id"], r.current, r.proposed) for r in cut] == \
+           [(r.row["request_id"], r.current, r.proposed) for r in pre]
+    assert all(r.current.latency_ms == 120.0 for r in cut)      # not the old row's 99999
+    assert cut_excluded["before_since"] == 1
+
+
+@pytest.mark.parametrize("flag", ["2026-09-20T12:00:00Z", "2026-09-20T12:00:00+00:00",
+                                  "2026-09-20T12:00:00", "2026-09-20T14:00:00+02:00"])
+@pytest.mark.parametrize("row_ts,kept", [
+    ("2026-09-20T12:00:00Z", True),             # Z suffix, on the boundary
+    ("2026-09-20T12:00:00", True),              # naive is read as UTC
+    ("2026-09-20T13:59:59+02:00", False),       # 11:59:59 UTC
+    ("2026-09-20T07:00:00-05:00", True),        # 12:00:00 UTC
+    ("2026-09-20T11:59:59.999999+00:00", False),
+])
+def test_since_compares_instants_not_strings(flag, row_ts, kept):          # Review Focus 1
+    rows, excluded = select_rows([make_row("r", "app-a", ts=row_ts)], {"app-a"},
+                                 since=parse_since(flag))
+    assert (len(rows) == 1) is kept
+    assert excluded["before_since"] == (0 if kept else 1)
+
+
+def test_since_row_without_ts_is_missing_features_not_simulated():         # Review Focus 1
+    """A row with no `ts` cannot be placed in the window. Without a cut it
+    is simulated as before; with one it is counted, never guessed at."""
+    row = make_row("r", "app-a", ts=None)
+    assert len(select_rows([row], {"app-a"})[0]) == 1
+    rows, excluded = select_rows([row], {"app-a"}, since=parse_since("2026-01-01"))
+    assert rows == [] and excluded["missing_features"] == 1 and excluded["before_since"] == 0
+
+
+@pytest.mark.parametrize("bad", ["yesterday", "", "2026-13-01", "12:00"])
+def test_parse_since_rejects_non_timestamps(bad):
+    with pytest.raises(ValueError):
+        parse_since(bad)
+
+
+# --- P3c-2 Task 2: the agreement gate's inputs (spec §6) ----------------------
+
+def test_baseline_check_equals_the_summarized_baseline():
+    """`baseline_check` (no proposal) and `summarize()["baseline"]` (empty
+    proposal) are the same block: both replay the snapshot as exported."""
+    rows = _rows(4) + [make_row("d", "app-a", attempts=["local-big"], chosen="local-big")]
+    sim = summarize(*_run(rows, make_snapshot(), {"schema": P}), inputs=_INPUTS, edits={})
+    assert asyncio.run(baseline_check(rows, make_snapshot(), base=BASE_SETTINGS)) \
+        == sim["baseline"]
+
+
+@pytest.mark.parametrize("agreement,minimum,ok", [
+    (1.0, 1.0, True), (0.9, 0.9, True), (0.899999, 0.9, False),
+    (0.0, 0.0, True), (None, 0.0, False),
+])
+def test_agreement_ok(agreement, minimum, ok):
+    assert agreement_ok({"agreement": agreement, "rows_compared": 0}, minimum) is ok
