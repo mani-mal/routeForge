@@ -44,7 +44,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 from app.eval.calibration import recommendation_set_id
-from app.eval.outcomes import _round6
+from app.eval.outcomes import _fmt, _round6
 from app.eval.simulate import ArmResult, RowResult, _bucket_stats, _parse_ts, _route_changed
 
 METHOD = "stratified_paired_row_bootstrap"
@@ -562,3 +562,178 @@ def plan_block(plan: UncertaintyPlan) -> dict:
             "interval": plan.interval, "seed": plan.seed, "min_rows": plan.min_rows,
             "quality_posterior_sets": [set_id for set_id, _sha in plan.posterior_files],
             "not_covered": list(NOT_COVERED)}
+
+
+# --- report text (spec §10) ---------------------------------------------------
+
+#: Printed in every report that shows a range, verbatim (spec §8), one string
+#: per source line without the leading "> " -- the same convention as
+#: `simulate.REPORT_CAVEAT`. Pinned by tests/eval/test_uncertainty_report.py.
+UNCERTAINTY_CAVEAT = (
+    "**Ranges show sampling variability only.** Each range is a percentile interval from\n"
+    "resampling the recorded rows with replacement, within each application, under this replay\n"
+    "model. It does not include replay model error (first-decision replay, frozen signals,\n"
+    "predicted overflow), the error of the admission estimate for rows no backend answered,\n"
+    "inputs that were not recorded, or future traffic shift. Replay gives each endpoint one\n"
+    "latency, so a latency range reflects only which endpoints the resampled rows used. A narrow\n"
+    "range on a biased replay is still biased."
+)
+
+#: Why a zero count is not "no risk" (spec §7). `{}` fields: n, level, bound, one_in.
+ZERO_COUNT_NOTE = (
+    "newly_rejected is 0 in all {n} rows. That is not zero risk: at the {level} level these "
+    "rows are consistent with a newly-rejected rate of up to {bound} (about 1 request in "
+    "{one_in}), if the rows are independent draws from the same traffic. Correlated rows, "
+    "such as the calls of one agent loop, make the true bound larger."
+)
+
+# (label, path into a bucket) for the range table, in `_metrics_table`'s order.
+_FIGURE_ROWS = tuple(
+    [(f"cost_usd {k}", ("cost_usd", k)) for k in ("current", "proposed", "delta")]
+    + [(f"cost_usd (both routed) {k}", ("cost_usd_both_routed", k))
+       for k in ("current", "proposed", "delta")]
+    + [(name, (name,)) for count in _COUNTS for name in (count, f"{count}_share")]
+    + [(f"latency_ms {p} {k}", ("latency_ms", p, k))
+       for p in ("p50", "p95") for k in ("current", "proposed", "delta")]
+    + [(f"quality_mean {k}", ("quality_mean", k)) for k in ("current", "proposed", "delta")]
+    + [(f"onprem_share {k}", ("onprem_share", k)) for k in ARMS])
+
+_PER_DAY_ROWS = (
+    ("cost_usd/day current", ("cost_usd", "current")),
+    ("cost_usd/day proposed", ("cost_usd", "proposed")),
+    ("cost_usd/day delta", ("cost_usd", "delta")),
+    ("cost_usd/day (both routed) delta", ("cost_usd_both_routed", "delta")),
+)
+
+
+def level_text(level: float) -> str:
+    """`0.9` as `90%`."""
+    return f"{level * 100:g}%"
+
+
+def caveat_lines() -> list[str]:
+    return ["> " + line for line in UNCERTAINTY_CAVEAT.split("\n")]
+
+
+def method_line(block: dict) -> str:
+    """One sentence saying how the ranges were made, from the block's head."""
+    return (f"{level_text(block['interval'])} percentile intervals from {block['replicates']} "
+            "bootstrap resamples of the simulated rows, drawn with replacement within each "
+            f"application (seed {block['seed']}). Both arms, and every scenario or relaxation, "
+            f"use the same resampled rows. A bucket with fewer than {block['min_rows']} rows "
+            "gets no range.")
+
+
+def quality_line(coverage: dict) -> str:
+    """How much of the quality range is label uncertainty (spec §6)."""
+    cur, prop = coverage["current"], coverage["proposed"]
+    text = (f"Quality uncertainty covers {cur['posterior']} of {cur['routed']} routed rows in "
+            f"the current arm and {prop['posterior']} of {prop['routed']} in the proposed arm; "
+            "the rest use a point prior.")
+    missing = max(cur["calibrated"] - cur["posterior"], prop["calibrated"] - prop["posterior"])
+    if missing:
+        text += (f" Up to {missing} row(s) per arm have a calibrated quality with no posterior "
+                 "loaded: pass the file that set was applied from with --quality-posteriors.")
+    return text
+
+
+def insufficient_text(bucket: dict) -> str:
+    return f"insufficient data (n = {bucket['n']})"
+
+
+def range_text(node: dict) -> str:
+    """A leaf's range for a table cell: `lo to hi`, with what is unusual
+    about it said in words."""
+    if node["lo"] is None:
+        return f"n/a (undefined in {node.get('undefined_replicates', 0)} resamples)"
+    text = f"{_fmt(node['lo'])} to {_fmt(node['hi'])}"
+    if node.get("point_outside"):
+        text += " (point outside range)"
+    return text
+
+
+def with_range(text: str, node: dict | None) -> str:
+    """`text [lo, hi]` for a cell of a table that already shows the point;
+    `text` unchanged when there is no leaf for it."""
+    if node is None:
+        return text
+    if node["lo"] is None:
+        return f"{text} [n/a]"
+    return f"{text} [{_fmt(node['lo'])}, {_fmt(node['hi'])}]"
+
+
+def _dig(bucket: dict, path: tuple[str, ...]) -> dict:
+    node = bucket
+    for part in path:
+        node = node[part]
+    return node
+
+
+def _table(bucket: dict, rows: tuple, level: float) -> list[str]:
+    lines = [f"| figure | point | {level_text(level)} range |", "|---|---|---|"]
+    for label, path in rows:
+        node = _dig(bucket, path)
+        lines.append(f"| {label} | {_fmt(node['point'])} | {range_text(node)} |")
+    return lines
+
+
+def zero_count_note(bucket: dict, level: float) -> str | None:
+    """`ZERO_COUNT_NOTE` for a bucket whose `newly_rejected` is 0, else None."""
+    if bucket.get("insufficient_data"):
+        return None
+    bound = bucket["newly_rejected_share"].get("zero_bound")
+    if bound is None:
+        return None
+    return ZERO_COUNT_NOTE.format(n=bucket["n"], level=level_text(level),
+                                  bound=f"{bound * 100:.3g}%",
+                                  one_in=f"{max(1, round(1 / bound)):,}")
+
+
+def bucket_lines(bucket: dict, level: float) -> list[str]:
+    """One bucket for a report: its range table and, when `newly_rejected`
+    is 0, the zero-count note -- or the insufficient-data line alone."""
+    if bucket.get("insufficient_data"):
+        return [insufficient_text(bucket)]
+    lines = _table(bucket, _FIGURE_ROWS, level)
+    note = zero_count_note(bucket, level)
+    if note:
+        lines += ["", note]
+    return lines
+
+
+def outside_line(count: int) -> str | None:
+    if not count:
+        return None
+    return (f"{count} figure(s) have a point estimate outside their own range (marked). A "
+            "percentile interval does not guarantee otherwise; nothing was widened.")
+
+
+def render_uncertainty_section(block: dict) -> str:
+    """The "Uncertainty ranges" section of a single-proposal `report.md`,
+    from `simulation.json`'s `uncertainty` block alone: caveat, method, then
+    (when the block has them -- a shadow-prices-only run does not) the
+    quality coverage, the totals, the per-day figures and each app."""
+    lines: list[str] = ["## Uncertainty ranges", ""]
+    lines += caveat_lines()
+    lines += ["", method_line(block), ""]
+    if "totals" not in block:
+        return "\n".join(lines)
+    level = block["interval"]
+    lines += [quality_line(block["quality_posterior"]), ""]
+    outside = outside_line(block["points_outside_interval"])
+    if outside:
+        lines += [outside, ""]
+    lines += [f"### Totals (n = {block['totals']['n']})", ""]
+    lines += bucket_lines(block["totals"], level)
+    lines.append("")
+    if block["per_day"] is not None:
+        lines += ["### Per day", ""]
+        lines += _table(block["per_day"], _PER_DAY_ROWS, level)
+        lines.append("")
+    lines += ["### By app", ""]
+    for app_id in sorted(block["by_app"]):
+        bucket = block["by_app"][app_id]
+        lines += [f"#### {app_id} (n = {bucket['n']})", ""]
+        lines += bucket_lines(bucket, level)
+        lines.append("")
+    return "\n".join(lines)
