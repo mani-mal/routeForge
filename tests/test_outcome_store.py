@@ -315,6 +315,12 @@ def test_schema_is_content_free():
     assert "prompt_tokens" in RoutingOutcome.__table__.columns
     assert "prompt_tokens_bucket" in RoutingOutcome.__table__.columns
     assert "completion_tokens" in RoutingOutcome.__table__.columns
+    # B60: the routing token count is a nullable integer COUNT -- no text can
+    # ride on it, and old rows (and cache hits) leave it null.
+    from sqlalchemy import Integer
+    routing_tokens = RoutingOutcome.__table__.columns["routing_tokens"]
+    assert isinstance(routing_tokens.type, Integer)
+    assert routing_tokens.nullable is True
 
 
 def test_outcome_feedback_has_the_app_request_composite_index():

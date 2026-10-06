@@ -310,8 +310,7 @@ literature doesn't model".
   it would have served 7, and baseline agreement stayed 1.0 because it only compares `ok`
   rows. Lesson, same family as B55 (§3.7): *every input the admission and routing decision
   read must be on the record for rejected requests too, and agreement must compare
-  outcomes (served vs rejected), not only the chosen model.* Fix is scoped into the
-  replay-fidelity slice (§4.4).
+  outcomes (served vs rejected), not only the chosen model.* The fix is §4.4.1.
 - **Experiment E-P3c2 (TO MEASURE):** the HO §25/§28 healthcare triad as three scenarios
   (all-on-prem / raw-PII-only on-prem / all-on-prem + second endpoint) on a persona-generated
   traffic mix with realistic shares (60/25/10/5). Report the comparison table. Also: static
@@ -319,7 +318,58 @@ literature doesn't model".
 
 ### 4.2 P3c-3 uncertainty ranges — *spec pending*
 ### 4.3 P3c-4 capacity model — *spec pending* (HO §25 "230% of capacity" example)
-### 4.4 Replay fidelity: failover/escalation, breaker state, spend/RPM admission — *spec pending*
+### 4.4 Replay fidelity
+
+#### 4.4.1 Replayable rejections (B60; spec `docs/superpowers/specs/2026-10-06-replayable-rejections-design.md`)
+
+- **Claim:** a request the gateway rejected is replayable from a content-free record, once
+  the record carries the one number the admission decision read: the token count the router
+  was given. A fidelity check must compare *outcomes* (routed or rejected), not only the
+  chosen model.
+- **What changed (FB §19.1):** every outcome row records `routing_tokens` (RouteForge's own
+  post-gate, post-compression count), separate from the backend's billed `prompt_tokens`.
+  Replay routes on the first and prices on the second. A rejected row is priced at the
+  admission estimate and counted as an estimate. A rejected row with no recorded size is
+  excluded and counted, never replayed as an empty prompt.
+- **Lesson to state (extends §3.7):** *every input the admission and routing decision read
+  must be on the record for rejected requests too; agreement must compare outcomes, not only
+  the chosen model.* B55 and B60 are the same defect found twice: a field the decision read
+  was missing from the row, and replay substituted a default that looked plausible. The two
+  agreement measures are each blind to the other's failure (FB §19.1), which is why both are
+  reported and the gate takes the lower.
+- **Second finding (FB §19.2):** a pooled outcome rate dilutes rejections, which are a small
+  share of traffic. The count of unreproduced rejections out of the recorded rejections is
+  the trustworthy number; report it beside the rate.
+- **Invariants to cite, with the test that pins each** (full table: FB §19.3):
+  R1 `test_schema_is_content_free` and
+  `test_r1_rejected_row_with_pii_carries_a_count_and_no_content`; R2
+  `test_r2_served_row_replay_is_unchanged_when_the_counts_coincide`; R3
+  `test_r3_budget_rejected_row_is_rejected_in_the_current_arm`; R4
+  `test_r4_raising_the_cap_newly_serves_it_at_the_admission_estimate`; R5
+  `test_live_round_trip_budget_rejections_replay_as_rejected`; R6
+  `test_r6_unsized_rows_are_excluded_and_counted_never_routed`; R7
+  `test_no_serving_module_imports_app_eval`; R8
+  `test_outcome_recording_adds_nothing_to_the_success_wire`; R9
+  `test_r9_export_without_the_field_still_loads_and_replays_served_rows`; R10
+  `tests/test_outcome_routing_tokens.py`; R11
+  `test_r11_every_status_has_a_recorded_outcome_class`; R12
+  `test_r12_gate_takes_the_lower_of_the_two`; R13
+  `test_r13_unmigrated_table_serving_continues_and_the_documented_alter_repairs_it`.
+- **Privacy argument for the paper:** the added field is an integer length, measured after
+  the gate. It is the same class of value as the token counts already recorded, and for
+  requests under 2000 tokens it was already recoverable from `complexity`. It adds a length
+  side channel for rejected requests, and that is all it adds (reference
+  `routing-outcomes.md` §2).
+- **Experiment E7b (TO MEASURE, FB §19.4):** re-run the 2026-10-06 DGX lab scenarios on rows
+  recorded after the upgrade. Report outcome agreement, the unreproduced-rejection count,
+  newly served under `raise-request-budget`, and the gap between `routing_tokens` and
+  `prompt_tokens` on served rows. No number exists yet.
+- **Limits:** a rescued request is costed at its admission estimate; a served row an
+  endpoint reported no usage for (e.g. a stream whose endpoint sent no usage block) is
+  replayed the same way, at its admission estimate, not a bill; a recorded `context_overflow`
+  needs a declared window; RouteForge's token count is not the backend's.
+
+#### 4.4.2 Still pending: failover/escalation, breaker state, spend/RPM admission — *spec pending*
 ### 4.5 Administrator review workflow — *spec pending* (closes HO §37 P3 "admin approval")
 ### 4.6 P2 evaluation metrics: confidence calibration, churn robustness, worst-group, router-version promotion gate — *spec pending* (FB §6.5 lists these as not yet demonstrated)
 
@@ -349,7 +399,7 @@ literature doesn't model".
 | E5 | Replay agreement before/after B55 | FB §15.4 | done |
 | E6 | Shadow-price non-monotonicity counterexample, live | FB §17.3 | **TO MEASURE** (not exercised live) |
 | E7 | Context-window replay effect on agreement | P3c-2, FB §18.4.1 | first run done (no overflow in the export: agreement 1.0, 0 hops); with real overflow failovers **TO MEASURE** |
-| E7b | Rejected rows replay as routed (B60) | FB §18.4.1 | observed live: 7 of 7 budget rejections; fix pending |
+| E7b | Rejected rows replay as routed (B60) | FB §18.4.1, §19.4 | defect observed live: 7 of 7 budget rejections replayed as routed. Fix built (§4.4.1); the re-run on post-upgrade rows — outcome agreement, unreproduced rejections, newly served, `routing_tokens` vs `prompt_tokens` — is **TO MEASURE** |
 | E8 | Healthcare scenario triad, traffic-weighted vs static | P3c-2 | **TO MEASURE** |
 | E9+ | uncertainty, capacity, fidelity, P2 metrics, R2/R3/R4 | §4–§5 | specs pending |
 

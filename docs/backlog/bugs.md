@@ -127,6 +127,45 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
+## B63 — `--shadow-prices` with no `--proposal` carries no `rows` block, so excluded and estimated counts are invisible  🔴 OPEN
+
+**Severity:** low (reporting gap; no effect on the prices themselves).
+**Found:** 2026-10-06, B60 final review (`docs/reference/policy-simulator.md` §8.5).
+
+`scripts/policy_simulate.py --shadow-prices` with no `--proposal` writes only
+`{schema, inputs, shadow_prices}` — there is no `rows` block, so a row excluded as
+`missing_routing_tokens` (B60) and a `rejections_avoided` row priced at its admission
+estimate are both invisible in that mode; the operator gets no count of either. Today's
+workaround is to add `--proposal` (an empty one predicts no change) to get the `rows` block
+alongside the shadow prices.
+
+**Wanted:** put a `rows` block (`simulated`, `estimated_tokens`, `excluded`) into the
+shadow-only `simulation.json` and print it in `report.md`, so the counts are visible without
+needing a proposal.
+
+## B62 — No boot-time check for a column the ORM expects and the live table is missing  🔴 OPEN
+
+**Severity:** medium (silent data loss: a deployed DB missing a column boots and serves
+traffic, but every write that touches the column fails and is swallowed).
+**Found:** 2026-10-06, B60 final review. Replaces the one-line follow-up note under B34
+(left in place, now pointing here).
+
+A deployed database missing a column the current code expects (e.g.
+`routing_outcomes.routing_tokens`, or any future `ALTER`-only column) boots and serves
+requests normally — `app/apps/store.py`'s outcome write fails and is logged, swallowed per
+rule (never changes a response), so nothing visible breaks. The admin outcomes export then
+returns `200` with an empty or partial body, and the only signal is one WARNING log line per
+affected request. An operator who misses the `ALTER` step (the usual deploy trap for this
+class of change — see B55, P3b, B60) can run for a long time writing no outcome rows at all
+before noticing.
+
+**Wanted:** one generic startup check — compare the ORM's declared metadata against the
+live database's actual columns for every mapped table, and log loudly (not tolerance code,
+not a migration runner) naming every column the code expects that the live table does not
+have. Boot still succeeds (serving must not refuse to start over a missing analytics
+column), but the gap is now a loud boot-time log line instead of a silent per-request
+WARNING an operator has to notice.
+
 ## B61 — UI: the onboarding form's "api key env" field accepts a key value, and gives no hint  🔴 OPEN
 
 **Severity:** low-medium (operator trap; leaks a secret into the config table and the screen).
@@ -144,7 +183,7 @@ then stored in `onboarded_models.api_key_env` in clear text and displayed in the
 var set in the API pod?") instead of a bare "unreachable"; (4) say next to the slug field that
 it must equal the model id the endpoint serves.
 
-## B60 — Rejected outcome rows record `prompt_tokens: 0`, so the policy simulator replays live-rejected requests as routed  🔴 OPEN
+## B60 — Rejected outcome rows record `prompt_tokens: 0`, so the policy simulator replays live-rejected requests as routed  ✅ RESOLVED IN CODE — NOT DEPLOYED (2026-10-06)
 
 **Severity:** medium-high for the simulator (wrong answer for a whole scenario class; no
 effect on serving).
@@ -170,6 +209,40 @@ served all 7. Baseline agreement stayed 1.0, because `_baseline` compares `ok` r
    as its own count.
 3. Until then: document in `docs/reference/policy-simulator.md` §6 that rejected rows replay
    with zero tokens and that budget and context-window scenarios cannot show rescued requests.
+
+**Resolution.** Resolved in code; NOT deployed and NOT verified live — needs the `ALTER` on
+each deployed database (`docs/reference/routing-outcomes.md` §1), then the research §19.4
+re-run. (The controller updates this line again after the deploy.) Design:
+`docs/superpowers/specs/2026-10-06-replayable-rejections-design.md`.
+
+- **Serving.** `RoutingOutcome` has `routing_tokens` (`INTEGER`, nullable): the `tokens_after`
+  the router was given. `Pipeline.run` and `run_stream` put it on the outcome context on the
+  same line as `complexity`, and `app/apps/outcomes.py::_policy_features` copies it onto
+  every row, served or rejected. `prompt_tokens` is unchanged: the backend's billed count,
+  zero when no backend answered. Nothing is added to any response. A deployed database needs
+  one `ALTER` before the image is rolled (`docs/reference/routing-outcomes.md` §1).
+- **Replay.** `app/eval/simulate.py::replay_tokens` gives the router the row's
+  `routing_tokens` and prices the call at the backend's `prompt_tokens`; a row no backend
+  answered is sized and priced at its routing tokens and the router's output estimate, and
+  counted in `rows.estimated_tokens`. A rejected or failed row with no recorded size (written
+  before the fix) is excluded as `missing_routing_tokens`, never replayed as an empty prompt.
+- **Agreement.** `_baseline` reports outcome agreement next to model agreement, with
+  `recorded_rejected_but_routed` and `recorded_routed_but_rejected`, overall and per app.
+  Both reports show it, and `--min-agreement` gates on the lower of the two.
+
+**Evidence.**
+`tests/eval/test_policy_simulate_cli.py::test_live_round_trip_budget_rejections_replay_as_rejected`
+sends three requests that a real app rejects for `max_cost_usd_per_request` *because of their
+size*, exports them with the snapshot, and replays: the `current` arm rejects all three,
+outcome agreement is 1.0, and a proposal raising the cap reports 3 newly served.
+`tests/eval/test_replay_rejections.py::test_r6_unsized_rows_are_excluded_and_counted_never_routed`
+pins the exclusion of pre-fix rows. The DGX lab re-run of the 2026-10-06 scenarios is recorded
+in `docs/research/feasible-route-bench.md` §19.4 when it is done.
+
+**Still open, by design** (`docs/reference/policy-simulator.md` §6): a recorded
+`context_overflow` is reproduced only when the endpoint declares a context window; a rescued
+request's cost is the admission estimate; failover, escalation, breaker state and
+daily-spend/RPM admission are not replayed.
 
 ## B59 — FEATURE: per-app tokens-per-minute / concurrency limits, and a limiter shared across replicas  🔴 OPEN
 
@@ -1307,7 +1380,8 @@ cause.
 
 **Rule for new request-path work.** Add the client shape to `tests/onboarding/clients.py` and let the matrix run it under every recipe.
 
-- Follow-up: boot-time check that fails with the missing column named.
+- Follow-up: boot-time check that fails with the missing column named — now tracked as
+  **B62**.
 
 ---
 

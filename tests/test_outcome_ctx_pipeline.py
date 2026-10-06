@@ -67,8 +67,12 @@ def test_outcome_ctx_populated_on_success():
     assert oc.keys() == {
         "sensitivity", "risk_class", "onprem_only",
         "detected_entity_types", "app_policy_version", "complexity",
-        "requested_model", "max_tokens"}
+        "requested_model", "max_tokens", "routing_tokens"}
     assert isinstance(oc["complexity"], float)
+    # B60: the count the router was given, set on the same line as the
+    # complexity derived from it.
+    assert type(oc["routing_tokens"]) is int and oc["routing_tokens"] > 0
+    assert oc["complexity"] == min(1.0, oc["routing_tokens"] / 2000)
 
 
 def test_outcome_ctx_survives_no_eligible_candidate_at_routing():
@@ -88,6 +92,8 @@ def test_outcome_ctx_survives_no_eligible_candidate_at_routing():
     # The failure happens in the gateway/router, strictly after complexity is
     # computed in run() -- so it must already be on the dict.
     assert "complexity" in oc
+    # B60: and so is the token count the router rejected the request on.
+    assert oc["routing_tokens"] == 1      # "hello": max(1, 5 // 4)
 
 
 def test_outcome_ctx_has_no_prompt_text_even_with_ssn():

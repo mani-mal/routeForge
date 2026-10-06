@@ -51,10 +51,21 @@ from app.routing.router import expected_output_tokens
 SIMULATED_STATUSES = frozenset({"ok", "backend_failed", "verify_failed",
                                 "no_eligible", "context_overflow"})
 
+#: The outcome each status's FIRST routing decision had (B60), which is what an
+#: arm's `outcome` is compared with. `verify_failed` and `backend_failed` were
+#: routed -- a model was chosen, and step 9 or the backend failed afterwards.
+#: `no_eligible` is always a first-decision rejection. `context_overflow` was
+#: refused for size on every attempt; replay models that as a `context_window`
+#: rejection. tests/eval/test_replay_rejections.py pins this table to
+#: `app/apps/outcomes.py::STATUSES`, so a new status must be given a class.
+RECORDED_OUTCOME = {"ok": "routed", "verify_failed": "routed", "backend_failed": "routed",
+                    "no_eligible": "rejected", "context_overflow": "rejected"}
+
 # `before_since` is checked first, so a row older than `--since` never reaches
-# the other checks (P3c-2 spec §6).
+# the other checks (P3c-2 spec §6). `missing_routing_tokens` (B60) is checked
+# last: only a well-formed row of a known app can be "well-formed but unsized".
 EXCLUSION_REASONS = ("before_since", "cache_hit", "unknown_status", "unknown_app",
-                     "missing_features")
+                     "missing_features", "missing_routing_tokens")
 
 
 @dataclass(frozen=True)
@@ -131,7 +142,24 @@ def _has_features(row: dict) -> bool:
                  or (isinstance(row["max_tokens"], int)
                      and not isinstance(row["max_tokens"], bool)
                      and row["max_tokens"] > 0))
+            # B60: absent (an export from before the column existed) or null
+            # (a cache hit) means "not recorded"; a recorded count is an int.
+            and (row.get("routing_tokens") is None
+                 or (isinstance(row["routing_tokens"], int)
+                     and not isinstance(row["routing_tokens"], bool)
+                     and row["routing_tokens"] >= 0))
             and _valid_ts(row.get("ts")))
+
+
+def _unsized(row: dict) -> bool:
+    """True for a well-formed row that records no size at all (B60): it was
+    not served (`status != "ok"`), it has no `routing_tokens`, and its
+    `prompt_tokens` is 0 because no backend answered. That is a rejected or
+    failed row written before `routing_tokens` existed. Replaying it would
+    replay an EMPTY prompt -- which fits any budget and any context window --
+    so it is excluded and counted instead. Call only after `_has_features`."""
+    return (row["status"] != "ok" and row.get("routing_tokens") is None
+            and row["prompt_tokens"] == 0)
 
 
 def parse_since(text: str) -> datetime:
@@ -175,7 +203,10 @@ def select_rows(records: list[dict], app_ids: set[str], *,
     -- but the key must be present), and a mistyped `requested_model`
     (non-empty string or null) or `max_tokens` (int > 0 or null). Those two
     (B55) may be ABSENT: an export from before they were recorded replays
-    unpinned at the default output estimate."""
+    unpinned at the default output estimate. A mistyped `routing_tokens`
+    (B60: int >= 0, null or absent) is `missing_features` too.
+    `missing_routing_tokens` (B60) is a well-formed row that records no size
+    (`_unsized`): never simulated as an empty prompt."""
     excluded = {reason: 0 for reason in EXCLUSION_REASONS}
     kept: list[dict] = []
     for row in records:
@@ -191,6 +222,8 @@ def select_rows(records: list[dict], app_ids: set[str], *,
             excluded["unknown_app"] += 1
         elif not _has_features(row) or (since is not None and row.get("ts") is None):
             excluded["missing_features"] += 1
+        elif _unsized(row):
+            excluded["missing_routing_tokens"] += 1
         else:
             kept.append(row)
     kept.sort(key=lambda r: (r.get("ts") or "", r["request_id"]))
@@ -231,14 +264,51 @@ def _rejected(eligible: tuple[str, ...], codes: tuple[str, ...], *,
 _COMPLEXITY_SATURATION_TOKENS = 2000
 
 
+def _scale_tokens(tokens: int, scale: float) -> int:
+    """A token count under `workload.token_scale`: `max(1, round(tokens *
+    scale))`, the identity at exactly 1.0. A count of 0 stays 0: flooring it
+    to 1 would make cost fall as the scale rises."""
+    if scale == 1.0:
+        return tokens
+    return max(1, round(tokens * scale)) if tokens > 0 else 0
+
+
+def replay_tokens(row: dict) -> tuple[int, int, bool]:
+    """`(routing_tokens, prompt_tokens, estimated)` for one selected row (B60).
+
+    Two different counts, used for two different things:
+
+    - `routing_tokens` is what `Router.select` is given -- the per-request
+      budget check and the cost term of the score. It is the row's recorded
+      `routing_tokens` (RouteForge's own count, the number the live router
+      was given), else the row's `prompt_tokens` as before the column
+      existed.
+    - `prompt_tokens` is what the routed call is priced at and what the
+      context-window check adds the output estimate to. It is the backend's
+      billed count when the row has one (`prompt_tokens > 0`), else the
+      routing count.
+
+    `estimated` is True when the row has a recorded `routing_tokens` but no
+    backend usage: a request that was rejected, failed before any response,
+    or was served by a backend that reported no usage (a stream whose
+    endpoint sent no usage block). Its replayed size and cost are then
+    RouteForge's estimate, not a bill, and the caller says so."""
+    billed = int(row["prompt_tokens"])
+    recorded = row.get("routing_tokens")
+    routing = billed if recorded is None else int(recorded)
+    if billed > 0:
+        return routing, billed, False
+    return routing, routing, recorded is not None
+
+
 def scaled_request(prompt_tokens: int, complexity: float,
                    scale: float) -> tuple[int, float, bool]:
     """`(prompt_tokens', complexity', estimated)` for one row under
     `workload.token_scale` (P3c-2 spec §4.1).
 
     - `scale == 1.0` is the identity, exactly.
-    - Tokens: `max(1, round(prompt_tokens * scale))`. A row that recorded no
-      prompt tokens (every failure row records 0) stays at 0: its size is
+    - Tokens: `_scale_tokens`. A row that recorded no
+      prompt tokens (a legacy zero-token row) stays at 0: its size is
       unknown, and flooring it to 1 would make cost fall as the scale rises.
     - Complexity below 1 is linear in the token count, so `complexity *
       scale` (capped at 1) is exact.
@@ -249,7 +319,7 @@ def scaled_request(prompt_tokens: int, complexity: float,
       scaling DOWN is an estimate, and `estimated` says so."""
     if scale == 1.0:
         return prompt_tokens, complexity, False
-    scaled = max(1, round(prompt_tokens * scale)) if prompt_tokens > 0 else 0
+    scaled = _scale_tokens(prompt_tokens, scale)
     if complexity < 1.0:
         return scaled, min(1.0, complexity * scale), False
     estimate = max(scale, scaled / _COMPLEXITY_SATURATION_TOKENS)
@@ -279,12 +349,17 @@ def simulate_row(scn: Scenario, row: dict, observed: dict[str, float]) -> ArmRes
     eligible = tuple(sorted(
         c.name for c in feasible_set(scn.settings, scn.registry, ctx,
                                      tenant_id=row["application_id"]).eligible))
+    # B60: the count the ROUTER is given and the count the call is PRICED and
+    # sized at are two numbers (`replay_tokens`). On a row from before
+    # `routing_tokens` was recorded they are the same number, as before.
+    routing_base, prompt_base, estimated_tokens = replay_tokens(row)
     # P3c-2: the scenario's workload assumptions, applied before routing and
     # pricing. A scenario built from a plain snapshot has none (scale 1.0,
     # share 0.0), so the `current` arm replays the row as recorded.
-    prompt_tokens, complexity, estimated = scaled_request(
-        int(row["prompt_tokens"]), float(row["complexity"]),
-        scn.assumptions.scale_for(row["application_id"]))
+    scale = scn.assumptions.scale_for(row["application_id"])
+    routing_tokens, complexity, estimated = scaled_request(
+        routing_base, float(row["complexity"]), scale)
+    prompt_tokens = _scale_tokens(prompt_base, scale)
     # B55: price at the client's recorded output cap, as the live gateway
     # does (`expected_output_tokens(settings, params)`); no cap recorded ->
     # the deployment's default estimate.
@@ -300,7 +375,7 @@ def simulate_row(scn: Scenario, row: dict, observed: dict[str, float]) -> ArmRes
     overflowed: list[str] = []          # picks that overflowed, in order
     while True:
         try:
-            decision = scn.router.select(ctx, tokens_after=prompt_tokens,
+            decision = scn.router.select(ctx, tokens_after=routing_tokens,
                                          complexity=complexity,
                                          output_tokens=output_tokens,
                                          exclude=frozenset(overflowed))
@@ -341,9 +416,17 @@ def simulate_row(scn: Scenario, row: dict, observed: dict[str, float]) -> ArmRes
     # route. `price_call` bills cached tokens at the input price when the
     # endpoint declares no cached price.
     cached_tokens = round(prompt_tokens * scn.assumptions.cached_for(row["application_id"]))
+    # B60: a row with no backend token count (rejected, failed before a
+    # response, or served with no reported usage) has no completion count
+    # either. It is priced at the router's own output estimate -- with
+    # `prompt_tokens` above, the same pair the live per-request budget check
+    # priced it at -- so such a row costs its admission estimate, not its
+    # prompt alone.
+    completion_tokens = (output_tokens if estimated_tokens
+                         else int(row.get("completion_tokens") or 0))
     cost = price_call(scn.registry.price_for(pick.name),
                       prompt_tokens=prompt_tokens,
-                      completion_tokens=int(row.get("completion_tokens") or 0),
+                      completion_tokens=completion_tokens,
                       cached_prompt_tokens=cached_tokens)
     asserted = scn.signals.proposed_latency(pick.name)
     if asserted is not None:
@@ -435,12 +518,25 @@ async def baseline_check(records: list[dict], snapshot: dict, *, base: Settings,
     return _round6(_baseline([RowResult(row, arm, arm) for row, arm in zip(rows, arms)]))
 
 
+def gate_agreement(baseline: dict) -> float | None:
+    """The one rate `--min-agreement` is compared with: the LOWER of model
+    agreement and outcome agreement (B60). They catch different defects --
+    replay picked a different model (B55) / replay served a request the
+    record says was rejected (B60) -- and a replay is fit to use only if it
+    reproduces both, so neither may hide behind the other. None when either
+    is not computable: with no served row nothing vouches for the model
+    replay picks, however well the outcomes agree."""
+    agreement, outcome = baseline["agreement"], baseline["outcome_agreement"]
+    if agreement is None or outcome is None:
+        return None
+    return min(agreement, outcome)
+
+
 def agreement_ok(baseline: dict, minimum: float) -> bool:
-    """The `--min-agreement` gate: False when the baseline has no comparable
-    row (`agreement` is None -- nothing vouches for the replay) or agrees
-    with the record less often than `minimum`."""
-    agreement = baseline["agreement"]
-    return agreement is not None and agreement >= minimum
+    """The `--min-agreement` gate: False when `gate_agreement` is None
+    (nothing vouches for the replay) or below `minimum`."""
+    rate = gate_agreement(baseline)
+    return rate is not None and rate >= minimum
 
 
 # --- summary and report (spec §8) -------------------------------------------
@@ -568,11 +664,41 @@ def _agrees(r: RowResult) -> bool:
     return _first_pick(r.current) == r.row["attempts"][0]
 
 
+def _outcome_stats(rows: list[RowResult]) -> dict:
+    """Outcome-level agreement over `rows` (B60): does the `current` arm's
+    OUTCOME -- routed or rejected -- match the recorded status's class
+    (`RECORDED_OUTCOME`)? Over every simulated row, served or not.
+
+    `recorded_rejected_but_routed` is the B60 signature: replay serves a
+    request the record says was rejected, so a proposal can show nothing to
+    rescue. It is reported next to `recorded_rejected`, its denominator,
+    because rejections are usually a small share of traffic and `agreement`
+    alone would dilute them."""
+    recorded = [RECORDED_OUTCOME[r.row["status"]] for r in rows]
+    rejected_but_routed = sum(1 for r, rec in zip(rows, recorded)
+                              if rec == "rejected" and r.current.outcome == "routed")
+    routed_but_rejected = sum(1 for r, rec in zip(rows, recorded)
+                              if rec == "routed" and r.current.outcome == "rejected")
+    n = len(rows)
+    return {
+        "rows": n,
+        "agreement": (n - rejected_but_routed - routed_but_rejected) / n if n else None,
+        "recorded_rejected": sum(1 for rec in recorded if rec == "rejected"),
+        "recorded_rejected_but_routed": rejected_but_routed,
+        "recorded_routed_but_rejected": routed_but_rejected,
+    }
+
+
 def _baseline(results: list[RowResult]) -> dict:
     """Fidelity check (spec §7): does the `current` arm's pick agree with the
     recorded first attempt, over simulated `ok` rows with a recorded
     attempt. Never compares `proposed` -- the headline diff is always
     `current` vs `proposed`, both simulated.
+
+    Two measures (B60). `agreement` is MODEL agreement, as above. The
+    `outcome_*` fields are OUTCOME agreement (`_outcome_stats`), over every
+    simulated row: a recorded rejection the `current` arm routes is
+    invisible to model agreement, which only looks at `ok` rows.
 
     `overflow_contradicted` (final review) counts the subset of
     disagreements where the record proves the row's recorded first pick
@@ -604,6 +730,7 @@ def _baseline(results: list[RowResult]) -> dict:
     top = sorted(disagreements.items(), key=lambda kv: (-kv[1], kv[0][0], kv[0][1]))[:10]
     top_disagreements = [{"recorded": rec, "simulated": sim, "count": n}
                          for (rec, sim), n in top]
+    outcome = _outcome_stats(results)
     return {
         "rows_compared": rows_compared,
         "agreement": agreement,
@@ -611,6 +738,15 @@ def _baseline(results: list[RowResult]) -> dict:
         "by_app": by_app,
         "top_disagreements": top_disagreements,
         "overflow_contradicted": overflow_contradicted,
+        "outcome_rows_compared": outcome["rows"],
+        "outcome_agreement": outcome["agreement"],
+        "outcome_warning": outcome["agreement"] is not None and outcome["agreement"] < 0.90,
+        "recorded_rejected": outcome["recorded_rejected"],
+        "recorded_rejected_but_routed": outcome["recorded_rejected_but_routed"],
+        "recorded_routed_but_rejected": outcome["recorded_routed_but_rejected"],
+        "outcome_by_app": {
+            app_id: _outcome_stats([r for r in results if r.row["application_id"] == app_id])
+            for app_id in sorted({r.row["application_id"] for r in results})},
     }
 
 
@@ -720,7 +856,12 @@ def summarize(results: list[RowResult], excluded: dict[str, int], *, inputs: dic
         "inputs": full_inputs,
         "edits": edits,
         "assumptions": _assumptions_summary(results, assumptions),
-        "rows": {"simulated": len(results), "excluded": dict(excluded)},
+        "rows": {"simulated": len(results), "excluded": dict(excluded),
+                 # B60: rows with no backend token count -- rejected, failed
+                 # before a response, or served with no reported usage --
+                 # sized and priced from RouteForge's own routing token
+                 # count -- an estimate.
+                 "estimated_tokens": sum(1 for r in results if replay_tokens(r.row)[2])},
         "baseline": _baseline(results),
         "totals": totals,
         "by_app": {app_id: _bucket_stats([r for r in results
@@ -847,14 +988,65 @@ def _excluded_lines(excluded: dict) -> list[str]:
     return lines
 
 
+def _rate(value: float | None) -> str:
+    """An agreement rate for a report: `87.5%`, or `n/a` when not computable."""
+    return "n/a" if value is None else f"{value * 100:.1f}%"
+
+
+def _agreement_line(baseline: dict) -> str:
+    """Both baseline agreements on one line (B60) -- printed on every
+    report, not only when one of them is low: a replay nobody was told
+    about is how B60 went unnoticed."""
+    return (f"Baseline agreement: model {_rate(baseline['agreement'])} over "
+            f"{baseline['rows_compared']} compared rows; outcome "
+            f"{_rate(baseline['outcome_agreement'])} over "
+            f"{baseline['outcome_rows_compared']} simulated rows.")
+
+
+def _fidelity_notes(baseline: dict, rows: dict) -> list[str]:
+    """Plain sentences both reports print under the agreement banner (B60),
+    one per condition that holds; empty when none does.
+
+    The two outcome disagreement counts are printed with their own
+    denominators whenever they are non-zero, whatever `outcome_agreement`
+    is: rejections are usually a small share of traffic, so every one of
+    them can replay wrong while the rate stays above the 90% threshold."""
+    notes: list[str] = []
+    rejected = baseline["recorded_rejected"]
+    wrongly_routed = baseline["recorded_rejected_but_routed"]
+    if wrongly_routed:
+        notes.append(
+            f"{wrongly_routed} of {rejected} recorded rejection(s) replay as routed. Replay "
+            "does not reproduce them, so \"newly served\" is understated for these rows -- "
+            "check for drift since the export window (a budget, a declared context window "
+            "or an endpoint's state).")
+    wrongly_rejected = baseline["recorded_routed_but_rejected"]
+    if wrongly_rejected:
+        notes.append(
+            f"{wrongly_rejected} of {baseline['outcome_rows_compared'] - rejected} row(s) "
+            "recorded as routed replay as rejected. \"newly rejected\" is understated for "
+            "these rows -- check for drift since the export window.")
+    estimated = rows.get("estimated_tokens", 0)
+    if estimated:
+        notes.append(
+            f"{estimated} row(s) had no backend token count (rejected, failed before a "
+            "response, or served by a backend that reported no usage). Replay sizes and "
+            "prices them from RouteForge's own routing token count and output-token "
+            "estimate -- an estimate, not a bill.")
+    return notes
+
+
 def render_report(sim: dict) -> str:
-    """The `report.md` document (spec §8), in the order: caveat, baseline
-    warning, headline, new rejections, moves, by-app, by-workload,
-    latency/quality sources, excluded rows."""
+    """The `report.md` document (spec §8), in the order: caveat, the two
+    baseline agreements, baseline warnings and notes, headline, new
+    rejections, moves, by-app, by-workload, latency/quality sources,
+    excluded rows."""
     lines: list[str] = ["> " + line for line in REPORT_CAVEAT.split("\n")]
     lines.append("")
 
     baseline = sim["baseline"]
+    lines.append(_agreement_line(baseline))
+    lines.append("")
     if baseline["warning"]:
         lines.append(
             f"> **Warning:** baseline agreement is only {baseline['agreement'] * 100:.1f}% "
@@ -866,6 +1058,16 @@ def render_report(sim: dict) -> str:
             f"> **Note:** {baseline['overflow_contradicted']} row(s) served by an endpoint "
             "replay predicts would overflow -- check that endpoint's declared "
             "context_window.")
+        lines.append("")
+    if baseline["outcome_warning"]:
+        lines.append(
+            f"> **Warning:** baseline outcome agreement is only "
+            f"{baseline['outcome_agreement'] * 100:.1f}% across "
+            f"{baseline['outcome_rows_compared']} simulated rows (below the 90% threshold). "
+            "Replay serves or rejects requests differently from the record this often.")
+        lines.append("")
+    for note in _fidelity_notes(baseline, sim["rows"]):
+        lines.append(f"> **Note:** {note}")
         lines.append("")
 
     lines += _assumption_lines(sim["assumptions"])

@@ -274,6 +274,10 @@ def build_ok_outcome(resp: dict, *, request_id: str, application_id: str,
 
 
 def _policy_features(outcome_ctx: dict) -> dict:
+    """The request features both builders copy off `outcome_ctx`, so a
+    served and a rejected row can never disagree about them. `routing_tokens`
+    (B60) is the token count the router was given -- a count, never text --
+    and is `None` when the request never reached compression."""
     return {
         "sensitivity": outcome_ctx.get("sensitivity"),
         "risk_class": outcome_ctx.get("risk_class"),
@@ -281,6 +285,7 @@ def _policy_features(outcome_ctx: dict) -> dict:
         "detected_entity_types": list(outcome_ctx.get("detected_entity_types") or []),
         "requested_model": outcome_ctx.get("requested_model"),
         "max_tokens": outcome_ctx.get("max_tokens"),
+        "routing_tokens": outcome_ctx.get("routing_tokens"),
     }
 
 
@@ -359,10 +364,11 @@ def build_failure_outcome(*, status: str, request_id: str, application_id: str,
     the caller collected before the failure -- and leaves everything that
     presumes a served response (`chosen`, `scoring`, `eligible`,
     `prompt_tokens`/`completion_tokens`, `cost_usd`, the `verify_*` fields,
-    `tier_target`, `prompt_tokens_bucket`) null or empty. `complexity` is
-    read off `outcome_ctx.get("complexity")` like `build_ok_outcome` --
-    known the moment the gate/compression ran, independent of whether the
-    request went on to fail. `rejected` is normalized through the same
+    `tier_target`, `prompt_tokens_bucket`) null or empty. `complexity` and
+    `routing_tokens` (B60) are read off `outcome_ctx` like `build_ok_outcome`
+    -- known the moment the gate/compression ran, independent of whether the
+    request went on to fail. `prompt_tokens` stays 0 here: it is the
+    backend's billed count, and no backend answered. `rejected` is normalized through the same
     `{name, code}`-only rule `build_ok_outcome` uses, regardless of what
     shape the caller's entries carry.
 

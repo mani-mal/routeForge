@@ -917,6 +917,11 @@ class Pipeline:
         complexity = min(1.0, comp.tokens_after / 2000)
         if internals is not None:
             internals["outcome_ctx"]["complexity"] = complexity
+            # B60: the count the router is about to be given, recorded on
+            # every outcome row -- a rejected one included -- so the policy
+            # simulator replays the request at its real size. A count, never
+            # text (app/apps/outcomes.py's content-free contract).
+            internals["outcome_ctx"]["routing_tokens"] = comp.tokens_after
 
         hint = {k: getattr(request, k) for k in ("mock_confidence", "mock_fail")
                 if hasattr(request, k)}
@@ -1252,6 +1257,11 @@ class Pipeline:
         complexity = min(1.0, comp.tokens_after / 2000)
         if internals is not None:
             internals["outcome_ctx"]["complexity"] = complexity
+            # B60: the count the router is about to be given, recorded on
+            # every outcome row -- a rejected one included -- so the policy
+            # simulator replays the request at its real size. A count, never
+            # text (app/apps/outcomes.py's content-free contract).
+            internals["outcome_ctx"]["routing_tokens"] = comp.tokens_after
         hint = {k: getattr(request, k) for k in ("mock_confidence", "mock_fail")
                 if hasattr(request, k)}
         stream, records = await self._gateway.run_stream(

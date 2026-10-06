@@ -25,9 +25,9 @@ from app.eval.proposal import (SCHEMA as PROPOSAL_SCHEMA, ProposalError, _valida
                                normalized_edits)
 from app.eval.scenario import build_scenario, close_scenario
 from app.eval.simulate import (CACHED_SHARE_NOTE, REPORT_CAVEAT, _assumption_items,
-                               _excluded_lines, _metrics_table, _move_lines,
-                               _new_rejection_lines, _per_day, arm_results, run_rows,
-                               summarize)
+                               _excluded_lines, _fidelity_notes, _metrics_table,
+                               _move_lines, _new_rejection_lines, _per_day, arm_results,
+                               run_rows, summarize)
 
 SCHEMA = "routeforge.policy-scenarios/v1"
 COMPARISON_SCHEMA = "routeforge.scenario-comparison/v1"
@@ -292,8 +292,10 @@ def _pct(value: float) -> str:
 
 
 def _agreement_lines(doc: dict) -> list[str]:
-    """The agreement banner: overall, per app, a warning under 90%, and the
-    `--since` cut when one was applied."""
+    """The agreement banner: model agreement (overall, per app, a warning
+    under 90%), outcome agreement (the same, B60) with a note for every
+    recorded outcome replay does not reproduce, and the `--since` cut when
+    one was applied."""
     baseline = doc["baseline"]
     lines = ["## Baseline agreement", ""]
     if baseline["agreement"] is None:
@@ -317,6 +319,28 @@ def _agreement_lines(doc: dict) -> list[str]:
                 f"**Note:** {baseline['overflow_contradicted']} row(s) served by an endpoint "
                 "replay predicts would overflow -- check that endpoint's declared "
                 "context_window.")
+    # B60: outcome agreement is over EVERY simulated row, so it is shown even
+    # when no served row makes model agreement computable.
+    lines.append("")
+    if baseline["outcome_agreement"] is None:
+        lines.append("**Outcome agreement: n/a** -- no simulated row.")
+    else:
+        lines.append(f"**Outcome agreement: {_pct(baseline['outcome_agreement'])}** over "
+                     f"{baseline['outcome_rows_compared']} simulated rows (routed or "
+                     "rejected, against each row's recorded status).")
+        if baseline["outcome_warning"]:
+            lines.append("")
+            lines.append("⚠ **Warning:** outcome agreement is below the 90% threshold. "
+                         "Replay serves or rejects requests differently from the record "
+                         "this often.")
+        if baseline["outcome_by_app"]:
+            lines.append("")
+            lines.append("Per app (outcome): " + " · ".join(
+                f"{app_id} {_pct(stats['agreement'])}" + (" ⚠" if stats["agreement"] < 0.90 else "")
+                for app_id, stats in sorted(baseline["outcome_by_app"].items())))
+    for note in _fidelity_notes(baseline, doc["rows"]):
+        lines.append("")
+        lines.append(f"**Note:** {note}")
     since = doc["inputs"].get("since")
     if since is not None:
         lines.append("")

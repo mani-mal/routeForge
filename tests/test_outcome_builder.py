@@ -604,6 +604,64 @@ def test_build_failure_outcome_verify_failed_reads_the_stashed_trace():
     assert SSN not in dumped and EMAIL not in dumped
 
 
+# --- routing_tokens (B60) -------------------------------------------------
+
+def test_both_builders_copy_routing_tokens_from_the_outcome_ctx():
+    """The token count the router was given rides on `outcome_ctx` (the
+    pipeline sets it next to `complexity`) and lands on the row whatever the
+    status. `prompt_tokens` is untouched: it stays the backend's count."""
+    ctx = outcome_context(_ctx())
+    ctx["complexity"] = 1.0
+    ctx["routing_tokens"] = 5280
+    ok = build_ok_outcome(
+        _resp([_router_hop("m"), _verify()], prompt_tokens=5011),
+        request_id="req-rt", application_id="app-1", outcome_ctx=ctx,
+        routing_policy_version="rpv-1", workload=None, workload_source="none")
+    assert ok["routing_tokens"] == 5280
+    assert ok["prompt_tokens"] == 5011
+    for status in ("no_eligible", "context_overflow", "backend_failed"):
+        row = build_failure_outcome(
+            status=status, request_id="req-rt", application_id="app-1",
+            outcome_ctx=ctx, routing_policy_version="rpv-1",
+            endpoint_registry_version=None, workload=None, workload_source="none")
+        assert row["routing_tokens"] == 5280, status
+        assert row["prompt_tokens"] == 0, status
+
+
+def test_routing_tokens_is_null_when_the_request_never_reached_compression():
+    """`outcome_context` itself does not know the count -- compression has
+    not run yet. A row built from it alone (a semantic-cache hit; a failure
+    before step 5) records null, never 0."""
+    ctx = outcome_context(_ctx())
+    assert "routing_tokens" not in ctx
+    ok = build_ok_outcome(
+        _resp([_verify()]), request_id="req-rt0", application_id="app-1",
+        outcome_ctx=ctx, routing_policy_version="rpv-1", workload=None,
+        workload_source="none")
+    failed = build_failure_outcome(
+        status="no_eligible", request_id="req-rt0", application_id="app-1",
+        outcome_ctx={}, routing_policy_version="rpv-1",
+        endpoint_registry_version=None, workload=None, workload_source="none")
+    assert ok["routing_tokens"] is None
+    assert failed["routing_tokens"] is None
+
+
+def test_verify_failed_row_keeps_both_token_counts():
+    """A `verify_failed` row is built from the served attempt's trace: the
+    backend's `prompt_tokens` AND the router's `routing_tokens` are both
+    real, and they are different numbers."""
+    ctx = outcome_context(_ctx())
+    ctx["routing_tokens"] = 1620
+    row = build_failure_outcome(
+        status="verify_failed", request_id="req-rtv", application_id="app-1",
+        outcome_ctx=ctx, routing_policy_version="rpv-1",
+        endpoint_registry_version="erv-1", workload=None, workload_source="none",
+        trace=[_router_hop("m"), _verify(passed=False)],
+        prompt_tokens=1500, completion_tokens=40, cost_usd=0.003)
+    assert row["routing_tokens"] == 1620
+    assert row["prompt_tokens"] == 1500
+
+
 # --- feedback_values -----------------------------------------------------
 
 def test_feedback_values_accepts_a_slashed_model_slug():

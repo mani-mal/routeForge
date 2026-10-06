@@ -1,8 +1,8 @@
 # Priorities 1–3: what is built and what remains
 
-**As of 2026-10-06**, `main` is through PR #84 (P3c-2, alternative scenarios). The DGX
+**As of 2026-10-06**, `main` is through PR #86 (B60, replayable rejections). The DGX
 Spark runs `4bfb0b3` (through PR #79). The DGX lab (Run:ai) cluster was rebuilt and
-redeployed by PR #83, and is the deployment target for P3c-2 onward (api/ui `0.26.0`).
+redeployed by PR #83, and is the deployment target for P3c-2 onward (api/ui `0.27.0`).
 
 This is the status of the program set out in `docs/new/RouteForge-Priorities-1-3-LLM-Handoff.md`
 (the "handoff"). Each shipped slice went through the same pipeline: design spec
@@ -61,6 +61,7 @@ Handoff §37 Priority 2 criteria met:
 | B56 / B57 | #78 | The exact app scope is enforced at the router; the `serving` logger actually prints in deployment | |
 | **P3c-1** shadow prices | #79, #80 | `policy_simulate.py --shadow-prices` relaxes one constraint at a time, per app, and prices it (cost/day, rejections avoided, newly rejected, quality, latency, on-prem share). Security constraints appear only as "cost of protection", never as a recommendation. | `docs/reference/policy-simulator.md` §8, research §17 |
 | **P3c-2** alternative scenarios | #84 | `policy_simulate.py --scenarios` replays several administrator-written scenarios against one shared baseline and writes one comparison table, in file order, never ranked. Proposals can assume a token scale, a cached-prompt share and a per-endpoint latency. Replay mirrors the gateway's context-window overflow re-selection. `--since` cuts old rows; `--min-agreement` refuses a run whose baseline disagrees with the record. | `docs/reference/policy-simulator.md` §9, research §18 |
+| B60 replayable rejections | #86 | Every outcome row records `routing_tokens`, the token count the router was given, so a request rejected for its size replays as rejected and a proposal that raises a budget shows what it rescues. The baseline check reports outcome agreement (routed or rejected against the recorded status) next to model agreement, and `--min-agreement` gates on the lower. Rejected rows from before the fix are excluded and counted. One `ALTER` before deploy. | `docs/reference/policy-simulator.md` §5–§6, `docs/reference/routing-outcomes.md` §1, research §19 |
 
 Handoff §37 Priority 3 criteria met:
 - simulation never activates anything;
@@ -82,6 +83,9 @@ partly met: nothing is ever applied, but there is no approval workflow (see §2.
 - **A replay is only as good as its baseline agreement.** Rows recorded before B55 replay
   unpinned. On the Spark they produced a fake shadow price (research §17.4). Cut exports at
   the first B55-era row: 2026-09-25 01:25 UTC on the Spark.
+- **Agreement over served rows is not enough.** A request rejected for its size replayed as
+  routed, because the row did not record its size, and model agreement stayed 1.0 (B60,
+  research §18.4.1). Agreement now also compares outcomes (research §19).
 - **Real Spark traffic today is one app (`kit-gtm`, Qwen Code).** Its only binding constraint
   is its own model pin: $0 difference, and about 26 s lower replayed p50 without it.
 
@@ -113,8 +117,9 @@ brainstorm, spec, plan and build.
    - no breaker state;
    - no re-running of PII detection;
    - no daily-spend or RPM admission;
-   - recorded `context_overflow` rows are not reproduced, because failure rows record no
-     prompt size (research §18.2);
+   - a recorded `context_overflow` row is reproduced only on an endpoint with a declared
+     context window (research §19.5). Rejected rows now carry their size (B60);
+   - a rescued request is costed at its admission estimate, not a measured cost;
    - quality for routes never historically served falls back to the tier default
      (handoff open question 10).
 
@@ -167,5 +172,6 @@ brainstorm, spec, plan and build.
    §15–§17.
 2. Start P3c-3 (uncertainty ranges) with a design brainstorm, then a spec, plan and subagent
    build.
-3. Before quoting any simulator number from the Spark, check baseline agreement, and exclude
-   rows recorded before B55.
+3. Before quoting any simulator number from the Spark, check both baseline agreements, and
+   exclude rows recorded before B55. Rejected rows recorded before B60 are excluded
+   automatically (`missing_routing_tokens`).

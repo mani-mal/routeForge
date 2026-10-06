@@ -56,6 +56,16 @@ per-request budget check sees the real cap. Both are null for an unpinned or unc
 request. **Rows exported before these fields existed lack both keys**; such a row is still
 simulated, unpinned and at the deployment's default output-token estimate.
 
+A third per-row field makes a **rejected** request replayable (B60, 2026-10-06):
+`routing_tokens` — the token count the router was given (RouteForge's own post-gate,
+post-compression count). Replay hands it to `Router.select`, so the per-request budget check
+sees the size the live check saw. It is recorded on every status. `prompt_tokens` is a
+different number — the backend's billed count, zero on a row no backend answered — and replay
+still prices a served row from it (§6). **A rejected or failed row exported before
+`routing_tokens` existed has no record of its size at all**, and is excluded, counted as
+`missing_routing_tokens`, rather than replayed as an empty prompt. A served row from before
+it replays as it always did.
+
 ### 1.2 The config snapshot
 
 Everything a routing decision reads — settings, the onboarded pool, per-app policy,
@@ -184,7 +194,7 @@ to the `proposed` arm only; the `current` arm always replays rows as recorded.
 
 | Key | Validation | Effect in replay |
 |---|---|---|
-| `token_scale` | Finite, `0 < x ≤ 10`. Default `1.0`. | Before routing and pricing: `prompt_tokens' = max(1, round(prompt_tokens × scale))` (a row that recorded 0 prompt tokens stays 0); `completion_tokens` unchanged. A recorded `complexity` below 1 becomes `min(1, complexity × scale)`, which is exact. A saturated complexity (1.0) hides the real token count, so it becomes `min(1, max(scale, prompt_tokens' / 2000))`; when the scale is below 1 that is an estimate, and the row is counted in `assumptions.saturated_complexity_estimated`. |
+| `token_scale` | Finite, `0 < x ≤ 10`. Default `1.0`. | Before routing and pricing, the same rule scales TWO counts independently (`app/eval/simulate.py`: `scaled_request` for the routing count, `_scale_tokens` for the pricing count): `x' = max(1, round(x × scale))`, a row that recorded a `0` count stays `0`. The **routing** count — what `Router.select` is given, the per-request budget check and the cost term of the score, and what a saturated complexity is re-estimated from — and the **pricing/context-window** count — what the routed call is priced at and the context-window check sizes against a candidate's declared window — scale separately. On a row recorded before `routing_tokens` existed, the routing count equals `prompt_tokens`, so the two scale identically, as before B60. `completion_tokens` is unchanged. A recorded `complexity` below 1 becomes `min(1, complexity × scale)`, which is exact. A saturated complexity (1.0) hides the real token count, so it becomes `min(1, max(scale, routing_tokens' / 2000))`; when the scale is below 1 that is an estimate, and the row is counted in `assumptions.saturated_complexity_estimated`. |
 | `cached_share` | Finite, `0 ≤ x ≤ 1`. Default `0`. | That fraction of the (scaled) prompt tokens is priced at the endpoint's cached-input price. An endpoint with no declared cached price bills them at the input price. The router still estimates with zero cached tokens, so this moves cost, never a route. |
 | `apps.<application_id>` | The app must be in the snapshot. Same two keys. | Overrides the global value for that app. |
 
@@ -233,7 +243,7 @@ uv run python scripts/policy_simulate.py \
 | `--max-relaxations` | `50` | cap on relaxations `--shadow-prices` evaluates, must be `>= 1` (exit `2` otherwise) |
 | `--scenarios` | off | a `routeforge.policy-scenarios/v1` file; compares its scenarios side by side (§9). Cannot be combined with `--proposal` or `--shadow-prices` (exit `2`) |
 | `--since` | off | ISO-8601 UTC timestamp. Rows with `ts` before it are excluded and counted as `before_since`. Applies to every mode. A value with no offset is read as UTC |
-| `--min-agreement` | off | `0 ≤ X ≤ 1`. If baseline agreement (§5) is not computable or is below `X`, print it and exit `4` before any file or directory is written. Applies to every mode |
+| `--min-agreement` | off | `0 ≤ X ≤ 1`. Compared with the **lower** of the two baseline agreements (§5): model agreement and outcome agreement. If either is not computable, or the lower one is below `X`, print both and exit `4` before any file or directory is written. Applies to every mode |
 
 `--proposal` is required unless `--shadow-prices` or `--scenarios` is given — with none of
 the three, the CLI exits `2` (an argparse usage error, since there is nothing to simulate).
@@ -245,7 +255,7 @@ the three, the CLI exits `2` (an argparse usage error, since there is nothing to
 | `0` | `simulation.json` and `report.md` written (`--proposal`, or `--shadow-prices` alone); `comparison.json` and `report.md` written (`--scenarios`, §9.4) |
 | `2` | an input failed to load, validate or apply — a bad export, an invalid proposal (unknown key, bad value, a container of the wrong type), a malformed snapshot (a missing or mistyped nested key, named by its dotted path), a snapshot that loads structurally but fails **deep** validation during `simulate()`/`shadow_prices()` (for example a provider the running deployment's own `config/` never declared), a `--config-dir` that cannot load (missing key, bad YAML, a failed config lint), neither `--proposal` nor `--shadow-prices` given, `--max-relaxations < 1`, or a shadow-prices eligible-superset invariant breach (`ShadowInvariantError`, printed as `error: internal invariant: ...` — spec §3; a relaxation narrowed some row's eligible set, which should never happen since every relaxation only widens eligibility, so it means a bug, not a reportable finding). A relaxation that newly **rejects** a baseline-routed row is *not* a breach — it is reported as `newly_rejected` (§8.4) and exits `0`. `--scenarios` combined with `--proposal` or `--shadow-prices` (an argparse usage error), neither `--proposal` nor `--shadow-prices` nor `--scenarios` given (also an argparse usage error), an invalid scenarios file (named `scenarios[<i>](<name>).proposal.<path>`), a `--since` that is not a timestamp, a `--min-agreement` outside `[0, 1]`, and a `--scenarios` comparison invariant breach (`ComparisonInvariantError`, printed as `error: internal invariant: ...` — two scenarios disagreed about the rows, excluded counts or baseline they share by construction, which means a bug, never a reportable result) are also exit `2`. Nothing is written; the offending location is on stderr — never a traceback. |
 | `3` | the proposal (or any scenario) introduces new rejections and `--fail-on-new-rejections` was passed |
-| `4` | baseline agreement is below `--min-agreement`, or there is no comparable row. Nothing is written |
+| `4` | the lower of model agreement and outcome agreement (§5) is below `--min-agreement`, or there is no comparable row. Nothing is written. The message names both rates and both outcome-disagreement counts |
 
 The CLI is file-based only: no DB, no `app.api` import, no network
 (`tests/eval/test_isolation.py` pins that `app/eval` is never imported by serving code, and
@@ -267,8 +277,8 @@ the export window).
 | `simulation_id` | first 16 hex characters of the sha256 over the canonical `inputs` block |
 | `inputs` | `export_sha256`, `snapshot_sha256`, `proposal_sha256`, `proposal_title`, `routing_policy_version`, `registry_version`, `snapshot_generated_at`, `serving_policy` (the four posture values every app was compiled under — the snapshot's), `window` (`{start, end}` over the simulated rows' `ts`, or `null`), `since` (the `--since` cut as an ISO string, or `null`) |
 | `edits` | the proposal, minus `schema`/`title`, keys sorted — exactly what was asked for |
-| `rows` | `simulated` (count) and `excluded` (count per reason: `before_since` (first), `cache_hit`, `unknown_status`, `unknown_app`, `missing_features`). `missing_features` counts a row whose `request_id`, `complexity`, `prompt_tokens` (numeric), `completion_tokens` (numeric or null), `detected_entity_types` (list of strings or null; the key must be present), `workload`, `attempts` or `ts` is missing or mistyped, or whose `requested_model` (non-empty string or null) or `max_tokens` (integer > 0 or null) is mistyped — these two may be absent (an older export) — a malformed row is counted, never a crash. A non-object export line is a skipped-line warning. |
-| `baseline` | the fidelity check — `rows_compared`, `agreement`, `warning`, `by_app`, `top_disagreements`, `overflow_contradicted` (§5) |
+| `rows` | `simulated` (count), `estimated_tokens` (simulated rows with no backend token count, sized and priced from `routing_tokens` — §6) and `excluded` (count per reason, first match wins: `before_since`, `cache_hit`, `unknown_status`, `unknown_app`, `missing_features`, `missing_routing_tokens`). `missing_routing_tokens` counts a well-formed row that records no size: not `ok`, no `routing_tokens`, and `prompt_tokens` zero — a rejected or failed row from before B60. A mistyped `routing_tokens` (anything but an integer ≥ 0 or null) is `missing_features`. `missing_features` counts a row whose `request_id`, `complexity`, `prompt_tokens` (numeric), `completion_tokens` (numeric or null), `detected_entity_types` (list of strings or null; the key must be present), `workload`, `attempts` or `ts` is missing or mistyped, or whose `requested_model` (non-empty string or null) or `max_tokens` (integer > 0 or null) is mistyped — these two may be absent (an older export) — a malformed row is counted, never a crash. A non-object export line is a skipped-line warning. |
+| `baseline` | the fidelity check (§5). Model agreement: `rows_compared`, `agreement`, `warning`, `by_app`, `top_disagreements`, `overflow_contradicted`. Outcome agreement: `outcome_rows_compared`, `outcome_agreement`, `outcome_warning`, `recorded_rejected`, `recorded_rejected_but_routed`, `recorded_routed_but_rejected`, and `outcome_by_app.<id>` (`rows`, `agreement` and the same three counts) |
 | `totals`, `by_app.<id>`, `by_workload.<label>` | each the same block: `requests`, `route_changed`, `newly_rejected`, `newly_served`, `cost_usd` (`{current, proposed, delta}` — each arm's routed rows), `cost_usd_both_routed` (same shape, over only the rows routed in **both** arms), `latency_ms.p50`/`.p95` (same shape), `quality_mean` (same shape), `onprem_share` (`{current, proposed}`), `overflow_hops` (`{current, proposed}`) |
 | `moves` | top 20 `{from, to, count}` model-pair moves; `(rejected)` is a legal `from`/`to` value |
 | `new_rejections` | `{by_app: {...}, by_code: {...}, by_core: {...}}` — rows that were `routed` under `current` and `rejected` under `proposed`. `by_core` (P3b) groups by the `proposed` arm's minimal conflicting core: requirement ids joined with `+` (e.g. `"residency+requested_model"`), in `REQUIREMENT_ORDER`; when the core itself is empty it falls back to `"(state:" + ",".join(core_state) + ")"`; when both are empty (the router's own core computation failed) it is `"(unknown)"`. See `docs/reference/conflicting-core.md`. |
@@ -287,7 +297,9 @@ Opens with the caveat, verbatim, as a blockquote:
 > eligibility and routing code and a frozen snapshot of signals. It does not model other
 > failover, escalation, breaker state or caching.
 
-Then, in order: a baseline warning (only if `agreement < 0.90`), an **Assumptions** section
+Then, in order: one line stating both baseline agreements (always printed), a baseline
+warning for each agreement that is below 0.90, a note for every recorded outcome replay
+does not reproduce and for rows sized from an estimate (§5), an **Assumptions** section
 (only when the proposal sets `workload` or `latency_ms`), **Headline** (the `totals`
 metrics table), **New rejections** (by app, by code, then **by conflicting core** — a
 `| core | count |` table, sorted by count descending then core key — or "None." when there
@@ -322,9 +334,39 @@ though the first picks still match. That subset is reported separately as
 `overflow_contradicted`: it is a fidelity check on the endpoint's declared `context_window`
 (or the default output-token estimate, when `max_tokens` was not recorded), not an ordinary
 routing disagreement, and `report.md` prints it next to the agreement banner whenever it is
-non-zero. `--min-agreement X` turns this check into a gate (exit `4`), and `--since TS` is the
-way to cut an export at the first row a replay can be trusted for — for example the first row
-recorded after B55.
+non-zero. `--since TS` is the way to cut an export at the first row a replay can be trusted for — for
+example the first row recorded after B55.
+
+**Outcome agreement (B60).** Model agreement looks only at `ok` rows, so it cannot see a
+request the record says was *rejected* and replay *routes*. A second measure covers that.
+Over **every simulated row**, the `current` arm's outcome — routed or rejected — is compared
+with the class of the recorded status:
+
+| Recorded `status` | Class | Why |
+|---|---|---|
+| `ok` | routed | served |
+| `verify_failed` | routed | a model was chosen and answered; step 9 refused the answer |
+| `backend_failed` | routed | a model was chosen; every attempt failed upstream |
+| `no_eligible` | rejected | the router found no candidate at the first decision |
+| `context_overflow` | rejected | every attempt was refused for size; replay models that as a `context_window` rejection |
+
+`outcome_agreement` is the share that match. Two counts say which way it went wrong:
+`recorded_rejected_but_routed` (out of `recorded_rejected`) and
+`recorded_routed_but_rejected`. All of it is also broken down per app (`outcome_by_app`).
+
+Every report states both agreements, on a clean run too. A rate below 90% prints a warning. **Any
+non-zero count prints a note with its denominator** ("2 of 7 recorded rejections replay as
+routed"), whatever the rate is: rejections are usually a small share of traffic, so every one
+of them can replay wrong while `outcome_agreement` stays above 90%. The count out of the
+rejected rows is the number that says whether a "newly served" figure can be trusted.
+
+**`--min-agreement X` is a gate on the lower of the two** (exit `4`, nothing written). Model
+agreement catches a replay that picks a different model (B55); outcome agreement catches one
+that serves a rejected request (B60). A replay is fit to answer "what would change" only if
+it reproduces both, so neither is allowed to hide behind the other, and they are not pooled.
+Both must be computable: with no served row, nothing vouches for which model replay picks,
+however well the outcomes agree. Outcome agreement is taken over all simulated rows, so it is
+diluted as described above; `--min-agreement 1.0` refuses any disagreement.
 
 **What lowers it:**
 
@@ -337,6 +379,11 @@ recorded after B55.
   replayed unpinned to a different model.
 - **Circuit-breaker state** — a request served while a circuit was open replays with no open
   circuits (§6).
+- **A budget, a declared context window or an endpoint's state changed since the traffic was
+  recorded** — a request rejected then can route now, and the reverse. This lowers *outcome*
+  agreement.
+- **A recorded `context_overflow` on an endpoint with no declared `context_window`** — replay
+  cannot predict an overflow it has no limit for, so the row replays as routed (§6).
 
 **The headline diff itself is never logged-vs-simulated.** Both `current` and `proposed` are
 simulated arms sharing one signals snapshot, so drift and fidelity loss affect both sides
@@ -354,12 +401,32 @@ From spec §2, plus what the build settled during P3a:
   `docs/reference/conflicting-core.md`. Shadow prices (P3c-1, §8 below) now price what each
   individual constraint costs. Alternative scenarios are §9 (P3c-2). **A capacity model and
   uncertainty ranges** remain out of scope (P3c-3, P3c-4).
-- **Rejected rows replay with zero prompt tokens (B60).** A row recorded `no_eligible` or
-  `context_overflow` carries `prompt_tokens: 0`, so replay prices and sizes it as an empty
-  prompt and the `current` arm routes it. A scenario that raises a per-request budget or a
-  context window therefore cannot show the requests it would rescue, and baseline agreement
-  (computed over `ok` rows) does not flag the mismatch. First observed live on 2026-10-06
-  (`docs/research/feasible-route-bench.md` §18.4.1).
+- **Two token counts, used for two things (B60, fixed 2026-10-06).** The router is given the
+  row's `routing_tokens` — RouteForge's own count, the number the live router was given — so
+  the per-request budget check and the cost term of the score see what they saw live. The
+  routed call is priced, and the context-window check sized, at `prompt_tokens`, the
+  backend's billed count. A row from before `routing_tokens` existed uses `prompt_tokens`
+  for both, as before.
+- **A row with no backend token count is an estimate.** A rejected row, one that failed
+  before any response, or one an endpoint served but reported no usage for (a stream whose
+  endpoint sent no usage block) has `prompt_tokens: 0` and no completion count. When an arm
+  routes it, replay prices it at its `routing_tokens` and at the router's output estimate
+  (its recorded `max_tokens`, else `default_estimated_output_tokens`) — the same pair the live
+  per-request budget check priced it at. So a request a proposal rescues, or an already-`ok`
+  row an endpoint reported no usage for, is costed at its admission estimate, which can
+  overstate what it would really have cost. `rows.estimated_tokens` counts all of these rows
+  and the report says so. A `backend_failed` row is routed in both arms and costed as if the
+  call had succeeded; the failure itself is not replayed.
+- **Rejected and failed rows recorded before B60 are excluded**, counted as
+  `missing_routing_tokens`. They record no size, and replaying them as empty prompts is what
+  made a raised budget show nothing to rescue (first observed live on 2026-10-06,
+  `docs/research/feasible-route-bench.md` §18.4.1). **This changes the output for an export
+  that contains such rows**: fewer rows are simulated than before, and totals move. To
+  simulate rejected requests, use rows recorded after the upgrade (`--since`).
+  `simulation_id`/`comparison_id` hash the `inputs` block, not the code, so the same id can
+  now name two different outputs for an export recorded before `routing_tokens` existed —
+  its unsized rejected/failed rows are excluded where an earlier build of this tool replayed
+  them as routed.
 - **No re-running PII detection.** Recorded `detected_entity_types` are replayed as-is, so a
   proposal cannot change `pii_detection`, a denylist, exempt patterns or recognizers.
 - **No daily-spend or RPM admission simulation** — those are admission limits, not routing.
@@ -371,7 +438,10 @@ From spec §2, plus what the build settled during P3a:
   declared `context_window` is never enforced ahead of time — overflow is the backend's own
   refusal, on its real tokenisation and its real limit. Replay has no backend to ask, so it
   predicts that refusal instead, from data the row and the snapshot already carry:
-  1. `prompt_tokens` is the backend's own recorded count for the row — not an estimate.
+  1. `prompt_tokens` is the backend's own recorded count for the row — not an estimate. For
+     a row no backend answered it is the row's `routing_tokens`, which is RouteForge's count
+     and not the backend's, so a request the backend refused by a small margin can replay as
+     fitting.
   2. `output_tokens` is the row's recorded `max_tokens`, or the deployment's
      `default_estimated_output_tokens` when none was recorded. So an uncapped request that fit
      live can still overflow in replay, when the default estimate overstates what the client
@@ -393,9 +463,10 @@ From spec §2, plus what the build settled during P3a:
   that same pick as an overflow is a sign the endpoint's declared window understates its real
   one (or no `max_tokens` was recorded and point 2 above overstates the request) — §5 reports
   that subset separately as `overflow_contradicted`.
-- **Recorded `context_overflow` rows are still not reproduced.** A failure row records
-  `prompt_tokens: 0`, so replay sees a prompt that fits any window. Rows that were served
-  carry their real token count and are replayed faithfully.
+- **A recorded `context_overflow` row is reproduced only when the endpoint declares a
+  window.** The row now carries its size (`routing_tokens`), so a declared `context_window`
+  it exceeds rejects it in replay too. An undeclared window never overflows, so the row
+  replays as routed and is counted in `recorded_rejected_but_routed` (§5).
 - **Cached tokens are an assumption, not a record.** Outcome rows do not record cached
   prompt tokens. Both arms price none as cached unless a proposal sets `workload.cached_share`.
 - **Pinned-model rejections are not in the input.** A pin the app may not use is a
@@ -608,6 +679,19 @@ the §4.2 caveat followed by the "Shadow prices" section. **With `--proposal`**,
 P3a output is unchanged in full, `shadow_prices` is added as one more top-level key, and the
 "Shadow prices" section is appended to the end of the report.
 
+**Shadow-prices-only hides the new exclusion and the estimated-row count (B63 backlog
+item).** `shadow_prices` selects rows the same way `simulate()` does (`select_rows`), so a
+row recorded before `routing_tokens` existed that is not `ok` and carries no size is excluded
+here too, counted as `missing_routing_tokens` — but with no `--proposal` there is no `rows`
+block in `simulation.json` or `report.md`, so this mode prints no count of how many rows were
+excluded or sized from an estimate. A `rejections_avoided` row's share of a constraint's
+`cost_usd` is still an admission estimate (its routing tokens plus the router's output-token
+estimate, §6), the same estimate `rows.estimated_tokens` would count if this mode reported
+it; `cost_saved_per_day` is unaffected, since it is computed only over rows routed in both
+arms. To see the excluded and estimated counts, run with `--proposal` alongside
+`--shadow-prices` — an empty proposal (`{"schema": "routeforge.policy-proposal/v1"}`)
+predicts no change and still produces the `rows` block.
+
 ### 8.6 Flags
 
 See the `--shadow-prices` and `--max-relaxations` rows in §3's flag table and exit-code
@@ -690,7 +774,7 @@ places.
 |---|---|
 | `comparison_id` | first 16 hex characters of the sha256 over `inputs` |
 | `inputs` | `export_sha256`, `snapshot_sha256`, `scenarios_sha256`, `title`, `routing_policy_version`, `registry_version`, `snapshot_generated_at`, `serving_policy`, `since`, `window` |
-| `rows` | `simulated` and `excluded` — the same for every scenario |
+| `rows` | `simulated`, `estimated_tokens` and `excluded` — the same for every scenario |
 | `baseline` | the fidelity block of §5, computed once from the shared `current` arm |
 | `scenarios` | file order. Each: `name`, `edits`, `assumptions`, and `summary` — the §4.1 body (`totals`, `by_app`, `by_workload`, `moves`, `new_rejections`, `affected_apps`, `sources`, `per_day`) |
 | `table` | file order. One row per scenario: `name`, `cost_per_day_delta_usd`, `cost_delta_usd`, `route_changed`, `newly_rejected`, `newly_served`, `latency_p50_delta_ms`, `latency_p95_delta_ms`, `quality_mean_delta`, `onprem_share_current`, `onprem_share_proposed`, `overflow_hops`, `affected_apps` |
@@ -707,8 +791,10 @@ gives for the same body.
 
 ### 9.5 `report.md`
 
-In order: the §4.2 caveat; the title; a **baseline agreement** banner (overall rate, a ⚠
-warning under 90%, the rate per app, and the `--since` cut when one was given); **one
+In order: the §4.2 caveat; the title; a **baseline agreement** banner (model agreement and
+outcome agreement, each with its overall rate, a ⚠ warning under 90% and the rate per app;
+a note for every recorded outcome replay does not reproduce and for rows sized from an
+estimate; and the `--since` cut when one was given); **one
 comparison table** in file order, followed by the sentence "Listed in file order. RouteForge
 does not rank or recommend scenarios." and the like-for-like note; an **Assumptions** line
 for each scenario that sets `workload` or `latency_ms`; a short section per scenario
