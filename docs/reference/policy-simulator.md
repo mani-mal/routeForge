@@ -191,6 +191,11 @@ to the `proposed` arm only; the `current` arm always replays rows as recorded.
 Outcome rows do not record cached tokens, so any non-zero `cached_share` is an assumption
 and the report says so.
 
+`token_scale` changes the tokens priced and checked against a candidate's declared
+`context_window` (§6); it never changes the replayed latency, which comes only from the
+`endpoints.*.latency_ms` assertion below, an observed/signal/tier-default value, or the
+router's own latency scoring term.
+
 **`endpoints.add[].latency_ms` and `endpoints.update.<slug>.latency_ms`** (P3c-2) — an
 operator-asserted latency in milliseconds: finite `> 0`, or `null` for "no override". Use it
 to model a serving-engine or hardware change; RouteForge cannot see the serving engine, so
@@ -237,8 +242,8 @@ the three, the CLI exits `2` (an argparse usage error, since there is nothing to
 
 | Code | Meaning |
 |---|---|
-| `0` | `simulation.json` and `report.md` written |
-| `2` | an input failed to load, validate or apply — a bad export, an invalid proposal (unknown key, bad value, a container of the wrong type), a malformed snapshot (a missing or mistyped nested key, named by its dotted path), a snapshot that loads structurally but fails **deep** validation during `simulate()`/`shadow_prices()` (for example a provider the running deployment's own `config/` never declared), a `--config-dir` that cannot load (missing key, bad YAML, a failed config lint), neither `--proposal` nor `--shadow-prices` given, `--max-relaxations < 1`, or a shadow-prices eligible-superset invariant breach (`ShadowInvariantError`, printed as `error: internal invariant: ...` — spec §3; a relaxation narrowed some row's eligible set, which should never happen since every relaxation only widens eligibility, so it means a bug, not a reportable finding). A relaxation that newly **rejects** a baseline-routed row is *not* a breach — it is reported as `newly_rejected` (§8.4) and exits `0`. `--scenarios` combined with `--proposal` or `--shadow-prices`, an invalid scenarios file (named `scenarios[<i>] (<name>).proposal.<path>`), a `--since` that is not a timestamp, a `--min-agreement` outside `[0, 1]` are also exit `2`. Nothing is written; the offending location is on stderr — never a traceback. |
+| `0` | `simulation.json` and `report.md` written (`--proposal`, or `--shadow-prices` alone); `comparison.json` and `report.md` written (`--scenarios`, §9.4) |
+| `2` | an input failed to load, validate or apply — a bad export, an invalid proposal (unknown key, bad value, a container of the wrong type), a malformed snapshot (a missing or mistyped nested key, named by its dotted path), a snapshot that loads structurally but fails **deep** validation during `simulate()`/`shadow_prices()` (for example a provider the running deployment's own `config/` never declared), a `--config-dir` that cannot load (missing key, bad YAML, a failed config lint), neither `--proposal` nor `--shadow-prices` given, `--max-relaxations < 1`, or a shadow-prices eligible-superset invariant breach (`ShadowInvariantError`, printed as `error: internal invariant: ...` — spec §3; a relaxation narrowed some row's eligible set, which should never happen since every relaxation only widens eligibility, so it means a bug, not a reportable finding). A relaxation that newly **rejects** a baseline-routed row is *not* a breach — it is reported as `newly_rejected` (§8.4) and exits `0`. `--scenarios` combined with `--proposal` or `--shadow-prices` (an argparse usage error), neither `--proposal` nor `--shadow-prices` nor `--scenarios` given (also an argparse usage error), an invalid scenarios file (named `scenarios[<i>](<name>).proposal.<path>`), a `--since` that is not a timestamp, a `--min-agreement` outside `[0, 1]`, and a `--scenarios` comparison invariant breach (`ComparisonInvariantError`, printed as `error: internal invariant: ...` — two scenarios disagreed about the rows, excluded counts or baseline they share by construction, which means a bug, never a reportable result) are also exit `2`. Nothing is written; the offending location is on stderr — never a traceback. |
 | `3` | the proposal (or any scenario) introduces new rejections and `--fail-on-new-rejections` was passed |
 | `4` | baseline agreement is below `--min-agreement`, or there is no comparable row. Nothing is written |
 
@@ -263,7 +268,7 @@ the export window).
 | `inputs` | `export_sha256`, `snapshot_sha256`, `proposal_sha256`, `proposal_title`, `routing_policy_version`, `registry_version`, `snapshot_generated_at`, `serving_policy` (the four posture values every app was compiled under — the snapshot's), `window` (`{start, end}` over the simulated rows' `ts`, or `null`), `since` (the `--since` cut as an ISO string, or `null`) |
 | `edits` | the proposal, minus `schema`/`title`, keys sorted — exactly what was asked for |
 | `rows` | `simulated` (count) and `excluded` (count per reason: `before_since` (first), `cache_hit`, `unknown_status`, `unknown_app`, `missing_features`). `missing_features` counts a row whose `request_id`, `complexity`, `prompt_tokens` (numeric), `completion_tokens` (numeric or null), `detected_entity_types` (list of strings or null; the key must be present), `workload`, `attempts` or `ts` is missing or mistyped, or whose `requested_model` (non-empty string or null) or `max_tokens` (integer > 0 or null) is mistyped — these two may be absent (an older export) — a malformed row is counted, never a crash. A non-object export line is a skipped-line warning. |
-| `baseline` | the fidelity check — `rows_compared`, `agreement`, `warning`, `by_app`, `top_disagreements` (§5) |
+| `baseline` | the fidelity check — `rows_compared`, `agreement`, `warning`, `by_app`, `top_disagreements`, `overflow_contradicted` (§5) |
 | `totals`, `by_app.<id>`, `by_workload.<label>` | each the same block: `requests`, `route_changed`, `newly_rejected`, `newly_served`, `cost_usd` (`{current, proposed, delta}` — each arm's routed rows), `cost_usd_both_routed` (same shape, over only the rows routed in **both** arms), `latency_ms.p50`/`.p95` (same shape), `quality_mean` (same shape), `onprem_share` (`{current, proposed}`), `overflow_hops` (`{current, proposed}`) |
 | `moves` | top 20 `{from, to, count}` model-pair moves; `(rejected)` is a legal `from`/`to` value |
 | `new_rejections` | `{by_app: {...}, by_code: {...}, by_core: {...}}` — rows that were `routed` under `current` and `rejected` under `proposed`. `by_core` (P3b) groups by the `proposed` arm's minimal conflicting core: requirement ids joined with `+` (e.g. `"residency+requested_model"`), in `REQUIREMENT_ORDER`; when the core itself is empty it falls back to `"(state:" + ",".join(core_state) + ")"`; when both are empty (the router's own core computation failed) it is `"(unknown)"`. See `docs/reference/conflicting-core.md`. |
@@ -278,8 +283,9 @@ Opens with the caveat, verbatim, as a blockquote:
 
 > **Simulation only.** Nothing in this report has been applied. It predicts the first routing
 > decision of recorded requests under the proposal, plus deterministic context-window overflow
-> re-selection, using the real eligibility and routing code and a frozen snapshot of signals.
-> It does not model other failover, escalation, breaker state or caching.
+> re-selection predicted from each endpoint's declared context window, using the real
+> eligibility and routing code and a frozen snapshot of signals. It does not model other
+> failover, escalation, breaker state or caching.
 
 Then, in order: a baseline warning (only if `agreement < 0.90`), an **Assumptions** section
 (only when the proposal sets `workload` or `latency_ms`), **Headline** (the `totals`
@@ -309,9 +315,16 @@ Agreement below 90% prints a warning at the top of `report.md`.
 
 The comparison is between **first decisions**: the model the `current` arm selected first,
 before any context-window re-selection (§6), against the recorded first attempt. A row the
-`current` arm rejects always counts as a disagreement. `--min-agreement X` turns this check
-into a gate (exit `4`), and `--since TS` is the way to cut an export at the first row a
-replay can be trusted for — for example the first row recorded after B55.
+`current` arm rejects always counts as a disagreement. So does a row whose record proves the
+*recorded* first pick served it alone, live (`chosen == attempts[0]`, one recorded attempt),
+while replay's `current` arm excludes that same pick as a predicted overflow (§6) — even
+though the first picks still match. That subset is reported separately as
+`overflow_contradicted`: it is a fidelity check on the endpoint's declared `context_window`
+(or the default output-token estimate, when `max_tokens` was not recorded), not an ordinary
+routing disagreement, and `report.md` prints it next to the agreement banner whenever it is
+non-zero. `--min-agreement X` turns this check into a gate (exit `4`), and `--since TS` is the
+way to cut an export at the first row a replay can be trusted for — for example the first row
+recorded after B55.
 
 **What lowers it:**
 
@@ -345,16 +358,35 @@ From spec §2, plus what the build settled during P3a:
   proposal cannot change `pii_detection`, a denylist, exempt patterns or recognizers.
 - **No daily-spend or RPM admission simulation** — those are admission limits, not routing.
 - **No circuit-breaker state.** Both arms run with no circuits open.
-- **No confidence-escalation or failover replay.** Only the request's first routing decision
-  is simulated; later hops are never replayed.
-- **Context-window overflow is replayed; other failover is not.** Both arms mirror the
-  gateway's overflow handling: if the pick declares a `context_window` and
-  `prompt_tokens + output_tokens` exceeds it, the pick is excluded and the router selects
-  again, at most `routing.max_failover_attempts` extra times — the live bound. If every
-  reachable candidate overflows, the row is rejected with code `context_window` (live: a 400).
-  An undeclared window (`null`) never overflows. The endpoint served after the hops is the one
-  costed, and `overflow_hops` counts the hops. So a proposed `context_window` change now has a
-  visible effect.
+- **Only the request's first routing decision is simulated, plus predicted context-window
+  overflow re-selection (below).** No confidence-escalation and no other failover is
+  replayed; later hops beyond the overflow re-selection are never replayed.
+- **Context-window overflow is PREDICTED, not replayed from what happened live.** Live, the
+  declared `context_window` is never enforced ahead of time — overflow is the backend's own
+  refusal, on its real tokenisation and its real limit. Replay has no backend to ask, so it
+  predicts that refusal instead, from data the row and the snapshot already carry:
+  1. `prompt_tokens` is the backend's own recorded count for the row — not an estimate.
+  2. `output_tokens` is the row's recorded `max_tokens`, or the deployment's
+     `default_estimated_output_tokens` when none was recorded. So an uncapped request that fit
+     live can still overflow in replay, when the default estimate overstates what the client
+     actually asked for (and the endpoint actually served).
+  3. A pick is excluded when `prompt_tokens + output_tokens` exceeds its DECLARED
+     `context_window`, and the router selects again, at most `routing.max_failover_attempts`
+     extra times — the live bound. If every reachable candidate overflows, the row is rejected
+     with code `context_window` (live: a 400). An undeclared window (`null`) never overflows.
+  4. **The live streaming path has no re-selection at all.** `Gateway.run_stream` makes exactly
+     one `Router.select` call and streams from whatever it returns; a request that overflows
+     live on that path is a 400 with no retry. Replay re-selects for every row regardless of
+     whether it was served streamed or not, so a streamed row's predicted overflow handling is
+     strictly more forgiving than what the stream path actually does.
+
+  The endpoint served after the hops is the one costed, and `overflow_hops` counts the hops. So
+  a proposed `context_window` change now has a visible effect. And because this is a
+  prediction, not a replay, it can be WRONG: an `ok` row whose record proves its recorded first
+  pick served it alone (`chosen == attempts[0]`, one recorded attempt) but whose replay excludes
+  that same pick as an overflow is a sign the endpoint's declared window understates its real
+  one (or no `max_tokens` was recorded and point 2 above overstates the request) — §5 reports
+  that subset separately as `overflow_contradicted`.
 - **Recorded `context_overflow` rows are still not reproduced.** A failure row records
   `prompt_tokens: 0`, so replay sees a prompt that fits any window. Rows that were served
   carry their real token count and are replayed faithfully.
@@ -518,6 +550,14 @@ and `newly_rejected_reasons`, and such a relaxation is binding. (Amended 2026-09
 original design claimed the routed→rejected half as an invariant; it was wrong. See
 `docs/research/feasible-route-bench.md` §17.3.)
 
+The same non-monotonicity applies to predicted context-window overflow (§6, added P3c-2): a
+relaxation can newly reject a row with code `context_window` when the wider eligible set
+reaches a candidate with a smaller declared window that the (scaled) request then overflows,
+and conversely a baseline `context_window` rejection can be AVOIDED by a relaxation that
+reaches a candidate with a larger or undeclared window — `requested_model`'s relaxation
+(unpinning) is the clearest example, since the pinned candidate may be the only one with too
+small a window.
+
 ### 8.5 The two tables and the non-recommendation rule
 
 `report.md`'s "Shadow prices" section opens with this caveat, verbatim:
@@ -619,7 +659,7 @@ order, no output field ranks or scores them, and nothing is applied.
 - `name`: 1 to 64 characters of `[A-Za-z0-9._+-]`, unique within the file.
 - `proposal`: a v1 proposal body (§2). `schema` is optional inside it.
 - Loading is all-or-nothing. Every scenario is validated against the snapshot before any
-  replay starts. An error is named `scenarios[<i>] (<name>).proposal.<dotted path>` and the
+  replay starts. An error is named `scenarios[<i>](<name>).proposal.<dotted path>` and the
   CLI exits `2` with nothing written.
 - An empty body `{}` is a valid scenario and predicts zero change.
 

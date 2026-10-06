@@ -88,7 +88,7 @@ def test_scenarios_come_back_in_file_order_with_shared_rows_and_baseline():
     assert cmp.window == {"start": "2026-09-20T12:00:00+00:00",
                           "end": "2026-09-22T12:00:11+00:00"}
     assert set(cmp.baseline) == {"rows_compared", "agreement", "warning", "by_app",
-                                 "top_disagreements"}
+                                 "top_disagreements", "overflow_contradicted"}
     for entry in cmp.scenarios:
         assert set(entry) == {"name", "edits", "assumptions", "summary"}
         assert set(entry["summary"]) == {"totals", "by_app", "by_workload", "moves",
@@ -128,7 +128,12 @@ def test_s9_scenario_proposals_never_widen_eligibility(tightenings, disable, ety
         assert set(r.proposed.eligible) <= set(r.current.eligible)
         if item.proposal["apps"]["app-a"].get("residency") == "onprem_only":
             assert r.proposed.provider in (None, "onprem")
-        # a tightening can never newly serve a row, and compare() agrees with the row
+        # A tightening can never newly serve a row here because this fixture's
+        # onboarded rows all declare no context_window (no overflow is
+        # possible in this test) -- in general, removing an overflowing
+        # endpoint from eligibility can let the bounded re-select loop (spec
+        # §5) reach one that fits, newly serving a row a wider eligible set
+        # would have overflowed on. compare() agrees with the row either way.
         totals = entry["summary"]["totals"]
         assert totals["newly_served"] == 0
         assert totals["newly_rejected"] == int(

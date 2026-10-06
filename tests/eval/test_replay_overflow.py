@@ -141,18 +141,55 @@ def test_shrinking_a_window_newly_rejects_and_is_keyed_context_window():
 def test_baseline_compares_the_first_decision_not_the_served_model():     # Review Focus 4
     """The record says m1 was tried first and m2 served. Replay reproduces
     exactly that; the fidelity check must call it agreement, and a rejected
-    arm must still count as a disagreement."""
+    arm must still count as a disagreement. Neither row's record proves its
+    OWN first pick served it alone (the failover row names two attempts; the
+    all-overflow row's one attempt was never actually overflowed live, but
+    it IS excluded by replay -- see the dedicated overflow_contradicted
+    tests below for that distinction)."""
     failover = _row("f", attempts=["m1", "m2"], chosen="m2")
     results, excluded = _run([failover], _mids(1000, None))
     sim = summarize(results, excluded, inputs=_INPUTS, edits={})
     assert results[0].current.model == "m2"
     assert sim["baseline"]["agreement"] == 1.0 and sim["baseline"]["top_disagreements"] == []
+    assert sim["baseline"]["overflow_contradicted"] == 0
     served_live = _row("s", attempts=["m1"], chosen="m1")
     results, excluded = _run([served_live], _mids(1000, 1200))     # replay: all overflow
     sim = summarize(results, excluded, inputs=_INPUTS, edits={})
     assert sim["baseline"]["agreement"] == 0.0
     assert sim["baseline"]["top_disagreements"] == [
         {"recorded": "m1", "simulated": "(rejected)", "count": 1}]
+    # The record's one attempt IS "m1" chosen, so this row also qualifies as
+    # overflow_contradicted -- it is already a disagreement either way.
+    assert sim["baseline"]["overflow_contradicted"] == 1
+
+
+def test_overflow_contradicted_counts_a_served_pick_replay_excludes():     # F1 final review
+    """4 `ok` rows the record says m1 ALONE served (one recorded attempt,
+    chosen == attempts[0]). m1's declared window is 1000 and the row is 900
+    prompt tokens, so replay's `current` arm excludes m1 as an overflow and
+    serves m2 instead. The first pick still matches the record ("m1"), so
+    before this fix `_baseline` read perfect agreement with no warning --
+    even though replay's own overflow prediction contradicts what the
+    record proves happened."""
+    rows = [_row(f"r{i}", attempts=["m1"], chosen="m1") for i in range(4)]
+    results, excluded = _run(rows, _mids(1000, None))
+    for r in results:
+        assert r.current.model == "m2" and r.current.attempted == ("m1", "m2")
+    sim = summarize(results, excluded, inputs=_INPUTS, edits={})
+    assert sim["baseline"]["agreement"] < 1.0
+    assert sim["baseline"]["overflow_contradicted"] == 4
+
+
+def test_reproduced_failover_is_not_overflow_contradicted():              # F1 final review
+    """The already-covered reproduced-failover case (record: m1 tried, m2
+    chosen) must keep agreeing, and the new field must read 0 for it --
+    only a row whose record proves a SINGLE pick served it alone can be
+    contradicted."""
+    failover = _row("f", attempts=["m1", "m2"], chosen="m2")
+    results, excluded = _run([failover], _mids(1000, None))
+    sim = summarize(results, excluded, inputs=_INPUTS, edits={})
+    assert sim["baseline"]["agreement"] == 1.0
+    assert sim["baseline"]["overflow_contradicted"] == 0
 
 
 def test_caveat_names_the_overflow_re_selection():

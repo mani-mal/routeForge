@@ -65,7 +65,7 @@ def _scenario_where(index: int, name: str) -> str:
     return f"scenarios[{index}]({name})"
 
 
-def validate_scenarios(doc) -> None:
+def validate_scenarios(doc: object) -> None:
     """Shape-only checks (no snapshot needed): the schema, the closed key
     sets, 1..20 scenarios, legal unique names, and every proposal body's own
     keys. Values are checked against the snapshot by `apply_scenarios`."""
@@ -311,6 +311,12 @@ def _agreement_lines(doc: dict) -> list[str]:
             lines.append("Per app: " + " · ".join(
                 f"{app_id} {_pct(rate)}" + (" ⚠" if rate < 0.90 else "")
                 for app_id, rate in sorted(baseline["by_app"].items())))
+        if baseline["overflow_contradicted"]:
+            lines.append("")
+            lines.append(
+                f"**Note:** {baseline['overflow_contradicted']} row(s) served by an endpoint "
+                "replay predicts would overflow -- check that endpoint's declared "
+                "context_window.")
     since = doc["inputs"].get("since")
     if since is not None:
         lines.append("")

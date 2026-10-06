@@ -284,6 +284,16 @@ literature doesn't model".
   agreement. By construction it should leave it unchanged: the baseline compares first
   decisions, and failure rows record `prompt_tokens: 0`, so recorded overflows cannot be
   reproduced (FB §18.2). **TO MEASURE** (before/after agreement on the Spark export).
+- **Final-review finding: a served pick's own predicted overflow was invisible to agreement.**
+  The revised expectation above is about a reproduced FAILOVER, not about a record proving the
+  first pick alone served the row while replay excludes that same pick as a predicted
+  overflow — that case still "agreed" by the first-decision measure, silently, even though the
+  overflow prediction (§4.1's new levers) contradicts what the record proves happened.
+  `_baseline` now treats it as a disagreement and reports the count separately as
+  `overflow_contradicted`: a direct fidelity check on each endpoint's declared
+  `context_window`, not a routing disagreement (FB §18.2 final-review addendum). **TO
+  MEASURE:** `ok` single-attempt rows the current arm's overflow replay contradicts, on the
+  Spark/DGX lab export.
 - **Experiment E-P3c2 (TO MEASURE):** the HO §25/§28 healthcare triad as three scenarios
   (all-on-prem / raw-PII-only on-prem / all-on-prem + second endpoint) on a persona-generated
   traffic mix with realistic shares (60/25/10/5). Report the comparison table. Also: static

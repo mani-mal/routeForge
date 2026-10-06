@@ -136,6 +136,20 @@ def test_value_errors_carry_index_name_and_dotted_path(body, where):      # Revi
     assert str(exc.value).startswith(where + ": ")
 
 
+def test_workload_apps_wildcard_is_rejected_inside_a_scenarios_file():    # F3 final review
+    """The same ALL_APPS collision guard (app/eval/proposal.py), named by
+    the scenario-file dotted path -- `scenarios[<i>](<name>).proposal.
+    workload.apps.*` -- even when an app literally named "*" exists in the
+    snapshot, so this is not merely "unknown application"."""
+    from tests.eval.sim_fixtures import app_entry
+    snap = make_snapshot(apps=[app_entry("*"), app_entry("app-a")])
+    doc = _doc(("first", {}),
+              ("second", {"workload": {"apps": {"*": {"token_scale": 0.5}}}}))
+    with pytest.raises(ScenarioError) as exc:
+        apply_scenarios(snap, doc, base=BASE_SETTINGS)
+    assert exc.value.where == "scenarios[1](second).proposal.workload.apps.*"
+
+
 def test_a_snapshot_problem_is_not_blamed_on_a_scenario():
     snap = make_snapshot()
     snap["settings"]["providers"]["mystery"] = {

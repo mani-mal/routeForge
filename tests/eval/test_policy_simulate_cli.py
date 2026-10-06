@@ -12,7 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
-from tests.eval.sim_fixtures import make_row, make_snapshot
+from tests.eval.sim_fixtures import app_entry, make_row, make_snapshot, onboarded_row
 from tests.test_admin_api import _login
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -455,6 +455,25 @@ def test_min_agreement_out_of_range_exits_2(tmp_path, bad):
                          f"--min-agreement={bad}")
     assert proc.returncode == 2, proc.stderr
     assert "--min-agreement" in proc.stderr and not out.exists()
+
+
+def test_min_agreement_catches_an_overflow_contradicted_row(tmp_path):    # F1 final review
+    """4 `ok` rows the record says m1 ALONE served (one recorded attempt,
+    chosen == attempts[0]); m1's declared window is 1000 and the row is 900
+    prompt tokens, so replay's `current` arm excludes m1 as an overflow and
+    serves m2. First picks still match ("m1"), so before the fix agreement
+    read 1.0 with no warning -- `--min-agreement 1.0` must now refuse."""
+    snap = make_snapshot(
+        onboarded=[onboarded_row("m1", "mid", price_input=0.1, context_window=1000),
+                  onboarded_row("m2", "mid", price_input=0.2)],
+        apps=[app_entry("app-a", max_cost_usd_per_request=100.0)])
+    lines = [_line(make_row(f"r{i}", "app-a", complexity=0.6, prompt_tokens=900,
+                            attempts=["m1"], chosen="m1"))
+            for i in range(4)]
+    proc, out = _run_cli(tmp_path, lines, snap, {"schema": P},
+                         "--min-agreement", "1.0")
+    assert proc.returncode == 4, proc.stderr
+    assert not out.exists()
 
 
 # --- P3c-2 Task 10: --scenarios (spec §6, §8) ---------------------------------

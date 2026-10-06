@@ -2,8 +2,8 @@
 
 **As of 2026-10-06**, `main` is at `4605136` (through PR #83, the DGX cluster rebuild
 redeploy). The DGX Spark runs `4bfb0b3` (through PR #79); Run:ai was rebuilt and
-redeployed separately by PR #83. P3c-2 (below) is built on branch `feat/p3c2-scenarios`
-(HEAD `e36cd9d` plus this docs commit) but not yet merged — PR pending.
+redeployed separately by PR #83. P3c-2 (below) is built on branch `feat/p3c2-scenarios`,
+not yet merged — PR pending.
 
 This is the status of the program set out in `docs/new/RouteForge-Priorities-1-3-LLM-Handoff.md`
 (the "handoff"). Each shipped slice went through the same pipeline: design spec

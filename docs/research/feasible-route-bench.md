@@ -2420,9 +2420,16 @@ what the code does.
   prompt tokens are the backend's count, not the router's.
 - **Asserted latency.** Scored as a measurement, so it also supplies the same-tier peer prior.
   Otherwise re-asserting the current value could remove a prior and move a route.
-- **Context-window overflow.** Both arms mirror the gateway: exclude the overflowing pick,
-  select again, at most `max_failover_attempts` extra times. This is the first later-hop
-  behaviour replayed. It is safe to replay because it is a pure function of declared data.
+- **Context-window overflow.** Both arms mirror the gateway's non-streaming path: exclude the
+  overflowing pick, select again, at most `max_failover_attempts` extra times. This is the
+  first later-hop behaviour replayed, and it is safe to replay because it is a pure function
+  of declared data -- but that also means it is a PREDICTION, not a replay of what happened.
+  Live, overflow is the backend's own refusal on its real tokenisation and its real limit;
+  replay has no backend to ask, so it predicts the refusal from the operator's declared
+  `context_window` instead (final review, §18.2 below). The live STREAMING path
+  (`Gateway.run_stream`) makes exactly one `Router.select` call and never re-selects, so a
+  streamed request that overflows live is a 400 with no retry -- replay's re-selection is
+  strictly more forgiving there than what the stream path actually does.
 
 ### 18.2 Two things the design expected that the code does not give
 
@@ -2435,6 +2442,18 @@ what the code does.
   `prompt_tokens: 0`, so replay sees a prompt that fits any window. Reproducing those rows
   needs the outcome row to record the prompt size on failure — a serving change, not made
   here. This is the §15.4 lesson again: replay can only be as faithful as the row.
+- **A served pick's own predicted overflow was invisible to agreement (final-review finding,
+  closed).** The first bullet above is about a reproduced FAILOVER -- it says nothing about a
+  record that proves the first pick ALONE served the row (`chosen == attempts[0]`, one
+  recorded attempt) while replay's `current` arm excludes that same pick as a predicted
+  overflow. First picks still match in that case, so the original design read it as perfect
+  agreement, silently. That is backwards: it is exactly the row where the prediction (§18.1)
+  disagrees with the record. `_baseline` now counts it as a disagreement and reports the count
+  separately as `overflow_contradicted`, so it reads as a fidelity check on each endpoint's
+  DECLARED `context_window` specifically, not a routing-logic disagreement: a non-zero count
+  says some endpoint's declared window probably understates its real one (or no `max_tokens`
+  was recorded and the default output estimate overstates the request --
+  `docs/reference/policy-simulator.md` §6).
 
 ### 18.3 Invariants, and the test that pins each
 
@@ -2467,6 +2486,7 @@ legitimately unmeasured, not omitted.
 | Spark export, baseline agreement before overflow replay | TO MEASURE |
 | Spark export, baseline agreement after overflow replay (§18.2 predicts no change) | TO MEASURE |
 | Spark export, rows with `overflow_hops > 0` in the current arm | TO MEASURE |
+| Spark export, `ok` single-attempt rows the current arm's overflow replay contradicts (`overflow_contradicted`) | TO MEASURE |
 | Healthcare triad (all on-prem / raw-PII-only on-prem / all on-prem + second endpoint) on persona traffic: the comparison table | TO MEASURE |
 | Static 4-request test vs traffic-weighted replay of the same triad | TO MEASURE |
 

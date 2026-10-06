@@ -451,8 +451,9 @@ def agreement_ok(baseline: dict, minimum: float) -> bool:
 REPORT_CAVEAT = (
     "**Simulation only.** Nothing in this report has been applied. It predicts the first routing\n"
     "decision of recorded requests under the proposal, plus deterministic context-window overflow\n"
-    "re-selection, using the real eligibility and routing code and a frozen snapshot of signals.\n"
-    "It does not model other failover, escalation, breaker state or caching."
+    "re-selection predicted from each endpoint's declared context window, using the real\n"
+    "eligibility and routing code and a frozen snapshot of signals. It does not model other\n"
+    "failover, escalation, breaker state or caching."
 )
 
 
@@ -535,32 +536,70 @@ def _first_pick(arm: ArmResult) -> str | None:
     return arm.attempted[0] if arm.attempted else arm.model
 
 
+def _overflow_contradicted(r: RowResult) -> bool:
+    """True when the record proves this row's single recorded attempt alone
+    SERVED it, live (`chosen == attempts[0]`, exactly one recorded attempt),
+    but the `current` arm excludes that same pick as a predicted
+    context-window overflow (`overflow_hops > 0` -- also true of an
+    all-overflow rejection). The FIRST pick can still equal the recorded one
+    here: the contradiction is about whether that pick could have served the
+    row at all, not about which model was tried first (final review; docs/
+    reference/policy-simulator.md §6). A near-miss case for how this could
+    legitimately happen: the row's `max_tokens` was not recorded, so replay
+    prices it at the deployment's default output estimate, which may be
+    larger than what the client actually asked for and the endpoint
+    actually served (§6)."""
+    attempts = r.row.get("attempts") or []
+    if len(attempts) != 1 or r.row.get("chosen") != attempts[0]:
+        return False
+    return r.current.overflow_hops > 0
+
+
+def _agrees(r: RowResult) -> bool:
+    """True when the `current` arm backs up the record's first attempt: the
+    first pick must match it, AND -- unless the record itself is
+    contradicted by a predicted overflow (`_overflow_contradicted`) -- that
+    is enough. A reproduced failover (the record's own first attempt differs
+    from what was chosen, and replay reproduces that exact hop) still
+    agrees; only a contradicted row is forced to disagree regardless of the
+    first-pick match."""
+    if _overflow_contradicted(r):
+        return False
+    return _first_pick(r.current) == r.row["attempts"][0]
+
+
 def _baseline(results: list[RowResult]) -> dict:
     """Fidelity check (spec §7): does the `current` arm's pick agree with the
     recorded first attempt, over simulated `ok` rows with a recorded
     attempt. Never compares `proposed` -- the headline diff is always
-    `current` vs `proposed`, both simulated."""
+    `current` vs `proposed`, both simulated.
+
+    `overflow_contradicted` (final review) counts the subset of
+    disagreements where the record proves the row's recorded first pick
+    SERVED it alone, live, while replay's predicted context-window overflow
+    (§6) excludes that same pick. It is a direct fidelity check on the
+    endpoint's declared `context_window` (or the default output-token
+    estimate), not an ordinary routing disagreement -- but it still counts
+    toward `agreement`/`by_app`/`top_disagreements` like any other."""
     compared = [r for r in results
                 if r.row.get("status") == "ok" and (r.row.get("attempts") or [])]
     rows_compared = len(compared)
     agreement = None
     by_app: dict[str, float] = {}
     disagreements: Counter = Counter()
+    overflow_contradicted = sum(1 for r in compared if _overflow_contradicted(r))
     if rows_compared:
-        # First decision against first recorded attempt: an overflow hop
-        # replay reproduces (P3c-2) must not read as a disagreement.
-        agree_count = sum(1 for r in compared
-                          if _first_pick(r.current) == r.row["attempts"][0])
+        agree_count = sum(1 for r in compared if _agrees(r))
         agreement = agree_count / rows_compared
         for app_id in sorted({r.row["application_id"] for r in compared}):
             sub = [r for r in compared if r.row["application_id"] == app_id]
-            by_app[app_id] = sum(
-                1 for r in sub if _first_pick(r.current) == r.row["attempts"][0]) / len(sub)
+            by_app[app_id] = sum(1 for r in sub if _agrees(r)) / len(sub)
         for r in compared:
+            if _agrees(r):
+                continue
             recorded = r.row["attempts"][0]
             simulated = _first_pick(r.current) or "(rejected)"
-            if recorded != simulated:
-                disagreements[(recorded, simulated)] += 1
+            disagreements[(recorded, simulated)] += 1
 
     top = sorted(disagreements.items(), key=lambda kv: (-kv[1], kv[0][0], kv[0][1]))[:10]
     top_disagreements = [{"recorded": rec, "simulated": sim, "count": n}
@@ -571,6 +610,7 @@ def _baseline(results: list[RowResult]) -> dict:
         "warning": agreement is not None and agreement < 0.90,
         "by_app": by_app,
         "top_disagreements": top_disagreements,
+        "overflow_contradicted": overflow_contradicted,
     }
 
 
@@ -820,6 +860,12 @@ def render_report(sim: dict) -> str:
             f"> **Warning:** baseline agreement is only {baseline['agreement'] * 100:.1f}% "
             f"across {baseline['rows_compared']} compared rows (below the 90% threshold). "
             "Treat the headline diff as noisier than usual -- see spec §7 for causes.")
+        lines.append("")
+    if baseline["overflow_contradicted"]:
+        lines.append(
+            f"> **Note:** {baseline['overflow_contradicted']} row(s) served by an endpoint "
+            "replay predicts would overflow -- check that endpoint's declared "
+            "context_window.")
         lines.append("")
 
     lines += _assumption_lines(sim["assumptions"])

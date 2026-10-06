@@ -94,6 +94,21 @@ def test_boundary_values_are_accepted():
     _apply({"schema": P, "workload": {"token_scale": 1e-9, "cached_share": 1}})
 
 
+def test_workload_app_id_cannot_be_the_all_apps_wildcard():               # F3 final review
+    """An app literally named "*" would otherwise collide with ALL_APPS, the
+    key `assumptions_block` writes the GLOBAL `token_scale`/`cached_share`
+    under: a per-app override for app "*" would silently overwrite the
+    global entry (app/eval/proposal.py::assumptions_block), which then
+    becomes the fallback every OTHER app's `Assumptions.scale_for`/
+    `cached_for` reads (app/eval/scenario.py). Reserved outright -- this is
+    not merely "unknown application"; app "*" genuinely exists here."""
+    snap = make_snapshot(apps=[app_entry("*"), app_entry("app-a")])
+    with pytest.raises(ProposalError) as exc:
+        _apply({"schema": P, "workload": {"token_scale": 0.6,
+                                          "apps": {"*": {"token_scale": 0.9}}}}, snap)
+    assert exc.value.where == f"workload.apps.{ALL_APPS}"
+
+
 def test_load_proposal_rejects_unknown_workload_key(tmp_path):
     path = tmp_path / "p.json"
     path.write_text(json.dumps({"schema": P, "workload": {"cache_share": 0.4}}))

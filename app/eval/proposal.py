@@ -596,6 +596,16 @@ def apply_proposal(snapshot: dict, proposal: dict, *, base: Settings | None = No
     workload = proposal.get("workload") or {}
     _validate_workload_fields("workload", workload)
     for app_id, fields in (workload.get("apps") or {}).items():
+        # ALL_APPS ("*") is the key `assumptions_block` writes the GLOBAL
+        # token_scale/cached_share under; an app literally named "*" would
+        # silently collide with it there (and in `Assumptions.scale_for`/
+        # `cached_for`'s ALL_APPS fallback) -- reserved outright, even when
+        # such an app exists in the snapshot (final review, F3).
+        if app_id == ALL_APPS:
+            raise ProposalError(
+                f"workload.apps.{app_id}",
+                "application id '*' is reserved for the global workload "
+                "assumption and cannot be set per-app")
         if app_id not in apps_by_id:
             raise ProposalError(f"workload.apps.{app_id}", "unknown application")
         _validate_workload_fields(f"workload.apps.{app_id}", fields)
