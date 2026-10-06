@@ -711,3 +711,128 @@ def test_cli_counts_prefix_rejected_rows_as_missing_routing_tokens(tmp_path):
     assert sim["rows"]["excluded"]["missing_routing_tokens"] == 2
     assert sim["totals"]["newly_served"] == 0
     assert "| missing_routing_tokens | 2 |" in (out / "report.md").read_text()
+
+
+# --- B60: the live round trip, with rejections (R3, R4, R5) -------------------
+
+# 12 000 characters -> 3000 routing tokens (`count_tokens` is len // 4). With
+# the seeded prices ($0.05 and $0.10 per 1M) and a 16-token output cap the
+# request is estimated at $0.0001508 (local-8b) / $0.0003016 (local-32b): over
+# the $0.0001 cap on both tiers. The SAME request with a zero-token prompt is
+# estimated at $0.0000008 / $0.0000016 -- under it. So these requests are
+# rejected BECAUSE OF THEIR SIZE, which is the case B60 could not replay: a
+# test built on a large `max_tokens` instead would be over budget on its
+# output alone and would have passed before the fix.
+_LIVE_LONG = {"messages": [{"role": "user", "content": "word " * 2400}], "max_tokens": 16}
+_LIVE_CAP = 0.0001
+_LIVE_APP = "rr-budget"
+
+
+def _live_traffic_with_rejections():
+    """A real app, real requests: 3 served for the demo app, 1 served and 3
+    budget-rejected for a capped app. Returns `(export_lines, snapshot)`."""
+    from tests.onboarding.harness import onboard
+
+    with TestClient(create_app()) as c:
+        demo = {"Authorization": "Bearer demo-key"}
+        hello = {"messages": [{"role": "user", "content": "hello"}]}
+        for _ in range(3):
+            assert c.post("/v1/chat/completions", headers=demo, json=hello).status_code == 200
+        app = onboard(c, _LIVE_APP, max_cost_usd_per_request=_LIVE_CAP)   # logs the admin in
+        assert app.chat({**hello, "max_tokens": 16}).status_code == 200
+        for _ in range(3):
+            r = app.chat(_LIVE_LONG)
+            assert r.status_code == 422, r.text
+            assert r.json()["error"]["code"] == "no_eligible_model"
+        snapshot = c.get("/admin/config-snapshot").json()
+        export = [json.loads(x) for x in
+                  c.get("/admin/outcomes/export").text.strip().splitlines()]
+    return export, snapshot
+
+
+def _raise_live_cap():
+    return {"apps": {_LIVE_APP: {"max_cost_usd_per_request": 1.0}}}
+
+
+def test_live_round_trip_budget_rejections_replay_as_rejected(tmp_path):  # R3, R4, R5
+    """The B60 experiment, end to end on a real app. Requests rejected live
+    for `max_cost_usd_per_request` are REJECTED by replay's `current` arm
+    under the snapshot the same deployment exported (R3); a proposal raising
+    the cap newly serves exactly them (R4); and both agreements are 1.0, so
+    `--min-agreement 1.0` passes (R5)."""
+    export, snapshot = _live_traffic_with_rejections()
+    rejected = [e["outcome"] for e in export if e["outcome"]["status"] == "no_eligible"]
+    assert len(rejected) == 3
+    assert all(o["routing_tokens"] == 3000 and o["prompt_tokens"] == 0 for o in rejected)
+
+    proc, out = _run_cli(tmp_path, export, snapshot, {"schema": P, **_raise_live_cap()},
+                         "--min-agreement", "1.0")
+    assert proc.returncode == 0, proc.stderr
+    sim = json.loads((out / "simulation.json").read_text())
+    assert sim["rows"]["simulated"] == 7
+    # The B60 headline, asserted first: before the fix this was 0, because
+    # replay had already (wrongly) routed the three rejected requests.
+    assert sim["totals"]["newly_served"] == 3                                             # R4
+    assert sim["totals"]["newly_rejected"] == 0
+    assert sim["rows"]["excluded"]["missing_routing_tokens"] == 0
+    assert sim["rows"]["estimated_tokens"] == 3
+    base = sim["baseline"]
+    assert (base["agreement"], base["rows_compared"]) == (1.0, 4)
+    assert (base["outcome_agreement"], base["outcome_rows_compared"]) == (1.0, 7)       # R5
+    assert (base["recorded_rejected"], base["recorded_rejected_but_routed"],
+            base["recorded_routed_but_rejected"]) == (3, 0, 0)                           # R3
+    assert sim["by_app"][_LIVE_APP]["newly_served"] == 3
+    (demo_app,) = set(sim["by_app"]) - {_LIVE_APP}             # the seeded demo app
+    assert sim["by_app"][demo_app]["newly_served"] == 0
+    assert sim["affected_apps"] == [_LIVE_APP]
+    # Each rescued request costs its admission estimate on the tier it routes
+    # to (local-32b: 3000 prompt + 16 output tokens at $0.10 per 1M). The
+    # JSON is rounded to 6 places, hence the absolute tolerance.
+    assert sim["by_app"][_LIVE_APP]["cost_usd"]["delta"] == \
+        pytest.approx(3 * 0.0003016, abs=1e-6)
+    report = (out / "report.md").read_text()
+    assert "model 100.0% over 4 compared rows; outcome 100.0% over 7 simulated rows." in report
+
+    # No proposal change: the same rows stay rejected, and nothing moves.
+    proc, out = _run_cli(tmp_path, export, snapshot, {"schema": P}, "--min-agreement", "1.0")
+    assert proc.returncode == 0, proc.stderr
+    noop = json.loads((out / "simulation.json").read_text())
+    assert noop["baseline"] == base
+    assert (noop["totals"]["newly_served"], noop["totals"]["route_changed"]) == (0, 0)
+
+
+def test_live_round_trip_scenarios_show_the_rescued_rejections(tmp_path):
+    """The DGX lab's `raise-request-budget` scenario, which reported 0 newly
+    served: on a live export it now reports the rejections it rescues, next
+    to a no-op scenario that reports none."""
+    export, snapshot = _live_traffic_with_rejections()
+    proc, out = _run_cli_scenarios(
+        tmp_path, export, snapshot,
+        _scenarios(("no-change", {}), ("raise-request-budget", _raise_live_cap())),
+        "--min-agreement", "1.0")
+    assert proc.returncode == 0, proc.stderr
+    doc = json.loads((out / "comparison.json").read_text())
+    assert doc["baseline"]["outcome_agreement"] == 1.0
+    assert doc["baseline"]["recorded_rejected_but_routed"] == 0
+    assert [(row["name"], row["newly_served"]) for row in doc["table"]] == \
+        [("no-change", 0), ("raise-request-budget", 3)]
+    assert "**Outcome agreement: 100.0%** over 7 simulated rows" in \
+        (out / "report.md").read_text()
+
+
+def test_live_export_stripped_of_routing_tokens_excludes_the_rejections(tmp_path):  # R6
+    """The same live export as a pre-fix deployment would have written it
+    (no `routing_tokens` key): the three rejections are excluded and counted,
+    and the raised cap rescues nothing -- never a silent 0 over rows that
+    were quietly replayed as empty prompts."""
+    export, snapshot = _live_traffic_with_rejections()
+    for line in export:
+        del line["outcome"]["routing_tokens"]
+    proc, out = _run_cli(tmp_path, export, snapshot, {"schema": P, **_raise_live_cap()},
+                         "--min-agreement", "1.0")
+    assert proc.returncode == 0, proc.stderr
+    sim = json.loads((out / "simulation.json").read_text())
+    assert sim["rows"]["simulated"] == 4
+    assert sim["rows"]["excluded"]["missing_routing_tokens"] == 3
+    assert sim["baseline"]["recorded_rejected"] == 0
+    assert sim["totals"]["newly_served"] == 0
