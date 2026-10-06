@@ -12,7 +12,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-from dataclasses import dataclass, fields as dc_fields
+from dataclasses import dataclass, field, fields as dc_fields
 
 from pydantic import ValidationError
 
@@ -336,6 +336,52 @@ class FrozenSignals:
         return float(row["latency_ms"])
 
 
+_ASSUMPTION_KEYS = ("token_scale", "cached_share", "latency_ms")
+
+
+@dataclass(frozen=True)
+class Assumptions:
+    """What a proposal ASSUMES rather than configures (P3c-2 spec §4): a
+    token scale and a cached-prompt share per app (`ALL_APPS` holds the
+    global value), and an asserted latency per endpoint. Empty for a
+    scenario built from a plain snapshot, so the `current` arm never
+    carries any."""
+
+    token_scale: dict[str, float] = field(default_factory=dict)
+    cached_share: dict[str, float] = field(default_factory=dict)
+    latency_ms: dict[str, float] = field(default_factory=dict)
+
+    def scale_for(self, app_id: str) -> float:
+        """The app's own `token_scale`, else the global one, else 1.0."""
+        return self.token_scale.get(app_id, self.token_scale.get(ALL_APPS, 1.0))
+
+    def cached_for(self, app_id: str) -> float:
+        """The app's own `cached_share`, else the global one, else 0.0."""
+        return self.cached_share.get(app_id, self.cached_share.get(ALL_APPS, 0.0))
+
+
+def _assumptions(doc: dict) -> Assumptions:
+    """The applied document's `assumptions` block as an `Assumptions`; an
+    absent block is the empty one. The block is machine-written
+    (`apply_proposal`), so this only checks its shape -- the ranges were
+    validated where the proposal was."""
+    block = doc.get("assumptions")
+    if block is None:
+        return Assumptions()
+    _need_dict(block, "assumptions")
+    for key in block:
+        if key not in _ASSUMPTION_KEYS:
+            raise SnapshotError(f"assumptions.{key}", "unknown key")
+    maps: dict[str, dict[str, float]] = {}
+    for key in _ASSUMPTION_KEYS:
+        values = _need_dict(block.get(key, {}), f"assumptions.{key}")
+        for name, value in values.items():
+            if not _is_number(value):
+                raise SnapshotError(f"assumptions.{key}.{name}", "must be a number")
+        maps[key] = {name: float(value) for name, value in values.items()}
+    return Assumptions(**maps)
+
+
 @dataclass(frozen=True)
 class AppScenario:
     application_id: str
@@ -354,6 +400,7 @@ class Scenario:
     apps: dict[str, AppScenario]
     router: Router
     db: Database
+    assumptions: Assumptions = field(default_factory=Assumptions)
 
 
 def _app_policy_view(policy: dict, app_id: str) -> AppPolicyView:
@@ -395,6 +442,7 @@ async def build_scenario(doc: dict, *, base: Settings) -> Scenario:
             raise SnapshotError(
                 f"onboarded.{row['slug']}.tier",
                 f"unknown tier {row['tier']!r}; legal tiers: {sorted(canonical_tiers)}")
+    assumptions = _assumptions(doc)   # before the scratch DB: a bad block leaks nothing
 
     db = Database(url="sqlite+aiosqlite://")
     await db.ensure_ready()
@@ -456,7 +504,8 @@ async def build_scenario(doc: dict, *, base: Settings) -> Scenario:
         router = Router(settings, quality_resolver=quality, registry=registry, signals=signals)
 
         return Scenario(settings=settings, registry=registry, quality=quality,
-                        signals=signals, apps=apps, router=router, db=db)
+                        signals=signals, apps=apps, router=router, db=db,
+                        assumptions=assumptions)
     except BaseException:
         await db.dispose()
         raise

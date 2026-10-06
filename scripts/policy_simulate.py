@@ -42,7 +42,7 @@ from app.config.lint import ConfigLintError  # noqa: E402
 from app.config.loader import load_settings  # noqa: E402
 from app.eval.outcomes import load_export  # noqa: E402
 from app.eval.proposal import (  # noqa: E402
-    ProposalError, apply_proposal, load_proposal, normalized_edits,
+    ProposalError, apply_proposal, assumptions_block, load_proposal, normalized_edits,
 )
 from app.eval.scenario import SnapshotError, load_snapshot  # noqa: E402
 from app.eval.shadow import ShadowInvariantError, render_shadow_section, shadow_prices  # noqa: E402
@@ -165,7 +165,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.proposal:
             results, excluded = asyncio.run(simulate(records, snapshot, proposal, base=base,
                                                      since=since))
-            sim = summarize(results, excluded, inputs=inputs, edits=normalized_edits(proposal))
+            sim = summarize(results, excluded, inputs=inputs, edits=normalized_edits(proposal),
+                            assumptions=assumptions_block(proposal))
             baseline = sim["baseline"]
         elif args.min_agreement is not None:
             # `--shadow-prices` alone has no `summarize()` output to read the

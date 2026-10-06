@@ -70,6 +70,9 @@ class ArmResult:
     quality_source: str | None
     core: tuple[str, ...] = ()       # P3b: NoEligibleCandidate.core.ids(), () when routed
     core_state: tuple[str, ...] = () # P3b: NoEligibleCandidate.core.state_ids(), () when routed
+    # P3c-2: True when `workload.token_scale` shrank a row whose recorded
+    # complexity was saturated, so its new complexity is an estimate.
+    complexity_estimated: bool = False
 
 
 @dataclass(frozen=True)
@@ -202,9 +205,42 @@ def observed_latencies(records: list[dict]) -> dict[str, float]:
 
 
 def _rejected(eligible: tuple[str, ...], codes: tuple[str, ...], *,
-              core: tuple[str, ...] = (), core_state: tuple[str, ...] = ()) -> ArmResult:
+              core: tuple[str, ...] = (), core_state: tuple[str, ...] = (),
+              complexity_estimated: bool = False) -> ArmResult:
     return ArmResult("rejected", None, None, None, eligible, codes,
-                     None, None, None, None, None, core, core_state)
+                     None, None, None, None, None, core, core_state,
+                     complexity_estimated=complexity_estimated)
+
+
+# app/pipeline.py: `complexity = min(1.0, comp.tokens_after / 2000)`. The
+# literal has no name there to import; tests/eval/test_proposal_workload.py
+# pins it against the pipeline source so the two cannot drift apart.
+_COMPLEXITY_SATURATION_TOKENS = 2000
+
+
+def scaled_request(prompt_tokens: int, complexity: float,
+                   scale: float) -> tuple[int, float, bool]:
+    """`(prompt_tokens', complexity', estimated)` for one row under
+    `workload.token_scale` (P3c-2 spec §4.1).
+
+    - `scale == 1.0` is the identity, exactly.
+    - Tokens: `max(1, round(prompt_tokens * scale))`. A row that recorded no
+      prompt tokens (every failure row records 0) stays at 0: its size is
+      unknown, and flooring it to 1 would make cost fall as the scale rises.
+    - Complexity below 1 is linear in the token count, so `complexity *
+      scale` (capped at 1) is exact.
+    - A saturated complexity (>= 1) hides the real token count, which was at
+      least the saturation point. So the scaled complexity is at least
+      `scale`, and otherwise estimated from the scaled prompt tokens.
+      Scaling UP therefore keeps it at exactly 1 (known, not an estimate);
+      scaling DOWN is an estimate, and `estimated` says so."""
+    if scale == 1.0:
+        return prompt_tokens, complexity, False
+    scaled = max(1, round(prompt_tokens * scale)) if prompt_tokens > 0 else 0
+    if complexity < 1.0:
+        return scaled, min(1.0, complexity * scale), False
+    estimate = max(scale, scaled / _COMPLEXITY_SATURATION_TOKENS)
+    return scaled, min(1.0, estimate), scale < 1.0
 
 
 def simulate_row(scn: Scenario, row: dict, observed: dict[str, float]) -> ArmResult:
@@ -228,7 +264,12 @@ def simulate_row(scn: Scenario, row: dict, observed: dict[str, float]) -> ArmRes
     eligible = tuple(sorted(
         c.name for c in feasible_set(scn.settings, scn.registry, ctx,
                                      tenant_id=row["application_id"]).eligible))
-    prompt_tokens = int(row["prompt_tokens"])
+    # P3c-2: the scenario's workload assumptions, applied before routing and
+    # pricing. A scenario built from a plain snapshot has none (scale 1.0,
+    # share 0.0), so the `current` arm replays the row as recorded.
+    prompt_tokens, complexity, estimated = scaled_request(
+        int(row["prompt_tokens"]), float(row["complexity"]),
+        scn.assumptions.scale_for(row["application_id"]))
     try:
         # B55: price at the client's recorded output cap, as the live
         # gateway does (`expected_output_tokens(settings, params)`); no cap
@@ -236,7 +277,7 @@ def simulate_row(scn: Scenario, row: dict, observed: dict[str, float]) -> ArmRes
         output_tokens = expected_output_tokens(
             scn.settings, {"max_tokens": row["max_tokens"]} if row.get("max_tokens") else None)
         decision = scn.router.select(ctx, tokens_after=prompt_tokens,
-                                     complexity=float(row["complexity"]),
+                                     complexity=complexity,
                                      output_tokens=output_tokens)
     except NoEligibleCandidate as exc:
         # P3b: the router attaches the minimal conflicting core to every
@@ -246,18 +287,26 @@ def simulate_row(scn: Scenario, row: dict, observed: dict[str, float]) -> ArmRes
         core = exc.core.ids() if exc.core else ()
         core_state = exc.core.state_ids() if exc.core else ()
         if not exc.rejected:
-            return _rejected(eligible, ("empty_pool",), core=core, core_state=core_state)
+            return _rejected(eligible, ("empty_pool",), core=core, core_state=core_state,
+                             complexity_estimated=estimated)
         fallback = "over_budget" if "budget filter" in str(exc) else "unspecified"
         codes = tuple(sorted({code or fallback for _name, code in exc.rejected}))
-        return _rejected(eligible, codes, core=core, core_state=core_state)
+        return _rejected(eligible, codes, core=core, core_state=core_state,
+                         complexity_estimated=estimated)
     except ContextWindowExceeded:
-        return _rejected(eligible, ("context_window",))
+        return _rejected(eligible, ("context_window",), complexity_estimated=estimated)
 
     pick = decision.chosen
+    # P3c-2: `workload.cached_share` of the (scaled) prompt is billed at the
+    # endpoint's cached-input price. The ROUTER still estimates at zero
+    # cached tokens, as it does live, so the share moves cost and never a
+    # route. `price_call` bills cached tokens at the input price when the
+    # endpoint declares no cached price.
+    cached_tokens = round(prompt_tokens * scn.assumptions.cached_for(row["application_id"]))
     cost = price_call(scn.registry.price_for(pick.name),
                       prompt_tokens=prompt_tokens,
                       completion_tokens=int(row.get("completion_tokens") or 0),
-                      cached_prompt_tokens=0)
+                      cached_prompt_tokens=cached_tokens)
     if pick.name in observed:
         latency, latency_source = observed[pick.name], "observed"
     else:
@@ -269,7 +318,8 @@ def simulate_row(scn: Scenario, row: dict, observed: dict[str, float]) -> ArmRes
             latency_source = "tier_default"
     q = scn.quality.resolve(pick.name, row.get("workload"))
     return ArmResult("routed", pick.name, pick.provider, pick.tier, eligible, (),
-                     cost, latency, latency_source, q.score, q.source)
+                     cost, latency, latency_source, q.score, q.source,
+                     complexity_estimated=estimated)
 
 
 def run_rows(records: list[dict], current: Scenario, proposed: Scenario, *,
@@ -510,8 +560,20 @@ def _per_day(window: dict | None, cost_usd: dict) -> dict | None:
     return {"cost_usd": {k: (v / days if v is not None else None) for k, v in cost_usd.items()}}
 
 
+def _assumptions_summary(results: list[RowResult], assumptions: dict | None) -> dict:
+    """The `assumptions` block of `simulation.json` (P3c-2 spec §4): what the
+    proposal assumed (`proposal.assumptions_block`'s three maps, empty when
+    it assumed nothing) plus `saturated_complexity_estimated`, the number of
+    rows whose scaled complexity is an estimate."""
+    block = {key: dict((assumptions or {}).get(key) or {})
+             for key in ("token_scale", "cached_share", "latency_ms")}
+    block["saturated_complexity_estimated"] = sum(
+        1 for r in results if r.proposed.complexity_estimated)
+    return block
+
+
 def summarize(results: list[RowResult], excluded: dict[str, int], *, inputs: dict,
-             edits: dict) -> dict:
+             edits: dict, assumptions: dict | None = None) -> dict:
     """The deterministic `simulation.json` document (spec §8). `inputs` is
     the caller's partial input record (no `window` yet -- this function
     computes it from the simulated rows and adds it before hashing, so
@@ -530,6 +592,7 @@ def summarize(results: list[RowResult], excluded: dict[str, int], *, inputs: dic
         "simulation_id": simulation_id,
         "inputs": full_inputs,
         "edits": edits,
+        "assumptions": _assumptions_summary(results, assumptions),
         "rows": {"simulated": len(results), "excluded": dict(excluded)},
         "baseline": _baseline(results),
         "totals": totals,
@@ -577,6 +640,42 @@ def _metrics_table(stats: dict) -> list[str]:
     return lines
 
 
+#: Printed whenever a proposal sets `workload.cached_share` (spec §4.1).
+CACHED_SHARE_NOTE = (
+    "`cached_share` is an assumption: outcome rows do not record cached prompt tokens, so "
+    "the current arm prices none as cached."
+)
+
+
+def _assumption_items(block: dict) -> list[str]:
+    """One short string per assumption a proposal set, e.g.
+    `"token_scale: *=0.6, claims=0.5"`; empty when it assumed nothing. With
+    a `token_scale`, the last item says how many rows had a saturated
+    complexity estimated."""
+    items = []
+    for key in ("token_scale", "cached_share", "latency_ms"):
+        if block[key]:
+            shown = ", ".join(f"{name}={_fmt(value)}" for name, value in sorted(block[key].items()))
+            items.append(f"{key}: {shown}")
+    if block["token_scale"]:
+        items.append("rows whose saturated complexity was estimated from scaled prompt "
+                     f"tokens: {block['saturated_complexity_estimated']}")
+    return items
+
+
+def _assumption_lines(block: dict) -> list[str]:
+    """The report's "Assumptions" section for one `assumptions` block, or
+    nothing at all when the proposal assumed nothing."""
+    items = _assumption_items(block)
+    if not items:
+        return []
+    lines = ["## Assumptions", ""] + [f"- {item}" for item in items]
+    if block["cached_share"]:
+        lines.append(f"- {CACHED_SHARE_NOTE}")
+    lines.append("")
+    return lines
+
+
 def render_report(sim: dict) -> str:
     """The `report.md` document (spec §8), in the order: caveat, baseline
     warning, headline, new rejections, moves, by-app, by-workload,
@@ -591,6 +690,8 @@ def render_report(sim: dict) -> str:
             f"across {baseline['rows_compared']} compared rows (below the 90% threshold). "
             "Treat the headline diff as noisier than usual -- see spec §7 for causes.")
         lines.append("")
+
+    lines += _assumption_lines(sim["assumptions"])
 
     lines.append("## Headline")
     lines.append("")
