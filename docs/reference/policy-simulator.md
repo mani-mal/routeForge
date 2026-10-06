@@ -354,6 +354,12 @@ From spec §2, plus what the build settled during P3a:
   `docs/reference/conflicting-core.md`. Shadow prices (P3c-1, §8 below) now price what each
   individual constraint costs. Alternative scenarios are §9 (P3c-2). **A capacity model and
   uncertainty ranges** remain out of scope (P3c-3, P3c-4).
+- **Rejected rows replay with zero prompt tokens (B60).** A row recorded `no_eligible` or
+  `context_overflow` carries `prompt_tokens: 0`, so replay prices and sizes it as an empty
+  prompt and the `current` arm routes it. A scenario that raises a per-request budget or a
+  context window therefore cannot show the requests it would rescue, and baseline agreement
+  (computed over `ok` rows) does not flag the mismatch. First observed live on 2026-10-06
+  (`docs/research/feasible-route-bench.md` §18.4.1).
 - **No re-running PII detection.** Recorded `detected_entity_types` are replayed as-is, so a
   proposal cannot change `pii_detection`, a denylist, exempt patterns or recognizers.
 - **No daily-spend or RPM admission simulation** — those are admission limits, not routing.

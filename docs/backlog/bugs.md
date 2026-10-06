@@ -127,6 +127,50 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
+## B61 — UI: the onboarding form's "api key env" field accepts a key value, and gives no hint  🔴 OPEN
+
+**Severity:** low-medium (operator trap; leaks a secret into the config table and the screen).
+**Found:** 2026-10-06, onboarding `qwen3-coder-next` on the DGX lab.
+
+The field takes the **name** of an environment variable in the API pod. An operator pasted
+the key itself. RouteForge found no variable by that name, sent no `Authorization` header,
+the probe got 401 and the model showed "unreachable" with no explanation. The pasted key was
+then stored in `onboarded_models.api_key_env` in clear text and displayed in the form.
+
+**Wanted:** (1) helper text under the field ("name of an env var in the API pod, e.g.
+`SP_ONPREM_API_KEY` — not the key"); (2) refuse a value that is not a plausible env-var name
+(`[A-Z_][A-Z0-9_]*`) at the admin API, which also stops key-shaped values being stored;
+(3) when the probe returns 401/403, say so ("endpoint rejected the credentials; is the env
+var set in the API pod?") instead of a bare "unreachable"; (4) say next to the slug field that
+it must equal the model id the endpoint serves.
+
+## B60 — Rejected outcome rows record `prompt_tokens: 0`, so the policy simulator replays live-rejected requests as routed  🔴 OPEN
+
+**Severity:** medium-high for the simulator (wrong answer for a whole scenario class; no
+effect on serving).
+**Found:** 2026-10-06, first live P3c-2 run on the DGX lab
+(`docs/research/feasible-route-bench.md` §18.4.1).
+
+`build_failure_outcome` (`app/apps/outcomes.py`) writes `prompt_tokens: 0` on every failure
+row, including `no_eligible`. Replay prices a zero-token prompt, which fits any per-request
+cap and any context window, so the simulator's `current` arm **routes** rows the record says
+were rejected.
+
+Observed: 7 requests rejected live with core `max_cost_usd_per_request` (cap 0.05, estimate
+0.05344). A scenario raising the cap to 0.5 reported **0 newly served**; live it would have
+served all 7. Baseline agreement stayed 1.0, because `_baseline` compares `ok` rows only.
+
+**Fix (replay-fidelity slice):**
+1. Serving: record the routing token count (`tokens_after`) and the output-token estimate on
+   rejected outcome rows — both are known before the router runs. Content-free; needs a
+   column or reuse of `prompt_tokens` with a documented meaning. Deployed DBs need an ALTER
+   if a column is added.
+2. Replay: extend the baseline check to outcomes — a row recorded `no_eligible` /
+   `context_overflow` that the current arm routes (or the reverse) is a disagreement, reported
+   as its own count.
+3. Until then: document in `docs/reference/policy-simulator.md` §6 that rejected rows replay
+   with zero tokens and that budget and context-window scenarios cannot show rescued requests.
+
 ## B59 — FEATURE: per-app tokens-per-minute / concurrency limits, and a limiter shared across replicas  🔴 OPEN
 
 **Severity:** medium (fairness on a shared model; no effect on privacy or routing correctness).

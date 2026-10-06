@@ -2478,17 +2478,71 @@ where they coincide.
 
 ### 18.4 Results
 
-**TO MEASURE.** No live run has been made; nothing below is a result yet. These numbers are
-legitimately unmeasured, not omitted.
+#### 18.4.1 First live run — DGX lab, 2026-10-06
+
+**Setup.** DGX lab Run:ai cluster, RouteForge api `0.26.0` (`main` through PR #84). One
+onboarded endpoint: `qwen3-coder-next` (vLLM, tier `mid`, declared context window 262144,
+priced $10/$10 per 1M by the operator). One application, `paper-test`, default policy
+(per-request cap $0.05). 24 single-turn requests sent once, prompt sizes 23–2265 backend
+tokens for the served ones, `max_tokens` 16–64, two client workload labels. This is a
+plumbing check of the feature on real records, **not** a workload study: one app, one
+endpoint, one pass, 29 seconds of traffic.
+
+Artifacts (content-free): `docs/research/results/p3c2-dgx-lab-2026-10-06/`
+(`scenarios.json`, `comparison.json`, `report.md`). `comparison_id e76c748673457d86`,
+registry version `51464fef8c98`, run with `--since 2026-10-06T16:00:00Z --min-agreement 0.9`.
+
+**Live outcome.** 18 requests served (17 from the batch plus one smoke request), 7 rejected
+`no_eligible` with HTTP 422. Every rejected row carries the same minimal conflicting core,
+recorded live: `max_cost_usd_per_request` (cap 0.05, cheapest estimate 0.05344), no state
+component, one candidate considered. That is P3b working on a real deployment.
+
+**Replay.** 25 rows simulated (1 older row cut by `--since`), six scenarios.
 
 | measurement | value |
 |---|---|
-| Spark export, baseline agreement before overflow replay | TO MEASURE |
-| Spark export, baseline agreement after overflow replay (§18.2 predicts no change) | TO MEASURE |
-| Spark export, rows with `overflow_hops > 0` in the current arm | TO MEASURE |
-| Spark export, `ok` single-attempt rows the current arm's overflow replay contradicts (`overflow_contradicted`) | TO MEASURE |
+| baseline agreement | 1.0 over 18 compared (`ok`) rows |
+| rows with `overflow_hops > 0` in the current arm | 0 |
+| `overflow_contradicted` | 0 |
+| `no-change` scenario | zero in every column (S1 holds on live data) |
+| `smaller-prompts-0.6` (`token_scale: 0.6`) | cost −0.05546 USD of 0.14227 (−39.0%); 0 route changes; 11 rows with estimated saturated complexity |
+| `cheaper-price` (0.5 / 1.5 per 1M) | cost −0.134794 USD (−94.7%); 0 route changes |
+| `window-2000` (declared window 262144 → 2000) | 2 newly rejected, both `context_window`; 2 overflow hops |
+| `slower-5s` (`latency_ms: 5000`) | Δp50 = Δp95 = +4848.6 ms; 0 route changes (one endpoint, nothing to move to) |
+| `raise-request-budget` (cap 0.05 → 0.5) | **0 newly served — wrong, see below** |
+
+**Finding: live-rejected rows replay as routed, so a budget scenario cannot show what it
+would rescue (B60).** The seven `no_eligible` rows record `prompt_tokens: 0` and
+`complexity: 1.0`. Replay prices a zero-token prompt under any cap, so the `current` arm
+*routes* all seven, although the record says they were rejected. Consequences, all visible in
+this run:
+
+- `raise-request-budget` reports 0 newly served. Live, raising the cap to $0.5 would have
+  served all seven (their estimates were ≈ $0.053).
+- Baseline agreement stays 1.0, because agreement is computed over `ok` rows only. The
+  disagreement between the record (`no_eligible`) and the current arm (routed) is not
+  counted anywhere.
+- The seven rows are the "11 rows with estimated saturated complexity" minus the four served
+  rows above 2000 routing tokens: their scaled cost is computed from zero tokens.
+
+This is the limit §18.2 predicted for `context_overflow` rows, observed on the commoner case
+of budget rejections. It needs one serving change (record the routing token count on rejected
+outcome rows) and one replay change (count a recorded rejection that the current arm routes
+as a disagreement). Both are scoped into the replay-fidelity slice.
+
+**What this run does not show.** No route ever changes: there is one endpoint. No eligibility
+constraint binds except the budget. Latency p50 is the frozen measured median (151.4 ms), not
+a per-request model. Nothing here supports a claim about routing quality or savings.
+
+#### 18.4.2 Still to measure
+
+| measurement | value |
+|---|---|
+| Agreement before/after overflow replay on an export that contains real overflow failovers | TO MEASURE |
+| `overflow_contradicted` on an export from an endpoint with a tight declared window | TO MEASURE |
 | Healthcare triad (all on-prem / raw-PII-only on-prem / all on-prem + second endpoint) on persona traffic: the comparison table | TO MEASURE |
 | Static 4-request test vs traffic-weighted replay of the same triad | TO MEASURE |
 
-Caveat for when they are measured: the Spark serves one app with every model priced at $0
-(§17.4), so cost columns there will be zero. A priced, multi-app result needs persona traffic.
+The triad needs at least two eligible endpoints with different placement (an on-prem and a
+cloud or second on-prem endpoint) and persona traffic with PII; the DGX lab has one endpoint
+today.
