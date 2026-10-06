@@ -33,6 +33,10 @@ from app.routing.signals import SignalValue
 SCHEMA_PREFIX = "routeforge.config-snapshot/"
 SCHEMA_MAJOR = "v1"
 
+#: The key a global workload value is stored under in an applied document's
+#: `assumptions` block (P3c-2 spec §4.3); any other key is an application id.
+ALL_APPS = "*"
+
 _REQUIRED_TOP_KEYS = (
     "schema", "generated_at", "routing_policy_version", "registry_version",
     "settings", "onboarded", "apps", "quality", "signals",
@@ -69,6 +73,14 @@ def load_snapshot(path: str) -> tuple[dict, str]:
     except json.JSONDecodeError as exc:
         raise SnapshotError("file", f"invalid JSON: {exc}") from exc
     validate_snapshot(doc)
+    # `assumptions` is written only by `apply_proposal` (P3c-2 spec §4.3). A
+    # snapshot FILE that carries one was edited by hand: refuse it, so
+    # workload or latency assumptions can never be smuggled into the
+    # `current` arm.
+    if "assumptions" in doc:
+        raise SnapshotError(
+            "assumptions", "not allowed in a snapshot file; it is written only by "
+            "apply_proposal")
     return doc, digest
 
 

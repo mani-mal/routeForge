@@ -21,7 +21,7 @@ import math
 
 from app.config.loader import load_settings
 from app.config.schema import Settings
-from app.eval.scenario import _app_policy_view, build_settings
+from app.eval.scenario import ALL_APPS, SnapshotError, _app_policy_view, build_settings
 from app.policy.compile import (_OPERATOR_NAME, PolicyViolation, compile_policy,
                                 resolve_residency)
 from app.policy.enums import PROMPT_RETENTION_VALUES
@@ -30,7 +30,8 @@ SCHEMA = "routeforge.policy-proposal/v1"
 _SCHEMA_PREFIX = "routeforge.policy-proposal/"
 _SCHEMA_MAJOR = "v1"
 
-_TOP_KEYS = frozenset({"schema", "title", "apps", "providers", "endpoints", "prices"})
+_TOP_KEYS = frozenset({"schema", "title", "apps", "providers", "endpoints", "prices",
+                       "workload"})
 _APP_EDIT_KEYS = frozenset({
     "residency", "allowed_regions", "require_no_retention", "allowed_tiers",
     "allowed_providers", "allowed_models", "max_cost_usd_per_request",
@@ -53,6 +54,9 @@ _ENDPOINT_UPDATE_KEYS = frozenset({
     "context_window", "allowed_app_ids",
 })
 _PRICE_KEYS = frozenset({"input", "output", "cached_input"})
+# P3c-2 (spec §4.1): assumptions about the traffic itself, global and per app.
+_WORKLOAD_KEYS = frozenset({"token_scale", "cached_share", "apps"})
+_WORKLOAD_APP_KEYS = frozenset({"token_scale", "cached_share"})
 _RULE_KEYS = frozenset(
     {"entities", "sensitivity", "risk_class", "residency", "require_verification"})
 
@@ -151,6 +155,11 @@ def _validate_keys(doc: dict) -> None:
 
     for slug, fields in _opt_dict(doc, "prices", "prices").items():
         _check_keys(fields, _PRICE_KEYS, f"prices.{slug}")
+
+    workload = _opt_dict(doc, "workload", "workload")
+    _check_keys(workload, _WORKLOAD_KEYS, "workload")
+    for app_id, fields in _opt_dict(workload, "apps", "workload.apps").items():
+        _check_keys(fields, _WORKLOAD_APP_KEYS, f"workload.apps.{app_id}")
 
 
 def load_proposal(path: str) -> tuple[dict, str]:
@@ -397,6 +406,24 @@ def _validate_endpoint_update(slug: str, fields: dict, canonical_tiers: set[str]
             f"{loc}.allowed_app_ids", fields["allowed_app_ids"], app_ids)
 
 
+# --- workload validation (P3c-2 spec §4.1) -------------------------------------
+
+def _validate_workload_fields(loc: str, fields: dict) -> None:
+    """`token_scale` in (0, 10] and `cached_share` in [0, 1], each only when
+    present. A bool, a string, NaN and +/-inf are all refused: an assumption
+    that silently reads as "no change" is worse than a load error."""
+    if "token_scale" in fields:
+        value = fields["token_scale"]
+        if not (_finite_number(value) and 0 < value <= 10):
+            raise ProposalError(f"{loc}.token_scale",
+                                "must be a finite number > 0 and <= 10")
+    if "cached_share" in fields:
+        value = fields["cached_share"]
+        if not (_finite_number(value) and 0 <= value <= 1):
+            raise ProposalError(f"{loc}.cached_share",
+                                "must be a finite number in [0, 1]")
+
+
 # --- application -----------------------------------------------------------
 
 def normalized_edits(proposal: dict) -> dict:
@@ -404,6 +431,25 @@ def normalized_edits(proposal: dict) -> dict:
     echoed into `simulation.json` so the record shows what was asked for
     without the schema/title noise."""
     return {k: proposal[k] for k in sorted(proposal) if k not in ("schema", "title")}
+
+
+def assumptions_block(proposal: dict) -> dict | None:
+    """The `assumptions` block a VALIDATED proposal sets (P3c-2 spec §4.3):
+    `{"token_scale": {"*": x, "<app>": y}, "cached_share": {...},
+    "latency_ms": {"<slug>": ms}}`, or None when it sets none. All three keys
+    are always present in a block, so a reader never has to probe for one.
+    `apply_proposal` writes exactly this into the applied document; the CLI
+    and the scenario comparison echo it, like `normalized_edits`."""
+    workload = proposal.get("workload") or {}
+    block: dict[str, dict[str, float]] = {"token_scale": {}, "cached_share": {},
+                                          "latency_ms": {}}
+    for key in ("token_scale", "cached_share"):
+        if key in workload:
+            block[key][ALL_APPS] = float(workload[key])
+        for app_id, fields in sorted((workload.get("apps") or {}).items()):
+            if key in fields:
+                block[key][app_id] = float(fields[key])
+    return block if any(block.values()) else None
 
 
 def _load_base_settings() -> Settings:
@@ -419,6 +465,14 @@ def apply_proposal(snapshot: dict, proposal: dict, *, base: Settings | None = No
     applied. Never mutates `snapshot` or `proposal`."""
     _validate_schema(proposal)
     _validate_keys(proposal)
+    # The block is only ever written below, so a document that already has
+    # one is a snapshot a proposal was already applied to (or a hand edit):
+    # applying a second proposal on top would silently merge two sets of
+    # assumptions (P3c-2 spec §4.3).
+    if "assumptions" in snapshot:
+        raise SnapshotError(
+            "assumptions", "is written only by apply_proposal; this snapshot already "
+            "has a proposal applied")
 
     settings = build_settings(snapshot, base if base is not None else _load_base_settings())
 
@@ -504,6 +558,14 @@ def apply_proposal(snapshot: dict, proposal: dict, *, base: Settings | None = No
                 f"prices.{slug}", "not an onboarded endpoint or a priced model")
         _validate_price_fields(f"prices.{slug}", fields)
 
+    # -- workload --
+    workload = proposal.get("workload") or {}
+    _validate_workload_fields("workload", workload)
+    for app_id, fields in (workload.get("apps") or {}).items():
+        if app_id not in apps_by_id:
+            raise ProposalError(f"workload.apps.{app_id}", "unknown application")
+        _validate_workload_fields(f"workload.apps.{app_id}", fields)
+
     # -- everything validated; apply on a deep copy, in spec order --
     out = copy.deepcopy(snapshot)
 
@@ -582,5 +644,11 @@ def apply_proposal(snapshot: dict, proposal: dict, *, base: Settings | None = No
     # fields in place), so its list is never rebuilt either.
     if add_list or remove_list:
         out["onboarded"] = sorted(onboarded_out.values(), key=lambda o: o["slug"])
+
+    # Absent when the proposal sets none, so an empty proposal stays a true
+    # identity.
+    assumptions = assumptions_block(proposal)
+    if assumptions is not None:
+        out["assumptions"] = assumptions
 
     return out
