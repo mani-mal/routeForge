@@ -622,3 +622,15 @@ def test_zero_saving_never_renders_as_negative_zero():
     from app.eval.outcomes import _round6
     assert math.copysign(1.0, _round6(-0.0)) == 1.0
     assert math.copysign(1.0, _round6({"x": [-1e-9]})["x"][0]) == 1.0
+
+
+# --- P3c-2 Task 1: --since reaches shadow prices too (spec §6) ----------------
+
+def test_shadow_prices_respects_since():
+    from app.eval.simulate import parse_since
+    snap = make_snapshot(apps=[app_entry("a", allowed_tiers=["frontier"])])
+    rows = [make_row("old", "a", ts="2026-09-01T00:00:00+00:00"),
+            make_row("new", "a", ts="2026-09-20T12:00:00+00:00")]
+    assert _entry(_run(rows, snap), "allowed_tiers", app="a")["rows_in_scope"] == 2
+    cut = _run(rows, snap, since=parse_since("2026-09-10T00:00:00Z"))
+    assert _entry(cut, "allowed_tiers", app="a")["rows_in_scope"] == 1

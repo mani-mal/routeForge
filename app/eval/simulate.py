@@ -33,7 +33,7 @@ import json
 import statistics
 from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.config.schema import Settings
 from app.errors import ContextWindowExceeded, NoEligibleCandidate
@@ -49,7 +49,10 @@ from app.routing.router import expected_output_tokens
 SIMULATED_STATUSES = frozenset({"ok", "backend_failed", "verify_failed",
                                 "no_eligible", "context_overflow"})
 
-EXCLUSION_REASONS = ("cache_hit", "unknown_status", "unknown_app", "missing_features")
+# `before_since` is checked first, so a row older than `--since` never reaches
+# the other checks (P3c-2 spec §6).
+EXCLUSION_REASONS = ("before_since", "cache_hit", "unknown_status", "unknown_app",
+                     "missing_features")
 
 
 @dataclass(frozen=True)
@@ -116,10 +119,41 @@ def _has_features(row: dict) -> bool:
             and _valid_ts(row.get("ts")))
 
 
-def select_rows(records: list[dict], app_ids: set[str]) -> tuple[list[dict], dict[str, int]]:
+def parse_since(text: str) -> datetime:
+    """A `--since` value as an aware UTC datetime. Accepts what
+    `datetime.fromisoformat` accepts plus a trailing `Z`; a value with no
+    offset is read as UTC. Raises `ValueError` on anything else."""
+    return _utc(_parse_ts(text))
+
+
+def _utc(ts: datetime) -> datetime:
+    """`ts` as an aware UTC datetime; a naive value is read as UTC."""
+    if ts.tzinfo is None:
+        return ts.replace(tzinfo=timezone.utc)
+    return ts.astimezone(timezone.utc)
+
+
+def _before_since(row: dict, since: datetime | None) -> bool:
+    """True when `row` carries a parseable `ts` strictly before `since`. A
+    row with no usable `ts` is never `before_since` -- `select_rows` counts
+    it under `missing_features` instead when a cut was asked for."""
+    ts = row.get("ts")
+    if since is None or not isinstance(ts, str):
+        return False
+    try:
+        return _utc(_parse_ts(ts)) < since
+    except ValueError:
+        return False
+
+
+def select_rows(records: list[dict], app_ids: set[str], *,
+                since: datetime | None = None) -> tuple[list[dict], dict[str, int]]:
     """The rows to simulate, sorted by `(ts, request_id)`, plus a count per
     exclusion reason. Every excluded row is counted under exactly one reason
     (first match, in `EXCLUSION_REASONS` order) -- never silently dropped.
+    `before_since` (P3c-2) is a row whose `ts` is strictly before `since`;
+    with a `since`, a row that has no `ts` cannot be placed in the window and
+    is counted under `missing_features`.
     `missing_features` covers a missing or mistyped `request_id`,
     `complexity`, `prompt_tokens`, `completion_tokens`, `workload`,
     `attempts`, `ts`, or `detected_entity_types` (list of strings, or null
@@ -132,13 +166,15 @@ def select_rows(records: list[dict], app_ids: set[str]) -> tuple[list[dict], dic
     for row in records:
         status = row.get("status")
         app_id = row.get("application_id")
-        if row.get("cache_hit"):
+        if _before_since(row, since):
+            excluded["before_since"] += 1
+        elif row.get("cache_hit"):
             excluded["cache_hit"] += 1
         elif not isinstance(status, str) or status not in SIMULATED_STATUSES:
             excluded["unknown_status"] += 1
         elif not isinstance(app_id, str) or app_id not in app_ids:
             excluded["unknown_app"] += 1
-        elif not _has_features(row):
+        elif not _has_features(row) or (since is not None and row.get("ts") is None):
             excluded["missing_features"] += 1
         else:
             kept.append(row)
@@ -236,14 +272,17 @@ def simulate_row(scn: Scenario, row: dict, observed: dict[str, float]) -> ArmRes
                      cost, latency, latency_source, q.score, q.source)
 
 
-def run_rows(records: list[dict], current: Scenario,
-             proposed: Scenario) -> tuple[list[RowResult], dict[str, int]]:
+def run_rows(records: list[dict], current: Scenario, proposed: Scenario, *,
+             since: datetime | None = None) -> tuple[list[RowResult], dict[str, int]]:
     """Simulate every selectable row under both scenarios. Observed latencies
-    come from ALL records (not only the selected ones) and are shared by both
-    arms; only apps present in both scenarios are simulated."""
-    observed = observed_latencies(records)
+    come from every record in the window (not only the selected ones) and
+    are shared by both arms; only apps present in both scenarios are
+    simulated. `since` cuts the export first: a row before it is counted
+    `before_since` and feeds nothing, so the result equals a run over an
+    export that never held those rows."""
+    observed = observed_latencies([r for r in records if not _before_since(r, since)])
     app_ids = set(current.apps) & set(proposed.apps)
-    rows, excluded = select_rows(records, app_ids)
+    rows, excluded = select_rows(records, app_ids, since=since)
     results = [RowResult(row, simulate_row(current, row, observed),
                          simulate_row(proposed, row, observed))
                for row in rows]
@@ -251,14 +290,15 @@ def run_rows(records: list[dict], current: Scenario,
 
 
 async def simulate(records: list[dict], snapshot: dict, proposal: dict, *,
-                   base: Settings) -> tuple[list[RowResult], dict[str, int]]:
+                   base: Settings, since: datetime | None = None
+                   ) -> tuple[list[RowResult], dict[str, int]]:
     """Build both scenarios from one base `Settings`, replay, close both."""
     proposed_doc = apply_proposal(snapshot, proposal, base=base)
     current = await build_scenario(snapshot, base=base)
     try:
         proposed = await build_scenario(proposed_doc, base=base)
         try:
-            return run_rows(records, current, proposed)
+            return run_rows(records, current, proposed, since=since)
         finally:
             await close_scenario(proposed)
     finally:

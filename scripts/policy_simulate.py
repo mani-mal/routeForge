@@ -45,7 +45,9 @@ from app.eval.proposal import (  # noqa: E402
 )
 from app.eval.scenario import SnapshotError, load_snapshot  # noqa: E402
 from app.eval.shadow import ShadowInvariantError, render_shadow_section, shadow_prices  # noqa: E402
-from app.eval.simulate import REPORT_CAVEAT, render_report, simulate, summarize  # noqa: E402
+from app.eval.simulate import (  # noqa: E402
+    REPORT_CAVEAT, parse_since, render_report, simulate, summarize,
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -66,6 +68,9 @@ def _parser() -> argparse.ArgumentParser:
                    help="price what each constraint costs (P3c-1); makes --proposal optional")
     p.add_argument("--max-relaxations", type=int, default=50,
                    help="cap on relaxations evaluated with --shadow-prices (default: 50)")
+    p.add_argument("--since", default=None, metavar="TS",
+                   help="ISO-8601 UTC timestamp; rows before it are excluded "
+                        "(counted as before_since). Applies to every mode.")
     return p
 
 
@@ -79,6 +84,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.max_relaxations < 1:
         print("error: --max-relaxations must be >= 1", file=sys.stderr)
         return 2
+
+    since = None
+    if args.since is not None:
+        try:
+            since = parse_since(args.since)
+        except ValueError:
+            print(f"error: --since {args.since!r}: not an ISO-8601 timestamp",
+                  file=sys.stderr)
+            return 2
 
     try:
         records, warnings = load_export(args.export)
@@ -113,7 +127,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         results = excluded = None
         if args.proposal:
-            results, excluded = asyncio.run(simulate(records, snapshot, proposal, base=base))
+            results, excluded = asyncio.run(simulate(records, snapshot, proposal, base=base,
+                                                     since=since))
 
         shadow_block = None
         if args.shadow_prices:
@@ -128,7 +143,7 @@ def main(argv: list[str] | None = None) -> int:
                 baseline_label = "snapshot"
             shadow_block = asyncio.run(shadow_prices(
                 records, baseline_doc, base=base, cap=args.max_relaxations,
-                baseline_label=baseline_label))
+                baseline_label=baseline_label, since=since))
     except (SnapshotError, ProposalError) as exc:
         # Spec §8 governs over the narrower "catch ProposalError" reading:
         # exit 2 is "an input file failed to load OR VALIDATE" -- a
@@ -165,6 +180,7 @@ def main(argv: list[str] | None = None) -> int:
             "registry_version": snapshot["registry_version"],
             "snapshot_generated_at": snapshot["generated_at"],
             "serving_policy": serving_policy,
+            "since": since.isoformat() if since is not None else None,
         }
         sim = summarize(results, excluded, inputs=inputs, edits=normalized_edits(proposal))
         report_text = render_report(sim)
@@ -188,6 +204,7 @@ def main(argv: list[str] | None = None) -> int:
             "registry_version": snapshot["registry_version"],
             "snapshot_generated_at": snapshot["generated_at"],
             "serving_policy": serving_policy,
+            "since": since.isoformat() if since is not None else None,
         }
         sim = {"schema": "routeforge.simulation/v1", "inputs": inputs,
               "shadow_prices": shadow_block}

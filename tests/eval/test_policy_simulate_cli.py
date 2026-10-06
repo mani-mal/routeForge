@@ -350,3 +350,46 @@ def test_cli_malformed_export_rows_are_counted(tmp_path):                 # Impo
     assert sim["rows"]["simulated"] == 1
     assert sim["rows"]["excluded"]["missing_features"] == 3
     assert "line 5" in proc.stderr          # the non-object line is a skipped-line warning
+
+
+# --- P3c-2 Task 1: --since (spec §6, S10) -------------------------------------
+
+def _two_eras():
+    return [_line(make_row("old", "app-a", ts="2026-09-01T00:00:00+00:00")),
+            _line(make_row("new", "app-a", ts="2026-09-20T12:00:00+00:00"))]
+
+
+def test_cli_since_cuts_the_export_and_records_the_cut(tmp_path):         # S10
+    proc, out = _run_cli(tmp_path, _two_eras(), make_snapshot(), {"schema": P},
+                         "--since", "2026-09-10T00:00:00Z")
+    assert proc.returncode == 0, proc.stderr
+    sim = json.loads((out / "simulation.json").read_text())
+    assert sim["rows"]["simulated"] == 1
+    assert sim["rows"]["excluded"]["before_since"] == 1
+    assert sim["inputs"]["since"] == "2026-09-10T00:00:00+00:00"
+    assert "| before_since | 1 |" in (out / "report.md").read_text()
+    # a different cut is a different simulation
+    proc2, _ = _run_cli(tmp_path, _two_eras(), make_snapshot(), {"schema": P})
+    sim2 = json.loads((out / "simulation.json").read_text())
+    assert sim2["inputs"]["since"] is None and sim2["simulation_id"] != sim["simulation_id"]
+
+
+def test_cli_since_applies_to_shadow_prices_mode(tmp_path):
+    from tests.eval.sim_fixtures import app_entry
+    snap = make_snapshot(apps=[app_entry("app-a", allowed_tiers=["frontier"])])
+    proc, out = _run_cli_no_proposal(tmp_path, _two_eras(), snap, "--shadow-prices",
+                                     "--since", "2026-09-10T00:00:00Z")
+    assert proc.returncode == 0, proc.stderr
+    sim = json.loads((out / "simulation.json").read_text())
+    (entry,) = [e for e in sim["shadow_prices"]["constraints"]
+                if e["requirement"] == "allowed_tiers"]
+    assert entry["rows_in_scope"] == 1
+    assert sim["inputs"]["since"] == "2026-09-10T00:00:00+00:00"
+
+
+def test_cli_bad_since_exits_2(tmp_path):
+    proc, out = _run_cli(tmp_path, _two_eras(), make_snapshot(), {"schema": P},
+                         "--since", "last tuesday")
+    assert proc.returncode == 2, proc.stderr
+    assert "--since" in proc.stderr and "Traceback" not in proc.stderr
+    assert not out.exists()
