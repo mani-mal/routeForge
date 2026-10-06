@@ -1,8 +1,9 @@
 """Policy simulator replay engine (P3a, spec §7): offline, operator-run.
 
-Replays each recorded P2b-2 outcome row's **FIRST routing decision only**
-through the real serving code -- `build_context` -> `feasible_set` ->
-`Router.select` -- under **both** arms:
+Replays each recorded P2b-2 outcome row's **first routing decision** through
+the real serving code -- `build_context` -> `feasible_set` ->
+`Router.select` -- plus the gateway's deterministic context-window overflow
+re-selection (P3c-2), under **both** arms:
 
 - `current`  = the config snapshot as exported;
 - `proposed` = the snapshot with a policy proposal applied.
@@ -20,7 +21,8 @@ Deliberate non-goals (spec §2):
 - no re-running PII detection -- recorded entity TYPES are replayed as-is;
 - no daily-spend / RPM admission simulation;
 - no circuit-breaker state (both arms run with no open circuits);
-- no confidence-escalation or failover replay -- only the first decision.
+- no confidence-escalation or failover replay -- only the first decision,
+  and the overflow re-selection that is a pure function of declared data.
 
 Only `NoEligibleCandidate` and `ContextWindowExceeded` are recorded as
 rejections. Any other exception propagates: a simulator bug must surface,
@@ -73,6 +75,16 @@ class ArmResult:
     # P3c-2: True when `workload.token_scale` shrank a row whose recorded
     # complexity was saturated, so its new complexity is an estimate.
     complexity_estimated: bool = False
+    # P3c-2 spec §5: every model this arm selected, in order -- the picks
+    # that overflowed their declared context window, then (when routed) the
+    # one served. `attempted[0]` is the first routing decision.
+    attempted: tuple[str, ...] = ()
+
+    @property
+    def overflow_hops(self) -> int:
+        """Picks excluded because prompt + output exceeded their window."""
+        served = 1 if self.outcome == "routed" else 0
+        return max(0, len(self.attempted) - served)
 
 
 @dataclass(frozen=True)
@@ -206,10 +218,11 @@ def observed_latencies(records: list[dict]) -> dict[str, float]:
 
 def _rejected(eligible: tuple[str, ...], codes: tuple[str, ...], *,
               core: tuple[str, ...] = (), core_state: tuple[str, ...] = (),
-              complexity_estimated: bool = False) -> ArmResult:
+              complexity_estimated: bool = False,
+              attempted: tuple[str, ...] = ()) -> ArmResult:
     return ArmResult("rejected", None, None, None, eligible, codes,
                      None, None, None, None, None, core, core_state,
-                     complexity_estimated=complexity_estimated)
+                     complexity_estimated=complexity_estimated, attempted=attempted)
 
 
 # app/pipeline.py: `complexity = min(1.0, comp.tokens_after / 2000)`. The
@@ -244,7 +257,9 @@ def scaled_request(prompt_tokens: int, complexity: float,
 
 
 def simulate_row(scn: Scenario, row: dict, observed: dict[str, float]) -> ArmResult:
-    """One row's first routing decision under one scenario."""
+    """One row's routing decision under one scenario: the first decision,
+    then -- only when the pick's declared context window is too small -- the
+    same exclude-and-reselect the live gateway does (P3c-2 spec §5)."""
     app = scn.apps[row["application_id"]]
     # Placeholder entities: only `.type` is read on the context path.
     entities = [Entity(type=t, start=0, end=0, value="")
@@ -270,33 +285,56 @@ def simulate_row(scn: Scenario, row: dict, observed: dict[str, float]) -> ArmRes
     prompt_tokens, complexity, estimated = scaled_request(
         int(row["prompt_tokens"]), float(row["complexity"]),
         scn.assumptions.scale_for(row["application_id"]))
-    try:
-        # B55: price at the client's recorded output cap, as the live
-        # gateway does (`expected_output_tokens(settings, params)`); no cap
-        # recorded -> the deployment's default estimate.
-        output_tokens = expected_output_tokens(
-            scn.settings, {"max_tokens": row["max_tokens"]} if row.get("max_tokens") else None)
-        decision = scn.router.select(ctx, tokens_after=prompt_tokens,
-                                     complexity=complexity,
-                                     output_tokens=output_tokens)
-    except NoEligibleCandidate as exc:
-        # P3b: the router attaches the minimal conflicting core to every
-        # NoEligibleCandidate it raises (None only if computing the core
-        # itself failed) -- carry it through so the summary can group
-        # rejections by why, not just by code.
-        core = exc.core.ids() if exc.core else ()
-        core_state = exc.core.state_ids() if exc.core else ()
-        if not exc.rejected:
-            return _rejected(eligible, ("empty_pool",), core=core, core_state=core_state,
-                             complexity_estimated=estimated)
-        fallback = "over_budget" if "budget filter" in str(exc) else "unspecified"
-        codes = tuple(sorted({code or fallback for _name, code in exc.rejected}))
-        return _rejected(eligible, codes, core=core, core_state=core_state,
-                         complexity_estimated=estimated)
-    except ContextWindowExceeded:
-        return _rejected(eligible, ("context_window",), complexity_estimated=estimated)
+    # B55: price at the client's recorded output cap, as the live gateway
+    # does (`expected_output_tokens(settings, params)`); no cap recorded ->
+    # the deployment's default estimate.
+    output_tokens = expected_output_tokens(
+        scn.settings, {"max_tokens": row["max_tokens"]} if row.get("max_tokens") else None)
 
-    pick = decision.chosen
+    # P3c-2 spec §5: mirror `Gateway.run`'s overflow handling. A pick whose
+    # DECLARED window cannot hold prompt + output is excluded and the router
+    # re-selects, at most `max_failover_attempts` extra times -- the live
+    # bound. An undeclared window (None) never overflows: replay cannot
+    # invent a limit. This is the only later-hop behaviour replayed.
+    max_failover = int(scn.settings.routing.max_failover_attempts)
+    overflowed: list[str] = []          # picks that overflowed, in order
+    while True:
+        try:
+            decision = scn.router.select(ctx, tokens_after=prompt_tokens,
+                                         complexity=complexity,
+                                         output_tokens=output_tokens,
+                                         exclude=frozenset(overflowed))
+        except NoEligibleCandidate as exc:
+            if overflowed:
+                # Every reachable candidate overflowed. The live gateway
+                # reports that as ContextWindowExceeded (400), not a 422.
+                return _rejected(eligible, ("context_window",),
+                                 complexity_estimated=estimated,
+                                 attempted=tuple(overflowed))
+            # P3b: the router attaches the minimal conflicting core to every
+            # NoEligibleCandidate it raises (None only if computing the core
+            # itself failed) -- carry it through so the summary can group
+            # rejections by why, not just by code.
+            core = exc.core.ids() if exc.core else ()
+            core_state = exc.core.state_ids() if exc.core else ()
+            if not exc.rejected:
+                return _rejected(eligible, ("empty_pool",), core=core, core_state=core_state,
+                                 complexity_estimated=estimated)
+            fallback = "over_budget" if "budget filter" in str(exc) else "unspecified"
+            codes = tuple(sorted({code or fallback for _name, code in exc.rejected}))
+            return _rejected(eligible, codes, core=core, core_state=core_state,
+                            complexity_estimated=estimated)
+        except ContextWindowExceeded:
+            return _rejected(eligible, ("context_window",), complexity_estimated=estimated,
+                             attempted=tuple(overflowed))
+        pick = decision.chosen
+        if pick.context_window is None or prompt_tokens + output_tokens <= pick.context_window:
+            break
+        overflowed.append(pick.name)
+        if len(overflowed) > max_failover:
+            return _rejected(eligible, ("context_window",), complexity_estimated=estimated,
+                             attempted=tuple(overflowed))
+
     # P3c-2: `workload.cached_share` of the (scaled) prompt is billed at the
     # endpoint's cached-input price. The ROUTER still estimates at zero
     # cached tokens, as it does live, so the share moves cost and never a
@@ -321,9 +359,11 @@ def simulate_row(scn: Scenario, row: dict, observed: dict[str, float]) -> ArmRes
             latency = scn.signals.latency(pick.name, pick.tier).value
             latency_source = "tier_default"
     q = scn.quality.resolve(pick.name, row.get("workload"))
+    # The endpoint served AFTER any overflow hops is the one costed.
     return ArmResult("routed", pick.name, pick.provider, pick.tier, eligible, (),
                      cost, latency, latency_source, q.score, q.source,
-                     complexity_estimated=estimated)
+                     complexity_estimated=estimated,
+                     attempted=(*overflowed, pick.name))
 
 
 def run_rows(records: list[dict], current: Scenario, proposed: Scenario, *,
@@ -391,9 +431,9 @@ def agreement_ok(baseline: dict, minimum: float) -> bool:
 #: every line so a multi-line quote stays a single blockquote).
 REPORT_CAVEAT = (
     "**Simulation only.** Nothing in this report has been applied. It predicts the first routing\n"
-    "decision of recorded requests under the proposal, using the real eligibility and routing\n"
-    "code and a frozen snapshot of signals. It does not model failover, escalation, breaker\n"
-    "state or caching."
+    "decision of recorded requests under the proposal, plus deterministic context-window overflow\n"
+    "re-selection, using the real eligibility and routing code and a frozen snapshot of signals.\n"
+    "It does not model other failover, escalation, breaker state or caching."
 )
 
 
@@ -421,13 +461,14 @@ def _delta(current: float | None, proposed: float | None) -> dict:
 
 def _bucket_stats(rows: list[RowResult]) -> dict:
     """The `{requests, route_changed, newly_rejected, newly_served, cost_usd,
-    cost_usd_both_routed, latency_ms, quality_mean, onprem_share}` block shared by `totals`,
+    cost_usd_both_routed, latency_ms, quality_mean, onprem_share, overflow_hops}` block shared by `totals`,
     `by_app.<app>` and `by_workload.<workload>` (spec §8)."""
     cost = {}
     lat_p50 = {}
     lat_p95 = {}
     quality = {}
     onprem_share = {}
+    overflow_hops = {}
     for arm in ("current", "proposed"):
         routed = [getattr(r, arm) for r in rows if getattr(r, arm).outcome == "routed"]
         cost[arm] = sum(a.cost_usd or 0.0 for a in routed)
@@ -438,6 +479,9 @@ def _bucket_stats(rows: list[RowResult]) -> dict:
         quality[arm] = _mean(q_vals)
         onprem_share[arm] = ((sum(1 for a in routed if a.provider == "onprem") / len(routed))
                               if routed else None)
+        # Over every row, routed or not: a row rejected for overflowing every
+        # reachable endpoint spent hops too.
+        overflow_hops[arm] = sum(getattr(r, arm).overflow_hops for r in rows)
 
     # Like-for-like cost: only rows routed in BOTH arms. `cost_usd` above
     # sums each arm's routed rows, so a newly rejected row simply drops out
@@ -458,7 +502,18 @@ def _bucket_stats(rows: list[RowResult]) -> dict:
                        "p95": _delta(lat_p95["current"], lat_p95["proposed"])},
         "quality_mean": _delta(quality["current"], quality["proposed"]),
         "onprem_share": {"current": onprem_share["current"], "proposed": onprem_share["proposed"]},
+        "overflow_hops": {"current": overflow_hops["current"],
+                          "proposed": overflow_hops["proposed"]},
     }
+
+
+def _first_pick(arm: ArmResult) -> str | None:
+    """The model the arm's FIRST select chose, before any overflow
+    re-selection; None when the arm rejected the row. An `ArmResult` built
+    without `attempted` (older callers) reads as its served model."""
+    if arm.outcome != "routed":
+        return None
+    return arm.attempted[0] if arm.attempted else arm.model
 
 
 def _baseline(results: list[RowResult]) -> dict:
@@ -473,15 +528,18 @@ def _baseline(results: list[RowResult]) -> dict:
     by_app: dict[str, float] = {}
     disagreements: Counter = Counter()
     if rows_compared:
-        agree_count = sum(1 for r in compared if r.current.model == r.row["attempts"][0])
+        # First decision against first recorded attempt: an overflow hop
+        # replay reproduces (P3c-2) must not read as a disagreement.
+        agree_count = sum(1 for r in compared
+                          if _first_pick(r.current) == r.row["attempts"][0])
         agreement = agree_count / rows_compared
         for app_id in sorted({r.row["application_id"] for r in compared}):
             sub = [r for r in compared if r.row["application_id"] == app_id]
             by_app[app_id] = sum(
-                1 for r in sub if r.current.model == r.row["attempts"][0]) / len(sub)
+                1 for r in sub if _first_pick(r.current) == r.row["attempts"][0]) / len(sub)
         for r in compared:
             recorded = r.row["attempts"][0]
-            simulated = r.current.model or "(rejected)"
+            simulated = _first_pick(r.current) or "(rejected)"
             if recorded != simulated:
                 disagreements[(recorded, simulated)] += 1
 
@@ -529,7 +587,13 @@ def _new_rejections(results: list[RowResult]) -> dict:
             by_app[r.row["application_id"]] += 1
             for code in r.proposed.reject_codes:
                 by_code[code] += 1
-            by_core[_core_key(r.proposed.core, r.proposed.core_state)] += 1
+            # A context-window rejection has no conflicting core -- no
+            # requirement refused it, the request is too large -- so it gets
+            # its own key instead of reading as "(unknown)".
+            if r.proposed.reject_codes == ("context_window",):
+                by_core["(context_window)"] += 1
+            else:
+                by_core[_core_key(r.proposed.core, r.proposed.core_state)] += 1
     return {"by_app": dict(by_app), "by_code": dict(by_code), "by_core": dict(by_core)}
 
 
@@ -641,6 +705,9 @@ def _metrics_table(stats: dict) -> list[str]:
     lines.append(f"| quality_mean | {_fmt(q['current'])} | {_fmt(q['proposed'])} | {_fmt(q['delta'])} |")
     o = stats["onprem_share"]
     lines.append(f"| onprem_share | {_fmt(o['current'])} | {_fmt(o['proposed'])} | n/a |")
+    h = stats["overflow_hops"]
+    lines.append(f"| overflow_hops | {h['current']} | {h['proposed']} | "
+                 f"{h['proposed'] - h['current']} |")
     return lines
 
 
