@@ -101,6 +101,33 @@ def _attempt_chain(choice: Choice) -> tuple[str, ...]:
         return tuple(choice.attempts)
     return (choice.endpoint,) if choice.endpoint is not None else ()
 
+@dataclass(frozen=True)
+class CaseScore:
+    """One `(case, strategy)` outcome, **unrounded**: what that case adds to
+    each aggregate `strategy_metrics` reports. A field is `None` when the
+    case is outside that metric's denominator -- never 0.0, for the same
+    reason `_mean` returns `None` on an empty list.
+
+    `strategy_metrics` is `aggregate_scores(case_scores(...))`, rounded. The
+    per-case form exists so a caller can aggregate over a SUBSET of cases (a
+    group, `app/eval/groups.py`) or resample cases (the paired comparison in
+    `app/eval/version_check.py`) without re-deriving any rule below."""
+
+    case_id: str
+    empty: bool                      # E(c) = {}
+    violation: bool                  # at most one per case
+    empty_mismatch: bool             # expect_empty disagrees, or not rejected_ok
+    infeasible_at_floor: bool        # non-empty and P(c) = {}
+    passed: float | None             # 1.0 / 0.0; None on an empty case
+    quality_regret: float | None     # q* - served quality; None on an empty case
+    floor_miss: float | None         # 1.0 / 0.0; None unless P(c) != {}
+    cost_regret: float | None        # only when the served outcome passed
+    latency_regret: float | None     # likewise, and both latencies known
+    chosen_cost: float | None        # the chain's summed cost; None on an empty case
+    wasted_attempts: float | None    # failed attempts; None on an empty case
+    exhausted: float | None          # 1.0 / 0.0; None on an empty case
+
+
 def _round_value(value):
     """Round every float leaf in `value` to 12 dp; recurse through dict,
     list, and tuple containers; pass everything else through unchanged.
@@ -257,6 +284,176 @@ def case_oracle(rows: list[MatrixRow]) -> dict:
     """
     return _round_value(_oracle_raw(rows))
 
+def case_scores(
+    cases: list[CaseInfo], rows: list[MatrixRow], choices: list[Choice], strategy: str,
+) -> list[CaseScore]:
+    """One `CaseScore` per case in `cases`, in the order given, for
+    `strategy`. Every rule is `strategy_metrics`' (its docstring is the
+    definition): this is the per-case walk that function aggregates."""
+    rows_by_case: dict[str, list[MatrixRow]] = {}
+    rows_by_case_endpoint: dict[tuple[str, str], MatrixRow] = {}
+    for row in rows:
+        rows_by_case.setdefault(row.case_id, []).append(row)
+        rows_by_case_endpoint[(row.case_id, row.endpoint)] = row
+
+    choice_by_case = {c.case_id: c for c in choices if c.strategy == strategy}
+    scores: list[CaseScore] = []
+
+    for case in cases:
+        actual_empty = len(case.eligible) == 0
+        mismatch = (case.expect_empty != actual_empty) or (
+            actual_empty and not case.rejected_ok)
+
+        has_choice_record = case.case_id in choice_by_case
+        choice = choice_by_case.get(case.case_id)
+        chain = _attempt_chain(choice) if choice is not None else ()
+
+        if actual_empty:
+            # A correct chain on an empty case is empty; any attempt names
+            # an endpoint outside E(c) = {} by construction. A missing
+            # Choice record is also correct here (nothing to record) --
+            # the harness-bug rule below applies only to non-empty cases.
+            scores.append(CaseScore(
+                case_id=case.case_id, empty=True, violation=bool(chain),
+                empty_mismatch=mismatch, infeasible_at_floor=False, passed=None,
+                quality_regret=None, floor_miss=None, cost_regret=None,
+                latency_regret=None, chosen_cost=None, wasted_attempts=None,
+                exhausted=None))
+            continue
+
+        # Spec §6: q*, P, c*, l* are all defined over E(c). A row for an
+        # endpoint outside case.eligible must never contaminate the oracle
+        # (fix-round-1 finding 3) -- it is still flagged, but only via
+        # violations() / the missing-row check below, never by skewing q*.
+        case_rows = [
+            row for row in rows_by_case.get(case.case_id, [])
+            if row.endpoint in case.eligible
+        ]
+        oracle = _oracle_raw(case_rows) if case_rows else None
+
+        # Failover-aware outcome (B48 spec §5). A violating chain -- any
+        # attempt outside E(c), or an eligible attempt with no sweep row --
+        # is scored exactly like "no choice" (quality 0, cost 0, no
+        # attempts, not exhausted) so one bad case cannot silently distort
+        # the aggregate; the violation itself is what fails the run.
+        outcome = _attempt_outcome_raw({}, ())
+        violation = False
+        if not has_choice_record:
+            # A non-empty case with no Choice record at all for this
+            # strategy is a harness bug -- the runner is expected to
+            # record one Choice per (case, strategy) it ran. Distinct from
+            # an explicit Choice(endpoint=None) with no attempts, which is
+            # a legitimate "no choice" and stays violation-free (below).
+            violation = True
+        elif chain:
+            # Every recorded attempt must be in E(c) and have a sweep row
+            # -- including any recorded past the served one (spec §5:
+            # "any attempt outside E(c) is a violation").
+            case_rows_by_endpoint = {
+                endpoint: rows_by_case_endpoint[(case.case_id, endpoint)]
+                for endpoint in chain
+                if endpoint in case.eligible
+                and (case.case_id, endpoint) in rows_by_case_endpoint
+            }
+            if (len(case_rows_by_endpoint) != len(set(chain))
+                    or len(set(chain)) != len(chain)):
+                # an attempt outside E(c) / with no sweep row, or the same
+                # endpoint attempted twice (the gateway excludes a failed one)
+                violation = True
+            else:
+                candidate = _attempt_outcome_raw(case_rows_by_endpoint, chain)
+                if choice.attempts and (candidate["attempts"] != len(chain)
+                                        or choice.endpoint != candidate["served"]):
+                    # entries recorded after the served attempt, or a
+                    # `Choice.endpoint` that is not the chain's served one
+                    # (ruling D) -- the record contradicts itself
+                    violation = True
+                else:
+                    outcome = candidate
+
+        served_row = (rows_by_case_endpoint[(case.case_id, outcome["served"])]
+                      if outcome["served"] is not None else None)
+        chosen_passed = served_row.passed if served_row is not None else False
+        chosen_cost = outcome["cost_usd"]
+        chosen_latency = outcome["latency_ms"]
+        q_star = oracle["q_star"] if oracle is not None else 0.0
+
+        floor_miss: float | None = None
+        cost_regret: float | None = None
+        latency_regret: float | None = None
+        if oracle is not None and oracle["passing"]:
+            floor_miss = 0.0 if chosen_passed else 1.0
+            if chosen_passed:
+                # Only a served, passing outcome reaches here, so an
+                # exhausted chain's (failure-only) latency never enters
+                # latency regret.
+                c_star = oracle["c_star"]
+                if c_star is not None:
+                    cost_regret = chosen_cost - c_star
+                l_star = oracle["l_star"]
+                if chosen_latency is not None and l_star is not None:
+                    latency_regret = chosen_latency - l_star
+
+        scores.append(CaseScore(
+            case_id=case.case_id, empty=False, violation=violation,
+            empty_mismatch=mismatch,
+            infeasible_at_floor=oracle is not None and oracle["infeasible_at_floor"],
+            passed=1.0 if chosen_passed else 0.0,
+            quality_regret=q_star - outcome["quality"],
+            floor_miss=floor_miss, cost_regret=cost_regret,
+            latency_regret=latency_regret, chosen_cost=chosen_cost,
+            wasted_attempts=float(outcome["wasted_attempts"]),
+            exhausted=1.0 if outcome["exhausted"] else 0.0))
+    return scores
+
+
+#: `aggregate_scores` key -> the `CaseScore` field it is the mean of. A case
+#: whose field is `None` is outside that metric's denominator.
+_SCORE_FIELD = {
+    "pass_rate": "passed",
+    "quality_regret": "quality_regret",
+    "cost_regret": "cost_regret",
+    "latency_regret": "latency_regret",
+    "floor_miss_rate": "floor_miss",
+    "mean_chosen_cost": "chosen_cost",
+    "wasted_attempts": "wasted_attempts",
+    "exhausted_rate": "exhausted",
+}
+
+
+def _values(scores: list[CaseScore], field: str) -> list[float]:
+    return [v for v in (getattr(s, field) for s in scores) if v is not None]
+
+
+def aggregate_scores(scores: list[CaseScore]) -> dict:
+    """`strategy_metrics`' dict from per-case scores, **unrounded**. Sums run
+    in the order `scores` is given."""
+    n_cases = len(scores)
+    out = {
+        "n_cases": n_cases,
+        "violation_rate": (sum(1 for s in scores if s.violation) / n_cases
+                           if n_cases else None),
+    }
+    for key in ("pass_rate", "quality_regret", "cost_regret", "latency_regret",
+                "floor_miss_rate"):
+        out[key] = _mean(_values(scores, _SCORE_FIELD[key]))
+    out["infeasible_at_floor"] = sum(1 for s in scores if s.infeasible_at_floor)
+    out["empty_set_mismatches"] = sum(1 for s in scores if s.empty_mismatch)
+    for key in ("mean_chosen_cost", "wasted_attempts", "exhausted_rate"):
+        out[key] = _mean(_values(scores, _SCORE_FIELD[key]))
+    return out
+
+
+def metric_support(scores: list[CaseScore]) -> dict[str, int]:
+    """How many cases each `aggregate_scores` rate or mean is over: its
+    denominator. `violation_rate` is over every case; the rest are over the
+    cases whose `CaseScore` field is not `None`."""
+    support = {"violation_rate": len(scores)}
+    for key, field in _SCORE_FIELD.items():
+        support[key] = len(_values(scores, field))
+    return support
+
+
 def strategy_metrics(
     cases: list[CaseInfo], rows: list[MatrixRow], choices: list[Choice], strategy: str,
 ) -> dict:
@@ -306,141 +503,7 @@ def strategy_metrics(
     denominator is empty (e.g. no non-empty cases, or no case where the
     choice passed) -- an aggregate with no data is undefined, not zero.
     """
-    rows_by_case: dict[str, list[MatrixRow]] = {}
-    rows_by_case_endpoint: dict[tuple[str, str], MatrixRow] = {}
-    for row in rows:
-        rows_by_case.setdefault(row.case_id, []).append(row)
-        rows_by_case_endpoint[(row.case_id, row.endpoint)] = row
-
-    choice_by_case = {c.case_id: c for c in choices if c.strategy == strategy}
-
-    n_cases = len(cases)
-    violations_count = 0
-    empty_mismatches = 0
-    infeasible_count = 0
-
-    quality_regrets: list[float] = []
-    pass_flags: list[float] = []
-    floor_miss_flags: list[float] = []
-    cost_regrets: list[float] = []
-    latency_regrets: list[float] = []
-    chosen_costs: list[float] = []
-    wasted_counts: list[float] = []
-    exhausted_flags: list[float] = []
-
-    for case in cases:
-        actual_empty = len(case.eligible) == 0
-        mismatch = (case.expect_empty != actual_empty) or (
-            actual_empty and not case.rejected_ok)
-        if mismatch:
-            empty_mismatches += 1
-
-        has_choice_record = case.case_id in choice_by_case
-        choice = choice_by_case.get(case.case_id)
-        chain = _attempt_chain(choice) if choice is not None else ()
-
-        if actual_empty:
-            # A correct chain on an empty case is empty; any attempt names
-            # an endpoint outside E(c) = {} by construction. A missing
-            # Choice record is also correct here (nothing to record) --
-            # the harness-bug rule below applies only to non-empty cases.
-            if chain:
-                violations_count += 1
-            continue
-
-        # Spec §6: q*, P, c*, l* are all defined over E(c). A row for an
-        # endpoint outside case.eligible must never contaminate the oracle
-        # (fix-round-1 finding 3) -- it is still flagged, but only via
-        # violations() / the missing-row check below, never by skewing q*.
-        case_rows = [
-            row for row in rows_by_case.get(case.case_id, [])
-            if row.endpoint in case.eligible
-        ]
-        oracle = _oracle_raw(case_rows) if case_rows else None
-        if oracle is not None and oracle["infeasible_at_floor"]:
-            infeasible_count += 1
-
-        # Failover-aware outcome (B48 spec §5). A violating chain -- any
-        # attempt outside E(c), or an eligible attempt with no sweep row --
-        # is scored exactly like "no choice" (quality 0, cost 0, no
-        # attempts, not exhausted) so one bad case cannot silently distort
-        # the aggregate; the violation itself is what fails the run.
-        outcome = _attempt_outcome_raw({}, ())
-        if not has_choice_record:
-            # A non-empty case with no Choice record at all for this
-            # strategy is a harness bug -- the runner is expected to
-            # record one Choice per (case, strategy) it ran. Distinct from
-            # an explicit Choice(endpoint=None) with no attempts, which is
-            # a legitimate "no choice" and stays violation-free (below).
-            violations_count += 1
-        elif chain:
-            # Every recorded attempt must be in E(c) and have a sweep row
-            # -- including any recorded past the served one (spec §5:
-            # "any attempt outside E(c) is a violation").
-            case_rows_by_endpoint = {
-                endpoint: rows_by_case_endpoint[(case.case_id, endpoint)]
-                for endpoint in chain
-                if endpoint in case.eligible
-                and (case.case_id, endpoint) in rows_by_case_endpoint
-            }
-            if (len(case_rows_by_endpoint) != len(set(chain))
-                    or len(set(chain)) != len(chain)):
-                # an attempt outside E(c) / with no sweep row, or the same
-                # endpoint attempted twice (the gateway excludes a failed one)
-                violations_count += 1
-            else:
-                candidate = _attempt_outcome_raw(case_rows_by_endpoint, chain)
-                if choice.attempts and (candidate["attempts"] != len(chain)
-                                        or choice.endpoint != candidate["served"]):
-                    # entries recorded after the served attempt, or a
-                    # `Choice.endpoint` that is not the chain's served one
-                    # (ruling D) -- the record contradicts itself
-                    violations_count += 1
-                else:
-                    outcome = candidate
-
-        served_row = (rows_by_case_endpoint[(case.case_id, outcome["served"])]
-                      if outcome["served"] is not None else None)
-        chosen_passed = served_row.passed if served_row is not None else False
-        chosen_cost = outcome["cost_usd"]
-        chosen_latency = outcome["latency_ms"]
-
-        q_star = oracle["q_star"] if oracle is not None else 0.0
-        quality_regrets.append(q_star - outcome["quality"])
-        pass_flags.append(1.0 if chosen_passed else 0.0)
-        chosen_costs.append(chosen_cost)
-        wasted_counts.append(float(outcome["wasted_attempts"]))
-        exhausted_flags.append(1.0 if outcome["exhausted"] else 0.0)
-
-        if oracle is not None and oracle["passing"]:
-            floor_miss_flags.append(0.0 if chosen_passed else 1.0)
-            if chosen_passed:
-                # Only a served, passing outcome reaches here, so an
-                # exhausted chain's (failure-only) latency never enters
-                # latency regret.
-                c_star = oracle["c_star"]
-                if c_star is not None:
-                    cost_regrets.append(chosen_cost - c_star)
-                l_star = oracle["l_star"]
-                if chosen_latency is not None and l_star is not None:
-                    latency_regrets.append(chosen_latency - l_star)
-
-    violation_rate = violations_count / n_cases if n_cases else None
-
-    return _round_value({
-        "n_cases": n_cases,
-        "violation_rate": violation_rate,
-        "pass_rate": _mean(pass_flags),
-        "quality_regret": _mean(quality_regrets),
-        "cost_regret": _mean(cost_regrets),
-        "latency_regret": _mean(latency_regrets),
-        "floor_miss_rate": _mean(floor_miss_flags),
-        "infeasible_at_floor": infeasible_count,
-        "empty_set_mismatches": empty_mismatches,
-        "mean_chosen_cost": _mean(chosen_costs),
-        "wasted_attempts": _mean(wasted_counts),
-        "exhausted_rate": _mean(exhausted_flags),
-    })
+    return _round_value(aggregate_scores(case_scores(cases, rows, choices, strategy)))
 
 def grouped(
     cases: list[CaseInfo], rows: list[MatrixRow], choices: list[Choice],
