@@ -74,6 +74,26 @@ def _own_run(tmp_path, body: dict, *extra: str, rows=None, capacity: dict | None
     return code, out
 
 
+def _own_scenarios(tmp_path, bodies, *extra: str, rows=None, capacity: dict | None = None,
+                   snapshot: dict | None = None):
+    """Run `--scenarios` over a hand-made export; `bodies` is `(name, proposal
+    body)` pairs. Returns `(exit code, out)`."""
+    export, snap, doc = tmp_path / "e.ndjson", tmp_path / "s.json", tmp_path / "sc.json"
+    export.write_text(_export_lines(traffic(QUIET_THEN_BUSY) if rows is None else rows),
+                      encoding="utf-8")
+    snap.write_text(_dump(snapshot or one_endpoint()), encoding="utf-8")
+    doc.write_text(_dump({"schema": "routeforge.policy-scenarios/v1", "scenarios": [
+        {"name": name, "proposal": body} for name, body in bodies]}), encoding="utf-8")
+    flags = []
+    if capacity is not None:
+        flags = ["--capacity", _capacity_file(tmp_path, capacity)]
+    out = tmp_path / "out"
+    code = load_cli().main(["--export", str(export), "--snapshot", str(snap),
+                            "--scenarios", str(doc), "--out", str(out),
+                            "--config-dir", str(ROOT / "config"), *flags, *extra])
+    return code, out
+
+
 # --- C1: a stated capacity only adds ----------------------------------------------
 
 @pytest.mark.parametrize("mode", ["proposal", "proposal_shadow", "scenarios"])
@@ -313,12 +333,23 @@ def test_c15_a_proposal_capacity_for_an_unknown_endpoint_is_refused(tmp_path, ca
     _refused(capsys, code, out, "capacity.local-typo: not an onboarded endpoint")
 
 
-def test_the_agreement_gate_still_refuses_first(tmp_path, capsys):
+@pytest.mark.parametrize("mode", ["proposal", "scenarios", "scenarios_uncertainty"])
+def test_the_agreement_gate_still_refuses_first(tmp_path, capsys, mode):
     """Rows recorded on an endpoint replay does not pick: agreement 0, exit
-    4, nothing written -- capacity input or not."""
+    4, nothing written -- capacity input or not, in every mode. The body
+    asserts a latency too long to place, which is exit 2 once the capacity
+    model runs: the gate must refuse before it does (spec §3.4)."""
     rows = traffic([2] * 12, attempts=["local-gone"], chosen="local-gone")
-    code, out = _own_run(tmp_path, {}, "--min-agreement", "0.9", rows=rows, capacity=LIMITS)
-    assert code == 4 and "below --min-agreement" in capsys.readouterr().err
+    body = {"endpoints": {"update": {"local-cheap": {"latency_ms": 1e12}}}}
+    if mode == "proposal":
+        code, out = _own_run(tmp_path, body, "--min-agreement", "0.9", rows=rows,
+                             capacity=LIMITS)
+    else:
+        extra = ("--uncertainty", "--bootstrap", "40") if mode.endswith("uncertainty") else ()
+        code, out = _own_scenarios(tmp_path, [("slow", body)], "--min-agreement", "0.9", *extra,
+                                   rows=rows, capacity=LIMITS)
+    err = capsys.readouterr().err
+    assert code == 4 and "below --min-agreement" in err and "error: capacity" not in err
     assert not out.exists()
 
 
@@ -332,15 +363,6 @@ def test_c15_an_asserted_latency_too_long_to_place_is_refused(tmp_path, capsys, 
         code, out = _own_run(tmp_path, body, capacity=LIMITS)
         _refused(capsys, code, out, "error: capacity: endpoints.local-cheap.latency_ms: ")
         return
-    export, snap, doc = tmp_path / "e.ndjson", tmp_path / "s.json", tmp_path / "sc.json"
-    export.write_text(_export_lines(traffic(QUIET_THEN_BUSY)), encoding="utf-8")
-    snap.write_text(_dump(one_endpoint()), encoding="utf-8")
-    doc.write_text(_dump({"schema": "routeforge.policy-scenarios/v1", "scenarios": [
-        {"name": "slow-box", "proposal": body}]}), encoding="utf-8")
-    out = tmp_path / "out"
-    code = load_cli().main(["--export", str(export), "--snapshot", str(snap),
-                            "--scenarios", str(doc), "--out", str(out),
-                            "--config-dir", str(ROOT / "config"),
-                            "--capacity", _capacity_file(tmp_path, LIMITS)])
+    code, out = _own_scenarios(tmp_path, [("slow-box", body)], capacity=LIMITS)
     _refused(capsys, code, out,
              "error: capacity: scenarios[0](slow-box).endpoints.local-cheap.latency_ms: ")

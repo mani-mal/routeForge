@@ -247,10 +247,13 @@ def _compare_scenarios(args: argparse.Namespace, *, records: list[dict], warning
     """`--scenarios` mode (P3c-2): replay every scenario against one shared
     `current` arm, then write `comparison.json` and `report.md`."""
     try:
-        if plan is not None and args.min_agreement is not None:
-            # P3c-3: `compare` bootstraps every scenario before it returns the
-            # baseline the gate reads. One extra replay of the snapshot keeps
-            # a run the gate refuses from paying for those bootstraps.
+        if (plan is not None or capacity is not None) and args.min_agreement is not None:
+            # `compare` returns the baseline the gate reads only after it has
+            # bootstrapped every scenario (P3c-3) and built every scenario's
+            # capacity block (P3c-4), which can itself refuse the run (exit
+            # 2). One extra replay of the snapshot keeps a run the gate
+            # refuses from paying for the bootstraps, and makes the gate the
+            # first to refuse, as it is in `--proposal` mode.
             early = asyncio.run(baseline_check(records, snapshot, base=base, since=since))
             if not agreement_ok(early, args.min_agreement):
                 return _below_min_agreement(early, args.min_agreement)
