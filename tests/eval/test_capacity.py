@@ -485,7 +485,7 @@ def test_c7_a_rejected_row_adds_no_demand():                                    
 FIGURES = ("peak", "mean_window", "mean_active")
 
 
-@pytest.mark.parametrize("scale", [0.25, 2, 10, 1000])
+@pytest.mark.parametrize("scale", [0.25, 0.7, 2, 10, 1000])
 def test_c4_utilisation_is_linear_in_volume_scale(scale):                              # C4
     rows, snapshot = traffic(QUIET_THEN_BUSY), one_endpoint()
     entry = block_for(rows, snapshot, {"workload": {"volume_scale": scale}},
@@ -507,6 +507,37 @@ def test_c4_utilisation_is_linear_in_volume_scale(scale):                       
     # Volume changes how many requests there are, not how long one takes.
     for key in ("service_time_sources", "service_time_ms", "active_buckets"):
         assert proposed[key] == current[key]
+
+
+@pytest.mark.parametrize("scale", [0.1, 0.7, 3, 1_000_000])
+def test_c4_a_uniform_scale_over_several_applications_moves_no_peak_bucket(scale):    # C4
+    """Three applications share one endpoint and one volume scale. A uniform
+    scale multiplies every bucket by the same number, so the largest bucket
+    is the largest bucket at any scale. Scaling each application's integer
+    separately and adding the three products put the sum one unit in the
+    last place off (0.7 x a + 0.7 x b + 0.7 x c is not 0.7 x (a + b + c) in
+    floating point), and at 0.7 the peak moved from 12:24 to 12:34: so the
+    integers of applications that share a factor are added first."""
+    rng = random.Random(11)
+    rows = synthetic([(rng.uniform(0, 3600), rng.choice([0.4, 7.3, 95.0, 410.0]))
+                      for _ in range(1500)])
+    for i, r in enumerate(rows):
+        r.row["application_id"] = f"app-{'abc'[i % 3]}"
+    limits = {"e": {"max_concurrency": 3.0, "requests_per_minute": 20.0,
+                    "tokens_per_minute": 30000.0, "output_tokens_per_minute": 900.0}}
+    plain = capacity_block(rows, CapacityPlan(limits=limits))["endpoints"]["e"]["current"]
+    in_the_file = capacity_block(rows, CapacityPlan(limits=limits, volume={"*": float(scale)}))
+    in_the_proposal = capacity_block(rows, CapacityPlan(limits=limits),
+                                     {"workload": {"volume_scale": scale}})
+    for arm in (in_the_file["endpoints"]["e"]["current"],
+                in_the_proposal["endpoints"]["e"]["proposed"]):
+        for limit in CAPACITY_LIMITS:
+            assert arm["limits"][limit]["peak_bucket"] == plain["limits"][limit]["peak_bucket"], (
+                limit)
+            assert arm["limits"][limit]["peak"] == pytest.approx(
+                scale * plain["limits"][limit]["peak"], rel=1e-12)
+            assert arm["limits"][limit]["limit"] == plain["limits"][limit]["limit"]
+    assert plain["limits"]["requests_per_minute"]["peak_bucket"] == "2026-09-20T12:24:00+00:00"
 
 
 def test_c4_volume_changes_no_route_and_no_cost():                                     # C4

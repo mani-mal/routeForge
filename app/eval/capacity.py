@@ -32,9 +32,10 @@ rejection and no predicted delay: RouteForge does not know what an endpoint
 does above a stated limit (`CAPACITY_CAVEAT`).
 
 Everything that decides a figure is exact integer arithmetic on
-milliseconds, requests and tokens; a volume scale is applied once per
-application, in sorted order. The block does not depend on the order rows
-come in.
+milliseconds, requests and tokens; a volume scale multiplies the exact
+integer total of the applications that share it, once. The block does not
+depend on the order rows come in, and a uniform scale moves no peak to
+another bucket.
 
 Never ranks a scenario and never proposes a remedy. Never imported by
 serving code (`tests/eval/test_isolation.py`).
@@ -430,11 +431,24 @@ def arm_load(results: list[RowResult], arm: str, *, bucket_seconds: int,
     return loads
 
 
+def _scaled_sum(per_app: dict[str, int], volume: Callable[[str], float]) -> float:
+    """Per-application exact integers as one volume-scaled float. The
+    integers of applications that share a volume factor are added FIRST, as
+    integers, and each distinct factor multiplies once; the products are
+    summed with `math.fsum`. So a uniform scale is one multiplication of an
+    exact total -- `0.7 * (a + b + c)`, never `0.7 * a + 0.7 * b + 0.7 * c`,
+    which differs in the last place and could move a peak to another bucket."""
+    by_factor: dict[float, int] = {}
+    for app_id, value in per_app.items():
+        factor = volume(app_id)
+        by_factor[factor] = by_factor.get(factor, 0) + value
+    return math.fsum(factor * by_factor[factor] for factor in sorted(by_factor))
+
+
 def _scaled(per_app: dict[str, list[int]], volume: Callable[[str], float]) -> list[float]:
     """One bucket's (or one total's) per-application integers as four
-    volume-scaled floats: each application's exact integer times its volume
-    scale, once, summed with `math.fsum` in sorted-application order."""
-    return [math.fsum(volume(app_id) * per_app[app_id][i] for app_id in sorted(per_app))
+    volume-scaled floats (`_scaled_sum`, once per figure)."""
+    return [_scaled_sum({app_id: cell[i] for app_id, cell in per_app.items()}, volume)
             for i in range(4)]
 
 
@@ -507,8 +521,7 @@ def _arm_block(load: EndpointLoad | None, limits: dict[str, float],
                             "max": load.service_max_ms if load.rows else None},
         "replay_share": load.replay_ms / load.service_ms if load.service_ms else None,
         "replay_source": min(load.replay_sources) if load.replay_sources else None,
-        "service_ms_after_window": math.fsum(
-            volume(app_id) * load.after_window[app_id] for app_id in sorted(load.after_window)),
+        "service_ms_after_window": _scaled_sum(load.after_window, volume),
         "estimated_token_rows": load.estimated_token_rows,
         "demand": demand,
         "limits": stated,
