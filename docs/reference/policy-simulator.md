@@ -16,7 +16,8 @@ removing an endpoint, editing prices).
 
 - Design: `docs/superpowers/specs/2026-09-24-policy-simulator-design.md`. Shadow prices (§8)
   are `docs/superpowers/specs/2026-09-26-shadow-prices-design.md` (P3c-1). Uncertainty ranges
-  (§10) are `docs/superpowers/specs/2026-10-06-p3c3-uncertainty-design.md` (P3c-3).
+  (§10) are `docs/superpowers/specs/2026-10-06-p3c3-uncertainty-design.md` (P3c-3). Capacity
+  (§11) is `docs/superpowers/specs/2026-10-07-p3c4-capacity-design.md` (P3c-4).
 - Research notes (the model, the two-arm design, the invariants):
   `docs/research/feasible-route-bench.md` §15; shadow prices §17.
 - Prerequisite datasets: `docs/reference/routing-outcomes.md` (P2b-2, the export this reads)
@@ -26,7 +27,7 @@ Code: `app/apps/snapshot.py` (snapshot builder), `app/api/admin_routes.py`
 (`GET /admin/config-snapshot`), `app/eval/scenario.py` (snapshot/proposal → scenario),
 `app/eval/proposal.py` (proposal load/validate/apply), `app/eval/simulate.py` (replay +
 report), `app/eval/shadow.py` (shadow prices, P3c-1), `app/eval/uncertainty.py` (ranges,
-P3c-3), `scripts/policy_simulate.py` (CLI).
+P3c-3), `app/eval/capacity.py` (capacity, P3c-4), `scripts/policy_simulate.py` (CLI).
 
 ## 1. Three inputs
 
@@ -150,8 +151,9 @@ predict zero change in every row (spec §9.1).
 anything is applied — loading is all-or-nothing.
 
 **Top level (`_TOP_KEYS`):** `schema`, `title`, `apps`, `providers`, `endpoints`, `prices`,
-`workload`. Every container must be the documented type — `apps`, `providers`, `prices`,
-`endpoints`, `endpoints.update`, `workload` and `workload.apps` objects; `endpoints.add` a
+`workload`, `capacity`. Every container must be the documented type — `apps`, `providers`,
+`prices`, `endpoints`, `endpoints.update`, `workload`, `workload.apps`, `capacity` and each
+`capacity.<slug>` objects; `endpoints.add` a
 list of objects; `remove`/`disable`/`enable` lists of slug strings — or loading fails naming
 the path.
 
@@ -198,7 +200,8 @@ to the `proposed` arm only; the `current` arm always replays rows as recorded.
 |---|---|---|
 | `token_scale` | Finite, `0 < x ≤ 10`. Default `1.0`. | Before routing and pricing, the same rule scales TWO counts independently (`app/eval/simulate.py`: `scaled_request` for the routing count, `_scale_tokens` for the pricing count): `x' = max(1, round(x × scale))`, a row that recorded a `0` count stays `0`. The **routing** count — what `Router.select` is given, the per-request budget check and the cost term of the score, and what a saturated complexity is re-estimated from — and the **pricing/context-window** count — what the routed call is priced at and the context-window check sizes against a candidate's declared window — scale separately. On a row recorded before `routing_tokens` existed, the routing count equals `prompt_tokens`, so the two scale identically, as before B60. `completion_tokens` is unchanged. A recorded `complexity` below 1 becomes `min(1, complexity × scale)`, which is exact. A saturated complexity (1.0) hides the real token count, so it becomes `min(1, max(scale, routing_tokens' / 2000))`; when the scale is below 1 that is an estimate, and the row is counted in `assumptions.saturated_complexity_estimated`. |
 | `cached_share` | Finite, `0 ≤ x ≤ 1`. Default `0`. | That fraction of the (scaled) prompt tokens is priced at the endpoint's cached-input price. An endpoint with no declared cached price bills them at the input price. The router still estimates with zero cached tokens, so this moves cost, never a route. |
-| `apps.<application_id>` | The app must be in the snapshot. Same two keys. | Overrides the global value for that app. |
+| `volume_scale` (P3c-4) | Finite, `0 < x ≤ 1,000,000`. Default `1.0`. | Counts every routed request that many times **in the capacity section only** (§11.3). It moves no route, no cost and no other figure. Exit `2` when no capacity is stated anywhere. |
+| `apps.<application_id>` | The app must be in the snapshot. The same three keys. | Overrides the global value for that app. |
 
 Outcome rows do not record cached tokens, so any non-zero `cached_share` is an assumption
 and the report says so.
@@ -218,11 +221,23 @@ including as the same-tier peer prior for unmeasured endpoints. When
 `routing.signals.enabled` is false the live router ignores measured latency, so the assertion
 then changes the replayed latency only.
 
+**`capacity.<slug>`** (P3c-4) — limits the operator **states** for an endpoint in the proposed
+arm: any of `max_concurrency`, `requests_per_minute`, `tokens_per_minute`,
+`output_tokens_per_minute`, each a finite number `> 0` (a `0` is refused; leave the key out
+for "not stated"). The slug must be an onboarded row this proposal does not remove, a priced
+YAML pool model, or an endpoint this proposal adds. It overrides a `--capacity` file's value
+for that endpoint limit by limit. §11.
+
 **Where assumptions live.** `apply_proposal` writes them into the applied document as a
 top-level `assumptions` block: `{"token_scale": {"*": x, "<app>": y}, "cached_share": {...},
 "latency_ms": {"<slug>": ms}}`, absent when the proposal sets none. A snapshot **file** that
 already contains `assumptions` is a load error, so a hand-edited snapshot cannot put
 assumptions into the `current` arm.
+
+`capacity` and `workload.volume_scale` (P3c-4) are the exception. `apply_proposal` validates
+them and writes them **nowhere**: they are read from the proposal itself after replay, are
+echoed in `edits` and in the capacity block (§11.8), and are not in the `assumptions` block.
+That is what keeps a run with no capacity stated byte-identical.
 
 ## 3. Running the CLI
 
@@ -232,7 +247,8 @@ uv run python scripts/policy_simulate.py \
   --out results/sim \
   [--config-dir config] [--fail-on-new-rejections] \
   [--uncertainty [--bootstrap N] [--interval P] [--seed S] [--min-rows K]
-                 [--quality-posteriors FILE ...]]
+                 [--quality-posteriors FILE ...]] \
+  [--capacity FILE [--capacity-bucket SECONDS] [--capacity-min-buckets K]]
 ```
 
 | Flag | Default | Meaning |
@@ -250,6 +266,8 @@ uv run python scripts/policy_simulate.py \
 | `--min-agreement` | off | `0 ≤ X ≤ 1`. Compared with the **lower** of the two baseline agreements (§5): model agreement and outcome agreement. If either is not computable, or the lower one is below `X`, print both and exit `4` before any file or directory is written. Applies to every mode |
 | `--uncertainty` | off | add a range to every headline figure (P3c-3, §10): a percentile interval from a bootstrap over the simulated rows. Sampling variability only. Applies to every mode |
 | `--bootstrap`, `--interval`, `--seed`, `--min-rows`, `--quality-posteriors` | `1000`, `0.90`, `0`, `30`, none | tuning for `--uncertainty` (§10.3); each is exit `2` without it |
+| `--capacity` | off | a `routeforge.capacity-assumptions/v1` file: the limits the operator states for endpoints as they are, for both arms (P3c-4, §11). Needs `--proposal` or `--scenarios` |
+| `--capacity-bucket`, `--capacity-min-buckets` | `60`, `10` | tuning for the capacity section (§11.4); each is exit `2` when no capacity is stated |
 
 `--proposal` is required unless `--shadow-prices` or `--scenarios` is given — with none of
 the three, the CLI exits `2` (an argparse usage error, since there is nothing to simulate).
@@ -259,7 +277,7 @@ the three, the CLI exits `2` (an argparse usage error, since there is nothing to
 | Code | Meaning |
 |---|---|
 | `0` | `simulation.json` and `report.md` written (`--proposal`, or `--shadow-prices` alone); `comparison.json` and `report.md` written (`--scenarios`, §9.4) |
-| `2` | an input failed to load, validate or apply — a bad export, an invalid proposal (unknown key, bad value, a container of the wrong type), a malformed snapshot (a missing or mistyped nested key, named by its dotted path), a snapshot that loads structurally but fails **deep** validation during `simulate()`/`shadow_prices()` (for example a provider the running deployment's own `config/` never declared), a `--config-dir` that cannot load (missing key, bad YAML, a failed config lint), neither `--proposal` nor `--shadow-prices` given, `--max-relaxations < 1`, or a shadow-prices eligible-superset invariant breach (`ShadowInvariantError`, printed as `error: internal invariant: ...` — spec §3; a relaxation narrowed some row's eligible set, which should never happen since every relaxation only widens eligibility, so it means a bug, not a reportable finding). A relaxation that newly **rejects** a baseline-routed row is *not* a breach — it is reported as `newly_rejected` (§8.4) and exits `0`. `--scenarios` combined with `--proposal` or `--shadow-prices` (an argparse usage error), neither `--proposal` nor `--shadow-prices` nor `--scenarios` given (also an argparse usage error), an invalid scenarios file (named `scenarios[<i>](<name>).proposal.<path>`), a `--since` that is not a timestamp, a `--min-agreement` outside `[0, 1]`, and a `--scenarios` comparison invariant breach (`ComparisonInvariantError`, printed as `error: internal invariant: ...` — two scenarios disagreed about the rows, excluded counts or baseline they share by construction, which means a bug, never a reportable result) are also exit `2`. So are an `--uncertainty` tuning flag given without `--uncertainty`, a tuning value out of range, and a `--quality-posteriors` file that does not load or does not match its own `set_id` (§10.3). Nothing is written; the offending location is on stderr — never a traceback. |
+| `2` | an input failed to load, validate or apply — a bad export, an invalid proposal (unknown key, bad value, a container of the wrong type), a malformed snapshot (a missing or mistyped nested key, named by its dotted path), a snapshot that loads structurally but fails **deep** validation during `simulate()`/`shadow_prices()` (for example a provider the running deployment's own `config/` never declared), a `--config-dir` that cannot load (missing key, bad YAML, a failed config lint), neither `--proposal` nor `--shadow-prices` given, `--max-relaxations < 1`, or a shadow-prices eligible-superset invariant breach (`ShadowInvariantError`, printed as `error: internal invariant: ...` — spec §3; a relaxation narrowed some row's eligible set, which should never happen since every relaxation only widens eligibility, so it means a bug, not a reportable finding). A relaxation that newly **rejects** a baseline-routed row is *not* a breach — it is reported as `newly_rejected` (§8.4) and exits `0`. `--scenarios` combined with `--proposal` or `--shadow-prices` (an argparse usage error), neither `--proposal` nor `--shadow-prices` nor `--scenarios` given (also an argparse usage error), an invalid scenarios file (named `scenarios[<i>](<name>).proposal.<path>`), a `--since` that is not a timestamp, a `--min-agreement` outside `[0, 1]`, and a `--scenarios` comparison invariant breach (`ComparisonInvariantError`, printed as `error: internal invariant: ...` — two scenarios disagreed about the rows, excluded counts or baseline they share by construction, which means a bug, never a reportable result) are also exit `2`. So are an `--uncertainty` tuning flag given without `--uncertainty`, a tuning value out of range, and a `--quality-posteriors` file that does not load or does not match its own `set_id` (§10.3). So are a `--capacity` file that does not load or validate, a capacity flag out of range, a capacity tuning flag or a `workload.volume_scale` with no capacity stated anywhere, `--capacity` with `--shadow-prices` and no `--proposal`, and an asserted endpoint latency above 24 hours when a capacity is stated (§11.4) — each printed as `error: capacity: …`. Nothing is written; the offending location is on stderr — never a traceback. |
 | `3` | the proposal (or any scenario) introduces new rejections and `--fail-on-new-rejections` was passed |
 | `4` | the lower of model agreement and outcome agreement (§5) is below `--min-agreement`, or there is no comparable row. Nothing is written. The message names both rates and both outcome-disagreement counts |
 
@@ -281,7 +299,7 @@ the export window).
 |---|---|
 | `schema` | `"routeforge.simulation/v1"` |
 | `simulation_id` | first 16 hex characters of the sha256 over the canonical `inputs` block |
-| `inputs` | `export_sha256`, `snapshot_sha256`, `proposal_sha256`, `proposal_title`, `routing_policy_version`, `registry_version`, `snapshot_generated_at`, `serving_policy` (the four posture values every app was compiled under — the snapshot's), `window` (`{start, end}` over the simulated rows' `ts`, or `null`), `since` (the `--since` cut as an ISO string, or `null`). With `--uncertainty` only: `uncertainty` (§10.7); the key is absent otherwise |
+| `inputs` | `export_sha256`, `snapshot_sha256`, `proposal_sha256`, `proposal_title`, `routing_policy_version`, `registry_version`, `snapshot_generated_at`, `serving_policy` (the four posture values every app was compiled under — the snapshot's), `window` (`{start, end}` over the simulated rows' `ts`, or `null`), `since` (the `--since` cut as an ISO string, or `null`). With `--uncertainty` only: `uncertainty` (§10.7); the key is absent otherwise. With a stated capacity only: `capacity` (§11.8); absent otherwise |
 | `edits` | the proposal, minus `schema`/`title`, keys sorted — exactly what was asked for |
 | `rows` | `simulated` (count), `estimated_tokens` (simulated rows with no backend token count, sized and priced from `routing_tokens` — §6) and `excluded` (count per reason, first match wins: `before_since`, `cache_hit`, `unknown_status`, `unknown_app`, `missing_features`, `missing_routing_tokens`). `missing_routing_tokens` counts a well-formed row that records no size: not `ok`, no `routing_tokens`, and `prompt_tokens` zero — a rejected or failed row from before B60. A mistyped `routing_tokens` (anything but an integer ≥ 0 or null) is `missing_features`. `missing_features` counts a row whose `request_id`, `complexity`, `prompt_tokens` (numeric), `completion_tokens` (numeric or null), `detected_entity_types` (list of strings or null; the key must be present), `workload`, `attempts` or `ts` is missing or mistyped, or whose `requested_model` (non-empty string or null) or `max_tokens` (integer > 0 or null) is mistyped — these two may be absent (an older export) — a malformed row is counted, never a crash. A non-object export line is a skipped-line warning. |
 | `baseline` | the fidelity check (§5). Model agreement: `rows_compared`, `agreement`, `warning`, `by_app`, `top_disagreements`, `overflow_contradicted`. Outcome agreement: `outcome_rows_compared`, `outcome_agreement`, `outcome_warning`, `recorded_rejected`, `recorded_rejected_but_routed`, `recorded_routed_but_rejected`, and `outcome_by_app.<id>` (`rows`, `agreement` and the same three counts) |
@@ -293,6 +311,7 @@ the export window).
 | `per_day` | `{cost_usd: {current, proposed, delta}}` divided by the export window in days; `null` when the window is under 1 day |
 | `assumptions` | always present: `token_scale`, `cached_share`, `latency_ms` (each a map, empty when the proposal sets none) and `saturated_complexity_estimated` (rows whose scaled complexity is an estimate) |
 | `uncertainty` | only with `--uncertainty`: a range for every figure of `totals`, `by_app` and `per_day` (§10.7). No other field changes when it is present |
+| `capacity` | only with a stated capacity: per endpoint and arm, replayed demand per time bucket against the stated limits, every peak with its average over the window (§11.8). No other field changes when it is present |
 
 ### 4.2 `report.md`
 
@@ -312,8 +331,9 @@ metrics table), **New rejections** (by app, by code, then **by conflicting core*
 `| core | count |` table, sorted by count descending then core key — or "None." when there
 are none), **Moves** (from → to → count — or "None."), **By app** (one subsection per app,
 same metrics table), **By workload** (same, per workload label), **Latency and quality
-sources**, **Excluded rows** (reason → count). With `--uncertainty`, an **Uncertainty ranges**
-section follows (§10.8); everything before it is unchanged.
+sources**, **Excluded rows** (reason → count). With a stated capacity, a **Capacity** section
+follows (§11.8). With `--uncertainty`, an **Uncertainty ranges** section follows (§10.8);
+everything before them is unchanged.
 
 **Read the two cost rows together.** `cost_usd` sums each arm over the rows *that arm*
 routed, so a row the proposal newly rejects simply disappears from the proposed sum — it
@@ -409,7 +429,8 @@ From spec §2, plus what the build settled during P3a:
   `docs/reference/conflicting-core.md`. Shadow prices (P3c-1, §8 below) now price what each
   individual constraint costs. Alternative scenarios are §9 (P3c-2). Uncertainty ranges are
   §10 (P3c-3): sampling variability only, and none of the limits in this section is inside
-  them. **A capacity model** remains out of scope (P3c-4).
+  them. Endpoint load is §11 (P3c-4): stated limits against replayed demand, with **no
+  queueing, overload or rejection model**.
 - **Two token counts, used for two things (B60, fixed 2026-10-06).** The router is given the
   row's `routing_tokens` — RouteForge's own count, the number the live router was given — so
   the per-request budget check and the cost term of the score see what they saw live. The
@@ -717,8 +738,8 @@ From spec §2, deliberate non-goals for this sub-project:
   recorded rows once. `--uncertainty` adds a range for each binding relaxation's cost and
   counts (§10); it is sampling variability only, not a sensitivity analysis.
 - **No capacity effects.** A relaxation that would route far more traffic onto one endpoint
-  is priced as if that endpoint has unlimited headroom — there is no queueing, saturation
-  or capacity model. That is P3c-4.
+  is priced as if that endpoint has unlimited headroom. The capacity section (§11, P3c-4) is
+  produced for a proposal or a scenario, never for a relaxation.
 - Every §6 non-goal above still applies to shadow prices too: no live dry-run, no
   re-running PII detection, no daily-spend/RPM admission, no circuit-breaker state, no
   confidence-escalation/failover replay.
@@ -787,7 +808,8 @@ places.
 | `rows` | `simulated`, `estimated_tokens` and `excluded` — the same for every scenario |
 | `baseline` | the fidelity block of §5, computed once from the shared `current` arm |
 | `scenarios` | file order. Each: `name`, `edits`, `assumptions`, and `summary` — the §4.1 body (`totals`, `by_app`, `by_workload`, `moves`, `new_rejections`, `affected_apps`, `sources`, `per_day`) |
-| `table` | file order. One row per scenario: `name`, `cost_per_day_delta_usd`, `cost_delta_usd`, `route_changed`, `newly_rejected`, `newly_served`, `latency_p50_delta_ms`, `latency_p95_delta_ms`, `quality_mean_delta`, `onprem_share_current`, `onprem_share_proposed`, `overflow_hops`, `affected_apps` |
+| `table` | file order. One row per scenario: `name`, `cost_per_day_delta_usd`, `cost_delta_usd`, `route_changed`, `newly_rejected`, `newly_served`, `latency_p50_delta_ms`, `latency_p95_delta_ms`, `quality_mean_delta`, `onprem_share_current`, `onprem_share_proposed`, `overflow_hops`, `affected_apps`. With a stated capacity also `peak_utilisation`, `peak_mean_window`, `peak_endpoint`, `peak_limit` (§11.8) |
+| `capacity` | only with a stated capacity: `scenarios`, file order, each scenario's capacity block (§11.8) |
 
 **The table's cost columns are like-for-like.** `cost_delta_usd` is
 `totals.cost_usd_both_routed.delta` — only rows routed in both arms — and
@@ -813,8 +835,9 @@ excluded rows.
 
 ### 9.6 Limits
 
-- No capacity or overload model (P3c-4). Ranges are opt-in (`--uncertainty`, §10) and are
-  sampling variability only.
+- Endpoint load is opt-in (a stated capacity, §11) and has no queueing, overload or
+  rejection model. Ranges are opt-in (`--uncertainty`, §10) and are sampling variability
+  only.
 - `--scenarios` cannot be combined with `--shadow-prices`.
 - `token_scale` on a saturated row and every `cached_share` are assumptions; the report
   labels both.
@@ -1140,4 +1163,312 @@ per pass on this machine; nothing has been timed on a real export (**TO MEASURE*
   streams are not guaranteed identical across versions.
 - Every measurement quoted in this section is synthetic. Coverage of the ranges on recorded
   traffic is **TO MEASURE**.
-- No capacity or overload model (P3c-4).
+- Capacity figures (§11) carry no range; §11.7 says why.
+
+## 11. Capacity: stated limits against replayed demand (P3c-4)
+
+Design: `docs/superpowers/specs/2026-10-07-p3c4-capacity-design.md` (as built: its
+"Amendments" section). Research notes: `docs/research/feasible-route-bench.md` §21. Code:
+`app/eval/capacity.py` (`CapacityPlan`, `load_capacity`, `build_plan`, `service_time`,
+`arm_load`, `capacity_block`, `render_capacity_section`), wired into `app/eval/scenarios.py`
+and `scripts/policy_simulate.py`.
+
+### 11.1 What it answers
+
+§4–§10 say where requests would go and what that costs. They treat every endpoint as having
+unlimited room. This section answers the other half: **would the endpoints the traffic lands
+on be able to carry it?** A change such as "all healthcare traffic on-prem" can be cheaper
+and safer and still offer one local endpoint more than it was stated to serve.
+
+It is a comparison of two things, and only that:
+
+- **capacity the operator states** — RouteForge measures none of it and manages none of it
+  (it deploys, scales and load-balances no inference);
+- **demand the replay predicts** — the rows the simulator already routed, per endpoint, per
+  arm, per time bucket.
+
+It is **off unless a capacity is stated**: a `--capacity` file, or a `capacity` key in the
+proposal or in any scenario. With none, every output file is byte-identical to what it was
+before this feature (`tests/eval/test_uncertainty_golden.py` still pins that).
+
+### 11.2 Stating capacity
+
+**The deployment as it is — `--capacity FILE`**, schema
+`routeforge.capacity-assumptions/v1`:
+
+```json
+{
+  "schema": "routeforge.capacity-assumptions/v1",
+  "title": "Lab endpoints, as load-tested 2026-10",
+  "endpoints": {
+    "local-llama": {"max_concurrency": 8, "requests_per_minute": 600,
+                    "tokens_per_minute": 400000, "output_tokens_per_minute": 90000}
+  },
+  "workload": {"volume_scale": 10, "apps": {"claims": {"volume_scale": 25}}}
+}
+```
+
+- Keys: `schema`, `title` (optional), `endpoints`, `workload`. Anything else is a load error.
+- `endpoints.<slug>` must be an onboarded row of the snapshot (enabled or not) or a priced
+  YAML pool model. A slug the snapshot does not hold is a load error — a typo never reads as
+  "no limit stated".
+- What the file states holds in **both arms**.
+
+**What a change would make it — the proposal's `capacity` key** (§2.1): the same four limits
+per slug, for the **proposed arm only**, overriding the file **limit by limit**. The slug
+must exist in the proposed arm (an onboarded row the proposal does not remove, a priced pool
+model, or an endpoint the proposal adds).
+
+**The four limits.** Each is optional, and a finite number `> 0`:
+
+| Limit | Compared with, per bucket |
+|---|---|
+| `max_concurrency` | offered concurrency: the service time that falls **in** the bucket ÷ the bucket length — the mean number of requests in service during it, had none ever waited |
+| `requests_per_minute` | requests **arriving** in the bucket, per minute |
+| `tokens_per_minute` | prompt + completion tokens of those requests, per minute |
+| `output_tokens_per_minute` | completion tokens of those requests, per minute |
+
+**A limit of `0` is refused**, not read as "no capacity". Leave the key out for "not stated".
+**A limit is printed exactly as it was stated.** `volume_scale` (§11.3) moves demand and never
+a limit.
+
+### 11.3 Volume scale
+
+`volume_scale` (finite, `0 < x ≤ 1,000,000`, default `1`) counts every routed request of an
+application that many times. It has a global value and per-application overrides, and can be
+set in two places:
+
+| Where | Applies to | Reads as |
+|---|---|---|
+| the `--capacity` file's `workload` | both arms | "real traffic is this many times the export" |
+| a proposal's `workload` | the proposed arm | "…and suppose it grew by this much" |
+
+The proposed arm's factor for an application is the product of the two.
+
+- It changes **no route and no cost figure**. Everything outside the capacity section is for
+  the recorded volume.
+- It does **not rescale burstiness**: ten times the volume is the same arrivals, each counted
+  ten times.
+- It does **not make a small export a large one**: 24 rows at `volume_scale: 1000` are 24
+  arrival times. The window-too-short rule (§11.5) counts buckets, not scaled requests.
+- `workload.token_scale` scales the prompt tokens in token demand (then `volume_scale`
+  multiplies); it moves neither the request rate nor any service time.
+- Setting it with no capacity stated anywhere is exit `2`: it would change nothing.
+
+### 11.4 Running it
+
+```bash
+uv run python scripts/policy_simulate.py \
+  --export outcomes.ndjson --snapshot snapshot.json --scenarios scenarios.json \
+  --out results/cmp --capacity capacity.json \
+  [--capacity-bucket 60] [--capacity-min-buckets 10]
+```
+
+The same flags work with `--proposal`. `--capacity` with `--shadow-prices` and no
+`--proposal` is exit `2` (there is no proposed arm to measure).
+
+| Flag | Default | Valid | Meaning |
+|---|---|---|---|
+| `--capacity` | none | a capacity-assumptions file | §11.2 |
+| `--capacity-bucket` | `60` | integer, 1 to 86400 | bucket length in seconds |
+| `--capacity-min-buckets` | `10` | integer ≥ 1 | with fewer buckets in which a request **arrived**: "window too short" (§11.5) |
+
+Exit `2`, nothing written, the reason on stderr as `error: capacity: …`: a file that does
+not load or validate; a flag out of range; a tuning flag, or a `workload.volume_scale`, with
+no capacity stated anywhere; and a latency a proposal asserts for an endpoint (§2.1) of more
+than 24 hours, when a row lands on that endpoint — a service time that long cannot be
+placed, and an operator's claim is never dropped in silence (in a scenarios file the
+location is `scenarios[<i>](<name>).endpoints.<slug>.latency_ms`).
+
+### 11.5 The method
+
+- **Which rows.** For each arm, every simulated row the arm **routed** adds demand to the
+  endpoint replay served it from. A rejected row adds nothing.
+- **When a request arrives.** `ts` on an outcome row is when the row was **written — the end
+  of the request**. Arrival is estimated as `ts` minus the row's recorded `latency_ms`, in
+  whole milliseconds (the timestamp is floored to the millisecond; no float decides which
+  bucket a row is in). A latency that is missing, negative, not finite or **above 24 hours**
+  is unusable: it subtracts nothing, and the row is counted in `rows.unusable_latency`.
+  Buckets are aligned to the Unix epoch (with the default, a bucket is a UTC minute). A row
+  with no `ts` is counted in `rows.without_ts` and is in no bucket.
+- **Where its load goes.** A request is in service from its estimated arrival for its
+  service time. Its **requests and tokens are counted in the bucket it arrived in** (a rate
+  limit counts admissions). Its **service time is spread over every bucket it runs
+  through**, by the milliseconds that fall in each. So one request is never more than one
+  request of concurrency in any bucket, however long it runs and however short the bucket.
+- **Service time, per row, per arm**, the first that applies:
+  1. `asserted` — the proposal asserts a `latency_ms` for the arm's endpoint (§2.1). It is
+     the operator's claim about the endpoint under that scenario, so it replaces the others.
+     Proposed arm only.
+  2. `recorded` — the arm serves the row on the endpoint that **served it alone** (recorded
+     `status: ok`, one attempt, `chosen` = that endpoint): the row's own recorded latency.
+  3. `endpoint_mean` — otherwise the endpoint's **mean** recorded latency over the simulated
+     rows it served alone. The mean, not the median §4.1 reports as the replayed latency:
+     offered load is the arrival rate times the mean service time, and with skewed service
+     times the median understates it badly (research §21.5).
+  4. `replay` — the endpoint served no simulated row alone: replay's one latency for it, the
+     snapshot's signal or else the tier default (`replay_source` says which).
+
+  `service_time_sources` counts the rows under each, per endpoint and arm. The report prints
+  a sentence when a tenth or more of an endpoint's service time is `replay`.
+- **Tokens.** The counts replay **priced** the call at: the backend's billed prompt count
+  (scaled by `token_scale`) and the recorded completion count. A row no backend answered uses
+  RouteForge's own `routing_tokens` and the router's output estimate (§6); the rows routed to
+  an endpoint that are sized that way are counted in its `estimated_token_rows`.
+  `tokens_per_minute` is prompt + completion, as a provider's TPM quota counts a call; a
+  provider that reserves `max_tokens` at admission counts more. Cached tokens are not
+  subtracted.
+- **The window** runs from the bucket of the first estimated arrival to the last bucket a
+  recorded request was still in service in. It comes from the recorded rows alone, so it is
+  the same for both arms, every endpoint and every scenario. Service time that an asserted
+  or mean latency pushes past the window's last bucket is in no bucket; it is reported
+  (`service_ms_after_window`) so that service time adds up.
+- **Window too short.** With fewer than `--capacity-min-buckets` buckets in which a request
+  **arrived** (`window.arrival_buckets`), the block says `window_too_short: true` and carries
+  no endpoint figure; the comparison table cell reads
+  `window too short (k of the 10 buckets needed)`. Buckets a request merely ran through do
+  not count: a long service time cannot make a short export look long.
+
+Per endpoint, per arm, per **stated** limit: `limit`, `peak` (the largest bucket ÷ the
+limit), `peak_bucket`, `mean_window`, `mean_active`, `buckets_over` and `buckets_over_share`
+(buckets above 100%, as a count and as a share of **all the window's buckets**), and
+`requests_over_share` (that endpoint's requests arriving in those buckets). Demand of exactly
+the limit is 100%, which is not above it. Demand itself (`peak`, `mean_window`, `mean_active`
+of each of the four) is shown for every endpoint with routed rows, **stated limit or not**.
+
+Every figure is computed from exact integer counts of requests, tokens and milliseconds per
+endpoint, bucket and application; each application's volume scale is applied once. The
+output does not depend on the order of the rows in the export.
+
+### 11.6 Reading a peak: never without the average
+
+**A peak is a maximum over buckets.** It is the single busiest bucket of the window. For a
+perfectly steady stream it still sits well above the average, and it grows when the window
+gets longer (more buckets to be the maximum of) and when the bucket gets shorter (less
+averaging inside one). A peak says nothing about how often the endpoint is that busy.
+
+So no output prints a peak alone. Beside every peak are:
+
+| Figure | Over | Reads as |
+|---|---|---|
+| `mean_window` — `avg (window)` | every bucket of the window, **empty ones included** | the time-average: how loaded the endpoint is over the whole period |
+| `mean_active` — `avg (active)` | the endpoint's `active_buckets`: those in which it had an arrival or a request in service | how loaded it is while it is doing anything |
+| `buckets_over`, `buckets_over_share` | every bucket of the window | how much of the period is above the stated limit |
+| `requests_over_share` | the endpoint's requests | how much of its traffic arrives in those buckets |
+
+and the report and the comparison table print them together:
+`peak 100.0% / avg 2.1% (local-llama, max_concurrency, 60 s buckets)`.
+
+How to read the pairs:
+
+- **Peak high, window average low** — a sparse or bursty export. Twelve requests a day, each
+  over two minutes long, against `max_concurrency: 1` is `peak 100% / avg 2%`: the endpoint
+  is fully used for a minute at a time and idle nearly always. `buckets_over_share` says
+  whether the limit is ever exceeded (here it is not).
+- **Peak and window average both above 100%** — the endpoint is offered more than its stated
+  limit on average, not just at the worst moment.
+- **Window average low, active average high** — the export has long idle gaps (two test
+  sessions a week apart). `mean_active` describes the sessions; `mean_window` the period.
+  `active_buckets` and `window.buckets` are both printed.
+- **A different `--capacity-bucket` moves the peak and leaves `mean_window` where it is.**
+  If a conclusion changes with the bucket length, it rested on the peak.
+
+### 11.7 What the figures are — and are not
+
+Every capacity section opens with this, verbatim:
+
+> **Stated capacity against replayed demand.** Every limit below is a figure the operator
+> stated; RouteForge has not measured it and does not manage capacity. Demand is the replayed
+> route of each recorded request. A request arrives at its estimated arrival time (the time
+> the record was written minus its recorded latency) and is in service from then for its
+> service time: requests and tokens are counted in the bucket of arrival, service time in
+> every bucket it runs through. Service time is the request's own recorded latency where
+> replay serves it on the endpoint that served it alone; otherwise that endpoint's mean
+> recorded latency; otherwise replay's latency for the endpoint. A latency the proposal
+> asserts replaces all three. A recorded latency includes the time RouteForge spent before
+> and after the backend call, and for a request that failed over it cannot be attributed to
+> one endpoint, so it is not used. A peak is a maximum over buckets: it grows with a longer
+> window and with a shorter bucket even for a steady stream, so every peak is printed with
+> the average over the whole window. Nothing here models queueing, batching, autoscaling, the
+> serving engine's real concurrency behaviour, load that reaches an endpoint without passing
+> through RouteForge, bursts shorter than a bucket, or the load of failover attempts.
+> RouteForge does not know what an endpoint does above a stated limit (queue, shed or slow
+> down), so no rejection and no delay is predicted. An export of a few buckets says little.
+
+`capacity.not_modelled` carries the exclusions as ids: `queueing`, `batching`,
+`autoscaling`, `engine_concurrency`, `external_load`, `sub_bucket_bursts`, `failover_load`,
+`moved_request_latency`, `overload_behaviour`. (`moved_request_latency`: a request replay
+moves to an endpoint it never ran on gets that endpoint's mean service time, not a
+prediction of its own.)
+
+- **No predicted rejection.** `newly_rejected` stays a policy figure. Nothing in the capacity
+  block counts a request as lost: live, a refused request fails over to the next candidate,
+  which replay does not model.
+- **No range.** With `--uncertainty` the capacity figures stay points and the section says
+  why: the bootstrap resamples rows as if their order did not matter, and capacity depends on
+  when requests arrive. The capacity block is identical with and without `--uncertainty`, and
+  the `uncertainty` block is identical with and without capacity.
+- **Never a recommendation.** The section names no remedy — not more capacity, and not a
+  change to any policy or protection. The comparison table stays in file order; a lower peak
+  load does not make a scenario the one to choose.
+
+### 11.8 Output
+
+**`simulation.json`** gains `capacity` and `inputs.capacity` (`file_sha256` — null with no
+file — `bucket_seconds`, `min_buckets`), and nothing else changes:
+
+| Field | Contents |
+|---|---|
+| `method` | `"bucketed_offered_load"` |
+| `bucket_seconds`, `min_buckets` | the plan |
+| `window` | `first_bucket`, `last_bucket` (ISO-8601 UTC bucket starts), `buckets` (every bucket from the first to the last), `arrival_buckets` (those in which a simulated row arrived) |
+| `rows` | `simulated`, `without_ts`, `unusable_latency`, `excluded_not_counted` (excluded rows other than cache hits and rows before `--since`: they may have loaded an endpoint) |
+| `volume_scale` | `base` (the file's) and `proposal`, each `{"*": global, "<app>": value}` |
+| `not_modelled` | the nine ids of §11.7 |
+| `window_too_short` | when true, `endpoints` is empty and both `peak` entries are null |
+| `endpoints.<slug>.<arm>` | `requests` (volume-scaled); `active_buckets`; `service_time_sources` (`recorded`, `endpoint_mean`, `replay`, `asserted` — rows); `service_time_ms` (`mean`, `max` over those rows; null with none); `replay_share` (the share of the rows' service time that is `replay`) and `replay_source`; `service_ms_after_window`; `estimated_token_rows`; `demand.<dimension>.{peak, mean_window, mean_active}`; and `limits.<limit>` — the §11.5 figures, only for limits stated for that arm |
+| `peak.<arm>` | the arm's most loaded stated limit, with its context: `endpoint`, `limit`, `utilisation` (the peak), `bucket`, `mean_window`, `buckets_over_share`, `bucket_seconds`, `buckets` (the window's); null when the arm has no stated limit |
+
+**`comparison.json`** gains `capacity.scenarios` — file order, each `name` plus exactly the
+block above for that scenario's body — `inputs.capacity`, and four keys on every `table`
+row: `peak_utilisation`, `peak_mean_window`, `peak_endpoint`, `peak_limit` (the proposed
+arm's `peak`; null when nothing is stated or the window is too short).
+
+**Reports.** A single proposal gets a `## Capacity` section after the P3a report, before
+"Uncertainty ranges" and "Shadow prices": the caveat, "This section reports load against
+stated limits and proposes no remedy…", the window and what the two averages are over, each
+arm's peak load with its average, then per endpoint its requests, active buckets and service
+time (mean, longest, and how many rows used each source), a utilisation table (one row per
+stated limit per arm: stated, peak, avg (window), avg (active), buckets over 100%, requests
+arriving in those buckets, peak bucket) and a demand table. A comparison gets one more table
+column, last — `peak / avg load (proposed)`, e.g.
+`peak 100.0% / avg 2.1% (local-llama, max_concurrency, 60 s buckets)` — one `## Capacity`
+section with the caveat and the current arm's peak load, and a `### Capacity` subsection per
+scenario.
+
+### 11.9 Limits
+
+- Everything in §11.7. In particular the model has **no queue**: 150% of a stated
+  concurrency says the endpoint is offered more than it was stated to serve, not what
+  happens next.
+- **A recorded latency is not a backend service time.** It includes the time RouteForge
+  spent before and after the backend call (the gate, compression, verification), and under
+  load it includes any time the request waited in the serving engine's own queue — so
+  demand computed from an overloaded period overstates the service time an unloaded endpoint
+  would need.
+- **A moved request has no service time of its own.** It gets the mean of the endpoint it is
+  moved to (or replay's latency for it), whatever its size.
+- **Tokens are not spread.** A long generation's tokens are all counted in the bucket it
+  arrived in, although the endpoint produces them over the whole service time.
+- **Arrival is an estimate** (`ts` minus the recorded latency), and a failure row's latency
+  includes gate time (`docs/reference/routing-outcomes.md` §3.2).
+- **The window's edges.** A request in service when the export begins, which arrived before
+  it, is not in the export's demand; service time past the window's last bucket is counted
+  apart (§11.5).
+- **First-decision replay.** A request that failed over live loaded two endpoints; here it
+  loads one. Every §6 limit applies.
+- **`volume_scale` is a multiplier**, not an arrival process (§11.3).
+- **A stated limit is not a measurement**, and one number per endpoint ignores that capacity
+  depends on the prompt and completion lengths being served.
+- No capacity figure for a shadow-price relaxation (§8.7).
+- Nothing has been run on recorded traffic: research §21.5.

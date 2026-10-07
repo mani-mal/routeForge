@@ -127,6 +127,45 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
+## B66 — FEATURE: capacity follow-ups — a declaration on the onboarded endpoint, a time-block bootstrap, a service-time model for moved requests  🔴 OPEN
+
+**Severity:** low (the capacity section works from a hand-written file; these make it less
+manual and less coarse).
+**Found:** 2026-10-07, the P3c-4 design
+(`docs/superpowers/specs/2026-10-07-p3c4-capacity-design.md` §13, as amended in §15).
+
+1. **Capacity declared on the onboarded endpoint.** Today the limits live in a
+   `--capacity` file the operator writes by hand, keyed by slug. An optional declaration on
+   `POST /admin/infra/models` (the four limits of `app/eval/proposal.py::CAPACITY_LIMITS`),
+   exported in `GET /admin/config-snapshot`, would let the simulator read it. Needs columns
+   on `onboarded_models` (an `ALTER` on deployed databases), a snapshot key and a console
+   field. **It stays a declaration**: RouteForge records it, enforces nothing with it and
+   cannot verify it. It must not become admission control — that is B59, a different
+   feature with a different owner (the gateway).
+2. **A time-block bootstrap.** Capacity figures carry no range because the P3c-3 row
+   bootstrap destroys arrival order. Resampling whole time blocks keeps it. Needs a block
+   length rule, enough blocks to resample (most exports today are too short), and a
+   statement of what a range on a maximum means.
+3. **Service time for requests that move, and backend time for all of them.** A row that
+   stays on its recorded endpoint already uses its own recorded latency (built, spec §15
+   A3). A row that moves gets the new endpoint's mean recorded latency, whatever its size:
+   it needs a model (latency against tokens, per endpoint) and its validation. Separately,
+   a recorded latency is RouteForge's end-to-end time, not the backend's; splitting it needs
+   a backend-time field on the outcome record (a serving change, with its own review).
+4. **Capacity for shadow prices.** A relaxation is still priced as if every endpoint had
+   unlimited room.
+5. **An overflow or queueing assumption — not wanted as things stand.** Counting requests
+   above a limit as rejected, or deriving a delay, needs to know what the endpoint does
+   above the limit and what the gateway's failover then does to the next endpoint; replay
+   follows neither. See the spec §9.2. Revisit only if failover is ever replayed, and then
+   as an operator-stated assumption, labelled as one.
+6. **Tokens spread over the generation.** Token demand is counted at arrival; a long
+   completion is produced over the whole service time. Matters only for a
+   generation-throughput limit with responses longer than a bucket.
+
+See also B59 (per-app TPM / concurrency limits in the gateway — admission, out of scope for
+the simulator) and B63 (the shadow-prices-only output has no `rows` block).
+
 ## B65 — Uncertainty ranges: presentation and test-safety follow-ups from the P3c-3 re-review  🔴 OPEN
 
 **Severity:** low (edge-case presentation; no wrong number).
