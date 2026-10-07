@@ -564,6 +564,17 @@ literature doesn't model".
   replay), next to the cost, latency and rejection figures the simulator already gives. The
   handoff's illustrative row is "required on-premises utilisation 55% → 230%"; **the
   measured values are TO MEASURE** and must not be quoted from the handoff.
+- **First run on recorded rows (DGX lab, 2026-10-07, FB §21.5.4a) — usable as an
+  illustration only.** One app, one endpoint, 96 rows that are four bursts of the same 24
+  test requests, limits invented for the run. At the default 60 s bucket the tool refuses a
+  figure (`window too short (3 of the 10 buckets needed)`); at 5 s buckets the current arm
+  reads `peak 331.7% / avg 0.4%, over 100% in 0.2% of 3880 buckets (qwen3-coder-next,
+  tokens_per_minute, 5 s buckets)`, and a scenario that raises the per-request budget (28
+  requests newly served) reads `peak 1272.5% / avg 2.6%, over 100% in 0.4%`. Two things worth
+  a sentence in the paper: the peak alone would have read as a 3× overload where the average
+  and the share show a burst of test traffic; and capacity demand moves with the POLICY
+  scenario (the rescued requests are the large ones), which is why it is computed from the
+  replayed arm. Artifacts: `docs/research/results/p3c4-dgx-lab-2026-10-07/`.
 - **Experiments that test the model rather than use it:** E10b stated against observed (does
   utilisation by this definition track latency or refusals on a real endpoint?); E10c
   recorded latency against backend time in service — in two steps, because on a served row
