@@ -31,6 +31,15 @@ interval from a bootstrap over the simulated rows, written under one new
 variability only -- see `app/eval/uncertainty.py::UNCERTAINTY_CAVEAT`.
 Without the flag every output is byte-identical to what it was before.
 
+With a stated capacity (P3c-4) -- a `--capacity` file, or a `capacity` key in
+the proposal or in any scenario -- the output also says how loaded each
+endpoint would be: replayed demand per time bucket against the limits the
+operator stated, under one new `capacity` key and a "Capacity" report
+section. Every peak is printed with its average over the whole window.
+Nothing is measured and nothing is managed -- see
+`app/eval/capacity.py::CAPACITY_CAVEAT`. With no capacity stated anywhere
+every output is byte-identical to what it was before.
+
 Exit codes: 0 output written; 2 an input file failed to load, validate or
 apply, or the flags do not combine; 3 the proposal (or any scenario)
 introduces new rejections and `--fail-on-new-rejections` is set (for
@@ -56,7 +65,13 @@ if str(REPO_ROOT) not in sys.path:
 from app.apps.snapshot import SERVING_POLICY_FIELDS  # noqa: E402
 from app.config.lint import ConfigLintError  # noqa: E402
 from app.config.loader import load_settings  # noqa: E402
-from app.eval.outcomes import load_export  # noqa: E402
+from app.eval.capacity import (  # noqa: E402
+    DEFAULT_BUCKET_SECONDS, DEFAULT_MIN_BUCKETS, MAX_BUCKET_SECONDS, CapacityError, CapacityPlan,
+    build_plan,
+    capacity_block, load_capacity, render_capacity_section, sets_volume, states_capacity,
+)
+from app.eval.capacity import plan_inputs as capacity_inputs  # noqa: E402
+from app.eval.outcomes import _round6, load_export  # noqa: E402
 from app.eval.proposal import (  # noqa: E402
     ProposalError, apply_proposal, assumptions_block, load_proposal, normalized_edits,
 )
@@ -129,7 +144,51 @@ def _parser() -> argparse.ArgumentParser:
                    help="a P2b-3 recommendation.json that was applied; repeatable. Its "
                         "Beta posteriors add quality-label uncertainty for the calibrated "
                         "qualities of that set. Needs --uncertainty")
+    p.add_argument("--capacity", default=None, metavar="FILE",
+                   help="routeforge.capacity-assumptions/v1 JSON file (P3c-4): the limits "
+                        "the operator STATES for endpoints as they are today, and optionally "
+                        "a volume scale; both hold in both arms. Adds a capacity section. "
+                        "Needs --proposal or --scenarios")
+    p.add_argument("--capacity-bucket", type=int, default=None, metavar="SECONDS",
+                   help=f"time bucket for demand, 1..{MAX_BUCKET_SECONDS} "
+                        f"(default: {DEFAULT_BUCKET_SECONDS}). Needs a stated capacity")
+    p.add_argument("--capacity-min-buckets", type=int, default=None, metavar="K",
+                   help="with fewer buckets in which a request arrived the capacity section says "
+                        f"\"window too short\" instead of a utilisation (default: "
+                        f"{DEFAULT_MIN_BUCKETS}). Needs a stated capacity")
     return p
+
+
+def _capacity_plan(args: argparse.Namespace, snapshot: dict,
+                   proposals: list[dict]) -> CapacityPlan | None:
+    """The capacity plan (P3c-4), or None when no capacity is stated
+    anywhere -- no `--capacity` file and no `capacity` key in any proposal.
+    Raises `ValueError` (`CapacityError` is one) or `OSError` for a file
+    that does not load, a flag out of range, and for every input that would
+    otherwise silently do nothing: a tuning flag or a `volume_scale` with no
+    capacity stated, or a capacity file with no proposed arm to measure."""
+    tuning = [flag for flag, value in (("--capacity-bucket", args.capacity_bucket),
+                                       ("--capacity-min-buckets", args.capacity_min_buckets))
+              if value is not None]
+    if args.capacity is None and not any(states_capacity(p) for p in proposals):
+        if tuning:
+            raise ValueError(f"{', '.join(tuning)} given with no capacity stated "
+                             "(--capacity, or a proposal's capacity key)")
+        if any(sets_volume(p) for p in proposals):
+            raise ValueError("workload.volume_scale is set but no capacity is stated "
+                             "(--capacity, or a proposal's capacity key); it would change "
+                             "nothing")
+        return None
+    if not proposals:
+        raise ValueError("--capacity needs --proposal or --scenarios: shadow prices alone "
+                         "have no proposed arm to measure")
+    doc, sha256 = load_capacity(args.capacity) if args.capacity is not None else (None, None)
+    return build_plan(
+        doc, sha256, snapshot,
+        bucket_seconds=(DEFAULT_BUCKET_SECONDS if args.capacity_bucket is None
+                        else args.capacity_bucket),
+        min_buckets=(DEFAULT_MIN_BUCKETS if args.capacity_min_buckets is None
+                     else args.capacity_min_buckets))
 
 
 def _uncertainty_plan(args: argparse.Namespace) -> UncertaintyPlan | None:
@@ -183,19 +242,29 @@ def _below_min_agreement(baseline: dict, minimum: float) -> int:
 
 def _compare_scenarios(args: argparse.Namespace, *, records: list[dict], warnings: list[str],
                        snapshot: dict, scenarios_doc: dict, inputs: dict, base,
-                       since, plan: UncertaintyPlan | None) -> int:
+                       since, plan: UncertaintyPlan | None,
+                       capacity: CapacityPlan | None = None) -> int:
     """`--scenarios` mode (P3c-2): replay every scenario against one shared
     `current` arm, then write `comparison.json` and `report.md`."""
     try:
-        if plan is not None and args.min_agreement is not None:
-            # P3c-3: `compare` bootstraps every scenario before it returns the
-            # baseline the gate reads. One extra replay of the snapshot keeps
-            # a run the gate refuses from paying for those bootstraps.
+        if (plan is not None or capacity is not None) and args.min_agreement is not None:
+            # `compare` returns the baseline the gate reads only after it has
+            # bootstrapped every scenario (P3c-3) and built every scenario's
+            # capacity block (P3c-4), which can itself refuse the run (exit
+            # 2). One extra replay of the snapshot keeps a run the gate
+            # refuses from paying for the bootstraps, and makes the gate the
+            # first to refuse, as it is in `--proposal` mode.
             early = asyncio.run(baseline_check(records, snapshot, base=base, since=since))
             if not agreement_ok(early, args.min_agreement):
                 return _below_min_agreement(early, args.min_agreement)
         comparison = asyncio.run(compare(records, snapshot, scenarios_doc, base=base,
-                                         since=since, uncertainty=plan, notify=_note))
+                                         since=since, uncertainty=plan, notify=_note,
+                                         capacity=capacity))
+    except CapacityError as exc:
+        # P3c-4: something a scenario asserts cannot be placed (a latency
+        # above 24 hours). Named, exit 2, nothing written.
+        print(f"error: capacity: {exc}", file=sys.stderr)
+        return 2
     except (SnapshotError, ProposalError, ScenarioError) as exc:
         # All-or-nothing (spec §3): one invalid scenario fails the whole
         # file, named `scenarios[<i>](<name>).proposal.<path>`.
@@ -295,6 +364,21 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
+    # P3c-4: after the snapshot and the proposals, which say whether any
+    # capacity is stated and which endpoints and applications exist.
+    proposals = ([proposal] if proposal is not None
+                 else [entry["proposal"] for entry in scenarios_doc["scenarios"]]
+                 if scenarios_doc is not None else [])
+    try:
+        capacity_plan = _capacity_plan(args, snapshot, proposals)
+    except (ValueError, OSError) as exc:
+        print(f"error: capacity: {exc}", file=sys.stderr)
+        return 2
+    # Only when a capacity is stated: without one `inputs`, and so the
+    # document's id, are exactly what they were before P3c-4.
+    capacity_in = ({} if capacity_plan is None
+                   else {"capacity": capacity_inputs(capacity_plan)})
+
     # The base config is an input too: a directory that fails the boot lint
     # (`ConfigLintError`, not a ValueError), has a missing key or bad YAML is
     # exit 2 naming it, never a traceback.
@@ -327,6 +411,7 @@ def main(argv: list[str] | None = None) -> int:
         return _compare_scenarios(
             args, records=records, warnings=warnings, snapshot=snapshot,
             scenarios_doc=scenarios_doc, base=base, since=since, plan=plan,
+            capacity=capacity_plan,
             inputs={
                 "export_sha256": export_sha256,
                 "snapshot_sha256": snapshot_sha256,
@@ -338,6 +423,7 @@ def main(argv: list[str] | None = None) -> int:
                 "serving_policy": serving_policy,
                 "since": since.isoformat() if since is not None else None,
                 **uncertainty_inputs,
+                **capacity_in,
             })
 
     inputs = {
@@ -351,10 +437,11 @@ def main(argv: list[str] | None = None) -> int:
         "serving_policy": serving_policy,
         "since": since.isoformat() if since is not None else None,
         **uncertainty_inputs,
+        **capacity_in,
     }
 
     try:
-        sim = baseline = None
+        sim = baseline = capacity_out = None
         if args.proposal:
             results, excluded = asyncio.run(simulate(records, snapshot, proposal, base=base,
                                                      since=since))
@@ -370,6 +457,12 @@ def main(argv: list[str] | None = None) -> int:
         # output directory or file exists (P3c-2 spec §6).
         if args.min_agreement is not None and not agreement_ok(baseline, args.min_agreement):
             return _below_min_agreement(baseline, args.min_agreement)
+
+        # P3c-4: from the rows `summarize` just read; nothing is re-simulated.
+        # A plan implies `--proposal` here (`_capacity_plan`).
+        if capacity_plan is not None:
+            capacity_out = _round6(capacity_block(results, capacity_plan, proposal,
+                                                  excluded=excluded))
 
         # P3c-3: after the gate, so a refused run never pays for a bootstrap.
         # `results` are the rows `summarize` just read; nothing is re-simulated.
@@ -398,6 +491,11 @@ def main(argv: list[str] | None = None) -> int:
                 records, baseline_doc, base=base, cap=args.max_relaxations,
                 baseline_label=baseline_label, since=since, uncertainty=plan,
                 notify=_note))
+    except CapacityError as exc:
+        # P3c-4: something the proposal asserts cannot be placed (a latency
+        # above 24 hours). Named, exit 2, nothing written.
+        print(f"error: capacity: {exc}", file=sys.stderr)
+        return 2
     except (SnapshotError, ProposalError) as exc:
         # Spec §8 governs over the narrower "catch ProposalError" reading:
         # exit 2 is "an input file failed to load OR VALIDATE" -- a
@@ -421,6 +519,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.proposal:
         report_text = render_report(sim)
+        if capacity_out is not None:
+            sim["capacity"] = capacity_out
+            report_text += "\n" + render_capacity_section(
+                capacity_out, ranged=uncertainty_block is not None)
         if uncertainty_block is not None:
             sim["uncertainty"] = uncertainty_block
             report_text += "\n" + render_uncertainty_section(uncertainty_block)

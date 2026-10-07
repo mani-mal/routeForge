@@ -1,8 +1,8 @@
 # Priorities 1–3: what is built and what remains
 
-**As of 2026-10-06**, `main` is through PR #88 (P3c-3, uncertainty ranges). The DGX
+**As of 2026-10-07**, `main` is through PR #90 (P3c-4, capacity model). The DGX
 Spark runs `4bfb0b3` (through PR #79). The DGX lab (Run:ai) cluster was rebuilt and
-redeployed by PR #83, and is the deployment target for P3c-2 onward (api/ui `0.28.0`).
+redeployed by PR #83, and is the deployment target for P3c-2 onward (api/ui `0.29.0`).
 
 This is the status of the program set out in `docs/new/RouteForge-Priorities-1-3-LLM-Handoff.md`
 (the "handoff"). Each shipped slice went through the same pipeline: design spec
@@ -62,6 +62,7 @@ Handoff §37 Priority 2 criteria met:
 | **P3c-1** shadow prices | #79, #80 | `policy_simulate.py --shadow-prices` relaxes one constraint at a time, per app, and prices it (cost/day, rejections avoided, newly rejected, quality, latency, on-prem share). Security constraints appear only as "cost of protection", never as a recommendation. | `docs/reference/policy-simulator.md` §8, research §17 |
 | **P3c-2** alternative scenarios | #84 | `policy_simulate.py --scenarios` replays several administrator-written scenarios against one shared baseline and writes one comparison table, in file order, never ranked. Proposals can assume a token scale, a cached-prompt share and a per-endpoint latency. Replay mirrors the gateway's context-window overflow re-selection. `--since` cuts old rows; `--min-agreement` refuses a run whose baseline disagrees with the record. | `docs/reference/policy-simulator.md` §9, research §18 |
 | **P3c-3** uncertainty ranges | #88 | `policy_simulate.py --uncertainty` adds a range to every headline figure of all three modes: a percentile interval from a bootstrap over the replayed rows, resampled within each application (applications below `--min-rows` are pooled for the totals) and paired across arms, scenarios and relaxations. Opt-in; without the flag every output is byte-identical. `--quality-posteriors` adds label uncertainty for calibrated qualities from the P2b-3 recommendation file. Below `--min-rows` a bucket says "insufficient data"; a zero count carries a bound instead of reading as no risk. The range is sampling variability only and every report says so. | `docs/reference/policy-simulator.md` §10, research §20 |
+| **P3c-4** capacity | #90 | `policy_simulate.py --capacity FILE` (or a `capacity` key in a proposal or scenario) adds, per endpoint and arm, the replayed demand per time bucket against limits the **operator states**: for a concurrency, request-rate, token-rate and output-token-rate limit, the peak bucket **always with** the average over the whole window and over the endpoint's active buckets, the share of the window and of requests above 100%, and one more comparison-table column (`peak X% / avg Y%, over 100% in Z% of N buckets`). An endpoint whose only latency is a tier default gets no concurrency figure (a state, not a number), and service time a scenario places after the end of the record is reported as a share. A request's service time is its own recorded latency where it stays on its endpoint, and is spread over the buckets it runs through. `workload.volume_scale` asks the same at another traffic volume. Opt-in; with no capacity stated every output is byte-identical. It predicts no rejection and no delay, carries no range, and names no remedy; a short export says "window too short". The first model built was revised after review before any figure was quoted (research §21.5.2), and its presentation again after the final review (research §21.5.5). | `docs/reference/policy-simulator.md` §11, research §21 |
 | B60 replayable rejections | #86 | Every outcome row records `routing_tokens`, the token count the router was given, so a request rejected for its size replays as rejected and a proposal that raises a budget shows what it rescues. The baseline check reports outcome agreement (routed or rejected against the recorded status) next to model agreement, and `--min-agreement` gates on the lower. Rejected rows from before the fix are excluded and counted. One `ALTER` before deploy. | `docs/reference/policy-simulator.md` §5–§6, `docs/reference/routing-outcomes.md` §1, research §19 |
 
 Handoff §37 Priority 3 criteria met:
@@ -94,10 +95,10 @@ partly met: nothing is ever applied, but there is no approval workflow (see §2.
 
 ## 2. Still to build
 
-### 2.1 Priority 3 (in progress: P3c-4 is next)
+### 2.1 Priority 3 (the three P3c slices after shadow prices are built)
 
-The owner-approved order is scenarios → uncertainty → capacity. Each needs its own
-brainstorm, spec, plan and build. Scenarios (P3c-2) and uncertainty (P3c-3) are built.
+The owner-approved order was scenarios → uncertainty → capacity. Scenarios (P3c-2),
+uncertainty (P3c-3) and capacity (P3c-4) are built.
 
 1. **Follow-ups to P3c-3** (research §20.7), none blocking:
    - a cluster or day-block bootstrap. Rows are resampled as if independent; the calls of one
@@ -109,11 +110,21 @@ brainstorm, spec, plan and build. Scenarios (P3c-2) and uncertainty (P3c-3) are 
    - variation between applications. The ranges take the applications in the export as
      given; a two-stage bootstrap that also resamples applications would cover a claim about
      other tenants, at the cost of the pairing with per-application shadow prices.
-2. **P3c-4 capacity model** (handoff §26, §31). Nothing today says "on-prem demand reaches
-   230% of capacity". This needs a declared per-endpoint capacity (requests/s or tokens/s),
-   either operator-declared or measured from the observation log. The simulator would then
-   aggregate simulated load per endpoint per time bucket, and turn overload into a
-   predicted-rejection figure.
+2. **Follow-ups to P3c-4** (research §21.6, backlog B66), none blocking:
+   - capacity declared on the onboarded endpoint and exported in the snapshot, so the
+     `--capacity` file is generated rather than hand-written. An admin and schema change;
+     still a declaration RouteForge records and cannot verify;
+   - a time-block bootstrap, the only honest way to put a range on a peak;
+   - a service-time model for requests that move. A request that stays on its recorded
+     endpoint uses its own recorded latency; one that moves gets the new endpoint's mean;
+   - a p95-bucket figure beside the peak, a difference-array accumulation, and a
+     backend-time field on the outcome record (B66 items 7–9);
+   - the measurements: the healthcare scenario pair with a stated on-prem capacity, and
+     stated capacity against what an endpoint actually does (`docs/research/arxiv.md`
+     E10a–E10f). Nothing has been run on recorded traffic;
+   - **not** planned: turning overload into a predicted-rejection figure. RouteForge does not
+     know what an endpoint does above a limit, and its gateway would fail a refused request
+     over, which replay does not follow (design spec §9.2).
 3. **Administrator review workflow** (handoff §36, Phase 3, last bullet). Simulator output
    is a report file today. There is no console surface, sign-off record, or link from an
    approved simulation to the admin write that applies it.
@@ -176,9 +187,13 @@ brainstorm, spec, plan and build. Scenarios (P3c-2) and uncertainty (P3c-3) are 
 
 1. Read the handoff §28–§31, then `docs/reference/policy-simulator.md` §1–§8 and research
    §15–§17.
-2. Start P3c-4 (the capacity model) with a design brainstorm, then a spec, plan and subagent
-   build.
+2. The simulator slices are built. The next Priority 3 item is the administrator review
+   workflow (§2.1 item 3), or a fidelity gap from item 4; each starts with a design
+   brainstorm, then a spec, plan and subagent build.
 3. Before quoting any simulator number from the Spark, check both baseline agreements, and
    exclude rows recorded before B55. Rejected rows recorded before B60 are excluded
    automatically (`missing_routing_tokens`). A range from `--uncertainty` is sampling
-   variability only: quote it with the agreements, never instead of them.
+   variability only: quote it with the agreements, never instead of them. A utilisation from
+   the capacity section is against a limit somebody **stated**: quote the limit and its
+   source with it, and never a peak without its average, the share of buckets above the
+   limit, the bucket length and the window.

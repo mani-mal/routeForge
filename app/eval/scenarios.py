@@ -8,6 +8,12 @@ recorded traffic against the same `current` arm (`app/eval/simulate.py`).
 RouteForge never picks, ranks or recommends a scenario: they are reported in
 file order, and nothing is applied (handoff §28).
 
+With a `CapacityPlan` (P3c-4) every scenario also gets a capacity block
+(`app/eval/capacity.py`) under one `capacity` key, and the table one more
+column: the proposed arm's most loaded stated limit, its peak and its
+average over the window. That is a figure, not an ordering; the table stays
+in file order.
+
 With an `UncertaintyPlan` (P3c-3) every scenario also gets ranges
 (`app/eval/uncertainty.py`), under one `uncertainty` key. Every scenario is
 resampled with the same draws, so the ranges of two scenarios are over the
@@ -25,6 +31,8 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from app.config.schema import Settings
+from app.eval.capacity import (PEAK_COLUMN_NOTE, CapacityError, CapacityPlan, capacity_block,
+                               intro_lines, peak_text, scales_volume, scenario_lines)
 from app.eval.outcomes import _fmt, _round6
 from app.eval.proposal import (SCHEMA as PROPOSAL_SCHEMA, ProposalError, _validate_keys,
                                _validate_schema, apply_proposal, assumptions_block,
@@ -192,12 +200,16 @@ class Comparison:
     # P3c-3: `plan_block` plus `scenarios`, one `{"name", ...results_block,
     # "table"}` per scenario in file order. None without a plan.
     uncertainty: dict | None = None
+    # P3c-4: `{"scenarios": [{"name", ...capacity_block}]}` in file order.
+    # None without a plan.
+    capacity: dict | None = None
 
 
 async def compare(records: list[dict], snapshot: dict, scenarios_doc: dict, *,
                   base: Settings, since: datetime | None = None,
                   uncertainty: UncertaintyPlan | None = None,
-                  notify: Callable[[str], None] | None = None) -> Comparison:
+                  notify: Callable[[str], None] | None = None,
+                  capacity: CapacityPlan | None = None) -> Comparison:
     """Replay every scenario against ONE shared `current` arm (spec §7).
 
     Every proposal is validated and applied before anything is replayed
@@ -209,7 +221,11 @@ async def compare(records: list[dict], snapshot: dict, scenarios_doc: dict, *,
     `uncertainty` (P3c-3) adds each scenario's ranges, bootstrapped from the
     rows it was just replayed over -- no row is simulated a second time.
     `notify` is told, once, before the first bootstrap, what all of them
-    will cost (`uncertainty.cost_line`)."""
+    will cost (`uncertainty.cost_line`).
+
+    `capacity` (P3c-4) adds each scenario's capacity block, computed from
+    the same replayed rows against the plan's base limits and the
+    scenario's own `capacity` / `workload.volume_scale`."""
     applied = apply_scenarios(snapshot, scenarios_doc, base=base)
     current = await build_scenario(snapshot, base=base)
     try:
@@ -217,6 +233,7 @@ async def compare(records: list[dict], snapshot: dict, scenarios_doc: dict, *,
         shared: tuple[dict, dict, dict | None] | None = None
         entries: list[dict] = []
         ranges: list[dict] = []
+        loads: list[dict] = []
         for item in applied:
             proposed = await build_scenario(item.doc, base=base)
             try:
@@ -251,13 +268,30 @@ async def compare(records: list[dict], snapshot: dict, scenarios_doc: dict, *,
                 block = results_block(results, uncertainty,
                                       days=window_days(sim["inputs"]["window"]))
                 ranges.append({"name": item.name, **block, "table": table_ranges(block)})
+            if capacity is not None:
+                try:
+                    block = capacity_block(results, capacity, item.proposal, excluded=excluded)
+                except CapacityError as exc:
+                    if not exc.where.startswith("endpoints."):
+                        # Not something the scenario wrote (the snapshot's
+                        # signal, the export, a tier default): no scenario
+                        # is to be named for it.
+                        raise
+                    # Something this scenario asserts cannot be placed (a
+                    # latency above 24 hours): name the scenario, as a bad
+                    # proposal is named.
+                    raise CapacityError(
+                        f"scenarios[{len(loads)}]({item.name}).{exc.where}",
+                        exc.message) from exc
+                loads.append({"name": item.name, **block})
     finally:
         await close_scenario(current)
     rows, baseline, window = shared      # a file always holds at least one scenario
     return Comparison(
         rows=rows, baseline=baseline, window=window, scenarios=entries,
         uncertainty=(None if uncertainty is None
-                     else {**plan_block(uncertainty), "scenarios": ranges}))
+                     else {**plan_block(uncertainty), "scenarios": ranges}),
+        capacity=None if capacity is None else {"scenarios": loads})
 
 
 # --- output (spec §8) ----------------------------------------------------------
@@ -272,9 +306,29 @@ LIKE_FOR_LIKE_NOTE = (
 )
 
 
-def _table_row(entry: dict, window: dict | None) -> dict:
+def _table_row(entry: dict, window: dict | None, capacity: dict | None = None) -> dict:
     """One comparison-table row. Exactly these keys -- there is no rank,
-    score or recommendation field, by design (S8)."""
+    score or recommendation field, by design (S8). With a capacity block
+    (P3c-4) six more: the proposed arm's most loaded stated limit -- its
+    peak utilisation and, always beside it, its mean over the whole window
+    and the share of the window's buckets above the limit -- all None when
+    no limit is stated (or none could be computed) or the window is too
+    short; and the endpoints that maximum was taken without."""
+    row = _plain_table_row(entry, window)
+    if capacity is not None:
+        peak = capacity["peak"]["proposed"] or {}
+        row["peak_utilisation"] = peak.get("utilisation")
+        row["peak_mean_window"] = peak.get("mean_window")
+        row["peak_buckets_over_share"] = peak.get("buckets_over_share")
+        row["peak_endpoint"] = peak.get("endpoint")
+        row["peak_limit"] = peak.get("limit")
+        # What that maximum was taken WITHOUT: the endpoints whose stated
+        # `max_concurrency` has no figure in the proposed arm.
+        row["peak_concurrency_not_computed"] = capacity["concurrency_not_computed"]["proposed"]
+    return row
+
+
+def _plain_table_row(entry: dict, window: dict | None) -> dict:
     summary = entry["summary"]
     totals = summary["totals"]
     like_for_like = totals["cost_usd_both_routed"]
@@ -304,6 +358,8 @@ def comparison_doc(comparison: Comparison, *, inputs: dict) -> dict:
     full_inputs["window"] = comparison.window
     comparison_id = hashlib.sha256(
         json.dumps(full_inputs, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+    blocks = (comparison.capacity["scenarios"] if comparison.capacity is not None
+              else [None] * len(comparison.scenarios))
     doc = {
         "schema": COMPARISON_SCHEMA,
         "comparison_id": comparison_id,
@@ -311,8 +367,13 @@ def comparison_doc(comparison: Comparison, *, inputs: dict) -> dict:
         "rows": comparison.rows,
         "baseline": comparison.baseline,
         "scenarios": comparison.scenarios,
-        "table": [_table_row(entry, comparison.window) for entry in comparison.scenarios],
+        "table": [_table_row(entry, comparison.window, block)
+                  for entry, block in zip(comparison.scenarios, blocks)],
     }
+    if comparison.capacity is not None:
+        # The ONE top-level key a capacity plan adds (the table rows gain
+        # their six keys above); every other key is unchanged.
+        doc["capacity"] = comparison.capacity
     if comparison.uncertainty is not None:
         # The ONE key `--uncertainty` adds; every key above is unchanged.
         doc["uncertainty"] = comparison.uncertainty
@@ -387,10 +448,13 @@ def _agreement_lines(doc: dict) -> list[str]:
     return lines
 
 
-def _comparison_row(row: dict, ranges: dict | None = None) -> str:
+def _comparison_row(row: dict, ranges: dict | None = None,
+                    capacity: dict | None = None) -> str:
     """One table row. `ranges` (P3c-3, `uncertainty.table_ranges`) puts
     `[lo, hi]` after each figure that has one; without it, or when the
-    scenario has too few rows for a range, the cells are the points alone."""
+    scenario has too few rows for a range, the cells are the points alone.
+    `capacity` (P3c-4) is that scenario's capacity block: one more cell, a
+    point with no range."""
     if ranges is None or ranges.get("insufficient_data"):
         ranges = {}
 
@@ -411,6 +475,8 @@ def _comparison_row(row: dict, ranges: dict | None = None) -> str:
         str(row["overflow_hops"]),
         ", ".join(row["affected_apps"]) or "none",
     ]
+    if capacity is not None:
+        cells.append(peak_text(capacity, "proposed"))
     return "| " + " | ".join(cells) + " |"
 
 
@@ -477,15 +543,21 @@ def render_comparison(doc: dict) -> str:
     lines.append("")
     uncertainty = doc.get("uncertainty")
     ranges = {entry["name"]: entry for entry in uncertainty["scenarios"]} if uncertainty else {}
-    lines.append("| " + " | ".join(_TABLE_COLUMNS) + " |")
-    lines.append("|" + "---|" * len(_TABLE_COLUMNS))
-    lines += [_comparison_row(row, ranges[row["name"]]["table"] if ranges else None)
+    capacity = doc.get("capacity")
+    loads = {entry["name"]: entry for entry in capacity["scenarios"]} if capacity else {}
+    columns = _TABLE_COLUMNS + (("peak / avg load (proposed)",) if capacity else ())
+    lines.append("| " + " | ".join(columns) + " |")
+    lines.append("|" + "---|" * len(columns))
+    lines += [_comparison_row(row, ranges[row["name"]]["table"] if ranges else None,
+                              loads.get(row["name"]))
               for row in doc["table"]]
     lines.append("")
     lines.append(NO_RANKING_NOTE)
     lines.append("")
     lines.append(LIKE_FOR_LIKE_NOTE)
     lines.append("")
+    if capacity:
+        lines += [PEAK_COLUMN_NOTE, ""]
     if uncertainty:
         tables = [entry["table"] for entry in uncertainty["scenarios"]
                   if not entry["table"].get("insufficient_data")]
@@ -499,6 +571,17 @@ def render_comparison(doc: dict) -> str:
             if _count_outside(shown):
                 lines += [OUTSIDE_FOOTNOTE, ""]
         lines += _uncertainty_lines(uncertainty)
+
+    if capacity:
+        # Every scenario replays the same rows against the same base plan,
+        # so the window and the current arm's peak are the first one's.
+        shared = capacity["scenarios"][0]
+        lines += ["## Capacity", "",
+                  *intro_lines(shared, ranged=bool(uncertainty),
+                               volume=any(scales_volume(entry)
+                                          for entry in capacity["scenarios"])),
+                  f"Current arm peak load (the same for every scenario): "
+                  f"{peak_text(shared, 'current')}.", ""]
 
     assuming = [(entry["name"], _assumption_items(entry["assumptions"]))
                 for entry in doc["scenarios"]]
@@ -548,6 +631,8 @@ def render_comparison(doc: dict) -> str:
         lines.append("")
         lines.append("Affected apps: " + (", ".join(summary["affected_apps"]) or "none"))
         lines.append("")
+        if capacity:
+            lines += ["### Capacity", "", *scenario_lines(loads[entry["name"]], depth=4)]
 
     lines.append("## Excluded rows")
     lines.append("")

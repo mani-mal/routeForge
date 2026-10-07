@@ -440,7 +440,159 @@ literature doesn't model".
   - *Cost has a per-application term* and is otherwise linear in replicates × rows.
   - Percentile interval, not BCa; `--min-rows 30` is a convention; reproducible per Python
     minor version.
-### 4.3 P3c-4 capacity model — *spec pending* (HO §25 "230% of capacity" example)
+### 4.3 P3c-4 capacity model (spec `docs/superpowers/specs/2026-10-07-p3c4-capacity-design.md`; HO §25 "230% of capacity" example)
+
+- **Claim:** a traffic-weighted counterfactual of a routing policy is incomplete without the
+  load it places on each endpoint, and that load can be reported from the same content-free
+  records, with no new measurement, **as a comparison of operator-stated capacity with
+  replayed demand — and as nothing more than that.** The restraint is part of the claim: a
+  router that neither hosts nor measures the serving capacity cannot honestly predict
+  overload behaviour, and the report says so instead of deriving a rejection rate.
+- **Method (FB §21.1):** every row an arm routes is in service on the endpoint it is served
+  from, from its estimated arrival (the record's write time minus its recorded latency) for
+  its service time. Requests and tokens are counted in the epoch-aligned bucket of arrival
+  (default 60 s); service time is spread over the buckets the request runs through, so
+  offered concurrency in a bucket is the time-average number in flight, and one request is
+  never more than one. (For recorded requests that is the number in flight at the router
+  **as recorded, waiting included** — a recorded latency contains any time in the endpoint's
+  queue — not "had none waited"; say it that way.) Service time is the row's own recorded
+  latency when the arm serves it on the endpoint that served it alone; otherwise that
+  endpoint's mean recorded latency; otherwise replay's latency for the endpoint; a latency
+  the scenario asserts overrides these. **Where the only latency for an endpoint is a tier
+  default — a constant of the routing score — no concurrency figure is computed at all**:
+  it is a reported state, like a record that is too short. Four demands per bucket — requests/min, prompt+completion
+  tokens/min, completion tokens/min, offered concurrency — each divided by a limit the
+  operator states. Reported per endpoint per arm: the peak bucket **always with** the mean
+  over the whole window (the time-average), the share of the window's buckets above 100%,
+  and the mean over the endpoint's active buckets, the share of requests above 100%, the
+  peak's time, and the share of the arm's service time that falls after the window. A volume scale
+  (stated for both arms, and separately for the proposed arm) multiplies demand without
+  changing a route or a stated limit. Arithmetic is exact in integers and independent of
+  record order.
+- **What it models:** where the replayed traffic lands and when; how long each recorded
+  request was in service; the policy change's effect on that through the real eligibility
+  and routing code; linear scaling of volume.
+- **What it does not model (state this in the paper, FB §21.3, §21.6):** queueing, blocking
+  or delay; batching efficiency; autoscaling; the serving engine's real concurrency
+  behaviour; load that does not pass through the router; bursts shorter than a bucket;
+  failover load (replay is first-decision); the service time of a request **moved** to an
+  endpoint it never ran on (it gets that endpoint's mean). A recorded latency is end-to-end
+  at the router, not backend service time. Capacity is stated, never measured.
+- **How any utilisation figure must be quoted in the paper:** as a triple — peak,
+  time-average and the share of buckets above the limit — with the limit, who stated it, the
+  bucket length and the window: "peak X% / average Y% of a stated `max_concurrency` of N,
+  above it in Z% of W one-minute buckets". **Never a bare peak, and never the pair without
+  the share.** A peak is the maximum of the bucket averages: for a steady Poisson stream at
+  a mean of 2.0 in service it was 1.6–1.7× the mean in 60 s buckets and 3.0–3.2× in 10 s
+  buckets (synthetic, FB §21.5.2 F3), and it grows with the window. And the pair cannot say
+  how often: one stationary week read "peak 355% / avg 59%" against a limit of 1 and
+  "peak 178% / avg 30%" against a limit of 2 — the same shape — while the first limit was
+  exceeded in 17.6% of the minutes and the second in 1.2% (synthetic, FB §21.5.5 FR4). If
+  the figure is for a scenario that moves traffic or asserts a latency, quote
+  `service_after_window_share` with it. The headline is a maximum over endpoints and limits
+  too: say which limits were stated.
+- **Findings from building it (usable as a methods subsection; all synthetic, FB §21.5.2).**
+  The first model was the obvious one — one latency per endpoint, a request's service time
+  counted in the bucket it arrives in, a mean over the buckets with traffic, a headline
+  peak — and it was implemented exactly and tested. An independent review, before any
+  figure was quoted, showed its numbers were unsafe; each finding was re-measured before and
+  after the revision on the same synthetic streams:
+  - *F2, attribution.* Counting service time at arrival overstated the peak by 1.39× at a
+    300 s service time and 3.75× at 900 s (60 s buckets), and was off by +6% and −11% at
+    service times of half a bucket and one bucket, where its own warning flag was silent. Twelve two-minute requests spread over a
+    day against a limit of one concurrent request read "peak 230%, mean 230%, every request
+    over the limit"; no more than one was ever in service. Revised: peak 100%, time-average
+    2.1%, none over.
+  - *F4, median service time.* With lognormal service times (σ = 1), request rate × the
+    endpoint's median latency understated mean concurrency by 38% and the peak by 48%.
+    Revised (each request's own recorded time): 0.0% on the mean.
+  - *F3, a peak without context.* The conditional mean read 0.85 on a stream whose
+    time-average was 0.59, with no field naming the denominator. Revised: two labelled
+    means, and no output prints a peak without the time-average.
+  - *F1, determinism.* Summing volume-scaled floats in record order gave 29 distinct outputs
+    for 60 orderings of the same 3,000 records. Revised: exact integer accumulation; one
+    output.
+
+  The general point for the paper: **a load figure that is exactly what its specification
+  says can still be unquotable**, and the checks that caught it were against an independent
+  truth (an event sweep over raw arrival and service times), not against the specification.
+- **A second round, on presentation (all synthetic, FB §21.5.5).** With the engine equal to
+  that independent truth, a whole-branch review still found outputs that would have been
+  misread:
+  - *FR1, a default read as a measurement.* Traffic moved to an endpoint with no recorded
+    request, no latency signal and no asserted latency was placed at the routing score's
+    tier default (200 ms): ten-second requests read "peak 2.0% / avg 1.9%" of a limit the
+    current arm filled ("100.0% / 96.8%"). Now a state — no concurrency figure — and the
+    headline names the endpoint it was computed without.
+  - *FR3, right-truncation.* A record ends; service time a scenario places after its end is
+    in no bucket. With an asserted service time of 600 s on a 30-minute record 16.4% of the
+    proposed arm's service time was outside the window (mean 50.1 against a steady state of
+    60); at 7,200 s, 87.4%, and the figures no longer responded to the asserted value. Kept
+    (the alternative makes the baseline depend on the proposal) and disclosed as a share.
+  - *FR4, how often.* The pair above. The share of buckets over the limit is now part of
+    every printed peak. A modelled "expected peak of a steady stream" was considered as a
+    reference and **not** added: it needs an arrival assumption the router has no ground to
+    make about a tenant's traffic.
+  - *FR5, exact arithmetic is not the same as stable arithmetic.* Under one non-dyadic
+    volume scale shared by three applications, `0.7a + 0.7b + 0.7c ≠ 0.7(a + b + c)` in
+    floating point moved a peak to another, equally loaded, bucket. Equal factors are now
+    summed as integers first.
+
+  The point for the paper: **after the numbers are right, the remaining errors are in what
+  a maximum, a default and a truncated record are allowed to look like.**
+- **Design points usable in the paper:**
+  - *No overload-to-rejection step.* A fluid "excess over the limit" count is a lower bound
+    that reads as an estimate (the loss formula for a limit with no queue is Erlang-B, above
+    zero below 100%), and the gateway under study would fail a refused request over rather
+    than lose it. The exposure is reported instead: time and traffic above the stated limit.
+  - *No interval from the row bootstrap.* §4.2's bootstrap treats rows as exchangeable in
+    time; capacity is a function of their order. The figures are points, and the report
+    states why (FB §21.3).
+  - *A short record is a state, not a number* (`window_too_short`, below ten buckets with an
+    arrival by default).
+  - *The capacity output names no remedy* and never presents a security requirement as the
+    thing to change; scenarios stay in file order (HO §37).
+- **The experiment to run (E10a — the handoff's healthcare example, HO §25, §31):** on a
+  deployment with one on-prem endpoint and one in-region cloud endpoint, generate persona
+  traffic in the handoff's mix (public questions 60%, redacted claim summaries 25%, raw
+  patient data 10%, legal and audit 5%) at a known arrival rate. State the on-prem
+  endpoint's `max_concurrency` from its serving configuration. Compare two scenarios against
+  the current policy: "all healthcare-related requests on-prem" and "on-prem only for
+  requests containing raw PII". Report, per scenario and arm: on-prem peak **and**
+  time-average utilisation, the share of the window and of requests above 100%, the bucket
+  length and the window, and the share of service time by source (recorded, endpoint mean,
+  replay), next to the cost, latency and rejection figures the simulator already gives. The
+  handoff's illustrative row is "required on-premises utilisation 55% → 230%"; **the
+  measured values are TO MEASURE** and must not be quoted from the handoff.
+- **Experiments that test the model rather than use it:** E10b stated against observed (does
+  utilisation by this definition track latency or refusals on a real endpoint?); E10c
+  recorded latency against backend time in service — in two steps, because on a served row
+  the recorded figure is the **sum of the pipeline steps' latencies**, not wall-clock: the
+  sum against wall-clock, then wall-clock against backend time; E10d bucket-length
+  sensitivity of peak and average on recorded traffic; E10e the arrival estimate, which
+  subtracts that same sum from the write time; E10f the error of giving a moved request its
+  new endpoint's mean service time. All **TO MEASURE** (FB §21.5.4).
+- **Evidence so far:** synthetic verification only — two hand-computable arrival patterns
+  reproduced exactly; the before/after of F1–F4 on synthetic Poisson streams; engine
+  mutations each caught by a named test (run before the second round and not re-run); the
+  before/after of FR1–FR5 (FB §21.5.1–§21.5.3, §21.5.5). Nothing has been run on recorded
+  traffic.
+- **Limits (FB §21.6):** no queue; recorded latency is end-to-end, includes endpoint
+  queueing, and on a served row is a sum of step latencies rather than wall-clock; a request
+  recorded as failed, failed-over or rejected gets the endpoint's mean service time (a
+  120 s timeout on one request in ten: mean concurrency 0.968 where holding the slot would
+  give 2.03 — synthetic); a moved request has no service time of its own; the record is
+  right-truncated (FR3); a peak depends on bucket and window, and the headline is also a
+  maximum over endpoints and limits; calendar-minute buckets understate a sliding-window
+  rate limit (20 requests in 10 s across a minute boundary against 10/min read "peak 100%";
+  on steady streams the busiest sliding 60 s held 1.00–1.10× the busiest calendar minute —
+  synthetic); client retries are counted
+  as independent demand; demand refused before a record is written, or excluded from
+  simulation, is censored (counted where it can be; the direction is understatement); a
+  congested recording compounds with a volume scale or moved traffic, with no feedback;
+  estimated arrival; a stated limit is one number although real capacity depends on the
+  lengths served; volume scale multiplies and does not generate traffic; no range.
+
 ### 4.4 Replay fidelity
 
 #### 4.4.1 Replayable rejections (B60; spec `docs/superpowers/specs/2026-10-06-replayable-rejections-design.md`)
@@ -544,7 +696,13 @@ literature doesn't model".
 | E9b | Empirical coverage of the 90% range on split halves of a real export | §4.2, FB §20.6.3 | **TO MEASURE** |
 | E9c | Coverage under dependence (agent-loop traffic) | §4.2, FB §20.6.3 | **TO MEASURE** |
 | E9d | Quality range with and without calibration posteriors | §4.2, FB §20.6.3 | **TO MEASURE** |
-| E10+ | capacity, fidelity, P2 metrics, R2/R3/R4 | §4–§5 | specs pending |
+| E10a | Healthcare scenario pair with stated on-prem capacity: peak and time-average utilisation per arm, with bucket length and window | §4.3, FB §21.5.4 | **TO MEASURE** (synthetic verification of the arithmetic only, FB §21.5.1–§21.5.3) |
+| E10b | Stated capacity against observed endpoint behaviour at 50% / 100% / 150% average | §4.3, FB §21.5.4 | **TO MEASURE** |
+| E10c | Recorded latency (on a served row, the sum of the pipeline steps' latencies — not wall-clock) against wall-clock and against backend time in service, idle and under load | §4.3, FB §21.5.4 | **TO MEASURE** |
+| E10d | Peak and time-average utilisation against bucket length (10 / 60 / 300 / 3600 s) | §4.3, FB §21.5.4 | **TO MEASURE** on recorded traffic (synthetic: FB §21.5.2 F3) |
+| E10e | Share of rows whose bucket changes with the arrival estimate; error of write time − recorded latency (a sum of step latencies) against a logged request start | §4.3, FB §21.5.4 | **TO MEASURE** |
+| E10f | Error of giving a moved request its new endpoint's mean service time, by request size | §4.3, FB §21.5.4 | **TO MEASURE** |
+| E11+ | fidelity, P2 metrics, R2/R3/R4 | §4–§5 | specs pending |
 
 **Data caveat for every live number:** the Spark serves one app (`kit-gtm`, Qwen Code), all
 models priced $0 (FB §17.4). The DGX lab (the test target from 2026-10-06) has one priced
@@ -569,6 +727,36 @@ before writing the evaluation section.
   application understated the **totals** range with many small applications; small
   applications are now pooled, and the remaining `(n − S)/n` effect is disclosed, not
   corrected (FB §20.7).
+- Capacity figures (§4.3) compare **operator-stated** limits with replayed demand. They
+  contain no queueing model and no measured capacity, take service time from the router's
+  end-to-end recorded latency (a mean for a request that moves), estimate arrival from the
+  record's write time, and carry no interval. A peak is a maximum over buckets and depends
+  on the bucket and window lengths; it is quoted only with the time-average and the share
+  of buckets above the limit. Whether utilisation so defined tracks real endpoint behaviour
+  is unmeasured (E10b). Any "N% of capacity" in the paper is a statement about the stated
+  limit, not about the hardware. Specific threats, each a known direction of error (FB
+  §21.6; the figures there are synthetic):
+  - *Right-truncation.* A scenario with longer service times than the recorded ones is
+    understated, by the reported `service_after_window_share`.
+  - *The recorded latency is not wall-clock.* On a served row it is the sum of the pipeline
+    steps' latencies; it also contains router overhead and any endpoint queueing. Arrival
+    and service time both inherit this (E10c, E10e).
+  - *Failures are counted at the mean.* A request recorded as failed, failed-over or
+    rejected, which a scenario routes, gets the endpoint's mean service time; a long
+    timeout that held a slot is understated.
+  - *Calendar buckets against sliding limits.* A provider quota over any 60 seconds is
+    understated by the busiest calendar minute.
+  - *A maximum over more than buckets.* The headline is the largest figure over endpoints
+    and stated limits too; stating more limits can only raise it.
+  - *Retries.* Client retries after live failures are replayed as independent demand a
+    healthier scenario would not have had: overstatement.
+  - *Censoring.* Demand refused before a record is written, and rows excluded from
+    simulation, are missing: understatement (the excluded count is printed).
+  - *Congestion compounds.* Latencies recorded under congestion are inflated; a volume
+    scale or moved traffic multiplies them with no feedback.
+  - *An endpoint with no service time has no concurrency figure.* A scenario that moves
+    traffic to a new endpoint must assert its latency to get one; the assertion is then the
+    operator's, and is to be reported as such.
 - Endpoint declarations (region, retention) are operator-declared; RouteForge enforces the
   declaration and cannot verify a provider's contractual claim (CLAUDE.md).
 - Patent/prior-art scan incomplete; arXiv leads unverified.

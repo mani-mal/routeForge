@@ -127,6 +127,77 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
+## B66 — FEATURE: capacity follow-ups — a declaration on the onboarded endpoint, a time-block bootstrap, a service-time model for moved requests, a p95-bucket figure, a faster accumulation, a backend-time field  🔴 OPEN
+
+**Severity:** low (the capacity section works from a hand-written file; these make it less
+manual and less coarse).
+**Found:** 2026-10-07, the P3c-4 design
+(`docs/superpowers/specs/2026-10-07-p3c4-capacity-design.md` §13, as amended in §15).
+
+1. **Capacity declared on the onboarded endpoint.** Today the limits live in a
+   `--capacity` file the operator writes by hand, keyed by slug. An optional declaration on
+   `POST /admin/infra/models` (the four limits of `app/eval/proposal.py::CAPACITY_LIMITS`),
+   exported in `GET /admin/config-snapshot`, would let the simulator read it. Needs columns
+   on `onboarded_models` (an `ALTER` on deployed databases), a snapshot key and a console
+   field. **It stays a declaration**: RouteForge records it, enforces nothing with it and
+   cannot verify it. It must not become admission control — that is B59, a different
+   feature with a different owner (the gateway).
+2. **A time-block bootstrap.** Capacity figures carry no range because the P3c-3 row
+   bootstrap destroys arrival order. Resampling whole time blocks keeps it. Needs a block
+   length rule, enough blocks to resample (most exports today are too short), and a
+   statement of what a range on a maximum means.
+3. **Service time for requests that move, and backend time for all of them.** A row that
+   stays on its recorded endpoint already uses its own recorded latency (built, spec §15
+   A3). A row that moves gets the new endpoint's mean recorded latency, whatever its size:
+   it needs a model (latency against tokens, per endpoint) and its validation. Separately,
+   a recorded latency is RouteForge's end-to-end time, not the backend's; splitting it needs
+   a backend-time field on the outcome record (a serving change, with its own review).
+4. **Capacity for shadow prices.** A relaxation is still priced as if every endpoint had
+   unlimited room.
+5. **An overflow or queueing assumption — not wanted as things stand.** Counting requests
+   above a limit as rejected, or deriving a delay, needs to know what the endpoint does
+   above the limit and what the gateway's failover then does to the next endpoint; replay
+   follows neither. See the spec §9.2. Revisit only if failover is ever replayed, and then
+   as an operator-stated assumption, labelled as one.
+6. **Tokens spread over the generation.** Token demand is counted at arrival; a long
+   completion is produced over the whole service time. Matters only for a
+   generation-throughput limit with responses longer than a bucket.
+7. **A p95-bucket figure beside the peak** (final review, 2026-10-07). The peak is a maximum
+   over buckets and grows with the length of the export; a high quantile of the bucket
+   averages needs no arrival model and is stable in the window. On a steady synthetic
+   stream (Poisson 0.5/s, 4 s service, 60 s buckets) the 95th percentile of the bucket
+   averages was 1.29–1.33× the mean over 1 hour, 24 hours and 7 days, where the maximum was
+   1.59–1.68× (research §21.5.5; synthetic, computed from the raw arrivals outside the
+   engine). Needs: the per-bucket series kept long enough to take a quantile, a rule for
+   which quantile, and the same "never alone" presentation rule the peak has. It would sit
+   beside the peak, not replace it. Considered and **not** wanted: a modelled "expected peak
+   of a steady stream" — it needs an arrival assumption RouteForge does not have.
+8. **A difference-array accumulation.** Service time is spread by stepping through every
+   bucket a request runs through, so one row costs O(service time ÷ bucket length): a day
+   of service time in 1 s buckets is 86,400 steps for one request. Adding `+1` at the start
+   bucket and `−1` after the end bucket (with the two partial buckets handled exactly, in
+   integer milliseconds) and taking a running sum is O(1) per row. It must stay exact and
+   keep conservation (C3) and row-order independence (C2).
+9. **A backend-time field on the outcome record.** `latency_ms` on an `ok` row is the sum of
+   the trace records' latencies (`docs/reference/routing-outcomes.md` §3.2): RouteForge's
+   own steps plus the backend call, with any endpoint queueing inside it, and not wall-clock
+   time. The capacity model uses it both as the service time and to estimate arrival. A
+   separate field for the backend call's own duration — and a request-start timestamp —
+   would remove both approximations. A serving change (a column, an `ALTER`, the export),
+   with its own review; item 3 above mentions the same field for moved requests.
+
+10. **Presentation edge cases from the fix-wave re-review (2026-10-07).** `_num` prints a
+    non-zero value below 5e-13 as `0.` and `_seconds` prints a remainder under 50 ms as `0 s`;
+    for an endpoint whose concurrency is withheld, `active_buckets` still counts buckets
+    touched only by the tier-default service time; the hint `state
+    endpoints.<slug>.latency_ms` is not the literal proposal path
+    (`endpoints.update.<slug>.latency_ms`); the `peak_text` docstring example says 10082
+    buckets (measured 10081). And: the mutation table in research §21.5.3 predates the fix
+    wave — re-run it before it is quoted.
+
+See also B59 (per-app TPM / concurrency limits in the gateway — admission, out of scope for
+the simulator) and B63 (the shadow-prices-only output has no `rows` block).
+
 ## B65 — Uncertainty ranges: presentation and test-safety follow-ups from the P3c-3 re-review  🔴 OPEN
 
 **Severity:** low (edge-case presentation; no wrong number).
