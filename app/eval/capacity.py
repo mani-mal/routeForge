@@ -17,19 +17,32 @@ routed: per arm, per endpoint, per time bucket.
     out tokens/min = completion tokens of those requests, per minute
     concurrency    = milliseconds of service time that fall IN the bucket,
                      over the bucket's length: the mean number of requests
-                     in service during it, had none ever waited
+                     in flight during it
 
 A request is in service from its estimated arrival for its service time
 (`service_time`: its own recorded latency where replay serves it on the
 endpoint that served it), and that time is spread over every bucket it runs
 through. So one request is never more than one request of concurrency.
 
+**What "in flight" means depends on the service time.** A RECORDED latency
+is what RouteForge recorded for the whole request: it includes RouteForge's
+own time around the backend call and any time the request waited in the
+endpoint's queue. Concurrency built from recorded rows is therefore the
+number in flight at RouteForge AS RECORDED, waiting included -- not the
+number an idle endpoint would have had in service. Only an asserted
+latency is a service time free of waiting, and only if the operator's
+figure is. A tier default is neither: it is a routing constant, and no
+concurrency figure is computed from it (`TIER_DEFAULT_SERVICE_TIME`).
+
 Utilisation is demand divided by the stated limit. A peak is a maximum over
 buckets and is never reported alone: beside it are the mean over the whole
-window (`mean_window`, the time-average) and the mean over the endpoint's
-active buckets (`mean_active`). There is no queueing model, no predicted
-rejection and no predicted delay: RouteForge does not know what an endpoint
-does above a stated limit (`CAPACITY_CAVEAT`).
+window (`mean_window`, the time-average), the share of the window's buckets
+above the limit (`buckets_over_share`) and the mean over the endpoint's
+active buckets (`mean_active`). The window ends where the last recorded
+request ended; service time an arm places after it is in no bucket and is
+reported as a share (`service_after_window_share`). There is no queueing
+model, no predicted rejection and no predicted delay: RouteForge does not
+know what an endpoint does above a stated limit (`CAPACITY_CAVEAT`).
 
 Everything that decides a figure is exact integer arithmetic on
 milliseconds, requests and tokens; a volume scale multiplies the exact
@@ -712,16 +725,23 @@ CAPACITY_CAVEAT = (
     "service time: requests and tokens are counted in the bucket of arrival, service time in\n"
     "every bucket it runs through. Service time is the request's own recorded latency where\n"
     "replay serves it on the endpoint that served it alone; otherwise that endpoint's mean\n"
-    "recorded latency; otherwise replay's latency for the endpoint. A latency the proposal\n"
-    "asserts replaces all three. A recorded latency includes the time RouteForge spent before\n"
-    "and after the backend call, and for a request that failed over it cannot be attributed to\n"
-    "one endpoint, so it is not used. A peak is a maximum over buckets: it grows with a longer\n"
-    "window and with a shorter bucket even for a steady stream, so every peak is printed with\n"
-    "the average over the whole window. Nothing here models queueing, batching, autoscaling, the\n"
-    "serving engine's real concurrency behaviour, load that reaches an endpoint without passing\n"
-    "through RouteForge, bursts shorter than a bucket, or the load of failover attempts.\n"
-    "RouteForge does not know what an endpoint does above a stated limit (queue, shed or slow\n"
-    "down), so no rejection and no delay is predicted. An export of a few buckets says little."
+    "recorded latency; otherwise replay's latency for the endpoint, unless that is only a tier\n"
+    "default, which is not a service time: no concurrency figure is then computed. A latency the\n"
+    "proposal asserts replaces all three. A recorded latency is what RouteForge recorded for the\n"
+    "whole request, not the backend's own time: it includes the time RouteForge spent before and\n"
+    "after the backend call and any time the request waited in the endpoint's own queue, and for\n"
+    "a request that failed over it cannot be attributed to one endpoint, so it is not used. So\n"
+    "concurrency from recorded requests is the number in flight as recorded, waiting included,\n"
+    "not the number an idle endpoint would have had in service. The window ends when the last\n"
+    "recorded request ended; service time that runs past it is in no bucket and is reported as a\n"
+    "share. A peak is a maximum over buckets: it grows with a longer window and with a shorter\n"
+    "bucket even for a steady stream, so every peak is printed with the average over the whole\n"
+    "window and the share of buckets above the limit. Nothing here models queueing, batching,\n"
+    "autoscaling, the serving engine's real concurrency behaviour, load that reaches an endpoint\n"
+    "without passing through RouteForge, bursts shorter than a bucket, or the load of failover\n"
+    "attempts. RouteForge does not know what an endpoint does above a stated limit (queue, shed\n"
+    "or slow down), so no rejection and no delay is predicted. An export of a few buckets says\n"
+    "little."
 )
 
 #: Printed under the caveat, verbatim (spec §9.4, invariant C10).

@@ -11,6 +11,7 @@ from app.eval.capacity import (AVERAGES_NOTE, CAPACITY_CAVEAT, NO_RANGE_NOTE, NO
                                too_short_text)
 from app.eval.outcomes import _round6
 from tests.eval.sim_fixtures import make_row
+from tests.eval.test_uncertainty_golden import ROOT
 from tests.eval.test_capacity import (CAPACITY_BANNED, LIMITS, QUIET_THEN_BUSY, T0, _poisson,
                                       arm_on, block_for, mixed_traffic, one_endpoint, replay,
                                       synthetic, three_endpoints, traffic)
@@ -32,29 +33,45 @@ def test_c12_the_caveat_is_the_spec_text():                                     
         "service time: requests and tokens are counted in the bucket of arrival, service time in\n"
         "every bucket it runs through. Service time is the request's own recorded latency where\n"
         "replay serves it on the endpoint that served it alone; otherwise that endpoint's mean\n"
-        "recorded latency; otherwise replay's latency for the endpoint. A latency the proposal\n"
-        "asserts replaces all three. A recorded latency includes the time RouteForge spent before\n"
-        "and after the backend call, and for a request that failed over it cannot be attributed to\n"
-        "one endpoint, so it is not used. A peak is a maximum over buckets: it grows with a longer\n"
-        "window and with a shorter bucket even for a steady stream, so every peak is printed with\n"
-        "the average over the whole window. Nothing here models queueing, batching, autoscaling, the\n"
-        "serving engine's real concurrency behaviour, load that reaches an endpoint without passing\n"
-        "through RouteForge, bursts shorter than a bucket, or the load of failover attempts.\n"
-        "RouteForge does not know what an endpoint does above a stated limit (queue, shed or slow\n"
-        "down), so no rejection and no delay is predicted. An export of a few buckets says little."
+        "recorded latency; otherwise replay's latency for the endpoint, unless that is only a tier\n"
+        "default, which is not a service time: no concurrency figure is then computed. A latency the\n"
+        "proposal asserts replaces all three. A recorded latency is what RouteForge recorded for the\n"
+        "whole request, not the backend's own time: it includes the time RouteForge spent before and\n"
+        "after the backend call and any time the request waited in the endpoint's own queue, and for\n"
+        "a request that failed over it cannot be attributed to one endpoint, so it is not used. So\n"
+        "concurrency from recorded requests is the number in flight as recorded, waiting included,\n"
+        "not the number an idle endpoint would have had in service. The window ends when the last\n"
+        "recorded request ended; service time that runs past it is in no bucket and is reported as a\n"
+        "share. A peak is a maximum over buckets: it grows with a longer window and with a shorter\n"
+        "bucket even for a steady stream, so every peak is printed with the average over the whole\n"
+        "window and the share of buckets above the limit. Nothing here models queueing, batching,\n"
+        "autoscaling, the serving engine's real concurrency behaviour, load that reaches an endpoint\n"
+        "without passing through RouteForge, bursts shorter than a bucket, or the load of failover\n"
+        "attempts. RouteForge does not know what an endpoint does above a stated limit (queue, shed\n"
+        "or slow down), so no rejection and no delay is predicted. An export of a few buckets says\n"
+        "little."
     )
-    assert len(caveat_lines()) == 17 and all(line.startswith("> ") for line in caveat_lines())
+    assert len(caveat_lines()) == 24 and all(line.startswith("> ") for line in caveat_lines())
     assert NOT_MODELLED == ("queueing", "batching", "autoscaling", "engine_concurrency",
                             "external_load", "sub_bucket_bursts", "failover_load",
                             "moved_request_latency", "overload_behaviour")
+
+
+def test_c12_the_spec_and_the_reference_quote_the_caveat_word_for_word():               # C12
+    """The constant, spec §9.1 and reference §11.7 change together or not
+    at all."""
+    quoted = "\n".join(caveat_lines())
+    for path in ("docs/superpowers/specs/2026-10-07-p3c4-capacity-design.md",
+                 "docs/reference/policy-simulator.md"):
+        assert quoted in (ROOT / path).read_text(encoding="utf-8"), path
 
 
 def test_c12_the_section_opens_with_the_caveat_and_the_no_remedy_sentence():           # C12
     text = render_capacity_section(_block())
     lines = text.split("\n")
     assert lines[0] == "## Capacity" and lines[1] == ""
-    assert lines[2:19] == caveat_lines() and lines[19] == ""
-    assert lines[20] == NO_REMEDY_NOTE
+    assert lines[2:26] == caveat_lines() and lines[26] == ""
+    assert lines[27] == NO_REMEDY_NOTE
     assert ("Buckets of 60 s. The window is 30 bucket(s), from the first estimated arrival to "
             "the end of the last recorded request (2026-09-20T12:00:00+00:00 to "
             "2026-09-20T12:29:00+00:00); a request arrived in 30 of them; 160 simulated "

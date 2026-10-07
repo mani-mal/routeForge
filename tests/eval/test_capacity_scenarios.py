@@ -183,7 +183,7 @@ def test_the_report_has_one_capacity_section_and_one_per_scenario():
     assert text.count("\n## Capacity\n") == 1 and text.count("\n### Capacity\n") == 3
     top = text[text.index("\n## Capacity\n"):]
     lines = top.split("\n")
-    assert lines[3:20] == caveat_lines() and lines[21] == NO_REMEDY_NOTE
+    assert lines[3:27] == caveat_lines() and lines[28] == NO_REMEDY_NOTE
     assert ("Current arm peak load (the same for every scenario): peak 240.0% / avg 106.7%, "
             "over 100% in 33.3% of 30 buckets (local-cheap, output_tokens_per_minute, "
             "60 s buckets).") in top

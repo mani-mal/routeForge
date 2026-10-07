@@ -311,7 +311,7 @@ the export window).
 | `per_day` | `{cost_usd: {current, proposed, delta}}` divided by the export window in days; `null` when the window is under 1 day |
 | `assumptions` | always present: `token_scale`, `cached_share`, `latency_ms` (each a map, empty when the proposal sets none) and `saturated_complexity_estimated` (rows whose scaled complexity is an estimate) |
 | `uncertainty` | only with `--uncertainty`: a range for every figure of `totals`, `by_app` and `per_day` (§10.7). No other field changes when it is present |
-| `capacity` | only with a stated capacity: per endpoint and arm, replayed demand per time bucket against the stated limits, every peak with its average over the window (§11.8). No other field changes when it is present |
+| `capacity` | only with a stated capacity: per endpoint and arm, replayed demand per time bucket against the stated limits, every peak with its average over the window and the share of buckets above the limit (§11.8). No other field changes when it is present |
 
 ### 4.2 `report.md`
 
@@ -808,7 +808,7 @@ places.
 | `rows` | `simulated`, `estimated_tokens` and `excluded` — the same for every scenario |
 | `baseline` | the fidelity block of §5, computed once from the shared `current` arm |
 | `scenarios` | file order. Each: `name`, `edits`, `assumptions`, and `summary` — the §4.1 body (`totals`, `by_app`, `by_workload`, `moves`, `new_rejections`, `affected_apps`, `sources`, `per_day`) |
-| `table` | file order. One row per scenario: `name`, `cost_per_day_delta_usd`, `cost_delta_usd`, `route_changed`, `newly_rejected`, `newly_served`, `latency_p50_delta_ms`, `latency_p95_delta_ms`, `quality_mean_delta`, `onprem_share_current`, `onprem_share_proposed`, `overflow_hops`, `affected_apps`. With a stated capacity also `peak_utilisation`, `peak_mean_window`, `peak_endpoint`, `peak_limit` (§11.8) |
+| `table` | file order. One row per scenario: `name`, `cost_per_day_delta_usd`, `cost_delta_usd`, `route_changed`, `newly_rejected`, `newly_served`, `latency_p50_delta_ms`, `latency_p95_delta_ms`, `quality_mean_delta`, `onprem_share_current`, `onprem_share_proposed`, `overflow_hops`, `affected_apps`. With a stated capacity also `peak_utilisation`, `peak_mean_window`, `peak_buckets_over_share`, `peak_endpoint`, `peak_limit`, `peak_concurrency_not_computed` (§11.8) |
 | `capacity` | only with a stated capacity: `scenarios`, file order, each scenario's capacity block (§11.8) |
 
 **The table's cost columns are like-for-like.** `cost_delta_usd` is
@@ -1223,7 +1223,7 @@ model, or an endpoint the proposal adds).
 
 | Limit | Compared with, per bucket |
 |---|---|
-| `max_concurrency` | offered concurrency: the service time that falls **in** the bucket ÷ the bucket length — the mean number of requests in service during it, had none ever waited |
+| `max_concurrency` | offered concurrency: the service time that falls **in** the bucket ÷ the bucket length — the mean number of requests in flight during it. From recorded requests that is the number in flight at RouteForge **as recorded, waiting included** (a recorded latency includes any time spent in the endpoint's queue), not the number an idle endpoint would have had in service |
 | `requests_per_minute` | requests **arriving** in the bucket, per minute |
 | `tokens_per_minute` | prompt + completion tokens of those requests, per minute |
 | `output_tokens_per_minute` | completion tokens of those requests, per minute |
@@ -1248,7 +1248,9 @@ The proposed arm's factor for an application is the product of the two.
 - It changes **no route and no cost figure**. Everything outside the capacity section is for
   the recorded volume.
 - It does **not rescale burstiness**: ten times the volume is the same arrivals, each counted
-  ten times.
+  ten times. Whenever any scale is not `1` the capacity section prints, once and verbatim:
+  "A volume scale counts each recorded request that many times, at its recorded time; it
+  does not model how more traffic would arrive."
 - It does **not make a small export a large one**: 24 rows at `volume_scale: 1000` are 24
   arrival times. The window-too-short rule (§11.5) counts buckets, not scaled requests.
 - `workload.token_scale` scales the prompt tokens in token demand (then `volume_scale`
@@ -1278,7 +1280,13 @@ not load or validate; a flag out of range; a tuning flag, or a `workload.volume_
 no capacity stated anywhere; and a latency a proposal asserts for an endpoint (§2.1) of more
 than 24 hours, when a row lands on that endpoint — a service time that long cannot be
 placed, and an operator's claim is never dropped in silence (in a scenarios file the
-location is `scenarios[<i>](<name>).endpoints.<slug>.latency_ms`).
+location is `scenarios[<i>](<name>).endpoints.<slug>.latency_ms`). The same refusal applies
+to a latency replay itself supplies, and then the location is where the value came from:
+`snapshot.signals.<slug>.latency_ms`, `export.latency_ms (rows served by <slug>)` or
+`snapshot.settings.routing.signals.tier_latency_ms`, with no scenario named.
+
+`--min-agreement` refuses first in every mode: a run below the gate exits `4` and writes
+nothing, even when the capacity model would have refused it with exit `2`.
 
 ### 11.5 The method
 
@@ -1306,11 +1314,25 @@ location is `scenarios[<i>](<name>).endpoints.<slug>.latency_ms`).
      rows it served alone. The mean, not the median §4.1 reports as the replayed latency:
      offered load is the arrival rate times the mean service time, and with skewed service
      times the median understates it badly (research §21.5).
-  4. `replay` — the endpoint served no simulated row alone: replay's one latency for it, the
-     snapshot's signal or else the tier default (`replay_source` says which).
+  4. `replay` — the endpoint served no simulated row alone: replay's one latency for it, its
+     observed median, else the snapshot's signal, else the tier default (`replay_source`
+     says which).
 
   `service_time_sources` counts the rows under each, per endpoint and arm. The report prints
   a sentence when a tenth or more of an endpoint's service time is `replay`.
+- **A tier default is not a service time.** The tier default (`config/routing.yaml`: 200 /
+  500 / 1000 ms by tier) is a constant of the routing score. When it is all an arm has for
+  an endpoint — no simulated row served by it alone, no usable latency signal in the
+  snapshot, no latency asserted — **no concurrency figure is computed for that endpoint in
+  that arm**: `demand.concurrency` is null, a stated `max_concurrency` carries
+  `"not_computed": "tier_default_service_time"` and null figures, and its row reads
+  `n/a (no service time: state endpoints.<slug>.latency_ms)` in the proposed arm, or
+  `n/a (no service time: no recorded request or latency signal for <slug>)` in the current
+  arm (a proposal's `latency_ms` applies to the proposed arm only). The arm's headline is
+  chosen without it and says `…; concurrency not computed for <slug>`. Requests and tokens
+  are counted as usual. It is a state, like "window too short": the alternative was a
+  number — ten-second requests moved to such an endpoint read `peak 2.0% / avg 1.9%` of a
+  limit the current arm filled (synthetic; research §21.5.5).
 - **Tokens.** The counts replay **priced** the call at: the backend's billed prompt count
   (scaled by `token_scale`) and the recorded completion count. A row no backend answered uses
   RouteForge's own `routing_tokens` and the router's output estimate (§6); the rows routed to
@@ -1320,27 +1342,32 @@ location is `scenarios[<i>](<name>).endpoints.<slug>.latency_ms`).
   subtracted.
 - **The window** runs from the bucket of the first estimated arrival to the last bucket a
   recorded request was still in service in. It comes from the recorded rows alone, so it is
-  the same for both arms, every endpoint and every scenario. Service time that an asserted
-  or mean latency pushes past the window's last bucket is in no bucket; it is reported
-  (`service_ms_after_window`) so that service time adds up.
+  the same for both arms, every endpoint and every scenario. Service time that an asserted,
+  mean or replayed latency pushes past the window's last bucket is in no bucket; it is
+  reported (`service_ms_after_window`) so that service time adds up, and as a share of the
+  arm's service time on the endpoint (`service_after_window_share`). That share is how much
+  of the arm's concurrency the window does not show: the endpoint's note prints it with the
+  seconds, and at a tenth or more the headline names it (§11.6, §11.9).
 - **Window too short.** With fewer than `--capacity-min-buckets` buckets in which a request
   **arrived** (`window.arrival_buckets`), the block says `window_too_short: true` and carries
   no endpoint figure; the comparison table cell reads
   `window too short (k of the 10 buckets needed)`. Buckets a request merely ran through do
   not count: a long service time cannot make a short export look long.
 
-Per endpoint, per arm, per **stated** limit: `limit`, `peak` (the largest bucket ÷ the
-limit), `peak_bucket`, `mean_window`, `mean_active`, `buckets_over` and `buckets_over_share`
-(buckets above 100%, as a count and as a share of **all the window's buckets**), and
-`requests_over_share` (that endpoint's requests arriving in those buckets). Demand of exactly
-the limit is 100%, which is not above it. Demand itself (`peak`, `mean_window`, `mean_active`
+Per endpoint, per arm, per **stated** limit: `limit`, `not_computed` (null, or the reason a
+`max_concurrency` has no figure — every figure is then null), `peak` (the largest bucket ÷
+the limit), `peak_bucket`, `mean_window`, `mean_active`, `buckets_over` and
+`buckets_over_share` (buckets above 100%, as a count and as a share of **all the window's
+buckets**), and `requests_over_share` (that endpoint's requests arriving in those buckets).
+Demand of exactly the limit is 100%, which is not above it. Demand itself (`peak`, `mean_window`, `mean_active`
 of each of the four) is shown for every endpoint with routed rows, **stated limit or not**.
 
 Every figure is computed from exact integer counts of requests, tokens and milliseconds per
-endpoint, bucket and application; each application's volume scale is applied once. The
-output does not depend on the order of the rows in the export.
+endpoint, bucket and application; the counts of applications that share a volume scale are
+added before the scale is applied, once. The output does not depend on the order of the rows
+in the export, and a uniform scale never moves a peak to another bucket.
 
-### 11.6 Reading a peak: never without the average
+### 11.6 Reading a peak: never without the average and the share
 
 **A peak is a maximum over buckets.** It is the single busiest bucket of the window. For a
 perfectly steady stream it still sits well above the average, and it grows when the window
@@ -1356,15 +1383,39 @@ So no output prints a peak alone. Beside every peak are:
 | `buckets_over`, `buckets_over_share` | every bucket of the window | how much of the period is above the stated limit |
 | `requests_over_share` | the endpoint's requests | how much of its traffic arrives in those buckets |
 
-and the report and the comparison table print them together:
-`peak 100.0% / avg 2.1% (local-llama, max_concurrency, 60 s buckets)`.
+and the report and the comparison table print the first and third together with the peak:
+
+```
+peak 355.2% / avg 59.3%, over 100% in 17.6% of 10081 buckets (local-llama, max_concurrency, 60 s buckets)
+```
+
+That is: the busiest bucket; the time-average; the share of the window's buckets above the
+limit and how many buckets the window has; then the endpoint, the limit and the bucket
+length. **The share is there because peak and average cannot tell "over the limit 1% of the
+time" from "18% of the time"**: the same week of traffic against twice the limit reads
+`peak 177.6% / avg 29.6%, over 100% in 1.2% of 10081 buckets` (synthetic; research
+§21.5.5). And the ratio of peak to average grows with the length of the export, while the
+share does not.
+
+Two clauses can follow the parenthesis:
+
+- `; 16.4% of service time on local-llama falls after the window` — a tenth or more of that
+  arm's service time on an endpoint with a stated `max_concurrency` runs past the window, so
+  its concurrency is understated by about that much (§11.9). Printed whichever limit the
+  headline is on.
+- `; concurrency not computed for local-llama` — a `max_concurrency` is stated for that
+  endpoint and the arm has no service time for it (§11.5). The headline was chosen without
+  it. With nothing else stated the whole text is `n/a; concurrency not computed for …`.
+
+**The headline is a maximum over endpoints and limits as well as over buckets.** Stating
+more limits, or limits for more endpoints, can only raise it.
 
 How to read the pairs:
 
 - **Peak high, window average low** — a sparse or bursty export. Twelve requests a day, each
-  over two minutes long, against `max_concurrency: 1` is `peak 100% / avg 2%`: the endpoint
-  is fully used for a minute at a time and idle nearly always. `buckets_over_share` says
-  whether the limit is ever exceeded (here it is not).
+  over two minutes long, against `max_concurrency: 1` is `peak 100.0% / avg 2.1%, over 100%
+  in 0.0% of 1323 buckets`: the endpoint is fully used for a minute at a time and idle
+  nearly always, and the limit is never exceeded.
 - **Peak and window average both above 100%** — the endpoint is offered more than its stated
   limit on average, not just at the worst moment.
 - **Window average low, active average high** — the export has long idle gaps (two test
@@ -1384,16 +1435,23 @@ Every capacity section opens with this, verbatim:
 > service time: requests and tokens are counted in the bucket of arrival, service time in
 > every bucket it runs through. Service time is the request's own recorded latency where
 > replay serves it on the endpoint that served it alone; otherwise that endpoint's mean
-> recorded latency; otherwise replay's latency for the endpoint. A latency the proposal
-> asserts replaces all three. A recorded latency includes the time RouteForge spent before
-> and after the backend call, and for a request that failed over it cannot be attributed to
-> one endpoint, so it is not used. A peak is a maximum over buckets: it grows with a longer
-> window and with a shorter bucket even for a steady stream, so every peak is printed with
-> the average over the whole window. Nothing here models queueing, batching, autoscaling, the
-> serving engine's real concurrency behaviour, load that reaches an endpoint without passing
-> through RouteForge, bursts shorter than a bucket, or the load of failover attempts.
-> RouteForge does not know what an endpoint does above a stated limit (queue, shed or slow
-> down), so no rejection and no delay is predicted. An export of a few buckets says little.
+> recorded latency; otherwise replay's latency for the endpoint, unless that is only a tier
+> default, which is not a service time: no concurrency figure is then computed. A latency the
+> proposal asserts replaces all three. A recorded latency is what RouteForge recorded for the
+> whole request, not the backend's own time: it includes the time RouteForge spent before and
+> after the backend call and any time the request waited in the endpoint's own queue, and for
+> a request that failed over it cannot be attributed to one endpoint, so it is not used. So
+> concurrency from recorded requests is the number in flight as recorded, waiting included,
+> not the number an idle endpoint would have had in service. The window ends when the last
+> recorded request ended; service time that runs past it is in no bucket and is reported as a
+> share. A peak is a maximum over buckets: it grows with a longer window and with a shorter
+> bucket even for a steady stream, so every peak is printed with the average over the whole
+> window and the share of buckets above the limit. Nothing here models queueing, batching,
+> autoscaling, the serving engine's real concurrency behaviour, load that reaches an endpoint
+> without passing through RouteForge, bursts shorter than a bucket, or the load of failover
+> attempts. RouteForge does not know what an endpoint does above a stated limit (queue, shed
+> or slow down), so no rejection and no delay is predicted. An export of a few buckets says
+> little.
 
 `capacity.not_modelled` carries the exclusions as ids: `queueing`, `batching`,
 `autoscaling`, `engine_concurrency`, `external_load`, `sub_bucket_bursts`, `failover_load`,
@@ -1419,34 +1477,41 @@ file — `bucket_seconds`, `min_buckets`), and nothing else changes:
 
 | Field | Contents |
 |---|---|
-| `method` | `"bucketed_offered_load"` |
+| `method` | `"spread_offered_load"` (the first model, withdrawn before any figure was quoted, was `"bucketed_offered_load"`; the id changed so the two cannot be confused) |
 | `bucket_seconds`, `min_buckets` | the plan |
 | `window` | `first_bucket`, `last_bucket` (ISO-8601 UTC bucket starts), `buckets` (every bucket from the first to the last), `arrival_buckets` (those in which a simulated row arrived) |
 | `rows` | `simulated`, `without_ts`, `unusable_latency`, `excluded_not_counted` (excluded rows other than cache hits and rows before `--since`: they may have loaded an endpoint) |
 | `volume_scale` | `base` (the file's) and `proposal`, each `{"*": global, "<app>": value}` |
 | `not_modelled` | the nine ids of §11.7 |
-| `window_too_short` | when true, `endpoints` is empty and both `peak` entries are null |
-| `endpoints.<slug>.<arm>` | `requests` (volume-scaled); `active_buckets`; `service_time_sources` (`recorded`, `endpoint_mean`, `replay`, `asserted` — rows); `service_time_ms` (`mean`, `max` over those rows; null with none); `replay_share` (the share of the rows' service time that is `replay`) and `replay_source`; `service_ms_after_window`; `estimated_token_rows`; `demand.<dimension>.{peak, mean_window, mean_active}`; and `limits.<limit>` — the §11.5 figures, only for limits stated for that arm |
-| `peak.<arm>` | the arm's most loaded stated limit, with its context: `endpoint`, `limit`, `utilisation` (the peak), `bucket`, `mean_window`, `buckets_over_share`, `bucket_seconds`, `buckets` (the window's); null when the arm has no stated limit |
+| `window_too_short` | when true, `endpoints` is empty, both `peak` entries are null and both `concurrency_not_computed` lists are empty |
+| `endpoints.<slug>.<arm>` | `requests` (volume-scaled); `active_buckets`; `service_time_sources` (`recorded`, `endpoint_mean`, `replay`, `asserted` — rows); `service_time_ms` (`mean`, `max` over those rows; null with none); `replay_share` (the share of the rows' service time that is `replay`) and `replay_source`; `service_ms_after_window` and `service_after_window_share` (that amount over all the service time the arm placed on the endpoint; null with no row there or with no service time); `estimated_token_rows`; `demand.<dimension>.{peak, mean_window, mean_active}` (all null for `concurrency` when the arm has no service time for the endpoint, §11.5); and `limits.<limit>` — the §11.5 figures, only for limits stated for that arm |
+| `limits.<limit>.not_computed` | null, or `"tier_default_service_time"` on a `max_concurrency` the arm has no service time for; `limit` is still the stated value and every other figure is null |
+| `peak.<arm>` | the arm's most loaded stated limit **among those with a figure**, with its context: `endpoint`, `limit`, `utilisation` (the peak), `bucket`, `mean_window`, `buckets_over_share`, `bucket_seconds`, `buckets` (the window's), `service_after_window_share` (that endpoint's); null when the arm has no stated limit with a figure |
+| `concurrency_not_computed.<arm>` | the endpoints, sorted, whose stated `max_concurrency` has no figure in that arm: what `peak.<arm>` was chosen without. Usually empty |
 
 **`comparison.json`** gains `capacity.scenarios` — file order, each `name` plus exactly the
-block above for that scenario's body — `inputs.capacity`, and four keys on every `table`
-row: `peak_utilisation`, `peak_mean_window`, `peak_endpoint`, `peak_limit` (the proposed
-arm's `peak`; null when nothing is stated or the window is too short).
+block above for that scenario's body — `inputs.capacity`, and six keys on every `table`
+row: `peak_utilisation`, `peak_mean_window`, `peak_buckets_over_share`, `peak_endpoint`,
+`peak_limit` (the proposed arm's `peak`; null when nothing with a figure is stated or the
+window is too short) and `peak_concurrency_not_computed` (the proposed arm's list above).
 
 **Reports.** A single proposal gets a `## Capacity` section after the P3a report, before
 "Uncertainty ranges" and "Shadow prices": the caveat, "This section reports load against
-stated limits and proposes no remedy…", the window and what the two averages are over, each
-arm's peak load with its average, then per endpoint its requests, active buckets and service
+stated limits and proposes no remedy…", the window and what the two averages are over, the
+volume sentence when a scale is in use, each arm's peak load with its average and the share
+of buckets above the limit, then per endpoint its requests, active buckets and service
 time (mean, longest, and how many rows used each source), a utilisation table (one row per
 stated limit per arm: stated, peak, avg (window), avg (active), buckets over 100%, requests
 arriving in those buckets, peak bucket) and a demand table. A comparison gets one more table
-column, last — `peak / avg load (proposed)`, e.g.
-`peak 100.0% / avg 2.1% (local-llama, max_concurrency, 60 s buckets)` — one `## Capacity`
+column, last — `peak / avg load (proposed)`, in the form of §11.6 — one `## Capacity`
 section with the caveat and the current arm's peak load, and a `### Capacity` subsection per
-scenario.
+scenario. No figure in either report is printed with an exponent.
 
 ### 11.9 Limits
+
+Every figure quoted in this subsection is **synthetic** — rows built by hand with a known
+arrival pattern, run through `capacity_block` — and the method for each is in research
+§21.5.5. None is a measurement of real traffic.
 
 - Everything in §11.7. In particular the model has **no queue**: 150% of a stated
   concurrency says the endpoint is offered more than it was stated to serve, not what
@@ -1455,20 +1520,60 @@ scenario.
   spent before and after the backend call (the gate, compression, verification), and under
   load it includes any time the request waited in the serving engine's own queue — so
   demand computed from an overloaded period overstates the service time an unloaded endpoint
-  would need.
+  would need. Concurrency from recorded requests is the number in flight as recorded,
+  waiting included.
+- **On an `ok` row, `latency_ms` is the sum of the trace records' latencies, not
+  wall-clock time** (`docs/reference/routing-outcomes.md` §3.2). The arrival estimate and
+  the service time both rest on it; how far the sum is from wall-clock is unmeasured
+  (research §21.5.4, E10c and E10e).
+- **A request recorded as failed gets the endpoint's mean service time.** A row recorded as
+  `backend_failed` or `verify_failed`, one that failed over, or one that was rejected, that
+  an arm routes, never uses its own latency: a failure row's latency is wall-clock from the
+  request handler, not a service time. So a failure that held a slot for a long timeout is
+  counted at the mean: with one row in ten recorded as a 120 s `backend_failed` timeout
+  among 10 s requests, mean concurrency read 0.968 where holding the slot for 120 s would
+  give 2.03.
 - **A moved request has no service time of its own.** It gets the mean of the endpoint it is
-  moved to (or replay's latency for it), whatever its size.
+  moved to (or replay's latency for it), whatever its size; where that latency is only a
+  tier default there is no concurrency figure at all (§11.5).
+- **The export is right-truncated, which understates an arm whose service time is not the
+  recorded one.** The window ends when the last recorded request ended; service time an
+  asserted, mean or replayed latency places after it is in no bucket. On a 30-minute export
+  at 6 requests a minute with the proposal asserting a service time `S`, the share of the
+  proposed arm's service time after the window was 1.4% at 60 s, 16.4% at 600 s
+  (`mean_window` 50.1 where the steady state is 60), 49.8% at 1,800 s (90.4 against 180)
+  and 87.4% at 7,200 s — beyond the window's length the figures stop responding to `S`. The
+  share is printed (`service_after_window_share`, §11.5); the figures are not corrected.
+- **Epoch-aligned buckets understate a sliding-window rate limit.** A provider that counts
+  requests over any 60 seconds sees more than the busiest calendar minute: 20 requests in
+  10 seconds straddling a minute boundary, against 10 a minute, read `peak 100.0%` with no
+  bucket over, where the busiest sliding minute holds 20; on three steady Poisson streams
+  the busiest sliding 60 seconds held 1.00 to 1.10 times the busiest calendar minute.
+- **The headline is a maximum over endpoints and limits as well as over buckets.** Stating
+  more limits can only raise it; two runs are comparable only when they state the same
+  limits.
+- **Client retries are counted as independent demand.** A request retried after a live
+  failure or timeout is several rows; a scenario in which the first attempt would have
+  succeeded would not have had the others.
+- **Demand that left no usable record is censored.** A request refused before an outcome
+  row was written is not in the export, and rows excluded from simulation
+  (`unknown_status`, `unknown_app`, `missing_features`, `missing_routing_tokens`) are not
+  in the demand. The excluded count is printed (`rows.excluded_not_counted`); the direction
+  is understatement.
+- **A congested recording compounds with `volume_scale` and with moved traffic.** Recorded
+  latencies from a period in which the endpoint was queueing are inflated; scaling volume or
+  moving more traffic onto that endpoint multiplies the inflated service time, and nothing
+  feeds the extra load back into it (no queue is modelled).
 - **Tokens are not spread.** A long generation's tokens are all counted in the bucket it
   arrived in, although the endpoint produces them over the whole service time.
 - **Arrival is an estimate** (`ts` minus the recorded latency), and a failure row's latency
   includes gate time (`docs/reference/routing-outcomes.md` §3.2).
-- **The window's edges.** A request in service when the export begins, which arrived before
-  it, is not in the export's demand; service time past the window's last bucket is counted
-  apart (§11.5).
+- **The window's left edge.** A request in service when the export begins, which arrived
+  before it, is not in the export's demand.
 - **First-decision replay.** A request that failed over live loaded two endpoints; here it
   loads one. Every §6 limit applies.
 - **`volume_scale` is a multiplier**, not an arrival process (§11.3).
 - **A stated limit is not a measurement**, and one number per endpoint ignores that capacity
   depends on the prompt and completion lengths being served.
 - No capacity figure for a shadow-price relaxation (§8.7).
-- Nothing has been run on recorded traffic: research §21.5.
+- Nothing has been run on recorded traffic: research §21.5.4.

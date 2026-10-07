@@ -127,7 +127,7 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
-## B66 — FEATURE: capacity follow-ups — a declaration on the onboarded endpoint, a time-block bootstrap, a service-time model for moved requests  🔴 OPEN
+## B66 — FEATURE: capacity follow-ups — a declaration on the onboarded endpoint, a time-block bootstrap, a service-time model for moved requests, a p95-bucket figure, a faster accumulation, a backend-time field  🔴 OPEN
 
 **Severity:** low (the capacity section works from a hand-written file; these make it less
 manual and less coarse).
@@ -162,6 +162,29 @@ manual and less coarse).
 6. **Tokens spread over the generation.** Token demand is counted at arrival; a long
    completion is produced over the whole service time. Matters only for a
    generation-throughput limit with responses longer than a bucket.
+7. **A p95-bucket figure beside the peak** (final review, 2026-10-07). The peak is a maximum
+   over buckets and grows with the length of the export; a high quantile of the bucket
+   averages needs no arrival model and is stable in the window. On a steady synthetic
+   stream (Poisson 0.5/s, 4 s service, 60 s buckets) the 95th percentile of the bucket
+   averages was 1.29–1.33× the mean over 1 hour, 24 hours and 7 days, where the maximum was
+   1.59–1.68× (research §21.5.5; synthetic, computed from the raw arrivals outside the
+   engine). Needs: the per-bucket series kept long enough to take a quantile, a rule for
+   which quantile, and the same "never alone" presentation rule the peak has. It would sit
+   beside the peak, not replace it. Considered and **not** wanted: a modelled "expected peak
+   of a steady stream" — it needs an arrival assumption RouteForge does not have.
+8. **A difference-array accumulation.** Service time is spread by stepping through every
+   bucket a request runs through, so one row costs O(service time ÷ bucket length): a day
+   of service time in 1 s buckets is 86,400 steps for one request. Adding `+1` at the start
+   bucket and `−1` after the end bucket (with the two partial buckets handled exactly, in
+   integer milliseconds) and taking a running sum is O(1) per row. It must stay exact and
+   keep conservation (C3) and row-order independence (C2).
+9. **A backend-time field on the outcome record.** `latency_ms` on an `ok` row is the sum of
+   the trace records' latencies (`docs/reference/routing-outcomes.md` §3.2): RouteForge's
+   own steps plus the backend call, with any endpoint queueing inside it, and not wall-clock
+   time. The capacity model uses it both as the service time and to estimate arrival. A
+   separate field for the backend call's own duration — and a request-start timestamp —
+   would remove both approximations. A serving change (a column, an `ALTER`, the export),
+   with its own review; item 3 above mentions the same field for moved requests.
 
 See also B59 (per-app TPM / concurrency limits in the gateway — admission, out of scope for
 the simulator) and B63 (the shadow-prices-only output has no `rows` block).

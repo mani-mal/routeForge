@@ -197,7 +197,7 @@ def test_c14_the_cli_reports_the_hand_computed_utilisation(tmp_path):           
             "(local-cheap, output_tokens_per_minute, 60 s buckets); proposed peak 480.0% / "
             "avg 213.3%, over 100% in 33.3% of 30 buckets (local-cheap, "
             "output_tokens_per_minute, 60 s buckets).") in text
-    assert text.split("## Capacity\n\n")[1].split("\n")[:17] == caveat_lines()
+    assert text.split("## Capacity\n\n")[1].split("\n")[:24] == caveat_lines()
 
 
 def test_a_capacity_stated_only_in_the_proposal_is_enough(tmp_path):
