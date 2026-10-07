@@ -13,7 +13,9 @@ first prints the call budget and asks for confirmation (`--yes` skips the
 prompt for non-interactive use).
 
 Writes `matrix.jsonl`, `choices.jsonl`, `metrics.json`, `report.md` and
-`run.json` into `--out` (default `results/<utc timestamp>`).
+`run.json` into `--out` (default `results/<utc timestamp>`). `--group-report`
+adds `groups.json` and `groups.md`: every metric by placement, protection,
+application and workload.
 
 Exit codes: 0 ok; 1 load/usage error (or a declined live run); 2 policy
 violation, empty-set mismatch, post-gate widening or pinned-served mismatch.
@@ -40,6 +42,7 @@ if str(REPO_ROOT) not in sys.path:
 from app.config.loader import load_settings  # noqa: E402
 from app.eval.cases import SuiteError, load_suite  # noqa: E402
 from app.eval.endpoints import EndpointFileError, load_endpoints  # noqa: E402
+from app.eval.groups import DEFAULT_MIN_GROUP_SIZE  # noqa: E402
 from app.eval.runner import run_bench  # noqa: E402
 from app.eval.strategies import DEFAULT_SECONDS_PER_CASE  # noqa: E402
 
@@ -70,6 +73,12 @@ def _parser() -> argparse.ArgumentParser:
                    help="synthetic case-clock spacing: case k is scored at "
                         "k x this many seconds; drives signal decay "
                         f"(default {DEFAULT_SECONDS_PER_CASE:g}; must be > 0)")
+    p.add_argument("--group-report", action="store_true",
+                   help="also write groups.json and groups.md: every metric by "
+                        "placement, protection, application and workload")
+    p.add_argument("--min-group-size", type=int, default=None,
+                   help="fewest cases behind a printed group rate "
+                        f"(default {DEFAULT_MIN_GROUP_SIZE}; needs --group-report)")
     return p
 
 
@@ -93,6 +102,11 @@ def _confirm_live(suite: str, endpoints: str, assume_yes: bool) -> bool:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.min_group_size is not None and not args.group_report:
+        # A flag that would silently do nothing is a usage error.
+        print("feasible_bench: load error: --min-group-size needs --group-report",
+              file=sys.stderr)
+        return 1
     out = args.out or str(
         REPO_ROOT / "results" / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
 
@@ -109,7 +123,10 @@ def main(argv: list[str] | None = None) -> int:
         args.suite, args.endpoints, out_dir=out, seed=args.seed, live=args.live,
         keep_text=args.keep_text, variants_path=args.variants,
         parity_tol=args.parity_tol, fixed=args.fixed,
-        seconds_per_case=args.seconds_per_case))
+        seconds_per_case=args.seconds_per_case,
+        group_report=args.group_report,
+        min_group_size=(DEFAULT_MIN_GROUP_SIZE if args.min_group_size is None
+                        else args.min_group_size)))
     if result.exit_code != 1:
         print(f"feasible_bench: results in {result.out_dir} (exit {result.exit_code})")
     return result.exit_code

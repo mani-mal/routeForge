@@ -16,7 +16,9 @@ case:
    attempts on this case, after it was scored (spec §6).
 
 After the last case it computes the feasible-oracle metrics (`metrics.json`),
-a human report (`report.md`) and a run stamp (`run.json`). Exit codes: `0` ok,
+a human report (`report.md`) and a run stamp (`run.json`). With
+`group_report=True` it also writes `groups.json` and `groups.md`
+(`app/eval/groups.py`); without it, no output changes. Exit codes: `0` ok,
 `1` load/usage error (including a `seconds_per_case` too small for this run's
 endpoint count or attempt cap -- `strategies.min_seconds_per_case`), `2`
 policy violation, empty-set mismatch, post-gate widening, pinned-served
@@ -52,11 +54,18 @@ from app.eval.endpoints import (
     load_endpoints,
 )
 from app.eval.graders import grade
+from app.eval.groups import (
+    DEFAULT_MIN_GROUP_SIZE,
+    case_keys,
+    group_report as build_group_report,
+    render_group_report,
+)
 from app.eval.oracle import (
     CaseInfo,
     Choice,
     MatrixRow,
     attempt_outcome,
+    case_scores,
     grouped,
     headline,
     strategy_metrics,
@@ -171,6 +180,7 @@ class RunResult:
     exit_code: int
     out_dir: str
     metrics: dict
+    groups: dict | None = None    # the `groups.json` document, when asked for
 
 
 class _CountingBackend:
@@ -376,18 +386,29 @@ async def run_bench(suite_path: str, endpoints_path: str, *, out_dir: str,
                     seed: int = 0, live: bool = False, keep_text: bool = False,
                     variants_path: str | None = None, parity_tol: float = 0.02,
                     fixed: str | None = None,
-                    seconds_per_case: float = DEFAULT_SECONDS_PER_CASE) -> RunResult:
+                    seconds_per_case: float = DEFAULT_SECONDS_PER_CASE,
+                    group_report: bool = False,
+                    min_group_size: int = DEFAULT_MIN_GROUP_SIZE) -> RunResult:
     """Run the benchmark end to end. Load/usage errors print to stderr and
     return exit code 1 before `out_dir` is touched.
 
     `seconds_per_case` (> 0) is the synthetic case clock's spacing (B48 spec
-    §6, amended): case `k` is scored at `t_k = k * seconds_per_case`."""
+    §6, amended): case `k` is scored at `t_k = k * seconds_per_case`.
+
+    `group_report` also writes `groups.json` and `groups.md`: every metric
+    by placement, protection, application and workload, a figure over fewer
+    than `min_group_size` cases printed as a count and no rate."""
     args = {"suite": suite_path, "endpoints": endpoints_path, "seed": seed,
             "live": live, "keep_text": keep_text, "variants": variants_path,
             "parity_tol": parity_tol, "fixed": fixed,
             "seconds_per_case": seconds_per_case}
+    if group_report:   # only then: an unflagged run's `run.json` keeps its keys
+        args.update(group_report=True, min_group_size=min_group_size)
     started = _now()
     try:
+        if (isinstance(min_group_size, bool) or not isinstance(min_group_size, int)
+                or min_group_size < 1):
+            raise BenchError(f"min_group_size must be an int >= 1; got {min_group_size!r}")
         seconds_per_case = check_seconds_per_case(seconds_per_case)
         cases, suite_hash = load_suite(suite_path)
         base = load_settings()
@@ -442,6 +463,7 @@ async def run_bench(suite_path: str, endpoints_path: str, *, out_dir: str,
                 max_attempts=max_attempts, seconds_per_case=seconds_per_case,
                 out_dir=out_dir, seed=seed,
                 live=live, keep_text=keep_text, parity_tol=parity_tol, fixed=fixed,
+                group_report=group_report, min_group_size=min_group_size,
                 stamp={"suite_hash": suite_hash, "endpoints_hash": endpoints_hash,
                        "args": args, "started_at": started})
         except LeakageError as exc:
@@ -459,7 +481,7 @@ async def run_bench(suite_path: str, endpoints_path: str, *, out_dir: str,
 async def _run_loaded(*, cases, specs, settings, registry, detector,
                       variant_cfgs, max_attempts, seconds_per_case,
                       out_dir, seed, live, keep_text, parity_tol, fixed,
-                      stamp) -> RunResult:
+                      group_report, min_group_size, stamp) -> RunResult:
     inner = make_backend(settings, registry) if live else SimulatedBackend(specs, seed)
     backend = _CountingBackend(inner)
     gate = Gate(settings, detector, registry=registry)
@@ -520,7 +542,7 @@ async def _run_loaded(*, cases, specs, settings, registry, detector,
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    for stale in ("metrics.json", "report.md", "run.json"):
+    for stale in ("metrics.json", "report.md", "run.json", "groups.json", "groups.md"):
         (out / stale).unlink(missing_ok=True)
 
     case_infos: list[CaseInfo] = []
@@ -715,9 +737,19 @@ async def _run_loaded(*, cases, specs, settings, registry, detector,
         "attempt_cap": max_attempts,
         "notes": {**ARM_NOTES, "base_routing_policy_version": BASE_RPV_NOTE},
     }
+    groups_doc: dict | None = None
+    if group_report:
+        keys = {case.id: case_keys(case.tags, case.app_policy) for case in cases}
+        scores = {n: case_scores(case_infos, rows, choices, n) for n in strategy_names}
+        groups_doc = json.loads(_dump(build_group_report(
+            scores, keys, min_size=min_group_size, mode=run_stamp["mode"])))
+        (out / "groups.json").write_text(_dump(groups_doc), encoding="utf-8")
+        (out / "groups.md").write_text(
+            render_group_report(groups_doc, detail=HEADLINE_ROUTER), encoding="utf-8")
     (out / "run.json").write_text(_dump(run_stamp), encoding="utf-8")
     (out / "report.md").write_text(_report(metrics, run_stamp), encoding="utf-8")
-    return RunResult(exit_code=exit_code, out_dir=str(out), metrics=metrics)
+    return RunResult(exit_code=exit_code, out_dir=str(out), metrics=metrics,
+                     groups=groups_doc)
 
 
 def _served(attempts: tuple[str, ...], rows_by_endpoint: dict[str, MatrixRow]
