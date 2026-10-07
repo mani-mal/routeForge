@@ -294,8 +294,11 @@ def test_u6_every_replicate_draws_exactly_the_apps_row_count(n):           # U6
 
 def test_u6_a_one_row_app_is_present_in_every_replicate():                 # U6
     """One row among 300: an unstratified resample would leave the app out
-    of about a third of the replicates. Stratified, it is drawn every time,
-    so none of its figures is ever undefined."""
+    of about a third of the replicates. Every app with its own stratum is
+    drawn every time, so none of its figures is ever undefined -- here the
+    one-row app is its own stratum because `min_rows` is 1. (Below
+    `min_rows` an app is pooled for the totals and has no range of its own:
+    tests/eval/test_uncertainty_strata.py.)"""
     results = _synthetic(300) + [_result(9999, "tiny", _arm("local-mid", 0.01),
                                          _arm("local-cheap", 0.002, latency=300.0))]
     block = results_block(results, UncertaintyPlan(replicates=100, min_rows=1))
@@ -335,7 +338,7 @@ def test_u7_no_rows_at_all():                                              # U7
     block = results_block([], UncertaintyPlan())
     empty = {"routed": 0, "calibrated": 0, "posterior": 0}
     assert block == {"totals": {"insufficient_data": True, "n": 0}, "by_app": {},
-                     "per_day": None, "points_outside_interval": 0,
+                     "per_day": None, "points_outside_interval": 0, "totals_strata": None,
                      "quality_posterior": {"current": empty, "proposed": empty}}
 
 

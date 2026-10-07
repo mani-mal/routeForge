@@ -35,8 +35,8 @@ from app.eval.simulate import (CACHED_SHARE_NOTE, REPORT_CAVEAT, _assumption_ite
                                run_rows, summarize)
 from app.eval.uncertainty import (UncertaintyPlan, bucket_lines, caveat_lines,
                                   insufficient_text, method_line, outside_line, plan_block,
-                                  quality_line, results_block, table_ranges, window_days,
-                                  with_range)
+                                  quality_line, results_block, strata_line, table_ranges,
+                                  window_days, with_range)
 
 SCHEMA = "routeforge.policy-scenarios/v1"
 COMPARISON_SCHEMA = "routeforge.scenario-comparison/v1"
@@ -415,11 +415,18 @@ RANGE_NOT_RANKING_NOTE = (
 
 def _uncertainty_lines(block: dict) -> list[str]:
     """The comparison report's "Uncertainty ranges" section: the caveat, how
-    the ranges were made, then one line per scenario in FILE order -- its
-    quality coverage, or that it has too few rows."""
+    the ranges were made, the strata the totals were resampled in, then one
+    line per scenario in FILE order -- its quality coverage, or that it has
+    too few rows."""
     lines = ["## Uncertainty ranges", ""]
     lines += caveat_lines()
-    lines += ["", method_line(block), "", RANGE_NOT_RANKING_NOTE, ""]
+    lines += ["", method_line(block), ""]
+    # Every scenario replays the same rows, so they all have the same strata.
+    strata = next((entry["totals_strata"] for entry in block["scenarios"]
+                   if entry["totals_strata"] is not None), None)
+    if strata is not None:
+        lines += [strata_line(strata, block["min_rows"]), ""]
+    lines += [RANGE_NOT_RANKING_NOTE, ""]
     for entry in block["scenarios"]:
         if entry["totals"].get("insufficient_data"):
             lines.append(f"- **{entry['name']}** -- {insufficient_text(entry['totals'])}")

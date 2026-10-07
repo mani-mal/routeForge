@@ -7,13 +7,21 @@ over the simulated rows.
 - **Rows are resampled, never re-simulated.** Replay is a deterministic
   function of a row, so each row's two `ArmResult`s are computed once
   (`app/eval/simulate.py`) and a replicate only draws row positions.
-- **Stratified by application.** Each app's rows are resampled to the same
-  count, so a per-app bucket never empties and the mix of traffic between
-  apps is held fixed.
-- **Paired.** The draw for `(seed, replicate, app)` depends on nothing else,
-  so both arms, every scenario and every shadow-price relaxation see the
-  same resampled rows. A delta's range is the range of the paired
-  difference.
+- **Stratified by application.** An app with at least `min_rows` rows is
+  its own stratum: its rows are resampled to the same count, so its bucket
+  never empties. All rows of the smaller apps form ONE pooled stratum,
+  which feeds the totals only -- drawn each on its own, many small apps
+  would add almost no variance to the totals (a one-row app none at all)
+  and the totals range would be too narrow. `totals_strata` in the output
+  says which strata were used and how much variance resampling within them
+  still leaves out.
+- **Paired.** The draw for `(seed, replicate, app)`, or for `(seed,
+  replicate, pooled row count)`, depends on nothing else, so both arms,
+  every scenario and every shadow-price relaxation see the same resampled
+  rows. A delta's range is the range of the paired difference.
+- **Flat in applications.** Strata are the outer loop: one app's replicate
+  values are reduced to its leaves before the next app is drawn, so memory
+  does not grow with the number of applications.
 - **Deterministic.** Same rows, plan and Python minor version give the same
   numbers. Nothing here reads a clock or the global `random` state.
 
@@ -41,6 +49,7 @@ import json
 import math
 import random
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from app.eval.calibration import recommendation_set_id
@@ -115,18 +124,23 @@ class UncertaintyPlan:
 
 @dataclass(frozen=True)
 class Bootstrap:
-    """Raw replicate values. `totals` maps a figure name to one value per
+    """Replicate values. `totals` maps a figure name to one value per
     replicate, or is None when there are fewer than `min_rows` rows.
-    `by_app` maps an app id to `(row count, the same map or None)`."""
+    `by_app` maps an app id to `(row count, its samples)`: the same kind of
+    map -- or whatever `run_bootstrap`'s `reduce` made of it -- for an app
+    that is its own stratum, None for a pooled app, and None for every app
+    under `totals_only`. `strata` is the `totals_strata` disclosure, None
+    when nothing was drawn."""
 
     n: int
     totals: dict[str, list] | None
-    by_app: dict[str, tuple[int, dict[str, list] | None]]
+    by_app: dict[str, tuple[int, object]]
+    strata: dict | None = None
 
 
 @dataclass(frozen=True)
 class _Stratum:
-    app: str
+    app: str | None                     # None: the pooled stratum
     n: int
     cls: list[int]                      # class id per row, in row order
     cols: list[list[float]]             # the DISTINCT cost columns
@@ -361,6 +375,48 @@ def draw_indices(seed: int, replicate: int, app: str, n: int) -> list[int]:
     return random.Random(f"{seed}:{replicate}:app:{app}").choices(range(n), k=n)
 
 
+def draw_pool(seed: int, replicate: int, n: int) -> list[int]:
+    """The positions replicate `replicate` draws from the pooled stratum of
+    `n` rows (the rows of every app below `min_rows`, in app order then row
+    order). A function of its three arguments alone, so every arm, scenario
+    and all-rows relaxation over the same export sees the same draw."""
+    return random.Random(f"{seed}:{replicate}:pool").choices(range(n), k=n)
+
+
+def _pooled(small: list[_Stratum]) -> _Stratum:
+    """ONE stratum holding the rows of every stratum in `small`, in the
+    order given (sorted app id, each app's rows in the caller's order)."""
+    cls = [c for s in small for c in s.cls]
+    cols: list[list[float]] = []
+    col_of: list[int] = []
+    for j in range(4):
+        column = [v for s in small for v in s.cols[s.col_of[j]]]
+        for i, seen in enumerate(cols):
+            if seen == column:
+                col_of.append(i)
+                break
+        else:
+            cols.append(column)
+            col_of.append(len(cols) - 1)
+    return _Stratum(None, len(cls), cls, cols, tuple(col_of))
+
+
+def _strata_block(units: list[_Stratum], n_total: int, pooled_apps: int) -> dict:
+    """The `totals_strata` disclosure (spec §4.2): how many apps are their
+    own stratum, how many apps and rows are pooled, the smallest stratum,
+    and `variance_factor = (n - S) / n` for `S` strata.
+
+    `variance_factor` is ANALYTIC, not measured. A bootstrap of `n_s` rows
+    reproduces `(n_s - 1) / n_s` of that stratum's unbiased variance, so
+    with the same variance in every stratum the totals keep `(n - S) / n`
+    of theirs. The ranges are NOT corrected for it."""
+    pooled_rows = sum(s.n for s in units if s.app is None)
+    return {"own": sum(1 for s in units if s.app is not None),
+            "pooled_apps": pooled_apps, "pooled_rows": pooled_rows,
+            "smallest": min(s.n for s in units),
+            "variance_factor": (n_total - len(units)) / n_total}
+
+
 def draw_quality(seed: int, replicate: int, key: PosteriorKey, post: Posterior) -> float:
     """Replicate `replicate`'s quality for one calibrated unit: one draw from
     its `Beta(alpha, beta)`, a function of the arguments alone, so both arms
@@ -376,38 +432,68 @@ def _record(samples: dict[str, list], figures: dict[str, float | None]) -> None:
 
 
 def run_bootstrap(results: list[RowResult], plan: UncertaintyPlan, *,
-                  days: float | None = None) -> Bootstrap:
-    """`plan.replicates` stratified resamples of `results`. `days` (the
-    export window, fixed, never resampled) adds the `per_day.*` figures to
-    the totals. A bucket with fewer than `plan.min_rows` rows gets no
-    samples; its rows are still drawn, because they are part of the totals.
-    With fewer than `min_rows` rows in all, nothing is drawn."""
+                  days: float | None = None, totals_only: bool = False,
+                  reduce: Callable[[str, dict[str, list]], object] | None = None) -> Bootstrap:
+    """`plan.replicates` stratified resamples of `results`.
+
+    **Strata** (spec §4.2). An app with at least `plan.min_rows` rows is its
+    own stratum, drawn by `draw_indices`; that one draw feeds both the app's
+    samples and the totals. The rows of every smaller app form one pooled
+    stratum, drawn by `draw_pool`, which feeds the totals only: a pooled app
+    has no samples of its own. With fewer than `min_rows` rows in all,
+    nothing is drawn.
+
+    `days` (the export window, fixed, never resampled) adds the `per_day.*`
+    figures to the totals. `totals_only` skips the per-app figures, for a
+    caller that reads the totals alone (`app/eval/shadow.py`).
+
+    **Memory.** Strata are the outer loop and replicates the inner one. The
+    totals are accumulated per replicate (class counts and four cost sums),
+    and each app's samples are handed to `reduce(app, samples)` as soon as
+    that app is done; `by_app` keeps what it returns. Without `reduce` the
+    raw samples are kept, which grows with the number of apps -- for tests.
+
+    Strata are added to the totals in app order, the pool last, so for an
+    export with no pooled app every replicate's float sums are made in the
+    order they always were."""
     strata, classes = _strata(results, plan.posteriors)
     n_total = len(results)
+    by_app: dict[str, tuple[int, object]] = {s.app: (s.n, None) for s in strata}
+    if n_total < plan.min_rows:
+        return Bootstrap(n_total, None, by_app)
+    units = [s for s in strata if s.n >= plan.min_rows]
+    small = [s for s in strata if s.n < plan.min_rows]
+    if small:
+        units.append(_pooled(small))
     used = sorted({sig[4] for cls in classes for sig in cls[:2] if sig[4] is not None},
                   key=lambda k: (k[0], k[1], k[2] or ""))
-    if n_total < plan.min_rows:
-        return Bootstrap(n_total, None, {s.app: (s.n, None) for s in strata})
-    totals: dict[str, list] = {}
-    by_app: dict[str, tuple[int, dict[str, list] | None]] = {
-        s.app: (s.n, {} if s.n >= plan.min_rows else None) for s in strata}
-    for b in range(plan.replicates):
-        qdraw = {key: draw_quality(plan.seed, b, key, plan.posteriors[key]) for key in used}
-        total_counts: Counter = Counter()
-        total_costs = [0.0, 0.0, 0.0, 0.0]
-        for s in strata:
-            idx = draw_indices(plan.seed, b, s.app, s.n)
+    replicates = range(plan.replicates)
+    qdraws = [{key: draw_quality(plan.seed, b, key, plan.posteriors[key]) for key in used}
+              for b in replicates]
+    total_counts: list[Counter] = [Counter() for _ in replicates]
+    total_costs = [[0.0, 0.0, 0.0, 0.0] for _ in replicates]
+    for s in units:
+        samples: dict[str, list] | None = (
+            {} if s.app is not None and not totals_only else None)
+        for b in replicates:
+            idx = (draw_pool(plan.seed, b, s.n) if s.app is None
+                   else draw_indices(plan.seed, b, s.app, s.n))
             counts = Counter(map(s.cls.__getitem__, idx))
             sums = [sum(map(col.__getitem__, idx)) for col in s.cols]
             costs = [sums[i] for i in s.col_of]
-            app_samples = by_app[s.app][1]
-            if app_samples is not None:
-                _record(app_samples, _figures(s.n, counts, costs, classes, None, qdraw))
-            total_counts.update(counts)
+            if samples is not None:
+                _record(samples, _figures(s.n, counts, costs, classes, None, qdraws[b]))
+            total_counts[b].update(counts)
+            row = total_costs[b]
             for j, value in enumerate(costs):
-                total_costs[j] += value
-        _record(totals, _figures(n_total, total_counts, total_costs, classes, days, qdraw))
-    return Bootstrap(n_total, totals, by_app)
+                row[j] += value
+        if samples is not None:
+            by_app[s.app] = (s.n, samples if reduce is None else reduce(s.app, samples))
+    totals: dict[str, list] = {}
+    for b in replicates:
+        _record(totals, _figures(n_total, total_counts[b], total_costs[b], classes, days,
+                                 qdraws[b]))
+    return Bootstrap(n_total, totals, by_app, _strata_block(units, n_total, len(small)))
 
 
 def _flatten(stats: dict, n: int, days: float | None) -> dict[str, float | None]:
@@ -530,20 +616,28 @@ def quality_coverage(results: list[RowResult], plan: UncertaintyPlan) -> dict:
 def results_block(results: list[RowResult], plan: UncertaintyPlan, *,
                   days: float | None = None) -> dict:
     """The ranges for ONE proposal's rows: `totals`, `by_app` (sorted),
-    `per_day` (None without a window of at least a day), `quality_posterior`
+    `per_day` (None without a window of at least a day), `totals_strata`
+    (`_strata_block`; None when nothing was drawn), `quality_posterior`
     (`quality_coverage`) and `points_outside_interval`. Points come from
     `simulate._bucket_stats`, so a leaf's `point` is the figure the document
-    already carries."""
-    boot = run_bootstrap(results, plan, days=days)
-    totals = _bucket(boot.n, _flatten(_bucket_stats(results), boot.n, days), boot.totals, plan)
-    per_day = totals.pop("per_day", None)
+    already carries. Each app's bucket is built as soon as that app has been
+    resampled, so no app's replicate values outlive it."""
     rows_of: dict[str, list[RowResult]] = {}
     for r in results:
         rows_of.setdefault(r.row["application_id"], []).append(r)
-    by_app = {app: _bucket(n, _flatten(_bucket_stats(rows_of[app]), n, None), samples, plan)
-              for app, (n, samples) in boot.by_app.items()}
+
+    def reduce(app: str, samples: dict[str, list]) -> dict:
+        rows = rows_of[app]
+        return _bucket(len(rows), _flatten(_bucket_stats(rows), len(rows), None), samples, plan)
+
+    boot = run_bootstrap(results, plan, days=days, reduce=reduce)
+    totals = _bucket(boot.n, _flatten(_bucket_stats(results), boot.n, days), boot.totals, plan)
+    per_day = totals.pop("per_day", None)
+    by_app = {app: bucket if bucket is not None else {"insufficient_data": True, "n": n}
+              for app, (n, bucket) in boot.by_app.items()}
     block = {"totals": totals, "by_app": by_app, "per_day": per_day}
     block["points_outside_interval"] = _count_outside(block)
+    block["totals_strata"] = _round6(boot.strata)
     block["quality_posterior"] = quality_coverage(results, plan)
     return block
 
@@ -596,12 +690,13 @@ def plan_block(plan: UncertaintyPlan) -> dict:
 #: `simulate.REPORT_CAVEAT`. Pinned by tests/eval/test_uncertainty_report.py.
 UNCERTAINTY_CAVEAT = (
     "**Ranges show sampling variability only.** Each range is a percentile interval from\n"
-    "resampling the recorded rows with replacement, within each application, under this replay\n"
+    "resampling the recorded rows with replacement, within each application (applications with\n"
+    "fewer than `--min-rows` rows are resampled together for the totals), under this replay\n"
     "model. It does not include replay model error (first-decision replay, frozen signals,\n"
-    "predicted overflow), the error of the admission estimate for rows no backend answered,\n"
-    "inputs that were not recorded, or future traffic shift. Replay gives each endpoint one\n"
-    "latency, so a latency range reflects only which endpoints the resampled rows used. A narrow\n"
-    "range on a biased replay is still biased."
+    "predicted overflow), the error of the admission estimate for rows with no backend token\n"
+    "count, inputs that were not recorded, or future traffic shift. Replay gives each endpoint\n"
+    "one latency, so a latency range reflects only which endpoints the resampled rows used. A\n"
+    "narrow range on a biased replay is still biased."
 )
 
 #: Why a zero count is not "no risk" (spec §7). `{}` fields: n, level, bound, one_in.
@@ -644,9 +739,20 @@ def method_line(block: dict) -> str:
     """One sentence saying how the ranges were made, from the block's head."""
     return (f"{level_text(block['interval'])} percentile intervals from {block['replicates']} "
             "bootstrap resamples of the simulated rows, drawn with replacement within each "
-            f"application (seed {block['seed']}). Both arms, and every scenario or relaxation, "
-            f"use the same resampled rows. A bucket with fewer than {block['min_rows']} rows "
-            "gets no range.")
+            f"application (applications with fewer than {block['min_rows']} rows are "
+            f"resampled together for the totals) (seed {block['seed']}). Both arms, and every "
+            "scenario or relaxation, use the same resampled rows. A bucket with fewer than "
+            f"{block['min_rows']} rows gets no range.")
+
+
+def strata_line(strata: dict, min_rows: int) -> str:
+    """The `totals_strata` disclosure as one sentence pair (spec §4.2)."""
+    return (f"Totals strata: {strata['own']} application(s) resampled on their own and "
+            f"{strata['pooled_apps']} with fewer than {min_rows} rows resampled together "
+            f"({strata['pooled_rows']} rows); the smallest stratum has {strata['smallest']} "
+            "rows. Resampling within strata leaves the totals about "
+            f"{_fmt(strata['variance_factor'])} of their variance (analytic, equal variance "
+            "assumed, not measured); ranges are not corrected for it.")
 
 
 def quality_line(coverage: dict) -> str:
@@ -744,6 +850,8 @@ def render_uncertainty_section(block: dict) -> str:
     if "totals" not in block:
         return "\n".join(lines)
     level = block["interval"]
+    if block["totals_strata"] is not None:
+        lines += [strata_line(block["totals_strata"], block["min_rows"]), ""]
     lines += [quality_line(block["quality_posterior"]), ""]
     outside = outside_line(block["points_outside_interval"])
     if outside:

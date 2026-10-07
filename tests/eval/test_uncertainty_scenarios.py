@@ -51,7 +51,7 @@ def test_block_head_and_scenarios_in_file_order():
     assert [entry["name"] for entry in block["scenarios"]] == [n for n, _ in _TRIAD]
     for entry in block["scenarios"]:
         assert set(entry) == {"name", "totals", "by_app", "per_day", "quality_posterior",
-                              "points_outside_interval", "table"}
+                              "points_outside_interval", "totals_strata", "table"}
         assert set(entry["by_app"]) == {"chat", "claims"} and entry["totals"]["n"] == 90
 
 

@@ -21,15 +21,16 @@ def test_u9_caveat_is_the_spec_text():                                     # U9
     range is. Editing it means editing spec §8 too."""
     assert UNCERTAINTY_CAVEAT == (
         "**Ranges show sampling variability only.** Each range is a percentile interval from\n"
-        "resampling the recorded rows with replacement, within each application, under this replay\n"
+        "resampling the recorded rows with replacement, within each application (applications with\n"
+        "fewer than `--min-rows` rows are resampled together for the totals), under this replay\n"
         "model. It does not include replay model error (first-decision replay, frozen signals,\n"
-        "predicted overflow), the error of the admission estimate for rows no backend answered,\n"
-        "inputs that were not recorded, or future traffic shift. Replay gives each endpoint one\n"
-        "latency, so a latency range reflects only which endpoints the resampled rows used. A narrow\n"
-        "range on a biased replay is still biased."
+        "predicted overflow), the error of the admission estimate for rows with no backend token\n"
+        "count, inputs that were not recorded, or future traffic shift. Replay gives each endpoint\n"
+        "one latency, so a latency range reflects only which endpoints the resampled rows used. A\n"
+        "narrow range on a biased replay is still biased."
     )
     assert all(line.startswith("> ") for line in caveat_lines())
-    assert len(caveat_lines()) == 7
+    assert len(caveat_lines()) == 8
 
 
 def test_u9_not_covered_names_every_excluded_source():                     # U9
@@ -42,9 +43,10 @@ def test_u9_section_opens_with_the_caveat_and_says_how_ranges_were_made():  # U9
     text = render_uncertainty_section(_block(replicates=100, seed=5))
     lines = text.split("\n")
     assert lines[0] == "## Uncertainty ranges" and lines[1] == ""
-    assert lines[2:9] == caveat_lines()
+    assert lines[2:10] == caveat_lines()
     assert ("90% percentile intervals from 100 bootstrap resamples of the simulated rows, "
-            "drawn with replacement within each application (seed 5).") in text
+            "drawn with replacement within each application (applications with fewer than "
+            "30 rows are resampled together for the totals) (seed 5).") in text
     assert "A bucket with fewer than 30 rows gets no range." in text
     assert text.endswith("\n") and not text.endswith("\n\n\n")
 
@@ -133,7 +135,7 @@ def test_quality_line_names_calibrated_rows_without_a_posterior():
 def test_a_block_with_no_figures_renders_the_caveat_and_method_only():
     """`--shadow-prices` without `--proposal`: there are no totals."""
     text = render_uncertainty_section(plan_block(UncertaintyPlan(replicates=50)))
-    assert text.split("\n")[2:9] == caveat_lines()
+    assert text.split("\n")[2:10] == caveat_lines()
     assert method_line(plan_block(UncertaintyPlan(replicates=50))) in text
     assert "### Totals" not in text and "Quality uncertainty" not in text
 

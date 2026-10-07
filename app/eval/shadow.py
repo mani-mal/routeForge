@@ -435,16 +435,22 @@ def _entry_ranges(entry: dict, results: list[RowResult], plan: UncertaintyPlan,
     `point` is the entry's own figure. Fewer than `plan.min_rows` rows in
     scope: `insufficient_data` and no range.
 
-    The draws are the ones every other part of the run uses for those apps,
-    so a relaxation's range and the proposal's are over the same resamples."""
+    The draws are the ones every other part of the run uses for those rows,
+    so a relaxation's range and the proposal's are over the same resamples:
+    one application's rows are that application's stratum, and an
+    endpoint-scoped relaxation, which re-simulates every row, is resampled
+    in the export's own strata (small applications pooled). `totals_strata`
+    says which, as `uncertainty.results_block` does."""
     head = {"requirement": entry["requirement"], "scope": entry["scope"],
             "security": entry["security"], "n": entry["rows_in_scope"]}
-    boot = run_bootstrap(results, plan)
+    # Only the totals of the rows in scope are read: no per-app figures.
+    boot = run_bootstrap(results, plan, totals_only=True)
     if boot.totals is None:
         return {**head, "insufficient_data": True}
     both = boot.totals["cost_usd_both_routed.delta"]
     return {
         **head,
+        "totals_strata": boot.strata,
         "route_changed": leaf(entry["route_changed"], boot.totals["route_changed"], plan),
         "rejections_avoided": leaf(entry["rejections_avoided"],
                                    boot.totals["newly_served"], plan),
@@ -550,6 +556,15 @@ SHADOW_CAVEAT = (
     "cost of a protection — they are never a recommendation to relax them."
 )
 
+#: Printed under the shadow "Ranges" table (P3c-3 spec §10.3).
+RANGE_STRATA_NOTE = (
+    "A relaxation scoped to one application is resampled as that application's rows; an "
+    "endpoint-scoped one over every row, with small applications resampled together "
+    "(`totals_strata` on each entry of `shadow_prices.uncertainty.constraints`). Resampling "
+    "within strata leaves a total about the `variance_factor` share of its variance "
+    "(analytic, equal variance assumed, not measured); ranges are not corrected for it."
+)
+
 #: The sentence under the two tables (final-fix ruling C1, verbatim).
 NEWLY_REJECTED_NOTE = (
     "Relaxing a constraint can newly reject a row: a wider allowed set can lift "
@@ -637,7 +652,7 @@ def _range_lines(ranges: dict) -> list[str]:
         return lines + ["None.", ""]
     lines += ["| " + " | ".join(_RANGE_COLUMNS) + " |", "|" + "---|" * len(_RANGE_COLUMNS)]
     lines += [_range_row(entry) for entry in ranges["constraints"]]
-    lines.append("")
+    lines += ["", RANGE_STRATA_NOTE, ""]
     return lines
 
 
