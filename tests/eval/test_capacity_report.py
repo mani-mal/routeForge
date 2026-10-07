@@ -10,8 +10,8 @@ from app.eval.capacity import (AVERAGES_NOTE, CAPACITY_CAVEAT, NO_RANGE_NOTE, NO
                                caveat_lines, peak_text, render_capacity_section, too_short_text)
 from app.eval.outcomes import _round6
 from tests.eval.sim_fixtures import make_row
-from tests.eval.test_capacity import (CAPACITY_BANNED, LIMITS, QUIET_THEN_BUSY, T0, arm_on,
-                                      block_for, mixed_traffic, one_endpoint, replay,
+from tests.eval.test_capacity import (CAPACITY_BANNED, LIMITS, QUIET_THEN_BUSY, T0, _poisson,
+                                      arm_on, block_for, mixed_traffic, one_endpoint, replay,
                                       synthetic, three_endpoints, traffic)
 
 
@@ -73,9 +73,10 @@ def test_the_section_shows_each_stated_limit_per_arm_and_the_demand():
     text = render_capacity_section(_block({"workload": {"volume_scale": 2}}))
     assert ("Volume scale assumed by the proposal (proposed arm only, multiplying any stated "
             "for both arms): *=2.") in text
-    assert ("Peak load: current peak 240.0% / avg 106.7% (local-cheap, "
-            "output_tokens_per_minute, 60 s buckets); proposed peak 480.0% / avg 213.3% "
-            "(local-cheap, output_tokens_per_minute, 60 s buckets).") in text
+    assert ("Peak load: current peak 240.0% / avg 106.7%, over 100% in 33.3% of 30 buckets "
+            "(local-cheap, output_tokens_per_minute, 60 s buckets); proposed peak 480.0% / "
+            "avg 213.3%, over 100% in 33.3% of 30 buckets (local-cheap, "
+            "output_tokens_per_minute, 60 s buckets).") in text
     assert "### local-cheap" in text
     assert ("Requests: current 160, proposed 320. Active buckets (an arrival or a request in "
             "service): current 30 of 30, proposed 30 of 30.") in text
@@ -106,8 +107,9 @@ def test_a_sparse_export_reads_as_sparse():
     block = _round6(capacity_block(synthetic(requests), CapacityPlan(
         limits={"e": {"max_concurrency": 1.0}})))
     text = render_capacity_section(block)
-    assert ("Peak load: current peak 100.0% / avg 2.1% (e, max_concurrency, 60 s buckets); "
-            "proposed peak 100.0% / avg 2.1% (e, max_concurrency, 60 s buckets).") in text
+    assert ("Peak load: current peak 100.0% / avg 2.1%, over 100% in 0.0% of 1323 buckets "
+            "(e, max_concurrency, 60 s buckets); proposed peak 100.0% / avg 2.1%, over 100% "
+            "in 0.0% of 1323 buckets (e, max_concurrency, 60 s buckets).") in text
     assert "The window is 1323 bucket(s)" in text and "a request arrived in 12 of them" in text
     assert "current 36 of 1323, proposed 36 of 1323." in text
     assert "| max_concurrency | current | 1 | 100.0% | 2.1% | 76.7% | 0 of 1323 | 0.0% |" in text
@@ -149,8 +151,8 @@ def test_a_limit_stated_in_one_arm_only_says_so_in_the_other():
     assert ("| max_concurrency | current | not stated | n/a | n/a | n/a | n/a | n/a | n/a |"
             in text)
     assert "| max_concurrency | proposed | 2 | 60.0% | 26.7% | 26.7% |" in text
-    assert ("Peak load: current not stated; proposed peak 60.0% / avg 26.7% (local-cheap, "
-            "max_concurrency, 60 s buckets).") in text
+    assert ("Peak load: current not stated; proposed peak 60.0% / avg 26.7%, over 100% in "
+            "0.0% of 30 buckets (local-cheap, max_concurrency, 60 s buckets).") in text
 
 
 def test_an_endpoint_no_row_reaches_prints_zero_and_no_peak_bucket():
@@ -366,28 +368,37 @@ def test_c10_no_sentence_ranks_recommends_or_prescribes():                      
     assert "read it with the average" in PEAK_COLUMN_NOTE
 
 
+#: What must follow every printed peak utilisation: the average over the
+#: window, then the share of the window's buckets above 100% and how many
+#: buckets that is a share of.
+_PEAK_CONTEXT = re.compile(r" / avg [\d.]+%, over 100% in [\d.]+% of \d+ buckets ")
+
+
 def unpaired_peaks(text: str) -> list[str]:
     """Every line of a report that prints a peak utilisation -- a
-    percentage in a "peak" sentence, cell or limits-table row -- without an
-    average beside it. Shared with the comparison report's test."""
+    percentage in a "peak" sentence, cell or limits-table row -- without
+    its context beside it: the average over the window AND how much of the
+    window is above 100%. A limits-table row carries the latter as a count
+    (`10 of 30`). Shared with the comparison report's test."""
     bad = []
     for line in text.split("\n"):
         if "%" not in line:
             continue
         if line.startswith("| ") and re.match(r"\| \w+ \| (current|proposed) \| ", line):
-            # A limits-table row: stated | peak | avg (window) | avg (active) | ...
+            # A limits-table row: stated | peak | avg (window) | avg (active) | buckets over |
             cells = [cell.strip() for cell in line.strip("|").split("|")]
-            if not (cells[3].endswith("%") and cells[4].endswith("%")
-                    and cells[5].endswith("%")):
+            if cells[3].endswith("%") and not (
+                    cells[4].endswith("%") and cells[5].endswith("%")
+                    and len(cells) > 6 and re.fullmatch(r"\d+ of \d+", cells[6])):
                 bad.append(line)
         elif "peak" in line.lower():
             for found in re.finditer(r"peak (\d[\d.]*%)", line):
-                if not line[found.end():].startswith(" / avg "):
+                if not _PEAK_CONTEXT.match(line, found.end()):
                     bad.append(line)
     return bad
 
 
-def test_c20_no_sentence_prints_a_peak_without_the_average():                          # C20
+def test_c20_no_sentence_prints_a_peak_without_the_average_and_the_share():           # C20
     blocks = [_block({"workload": {"volume_scale": 5}}),
               _round6(block_for(mixed_traffic(), three_endpoints(),
                                 {"endpoints": {"remove": ["local-mid"]}},
@@ -397,9 +408,40 @@ def test_c20_no_sentence_prints_a_peak_without_the_average():                   
         text = render_capacity_section(block)
         assert text.count(" / avg ") >= 2 and unpaired_peaks(text) == []
         for arm in ("current", "proposed"):
-            assert re.fullmatch(r"peak [\d.]+% / avg [\d.]+% \([\w-]+, \w+, 60 s buckets\)"
-                                r"(; concurrency not computed for [\w-]+)*",
-                                peak_text(block, arm))
-    # The detector is not vacuous.
+            assert re.fullmatch(
+                r"peak [\d.]+% / avg [\d.]+%, over 100% in [\d.]+% of \d+ buckets "
+                r"\([\w-]+, \w+, 60 s buckets\)(; concurrency not computed for [\w-]+)*",
+                peak_text(block, arm))
+    # The detector is not vacuous: a bare peak, a peak with the average and
+    # no share, and a table row missing either.
     assert unpaired_peaks("Peak load: current peak 230.0% (e, max_concurrency).") != []
+    assert unpaired_peaks("Peak load: current peak 355.2% / avg 59.3% (e, max_concurrency, "
+                          "60 s buckets).") != []
     assert unpaired_peaks("| max_concurrency | current | 1 | 230.0% | n/a | n/a | 1 of 2 |") != []
+    assert unpaired_peaks("| max_concurrency | current | 1 | 230.0% | 9.0% | 9.0% | n/a |") != []
+    assert unpaired_peaks("Peak load: current peak 355.2% / avg 59.3%, over 100% in 17.6% of "
+                          "10082 buckets (e, max_concurrency, 60 s buckets).") == []
+
+
+def test_the_headline_tells_often_over_the_limit_from_rarely():
+    """A stationary low-rate week (Poisson, 0.02 requests a second, 30 s
+    each: 0.6 in service on average). Against one concurrent request it is
+    over the limit in 17.6% of the minutes; against two, in 1.2% of them.
+    Peak and average alone read "355.2% / 59.3%" and "177.6% / 29.6%" --
+    the same shape -- and the ratio of peak to average grows with the
+    length of the export while the share of buckets over stays put. So the
+    share is printed with them."""
+    week = synthetic(_poisson(0.02, 24 * 7, 5, lambda rng: 30.0))
+    seen = {}
+    for limit in (1.0, 2.0):
+        block = _round6(capacity_block(week, CapacityPlan(
+            limits={"e": {"max_concurrency": limit}})))
+        buckets = block["window"]["buckets"]
+        seen[limit] = peak_text(block, "current")
+        stated = block["endpoints"]["e"]["current"]["limits"]["max_concurrency"]
+        assert block["peak"]["current"]["buckets_over_share"] == stated["buckets_over_share"]
+        assert stated["buckets_over_share"] == round(stated["buckets_over"] / buckets, 6)
+    assert seen[1.0] == (f"peak 355.2% / avg 59.3%, over 100% in 17.6% of {buckets} buckets "
+                         "(e, max_concurrency, 60 s buckets)")
+    assert seen[2.0] == (f"peak 177.6% / avg 29.6%, over 100% in 1.2% of {buckets} buckets "
+                         "(e, max_concurrency, 60 s buckets)")

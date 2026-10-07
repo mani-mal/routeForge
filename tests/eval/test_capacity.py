@@ -1423,27 +1423,37 @@ def test_c10_no_key_ranks_recommends_or_prescribes():                           
         "bucket_seconds", "buckets", "service_after_window_share"}
 
 
-def _peaks_without_an_average(node, path: str = "") -> list[str]:
-    """Every dict that carries a peak figure and no window mean beside it."""
+def _peaks_without_context(node, path: str = "") -> list[str]:
+    """Every dict that carries a peak figure without its context beside it:
+    the window mean, and -- for a utilisation (the headline, or a stated
+    limit's entry) -- the share of the window's buckets over the limit."""
     bare = []
     if isinstance(node, dict):
-        if ("peak" in node or "utilisation" in node) and "mean_window" not in node and not (
-                isinstance(node.get("peak"), dict)):
+        figure = ("peak" in node or "utilisation" in node) and not isinstance(
+            node.get("peak"), dict)
+        utilisation = "utilisation" in node or ("peak" in node and "limit" in node)
+        if (figure and "mean_window" not in node) or (
+                utilisation and "buckets_over_share" not in node):
             bare.append(path)
         for key, value in node.items():
-            bare += _peaks_without_an_average(value, f"{path}/{key}")
+            bare += _peaks_without_context(value, f"{path}/{key}")
     return bare
 
 
-def test_c20_no_peak_is_reported_without_the_window_mean_beside_it():                  # C20
+def test_c20_no_peak_is_reported_without_the_window_mean_and_the_share_beside_it():    # C20
     """In the block: every object with a `peak` (or the headline's
-    `utilisation`) has `mean_window` next to it."""
+    `utilisation`) has `mean_window` next to it, and every utilisation has
+    `buckets_over_share` too."""
     block = block_for(mixed_traffic(), three_endpoints(), _DROP_MID,
                       limits={"local-mid": {"max_concurrency": 2.0},
                               "local-big": {"requests_per_minute": 5.0}})
     assert block["peak"]["proposed"] is not None
-    assert _peaks_without_an_average(block) == []
-    # The detector is not vacuous: strip one mean and it fires.
-    del block["endpoints"]["local-big"]["proposed"]["limits"]["requests_per_minute"]["mean_window"]
-    assert _peaks_without_an_average(block) == [
+    assert _peaks_without_context(block) == []
+    # The detector is not vacuous: strip one of either and it fires.
+    stated = block["endpoints"]["local-big"]["proposed"]["limits"]["requests_per_minute"]
+    del stated["mean_window"]
+    assert _peaks_without_context(block) == [
         "/endpoints/local-big/proposed/limits/requests_per_minute"]
+    stated["mean_window"] = 0.0
+    del block["peak"]["proposed"]["buckets_over_share"]
+    assert _peaks_without_context(block) == ["/peak/proposed"]

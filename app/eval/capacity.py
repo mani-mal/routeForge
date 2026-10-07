@@ -718,9 +718,10 @@ NO_RANGE_NOTE = (
 #: Printed under the comparison table when it has the peak-load column.
 PEAK_COLUMN_NOTE = (
     "Peak load is the proposed arm's most loaded stated limit and the endpoint it is on: its "
-    "largest bucket, then its average over the whole window. A peak is a maximum over "
-    "buckets, so read it with the average. It is listed in file order like every other "
-    "column: a lower figure does not make a scenario the one to choose."
+    "largest bucket, then its average over the whole window, then the share of the window's "
+    "buckets in which it is above 100%. A peak is a maximum over buckets, endpoints and "
+    "limits, so read it with the average and the share. It is listed in file order like "
+    "every other column: a lower figure does not make a scenario the one to choose."
 )
 
 #: Says which bucket set each of the two averages is over (spec §6.2).
@@ -804,9 +805,12 @@ def too_short_text(block: dict) -> str:
 
 def peak_text(block: dict, arm: str) -> str:
     """One arm's most loaded stated limit, for a table cell or a line:
-    `peak 230.0% / avg 45.0% (local-llama, max_concurrency, 60 s buckets)`,
-    `not stated`, or the window-too-short state. Never a peak without the
-    average over the window beside it (invariant C20).
+    `peak 355.2% / avg 59.3%, over 100% in 17.6% of 10082 buckets (local-llama,
+    max_concurrency, 60 s buckets)`, `not stated`, or the window-too-short
+    state. Never a peak without the average over the window AND the share of
+    the window's buckets above the limit beside it (invariant C20): peak and
+    average alone cannot tell a limit exceeded in 1% of the buckets from one
+    exceeded in 18% of them.
 
     The headline is a maximum over endpoints and limits, and a figure that
     is missing from a maximum, or understated in it, must not leave it
@@ -827,7 +831,8 @@ def peak_text(block: dict, arm: str) -> str:
         return "n/a" + left_out if left_out else "not stated"
     cut_off = "".join(f"; {_pct(share)} of service time on {slug} falls after the window"
                       for slug, share in _after_window(block["endpoints"], arm))
-    return (f"peak {_pct(peak['utilisation'])} / avg {_pct(peak['mean_window'])} "
+    return (f"peak {_pct(peak['utilisation'])} / avg {_pct(peak['mean_window'])}, over 100% "
+            f"in {_pct(peak['buckets_over_share'])} of {peak['buckets']} buckets "
             f"({peak['endpoint']}, {peak['limit']}, {peak['bucket_seconds']} s buckets)"
             + cut_off + left_out)
 

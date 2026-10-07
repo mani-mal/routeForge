@@ -54,8 +54,8 @@ def test_c1_a_plan_adds_one_key_and_the_peak_table_keys_and_changes_nothing_else
     assert set(loaded) - set(plain) == {"capacity"}
     for before, after in zip(plain["table"], loaded["table"]):
         assert set(after) - set(before) == {"peak_utilisation", "peak_mean_window",
-                                            "peak_endpoint", "peak_limit",
-                                            "peak_concurrency_not_computed"}
+                                            "peak_buckets_over_share", "peak_endpoint",
+                                            "peak_limit", "peak_concurrency_not_computed"}
         assert {k: after[k] for k in before} == before
     stripped = {k: v for k, v in loaded.items() if k not in ("capacity", "table")}
     assert stripped == {k: v for k, v in plain.items() if k != "table"}
@@ -93,18 +93,20 @@ def test_the_table_carries_the_proposed_arms_most_loaded_limit():
     doc = _doc()
     rows = {row["name"]: row for row in doc["table"]}
     assert (rows["no-change"]["peak_utilisation"], rows["no-change"]["peak_mean_window"],
+            rows["no-change"]["peak_buckets_over_share"],
             rows["no-change"]["peak_endpoint"], rows["no-change"]["peak_limit"]) == (
-        2.4, 1.066667, "local-cheap", "output_tokens_per_minute")
+        2.4, 1.066667, 0.333333, "local-cheap", "output_tokens_per_minute")
     assert (rows["twice-the-traffic"]["peak_utilisation"],
-            rows["twice-the-traffic"]["peak_mean_window"]) == (4.8, 2.133333)
+            rows["twice-the-traffic"]["peak_mean_window"],
+            rows["twice-the-traffic"]["peak_buckets_over_share"]) == (4.8, 2.133333, 0.333333)
     assert rows["second-box"]["peak_utilisation"] == 2.4       # output tokens still bind
     text = render_comparison(doc)
     header = next(line for line in text.split("\n") if line.startswith("| scenario |"))
     assert header.endswith("| affected apps | peak / avg load (proposed) |")
-    assert ("| none | peak 240.0% / avg 106.7% (local-cheap, output_tokens_per_minute, "
-            "60 s buckets) |") in text
-    assert ("| none | peak 480.0% / avg 213.3% (local-cheap, output_tokens_per_minute, "
-            "60 s buckets) |") in text
+    assert ("| none | peak 240.0% / avg 106.7%, over 100% in 33.3% of 30 buckets (local-cheap, "
+            "output_tokens_per_minute, 60 s buckets) |") in text
+    assert ("| none | peak 480.0% / avg 213.3%, over 100% in 33.3% of 30 buckets (local-cheap, "
+            "output_tokens_per_minute, 60 s buckets) |") in text
 
 
 def test_a_tier_default_fills_the_cell_with_a_state_not_a_percentage():
@@ -151,6 +153,7 @@ def test_c20_no_cell_or_sentence_prints_a_peak_without_the_average():           
         for row in doc["table"]:
             assert row["peak_utilisation"] is not None
             assert row["peak_mean_window"] is not None
+            assert row["peak_buckets_over_share"] is not None
         for entry in doc["capacity"]["scenarios"]:
             for arm in ("current", "proposed"):
                 assert {"utilisation", "mean_window", "buckets_over_share", "bucket_seconds",
@@ -181,8 +184,9 @@ def test_the_report_has_one_capacity_section_and_one_per_scenario():
     top = text[text.index("\n## Capacity\n"):]
     lines = top.split("\n")
     assert lines[3:20] == caveat_lines() and lines[21] == NO_REMEDY_NOTE
-    assert ("Current arm peak load (the same for every scenario): peak 240.0% / avg 106.7% "
-            "(local-cheap, output_tokens_per_minute, 60 s buckets).") in top
+    assert ("Current arm peak load (the same for every scenario): peak 240.0% / avg 106.7%, "
+            "over 100% in 33.3% of 30 buckets (local-cheap, output_tokens_per_minute, "
+            "60 s buckets).") in top
     second = text[text.index("## Scenario: second-box"):]
     assert "#### local-cheap" in second
     assert "| max_concurrency | proposed | 2 | 60.0% |" in second
@@ -195,8 +199,9 @@ def test_the_report_has_one_capacity_section_and_one_per_scenario():
 def test_c8_a_short_window_fills_the_cell_with_the_state():                            # C8
     doc = _doc(rows=traffic([3] * 4))
     for row in doc["table"]:
-        assert (row["peak_utilisation"], row["peak_mean_window"], row["peak_endpoint"],
-                row["peak_limit"]) == (None, None, None, None)
+        assert (row["peak_utilisation"], row["peak_mean_window"],
+                row["peak_buckets_over_share"], row["peak_endpoint"],
+                row["peak_limit"]) == (None, None, None, None, None)
     assert all(entry["window_too_short"] for entry in doc["capacity"]["scenarios"])
     text = render_comparison(doc)
     assert text.count("| window too short (4 of the 10 buckets needed) |") == 3
@@ -209,6 +214,7 @@ def test_a_scenario_with_no_limit_anywhere_says_not_stated():
     doc = _doc(scenarios=(("no-change", {}),), capacity=CapacityPlan())
     assert doc["table"][0]["peak_utilisation"] is None
     assert doc["table"][0]["peak_mean_window"] is None
+    assert doc["table"][0]["peak_buckets_over_share"] is None
     assert "| none | not stated |" in render_comparison(doc)
 
 
@@ -226,8 +232,8 @@ def test_c9_ranges_and_capacity_together_leave_capacity_as_points():            
     assert text.count(NO_RANGE_NOTE) == 1
     cells = [line.rsplit("|", 2)[1] for line in text.split("\n")
              if line.startswith("| twice-the-traffic |")]
-    assert cells == [" peak 480.0% / avg 213.3% (local-cheap, output_tokens_per_minute, "
-                     "60 s buckets) "]
+    assert cells == [" peak 480.0% / avg 213.3%, over 100% in 33.3% of 30 buckets "
+                     "(local-cheap, output_tokens_per_minute, 60 s buckets) "]
 
 
 def test_c9_volume_scale_does_not_move_a_range_even_with_small_apps_pooled():          # C9

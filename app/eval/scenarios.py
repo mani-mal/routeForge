@@ -304,14 +304,17 @@ LIKE_FOR_LIKE_NOTE = (
 def _table_row(entry: dict, window: dict | None, capacity: dict | None = None) -> dict:
     """One comparison-table row. Exactly these keys -- there is no rank,
     score or recommendation field, by design (S8). With a capacity block
-    (P3c-4) four more: the proposed arm's most loaded stated limit -- its
+    (P3c-4) six more: the proposed arm's most loaded stated limit -- its
     peak utilisation and, always beside it, its mean over the whole window
-    -- all None when no limit is stated or the window is too short."""
+    and the share of the window's buckets above the limit -- all None when
+    no limit is stated (or none could be computed) or the window is too
+    short; and the endpoints that maximum was taken without."""
     row = _plain_table_row(entry, window)
     if capacity is not None:
         peak = capacity["peak"]["proposed"] or {}
         row["peak_utilisation"] = peak.get("utilisation")
         row["peak_mean_window"] = peak.get("mean_window")
+        row["peak_buckets_over_share"] = peak.get("buckets_over_share")
         row["peak_endpoint"] = peak.get("endpoint")
         row["peak_limit"] = peak.get("limit")
         # What that maximum was taken WITHOUT: the endpoints whose stated
@@ -364,7 +367,7 @@ def comparison_doc(comparison: Comparison, *, inputs: dict) -> dict:
     }
     if comparison.capacity is not None:
         # The ONE top-level key a capacity plan adds (the table rows gain
-        # their four keys above); every other key is unchanged.
+        # their six keys above); every other key is unchanged.
         doc["capacity"] = comparison.capacity
     if comparison.uncertainty is not None:
         # The ONE key `--uncertainty` adds; every key above is unchanged.

@@ -51,8 +51,8 @@ def _strip(doc: dict) -> dict:
     doc.pop("simulation_id", None)
     doc.pop("comparison_id", None)
     for row in doc.get("table", []):
-        for key in ("peak_utilisation", "peak_mean_window", "peak_endpoint", "peak_limit",
-                    "peak_concurrency_not_computed"):
+        for key in ("peak_utilisation", "peak_mean_window", "peak_buckets_over_share",
+                    "peak_endpoint", "peak_limit", "peak_concurrency_not_computed"):
             row.pop(key, None)
     return doc
 
@@ -193,9 +193,10 @@ def test_c14_the_cli_reports_the_hand_computed_utilisation(tmp_path):           
     text = (out / "report.md").read_text()
     assert ("| max_concurrency | proposed | 1 | 240.0% | 106.7% | 106.7% | 10 of 30 | 75.0% | "
             "2026-09-20T12:20:00+00:00 |") in text
-    assert ("Peak load: current peak 240.0% / avg 106.7% (local-cheap, "
-            "output_tokens_per_minute, 60 s buckets); proposed peak 480.0% / avg 213.3% "
-            "(local-cheap, output_tokens_per_minute, 60 s buckets).") in text
+    assert ("Peak load: current peak 240.0% / avg 106.7%, over 100% in 33.3% of 30 buckets "
+            "(local-cheap, output_tokens_per_minute, 60 s buckets); proposed peak 480.0% / "
+            "avg 213.3%, over 100% in 33.3% of 30 buckets (local-cheap, "
+            "output_tokens_per_minute, 60 s buckets).") in text
     assert text.split("## Capacity\n\n")[1].split("\n")[:17] == caveat_lines()
 
 
@@ -232,7 +233,8 @@ def test_c8_a_short_export_says_so_in_the_json_the_table_and_the_report(tmp_path
     doc = _doc("scenarios", out)
     assert all(entry["window_too_short"] and entry["endpoints"] == {}
                for entry in doc["capacity"]["scenarios"])
-    assert all(row["peak_utilisation"] is None for row in doc["table"])
+    assert all(row["peak_utilisation"] is None and row["peak_buckets_over_share"] is None
+               for row in doc["table"])
     text = (out / "report.md").read_text()
     assert text.count("| window too short (") == len(doc["table"])
     single = tmp_path / "single"
@@ -258,6 +260,7 @@ def test_c20_the_written_report_never_prints_a_peak_alone(mode, tmp_path):      
             assert block["peak"][arm]["mean_window"] is not None
     for row in doc.get("table", []):
         assert (row["peak_utilisation"] is None) == (row["peak_mean_window"] is None)
+        assert (row["peak_utilisation"] is None) == (row["peak_buckets_over_share"] is None)
         assert row["peak_utilisation"] is not None
 
 
