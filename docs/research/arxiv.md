@@ -540,10 +540,10 @@ literature doesn't model".
 | E7b | Rejected rows replay as routed (B60) | FB §18.4.1, §19.4.1 | done: defect observed (7 of 7 rejections replayed as routed), fixed, re-run on post-upgrade rows — 7 of 7 rejected in replay, outcome agreement 1.0 over 24, raise-budget newly serves 7 |
 | E7c | Token-estimate gap and over-rejection (B64) | FB §19.4.1 | first measurement: routing/backend = 1.54 on 17 served rows (synthetic prose); real traffic **TO MEASURE** |
 | E8 | Healthcare scenario triad, traffic-weighted vs static | P3c-2 | **TO MEASURE** |
-| E9a | Range width against sample size (500 / 5,000 / 50,000 rows; 24-row case) | §4.2, FB §20.6.2 | **TO MEASURE** |
-| E9b | Empirical coverage of the 90% range on split halves of a real export | §4.2, FB §20.6.2 | **TO MEASURE** |
-| E9c | Coverage under dependence (agent-loop traffic) | §4.2, FB §20.6.2 | **TO MEASURE** |
-| E9d | Quality range with and without calibration posteriors | §4.2, FB §20.6.2 | **TO MEASURE** |
+| E9a | Range width against sample size (500 / 5,000 / 50,000 rows; 24-row case) | §4.2, FB §20.6.2–§20.6.3 | 24-row case done (prints `insufficient data`); a 96-row lab run done as a plumbing check (four repeats of 24 requests — not independent rows): `raise-request-budget` newly serves 28 `[21, 35]`, no-op deltas exactly `[0, 0]`; width against `1/√n` on persona traffic **TO MEASURE** |
+| E9b | Empirical coverage of the 90% range on split halves of a real export | §4.2, FB §20.6.3 | **TO MEASURE** |
+| E9c | Coverage under dependence (agent-loop traffic) | §4.2, FB §20.6.3 | **TO MEASURE** |
+| E9d | Quality range with and without calibration posteriors | §4.2, FB §20.6.3 | **TO MEASURE** |
 | E10+ | capacity, fidelity, P2 metrics, R2/R3/R4 | §4–§5 | specs pending |
 
 **Data caveat for every live number:** the Spark serves one app (`kit-gtm`, Qwen Code), all
