@@ -454,8 +454,8 @@ def test_plan_block_and_inputs():
                                  "quality_posteriors_sha256": []}
     assert plan_block(plan) == {
         "method": METHOD, "strata": "application_id", "replicates": 250, "interval": 0.8,
-        "seed": 4, "min_rows": 10, "quality_posterior_sets": [],
-        "not_covered": list(NOT_COVERED)}
+        "seed": 4, "min_rows": 10, "interval_is_min_max": False,
+        "quality_posterior_sets": [], "not_covered": list(NOT_COVERED)}
     assert UncertaintyPlan() == UncertaintyPlan(replicates=1000, interval=0.90, seed=0,
                                                 min_rows=30)
 

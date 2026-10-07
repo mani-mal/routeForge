@@ -114,8 +114,12 @@ class UncertaintyPlan:
             raise ValueError(f"replicates must be an int from 1 to {MAX_REPLICATES}; "
                              f"got {self.replicates!r}")
         # `not (0 < x < 1)` also refuses NaN, which compares false both ways.
-        if isinstance(self.interval, bool) or not 0.0 < self.interval < 1.0:
-            raise ValueError(f"interval must be strictly between 0 and 1; got {self.interval!r}")
+        # A non-number is refused by type first: comparing it would raise
+        # TypeError, and the CLI reports a ValueError as exit 2.
+        if (isinstance(self.interval, bool) or not isinstance(self.interval, (int, float))
+                or not 0.0 < self.interval < 1.0):
+            raise ValueError(f"interval must be a number strictly between 0 and 1; "
+                             f"got {self.interval!r}")
         if not isinstance(self.seed, int) or isinstance(self.seed, bool) or self.seed < 0:
             raise ValueError(f"seed must be an int >= 0; got {self.seed!r}")
         if (not isinstance(self.min_rows, int) or isinstance(self.min_rows, bool)
@@ -241,7 +245,12 @@ def posterior_key(arm: ArmResult, row: dict,
     return None
 
 
-def _arm_sig(arm: ArmResult, row: dict, posteriors: dict[PosteriorKey, Posterior]) -> tuple:
+#: `(routed, on-prem, latency_ms, quality, posterior key)` -- see `_arm_sig`.
+ArmSig = tuple[bool, bool, float | None, float | None, PosteriorKey | None]
+
+
+def _arm_sig(arm: ArmResult, row: dict,
+             posteriors: dict[PosteriorKey, Posterior]) -> ArmSig:
     """Everything a figure reads from one arm of one row EXCEPT its cost:
     `(routed, on-prem, latency_ms, quality, posterior key)`. Latency and
     quality are properties of the picked model (and workload), so rows share
@@ -522,12 +531,39 @@ def _flatten(stats: dict, n: int, days: float | None) -> dict[str, float | None]
     return out
 
 
+def tail_index(n: int, level: float) -> int:
+    """How many of `n` sorted replicate values the percentile interval at
+    `level` leaves out on EACH side: `k = floor((1 - level) / 2 * n)`.
+
+    - The `1e-9` added before the floor guards against a product that should
+      be a whole number landing just below it in floating point
+      (`(1 - 0.9) / 2 * 20` is `0.9999999999999998`, and must give 1).
+    - `k` is clamped to `(n - 1) // 2`, the most that can be left out on
+      both sides without the two ends crossing: a level so small that both
+      tails pass the middle gives the middle value(s), never `lo > hi`.
+    - `k == 0` means nothing is left out: the "interval" is the replicates'
+      minimum and maximum (`plan_block`'s `interval_is_min_max`)."""
+    return min(int(math.floor((1.0 - level) / 2 * n + 1e-9)), (n - 1) // 2)
+
+
+def min_replicates(level: float) -> int:
+    """The fewest replicates at which the interval at `level` leaves at
+    least one value out on each side (`tail_index >= 1`): about
+    `2 / (1 - level)`, and never fewer than 3."""
+    n = max(3, int(2.0 / (1.0 - level)) - 1)
+    while tail_index(n, level) < 1:
+        n += 1
+    return n
+
+
 def interval_of(values: list[float], level: float) -> tuple[float, float]:
     """The equal-tailed percentile interval of `values` at `level`: with
-    `k = floor((1 - level) / 2 * N)`, the `(k+1)`-th smallest and the
-    `(k+1)`-th largest. One replicate gives `lo == hi`."""
+    `k = tail_index(N, level)` -- `floor((1 - level) / 2 * N)`, computed with
+    a `1e-9` guard against floating-point undershoot and clamped so the ends
+    never cross -- the `(k+1)`-th smallest and the `(k+1)`-th largest. One
+    replicate gives `lo == hi`; `k == 0` gives the minimum and the maximum."""
     ordered = sorted(values)
-    k = int(math.floor((1.0 - level) / 2 * len(ordered) + 1e-9))
+    k = tail_index(len(ordered), level)
     return ordered[k], ordered[len(ordered) - 1 - k]
 
 
@@ -536,12 +572,27 @@ def zero_bound(n: int, level: float) -> float:
     would still show no such row in `n` independent draws with probability
     `1 - level`, i.e. `1 - (1 - level) ** (1 / n)`. At the default 0.90 it
     is about `2.3 / n` (the "rule of three" is the same formula at 0.95).
-    It assumes independent rows; correlated rows make the true bound larger."""
+
+    It is ONE-SIDED (an upper limit at `level`; there is no lower one to
+    pair it with), and it bounds the rate under THIS REPLAY, not the live
+    rate: a replay that wrongly routes rows the live system would reject
+    shows 0 however many rows there are. It assumes independent rows;
+    correlated rows make the true bound larger."""
     return 1.0 - (1.0 - level) ** (1.0 / n)
 
 
+def one_bound(n: int, level: float) -> float:
+    """The mirror of `zero_bound`, for a share that is 1 in all `n` rows:
+    the smallest per-row rate at which `n` independent draws would still all
+    show the event with probability `1 - level`, i.e. `(1 - level) ** (1 /
+    n)`. One-sided (a lower limit), about the replayed rate, and about
+    sampling only: it says nothing about a share a policy fixes by
+    construction (an `onprem_only` application's on-prem share)."""
+    return (1.0 - level) ** (1.0 / n)
+
+
 def leaf(point: float | None, values: list, plan: UncertaintyPlan, *,
-         zero_n: int | None = None) -> dict:
+         zero_n: int | None = None, one_n: int | None = None) -> dict:
     """One figure's `{"point", "lo", "hi"}`, rounded to 6 dp.
 
     - A figure undefined (None) in ANY replicate has no range: `lo`/`hi` are
@@ -551,7 +602,8 @@ def leaf(point: float | None, values: list, plan: UncertaintyPlan, *,
       percentile interval does not promise that; it is reported, not hidden
       by widening the range.
     - `zero_n` (a share whose count is 0 in all `zero_n` rows) adds
-      `zero_bound`."""
+      `zero_bound`; `one_n` (a share that is 1 in all `one_n` rows) adds
+      `one_bound`."""
     out: dict = {"point": point, "lo": None, "hi": None}
     undefined = sum(1 for v in values if v is None)
     if undefined:
@@ -560,6 +612,8 @@ def leaf(point: float | None, values: list, plan: UncertaintyPlan, *,
     out["lo"], out["hi"] = interval_of(values, plan.interval)
     if zero_n:
         out["zero_bound"] = zero_bound(zero_n, plan.interval)
+    if one_n:
+        out["one_bound"] = one_bound(one_n, plan.interval)
     out = _round6(out)
     if out["point"] is not None and not out["lo"] <= out["point"] <= out["hi"]:
         out["point_outside"] = True
@@ -604,7 +658,8 @@ def estimated_token_rows(rows: list[RowResult]) -> int:
 def _bucket(rows: list[RowResult], samples: dict[str, list], plan: UncertaintyPlan,
             days: float | None) -> dict:
     """One bucket that has ranges: `{"n", "routed", "estimated_token_rows",
-    <figure tree of leaves>}`. Points come from `simulate._bucket_stats`.
+    <figure tree of leaves>}`. Points come from `simulate._bucket_stats`. A
+    share whose point is exactly 0 or 1 carries `zero_bound` / `one_bound`.
 
     `routed` is each arm's routed row count. A figure over an arm's routed
     rows (`_CONDITIONAL`) rests on that count, not on `n`: below
@@ -622,8 +677,14 @@ def _bucket(rows: list[RowResult], samples: dict[str, list], plan: UncertaintyPl
             flat[name] = _round6({"point": points[name], "lo": None, "hi": None,
                                   "insufficient_data": True, "n": behind})
             continue
-        zero = n if name.endswith("_share") and points[name] == 0 else None
-        flat[name] = leaf(points[name], values, plan, zero_n=zero)
+        # A share of exactly 0 or 1 has a one-value range at any sample
+        # size, so it carries the one-sided bound for the rows it is a
+        # share OF: the bucket's rows for a count's share, the arm's routed
+        # rows for its on-prem share.
+        of = n if name.endswith("_share") else behind if "onprem_share" in name else None
+        flat[name] = leaf(points[name], values, plan,
+                          zero_n=of if of and points[name] == 0 else None,
+                          one_n=of if of and points[name] == 1 else None)
     return {"n": n, "routed": routed, "estimated_token_rows": estimated_token_rows(rows),
             **_nest(flat)}
 
@@ -633,7 +694,11 @@ def _insufficient(n: int) -> dict:
     return {"insufficient_data": True, "n": n}
 
 
-def _count_outside(node) -> int:
+def _count_outside(node: object) -> int:
+    """How many leaves under `node` (dicts and lists, any depth) carry
+    `point_outside`."""
+    if isinstance(node, list):
+        return sum(_count_outside(v) for v in node)
     if isinstance(node, dict):
         return (1 if node.get("point_outside") else 0) + sum(
             _count_outside(v) for v in node.values())
@@ -723,6 +788,9 @@ def plan_block(plan: UncertaintyPlan) -> dict:
     what they leave out."""
     return {"method": METHOD, "strata": STRATA, "replicates": plan.replicates,
             "interval": plan.interval, "seed": plan.seed, "min_rows": plan.min_rows,
+            # True when there are too few replicates for the level to leave
+            # any value out: every range is then a minimum and a maximum.
+            "interval_is_min_max": tail_index(plan.replicates, plan.interval) == 0,
             "quality_posterior_sets": [set_id for set_id, _sha in plan.posterior_files],
             "not_covered": list(NOT_COVERED)}
 
@@ -743,15 +811,37 @@ UNCERTAINTY_CAVEAT = (
     "narrow range on a biased replay is still biased."
 )
 
-#: Why a zero count is not "no risk" (spec §7). `{}` fields: n, level, bound, one_in.
+#: Why a zero count is not "no risk" (spec §7.2). `{}` fields: n, level, bound, one_in.
 ZERO_COUNT_NOTE = (
     "newly_rejected is 0 in all {n} rows. That is not zero risk: at the {level} level these "
-    "rows are consistent with a newly-rejected rate of up to {bound} (about 1 request in "
-    "{one_in}), if the rows are independent draws from the same traffic. Correlated rows, "
-    "such as the calls of one agent loop, make the true bound larger."
+    "rows are consistent with a replayed newly-rejected rate of up to {bound} (about 1 "
+    "request in {one_in}), if the rows are independent draws from the same traffic. The "
+    "bound is one-sided, and it is a bound of the rate under this replay, not of the live "
+    "rate. Correlated rows, such as the calls of one agent loop, make the true bound larger."
 )
 
-# (label, path into a bucket) for the range table, in `_metrics_table`'s order.
+#: Under every table that prints a count as `point [lo, hi]` (spec §7.2).
+ZERO_RANGE_NOTE = "A count of 0 shows `[0, 0]` at any sample size; that is not zero risk."
+
+#: Under a bucket's table when a share in it is exactly 1 (spec §7.2).
+SATURATED_SHARE_NOTE = (
+    "A share of exactly 1 shows `1 to 1` at any sample size; that is not certainty: "
+    "`one_bound` in the JSON is the one-sided lower limit these rows are consistent with if "
+    "they are independent draws, and it says nothing about a share a policy fixes by "
+    "construction."
+)
+
+#: Under a table whose cells are `point [lo, hi]`, when a cell is marked (spec §7.3).
+OUTSIDE_FOOTNOTE = (
+    "`*` the point estimate is outside its own range. A percentile interval does not "
+    "guarantee otherwise; nothing was widened."
+)
+
+# (label, path into a bucket) for the range table. The figures it shares with
+# `simulate._metrics_table` (cost, latency, quality, on-prem share) are in
+# that table's order; the three counts and their shares, which
+# `_metrics_table` prints on its first line or not at all, sit between the
+# costs and the latencies.
 _FIGURE_ROWS = tuple(
     [(f"cost_usd {k}", ("cost_usd", k)) for k in ("current", "proposed", "delta")]
     + [(f"cost_usd (both routed) {k}", ("cost_usd_both_routed", k))
@@ -799,6 +889,16 @@ def strata_line(strata: dict, min_rows: int) -> str:
             "assumed, not measured); ranges are not corrected for it.")
 
 
+def min_max_line(block: dict) -> str | None:
+    """What to say when the block's `interval_is_min_max` is set, else None."""
+    if not block["interval_is_min_max"]:
+        return None
+    level = level_text(block["interval"])
+    return (f"With {block['replicates']} resamples each range is the smallest and the largest "
+            f"resample value, not a {level} interval: a {level} interval needs at least "
+            f"{min_replicates(block['interval'])} resamples.")
+
+
 def quality_line(coverage: dict) -> str:
     """How much of the quality range is label uncertainty (spec §6)."""
     cur, prop = coverage["current"], coverage["proposed"]
@@ -839,12 +939,16 @@ def range_text(node: dict) -> str:
 
 def with_range(text: str, node: dict | None) -> str:
     """`text [lo, hi]` for a cell of a table that already shows the point;
-    `text` unchanged when there is no leaf for it."""
+    `text` unchanged when there is no leaf for it. A point outside its own
+    range is marked `*` (`OUTSIDE_FOOTNOTE` explains the mark)."""
     if node is None:
         return text
+    if node.get("insufficient_data"):
+        return f"{text} [insufficient data, n = {node['n']} routed]"
     if node["lo"] is None:
         return f"{text} [n/a]"
-    return f"{text} [{_fmt(node['lo'])}, {_fmt(node['hi'])}]"
+    mark = "*" if node.get("point_outside") else ""
+    return f"{text} [{_fmt(node['lo'])}, {_fmt(node['hi'])}]{mark}"
 
 
 def _dig(bucket: dict, path: tuple[str, ...]) -> dict:
@@ -883,6 +987,8 @@ def bucket_lines(bucket: dict, level: float) -> list[str]:
     note = zero_count_note(bucket, level)
     if note:
         lines += ["", note]
+    if any("one_bound" in _dig(bucket, path) for _label, path in _FIGURE_ROWS):
+        lines += ["", SATURATED_SHARE_NOTE]
     return lines
 
 
@@ -901,6 +1007,9 @@ def render_uncertainty_section(block: dict) -> str:
     lines: list[str] = ["## Uncertainty ranges", ""]
     lines += caveat_lines()
     lines += ["", method_line(block), ""]
+    min_max = min_max_line(block)
+    if min_max:
+        lines += [min_max, ""]
     if "totals" not in block:
         return "\n".join(lines)
     level = block["interval"]

@@ -111,7 +111,11 @@ def test_u4_a_relaxation_is_resampled_with_the_same_draws_as_a_proposal():  # U4
     bucket = results_block(results, PLAN)["by_app"]["big"]
     assert big["cost_usd_both_routed_delta"] == bucket["cost_usd_both_routed"]["delta"]
     assert big["route_changed"] == bucket["route_changed"]
-    assert big["newly_rejected"] == bucket["newly_rejected"]
+    # The relaxation's leaf also carries `zero_bound` (final review F3: a
+    # relaxation's "0 newly rejected" is read as a safety claim); in a bucket
+    # that bound is on the share. The RANGE is the same, value for value.
+    assert big["newly_rejected"] == {**bucket["newly_rejected"],
+                                     "zero_bound": bucket["newly_rejected_share"]["zero_bound"]}
     assert big["rejections_avoided"] == bucket["newly_served"]
 
 
@@ -171,5 +175,5 @@ def test_no_binding_relaxation_gives_an_empty_ranges_list():
     snap = make_snapshot(apps=[app_entry("big")])
     block = _run(_rows("big", 40), snap, uncertainty=PLAN)
     assert block["constraints"] == [] and block["uncertainty"] == {
-        "interval": 0.9, "constraints": []}
+        "interval": 0.9, "constraints": [], "points_outside_interval": 0}
     assert "### Ranges\n\n" in render_shadow_section(block)

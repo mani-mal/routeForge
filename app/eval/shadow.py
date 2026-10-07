@@ -49,7 +49,8 @@ from app.eval.simulate import (
     select_rows,
     simulate_row,
 )
-from app.eval.uncertainty import (UncertaintyPlan, insufficient_text, leaf, level_text,
+from app.eval.uncertainty import (OUTSIDE_FOOTNOTE, ZERO_RANGE_NOTE, UncertaintyPlan,
+                                  _count_outside, insufficient_text, leaf, level_text,
                                   run_bootstrap, with_range)
 
 from app.policy.core import (
@@ -454,7 +455,12 @@ def _entry_ranges(entry: dict, results: list[RowResult], plan: UncertaintyPlan,
         "route_changed": leaf(entry["route_changed"], boot.totals["route_changed"], plan),
         "rejections_avoided": leaf(entry["rejections_avoided"],
                                    boot.totals["newly_served"], plan),
-        "newly_rejected": leaf(entry["newly_rejected"], boot.totals["newly_rejected"], plan),
+        # "0 newly rejected" is the count a reader takes as a safety claim,
+        # and its range is [0, 0] at any sample size: it carries the
+        # one-sided bound for the rows in scope (`uncertainty.zero_bound`).
+        "newly_rejected": leaf(entry["newly_rejected"], boot.totals["newly_rejected"], plan,
+                               zero_n=(entry["rows_in_scope"]
+                                       if entry["newly_rejected"] == 0 else None)),
         "cost_usd_both_routed_delta": leaf(entry["cost_usd_both_routed"]["delta"], both, plan),
         # The entry's own arithmetic: minus the like-for-like delta, per day.
         "cost_saved_per_day": (leaf(entry["cost_saved_per_day"], [-v / days for v in both], plan)
@@ -490,9 +496,10 @@ async def shadow_prices(records: list[dict], baseline_doc: dict, *, base: Settin
     the export exactly as `simulate.run_rows` does (P3c-2).
 
     `uncertainty` (P3c-3) adds ONE key to the block, `uncertainty`:
-    `{"interval", "constraints"}`, the second a list parallel to
-    `constraints` (same order) of `_entry_ranges`. Without a plan the block
-    is exactly what it was."""
+    `{"interval", "constraints", "points_outside_interval"}`, the second a
+    list parallel to `constraints` (same order) of `_entry_ranges`, the
+    third how many of its leaves have a point outside their own range.
+    Without a plan the block is exactly what it was."""
     observed = observed_latencies([r for r in records if not _before_since(r, since)])
     baseline = await build_scenario(baseline_doc, base=base)
     try:
@@ -536,8 +543,9 @@ async def shadow_prices(records: list[dict], baseline_doc: dict, *, base: Settin
         if uncertainty is not None:
             # Looked up by identity AFTER the sort, so the two lists stay
             # parallel whatever the order is.
-            block["uncertainty"] = {"interval": uncertainty.interval,
-                                    "constraints": [ranges[id(e)] for e in constraints]}
+            ordered = [ranges[id(e)] for e in constraints]
+            block["uncertainty"] = {"interval": uncertainty.interval, "constraints": ordered,
+                                    "points_outside_interval": _count_outside(ordered)}
         return _round6(block)
     finally:
         await close_scenario(baseline)
@@ -652,7 +660,10 @@ def _range_lines(ranges: dict) -> list[str]:
         return lines + ["None.", ""]
     lines += ["| " + " | ".join(_RANGE_COLUMNS) + " |", "|" + "---|" * len(_RANGE_COLUMNS)]
     lines += [_range_row(entry) for entry in ranges["constraints"]]
-    lines += ["", RANGE_STRATA_NOTE, ""]
+    lines += ["", ZERO_RANGE_NOTE, ""]
+    if ranges["points_outside_interval"]:
+        lines += [OUTSIDE_FOOTNOTE, ""]
+    lines += [RANGE_STRATA_NOTE, ""]
     return lines
 
 

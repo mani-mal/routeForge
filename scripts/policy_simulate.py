@@ -71,8 +71,8 @@ from app.eval.simulate import (  # noqa: E402
     summarize,
 )
 from app.eval.uncertainty import (  # noqa: E402
-    MAX_REPLICATES, UncertaintyPlan, load_posteriors, plan_block, plan_inputs,
-    render_uncertainty_section, results_block, window_days,
+    MAX_REPLICATES, UncertaintyPlan, level_text, load_posteriors, min_replicates, plan_block,
+    plan_inputs, render_uncertainty_section, results_block, tail_index, window_days,
 )
 
 
@@ -254,6 +254,14 @@ def main(argv: list[str] | None = None) -> int:
     except (ValueError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    if plan is not None and tail_index(plan.replicates, plan.interval) == 0:
+        # Not an error: the run is still reproducible and says what it did
+        # (`uncertainty.interval_is_min_max`). But nobody should find out
+        # from the JSON that their "90% range" left nothing out.
+        level = level_text(plan.interval)
+        print(f"policy_simulate: warning: --bootstrap {plan.replicates} is too few for a "
+              f"{level} interval (it needs at least {min_replicates(plan.interval)}): every "
+              "range is the smallest and the largest resample value", file=sys.stderr)
 
     try:
         records, warnings = load_export(args.export)

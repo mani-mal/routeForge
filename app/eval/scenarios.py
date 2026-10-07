@@ -33,10 +33,11 @@ from app.eval.simulate import (CACHED_SHARE_NOTE, REPORT_CAVEAT, _assumption_ite
                                _excluded_lines, _fidelity_notes, _metrics_table,
                                _move_lines, _new_rejection_lines, _per_day, arm_results,
                                run_rows, summarize)
-from app.eval.uncertainty import (UncertaintyPlan, bucket_lines, caveat_lines,
-                                  insufficient_text, method_line, outside_line, plan_block,
-                                  quality_line, results_block, strata_line, table_ranges,
-                                  token_estimate_line, window_days, with_range)
+from app.eval.uncertainty import (OUTSIDE_FOOTNOTE, ZERO_RANGE_NOTE, UncertaintyPlan,
+                                  _count_outside, bucket_lines, caveat_lines,
+                                  insufficient_text, method_line, min_max_line, outside_line,
+                                  plan_block, quality_line, results_block, strata_line,
+                                  table_ranges, token_estimate_line, window_days, with_range)
 
 SCHEMA = "routeforge.policy-scenarios/v1"
 COMPARISON_SCHEMA = "routeforge.scenario-comparison/v1"
@@ -421,6 +422,9 @@ def _uncertainty_lines(block: dict) -> list[str]:
     lines = ["## Uncertainty ranges", ""]
     lines += caveat_lines()
     lines += ["", method_line(block), ""]
+    min_max = min_max_line(block)
+    if min_max:
+        lines += [min_max, ""]
     # Every scenario replays the same rows, so they all have the same strata
     # and the same rows with no backend token count.
     ranged = next((entry for entry in block["scenarios"]
@@ -471,6 +475,17 @@ def render_comparison(doc: dict) -> str:
     lines.append(LIKE_FOR_LIKE_NOTE)
     lines.append("")
     if uncertainty:
+        tables = [entry["table"] for entry in uncertainty["scenarios"]
+                  if not entry["table"].get("insufficient_data")]
+        if tables:
+            # Only when the table above shows brackets at all.
+            lines += [ZERO_RANGE_NOTE, ""]
+            # The on-prem share cell prints no range, so a mark could not
+            # appear there: count the cells that do.
+            shown = [{k: v for k, v in table.items() if not k.startswith("onprem_share")}
+                     for table in tables]
+            if _count_outside(shown):
+                lines += [OUTSIDE_FOOTNOTE, ""]
         lines += _uncertainty_lines(uncertainty)
 
     assuming = [(entry["name"], _assumption_items(entry["assumptions"]))

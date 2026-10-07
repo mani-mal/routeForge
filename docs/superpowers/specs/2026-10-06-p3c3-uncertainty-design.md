@@ -229,6 +229,18 @@ A percentile interval. For `N` replicate values sorted ascending and level `P`, 
 At the defaults (`N = 1000`, `P = 0.90`) those are the 51st smallest and the 51st largest.
 One replicate gives `lo = hi`.
 
+Two edges (amended by the final review), both in `uncertainty.tail_index`:
+
+- `k` is computed as `floor((1 − P)/2 · N + 1e-9)` — the guard keeps a product that should be
+  a whole number from landing just below it in floating point — and clamped to
+  `(N − 1) // 2`, so a level small enough for both tails to pass the middle gives the middle
+  value(s) and never `lo > hi`.
+- When `k = 0` — fewer than `2/(1 − P)` replicates, 20 at the default level — nothing is left
+  out on either side and the "interval" is the replicates' minimum and maximum. The block's
+  head then carries `"interval_is_min_max": true` (`false` otherwise), the report says so in a
+  sentence, and the CLI prints a warning on stderr. It is not an error: the run is still
+  reproducible.
+
 It is not bias-corrected (no BCa), and it is not studentized. For sums, means and shares over
 many rows the three agree closely. For percentiles of a discrete distribution they do not, and
 the percentile interval is the one that needs no further assumption. §7.3 says what happens
@@ -449,12 +461,51 @@ beside the bootstrap, not a product of it.
 makes, and for the same reason too optimistic when rows are correlated. The report says both:
 
 > newly_rejected is 0 in all 80 rows. That is not zero risk: at the 90% level these rows are
-> consistent with a newly-rejected rate of up to 2.84% (about 1 request in 35), if the rows
-> are independent draws from the same traffic. Correlated rows, such as the calls of one agent
-> loop, make the true bound larger.
+> consistent with a replayed newly-rejected rate of up to 2.84% (about 1 request in 35), if
+> the rows are independent draws from the same traffic. The bound is one-sided, and it is a
+> bound of the rate under this replay, not of the live rate. Correlated rows, such as the
+> calls of one agent loop, make the true bound larger.
 
 `zero_bound` is attached to all three shares when their count is zero; the sentence is printed
 for `newly_rejected` only, the count a reader would otherwise take as a safety claim.
+
+**One-sided, and about the replay** (amended by the final review). The bound is an upper
+limit at level `P` with no lower limit to pair it with, and the rate it bounds is the rate
+**under this replay**. A replay that wrongly routes rows the live system would reject shows
+`0` however many rows there are; that is `replay_model_error` (§8), not sampling.
+
+**Where else it is attached.**
+
+- A shadow-price relaxation's `newly_rejected` leaf carries `zero_bound` when its point is
+  `0`, with `n` = the rows in scope. A relaxation has no share leaf, and "0 newly rejected"
+  beside a relaxation is exactly the figure a reader takes as a safety claim.
+- `onprem_share.current` / `.proposed` carry `zero_bound` when the share is `0`, with `n` =
+  that arm's **routed** rows (the rows the share is of).
+- Under the shadow "Ranges" table and under the scenario comparison table, where a count is
+  printed as `0 [0, 0]`, the reports print one fixed sentence:
+
+  > A count of 0 shows `[0, 0]` at any sample size; that is not zero risk.
+
+**The mirror case: a share of exactly 1.** Every row of a bucket newly rejected, or every
+routed row on-prem, prints `1 to 1` at any sample size. A share whose point is `1` carries
+
+```
+one_bound = (1 − P)^(1/n)
+```
+
+the smallest per-row rate at which `n` independent rows would still all show the event with
+probability `1 − P` (`n` as above: the bucket's rows for a count's share, the arm's routed
+rows for its on-prem share). It is the same statement as `zero_bound` about the complement,
+so the same derivation holds. Under a bucket's table that has such a leaf the report prints:
+
+> A share of exactly 1 shows `1 to 1` at any sample size; that is not certainty: `one_bound`
+> in the JSON is the one-sided lower limit these rows are consistent with if they are
+> independent draws, and it says nothing about a share a policy fixes by construction.
+
+The last clause matters for a security reading. An `onprem_only` application's on-prem share
+is `1` because a cloud provider is filtered out of its candidate pool before anything is
+scored, not because of the rows that happened to be sampled; `one_bound` on that leaf is a
+statement about sampling a rate, and must not be read as a chance of leaving the boundary.
 
 ### 7.3 A point outside its own range
 
@@ -463,9 +514,11 @@ skewed statistic (the mean of a very skewed Beta lies above its 95th percentile)
 percentile of a discrete distribution, and trivially with one replicate.
 
 When it happens the leaf carries `"point_outside": true`, the block counts such leaves in
-`points_outside_interval`, and the report marks the row and says how many there are. **The
-range is not widened to include the point.** A widened range would no longer be the interval
-§4.4 defines.
+`points_outside_interval` (so does `shadow_prices.uncertainty`), and the report marks the row
+and says how many there are. In a table whose cells are `point [lo, hi]` — the comparison
+table and the shadow "Ranges" table — the cell is marked `[lo, hi]*` and the table is
+followed by a footnote explaining the mark. **The range is not widened to include the
+point.** A widened range would no longer be the interval §4.4 defines.
 
 ### 7.4 A figure undefined in some replicate
 
@@ -533,7 +586,8 @@ Wherever a figure `x` exists, its leaf sits at the same path under the bucket:
   code, `_bucket_stats`, and rounded the same way).
 - `lo`, `hi`: §4.4. Floats are rounded to 6 decimal places; counts are integers.
 - Optional keys, present only when they apply: `point_outside: true` (§7.3),
-  `undefined_replicates: k` with `lo`/`hi` null (§7.4), `zero_bound: u` (§7.2), and
+  `undefined_replicates: k` with `lo`/`hi` null (§7.4), `zero_bound: u` and `one_bound: u`
+  (§7.2), and
   `insufficient_data: true` with `n: <routed rows>` and `lo`/`hi` null (§7.1, a figure over
   too few routed rows).
 
@@ -550,6 +604,7 @@ have no backend token count (§8, `admission_estimate_error`). With the block's 
   "method": "stratified_paired_row_bootstrap",
   "strata": "application_id",
   "replicates": 1000, "interval": 0.9, "seed": 0, "min_rows": 30,
+  "interval_is_min_max": false,
   "quality_posterior_sets": [],
   "not_covered": ["replay_model_error", "admission_estimate_error", "unrecorded_inputs",
                   "traffic_shift", "per_request_latency"],
@@ -595,11 +650,14 @@ With `--shadow-prices` and no `--proposal` there are no totals: the block holds 
 ```json
 "uncertainty": {
   "interval": 0.9,
+  "points_outside_interval": 0,
   "constraints": [
     {"requirement": "allowed_tiers", "scope": {"app": "big"}, "security": false, "n": 60,
+     "totals_strata": {"own": 1, "pooled_apps": 0, "pooled_rows": 0, "smallest": 60,
+                       "variance_factor": 0.983333},
      "route_changed": {"point": 20, "lo": 14, "hi": 25},
      "rejections_avoided": {"point": 0, "lo": 0, "hi": 0},
-     "newly_rejected": {"point": 0, "lo": 0, "hi": 0},
+     "newly_rejected": {"point": 0, "lo": 0, "hi": 0, "zero_bound": 0.037649},
      "cost_usd_both_routed_delta": {"point": -0.001143, "lo": -0.001433, "hi": -0.000842},
      "cost_saved_per_day": {"point": 0.00056, "lo": 0.000396, "hi": 0.000707}},
     {"requirement": "allowed_tiers", "scope": {"app": "few"}, "security": false, "n": 6,
@@ -610,7 +668,10 @@ With `--shadow-prices` and no `--proposal` there are no totals: the block holds 
 
 `constraints` is parallel to `shadow_prices.constraints`: same length, same order, and each
 entry repeats `requirement`, `scope` and `security` so it can be read alone. The order is the
-block's existing one; the ranges do not enter it.
+block's existing one; the ranges do not enter it. A ranged entry carries `totals_strata`
+(§4.2) for the rows it re-simulated, and `zero_bound` on `newly_rejected` when that count is
+0 (§7.2). `points_outside_interval` counts the leaves of every entry that carry
+`point_outside` (§7.3).
 
 ### 9.4 `comparison.json` (`--scenarios`)
 
@@ -694,7 +755,11 @@ Under a bucket whose `newly_rejected` is 0, the zero-count sentence (§7.2).
 
 - In the comparison table, each of the eight figures of §5.4 that the table prints as one
   number is followed by its range: `-0.02895 [-0.034024, -0.023268]`. The on-prem share cell
-  (`current→proposed`) is left as it is; its two ranges are in each scenario's section.
+  (`current→proposed`) is left as it is; its two ranges are in each scenario's section. A
+  cell whose point is outside its range is marked `[lo, hi]*`; a figure over too few routed
+  rows shows `[insufficient data, n = k routed]` (§7.1).
+- Directly under the table and its two existing notes, when any scenario has ranges: the
+  zero-count sentence (§7.2) and, when a cell is marked, the footnote for `*` (§7.3).
 - After the table and its two existing notes: an "Uncertainty ranges" section with the
   caveat, the method sentence, this sentence, verbatim
 
@@ -722,7 +787,9 @@ cost cell (`cost saved/day`, else the like-for-like delta) and the three counts,
 `point [lo, hi]`, and a `label` column that carries `price of a protection — not a
 recommendation` on every security row. A relaxation with too few rows shows `insufficient data
 (n = k)`. The section points at "Uncertainty ranges" for the caveat, which is always printed
-above it.
+above it. Under the table: the zero-count sentence (§7.2), the footnote for `*` when a cell
+is marked (§7.3), and a sentence on the strata each relaxation was resampled in, with the
+words "ranges are not corrected for it" (§4.2).
 
 ## 11. Performance
 
@@ -760,7 +827,7 @@ offline tool and is the reason `--bootstrap` exists; the reference will say so.
 |---|---|
 | U1 | Without `--uncertainty`, every output file of every mode is byte-identical to what the tree produced before this slice. With it, the document is that document plus the three keys of §9, and no existing value moves. |
 | U2 | With the flag, the same inputs and plan give byte-identical files. The global `random` state is neither read nor moved. |
-| U3 | Every leaf has `lo ≤ point ≤ hi`, or `point_outside: true`, or null `lo`/`hi` with `undefined_replicates`. The range is never widened. |
+| U3 | Every leaf has `lo ≤ point ≤ hi`, or `point_outside: true`, or null `lo`/`hi` with `undefined_replicates` or `insufficient_data`. The range is never widened, `lo ≤ hi` at every level, and a point outside its range is marked wherever the range is printed. A range that is a minimum and a maximum says so (`interval_is_min_max`). |
 | U4 | Paired. A no-op proposal has every delta, count and share range exactly `[0, 0]`, with pooled applications present too. An app that is its own stratum is drawn the same way alone and inside the whole export; a scenario gets the same block alone and among others; an app-scoped relaxation gets the range of the equivalent proposal's app bucket and an endpoint-scoped one the range of its totals; one calibrated unit in both arms cancels in the quality delta. |
 | U5 | Ranges narrow as the rows are replicated k-fold: a sum's relative width and a share's or mean's width strictly decrease from 1× to 4× to 16×. |
 | U6 | Every replicate draws exactly `n` positions for every app with its own stratum (`n ≥ --min-rows`) and exactly `n_pool` for the pooled stratum; an app with its own stratum is present in every replicate, a one-row app included when `--min-rows` is 1. Every replicate value equals `_bucket_stats` over the rows the two seed formulas draw. |
@@ -881,3 +948,11 @@ together; the sections above describe the design as amended.
    "rows no backend answered"; the code also estimates a row a backend answered without
    reporting usage. The caveat now says "rows with no backend token count", every bucket
    carries `estimated_token_rows`, and the report prints the count beside the caveat.
+4. **A one-value range says what it is** (§4.4, §7.2, §7.3, U3). A relaxation's
+   `newly_rejected` of 0 and an on-prem share of 0 now carry `zero_bound`; a share of exactly
+   1 carries the mirror `one_bound`; both are stated to be one-sided and about the replayed
+   rate; the comparison table and the shadow "Ranges" table print a fixed zero-count sentence
+   and mark a point outside its range; `shadow_prices.uncertainty` counts such points;
+   `interval_of` no longer returns an inverted pair at a very small level; and a range that
+   is only a minimum and a maximum (too few replicates for the level) is flagged in the
+   head, in the report and on stderr.
