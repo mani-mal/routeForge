@@ -770,8 +770,8 @@ Under a bucket whose `newly_rejected` is 0, the zero-count sentence (§7.2).
   and one line per scenario, in file order, with its quality coverage — or
   `insufficient data (n = k)`.
 - In each scenario's own section, after its metrics table: `### Ranges`, the totals table of
-  §10.1, and a line saying per-app ranges are in `comparison.json`, naming any app with
-  insufficient data.
+  §10.1, and a line saying per-app ranges are in `comparison.json`, with the number of apps
+  that have insufficient data and the first ten of them by name.
 
 With too few rows, no cell has brackets and every scenario's line and `### Ranges` say
 `insufficient data (n = k)`.
@@ -794,7 +794,22 @@ words "ranges are not corrected for it" (§4.2).
 ## 11. Performance
 
 `numpy` is not a dependency of the offline tooling (`pyproject.toml`), and none is added. The
-engine is pure Python, `O(replicates × rows)` with small constants:
+engine is pure Python. Its cost has **two terms** (amended by the final review — it is not
+simply proportional to replicates × rows):
+
+```
+replicates × (rows × c_row  +  strata × c_stratum)        per pass
+```
+
+- **Per row.** A draw of one position and up to four cost sums.
+- **Per stratum.** Every stratum that is drawn costs a freshly seeded generator and, for an
+  application that is its own stratum, one set of figures per replicate. An export with many
+  applications at or above `--min-rows` pays this term once per application; the pooled
+  small applications are one stratum however many they are.
+- **Per pass.** A proposal is one pass, each scenario one, each binding relaxation one over
+  its rows in scope.
+
+How it is kept small:
 
 - **Classes, not rows, for everything but cost.** A row's contribution to every figure except
   cost is determined by its two arms' `(routed, on-prem, latency, quality, posterior)` and
@@ -802,26 +817,53 @@ engine is pure Python, `O(replicates × rows)` with small constants:
   apps × workloads × endpoints²). A replicate counts drawn rows per class
   (`Counter(map(cls.__getitem__, idx))`) and computes counts, shares, both percentiles and
   both quality means from the class counts.
-- **Cost is the one per-row value.** Four columns per app (each arm; each arm restricted to
-  rows routed in both), summed over the drawn positions with `sum(map(col.__getitem__, idx))`.
-  Equal columns are stored once: an app a proposal does not touch has one distinct column.
+- **Cost is the one per-row value.** Four columns per stratum (each arm; each arm restricted
+  to rows routed in both), summed over the drawn positions with
+  `sum(map(col.__getitem__, idx))`. Equal columns are stored once: an app a proposal does not
+  touch has one distinct column.
 - **Nothing is held across scenarios.** §4.3.
+- **Memory is flat in applications** (amended by the final review). Strata are the outer loop
+  and replicates the inner one. The totals are accumulated per replicate (class counts and
+  four cost sums), and each application's replicate values are reduced to its leaves before
+  the next application is drawn. The first build looped the other way and held every
+  application's values until the end. For an export with no pooled application the output is
+  unchanged to the last digit: strata are added to each replicate's totals in the same order
+  (pinned against a block the first build wrote).
+- **Shadow prices ask for the totals only**, so no per-application figures are computed for a
+  relaxation.
 
-**Measured** (synthetic rows built in memory, three apps, one untouched; Python 3.12.3, one
-core of an Intel Core Ultra 7 165U):
+**The line before a bootstrap.** Before each bootstrap phase the CLI prints one line on
+stderr: replicates × rows × passes and a duration estimated from the two unit costs above
+(`uncertainty.ROW_SECONDS`, `STRATUM_SECONDS`). They are rough — one laptop core, and the
+per-row cost varies with how many distinct cost columns an application has — and the line
+says so. For shadow prices the line is an upper bound: only a binding relaxation is
+resampled.
 
-| rows | replicates | seconds |
-|---|---|---|
-| 100,000 | 1000 | 25.2 (27.5 on a second run) |
-| 1,000,000 | 50 | 36.0 |
+**Measured** (synthetic rows built in memory; Python 3.12.3, one core of an Intel Core Ultra
+7 165U; other processes were running on the machine, load average about 3 of 14 cores;
+`results_block`, which includes the one-off setup; peak RSS is the growth of the process's
+`ru_maxrss` across the call; each shape in a fresh process):
 
-So about 25 ms per replicate at 100,000 rows and about 0.7 s per replicate at 1,000,000 (the
-second figure includes the one-off setup, and the per-row cost is higher at that size). A
-1,000,000-row export at the default 1000 replicates is therefore about 12 minutes per
-proposal, per scenario, or per relaxation of an app that large. That is feasible for an
-offline tool and is the reason `--bootstrap` exists; the reference will say so.
+| shape (apps × rows) | replicates | first build (4344546) | as amended |
+|---|---|---|---|
+| 1,000 × 40 | 1000 | 44.4 s, peak RSS +669 MB | 38.4 s, peak RSS +20 MB |
+| 10,000 × 3 | 1000 | 166.0 s (166 ms per replicate), +12 MB | 10.1 s (10 ms per replicate), +13 MB |
+| 3 × 33,334 | 20 | 93 ms per replicate | 99 ms per replicate |
+| 100,000 × 3 | 5 | 14.3 s | 5.2 s |
+
+So the per-application term is real: 1,000 applications of 40 rows (40,000 rows) cost about
+as much as 100,000 rows in three applications. The earlier figures of this section — 100,000
+rows × 1000 replicates in about 25 s, 1,000,000 rows at about 0.7 s per replicate — were
+measured on a quiet machine with three applications, one of them untouched by the proposal
+(one cost column instead of four); they are the favourable case, not the general one. A
+1,000,000-row export at the default 1000 replicates is of the order of ten to twenty minutes
+per proposal, per scenario, or per relaxation of an app that large. That is feasible for an
+offline tool and is the reason `--bootstrap` exists.
 
 ## 12. Invariants (each pinned by a named test)
+
+U1–U13 are the original design's (U3, U4, U6 and U7 as amended); U14–U17 were added by the
+final review. Research §20.5 names the tests.
 
 | # | Invariant |
 |---|---|
@@ -838,6 +880,10 @@ offline tool and is the reason `--bootstrap` exists; the reference will say so.
 | U11 | No output key contains a ranking word; scenarios stay in file order and are not sorted by a range; a security relaxation's ranges keep the protection label. |
 | U12 | No serving module imports `app.eval`. |
 | U13 | The engine's figures are the document's: drawing every row once reproduces `_bucket_stats`, and every leaf's `point` is the figure at the same path. |
+| U14 | The totals are resampled in strata — each application at or above `--min-rows` on its own, the rest pooled — and the block says which (`totals_strata`) and what share of variance that keeps (`variance_factor`, analytic, uncorrected). Many small applications give the totals the width of the same rows as one application; with `--min-rows 1` and one-row applications the disclosure reads `0.0`. |
+| U15 | A one-value range carries its one-sided bound: `zero_bound` for a count of 0 (a share, a relaxation's `newly_rejected`, an on-prem share), `one_bound` for a share of 1. The tables that print `0 [0, 0]` say it is not zero risk. |
+| U16 | Memory does not grow with the number of applications, and the reordering changed nothing: for an export with no pooled application every leaf equals the one the first build wrote; each application's samples are reduced as it finishes; a totals-only caller computes no per-application figures. |
+| U17 | Before each bootstrap phase the CLI says on stderr what it will cost, from a row term and a per-stratum term — never without the flag, never when the `--min-agreement` gate refuses. A report names at most ten applications with insufficient data, after their count. |
 
 ## 13. Testing
 
@@ -848,7 +894,12 @@ figure controllable) and against real replays, so its figure definitions cannot 
 U1 is pinned by golden files: the four input files and the eight output files of the four
 ways to run the CLI (`--proposal`, `--proposal --shadow-prices`, `--shadow-prices`,
 `--scenarios`), written from the tree **before** any product code of this slice exists, and
-compared byte for byte ever after.
+compared byte for byte ever after. There are two cases, each in its own fixture directory:
+one whose routes move, and one with recorded rejections, rows with no backend token count
+and rows a proposal newly rejects and newly serves. The second was added by the final review
+and generated from a `git archive` of the base commit, so it too is a pin against the tree
+before this slice; `regenerate` refuses to run in a tree that has `app/eval/uncertainty.py`
+unless told the change is deliberate.
 
 Input classes that are likely to bite and that an obvious test would miss:
 
@@ -956,3 +1007,11 @@ together; the sections above describe the design as amended.
    `interval_of` no longer returns an inverted pair at a very small level; and a range that
    is only a minimum and a maximum (too few replicates for the level) is flagged in the
    head, in the report and on stderr.
+5. **Cost has a per-application term; memory no longer does** (§11). The engine now loops
+   strata outside and replicates inside and reduces each application as it finishes; shadow
+   prices compute totals only; the CLI prints an estimate before each bootstrap phase; and a
+   scenario's section names at most ten of the applications with insufficient data, after
+   their count.
+6. **The U1 pin exercises rejections** (§13). A second golden case — recorded rejections,
+   rows with no backend token count, rows newly rejected and newly served — was generated
+   from the base commit `566acc7`, not from the branch, and is pinned beside the first.

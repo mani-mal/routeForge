@@ -27,6 +27,7 @@ requests could route to that endpoint.
 from __future__ import annotations
 
 import copy
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -50,8 +51,8 @@ from app.eval.simulate import (
     simulate_row,
 )
 from app.eval.uncertainty import (OUTSIDE_FOOTNOTE, ZERO_RANGE_NOTE, UncertaintyPlan,
-                                  _count_outside, insufficient_text, leaf, level_text,
-                                  run_bootstrap, with_range)
+                                  _count_outside, cost_line, insufficient_text, leaf,
+                                  level_text, run_bootstrap, with_range)
 
 from app.policy.core import (
     REQ_ALLOWED_MODELS,
@@ -480,7 +481,8 @@ def _rank_key(entry: dict) -> tuple:
 async def shadow_prices(records: list[dict], baseline_doc: dict, *, base: Settings,
                         cap: int = 50, baseline_label: str = "snapshot",
                         since: datetime | None = None,
-                        uncertainty: UncertaintyPlan | None = None) -> dict:
+                        uncertainty: UncertaintyPlan | None = None,
+                        notify: Callable[[str], None] | None = None) -> dict:
     """The spec §5 `shadow_prices` block for `baseline_doc` (the snapshot,
     or the snapshot with a proposal already applied -- the caller decides and
     says which in `baseline_label`).
@@ -499,7 +501,9 @@ async def shadow_prices(records: list[dict], baseline_doc: dict, *, base: Settin
     `{"interval", "constraints", "points_outside_interval"}`, the second a
     list parallel to `constraints` (same order) of `_entry_ranges`, the
     third how many of its leaves have a point outside their own range.
-    Without a plan the block is exactly what it was."""
+    Without a plan the block is exactly what it was. `notify` is told, once,
+    before any relaxation is evaluated, what the bootstraps can cost at most
+    (`uncertainty.cost_line`: only a binding relaxation is resampled)."""
     observed = observed_latencies([r for r in records if not _before_since(r, since)])
     baseline = await build_scenario(baseline_doc, base=base)
     try:
@@ -510,6 +514,13 @@ async def shadow_prices(records: list[dict], baseline_doc: dict, *, base: Settin
         days = _window_days([RowResult(row, base_arm[row["request_id"]],
                                        base_arm[row["request_id"]]) for row in rows])
         rels, skipped = enumerate_relaxations(baseline_doc, rows, cap=cap)
+        if uncertainty is not None and notify is not None:
+            sizes = Counter(row["application_id"] for row in rows)
+            # One pass per relaxation, over its rows in scope: one app's
+            # rows, or every row for the endpoint-scoped relaxation.
+            notify(cost_line(uncertainty, [
+                list(sizes.values()) if rel.requirement == REQ_ENDPOINT_APP_ALLOWLIST
+                else [sizes[rel.app]] for rel in rels], upper_bound=True))
 
         constraints: list[dict] = []
         ranges: dict[int, dict] = {}        # id(entry) -> its ranges

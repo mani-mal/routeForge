@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -34,10 +35,11 @@ from app.eval.simulate import (CACHED_SHARE_NOTE, REPORT_CAVEAT, _assumption_ite
                                _move_lines, _new_rejection_lines, _per_day, arm_results,
                                run_rows, summarize)
 from app.eval.uncertainty import (OUTSIDE_FOOTNOTE, ZERO_RANGE_NOTE, UncertaintyPlan,
-                                  _count_outside, bucket_lines, caveat_lines,
-                                  insufficient_text, method_line, min_max_line, outside_line,
-                                  plan_block, quality_line, results_block, strata_line,
-                                  table_ranges, token_estimate_line, window_days, with_range)
+                                  _count_outside, app_sizes, bucket_lines, caveat_lines,
+                                  cost_line, insufficient_text, method_line, min_max_line,
+                                  outside_line, plan_block, quality_line, results_block,
+                                  strata_line, table_ranges, token_estimate_line, window_days,
+                                  with_range)
 
 SCHEMA = "routeforge.policy-scenarios/v1"
 COMPARISON_SCHEMA = "routeforge.scenario-comparison/v1"
@@ -194,7 +196,8 @@ class Comparison:
 
 async def compare(records: list[dict], snapshot: dict, scenarios_doc: dict, *,
                   base: Settings, since: datetime | None = None,
-                  uncertainty: UncertaintyPlan | None = None) -> Comparison:
+                  uncertainty: UncertaintyPlan | None = None,
+                  notify: Callable[[str], None] | None = None) -> Comparison:
     """Replay every scenario against ONE shared `current` arm (spec §7).
 
     Every proposal is validated and applied before anything is replayed
@@ -204,7 +207,9 @@ async def compare(records: list[dict], snapshot: dict, scenarios_doc: dict, *,
     time. Nothing is ranked, and nothing is applied to a deployment.
 
     `uncertainty` (P3c-3) adds each scenario's ranges, bootstrapped from the
-    rows it was just replayed over -- no row is simulated a second time."""
+    rows it was just replayed over -- no row is simulated a second time.
+    `notify` is told, once, before the first bootstrap, what all of them
+    will cost (`uncertainty.cost_line`)."""
     applied = apply_scenarios(snapshot, scenarios_doc, base=base)
     current = await build_scenario(snapshot, base=base)
     try:
@@ -240,6 +245,9 @@ async def compare(records: list[dict], snapshot: dict, scenarios_doc: dict, *,
                 "summary": {k: v for k, v in sim.items() if k not in _LIFTED},
             })
             if uncertainty is not None:
+                if notify is not None and not ranges:
+                    # Every scenario replays the same rows: one pass each.
+                    notify(cost_line(uncertainty, [app_sizes(results)] * len(applied)))
                 block = results_block(results, uncertainty,
                                       days=window_days(sim["inputs"]["window"]))
                 ranges.append({"name": item.name, **block, "table": table_ranges(block)})
@@ -445,6 +453,10 @@ def _uncertainty_lines(block: dict) -> list[str]:
     return lines
 
 
+#: How many insufficient-data applications a scenario's section names.
+_SMALL_APPS_SHOWN = 10
+
+
 def render_comparison(doc: dict) -> str:
     """`report.md` for a comparison (spec §8): the caveat, the agreement
     banner, ONE table in file order, the assumptions each scenario makes,
@@ -516,8 +528,13 @@ def render_comparison(doc: dict) -> str:
                      for app_id, bucket in sorted(ranges[entry["name"]]["by_app"].items())
                      if bucket.get("insufficient_data")]
             if small:
+                # An export can hold thousands of small applications: the
+                # count, and at most ten names. The rest are in the JSON.
+                shown = small[:_SMALL_APPS_SHOWN]
+                head = (f"{len(small)} app(s), the first {len(shown)}: "
+                        if len(small) > len(shown) else f"{len(small)} app(s): ")
                 lines.append("Per-app ranges are in `comparison.json`. Insufficient data: "
-                             + ", ".join(small) + ".")
+                             + head + ", ".join(shown) + ".")
             else:
                 lines.append("Per-app ranges are in `comparison.json`.")
             lines.append("")

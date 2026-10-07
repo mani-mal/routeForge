@@ -506,6 +506,68 @@ def run_bootstrap(results: list[RowResult], plan: UncertaintyPlan, *,
     return Bootstrap(n_total, totals, by_app, _strata_block(units, n_total, len(small)))
 
 
+# --- what a bootstrap will cost (spec §11) -------------------------------------------
+
+#: Two ROUGH unit costs of one bootstrap pass, in seconds, for the line the
+#: CLI prints before it starts. Pure Python on one laptop core (docs/reference/
+#: policy-simulator.md §10.9 says which); another machine can be several times
+#: faster or slower. They are an order of magnitude, never a promise.
+ROW_SECONDS = 0.4e-6          # per replicate, per row drawn
+STRATUM_SECONDS = 30e-6       # per replicate, per stratum drawn: a seeded generator and its figures
+
+
+def _strata_count(sizes: list[int], min_rows: int) -> int:
+    """How many strata `run_bootstrap` draws for apps of these row counts:
+    one per app at or above `min_rows`, one more for all the rest together,
+    none when the whole export is below `min_rows`."""
+    if sum(sizes) < min_rows:
+        return 0
+    own = sum(1 for n in sizes if n >= min_rows)
+    return own + (1 if own < len(sizes) else 0)
+
+
+def estimate_seconds(plan: UncertaintyPlan, passes: list[list[int]]) -> float:
+    """A rough duration for bootstrapping each of `passes` -- one list of
+    per-app row counts per pass (a proposal, a scenario, a relaxation's rows
+    in scope). `replicates x (rows x ROW_SECONDS + strata x
+    STRATUM_SECONDS)`, summed: the cost is linear in replicates x rows AND
+    has a term per application that is its own stratum."""
+    total = 0.0
+    for sizes in passes:
+        strata = _strata_count(sizes, plan.min_rows)
+        if strata:
+            total += plan.replicates * (sum(sizes) * ROW_SECONDS + strata * STRATUM_SECONDS)
+    return total
+
+
+def _duration(seconds: float) -> str:
+    if seconds < 1:
+        return "under 1 s"
+    return f"{seconds:.0f} s" if seconds < 120 else f"{seconds / 60:.0f} min"
+
+
+def cost_line(plan: UncertaintyPlan, passes: list[list[int]], *,
+              upper_bound: bool = False) -> str:
+    """One line for stderr before a bootstrap starts: replicates x rows x
+    passes, and `estimate_seconds` in words. `upper_bound` is for passes
+    that may be skipped (only a BINDING relaxation is resampled)."""
+    rows = [sum(sizes) for sizes in passes]
+    count = f"{len(passes)} pass" + ("" if len(passes) == 1 else "es")
+    if upper_bound or len(set(rows)) > 1:
+        work = (f"{'up to ' if upper_bound else ''}{count} ({sum(rows)} rows in all)")
+    else:
+        work = f"{rows[0] if rows else 0} rows x {count}"
+    return (f"policy_simulate: uncertainty: {plan.replicates} resamples x {work}: about "
+            f"{_duration(estimate_seconds(plan, passes))} (a rough estimate from two unit "
+            f"costs measured on one laptop core: {ROW_SECONDS * 1e6:g} microseconds per "
+            f"resample per row and {STRATUM_SECONDS * 1e6:g} per resample per stratum)")
+
+
+def app_sizes(results: list[RowResult]) -> list[int]:
+    """Each application's row count, for `cost_line`."""
+    return list(Counter(r.row["application_id"] for r in results).values())
+
+
 def _flatten(stats: dict, n: int, days: float | None) -> dict[str, float | None]:
     """A `_bucket_stats` block as the engine's flat figure names -- the
     POINT of every leaf, taken from the code that writes the figure itself."""

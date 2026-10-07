@@ -143,5 +143,5 @@ def test_u7_too_few_rows_prints_insufficient_data_and_no_brackets():       # U7
 def test_a_small_app_is_named_under_each_scenario():
     plan = UncertaintyPlan(replicates=40, min_rows=46)       # 45 rows per app
     report = render_comparison(_document(_doc(_TRIAD[0]), plan=plan))
-    assert ("Per-app ranges are in `comparison.json`. Insufficient data: "
+    assert ("Per-app ranges are in `comparison.json`. Insufficient data: 2 app(s): "
             "chat (n = 45), claims (n = 45).") in report

@@ -71,8 +71,9 @@ from app.eval.simulate import (  # noqa: E402
     summarize,
 )
 from app.eval.uncertainty import (  # noqa: E402
-    MAX_REPLICATES, UncertaintyPlan, level_text, load_posteriors, min_replicates, plan_block,
-    plan_inputs, render_uncertainty_section, results_block, tail_index, window_days,
+    MAX_REPLICATES, UncertaintyPlan, app_sizes, cost_line, level_text, load_posteriors,
+    min_replicates, plan_block, plan_inputs, render_uncertainty_section, results_block,
+    tail_index, window_days,
 )
 
 
@@ -154,6 +155,12 @@ def _uncertainty_plan(args: argparse.Namespace) -> UncertaintyPlan | None:
         posteriors=posteriors, posterior_files=files)
 
 
+def _note(line: str) -> None:
+    """A progress line for the operator: stderr, never stdout (stdout is the
+    two output paths)."""
+    print(line, file=sys.stderr, flush=True)
+
+
 def _shown(rate: float | None) -> str:
     return "n/a" if rate is None else f"{rate:.6g}"
 
@@ -188,7 +195,7 @@ def _compare_scenarios(args: argparse.Namespace, *, records: list[dict], warning
             if not agreement_ok(early, args.min_agreement):
                 return _below_min_agreement(early, args.min_agreement)
         comparison = asyncio.run(compare(records, snapshot, scenarios_doc, base=base,
-                                         since=since, uncertainty=plan))
+                                         since=since, uncertainty=plan, notify=_note))
     except (SnapshotError, ProposalError, ScenarioError) as exc:
         # All-or-nothing (spec §3): one invalid scenario fails the whole
         # file, named `scenarios[<i>](<name>).proposal.<path>`.
@@ -370,6 +377,9 @@ def main(argv: list[str] | None = None) -> int:
         if plan is not None:
             uncertainty_block = plan_block(plan)
             if args.proposal:
+                # Said before it starts: a large export at the default 1000
+                # resamples is minutes, and nothing else is printed meanwhile.
+                _note(cost_line(plan, [app_sizes(results)]))
                 uncertainty_block.update(results_block(
                     results, plan, days=window_days(sim["inputs"]["window"])))
 
@@ -386,7 +396,8 @@ def main(argv: list[str] | None = None) -> int:
                 baseline_label = "snapshot"
             shadow_block = asyncio.run(shadow_prices(
                 records, baseline_doc, base=base, cap=args.max_relaxations,
-                baseline_label=baseline_label, since=since, uncertainty=plan))
+                baseline_label=baseline_label, since=since, uncertainty=plan,
+                notify=_note))
     except (SnapshotError, ProposalError) as exc:
         # Spec §8 governs over the narrower "catch ProposalError" reading:
         # exit 2 is "an input file failed to load OR VALIDATE" -- a

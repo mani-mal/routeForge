@@ -347,5 +347,49 @@ def test_f1_an_endpoint_relaxation_equals_the_equivalent_proposals_totals():   #
     assert "ranges are not corrected for it" in RANGE_STRATA_NOTE
 
 
+# --- F4: what the engine holds, and what it skips ---------------------------------------
+
+def test_f4_each_apps_samples_are_reduced_as_soon_as_that_app_is_drawn():
+    """`reduce` gets one app's complete samples, in app order, and `by_app`
+    keeps only what it returns -- so a caller that reduces to leaves never
+    holds two apps' replicate values at once."""
+    seen: list[tuple[str, int]] = []
+
+    def reduce(app: str, samples: dict[str, list]) -> str:
+        seen.append((app, len(samples["cost_usd.current"])))
+        return app.upper()
+
+    boot = run_bootstrap(_mixed(SIZES, seed=5), UncertaintyPlan(replicates=7), reduce=reduce)
+    assert seen == [("big-a", 7), ("big-b", 7)]
+    assert boot.by_app["big-a"] == (45, "BIG-A") and boot.by_app["big-b"] == (30, "BIG-B")
+    assert boot.by_app["s3"] == (12, None)              # pooled: no samples of its own
+    assert len(boot.totals["cost_usd.current"]) == 7
+
+
+def test_f4_totals_only_computes_no_per_app_figures(monkeypatch):
+    """`shadow.py` reads the totals alone. With `totals_only` the engine
+    computes one set of figures per replicate instead of one per stratum
+    more, and the totals are the same values."""
+    import app.eval.uncertainty as uncertainty_mod
+
+    calls: list[int] = []
+    real = uncertainty_mod._figures
+
+    def counting(n, *args, **kwargs):
+        calls.append(n)
+        return real(n, *args, **kwargs)
+
+    monkeypatch.setattr(uncertainty_mod, "_figures", counting)
+    results = _mixed(LARGE)
+    plan = UncertaintyPlan(replicates=9)
+    full = run_bootstrap(results, plan)
+    assert len(calls) == 9 * (len(LARGE) + 1)
+    calls.clear()
+    only = run_bootstrap(results, plan, totals_only=True)
+    assert calls == [len(results)] * 9
+    assert only.totals == full.totals and only.strata == full.strata
+    assert all(samples is None for _n, samples in only.by_app.values())
+
+
 if __name__ == "__main__":
     write_fixture()
