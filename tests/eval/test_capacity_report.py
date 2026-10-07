@@ -10,9 +10,9 @@ from app.eval.capacity import (AVERAGES_NOTE, CAPACITY_CAVEAT, NO_RANGE_NOTE, NO
                                caveat_lines, peak_text, render_capacity_section, too_short_text)
 from app.eval.outcomes import _round6
 from tests.eval.sim_fixtures import make_row
-from tests.eval.test_capacity import (CAPACITY_BANNED, LIMITS, QUIET_THEN_BUSY, T0, block_for,
-                                      mixed_traffic, one_endpoint, replay, synthetic,
-                                      three_endpoints, traffic)
+from tests.eval.test_capacity import (CAPACITY_BANNED, LIMITS, QUIET_THEN_BUSY, T0, arm_on,
+                                      block_for, mixed_traffic, one_endpoint, replay,
+                                      synthetic, three_endpoints, traffic)
 
 
 def _block(body=None, **plan_kw) -> dict:
@@ -161,12 +161,75 @@ def test_an_endpoint_no_row_reaches_prints_zero_and_no_peak_bucket():
     assert ("| max_concurrency | proposed | 2 | 0.0% | 0.0% | 0.0% | 0 of 195 | n/a | n/a |"
             in text)
     assert "proposed none (no row routed there)." in text
-    assert ("**Note:** 100.0% of the current arm's service time on this endpoint is replay's "
-            "latency for the endpoint (tier_default), not a recorded request's: no simulated "
-            "row was served by it alone. A tier default is not a measurement: that part of "
-            "the offered concurrency rests on the default alone.") in text
-    assert "of the proposed arm's service time on this endpoint is replay's" not in (
+    # The current arm's rows there have only a tier default for a service time.
+    assert ("| max_concurrency | current | 2 | n/a (no service time: no recorded request or "
+            "latency signal for local-mid) | n/a | n/a | n/a | n/a | n/a |") in text
+    assert ("**Note:** the current arm's service time on this endpoint is a tier default: no "
+            "simulated row was served by it alone and the snapshot has no latency signal for "
+            "it. A tier default is a routing constant, not a service time, so no concurrency "
+            "figure is computed for this endpoint in this arm. Requests and tokens are "
+            "counted as usual.") in text
+    assert "the proposed arm's service time on this endpoint is" not in (
         text.split("### local-mid")[1])
+
+
+def _moved_to_a_tier_default(limits: dict, body: dict | None = None) -> dict:
+    rows = synthetic([(10 * i + 1, 10.0) for i in range(180)], endpoint_ms=10_000.0,
+                     proposed=arm_on("new", 200.0, "tier_default"))
+    return _round6(capacity_block(rows, CapacityPlan(limits=limits), body))
+
+
+def test_a_tier_default_prints_a_state_and_never_a_concurrency_percentage():
+    """Traffic moved to an endpoint whose only latency is a tier default:
+    the section, the headline and the comparison cell (both are
+    `peak_text`) print no concurrency percentage for it -- the limit row
+    names the input that is missing, and the headline says which endpoint
+    it leaves out."""
+    block = _moved_to_a_tier_default({"e": {"max_concurrency": 1.0},
+                                      "new": {"max_concurrency": 1.0}})
+    text = render_capacity_section(block)
+    section = text.split("### new")[1]
+    assert ("| max_concurrency | proposed | 1 | n/a (no service time: state "
+            "endpoints.new.latency_ms) | n/a | n/a | n/a | n/a | n/a |") in section
+    assert "| max_concurrency | current | 1 | 0.0% | 0.0% | 0.0% |" in section   # no row there
+    assert "| concurrency | proposed | n/a | n/a | n/a |" in section
+    assert "| requests_per_minute | proposed | 6 | " in section
+    assert ("**Note:** the proposed arm's service time on this endpoint is a tier default: no "
+            "simulated row was served by it alone and the snapshot has no latency signal for "
+            "it. A tier default is a routing constant, not a service time, so no concurrency "
+            "figure is computed for this endpoint in this arm. Requests and tokens are "
+            "counted as usual.") in section
+    assert not [line for line in section.split("\n") if "proposed" in line and "%" in line]
+    headline = peak_text(block, "proposed")
+    assert headline.endswith("; concurrency not computed for new")
+    assert "(new," not in headline and "2.0%" not in text and "1.9%" not in text
+    assert f"proposed {headline}." in text
+    assert unpaired_peaks(text) == []
+
+
+def test_a_tier_default_alone_leaves_no_headline_and_says_so():
+    block = _moved_to_a_tier_default({}, {"capacity": {"new": {"max_concurrency": 1}}})
+    assert peak_text(block, "proposed") == "n/a; concurrency not computed for new"
+    assert peak_text(block, "current") == "not stated"
+    text = render_capacity_section(block)
+    assert ("Peak load: current not stated; proposed n/a; concurrency not computed for "
+            "new.") in text
+    # No percentage at all for `new`, bar the limits table's own header.
+    assert "%" not in text.split("### new")[1].replace("| buckets over 100% |", "")
+
+
+def test_the_current_arm_cannot_be_given_a_latency_so_its_state_names_no_proposal_key():
+    """A proposal's `latency_ms` is the proposed arm's. In the current arm
+    the missing input is a recorded request or a latency signal; the row
+    says that, and does not point at a key that would change nothing."""
+    block = _round6(block_for(mixed_traffic(), three_endpoints(), {},
+                              limits={"local-mid": {"max_concurrency": 2.0}}))
+    section = render_capacity_section(block).split("### local-mid")[1]
+    assert ("| max_concurrency | current | 2 | n/a (no service time: no recorded request or "
+            "latency signal for local-mid) | n/a | n/a | n/a | n/a | n/a |") in section
+    assert ("| max_concurrency | proposed | 2 | n/a (no service time: state "
+            "endpoints.local-mid.latency_ms) | n/a | n/a | n/a | n/a | n/a |") in section
+    assert section.count("is a tier default: no simulated row was served by it alone") == 2
 
 
 def test_a_small_share_from_replays_latency_gets_no_sentence():
@@ -278,7 +341,8 @@ def test_c20_no_sentence_prints_a_peak_without_the_average():                   
         text = render_capacity_section(block)
         assert text.count(" / avg ") >= 2 and unpaired_peaks(text) == []
         for arm in ("current", "proposed"):
-            assert re.fullmatch(r"peak [\d.]+% / avg [\d.]+% \(.+, \w+, 60 s buckets\)",
+            assert re.fullmatch(r"peak [\d.]+% / avg [\d.]+% \([\w-]+, \w+, 60 s buckets\)"
+                                r"(; concurrency not computed for [\w-]+)*",
                                 peak_text(block, arm))
     # The detector is not vacuous.
     assert unpaired_peaks("Peak load: current peak 230.0% (e, max_concurrency).") != []

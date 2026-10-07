@@ -51,7 +51,8 @@ def _strip(doc: dict) -> dict:
     doc.pop("simulation_id", None)
     doc.pop("comparison_id", None)
     for row in doc.get("table", []):
-        for key in ("peak_utilisation", "peak_mean_window", "peak_endpoint", "peak_limit"):
+        for key in ("peak_utilisation", "peak_mean_window", "peak_endpoint", "peak_limit",
+                    "peak_concurrency_not_computed"):
             row.pop(key, None)
     return doc
 

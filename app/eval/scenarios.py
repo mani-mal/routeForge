@@ -314,6 +314,9 @@ def _table_row(entry: dict, window: dict | None, capacity: dict | None = None) -
         row["peak_mean_window"] = peak.get("mean_window")
         row["peak_endpoint"] = peak.get("endpoint")
         row["peak_limit"] = peak.get("limit")
+        # What that maximum was taken WITHOUT: the endpoints whose stated
+        # `max_concurrency` has no figure in the proposed arm.
+        row["peak_concurrency_not_computed"] = capacity["concurrency_not_computed"]["proposed"]
     return row
 
 

@@ -49,12 +49,13 @@ def test_c1_without_a_plan_nothing_is_added():                                  
     assert "apacity" not in text and "peak load" not in text
 
 
-def test_c1_a_plan_adds_one_key_and_four_table_keys_and_changes_nothing_else():        # C1
+def test_c1_a_plan_adds_one_key_and_the_peak_table_keys_and_changes_nothing_else():    # C1
     plain, loaded = _doc(capacity=None), _doc()
     assert set(loaded) - set(plain) == {"capacity"}
     for before, after in zip(plain["table"], loaded["table"]):
         assert set(after) - set(before) == {"peak_utilisation", "peak_mean_window",
-                                            "peak_endpoint", "peak_limit"}
+                                            "peak_endpoint", "peak_limit",
+                                            "peak_concurrency_not_computed"}
         assert {k: after[k] for k in before} == before
     stripped = {k: v for k, v in loaded.items() if k not in ("capacity", "table")}
     assert stripped == {k: v for k, v in plain.items() if k != "table"}
@@ -104,6 +105,37 @@ def test_the_table_carries_the_proposed_arms_most_loaded_limit():
             "60 s buckets) |") in text
     assert ("| none | peak 480.0% / avg 213.3% (local-cheap, output_tokens_per_minute, "
             "60 s buckets) |") in text
+
+
+def test_a_tier_default_fills_the_cell_with_a_state_not_a_percentage():
+    """Through the real `compare`: no row was recorded on `local-mid` and
+    the snapshot has no latency signal for it, so its concurrency is not
+    computed -- until a scenario asserts a latency for it, and then only in
+    that scenario's proposed arm."""
+    doc = _doc(mixed_traffic(), three_endpoints(), scenarios=(
+        ("no-change", {}),
+        ("measured-mid", {"endpoints": {"update": {"local-mid": {"latency_ms": 400}}}})),
+        capacity=CapacityPlan(limits={"local-mid": {"max_concurrency": 2.0}}))
+    plain, measured = doc["capacity"]["scenarios"]
+    assert plain["concurrency_not_computed"] == {"current": ["local-mid"],
+                                                 "proposed": ["local-mid"]}
+    assert measured["concurrency_not_computed"] == {"current": ["local-mid"], "proposed": []}
+    assert measured["endpoints"]["local-mid"]["proposed"]["service_time_sources"]["asserted"] > 0
+    rows = {row["name"]: row for row in doc["table"]}
+    assert rows["no-change"]["peak_utilisation"] is None
+    assert rows["no-change"]["peak_concurrency_not_computed"] == ["local-mid"]
+    assert rows["measured-mid"]["peak_utilisation"] > 0
+    assert rows["measured-mid"]["peak_concurrency_not_computed"] == []
+    text = render_comparison(doc)
+    cells = {line.split("|")[1].strip(): line.rsplit("|", 2)[1].strip()
+             for line in text.split("\n")
+             if line.startswith(("| no-change |", "| measured-mid |"))}
+    assert cells["no-change"] == "n/a; concurrency not computed for local-mid"
+    assert "(local-mid, max_concurrency, 60 s buckets)" in cells["measured-mid"]
+    assert "not computed" not in cells["measured-mid"]
+    assert ("Current arm peak load (the same for every scenario): n/a; concurrency not "
+            "computed for local-mid.") in text
+    assert unpaired_peaks(text) == []
 
 
 def test_c20_no_cell_or_sentence_prints_a_peak_without_the_average():                  # C20
@@ -208,7 +240,8 @@ def test_c9_volume_scale_does_not_move_a_range_even_with_small_apps_pooled():   
     doc = _doc(rows, three_endpoints(), scenarios=(
         ("no-change", {}),
         ("ten-times", {"workload": {"volume_scale": 10, "apps": {"app-b": {"volume_scale": 50}}}}),
-    ), uncertainty=ranged, capacity=CapacityPlan(limits={"local-mid": {"max_concurrency": 1.0}}))
+    ), uncertainty=ranged,
+        capacity=CapacityPlan(limits={"local-mid": {"requests_per_minute": 1.0}}))
     plain, scaled = doc["uncertainty"]["scenarios"]
     assert plain["totals_strata"]["pooled_apps"] == 1
     assert {k: v for k, v in scaled.items() if k != "name"} == {

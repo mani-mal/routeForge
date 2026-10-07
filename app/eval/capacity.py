@@ -83,6 +83,11 @@ _TOP_KEYS = frozenset({"schema", "title", "endpoints", "workload"})
 _WORKLOAD_KEYS = frozenset({"volume_scale", "apps"})
 _WORKLOAD_APP_KEYS = frozenset({"volume_scale"})
 
+#: Why a `max_concurrency` entry carries no figure (`limits.<limit>.not_computed`):
+#: the only service time replay has for the endpoint in that arm is the tier
+#: default of `config/routing.yaml`, a routing-score constant.
+TIER_DEFAULT_SERVICE_TIME = "tier_default_service_time"
+
 # A bucket is "over" a limit only when demand exceeds it by more than float
 # noise: demand of exactly the limit is 100%, which is not above 100%.
 _OVER = 1e-9
@@ -334,7 +339,9 @@ def service_time(r: RowResult, arm: str, means: dict[str, int]) -> tuple[int, st
     - `endpoint_mean`: the endpoint's mean recorded latency (`means`);
     - `replay`: no simulated row was served alone by the endpoint, so the
       one latency replay has for it -- the snapshot's signal, else the tier
-      default (`ArmResult.latency_source` says which)."""
+      default (`ArmResult.latency_source` says which). A tier default is
+      placed like any other, so service time stays conserved, but it is not
+      a service time: `_arm_block` computes no concurrency figure from it."""
     result = getattr(r, arm)
     if result.latency_source == "proposal":
         return _placeable_ms(result.latency_ms, result.model, "the asserted"), "asserted"
@@ -471,8 +478,18 @@ def _arm_block(load: EndpointLoad | None, limits: dict[str, float],
     - `mean_window`: the total over EVERY bucket of the window, empty ones
       included (`window.buckets`) -- the time-average;
     - `mean_active`: the total over the endpoint's own `active_buckets`,
-      those in which it had an arrival or a request in service."""
+      those in which it had an arrival or a request in service.
+
+    **No service time, no concurrency.** When the arm's service time on the
+    endpoint is replay's TIER DEFAULT -- no simulated row was served by it
+    alone, the snapshot has no latency signal for it and the proposal
+    asserts none -- there is nothing to compute a concurrency from: the
+    default is a routing-score constant (200 / 500 / 1000 ms by tier), and
+    placing real requests at it reads as a load cut that never happened. So
+    `demand.concurrency` is all null and a stated `max_concurrency` carries
+    `not_computed` and null figures. Requests and tokens are unaffected."""
     load = load or EndpointLoad()
+    no_service_time = "tier_default" in load.replay_sources
     scaled = {index: _scaled(per_app, volume) for index, per_app in sorted(load.cells.items())}
     rates = {index: _rates(values, bucket_seconds) for index, values in scaled.items()}
     # Totals from exact per-application integers, scaled once.
@@ -487,6 +504,10 @@ def _arm_block(load: EndpointLoad | None, limits: dict[str, float],
     active = len(load.cells)
     demand, peak_at = {}, {}
     for name in DEMANDS:
+        if name == "concurrency" and no_service_time:
+            peak_at[name] = None
+            demand[name] = {"peak": None, "mean_window": None, "mean_active": None}
+            continue
         peak, at = 0.0, None
         for index, rate in rates.items():           # ascending: the earliest peak wins
             if rate[name] > peak:
@@ -499,9 +520,17 @@ def _arm_block(load: EndpointLoad | None, limits: dict[str, float],
         if limit not in limits:
             continue
         cap, name = limits[limit], DEMAND_FOR[limit]
+        if demand[name]["peak"] is None:
+            # A state, not a number -- like `window_too_short`.
+            stated[limit] = {
+                "limit": cap, "not_computed": TIER_DEFAULT_SERVICE_TIME, "peak": None,
+                "peak_bucket": None, "mean_window": None, "mean_active": None,
+                "buckets_over": None, "buckets_over_share": None, "requests_over_share": None}
+            continue
         over = [index for index, rate in rates.items() if rate[name] > cap * (1 + _OVER)]
         stated[limit] = {
             "limit": cap,
+            "not_computed": None,
             "peak": demand[name]["peak"] / cap,
             "peak_bucket": (None if peak_at[name] is None
                             else bucket_start(peak_at[name], bucket_seconds)),
@@ -530,20 +559,30 @@ def _arm_block(load: EndpointLoad | None, limits: dict[str, float],
 
 def _peak(endpoints: dict, arm: str, *, bucket_seconds: int, window_buckets: int) -> dict | None:
     """The most loaded STATED limit of `arm`: the largest peak utilisation,
-    the first in (endpoint, `CAPACITY_LIMITS`) order on a tie. None when the
-    arm has no stated limit at all. It carries its own context -- the
+    the first in (endpoint, `CAPACITY_LIMITS`) order on a tie. A limit whose
+    utilisation is `not_computed` is never it (`_not_computed` lists those).
+    None when the arm has no stated limit with a figure. It carries its own context -- the
     time-average and the share of the window over the limit, and the bucket
     length and count they were computed over -- because a peak is a maximum
     over buckets and means little without them."""
     top = None
     for slug in sorted(endpoints):
         for limit, entry in endpoints[slug][arm]["limits"].items():
+            if entry["not_computed"]:
+                continue
             if top is None or entry["peak"] > top["utilisation"]:
                 top = {"endpoint": slug, "limit": limit, "utilisation": entry["peak"],
                        "bucket": entry["peak_bucket"], "mean_window": entry["mean_window"],
                        "buckets_over_share": entry["buckets_over_share"],
                        "bucket_seconds": bucket_seconds, "buckets": window_buckets}
     return top
+
+
+def _not_computed(endpoints: dict, arm: str) -> list[str]:
+    """The endpoints whose stated `max_concurrency` has no figure in `arm`,
+    sorted: what the arm's headline peak was chosen WITHOUT."""
+    return [slug for slug in sorted(endpoints)
+            if (endpoints[slug][arm]["limits"].get("max_concurrency") or {}).get("not_computed")]
 
 
 #: Excluded rows that load no endpoint inside the window, so are not "missing demand".
@@ -597,6 +636,7 @@ def capacity_block(results: list[RowResult], plan: CapacityPlan, proposal: dict 
         "window_too_short": too_short,
         "endpoints": {},
         "peak": {arm: None for arm in ARMS},
+        "concurrency_not_computed": {arm: [] for arm in ARMS},
     }
     if too_short:
         return block
@@ -623,6 +663,8 @@ def capacity_block(results: list[RowResult], plan: CapacityPlan, proposal: dict 
     block["peak"] = {arm: _peak(block["endpoints"], arm, bucket_seconds=bucket_seconds,
                                 window_buckets=window_buckets)
                      for arm in ARMS}
+    block["concurrency_not_computed"] = {arm: _not_computed(block["endpoints"], arm)
+                                         for arm in ARMS}
     return block
 
 
@@ -718,14 +760,22 @@ def peak_text(block: dict, arm: str) -> str:
     """One arm's most loaded stated limit, for a table cell or a line:
     `peak 230.0% / avg 45.0% (local-llama, max_concurrency, 60 s buckets)`,
     `not stated`, or the window-too-short state. Never a peak without the
-    average over the window beside it (invariant C20)."""
+    average over the window beside it (invariant C20).
+
+    An endpoint whose stated `max_concurrency` could not be computed is
+    named after it -- `...; concurrency not computed for new` -- because the
+    headline is a maximum, and a figure left out of a maximum must not
+    leave silently. With nothing else stated the cell is `n/a; ...`."""
     if block["window_too_short"]:
         return too_short_text(block)
     peak = block["peak"][arm]
+    left_out = "".join(f"; concurrency not computed for {slug}"
+                       for slug in block["concurrency_not_computed"][arm])
     if peak is None:
-        return "not stated"
+        return "n/a" + left_out if left_out else "not stated"
     return (f"peak {_pct(peak['utilisation'])} / avg {_pct(peak['mean_window'])} "
-            f"({peak['endpoint']}, {peak['limit']}, {peak['bucket_seconds']} s buckets)")
+            f"({peak['endpoint']}, {peak['limit']}, {peak['bucket_seconds']} s buckets)"
+            + left_out)
 
 
 def _scale_text(scale: dict[str, float]) -> str:
@@ -758,7 +808,17 @@ def window_lines(block: dict) -> list[str]:
     return lines
 
 
-def _limit_rows(entry: dict, window_buckets: int) -> list[str]:
+def _no_service_time_text(slug: str, arm: str) -> str:
+    """What a `max_concurrency` row prints instead of a utilisation when the
+    arm has no service time for the endpoint: the INPUT that is missing. A
+    proposal's `latency_ms` is the proposed arm's, so the current arm's row
+    names what the record lacks and no key."""
+    if arm == "proposed":
+        return f"n/a (no service time: state endpoints.{slug}.latency_ms)"
+    return f"n/a (no service time: no recorded request or latency signal for {slug})"
+
+
+def _limit_rows(slug: str, entry: dict, window_buckets: int) -> list[str]:
     rows = []
     for limit in CAPACITY_LIMITS:
         for arm in ARMS:
@@ -767,6 +827,10 @@ def _limit_rows(entry: dict, window_buckets: int) -> list[str]:
                 if limit in entry["current"]["limits"] or limit in entry["proposed"]["limits"]:
                     rows.append(f"| {limit} | {arm} | not stated | n/a | n/a | n/a | n/a | n/a "
                                 "| n/a |")
+                continue
+            if stated["not_computed"]:
+                rows.append(f"| {limit} | {arm} | {_num(stated['limit'])} | "
+                            f"{_no_service_time_text(slug, arm)} | n/a | n/a | n/a | n/a | n/a |")
                 continue
             rows.append(
                 f"| {limit} | {arm} | {_num(stated['limit'])} | {_pct(stated['peak'])} | "
@@ -780,15 +844,19 @@ def _arm_notes(arm: str, figures: dict) -> list[str]:
     """The sentences one arm of one endpoint gets only when they apply."""
     lines = []
     share = figures["replay_share"]
-    if share is not None and share >= MATERIAL_REPLAY_SHARE:
-        text = (f"**Note:** {_pct(share)} of the {arm} arm's service time on this endpoint is "
-                f"replay's latency for the endpoint ({figures['replay_source']}), not a "
-                "recorded request's: no simulated row was served by it alone.")
-        if figures["replay_source"] == "tier_default":
-            text += (" A tier default is not a measurement: that part of the offered "
-                     "concurrency rests on the default alone.")
-        lines += [text, ""]
-    if figures["service_ms_after_window"]:
+    no_service_time = figures["demand"]["concurrency"]["peak"] is None
+    if no_service_time:
+        # At any share: one row placed at a tier default is enough.
+        lines += [f"**Note:** the {arm} arm's service time on this endpoint is a tier default: "
+                  "no simulated row was served by it alone and the snapshot has no latency "
+                  "signal for it. A tier default is a routing constant, not a service time, so "
+                  "no concurrency figure is computed for this endpoint in this arm. Requests "
+                  "and tokens are counted as usual.", ""]
+    elif share is not None and share >= MATERIAL_REPLAY_SHARE:
+        lines += [f"**Note:** {_pct(share)} of the {arm} arm's service time on this endpoint is "
+                  f"replay's latency for the endpoint ({figures['replay_source']}), not a "
+                  "recorded request's: no simulated row was served by it alone.", ""]
+    if figures["service_ms_after_window"] and not no_service_time:
         lines += [f"**Note:** {_num(figures['service_ms_after_window'])} ms of the {arm} arm's "
                   "service time on this endpoint falls after the window's last bucket and is "
                   "in no bucket.", ""]
@@ -814,7 +882,7 @@ def endpoint_lines(slug: str, entry: dict, block: dict, *, depth: int) -> list[s
              f"{_service_text(proposed)}.", ""]
     for arm in ARMS:
         lines += _arm_notes(arm, entry[arm])
-    limit_rows = _limit_rows(entry, window_buckets)
+    limit_rows = _limit_rows(slug, entry, window_buckets)
     if limit_rows:
         lines += ["| limit | arm | stated | peak | avg (window) | avg (active) | "
                   "buckets over 100% | requests arriving in those buckets | peak bucket |",

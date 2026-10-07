@@ -720,6 +720,106 @@ def test_an_asserted_latency_replaces_every_other_source_in_the_proposed_arm():
             == entry["current"]["demand"]["requests_per_minute"])
 
 
+#: 30 minutes, one request every 10 s, each really 10 s: 1.0 in service.
+_STEADY_TEN_SECONDS = [(10 * i + 1, 10.0) for i in range(180)]
+_NOT_COMPUTED = {"limit": 1.0, "not_computed": "tier_default_service_time", "peak": None,
+                 "peak_bucket": None, "mean_window": None, "mean_active": None,
+                 "buckets_over": None, "buckets_over_share": None, "requests_over_share": None}
+
+
+def test_a_tier_default_is_not_a_service_time_so_no_concurrency_is_computed():
+    """The proposal moves every request to `new`, an endpoint with no
+    recorded request, no latency signal and no asserted latency. Replay's
+    latency for it is the tier default (200 ms): a routing-score constant.
+    Placing 10 s requests at 200 ms each read "peak 2.0% / avg 1.9%" against
+    the same limit the current arm fills (100.0% / 96.8%) -- a fifty-fold
+    drop that is nothing but the constant. So it is a state, not a number:
+    no concurrency demand and no `max_concurrency` utilisation for that
+    endpoint in that arm, and the headline does not rest on it. Requests and
+    tokens are counted as before."""
+    rows = synthetic(_STEADY_TEN_SECONDS, endpoint_ms=10_000.0,
+                     proposed=arm_on("new", 200.0, "tier_default"))
+    block = capacity_block(rows, CapacityPlan(limits={
+        "e": {"max_concurrency": 1.0},
+        "new": {"max_concurrency": 1.0, "requests_per_minute": 10.0}}))
+    current, new = block["endpoints"]["e"]["current"], block["endpoints"]["new"]["proposed"]
+    assert current["limits"]["max_concurrency"]["peak"] == 1.0
+    assert current["limits"]["max_concurrency"]["mean_window"] == pytest.approx(0.968, abs=0.001)
+    assert current["limits"]["max_concurrency"]["not_computed"] is None
+    assert (new["replay_share"], new["replay_source"]) == (1.0, "tier_default")
+    assert new["service_time_sources"] == {"recorded": 0, "endpoint_mean": 0, "replay": 180,
+                                           "asserted": 0}
+    assert new["limits"]["max_concurrency"] == _NOT_COMPUTED
+    assert new["demand"]["concurrency"] == {"peak": None, "mean_window": None,
+                                            "mean_active": None}
+    # A rate limit counts arrivals: no service time is in it.
+    assert new["requests"] == 180.0
+    assert new["limits"]["requests_per_minute"]["peak"] == pytest.approx(0.6)
+    assert new["limits"]["requests_per_minute"]["not_computed"] is None
+    assert new["demand"]["requests_per_minute"]["peak"] == 6.0
+    assert new["demand"]["tokens_per_minute"]["peak"] == 6000.0
+    assert block["concurrency_not_computed"] == {"current": [], "proposed": ["new"]}
+    # The headline is the largest COMPUTED utilisation.
+    assert (block["peak"]["proposed"]["endpoint"], block["peak"]["proposed"]["limit"]) == (
+        "new", "requests_per_minute")
+    assert (block["peak"]["current"]["endpoint"], block["peak"]["current"]["utilisation"]) == (
+        "e", 1.0)
+
+
+def test_a_concurrency_limit_that_cannot_be_computed_is_never_the_headline():
+    """With `max_concurrency` the only limit stated for `new`, the proposed
+    arm's headline is not `new` at 2%: it is what can be computed (`e`, which
+    the proposal emptied), and the block names the endpoint left out. With
+    no other limit at all there is no headline, and the block still says
+    why."""
+    rows = synthetic(_STEADY_TEN_SECONDS, endpoint_ms=10_000.0,
+                     proposed=arm_on("new", 200.0, "tier_default"))
+    both = capacity_block(rows, CapacityPlan(limits={"e": {"max_concurrency": 1.0},
+                                                     "new": {"max_concurrency": 1.0}}))
+    assert (both["peak"]["proposed"]["endpoint"], both["peak"]["proposed"]["utilisation"]) == (
+        "e", 0.0)
+    assert both["concurrency_not_computed"]["proposed"] == ["new"]
+    # Stated by the proposal, so for the proposed arm only.
+    alone = capacity_block(rows, CapacityPlan(), {"capacity": {"new": {"max_concurrency": 1}}})
+    assert alone["peak"] == {"current": None, "proposed": None}
+    assert alone["concurrency_not_computed"] == {"current": [], "proposed": ["new"]}
+    # Not stated is not "not computed".
+    bare = capacity_block(rows, CapacityPlan(limits={"e": {"max_concurrency": 1.0}}))
+    assert bare["concurrency_not_computed"] == {"current": [], "proposed": []}
+    assert bare["endpoints"]["new"]["proposed"]["demand"]["concurrency"]["peak"] is None
+
+
+@pytest.mark.parametrize("source,latency", [("signal", 9000.0), ("observed", 9000.0),
+                                            ("proposal", 9000.0)])
+def test_a_measured_or_asserted_latency_is_a_service_time(source, latency):
+    """The state is for a tier default only. The snapshot's latency signal,
+    replay's observed median and a latency the proposal asserts are each a
+    figure about the endpoint, and concurrency is computed from them."""
+    rows = synthetic(_STEADY_TEN_SECONDS, endpoint_ms=10_000.0,
+                     proposed=arm_on("new", latency, source))
+    block = capacity_block(rows, CapacityPlan(limits={"new": {"max_concurrency": 1.0}}))
+    stated = block["endpoints"]["new"]["proposed"]["limits"]["max_concurrency"]
+    assert stated["not_computed"] is None and stated["peak"] == pytest.approx(0.9)
+    assert block["concurrency_not_computed"] == {"current": [], "proposed": []}
+    assert block["peak"]["proposed"]["endpoint"] == "new"
+
+
+def test_the_real_replay_marks_an_endpoint_no_row_was_recorded_on():
+    """Through the real `simulate()`: every row was recorded on
+    `local-cheap`, replay routes some to `local-mid`, and the snapshot has
+    no signal for it -- in both arms of a no-op proposal."""
+    block = block_for(mixed_traffic(), three_endpoints(), {}, limits={
+        "local-mid": {"max_concurrency": 2.0, "tokens_per_minute": 90000.0}})
+    for arm in ("current", "proposed"):
+        mid = block["endpoints"]["local-mid"][arm]
+        assert mid["replay_source"] == "tier_default" and mid["requests"] > 0
+        assert mid["limits"]["max_concurrency"] == {**_NOT_COMPUTED, "limit": 2.0}
+        assert mid["limits"]["tokens_per_minute"]["peak"] > 0
+        assert block["peak"][arm]["limit"] == "tokens_per_minute"
+    assert block["concurrency_not_computed"] == {"current": ["local-mid"],
+                                                 "proposed": ["local-mid"]}
+
+
 @pytest.mark.parametrize("latency", [86_400_001, 1e12, 1e18])
 def test_c15_an_asserted_latency_too_long_to_place_is_refused(latency):                # C15
     """An operator's claim is never silently ignored, and a service time of
@@ -734,21 +834,30 @@ def test_c15_an_asserted_latency_too_long_to_place_is_refused(latency):         
 
 # --- C18, C19: one request is one request; the mean is the time-average ---------------
 
-def synthetic(requests, *, endpoint_ms: float = 6000.0) -> list[RowResult]:
+def arm_on(model: str, latency_ms: float, source: str) -> ArmResult:
+    """A routed `ArmResult` on `model`, with the ONE latency replay would
+    report for that endpoint and the rung it came from."""
+    return ArmResult("routed", model, "onprem", "cheap", (model,), (), 0.0, latency_ms, source,
+                     None, None, prompt_tokens=900, completion_tokens=100)
+
+
+def synthetic(requests, *, endpoint_ms: float = 6000.0,
+              proposed: ArmResult | None = None) -> list[RowResult]:
     """`RowResult`s for `(arrival seconds after T0, service seconds)` pairs,
     each recorded as served alone by endpoint `e` with its own service time,
     and routed there by both arms. Built by hand, not replayed: these tests
     are about arithmetic on a known arrival process, and need streams of
     thousands of requests with service times the fixtures do not have.
-    `endpoint_ms` is the ONE latency replay would report for the endpoint."""
-    arm = ArmResult("routed", "e", "onprem", "cheap", ("e",), (), 0.0, endpoint_ms, "observed",
-                    None, None, prompt_tokens=900, completion_tokens=100)
+    `endpoint_ms` is the ONE latency replay would report for the endpoint.
+    `proposed` replaces the proposed arm (`arm_on`): a proposal that moves
+    every row somewhere else, or asserts a latency."""
+    arm = arm_on("e", endpoint_ms, "observed")
     out = []
     for i, (arrival, service) in enumerate(requests):
         written = T0 + timedelta(milliseconds=round(arrival * 1000) + round(service * 1000))
         row = make_row(f"s{i}", "app-a", ts=written.isoformat(), latency_ms=service * 1000.0,
                        attempts=["e"], chosen="e")
-        out.append(RowResult(row, arm, arm))
+        out.append(RowResult(row, arm, proposed or arm))
     return out
 
 
@@ -875,7 +984,8 @@ def test_c19_the_window_mean_is_steady_and_the_peak_depends_on_window_and_bucket
 
 def test_c5_a_noop_proposal_gives_identical_demand_in_both_arms():                     # C5
     block = block_for(mixed_traffic(), three_endpoints(), {},
-                      limits={"local-mid": {"max_concurrency": 2.0}})
+                      limits={"local-mid": {"max_concurrency": 2.0,
+                                            "requests_per_minute": 5.0}})
     assert len(block["endpoints"]) >= 2                                   # not vacuous
     for slug, entry in block["endpoints"].items():
         assert entry["current"] == entry["proposed"], slug
@@ -1023,8 +1133,9 @@ def test_an_endpoint_with_a_limit_and_no_rows_is_shown_at_zero():
     assert arm["service_time_ms"] == {"mean": None, "max": None}
     assert (arm["replay_share"], arm["replay_source"]) == (None, None)
     assert arm["limits"]["max_concurrency"] == {
-        "limit": 4.0, "peak": 0.0, "peak_bucket": None, "mean_window": 0.0, "mean_active": 0.0,
-        "buckets_over": 0, "buckets_over_share": 0.0, "requests_over_share": None}
+        "limit": 4.0, "not_computed": None, "peak": 0.0, "peak_bucket": None,
+        "mean_window": 0.0, "mean_active": 0.0, "buckets_over": 0, "buckets_over_share": 0.0,
+        "requests_over_share": None}
     assert block["peak"]["current"] == {
         "endpoint": "local-big", "limit": "max_concurrency", "utilisation": 0.0, "bucket": None,
         "mean_window": 0.0, "buckets_over_share": 0.0, "bucket_seconds": 60, "buckets": 12}
@@ -1241,13 +1352,13 @@ def test_c10_no_key_ranks_recommends_or_prescribes():                           
     # Exactly these keys: there is no overflow, rejection or remedy field.
     assert set(block) == {"method", "bucket_seconds", "min_buckets", "window", "rows",
                           "volume_scale", "not_modelled", "window_too_short", "endpoints",
-                          "peak"}
+                          "peak", "concurrency_not_computed"}
     assert set(block["endpoints"]["local-cheap"]["current"]) == {
         "requests", "active_buckets", "service_time_sources", "service_time_ms", "replay_share",
         "replay_source", "service_ms_after_window", "estimated_token_rows", "demand", "limits"}
     assert set(block["endpoints"]["local-cheap"]["current"]["limits"]["max_concurrency"]) == {
-        "limit", "peak", "peak_bucket", "mean_window", "mean_active", "buckets_over",
-        "buckets_over_share", "requests_over_share"}
+        "limit", "not_computed", "peak", "peak_bucket", "mean_window", "mean_active",
+        "buckets_over", "buckets_over_share", "requests_over_share"}
     assert set(block["peak"]["current"]) == {
         "endpoint", "limit", "utilisation", "bucket", "mean_window", "buckets_over_share",
         "bucket_seconds", "buckets"}
