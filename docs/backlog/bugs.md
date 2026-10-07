@@ -186,6 +186,15 @@ manual and less coarse).
    would remove both approximations. A serving change (a column, an `ALTER`, the export),
    with its own review; item 3 above mentions the same field for moved requests.
 
+10. **Presentation edge cases from the fix-wave re-review (2026-10-07).** `_num` prints a
+    non-zero value below 5e-13 as `0.` and `_seconds` prints a remainder under 50 ms as `0 s`;
+    for an endpoint whose concurrency is withheld, `active_buckets` still counts buckets
+    touched only by the tier-default service time; the hint `state
+    endpoints.<slug>.latency_ms` is not the literal proposal path
+    (`endpoints.update.<slug>.latency_ms`); the `peak_text` docstring example says 10082
+    buckets (measured 10081). And: the mutation table in research §21.5.3 predates the fix
+    wave — re-run it before it is quoted.
+
 See also B59 (per-app TPM / concurrency limits in the gateway — admission, out of scope for
 the simulator) and B63 (the shadow-prices-only output has no `rows` block).
 
