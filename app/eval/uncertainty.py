@@ -54,7 +54,8 @@ from dataclasses import dataclass, field
 
 from app.eval.calibration import recommendation_set_id
 from app.eval.outcomes import _fmt, _round6
-from app.eval.simulate import ArmResult, RowResult, _bucket_stats, _parse_ts, _route_changed
+from app.eval.simulate import (ArmResult, RowResult, _bucket_stats, _parse_ts, _route_changed,
+                               replay_tokens)
 
 METHOD = "stratified_paired_row_bootstrap"
 STRATA = "application_id"
@@ -576,17 +577,60 @@ def _nest(flat: dict[str, dict]) -> dict:
     return out
 
 
-def _bucket(n: int, points: dict[str, float | None], samples: dict[str, list] | None,
-            plan: UncertaintyPlan) -> dict:
-    """One bucket of the block: `{"n", <figure tree of leaves>}`, or
-    `{"insufficient_data": true, "n"}` below `plan.min_rows`."""
-    if samples is None:
-        return {"insufficient_data": True, "n": n}
+#: The figures computed over an arm's ROUTED rows only (`_bucket_stats`): a
+#: mean, a share or a percentile of however many rows that arm routed.
+_CONDITIONAL = frozenset({"latency_ms.p50", "latency_ms.p95", "quality_mean", "onprem_share"})
+
+
+def _routed_behind(name: str, routed: dict[str, int]) -> int | None:
+    """How many routed rows the figure `name` is computed over: that arm's
+    routed count, the smaller of the two for a delta -- or None for a figure
+    over every row of the bucket (a cost sum, a count, a count's share)."""
+    head, _, last = name.rpartition(".")
+    if head not in _CONDITIONAL:
+        return None
+    return min(routed.values()) if last == "delta" else routed[last]
+
+
+def estimated_token_rows(rows: list[RowResult]) -> int:
+    """Rows with no backend token count (`simulate.replay_tokens`): rejected,
+    failed before a response, or served by a backend that reported no usage.
+    Replay sizes and prices them from RouteForge's own count, the same in
+    every replicate -- the `admission_estimate_error` no range includes. A
+    hand-built row that records no sizes at all counts as not estimated."""
+    return sum(1 for r in rows if "prompt_tokens" in r.row and replay_tokens(r.row)[2])
+
+
+def _bucket(rows: list[RowResult], samples: dict[str, list], plan: UncertaintyPlan,
+            days: float | None) -> dict:
+    """One bucket that has ranges: `{"n", "routed", "estimated_token_rows",
+    <figure tree of leaves>}`. Points come from `simulate._bucket_stats`.
+
+    `routed` is each arm's routed row count. A figure over an arm's routed
+    rows (`_CONDITIONAL`) rests on that count, not on `n`: below
+    `plan.min_rows` its leaf, and the delta it enters, gets no range --
+    `lo`/`hi` null, `insufficient_data: true` and `n` = the routed count --
+    for the reason a bucket of that many rows gets none."""
+    n = len(rows)
+    points = _flatten(_bucket_stats(rows), n, days)
+    routed = {name: sum(1 for r in rows if getattr(r, name).outcome == "routed")
+              for name in ARMS}
     flat = {}
     for name, values in samples.items():
+        behind = _routed_behind(name, routed)
+        if behind is not None and behind < plan.min_rows:
+            flat[name] = _round6({"point": points[name], "lo": None, "hi": None,
+                                  "insufficient_data": True, "n": behind})
+            continue
         zero = n if name.endswith("_share") and points[name] == 0 else None
         flat[name] = leaf(points[name], values, plan, zero_n=zero)
-    return {"n": n, **_nest(flat)}
+    return {"n": n, "routed": routed, "estimated_token_rows": estimated_token_rows(rows),
+            **_nest(flat)}
+
+
+def _insufficient(n: int) -> dict:
+    """A bucket below `plan.min_rows`: no range, and how many rows it has."""
+    return {"insufficient_data": True, "n": n}
 
 
 def _count_outside(node) -> int:
@@ -627,13 +671,13 @@ def results_block(results: list[RowResult], plan: UncertaintyPlan, *,
         rows_of.setdefault(r.row["application_id"], []).append(r)
 
     def reduce(app: str, samples: dict[str, list]) -> dict:
-        rows = rows_of[app]
-        return _bucket(len(rows), _flatten(_bucket_stats(rows), len(rows), None), samples, plan)
+        return _bucket(rows_of[app], samples, plan, None)
 
     boot = run_bootstrap(results, plan, days=days, reduce=reduce)
-    totals = _bucket(boot.n, _flatten(_bucket_stats(results), boot.n, days), boot.totals, plan)
+    totals = (_insufficient(boot.n) if boot.totals is None
+              else _bucket(results, boot.totals, plan, days))
     per_day = totals.pop("per_day", None)
-    by_app = {app: bucket if bucket is not None else {"insufficient_data": True, "n": n}
+    by_app = {app: bucket if bucket is not None else _insufficient(n)
               for app, (n, bucket) in boot.by_app.items()}
     block = {"totals": totals, "by_app": by_app, "per_day": per_day}
     block["points_outside_interval"] = _count_outside(block)
@@ -772,9 +816,19 @@ def insufficient_text(bucket: dict) -> str:
     return f"insufficient data (n = {bucket['n']})"
 
 
+def token_estimate_line(estimated: int, n: int) -> str:
+    """How many of a bucket's rows the `admission_estimate_error` exclusion
+    is about, printed beside the caveat that names it."""
+    return (f"{estimated} of {n} simulated rows have no backend token count "
+            "(`estimated_token_rows`): replay sizes and prices them from RouteForge's own "
+            "estimate, the same in every resample.")
+
+
 def range_text(node: dict) -> str:
     """A leaf's range for a table cell: `lo to hi`, with what is unusual
     about it said in words."""
+    if node.get("insufficient_data"):
+        return f"insufficient data (n = {node['n']} routed)"
     if node["lo"] is None:
         return f"n/a (undefined in {node.get('undefined_replicates', 0)} resamples)"
     text = f"{_fmt(node['lo'])} to {_fmt(node['hi'])}"
@@ -850,6 +904,9 @@ def render_uncertainty_section(block: dict) -> str:
     if "totals" not in block:
         return "\n".join(lines)
     level = block["interval"]
+    totals = block["totals"]
+    if not totals.get("insufficient_data"):
+        lines += [token_estimate_line(totals["estimated_token_rows"], totals["n"]), ""]
     if block["totals_strata"] is not None:
         lines += [strata_line(block["totals_strata"], block["min_rows"]), ""]
     lines += [quality_line(block["quality_posterior"]), ""]

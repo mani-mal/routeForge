@@ -406,6 +406,21 @@ Thirty is a convention, not a derivation. It is the usual floor below which a pe
 bootstrap of a mean is not trusted, and it is a flag because the right number depends on how
 skewed the app's costs are.
 
+**Figures over an arm's routed rows** (amended by the final review). Latency, `quality_mean`
+and `onprem_share` are computed over the rows an arm **routed**, not over the bucket's rows.
+A 100-row bucket whose proposed arm routes 10 rows would otherwise print a range for a mean
+of 10 while a 29-row application gets none. So every bucket carries
+`"routed": {"current": k, "proposed": k}`, and when an arm's routed count is below
+`--min-rows` those leaves of that arm — and the deltas they enter, on the smaller of the two
+counts — have no range:
+
+```json
+{"point": 300.0, "lo": null, "hi": null, "insufficient_data": true, "n": 10}
+```
+
+The report prints `insufficient data (n = 10 routed)`. Cost sums, the three counts and their
+shares are over every row of the bucket and keep their ranges.
+
 ### 7.2 A zero count
 
 If no row in a bucket is newly rejected, no resample of those rows contains one. The range is
@@ -479,6 +494,12 @@ It does not include:
 A narrow range on a biased replay is still biased. The baseline agreement block is the check
 on bias; the range is not.
 
+`admission_estimate_error` is the one exclusion a run can count. Every bucket carries
+`estimated_token_rows`, and the report prints, beside the caveat:
+
+> 15 of 90 simulated rows have no backend token count (`estimated_token_rows`): replay sizes
+> and prices them from RouteForge's own estimate, the same in every resample.
+
 **The caveat.** Every report that shows a range prints this, verbatim, as a blockquote:
 
 > **Ranges show sampling variability only.** Each range is a percentile interval from
@@ -512,11 +533,15 @@ Wherever a figure `x` exists, its leaf sits at the same path under the bucket:
   code, `_bucket_stats`, and rounded the same way).
 - `lo`, `hi`: §4.4. Floats are rounded to 6 decimal places; counts are integers.
 - Optional keys, present only when they apply: `point_outside: true` (§7.3),
-  `undefined_replicates: k` with `lo`/`hi` null (§7.4), `zero_bound: u` (§7.2).
+  `undefined_replicates: k` with `lo`/`hi` null (§7.4), `zero_bound: u` (§7.2), and
+  `insufficient_data: true` with `n: <routed rows>` and `lo`/`hi` null (§7.1, a figure over
+  too few routed rows).
 
-A bucket is `{"n": <rows>, <the figure tree of §5.1>}` or `{"insufficient_data": true, "n":
-<rows>}`. With the block's `replicates`, `seed` and `interval`, `n` is what is needed to
-reproduce a leaf.
+A bucket is `{"n": <rows>, "routed": {"current": k, "proposed": k}, "estimated_token_rows":
+k, <the figure tree of §5.1>}` or `{"insufficient_data": true, "n": <rows>}`. `routed` is
+each arm's routed row count (§7.1). `estimated_token_rows` is how many of the bucket's rows
+have no backend token count (§8, `admission_estimate_error`). With the block's `replicates`,
+`seed` and `interval`, `n` is what is needed to reproduce a leaf.
 
 ### 9.2 `simulation.json` (`--proposal`)
 
@@ -633,6 +658,9 @@ replacement within each application (applications with fewer than 30 rows are re
 together for the totals) (seed 0). Both arms, and every scenario or relaxation, use the same
 resampled rows. A bucket with fewer than 30 rows gets no range.
 
+0 of 111 simulated rows have no backend token count (`estimated_token_rows`): replay sizes and
+prices them from RouteForge's own estimate, the same in every resample.
+
 Totals strata: 2 application(s) resampled on their own and 1 with fewer than 30 rows
 resampled together (6 rows); the smallest stratum has 6 rows. Resampling within strata leaves
 the totals about 0.972973 of their variance (analytic, equal variance assumed, not measured);
@@ -658,7 +686,8 @@ insufficient data (n = 6)
 ```
 
 A table has one row per leaf of §5.1 (23 rows). A range cell is `lo to hi`, or
-`n/a (undefined in k resamples)`, with ` (point outside range)` appended when §7.3 applies.
+`n/a (undefined in k resamples)`, or `insufficient data (n = k routed)` (§7.1), with
+` (point outside range)` appended when §7.3 applies.
 Under a bucket whose `newly_rejected` is 0, the zero-count sentence (§7.2).
 
 ### 10.2 Scenario comparison
@@ -735,7 +764,7 @@ offline tool and is the reason `--bootstrap` exists; the reference will say so.
 | U4 | Paired. A no-op proposal has every delta, count and share range exactly `[0, 0]`, with pooled applications present too. An app that is its own stratum is drawn the same way alone and inside the whole export; a scenario gets the same block alone and among others; an app-scoped relaxation gets the range of the equivalent proposal's app bucket and an endpoint-scoped one the range of its totals; one calibrated unit in both arms cancels in the quality delta. |
 | U5 | Ranges narrow as the rows are replicated k-fold: a sum's relative width and a share's or mean's width strictly decrease from 1× to 4× to 16×. |
 | U6 | Every replicate draws exactly `n` positions for every app with its own stratum (`n ≥ --min-rows`) and exactly `n_pool` for the pooled stratum; an app with its own stratum is present in every replicate, a one-row app included when `--min-rows` is 1. Every replicate value equals `_bucket_stats` over the rows the two seed formulas draw. |
-| U7 | A bucket, scenario or relaxation below `--min-rows` carries `insufficient_data` and `n`, no range; the reports print `insufficient data (n = k)`. |
+| U7 | A bucket, scenario or relaxation below `--min-rows` carries `insufficient_data` and `n`, no range; the reports print `insufficient data (n = k)`. A latency, quality or on-prem-share leaf of an arm that routed fewer than `--min-rows` rows carries the same two keys with `n` = the routed count, and prints `insufficient data (n = k routed)`. |
 | U8 | Quality-label uncertainty exists only where a posterior does: one calibrated unit serving every row reproduces the Beta interval; without the file, or for a tier-default quality, the quality range has no label width; a file never attaches to a score it did not produce. |
 | U9 | The caveat is the spec's text, and every report that shows a range prints it; `not_covered` lists the five ids. |
 | U10 | `replicates`, `interval`, `seed`, `min_rows` and the posterior files' hashes are in `inputs`, and ids differ whenever any of them does. |
@@ -844,3 +873,11 @@ together; the sections above describe the design as amended.
    (research §20.6.1 has the measurement and its method). Applications below `--min-rows` are
    now one pooled stratum for the totals, the block discloses the strata and the analytic
    `variance_factor`, and the caveat and the method sentence say so.
+2. **A figure over an arm's routed rows needs enough routed rows** (§7.1, §9.1, U7). The
+   insufficient-data rule looked only at the bucket's row count, so a mean of 10 routed rows
+   in a 100-row bucket got a range. Buckets now carry `routed`, and such leaves carry
+   `insufficient_data` and the routed count.
+3. **The rows behind `admission_estimate_error` are counted** (§8, §9.1). The caveat said
+   "rows no backend answered"; the code also estimates a row a backend answered without
+   reporting usage. The caveat now says "rows with no backend token count", every bucket
+   carries `estimated_token_rows`, and the report prints the count beside the caveat.

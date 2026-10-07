@@ -377,10 +377,12 @@ def test_zero_bound_values():
 def test_a_figure_undefined_in_some_replicate_has_no_range():
     """One routed row among forty in the proposed arm: a replicate that does
     not draw it has no proposed latency at all. An interval over the other
-    replicates would be conditional on the figure existing, so there is none."""
+    replicates would be conditional on the figure existing, so there is none.
+    `min_rows` is 1 here so that the one routed row is not already refused a
+    range for being too few (tests/eval/test_uncertainty_leaves.py)."""
     results = [_result(i, "a", _arm("local-mid", 0.01), REJECTED) for i in range(39)]
     results.append(_result(39, "a", _arm("local-mid", 0.01), _arm("local-mid", 0.01)))
-    plan = UncertaintyPlan(replicates=200)
+    plan = UncertaintyPlan(replicates=200, min_rows=1)
     block = results_block(results, plan)
     node = block["totals"]["latency_ms"]["p50"]["proposed"]
     assert node["point"] == 800.0 and node["lo"] is None and node["hi"] is None
