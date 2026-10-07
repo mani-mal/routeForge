@@ -323,18 +323,22 @@ literature doesn't model".
   with an explicit statement of what it excludes, because the dominant error in such a
   simulator is replay bias, which no resampling of the same rows can see.
 - **Method (FB §20.1):** replay each row once under both arms; bootstrap the **rows**,
-  stratified by application, with replacement; percentile interval. The draw for an
-  application in a replicate is a function of (seed, replicate, application, row count) only,
-  which gives common random numbers across the two arms, across every scenario of a
-  comparison and across every shadow-price relaxation without holding them in memory together.
-  A delta's range is the range of the paired difference.
-- **What the interval covers:** sampling variability of the recorded rows, per application,
-  under the replay model. Where a route's quality is a P2b-3 calibrated score, the Beta
+  stratified by application, with replacement; percentile interval. An application with at
+  least `--min-rows` rows (default 30) is its own stratum; the rows of all smaller
+  applications form one pooled stratum that feeds the totals only. The draw for a stratum in
+  a replicate is a function of (seed, replicate, application, row count) — or (seed,
+  replicate, pooled row count) — only, which gives common random numbers across the two arms,
+  across every scenario of a comparison and across every shadow-price relaxation without
+  holding them in memory together. A delta's range is the range of the paired difference.
+- **What the interval covers:** sampling variability of the recorded rows, within strata,
+  for the applications in the export, under the replay model. Where a route's quality is a
+  P2b-3 calibrated score, the Beta
   posterior is drawn once per unit per replicate (shared by both arms), so the quality range
   also carries label uncertainty (FB §20.3).
 - **What it does not cover (state this in the paper, FB §20.2):** replay model error
   (first-decision replay, frozen signals, predicted overflow); the admission estimate for
-  rows no backend answered (1.54× the backend's count on the one run that measured it, FB
+  rows with no backend token count — the output counts them (1.54× the backend's count on
+  the one run that measured it, FB
   §19.4.1); unrecorded inputs (B55, B60); traffic shift; per-request latency variation (replay
   assigns one latency per endpoint). **A narrow range on a biased replay is still biased** —
   the range and the baseline agreement answer different questions.
@@ -342,7 +346,35 @@ literature doesn't model".
   - *The bootstrap cannot express a zero count.* "0 newly rejected" has range `[0, 0]` on 24
     rows and on 2 million. An analytic bound `1 − (1 − P)^(1/n)` is reported beside it; by
     Jensen's inequality it holds for the stratified totals as well as per application (FB
-    §20.4). 9.2% for 24 rows.
+    §20.4). 9.2% for 24 rows. It is one-sided and bounds the rate under the replay, not the
+    live rate. The mirror case — a share of exactly 1 — gets `(1 − P)^(1/n)`, with the
+    caution that a share fixed by policy (an on-prem-only application's on-prem share) is not
+    a sampled rate.
+  - *Stratifying by a unit with few rows silently shrinks the totals' range* (the review's
+    finding; FB §20.7 for the finding and the fix, FB §20.6.1 for the measurement and its
+    method). A bootstrap of a stratum of `n_s` rows reproduces `(n_s − 1)/n_s` of its
+    variance, so with one stratum per application the totals keep `(n − S)/n` of theirs —
+    and a width of exactly zero when every application has one row. Each application's own
+    range is unaffected, which is why it went unnoticed. Synthetic measurement, real engine,
+    240 rows, 30 datasets per shape, mean 90% width of the total against the normal-theory
+    width `2 · 1.645 · √n · s`:
+
+    | apps × rows | theory `√((n − S)/n)` | one stratum per application | small applications pooled |
+    |---|---|---|---|
+    | 1 × 240 | 0.998 | 0.997 | 0.997 |
+    | 8 × 30 | 0.983 | 0.981 | 0.981 |
+    | 80 × 3 | 0.816 | 0.818 | 0.992 |
+    | 120 × 2 | 0.707 | 0.697 | 0.992 |
+    | 240 × 1 | 0.000 | 0.000 | 0.992 |
+
+    The fix pools applications below `--min-rows` into one stratum for the totals, keeps the
+    pairing (the pooled draw has its own seed formula), and **discloses rather than
+    corrects** the remainder: every block reports the strata and the analytic
+    `variance_factor = (n − S)/n`. Paper point: a stratified bootstrap over tenants needs a
+    floor on stratum size, and a zero-width interval is the failure mode to test for.
+  - *A figure over a subset needs the subset's count.* Latency, quality and on-prem share
+    are statistics of the rows an arm routed; the minimum-rows rule has to be applied to
+    that count, not to the bucket's.
   - *Label uncertainty cancels in a paired delta.* A request that stays on the same model
     contributes exactly zero to the quality delta in every replicate; label uncertainty
     enters only through the rows that change model.
@@ -365,10 +397,19 @@ literature doesn't model".
   `test_u8_one_calibrated_unit_gives_the_posteriors_own_interval`; U9
   `test_u9_caveat_is_the_spec_text`; U10 `test_u10_the_id_tells_plans_apart`; U11
   `test_u11_ranges_add_no_ranking_key_and_keep_file_order`; U12
-  `test_no_serving_module_imports_app_eval`; U13 `test_engine_figures_equal_bucket_stats`.
-- **Synthetic numbers only so far (FB §20.6.1) — do not present as an evaluation:** 100,000
-  rows × 1000 replicates in about 25 s, 1,000,000 rows at about 0.7 s per replicate, pure Python;
-  a `Beta(41, 9)` posterior's 90% interval reproduced to within 0.01.
+  `test_no_serving_module_imports_app_eval`; U13 `test_engine_figures_equal_bucket_stats`
+  and the brute-force `test_f1_every_replicate_is_the_rows_the_seed_formulas_draw`; U14
+  `test_f1_many_small_apps_give_the_totals_the_width_of_one_app`; U15
+  `test_f3_a_share_of_one_carries_the_lower_bound`; U16
+  `test_f4_an_export_with_only_large_apps_gives_the_leaves_it_gave_before`; U17
+  `test_f4_the_cli_says_what_each_bootstrap_will_cost`.
+- **Synthetic numbers only so far (FB §20.6.1) — do not present as an evaluation:** the
+  stratification table above; cost `replicates × (rows × c_row + strata × c_stratum)`, pure
+  Python — 1,000 applications × 40 rows × 1000 replicates in 38.4 s with 20 MB of peak-RSS
+  growth (44.4 s and 669 MB before the engine was reordered), 10,000 applications × 3 rows ×
+  1000 replicates in 10.1 s (166.0 s before pooling), about 99 ms per replicate at 100,000
+  rows in three applications, on one laptop core with other processes running; a
+  `Beta(41, 9)` posterior's 90% interval reproduced to within 0.01.
 - **Experiments for the DGX lab (all TO MEASURE):**
   - **E9a — width against sample size.** Persona-generated traffic at 500, 5,000 and 50,000
     rows through the same six scenarios as E7b; report the width of each delta's range and
@@ -382,15 +423,23 @@ literature doesn't model".
     missing field as R3, §5).
   - **E9d — label uncertainty.** After one real calibration round, the quality range with and
     without `--quality-posteriors`, and the share of routed rows covered.
-- **Limits:** independence within an application is assumed and false; no block or cluster
-  bootstrap; percentile interval, not BCa; `--min-rows 30` is a convention; reproducible per
-  Python minor version. **Found in review, not yet fixed on this branch:** a stratified
-  bootstrap draws each stratum's rows independently, which understates each stratum's
-  variance by a factor of `(n_a − 1)/n_a`; pooling many small strata compounds it, so the
-  **totals** range is too narrow when the export has many small applications, even though
-  each app's own range is unaffected. Measured on a synthetic 240-row export, width relative
-  to normal theory: 1 app × 240 rows → 1.02; 8 × 30 → 0.92; 80 × 3 → 0.84; 120 × 2 → 0.67;
-  240 × 1 → 0.00 (FB §20.7). A follow-up commit on this branch is expected to address it.
+- **Limits (FB §20.7):**
+  - *Variation between applications is not covered.* The method conditions on the
+    applications in the export. With application means drawn from `exp(N(0, 0.7))` and
+    redrawn per dataset, the range was 0.09 to 0.29 of the true width whenever some
+    applications were large (synthetic, 200 datasets per shape, FB §20.6.1) — under the old
+    rule and the new one alike. A claim about "a typical tenant" cannot rest on these
+    ranges.
+  - *Rows are assumed independent within a stratum*, which agent traffic violates; no block
+    or cluster bootstrap (E9c).
+  - *Pooling assumes the small applications' rows are exchangeable*; where they differ in
+    mean the pooled totals range is up to 14% wider than the fixed-mix truth (synthetic, FB
+    §20.6.1).
+  - *Stratification still drops `1 − (n − S)/n` of the variance*, disclosed and not
+    corrected.
+  - *Cost has a per-application term* and is otherwise linear in replicates × rows.
+  - Percentile interval, not BCa; `--min-rows 30` is a convention; reproducible per Python
+    minor version.
 ### 4.3 P3c-4 capacity model — *spec pending* (HO §25 "230% of capacity" example)
 ### 4.4 Replay fidelity
 
@@ -515,8 +564,11 @@ before writing the evaluation section.
 - Replay is first-decision only (until §4.4), with frozen signals; cached tokens not recorded.
 - Uncertainty ranges (§4.2) are sampling variability under an independence assumption that
   agent traffic violates; they exclude replay bias by construction. Coverage on real records
-  is unmeasured (E9b, E9c). A stratified bootstrap also understates the **totals** range with
-  many small applications (synthetic measurement, FB §20.7); a fix is not yet landed.
+  is unmeasured (E9b, E9c). They condition on the applications in the export: variation
+  between applications is outside them (synthetic measurement, FB §20.6.1). Stratifying by
+  application understated the **totals** range with many small applications; small
+  applications are now pooled, and the remaining `(n − S)/n` effect is disclosed, not
+  corrected (FB §20.7).
 - Endpoint declarations (region, retention) are operator-declared; RouteForge enforces the
   declaration and cannot verify a provider's contractual claim (CLAUDE.md).
 - Patent/prior-art scan incomplete; arXiv leads unverified.

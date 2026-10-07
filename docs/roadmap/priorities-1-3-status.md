@@ -61,7 +61,7 @@ Handoff §37 Priority 2 criteria met:
 | B56 / B57 | #78 | The exact app scope is enforced at the router; the `serving` logger actually prints in deployment | |
 | **P3c-1** shadow prices | #79, #80 | `policy_simulate.py --shadow-prices` relaxes one constraint at a time, per app, and prices it (cost/day, rejections avoided, newly rejected, quality, latency, on-prem share). Security constraints appear only as "cost of protection", never as a recommendation. | `docs/reference/policy-simulator.md` §8, research §17 |
 | **P3c-2** alternative scenarios | #84 | `policy_simulate.py --scenarios` replays several administrator-written scenarios against one shared baseline and writes one comparison table, in file order, never ranked. Proposals can assume a token scale, a cached-prompt share and a per-endpoint latency. Replay mirrors the gateway's context-window overflow re-selection. `--since` cuts old rows; `--min-agreement` refuses a run whose baseline disagrees with the record. | `docs/reference/policy-simulator.md` §9, research §18 |
-| **P3c-3** uncertainty ranges | pending | `policy_simulate.py --uncertainty` adds a range to every headline figure of all three modes: a percentile interval from a bootstrap over the replayed rows, resampled within each application and paired across arms, scenarios and relaxations. Opt-in; without the flag every output is byte-identical. `--quality-posteriors` adds label uncertainty for calibrated qualities from the P2b-3 recommendation file. Below `--min-rows` a bucket says "insufficient data"; a zero count carries a bound instead of reading as no risk. The range is sampling variability only and every report says so. | `docs/reference/policy-simulator.md` §10, research §20 |
+| **P3c-3** uncertainty ranges | pending | `policy_simulate.py --uncertainty` adds a range to every headline figure of all three modes: a percentile interval from a bootstrap over the replayed rows, resampled within each application (applications below `--min-rows` are pooled for the totals) and paired across arms, scenarios and relaxations. Opt-in; without the flag every output is byte-identical. `--quality-posteriors` adds label uncertainty for calibrated qualities from the P2b-3 recommendation file. Below `--min-rows` a bucket says "insufficient data"; a zero count carries a bound instead of reading as no risk. The range is sampling variability only and every report says so. | `docs/reference/policy-simulator.md` §10, research §20 |
 | B60 replayable rejections | #86 | Every outcome row records `routing_tokens`, the token count the router was given, so a request rejected for its size replays as rejected and a proposal that raises a budget shows what it rescues. The baseline check reports outcome agreement (routed or rejected against the recorded status) next to model agreement, and `--min-agreement` gates on the lower. Rejected rows from before the fix are excluded and counted. One `ALTER` before deploy. | `docs/reference/policy-simulator.md` §5–§6, `docs/reference/routing-outcomes.md` §1, research §19 |
 
 Handoff §37 Priority 3 criteria met:
@@ -105,7 +105,10 @@ brainstorm, spec, plan and build. Scenarios (P3c-2) and uncertainty (P3c-3) are 
    - calibration posteriors in the snapshot. Today the operator passes the P2b-3
      recommendation file; exporting `alpha`/`beta` would need two `model_quality` columns and
      a snapshot schema bump;
-   - measured coverage on real records (`docs/research/arxiv.md` E9a–E9d).
+   - measured coverage on real records (`docs/research/arxiv.md` E9a–E9d);
+   - variation between applications. The ranges take the applications in the export as
+     given; a two-stage bootstrap that also resamples applications would cover a claim about
+     other tenants, at the cost of the pairing with per-application shadow prices.
 2. **P3c-4 capacity model** (handoff §26, §31). Nothing today says "on-prem demand reaches
    230% of capacity". This needs a declared per-endpoint capacity (requests/s or tokens/s),
    either operator-declared or measured from the observation log. The simulator would then

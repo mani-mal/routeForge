@@ -844,17 +844,24 @@ documents gain keys and no existing key or value changes.
 Every report that shows a range prints this, verbatim:
 
 > **Ranges show sampling variability only.** Each range is a percentile interval from
-> resampling the recorded rows with replacement, within each application, under this replay
+> resampling the recorded rows with replacement, within each application (applications with
+> fewer than `--min-rows` rows are resampled together for the totals), under this replay
 > model. It does not include replay model error (first-decision replay, frozen signals,
-> predicted overflow), the error of the admission estimate for rows no backend answered,
-> inputs that were not recorded, or future traffic shift. Replay gives each endpoint one
-> latency, so a latency range reflects only which endpoints the resampled rows used. A narrow
-> range on a biased replay is still biased.
+> predicted overflow), the error of the admission estimate for rows with no backend token
+> count, inputs that were not recorded, or future traffic shift. Replay gives each endpoint
+> one latency, so a latency range reflects only which endpoints the resampled rows used. A
+> narrow range on a biased replay is still biased.
 
 The block's `not_covered` list carries the same five exclusions as ids:
 `replay_model_error`, `admission_estimate_error`, `unrecorded_inputs`, `traffic_shift`,
 `per_request_latency`. Check the baseline agreements (§5) for bias; the range says nothing
 about it.
+
+One of the five can be counted. A row with no backend token count — rejected, failed before
+a response, or served by a backend that reported no usage — is sized and priced from
+RouteForge's own token count (§6), in every resample alike. Each bucket carries
+`estimated_token_rows`, and the report prints the count beside the caveat:
+"13 of 160 simulated rows have no backend token count (`estimated_token_rows`): …".
 
 ### 10.3 Running it
 
@@ -874,31 +881,67 @@ The same flags work with `--scenarios` and with `--shadow-prices`.
 | `--bootstrap` | `1000` | integer, 1 to 20000 | bootstrap resamples |
 | `--interval` | `0.90` | strictly between 0 and 1 | level of the interval |
 | `--seed` | `0` | integer ≥ 0 | seed; the same seed gives the same ranges |
-| `--min-rows` | `30` | integer ≥ 1 | a bucket with fewer rows gets "insufficient data" (§10.6) |
+| `--min-rows` | `30` | integer ≥ 1 | a bucket with fewer rows gets "insufficient data" (§10.6); applications with fewer rows are resampled together for the totals (§10.4) |
 | `--quality-posteriors` | none | repeatable | a P2b-3 `recommendation.json` that was applied (§10.5) |
 
 A tuning flag given without `--uncertainty`, a value out of range, or a posterior file that
 does not load is exit `2`; nothing is written. `--min-agreement` is checked before any
 resampling starts, in every mode.
 
+Two lines can appear on stderr; neither changes the exit code:
+
+- **Before each bootstrap phase**, what it will cost:
+  `policy_simulate: uncertainty: 1000 resamples x 111 rows x 1 pass: under 1 s (a rough
+  estimate …)`. One pass per proposal, one per scenario, and at most one per shadow-price
+  relaxation (only a binding relaxation is resampled). §10.9 says what the estimate is made
+  from.
+- **A warning when `--bootstrap` is too small for `--interval`.** With fewer than
+  `2 / (1 − P)` resamples — 20 at the default level — the interval leaves no value out on
+  either side, so every range is the smallest and the largest resample value. The run still
+  completes; the block's head carries `"interval_is_min_max": true` and the report says so.
+
 ### 10.4 The method
 
 - **Rows are resampled, never re-simulated.** Each row is replayed once, as always. A
   resample draws row positions with replacement and recomputes the figures.
-- **Within each application.** An app with `n` rows is resampled to exactly `n` rows from its
-  own rows, so a per-app figure is defined in every resample and the mix of traffic between
-  apps is held at what was recorded.
-- **Paired.** The rows drawn for an app in resample `b` depend only on the seed, `b`, the app
-  and its row count. Both arms, every scenario and every shadow-price relaxation therefore see
-  the same resampled rows, and a delta's range is the range of the difference over the same
-  rows. A proposal that changes nothing has every delta range at exactly `[0, 0]`.
-- **Percentile interval.** With `N` resamples and level `P`, `lo` and `hi` are the
-  `floor((1 − P)/2 · N) + 1`-th smallest and largest values.
+- **Within each application — in strata.** An app with at least `--min-rows` rows is its own
+  stratum: it is resampled to exactly its own row count from its own rows, so its figures are
+  defined in every resample, and that one draw feeds both its bucket and the totals. All rows
+  of the apps with **fewer** than `--min-rows` rows form **one pooled stratum**, resampled
+  together; it feeds the totals only (those apps have no range of their own, §10.6).
+- **Why small apps are pooled.** A stratum of `n` rows resampled on its own reproduces
+  `(n − 1)/n` of its variance, and a one-row stratum none. Drawn one app at a time, an export
+  of many small apps gets a totals range that is too narrow — width zero when every app has
+  one row (§10.10 has the measurement). Pooling removes most of that. What remains is
+  disclosed in `totals_strata` and in one report line, and **is not corrected**:
 
-It assumes the rows of one application are exchangeable and independent over the export
-window. Neither is true of real traffic: the calls of one agent loop are related to each
-other, and traffic shifts within a window. Both make the true uncertainty larger than the
-range shown. There is no day-block resampling.
+  ```json
+  "totals_strata": {"own": 2, "pooled_apps": 4, "pooled_rows": 45, "smallest": 30,
+                    "variance_factor": 0.975}
+  ```
+
+  `own` apps are their own stratum; `pooled_apps` apps (`pooled_rows` rows) are resampled
+  together; `smallest` is the smallest stratum's row count. `variance_factor = (n − S)/n` for
+  `n` rows in `S` strata is the share of the totals' variance that resampling within strata
+  keeps **if every stratum has the same variance** — an analytic figure, not a measurement.
+  With `--min-rows 1` nothing is pooled; 240 one-row apps then give `variance_factor: 0.0`
+  and totals ranges of width zero, and the line says so.
+- **Paired.** The rows drawn for an app in resample `b` depend only on the seed, `b`, the app
+  and its row count; the pooled draw depends only on the seed, `b` and the pooled row count.
+  Both arms, every scenario and every shadow-price relaxation therefore see the same resampled
+  rows, and a delta's range is the range of the difference over the same rows. A proposal
+  that changes nothing has every delta range at exactly `[0, 0]`. A relaxation scoped to one
+  app equals that app's bucket under the equivalent proposal; the endpoint-scoped relaxation,
+  which re-simulates every row, equals that proposal's totals.
+- **Percentile interval.** With `N` resamples and level `P`, `lo` and `hi` are the
+  `floor((1 − P)/2 · N) + 1`-th smallest and largest values. Fewer than `2 / (1 − P)`
+  resamples make that the minimum and the maximum (§10.3).
+
+It assumes the rows of one stratum are exchangeable and independent over the export window.
+Neither is true of real traffic: the calls of one agent loop are related to each other, and
+traffic shifts within a window. Both make the true uncertainty larger than the range shown.
+There is no day-block resampling. It also holds the set of applications fixed: nothing here
+covers variation **between** applications (§10.10).
 
 ### 10.5 Quality labels (`--quality-posteriors`)
 
@@ -927,14 +970,34 @@ file:
 - **`insufficient data (n = k)`.** A bucket with fewer than `--min-rows` rows has no range:
   the JSON carries `{"insufficient_data": true, "n": k}`. That applies to an app, to the
   totals, to a scenario and to a shadow-price relaxation's rows in scope.
+- **`insufficient data (n = k routed)`.** Latency, `quality_mean` and `onprem_share` are
+  figures of the rows an arm **routed**, not of the bucket's rows. Every bucket carries
+  `"routed": {"current": k, "proposed": k}`; when an arm routed fewer than `--min-rows` rows,
+  those leaves of that arm — and the deltas they enter, on the smaller of the two counts —
+  carry `"lo": null, "hi": null, "insufficient_data": true, "n": k`. A 100-row bucket whose
+  proposed arm routes 10 rows gets no range for a mean of 10. Cost sums, the three counts and
+  their shares are over every row and keep their ranges.
 - **A zero count is not "no risk".** If no row is newly rejected, no resample has one: the
   range is `[0, 0]` for 24 rows and for 2 million. So the share's leaf also carries
   `zero_bound = 1 − (1 − P)^(1/n)` — the largest rate at which `n` independent rows would
   still show none with probability `1 − P` — and the report prints it in a sentence. It is
-  about `2.3 / n` at the default level (9.2% for 24 rows).
+  about `2.3 / n` at the default level (9.2% for 24 rows). The bound is **one-sided**, and it
+  bounds the rate **under this replay**, not the live rate. It is also on a relaxation's
+  `newly_rejected` leaf in `shadow_prices.uncertainty` (`n` = the rows in scope) and on an
+  `onprem_share` of exactly 0 (`n` = that arm's routed rows). Under the scenario comparison
+  table and the shadow "Ranges" table, where a count prints as `0 [0, 0]`, the report says:
+  "A count of 0 shows `[0, 0]` at any sample size; that is not zero risk."
+- **A share of exactly 1 is not certainty.** The mirror case: every row of a bucket newly
+  rejected, or every routed row on-prem, prints `1 to 1` at any sample size. Such a leaf
+  carries `one_bound = (1 − P)^(1/n)`, the smallest rate at which `n` independent rows would
+  all show the event with probability `1 − P`, and the report says so under that bucket's
+  table. It is a statement about sampling a rate. It says **nothing about a share a policy
+  fixes by construction**: an `onprem_only` application's on-prem share is 1 because a cloud
+  provider is unreachable for it, whatever rows were sampled.
 - **`point_outside: true`.** A percentile interval does not promise to contain the point
-  estimate. When it does not, the leaf says so and the report marks the row. Nothing is
-  widened.
+  estimate. When it does not, the leaf says so and the report marks the row — `(point outside
+  range)` in a range table, `[lo, hi]*` with a footnote in the comparison table and the shadow
+  "Ranges" table. Nothing is widened.
 - **`undefined_replicates: k`.** A figure that does not exist in some resample (an arm with
   no routed row there) has no range: `lo` and `hi` are null.
 
@@ -943,8 +1006,12 @@ file:
 The added keys, and the only ones: `uncertainty`, `inputs.uncertainty`, and — with shadow
 prices — `shadow_prices.uncertainty`.
 
-**A leaf** is `{"point", "lo", "hi"}`, plus the flags of §10.6 when they apply. `point` is the
-figure the document already carries at the same path.
+**A leaf** is `{"point", "lo", "hi"}`, plus the keys of §10.6 when they apply
+(`insufficient_data` with `n`, `zero_bound`, `one_bound`, `point_outside`,
+`undefined_replicates`). `point` is the figure the document already carries at the same path.
+
+**A bucket** is `{"n", "routed": {"current", "proposed"}, "estimated_token_rows", <leaves>}`,
+or `{"insufficient_data": true, "n"}`.
 
 **`inputs.uncertainty`** is `{replicates, interval, seed, min_rows,
 quality_posteriors_sha256}`, so `simulation_id` / `comparison_id` differ between two runs that
@@ -956,21 +1023,28 @@ differ in any of them, and between a run with the flag and one without.
 |---|---|
 | `method`, `strata` | `"stratified_paired_row_bootstrap"`, `"application_id"` |
 | `replicates`, `interval`, `seed`, `min_rows` | the plan |
+| `interval_is_min_max` | `true` when `replicates` is too few for `interval` to leave any value out, so every range is a minimum and a maximum (§10.3); otherwise `false` |
 | `quality_posterior_sets` | the `set_id` of each posterior file |
 | `not_covered` | the five ids of §10.2 |
-| `totals`, `by_app.<id>` | a bucket: `n` and one leaf per figure — `cost_usd` and `cost_usd_both_routed` (`current`, `proposed`, `delta`), `route_changed`, `newly_rejected`, `newly_served` and each one's `_share`, `latency_ms.p50`/`.p95` (`current`, `proposed`, `delta`), `quality_mean` (same), `onprem_share` (`current`, `proposed`) — or `{insufficient_data, n}` |
+| `totals`, `by_app.<id>` | a bucket: `n`, `routed` (each arm's routed row count), `estimated_token_rows` (§10.2) and one leaf per figure — `cost_usd` and `cost_usd_both_routed` (`current`, `proposed`, `delta`), `route_changed`, `newly_rejected`, `newly_served` and each one's `_share`, `latency_ms.p50`/`.p95` (`current`, `proposed`, `delta`), `quality_mean` (same), `onprem_share` (`current`, `proposed`) — or `{insufficient_data, n}` |
 | `per_day` | `cost_usd` (`current`, `proposed`, `delta`) and `cost_usd_both_routed.delta`, each a leaf; `null` when the window is under a day |
+| `totals_strata` | `own`, `pooled_apps`, `pooled_rows`, `smallest`, `variance_factor` (§10.4); `null` when nothing was drawn |
 | `quality_posterior` | per arm: `routed`, `calibrated`, `posterior` (§10.5) |
 | `points_outside_interval` | how many leaves carry `point_outside` |
 
-With `--shadow-prices` and no `--proposal` the block holds only its first four rows.
-`by_workload` and `overflow_hops` have no range.
+With `--shadow-prices` and no `--proposal` the block holds only its head (`method` through
+`not_covered`). `by_workload` and `overflow_hops` have no range.
 
-**`shadow_prices.uncertainty`** is `{interval, constraints}`. `constraints` is parallel to
-`shadow_prices.constraints` (same order); each entry has `requirement`, `scope`, `security`,
-`n` and leaves for `route_changed`, `rejections_avoided`, `newly_rejected`,
-`cost_usd_both_routed_delta` and `cost_saved_per_day` (`null` under a one-day window), or
-`insufficient_data`.
+**`shadow_prices.uncertainty`** is `{interval, constraints, points_outside_interval}`.
+`constraints` is parallel to `shadow_prices.constraints` (same order); each entry has
+`requirement`, `scope`, `security`, `n`, `totals_strata` (the strata its rows were resampled
+in: one application's rows are one stratum; the endpoint-scoped relaxation uses the export's
+strata, small applications pooled) and leaves for `route_changed`, `rejections_avoided`,
+`newly_rejected` (with `zero_bound` when it is 0), `cost_usd_both_routed_delta` and
+`cost_saved_per_day` (`null` under a one-day window) — or `insufficient_data`.
+`points_outside_interval` counts the leaves that carry `point_outside`. A security
+constraint's entry is still the **price of a protection — not a recommendation**; a range on
+it changes how precisely the price is known, not what it is the price of.
 
 **`comparison.json` → `uncertainty`** has the same head and `scenarios`, in file order: each
 entry is `name` plus the `simulation.json` fields above for that scenario, plus `table` — the
@@ -979,33 +1053,91 @@ leaves behind that scenario's comparison-table row, under the table's own column
 ### 10.8 Reports
 
 - **Single proposal.** The report is unchanged, followed by an **Uncertainty ranges** section:
-  the caveat, one sentence on the method, the quality coverage, then a `figure | point |
-  range` table for the totals, the per-day figures and each app.
+  the caveat, one sentence on the method, the count of rows with no backend token count, the
+  totals strata (with "ranges are not corrected for it"), the quality coverage, then a
+  `figure | point | range` table for the totals, the per-day figures and each app.
 - **Scenario comparison.** In the comparison table each figure is followed by its range,
-  `-0.02895 [-0.034024, -0.023268]`. An **Uncertainty ranges** section follows the table, and
-  each scenario's section gains a **Ranges** table. The table stays in file order. A range is
-  not a ranking: overlapping ranges do not make two scenarios equal, and separate ranges do
-  not make one of them the one to choose.
-- **Shadow prices.** A **Ranges** table follows the two existing tables. A security
+  `-0.02895 [-0.034024, -0.023268]`; under the table, the zero-count sentence and, when a
+  cell is marked `*`, its footnote. An **Uncertainty ranges** section follows, and each
+  scenario's section gains a **Ranges** table and a line counting the apps with insufficient
+  data (the first ten are named; all are in `comparison.json`). The table stays in file
+  order. A range is not a ranking: overlapping ranges do not make two scenarios equal, and
+  separate ranges do not make one of them the one to choose.
+- **Shadow prices.** A **Ranges** table follows the two existing tables, then the zero-count
+  sentence, the `*` footnote when one applies, and a sentence on strata. A security
   constraint's row keeps its `price of a protection — not a recommendation` label there too.
 
 ### 10.9 Cost
 
-Pure Python, proportional to resamples × rows. Measured on synthetic rows (Python 3.12, one
-core of a laptop CPU): 100,000 rows × 1000 resamples in about 25 seconds; 1,000,000 rows at
-about 0.7 seconds per resample, so about 12 minutes at the default. Each scenario and each
-binding relaxation is resampled separately. For a very large export lower `--bootstrap` or cut
-the export with `--since`.
+Pure Python, no `numpy`. The cost of one pass is
+
+```
+resamples × (rows × c_row  +  strata × c_stratum)
+```
+
+so it is linear in resamples × rows **and has a term per application**: every application
+that is its own stratum (at or above `--min-rows`) costs a freshly seeded generator and a set
+of figures per resample. The small applications, pooled, are one stratum however many they
+are. A proposal is one pass, each scenario one, each binding shadow-price relaxation one over
+its rows in scope. Memory does not grow with the number of applications.
+
+Before each bootstrap phase the CLI prints an estimate on stderr, computed from two unit
+costs (`c_row` 0.4 µs, `c_stratum` 30 µs — `uncertainty.ROW_SECONDS`, `STRATUM_SECONDS`).
+They were fitted to the runs below on one laptop core and are **rough**: another machine can
+be several times faster or slower, and `c_row` varies with how many of an application's four
+cost columns differ.
+
+Measured on synthetic rows built in memory (Python 3.12.3, one core of an Intel Core Ultra 7
+165U, other processes running — load average about 3 of 14 cores; `results_block`, including
+the one-off setup; peak RSS is the growth of `ru_maxrss` across the call):
+
+| shape (apps × rows) | resamples | time | peak RSS growth |
+|---|---|---|---|
+| 1,000 × 40 | 1000 | 38.4 s | 20 MB |
+| 10,000 × 3 | 1000 | 10.1 s | 13 MB |
+| 3 × 33,334 | 20 | 99 ms per resample | 22 MB |
+| 100,000 × 3 | 5 | 5.2 s | 112 MB |
+
+(The last row's memory is the rows themselves and their strata, built once; it does not
+grow with resamples.) For comparison, before the final review's changes the first two rows
+took 44.4 s with 669 MB and 166.0 s: every application's resample values were held until the
+end, and each small application was drawn on its own.
+
+For a very large export lower `--bootstrap` or cut the export with `--since`. A
+1,000,000-row export at the default 1000 resamples is of the order of ten to twenty minutes
+per pass on this machine; nothing has been timed on a real export (**TO MEASURE**, research
+§20.6.2).
 
 ### 10.10 Limits
 
 - Everything in §10.2 and §10.4. In particular the range is too narrow when rows are
   correlated, and it knows nothing about a traffic shift.
+- **It does not cover variation between applications.** The applications in the export are
+  taken as given. If they are themselves a sample — of users, of tenants — the range is much
+  too narrow when some of them are large: on synthetic data with applications of unequal
+  means, 0.09 to 0.29 of the width that redrawing the applications gives (research §20.6.1,
+  which states the method).
+- **What stratification leaves out is disclosed, not corrected.** A stratum of `n` rows
+  resampled on its own reproduces `(n − 1)/n` of its variance. `totals_strata.variance_factor`
+  is that effect for the totals under an equal-variance assumption; the ranges are not
+  rescaled by it. Before small applications were pooled, a synthetic 240-row export gave
+  0.82 of the right totals width as 80 applications of 3 rows, 0.70 as 120 of 2 and a width
+  of zero as 240 of 1; pooled, all three give 0.99 (research §20.6.1). `--min-rows 1`
+  switches pooling off and brings the zero width back — with the disclosure reading
+  `variance_factor: 0.0`.
+- **Pooling assumes the small applications' rows are exchangeable.** Where those applications
+  differ in mean, the pooled totals range is wider than a fixed-mix reading — by up to 14% on
+  the same synthetic data.
 - Thirty rows is a convention for `--min-rows`, not a guarantee that a range is reliable at
   31.
+- `zero_bound` and `one_bound` are one-sided, assume independent rows, and bound the rate
+  under this replay, not the live rate. A share fixed by policy (an `onprem_only`
+  application's on-prem share) is not a sampled rate at all.
 - No ranges per workload, on `overflow_hops`, on the baseline agreements, or on non-binding
   relaxations.
 - Quality-label uncertainty needs the recommendation file; it is not read from the snapshot.
 - Results are reproducible on the same Python minor version; the standard library's random
   streams are not guaranteed identical across versions.
+- Every measurement quoted in this section is synthetic. Coverage of the ranges on recorded
+  traffic is **TO MEASURE**.
 - No capacity or overload model (P3c-4).
