@@ -1,8 +1,8 @@
 # Priorities 1–3: what is built and what remains
 
-**As of 2026-10-06**, `main` is through PR #86 (B60, replayable rejections). The DGX
+**As of 2026-10-06**, `main` is through PR #88 (P3c-3, uncertainty ranges). The DGX
 Spark runs `4bfb0b3` (through PR #79). The DGX lab (Run:ai) cluster was rebuilt and
-redeployed by PR #83, and is the deployment target for P3c-2 onward (api/ui `0.27.0`).
+redeployed by PR #83, and is the deployment target for P3c-2 onward (api/ui `0.28.0`).
 
 This is the status of the program set out in `docs/new/RouteForge-Priorities-1-3-LLM-Handoff.md`
 (the "handoff"). Each shipped slice went through the same pipeline: design spec
@@ -61,7 +61,7 @@ Handoff §37 Priority 2 criteria met:
 | B56 / B57 | #78 | The exact app scope is enforced at the router; the `serving` logger actually prints in deployment | |
 | **P3c-1** shadow prices | #79, #80 | `policy_simulate.py --shadow-prices` relaxes one constraint at a time, per app, and prices it (cost/day, rejections avoided, newly rejected, quality, latency, on-prem share). Security constraints appear only as "cost of protection", never as a recommendation. | `docs/reference/policy-simulator.md` §8, research §17 |
 | **P3c-2** alternative scenarios | #84 | `policy_simulate.py --scenarios` replays several administrator-written scenarios against one shared baseline and writes one comparison table, in file order, never ranked. Proposals can assume a token scale, a cached-prompt share and a per-endpoint latency. Replay mirrors the gateway's context-window overflow re-selection. `--since` cuts old rows; `--min-agreement` refuses a run whose baseline disagrees with the record. | `docs/reference/policy-simulator.md` §9, research §18 |
-| **P3c-3** uncertainty ranges | pending | `policy_simulate.py --uncertainty` adds a range to every headline figure of all three modes: a percentile interval from a bootstrap over the replayed rows, resampled within each application (applications below `--min-rows` are pooled for the totals) and paired across arms, scenarios and relaxations. Opt-in; without the flag every output is byte-identical. `--quality-posteriors` adds label uncertainty for calibrated qualities from the P2b-3 recommendation file. Below `--min-rows` a bucket says "insufficient data"; a zero count carries a bound instead of reading as no risk. The range is sampling variability only and every report says so. | `docs/reference/policy-simulator.md` §10, research §20 |
+| **P3c-3** uncertainty ranges | #88 | `policy_simulate.py --uncertainty` adds a range to every headline figure of all three modes: a percentile interval from a bootstrap over the replayed rows, resampled within each application (applications below `--min-rows` are pooled for the totals) and paired across arms, scenarios and relaxations. Opt-in; without the flag every output is byte-identical. `--quality-posteriors` adds label uncertainty for calibrated qualities from the P2b-3 recommendation file. Below `--min-rows` a bucket says "insufficient data"; a zero count carries a bound instead of reading as no risk. The range is sampling variability only and every report says so. | `docs/reference/policy-simulator.md` §10, research §20 |
 | B60 replayable rejections | #86 | Every outcome row records `routing_tokens`, the token count the router was given, so a request rejected for its size replays as rejected and a proposal that raises a budget shows what it rescues. The baseline check reports outcome agreement (routed or rejected against the recorded status) next to model agreement, and `--min-agreement` gates on the lower. Rejected rows from before the fix are excluded and counted. One `ALTER` before deploy. | `docs/reference/policy-simulator.md` §5–§6, `docs/reference/routing-outcomes.md` §1, research §19 |
 
 Handoff §37 Priority 3 criteria met:
