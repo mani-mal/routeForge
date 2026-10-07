@@ -127,6 +127,33 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
+## B65 — Uncertainty ranges: presentation and test-safety follow-ups from the P3c-3 re-review  🔴 OPEN
+
+**Severity:** low (edge-case presentation; no wrong number).
+**Found:** 2026-10-07, scoped re-review of the P3c-3 fix wave.
+
+1. A count that is the same in every resample but not zero prints as a one-value range with
+   no sentence — e.g. an application rejected whole gives `newly rejected 40 [40, 40]` in the
+   comparison table. The fixed sentence covers only 0. Widen it to "a count that is the same
+   in every resample".
+2. A share of 0 other than `newly_rejected_share` carries `zero_bound` in the JSON but no
+   sentence under the bucket table (a share of 1 has one).
+3. The pre-run cost line under-predicts large exports with few applications (the per-row
+   unit cost is about 2.5× low for that shape). Refit, or print a range.
+4. The single-proposal report's "By app" section still lists every insufficient application;
+   only the comparison report prints a count and the first ten.
+5. For latency and quality the insufficient-data count is an arm's routed rows; it should be
+   the routed rows that carry a latency or a quality, if a routed row can ever lack one.
+6. Test safety: `python -m tests.eval.test_uncertainty_strata` rewrites its pin from the
+   current engine with no guard, and the golden `regenerate` refusal test would rewrite the
+   real fixtures and still pass if the guard regressed. Point both at a temporary directory.
+7. Pre-existing, now more visible: `simulate.summarize` and `_baseline` group rows per
+   application by re-filtering (O(applications × rows)); with thousands of one-user
+   applications that dominates before the bootstrap does.
+
+See also B63 (the shadow-prices-only output has no `rows` block, so no estimated-row count
+can be printed beside the caveat in that mode).
+
 ## B64 — The admission cost estimate over-counts tokens, so the per-request budget rejects requests that would cost less than the cap  🔴 OPEN
 
 **Severity:** medium (requests refused that the operator's own cap would allow; no privacy

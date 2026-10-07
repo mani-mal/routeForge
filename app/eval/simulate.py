@@ -90,6 +90,10 @@ class ArmResult:
     # that overflowed their declared context window, then (when routed) the
     # one served. `attempted[0]` is the first routing decision.
     attempted: tuple[str, ...] = ()
+    # P3c-3: the calibration set a `calibrated` quality came from
+    # (`QualityScore.set_id`), None for every other source. It lets
+    # `app/eval/uncertainty.py` find that score's posterior.
+    quality_set_id: str | None = None
 
     @property
     def overflow_hops(self) -> int:
@@ -446,7 +450,8 @@ def simulate_row(scn: Scenario, row: dict, observed: dict[str, float]) -> ArmRes
     return ArmResult("routed", pick.name, pick.provider, pick.tier, eligible, (),
                      cost, latency, latency_source, q.score, q.source,
                      complexity_estimated=estimated,
-                     attempted=(*overflowed, pick.name))
+                     attempted=(*overflowed, pick.name),
+                     quality_set_id=q.set_id)
 
 
 def arm_results(records: list[dict], scn: Scenario, *,

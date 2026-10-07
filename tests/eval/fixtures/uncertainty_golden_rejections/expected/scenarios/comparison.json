@@ -1,0 +1,1440 @@
+{
+  "baseline": {
+    "agreement": 0.37415,
+    "by_app": {
+      "capped": 1.0,
+      "pinned": 0.0,
+      "safe": 0.35,
+      "steady": 0.35
+    },
+    "outcome_agreement": 1.0,
+    "outcome_by_app": {
+      "capped": {
+        "agreement": 1.0,
+        "recorded_rejected": 13,
+        "recorded_rejected_but_routed": 0,
+        "recorded_routed_but_rejected": 0,
+        "rows": 40
+      },
+      "pinned": {
+        "agreement": 1.0,
+        "recorded_rejected": 0,
+        "recorded_rejected_but_routed": 0,
+        "recorded_routed_but_rejected": 0,
+        "rows": 40
+      },
+      "safe": {
+        "agreement": 1.0,
+        "recorded_rejected": 0,
+        "recorded_rejected_but_routed": 0,
+        "recorded_routed_but_rejected": 0,
+        "rows": 40
+      },
+      "steady": {
+        "agreement": 1.0,
+        "recorded_rejected": 0,
+        "recorded_rejected_but_routed": 0,
+        "recorded_routed_but_rejected": 0,
+        "rows": 40
+      }
+    },
+    "outcome_rows_compared": 160,
+    "outcome_warning": false,
+    "overflow_contradicted": 0,
+    "recorded_rejected": 13,
+    "recorded_rejected_but_routed": 0,
+    "recorded_routed_but_rejected": 0,
+    "rows_compared": 147,
+    "top_disagreements": [
+      {
+        "count": 66,
+        "recorded": "local-cheap",
+        "simulated": "local-mid"
+      },
+      {
+        "count": 26,
+        "recorded": "local-cheap",
+        "simulated": "azure-gpt-mid"
+      }
+    ],
+    "warning": true
+  },
+  "comparison_id": "928f3501149086d0",
+  "inputs": {
+    "export_sha256": "ee8397c852536629565ab737774dbf5ffd68cc607420ef6f22cbbf191d693ad8",
+    "registry_version": "test",
+    "routing_policy_version": "6e6fe2027862",
+    "scenarios_sha256": "815a1f66feb85f59bbac075f98ff511f3c657f6928deccd7f3164b2c4272e700",
+    "serving_policy": {
+      "allow_app_passthrough": true,
+      "allow_app_pii_downgrade": true,
+      "default_policy_mode": "enforced",
+      "pii_detection": "presidio"
+    },
+    "since": null,
+    "snapshot_generated_at": "2026-09-24T00:00:00Z",
+    "snapshot_sha256": "dbec407b6ebba4f5a32decb60dd635d8edd4180c9b17a94305cd6f0d6bf72eb9",
+    "title": "Golden rejections",
+    "window": {
+      "end": "2026-09-22T12:38:00+00:00",
+      "start": "2026-09-20T12:00:00+00:00"
+    }
+  },
+  "rows": {
+    "estimated_tokens": 13,
+    "excluded": {
+      "before_since": 0,
+      "cache_hit": 0,
+      "missing_features": 0,
+      "missing_routing_tokens": 0,
+      "unknown_app": 0,
+      "unknown_status": 0
+    },
+    "simulated": 160
+  },
+  "scenarios": [
+    {
+      "assumptions": {
+        "cached_share": {},
+        "latency_ms": {},
+        "saturated_complexity_estimated": 0,
+        "token_scale": {}
+      },
+      "edits": {},
+      "name": "no-change",
+      "summary": {
+        "affected_apps": [],
+        "by_app": {
+          "capped": {
+            "cost_usd": {
+              "current": 0.00264,
+              "delta": 0.0,
+              "proposed": 0.00264
+            },
+            "cost_usd_both_routed": {
+              "current": 0.00264,
+              "delta": 0.0,
+              "proposed": 0.00264
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 120.0,
+                "delta": 0.0,
+                "proposed": 120.0
+              },
+              "p95": {
+                "current": 120.0,
+                "delta": 0.0,
+                "proposed": 120.0
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.5,
+              "delta": 0.0,
+              "proposed": 0.5
+            },
+            "requests": 40,
+            "route_changed": 0
+          },
+          "pinned": {
+            "cost_usd": {
+              "current": 0.03465,
+              "delta": 0.0,
+              "proposed": 0.03465
+            },
+            "cost_usd_both_routed": {
+              "current": 0.03465,
+              "delta": 0.0,
+              "proposed": 0.03465
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 500.0,
+                "delta": 0.0,
+                "proposed": 500.0
+              },
+              "p95": {
+                "current": 500.0,
+                "delta": 0.0,
+                "proposed": 500.0
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.75,
+              "delta": 0.0,
+              "proposed": 0.75
+            },
+            "requests": 40,
+            "route_changed": 0
+          },
+          "safe": {
+            "cost_usd": {
+              "current": 0.031864,
+              "delta": 0.0,
+              "proposed": 0.031864
+            },
+            "cost_usd_both_routed": {
+              "current": 0.031864,
+              "delta": 0.0,
+              "proposed": 0.031864
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 500.0,
+                "delta": 0.0,
+                "proposed": 500.0
+              },
+              "p95": {
+                "current": 500.0,
+                "delta": 0.0,
+                "proposed": 500.0
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.6625,
+              "delta": 0.0,
+              "proposed": 0.6625
+            },
+            "requests": 40,
+            "route_changed": 0
+          },
+          "steady": {
+            "cost_usd": {
+              "current": 0.010827,
+              "delta": 0.0,
+              "proposed": 0.010827
+            },
+            "cost_usd_both_routed": {
+              "current": 0.010827,
+              "delta": 0.0,
+              "proposed": 0.010827
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 500.0,
+                "delta": 0.0,
+                "proposed": 500.0
+              },
+              "p95": {
+                "current": 500.0,
+                "delta": 0.0,
+                "proposed": 500.0
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 0.35,
+              "proposed": 0.35
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.6625,
+              "delta": 0.0,
+              "proposed": 0.6625
+            },
+            "requests": 40,
+            "route_changed": 0
+          }
+        },
+        "by_workload": {
+          "(untagged)": {
+            "cost_usd": {
+              "current": 0.079981,
+              "delta": 0.0,
+              "proposed": 0.079981
+            },
+            "cost_usd_both_routed": {
+              "current": 0.079981,
+              "delta": 0.0,
+              "proposed": 0.079981
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 500.0,
+                "delta": 0.0,
+                "proposed": 500.0
+              },
+              "p95": {
+                "current": 500.0,
+                "delta": 0.0,
+                "proposed": 500.0
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 0.823129,
+              "proposed": 0.823129
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.656463,
+              "delta": 0.0,
+              "proposed": 0.656463
+            },
+            "requests": 160,
+            "route_changed": 0
+          }
+        },
+        "moves": [],
+        "new_rejections": {
+          "by_app": {},
+          "by_code": {},
+          "by_core": {}
+        },
+        "per_day": {
+          "cost_usd": {
+            "current": 0.03947,
+            "delta": 0.0,
+            "proposed": 0.03947
+          }
+        },
+        "sources": {
+          "current": {
+            "latency": {
+              "observed": 55,
+              "tier_default": 92
+            },
+            "quality": {
+              "tier_default": 147
+            }
+          },
+          "proposed": {
+            "latency": {
+              "observed": 55,
+              "tier_default": 92
+            },
+            "quality": {
+              "tier_default": 147
+            }
+          }
+        },
+        "totals": {
+          "cost_usd": {
+            "current": 0.079981,
+            "delta": 0.0,
+            "proposed": 0.079981
+          },
+          "cost_usd_both_routed": {
+            "current": 0.079981,
+            "delta": 0.0,
+            "proposed": 0.079981
+          },
+          "latency_ms": {
+            "p50": {
+              "current": 500.0,
+              "delta": 0.0,
+              "proposed": 500.0
+            },
+            "p95": {
+              "current": 500.0,
+              "delta": 0.0,
+              "proposed": 500.0
+            }
+          },
+          "newly_rejected": 0,
+          "newly_served": 0,
+          "onprem_share": {
+            "current": 0.823129,
+            "proposed": 0.823129
+          },
+          "overflow_hops": {
+            "current": 0,
+            "proposed": 0
+          },
+          "quality_mean": {
+            "current": 0.656463,
+            "delta": 0.0,
+            "proposed": 0.656463
+          },
+          "requests": 160,
+          "route_changed": 0
+        }
+      }
+    },
+    {
+      "assumptions": {
+        "cached_share": {},
+        "latency_ms": {},
+        "saturated_complexity_estimated": 0,
+        "token_scale": {}
+      },
+      "edits": {
+        "apps": {
+          "capped": {
+            "max_cost_usd_per_request": null
+          }
+        }
+      },
+      "name": "lift-cap",
+      "summary": {
+        "affected_apps": [
+          "capped"
+        ],
+        "by_app": {
+          "capped": {
+            "cost_usd": {
+              "current": 0.00264,
+              "delta": 0.01725,
+              "proposed": 0.01989
+            },
+            "cost_usd_both_routed": {
+              "current": 0.00264,
+              "delta": 0.001362,
+              "proposed": 0.004002
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 120.0,
+                "delta": 380.0,
+                "proposed": 500.0
+              },
+              "p95": {
+                "current": 120.0,
+                "delta": 380.0,
+                "proposed": 500.0
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 13,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 0.35
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.5,
+              "delta": 0.1625,
+              "proposed": 0.6625
+            },
+            "requests": 40,
+            "route_changed": 13
+          },
+          "pinned": {
+            "cost_usd": {
+              "current": 0.03465,
+              "delta": 0.0,
+              "proposed": 0.03465
+            },
+            "cost_usd_both_routed": {
+              "current": 0.03465,
+              "delta": 0.0,
+              "proposed": 0.03465
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 500.0,
+                "delta": 0.0,
+                "proposed": 500.0
+              },
+              "p95": {
+                "current": 500.0,
+                "delta": 0.0,
+                "proposed": 500.0
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.75,
+              "delta": 0.0,
+              "proposed": 0.75
+            },
+            "requests": 40,
+            "route_changed": 0
+          },
+          "safe": {
+            "cost_usd": {
+              "current": 0.031864,
+              "delta": 0.0,
+              "proposed": 0.031864
+            },
+            "cost_usd_both_routed": {
+              "current": 0.031864,
+              "delta": 0.0,
+              "proposed": 0.031864
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 500.0,
+                "delta": 0.0,
+                "proposed": 500.0
+              },
+              "p95": {
+                "current": 500.0,
+                "delta": 0.0,
+                "proposed": 500.0
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.6625,
+              "delta": 0.0,
+              "proposed": 0.6625
+            },
+            "requests": 40,
+            "route_changed": 0
+          },
+          "steady": {
+            "cost_usd": {
+              "current": 0.010827,
+              "delta": 0.0,
+              "proposed": 0.010827
+            },
+            "cost_usd_both_routed": {
+              "current": 0.010827,
+              "delta": 0.0,
+              "proposed": 0.010827
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 500.0,
+                "delta": 0.0,
+                "proposed": 500.0
+              },
+              "p95": {
+                "current": 500.0,
+                "delta": 0.0,
+                "proposed": 500.0
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 0.35,
+              "proposed": 0.35
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.6625,
+              "delta": 0.0,
+              "proposed": 0.6625
+            },
+            "requests": 40,
+            "route_changed": 0
+          }
+        },
+        "by_workload": {
+          "(untagged)": {
+            "cost_usd": {
+              "current": 0.079981,
+              "delta": 0.01725,
+              "proposed": 0.097231
+            },
+            "cost_usd_both_routed": {
+              "current": 0.079981,
+              "delta": 0.001362,
+              "proposed": 0.081342
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 500.0,
+                "delta": 0.0,
+                "proposed": 500.0
+              },
+              "p95": {
+                "current": 500.0,
+                "delta": 0.0,
+                "proposed": 500.0
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 13,
+            "onprem_share": {
+              "current": 0.823129,
+              "proposed": 0.675
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.656463,
+              "delta": 0.027912,
+              "proposed": 0.684375
+            },
+            "requests": 160,
+            "route_changed": 13
+          }
+        },
+        "moves": [
+          {
+            "count": 13,
+            "from": "(rejected)",
+            "to": "azure-gpt-mid"
+          },
+          {
+            "count": 13,
+            "from": "local-cheap",
+            "to": "azure-gpt-mid"
+          }
+        ],
+        "new_rejections": {
+          "by_app": {},
+          "by_code": {},
+          "by_core": {}
+        },
+        "per_day": {
+          "cost_usd": {
+            "current": 0.03947,
+            "delta": 0.008513,
+            "proposed": 0.047982
+          }
+        },
+        "sources": {
+          "current": {
+            "latency": {
+              "observed": 55,
+              "tier_default": 92
+            },
+            "quality": {
+              "tier_default": 147
+            }
+          },
+          "proposed": {
+            "latency": {
+              "observed": 42,
+              "tier_default": 118
+            },
+            "quality": {
+              "tier_default": 160
+            }
+          }
+        },
+        "totals": {
+          "cost_usd": {
+            "current": 0.079981,
+            "delta": 0.01725,
+            "proposed": 0.097231
+          },
+          "cost_usd_both_routed": {
+            "current": 0.079981,
+            "delta": 0.001362,
+            "proposed": 0.081342
+          },
+          "latency_ms": {
+            "p50": {
+              "current": 500.0,
+              "delta": 0.0,
+              "proposed": 500.0
+            },
+            "p95": {
+              "current": 500.0,
+              "delta": 0.0,
+              "proposed": 500.0
+            }
+          },
+          "newly_rejected": 0,
+          "newly_served": 13,
+          "onprem_share": {
+            "current": 0.823129,
+            "proposed": 0.675
+          },
+          "overflow_hops": {
+            "current": 0,
+            "proposed": 0
+          },
+          "quality_mean": {
+            "current": 0.656463,
+            "delta": 0.027912,
+            "proposed": 0.684375
+          },
+          "requests": 160,
+          "route_changed": 13
+        }
+      }
+    },
+    {
+      "assumptions": {
+        "cached_share": {},
+        "latency_ms": {},
+        "saturated_complexity_estimated": 0,
+        "token_scale": {}
+      },
+      "edits": {
+        "endpoints": {
+          "remove": [
+            "local-mid"
+          ]
+        }
+      },
+      "name": "drop-mid",
+      "summary": {
+        "affected_apps": [
+          "pinned",
+          "safe"
+        ],
+        "by_app": {
+          "capped": {
+            "cost_usd": {
+              "current": 0.00264,
+              "delta": 0.0,
+              "proposed": 0.00264
+            },
+            "cost_usd_both_routed": {
+              "current": 0.00264,
+              "delta": 0.0,
+              "proposed": 0.00264
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 120.0,
+                "delta": 0.0,
+                "proposed": 120.0
+              },
+              "p95": {
+                "current": 120.0,
+                "delta": 0.0,
+                "proposed": 120.0
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.5,
+              "delta": 0.0,
+              "proposed": 0.5
+            },
+            "requests": 40,
+            "route_changed": 0
+          },
+          "pinned": {
+            "cost_usd": {
+              "current": 0.03465,
+              "delta": -0.03465,
+              "proposed": 0
+            },
+            "cost_usd_both_routed": {
+              "current": 0,
+              "delta": 0,
+              "proposed": 0
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 500.0,
+                "delta": null,
+                "proposed": null
+              },
+              "p95": {
+                "current": 500.0,
+                "delta": null,
+                "proposed": null
+              }
+            },
+            "newly_rejected": 40,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": null
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.75,
+              "delta": null,
+              "proposed": null
+            },
+            "requests": 40,
+            "route_changed": 0
+          },
+          "safe": {
+            "cost_usd": {
+              "current": 0.031864,
+              "delta": -0.024934,
+              "proposed": 0.00693
+            },
+            "cost_usd_both_routed": {
+              "current": 0.031864,
+              "delta": -0.024934,
+              "proposed": 0.00693
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 500.0,
+                "delta": -380.0,
+                "proposed": 120.0
+              },
+              "p95": {
+                "current": 500.0,
+                "delta": -380.0,
+                "proposed": 120.0
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.6625,
+              "delta": -0.1625,
+              "proposed": 0.5
+            },
+            "requests": 40,
+            "route_changed": 26
+          },
+          "steady": {
+            "cost_usd": {
+              "current": 0.010827,
+              "delta": 0.0,
+              "proposed": 0.010827
+            },
+            "cost_usd_both_routed": {
+              "current": 0.010827,
+              "delta": 0.0,
+              "proposed": 0.010827
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 500.0,
+                "delta": 0.0,
+                "proposed": 500.0
+              },
+              "p95": {
+                "current": 500.0,
+                "delta": 0.0,
+                "proposed": 500.0
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 0.35,
+              "proposed": 0.35
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.6625,
+              "delta": 0.0,
+              "proposed": 0.6625
+            },
+            "requests": 40,
+            "route_changed": 0
+          }
+        },
+        "by_workload": {
+          "(untagged)": {
+            "cost_usd": {
+              "current": 0.079981,
+              "delta": -0.059584,
+              "proposed": 0.020397
+            },
+            "cost_usd_both_routed": {
+              "current": 0.045331,
+              "delta": -0.024934,
+              "proposed": 0.020397
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 500.0,
+                "delta": -380.0,
+                "proposed": 120.0
+              },
+              "p95": {
+                "current": 500.0,
+                "delta": 0.0,
+                "proposed": 500.0
+              }
+            },
+            "newly_rejected": 40,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 0.823129,
+              "proposed": 0.757009
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.656463,
+              "delta": -0.095715,
+              "proposed": 0.560748
+            },
+            "requests": 160,
+            "route_changed": 26
+          }
+        },
+        "moves": [
+          {
+            "count": 40,
+            "from": "local-mid",
+            "to": "(rejected)"
+          },
+          {
+            "count": 26,
+            "from": "local-mid",
+            "to": "local-cheap"
+          }
+        ],
+        "new_rejections": {
+          "by_app": {
+            "pinned": 40
+          },
+          "by_code": {
+            "app_scope": 40
+          },
+          "by_core": {
+            "allowed_models": 40
+          }
+        },
+        "per_day": {
+          "cost_usd": {
+            "current": 0.03947,
+            "delta": -0.029404,
+            "proposed": 0.010066
+          }
+        },
+        "sources": {
+          "current": {
+            "latency": {
+              "observed": 55,
+              "tier_default": 92
+            },
+            "quality": {
+              "tier_default": 147
+            }
+          },
+          "proposed": {
+            "latency": {
+              "observed": 81,
+              "tier_default": 26
+            },
+            "quality": {
+              "tier_default": 107
+            }
+          }
+        },
+        "totals": {
+          "cost_usd": {
+            "current": 0.079981,
+            "delta": -0.059584,
+            "proposed": 0.020397
+          },
+          "cost_usd_both_routed": {
+            "current": 0.045331,
+            "delta": -0.024934,
+            "proposed": 0.020397
+          },
+          "latency_ms": {
+            "p50": {
+              "current": 500.0,
+              "delta": -380.0,
+              "proposed": 120.0
+            },
+            "p95": {
+              "current": 500.0,
+              "delta": 0.0,
+              "proposed": 500.0
+            }
+          },
+          "newly_rejected": 40,
+          "newly_served": 0,
+          "onprem_share": {
+            "current": 0.823129,
+            "proposed": 0.757009
+          },
+          "overflow_hops": {
+            "current": 0,
+            "proposed": 0
+          },
+          "quality_mean": {
+            "current": 0.656463,
+            "delta": -0.095715,
+            "proposed": 0.560748
+          },
+          "requests": 160,
+          "route_changed": 26
+        }
+      }
+    },
+    {
+      "assumptions": {
+        "cached_share": {},
+        "latency_ms": {},
+        "saturated_complexity_estimated": 0,
+        "token_scale": {}
+      },
+      "edits": {
+        "apps": {
+          "capped": {
+            "max_cost_usd_per_request": null
+          }
+        },
+        "endpoints": {
+          "remove": [
+            "local-mid"
+          ]
+        }
+      },
+      "name": "lift-cap+drop-mid",
+      "summary": {
+        "affected_apps": [
+          "capped",
+          "pinned",
+          "safe"
+        ],
+        "by_app": {
+          "capped": {
+            "cost_usd": {
+              "current": 0.00264,
+              "delta": 0.01725,
+              "proposed": 0.01989
+            },
+            "cost_usd_both_routed": {
+              "current": 0.00264,
+              "delta": 0.001362,
+              "proposed": 0.004002
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 120.0,
+                "delta": 380.0,
+                "proposed": 500.0
+              },
+              "p95": {
+                "current": 120.0,
+                "delta": 380.0,
+                "proposed": 500.0
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 13,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 0.35
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.5,
+              "delta": 0.1625,
+              "proposed": 0.6625
+            },
+            "requests": 40,
+            "route_changed": 13
+          },
+          "pinned": {
+            "cost_usd": {
+              "current": 0.03465,
+              "delta": -0.03465,
+              "proposed": 0
+            },
+            "cost_usd_both_routed": {
+              "current": 0,
+              "delta": 0,
+              "proposed": 0
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 500.0,
+                "delta": null,
+                "proposed": null
+              },
+              "p95": {
+                "current": 500.0,
+                "delta": null,
+                "proposed": null
+              }
+            },
+            "newly_rejected": 40,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": null
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.75,
+              "delta": null,
+              "proposed": null
+            },
+            "requests": 40,
+            "route_changed": 0
+          },
+          "safe": {
+            "cost_usd": {
+              "current": 0.031864,
+              "delta": -0.024934,
+              "proposed": 0.00693
+            },
+            "cost_usd_both_routed": {
+              "current": 0.031864,
+              "delta": -0.024934,
+              "proposed": 0.00693
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 500.0,
+                "delta": -380.0,
+                "proposed": 120.0
+              },
+              "p95": {
+                "current": 500.0,
+                "delta": -380.0,
+                "proposed": 120.0
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.6625,
+              "delta": -0.1625,
+              "proposed": 0.5
+            },
+            "requests": 40,
+            "route_changed": 26
+          },
+          "steady": {
+            "cost_usd": {
+              "current": 0.010827,
+              "delta": 0.0,
+              "proposed": 0.010827
+            },
+            "cost_usd_both_routed": {
+              "current": 0.010827,
+              "delta": 0.0,
+              "proposed": 0.010827
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 500.0,
+                "delta": 0.0,
+                "proposed": 500.0
+              },
+              "p95": {
+                "current": 500.0,
+                "delta": 0.0,
+                "proposed": 500.0
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 0.35,
+              "proposed": 0.35
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.6625,
+              "delta": 0.0,
+              "proposed": 0.6625
+            },
+            "requests": 40,
+            "route_changed": 0
+          }
+        },
+        "by_workload": {
+          "(untagged)": {
+            "cost_usd": {
+              "current": 0.079981,
+              "delta": -0.042334,
+              "proposed": 0.037647
+            },
+            "cost_usd_both_routed": {
+              "current": 0.045331,
+              "delta": -0.023572,
+              "proposed": 0.021759
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 500.0,
+                "delta": -380.0,
+                "proposed": 120.0
+              },
+              "p95": {
+                "current": 500.0,
+                "delta": 0.0,
+                "proposed": 500.0
+              }
+            },
+            "newly_rejected": 40,
+            "newly_served": 13,
+            "onprem_share": {
+              "current": 0.823129,
+              "proposed": 0.566667
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.656463,
+              "delta": -0.048129,
+              "proposed": 0.608333
+            },
+            "requests": 160,
+            "route_changed": 39
+          }
+        },
+        "moves": [
+          {
+            "count": 40,
+            "from": "local-mid",
+            "to": "(rejected)"
+          },
+          {
+            "count": 26,
+            "from": "local-mid",
+            "to": "local-cheap"
+          },
+          {
+            "count": 13,
+            "from": "(rejected)",
+            "to": "azure-gpt-mid"
+          },
+          {
+            "count": 13,
+            "from": "local-cheap",
+            "to": "azure-gpt-mid"
+          }
+        ],
+        "new_rejections": {
+          "by_app": {
+            "pinned": 40
+          },
+          "by_code": {
+            "app_scope": 40
+          },
+          "by_core": {
+            "allowed_models": 40
+          }
+        },
+        "per_day": {
+          "cost_usd": {
+            "current": 0.03947,
+            "delta": -0.020891,
+            "proposed": 0.018578
+          }
+        },
+        "sources": {
+          "current": {
+            "latency": {
+              "observed": 55,
+              "tier_default": 92
+            },
+            "quality": {
+              "tier_default": 147
+            }
+          },
+          "proposed": {
+            "latency": {
+              "observed": 68,
+              "tier_default": 52
+            },
+            "quality": {
+              "tier_default": 120
+            }
+          }
+        },
+        "totals": {
+          "cost_usd": {
+            "current": 0.079981,
+            "delta": -0.042334,
+            "proposed": 0.037647
+          },
+          "cost_usd_both_routed": {
+            "current": 0.045331,
+            "delta": -0.023572,
+            "proposed": 0.021759
+          },
+          "latency_ms": {
+            "p50": {
+              "current": 500.0,
+              "delta": -380.0,
+              "proposed": 120.0
+            },
+            "p95": {
+              "current": 500.0,
+              "delta": 0.0,
+              "proposed": 500.0
+            }
+          },
+          "newly_rejected": 40,
+          "newly_served": 13,
+          "onprem_share": {
+            "current": 0.823129,
+            "proposed": 0.566667
+          },
+          "overflow_hops": {
+            "current": 0,
+            "proposed": 0
+          },
+          "quality_mean": {
+            "current": 0.656463,
+            "delta": -0.048129,
+            "proposed": 0.608333
+          },
+          "requests": 160,
+          "route_changed": 39
+        }
+      }
+    }
+  ],
+  "schema": "routeforge.scenario-comparison/v1",
+  "table": [
+    {
+      "affected_apps": [],
+      "cost_delta_usd": 0.0,
+      "cost_per_day_delta_usd": 0.0,
+      "latency_p50_delta_ms": 0.0,
+      "latency_p95_delta_ms": 0.0,
+      "name": "no-change",
+      "newly_rejected": 0,
+      "newly_served": 0,
+      "onprem_share_current": 0.823129,
+      "onprem_share_proposed": 0.823129,
+      "overflow_hops": 0,
+      "quality_mean_delta": 0.0,
+      "route_changed": 0
+    },
+    {
+      "affected_apps": [
+        "capped"
+      ],
+      "cost_delta_usd": 0.001362,
+      "cost_per_day_delta_usd": 0.000672,
+      "latency_p50_delta_ms": 0.0,
+      "latency_p95_delta_ms": 0.0,
+      "name": "lift-cap",
+      "newly_rejected": 0,
+      "newly_served": 13,
+      "onprem_share_current": 0.823129,
+      "onprem_share_proposed": 0.675,
+      "overflow_hops": 0,
+      "quality_mean_delta": 0.027912,
+      "route_changed": 13
+    },
+    {
+      "affected_apps": [
+        "pinned",
+        "safe"
+      ],
+      "cost_delta_usd": -0.024934,
+      "cost_per_day_delta_usd": -0.012305,
+      "latency_p50_delta_ms": -380.0,
+      "latency_p95_delta_ms": 0.0,
+      "name": "drop-mid",
+      "newly_rejected": 40,
+      "newly_served": 0,
+      "onprem_share_current": 0.823129,
+      "onprem_share_proposed": 0.757009,
+      "overflow_hops": 0,
+      "quality_mean_delta": -0.095715,
+      "route_changed": 26
+    },
+    {
+      "affected_apps": [
+        "capped",
+        "pinned",
+        "safe"
+      ],
+      "cost_delta_usd": -0.023572,
+      "cost_per_day_delta_usd": -0.011633,
+      "latency_p50_delta_ms": -380.0,
+      "latency_p95_delta_ms": 0.0,
+      "name": "lift-cap+drop-mid",
+      "newly_rejected": 40,
+      "newly_served": 13,
+      "onprem_share_current": 0.823129,
+      "onprem_share_proposed": 0.566667,
+      "overflow_hops": 0,
+      "quality_mean_delta": -0.048129,
+      "route_changed": 39
+    }
+  ]
+}

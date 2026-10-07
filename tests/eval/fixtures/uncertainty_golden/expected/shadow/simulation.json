@@ -1,0 +1,147 @@
+{
+  "inputs": {
+    "export_sha256": "e3ad325f0524506c14358611c568a10e5a42eda6d9af336fd9fb8ae160e37a52",
+    "proposal_sha256": null,
+    "proposal_title": null,
+    "registry_version": "test",
+    "routing_policy_version": "6e6fe2027862",
+    "serving_policy": {
+      "allow_app_passthrough": true,
+      "allow_app_pii_downgrade": true,
+      "default_policy_mode": "enforced",
+      "pii_detection": "presidio"
+    },
+    "since": null,
+    "snapshot_generated_at": "2026-09-24T00:00:00Z",
+    "snapshot_sha256": "5d6cc6e09051a338ad1070ed0789a6e859a34c44f17c112f5c0e92973a8ceadc"
+  },
+  "schema": "routeforge.simulation/v1",
+  "shadow_prices": {
+    "baseline": "snapshot",
+    "constraints": [
+      {
+        "affected_apps": [
+          "safe"
+        ],
+        "cost_saved_per_day": 0.01197,
+        "cost_usd": {
+          "baseline": 0.036945,
+          "delta": -0.024431,
+          "relaxed": 0.012514
+        },
+        "cost_usd_both_routed": {
+          "baseline": 0.036945,
+          "delta": -0.024431,
+          "relaxed": 0.012514
+        },
+        "latency_p50_delta": 0.0,
+        "moves": [
+          {
+            "count": 30,
+            "from": "local-mid",
+            "to": "azure-gpt-mid"
+          }
+        ],
+        "newly_rejected": 0,
+        "newly_rejected_reasons": {},
+        "onprem_share": {
+          "baseline": 1.0,
+          "relaxed": 0.333333
+        },
+        "quality_mean_delta": 0.0,
+        "rejections_avoided": 0,
+        "relaxed_to": "any (escalation off)",
+        "requirement": "residency",
+        "route_changed": 30,
+        "rows_in_scope": 45,
+        "scope": {
+          "app": "safe"
+        },
+        "security": true
+      },
+      {
+        "affected_apps": [
+          "big"
+        ],
+        "cost_saved_per_day": 0.00056,
+        "cost_usd": {
+          "baseline": 0.018128,
+          "delta": -0.001143,
+          "relaxed": 0.016985
+        },
+        "cost_usd_both_routed": {
+          "baseline": 0.018128,
+          "delta": -0.001143,
+          "relaxed": 0.016985
+        },
+        "latency_p50_delta": 0.0,
+        "moves": [
+          {
+            "count": 20,
+            "from": "azure-gpt-mid",
+            "to": "local-cheap"
+          }
+        ],
+        "newly_rejected": 0,
+        "newly_rejected_reasons": {},
+        "onprem_share": {
+          "baseline": 0.0,
+          "relaxed": 0.333333
+        },
+        "quality_mean_delta": -0.083333,
+        "rejections_avoided": 0,
+        "relaxed_to": "null",
+        "requirement": "allowed_tiers",
+        "route_changed": 20,
+        "rows_in_scope": 60,
+        "scope": {
+          "app": "big"
+        },
+        "security": false
+      },
+      {
+        "affected_apps": [
+          "few"
+        ],
+        "cost_saved_per_day": 4.9e-05,
+        "cost_usd": {
+          "baseline": 0.001691,
+          "delta": -0.000101,
+          "relaxed": 0.00159
+        },
+        "cost_usd_both_routed": {
+          "baseline": 0.001691,
+          "delta": -0.000101,
+          "relaxed": 0.00159
+        },
+        "latency_p50_delta": 0.0,
+        "moves": [
+          {
+            "count": 2,
+            "from": "azure-gpt-mid",
+            "to": "local-cheap"
+          }
+        ],
+        "newly_rejected": 0,
+        "newly_rejected_reasons": {},
+        "onprem_share": {
+          "baseline": 0.0,
+          "relaxed": 0.333333
+        },
+        "quality_mean_delta": -0.083333,
+        "rejections_avoided": 0,
+        "relaxed_to": "null",
+        "requirement": "allowed_tiers",
+        "route_changed": 2,
+        "rows_in_scope": 6,
+        "scope": {
+          "app": "few"
+        },
+        "security": false
+      }
+    ],
+    "evaluated": 6,
+    "non_binding": 3,
+    "skipped_by_cap": 0
+  }
+}

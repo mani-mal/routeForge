@@ -1,0 +1,597 @@
+{
+ "by_app.app-a.cost_usd.current": {
+  "hi": 0.525238,
+  "lo": 0.386357,
+  "point": 0.451673
+ },
+ "by_app.app-a.cost_usd.delta": {
+  "hi": 0.042521,
+  "lo": -0.131384,
+  "point": -0.053139
+ },
+ "by_app.app-a.cost_usd.proposed": {
+  "hi": 0.518948,
+  "lo": 0.296138,
+  "point": 0.398534
+ },
+ "by_app.app-a.cost_usd_both_routed.current": {
+  "hi": 0.509313,
+  "lo": 0.360899,
+  "point": 0.433666
+ },
+ "by_app.app-a.cost_usd_both_routed.delta": {
+  "hi": 0.052667,
+  "lo": -0.119522,
+  "point": -0.041545
+ },
+ "by_app.app-a.cost_usd_both_routed.proposed": {
+  "hi": 0.515421,
+  "lo": 0.290584,
+  "point": 0.392121
+ },
+ "by_app.app-a.latency_ms.p50.current": {
+  "hi": 800.0,
+  "lo": 800.0,
+  "point": 800.0
+ },
+ "by_app.app-a.latency_ms.p50.delta": {
+  "hi": 0.0,
+  "lo": -100.0,
+  "point": -100.0
+ },
+ "by_app.app-a.latency_ms.p50.proposed": {
+  "hi": 800.0,
+  "lo": 700.0,
+  "point": 700.0
+ },
+ "by_app.app-a.latency_ms.p95.current": {
+  "hi": 950.0,
+  "lo": 950.0,
+  "point": 950.0
+ },
+ "by_app.app-a.latency_ms.p95.delta": {
+  "hi": 550.0,
+  "lo": 0.0,
+  "point": 550.0
+ },
+ "by_app.app-a.latency_ms.p95.proposed": {
+  "hi": 1500.0,
+  "lo": 950.0,
+  "point": 1500.0
+ },
+ "by_app.app-a.newly_rejected": {
+  "hi": 6,
+  "lo": 0,
+  "point": 3
+ },
+ "by_app.app-a.newly_rejected_share": {
+  "hi": 0.12,
+  "lo": 0.0,
+  "point": 0.06
+ },
+ "by_app.app-a.newly_served": {
+  "hi": 4,
+  "lo": 0,
+  "point": 2
+ },
+ "by_app.app-a.newly_served_share": {
+  "hi": 0.08,
+  "lo": 0.0,
+  "point": 0.04
+ },
+ "by_app.app-a.onprem_share.current": {
+  "hi": 1.0,
+  "lo": 1.0,
+  "point": 1.0
+ },
+ "by_app.app-a.onprem_share.proposed": {
+  "hi": 0.978723,
+  "lo": 0.866667,
+  "point": 0.933333
+ },
+ "by_app.app-a.quality_mean.current": {
+  "hi": 0.75,
+  "lo": 0.75,
+  "point": 0.75
+ },
+ "by_app.app-a.quality_mean.delta": {
+  "hi": 0.070287,
+  "lo": 0.005192,
+  "point": 0.036444
+ },
+ "by_app.app-a.quality_mean.proposed": {
+  "hi": 0.820287,
+  "lo": 0.755192,
+  "point": 0.786444
+ },
+ "by_app.app-a.route_changed": {
+  "hi": 24,
+  "lo": 13,
+  "point": 18
+ },
+ "by_app.app-a.route_changed_share": {
+  "hi": 0.48,
+  "lo": 0.26,
+  "point": 0.36
+ },
+ "by_app.app-b.cost_usd.current": {
+  "hi": 0.712603,
+  "lo": 0.56143,
+  "point": 0.633985
+ },
+ "by_app.app-b.cost_usd.delta": {
+  "hi": 0.132497,
+  "lo": -0.159824,
+  "point": -0.0181
+ },
+ "by_app.app-b.cost_usd.proposed": {
+  "hi": 0.780848,
+  "lo": 0.468526,
+  "point": 0.615885
+ },
+ "by_app.app-b.cost_usd_both_routed.current": {
+  "hi": 0.615366,
+  "lo": 0.454697,
+  "point": 0.541881
+ },
+ "by_app.app-b.cost_usd_both_routed.delta": {
+  "hi": 0.195999,
+  "lo": -0.055267,
+  "point": 0.062584
+ },
+ "by_app.app-b.cost_usd_both_routed.proposed": {
+  "hi": 0.771271,
+  "lo": 0.458436,
+  "point": 0.604464
+ },
+ "by_app.app-b.latency_ms.p50.current": {
+  "hi": 800.0,
+  "lo": 800.0,
+  "point": 800.0
+ },
+ "by_app.app-b.latency_ms.p50.delta": {
+  "hi": 0.0,
+  "lo": -100.0,
+  "point": 0.0
+ },
+ "by_app.app-b.latency_ms.p50.proposed": {
+  "hi": 800.0,
+  "lo": 700.0,
+  "point": 800.0
+ },
+ "by_app.app-b.latency_ms.p95.current": {
+  "hi": 950.0,
+  "lo": 950.0,
+  "point": 950.0
+ },
+ "by_app.app-b.latency_ms.p95.delta": {
+  "hi": 550.0,
+  "lo": 550.0,
+  "point": 550.0
+ },
+ "by_app.app-b.latency_ms.p95.proposed": {
+  "hi": 1500.0,
+  "lo": 1500.0,
+  "point": 1500.0
+ },
+ "by_app.app-b.newly_rejected": {
+  "hi": 11,
+  "lo": 3,
+  "point": 7
+ },
+ "by_app.app-b.newly_rejected_share": {
+  "hi": 0.169231,
+  "lo": 0.046154,
+  "point": 0.107692
+ },
+ "by_app.app-b.newly_served": {
+  "hi": 7,
+  "lo": 1,
+  "point": 4
+ },
+ "by_app.app-b.newly_served_share": {
+  "hi": 0.107692,
+  "lo": 0.015385,
+  "point": 0.061538
+ },
+ "by_app.app-b.onprem_share.current": {
+  "hi": 1.0,
+  "lo": 1.0,
+  "point": 1.0
+ },
+ "by_app.app-b.onprem_share.proposed": {
+  "hi": 0.941176,
+  "lo": 0.764706,
+  "point": 0.854545
+ },
+ "by_app.app-b.quality_mean.current": {
+  "hi": 0.75,
+  "lo": 0.75,
+  "point": 0.75
+ },
+ "by_app.app-b.quality_mean.delta": {
+  "hi": 0.067469,
+  "lo": 0.016773,
+  "point": 0.040909
+ },
+ "by_app.app-b.quality_mean.proposed": {
+  "hi": 0.817469,
+  "lo": 0.766773,
+  "point": 0.790909
+ },
+ "by_app.app-b.route_changed": {
+  "hi": 24,
+  "lo": 13,
+  "point": 19
+ },
+ "by_app.app-b.route_changed_share": {
+  "hi": 0.369231,
+  "lo": 0.2,
+  "point": 0.292308
+ },
+ "by_app.app-c.cost_usd.current": {
+  "hi": 0.795319,
+  "lo": 0.624231,
+  "point": 0.713039
+ },
+ "by_app.app-c.cost_usd.delta": {
+  "hi": 0.213504,
+  "lo": -0.080341,
+  "point": 0.051155
+ },
+ "by_app.app-c.cost_usd.proposed": {
+  "hi": 0.960653,
+  "lo": 0.623558,
+  "point": 0.764194
+ },
+ "by_app.app-c.cost_usd_both_routed.current": {
+  "hi": 0.703376,
+  "lo": 0.524974,
+  "point": 0.617884
+ },
+ "by_app.app-c.cost_usd_both_routed.delta": {
+  "hi": 0.271478,
+  "lo": 0.025217,
+  "point": 0.127569
+ },
+ "by_app.app-c.cost_usd_both_routed.proposed": {
+  "hi": 0.949756,
+  "lo": 0.601495,
+  "point": 0.745454
+ },
+ "by_app.app-c.latency_ms.p50.current": {
+  "hi": 800.0,
+  "lo": 800.0,
+  "point": 800.0
+ },
+ "by_app.app-c.latency_ms.p50.delta": {
+  "hi": 0.0,
+  "lo": -100.0,
+  "point": 0.0
+ },
+ "by_app.app-c.latency_ms.p50.proposed": {
+  "hi": 800.0,
+  "lo": 700.0,
+  "point": 800.0
+ },
+ "by_app.app-c.latency_ms.p95.current": {
+  "hi": 950.0,
+  "lo": 950.0,
+  "point": 950.0
+ },
+ "by_app.app-c.latency_ms.p95.delta": {
+  "hi": 550.0,
+  "lo": 550.0,
+  "point": 550.0
+ },
+ "by_app.app-c.latency_ms.p95.proposed": {
+  "hi": 1500.0,
+  "lo": 1500.0,
+  "point": 1500.0
+ },
+ "by_app.app-c.newly_rejected": {
+  "hi": 12,
+  "lo": 3,
+  "point": 7
+ },
+ "by_app.app-c.newly_rejected_share": {
+  "hi": 0.15,
+  "lo": 0.0375,
+  "point": 0.0875
+ },
+ "by_app.app-c.newly_served": {
+  "hi": 14,
+  "lo": 5,
+  "point": 9
+ },
+ "by_app.app-c.newly_served_share": {
+  "hi": 0.175,
+  "lo": 0.0625,
+  "point": 0.1125
+ },
+ "by_app.app-c.onprem_share.current": {
+  "hi": 1.0,
+  "lo": 1.0,
+  "point": 1.0
+ },
+ "by_app.app-c.onprem_share.proposed": {
+  "hi": 0.905405,
+  "lo": 0.77027,
+  "point": 0.84058
+ },
+ "by_app.app-c.quality_mean.current": {
+  "hi": 0.75,
+  "lo": 0.75,
+  "point": 0.75
+ },
+ "by_app.app-c.quality_mean.delta": {
+  "hi": 0.073959,
+  "lo": 0.019256,
+  "point": 0.045217
+ },
+ "by_app.app-c.quality_mean.proposed": {
+  "hi": 0.823959,
+  "lo": 0.769256,
+  "point": 0.795217
+ },
+ "by_app.app-c.route_changed": {
+  "hi": 29,
+  "lo": 17,
+  "point": 23
+ },
+ "by_app.app-c.route_changed_share": {
+  "hi": 0.3625,
+  "lo": 0.2125,
+  "point": 0.2875
+ },
+ "by_app.app-d.cost_usd.current": {
+  "hi": 1.060732,
+  "lo": 0.881566,
+  "point": 0.967256
+ },
+ "by_app.app-d.cost_usd.delta": {
+  "hi": -0.037442,
+  "lo": -0.292855,
+  "point": -0.157607
+ },
+ "by_app.app-d.cost_usd.proposed": {
+  "hi": 0.954352,
+  "lo": 0.667021,
+  "point": 0.809649
+ },
+ "by_app.app-d.cost_usd_both_routed.current": {
+  "hi": 0.991377,
+  "lo": 0.797226,
+  "point": 0.89112
+ },
+ "by_app.app-d.cost_usd_both_routed.delta": {
+  "hi": 0.024235,
+  "lo": -0.230576,
+  "point": -0.098898
+ },
+ "by_app.app-d.cost_usd_both_routed.proposed": {
+  "hi": 0.933907,
+  "lo": 0.64698,
+  "point": 0.792222
+ },
+ "by_app.app-d.latency_ms.p50.current": {
+  "hi": 800.0,
+  "lo": 800.0,
+  "point": 800.0
+ },
+ "by_app.app-d.latency_ms.p50.delta": {
+  "hi": -100.0,
+  "lo": -500.0,
+  "point": -100.0
+ },
+ "by_app.app-d.latency_ms.p50.proposed": {
+  "hi": 700.0,
+  "lo": 300.0,
+  "point": 700.0
+ },
+ "by_app.app-d.latency_ms.p95.current": {
+  "hi": 950.0,
+  "lo": 950.0,
+  "point": 950.0
+ },
+ "by_app.app-d.latency_ms.p95.delta": {
+  "hi": 550.0,
+  "lo": 0.0,
+  "point": 550.0
+ },
+ "by_app.app-d.latency_ms.p95.proposed": {
+  "hi": 1500.0,
+  "lo": 950.0,
+  "point": 1500.0
+ },
+ "by_app.app-d.newly_rejected": {
+  "hi": 11,
+  "lo": 3,
+  "point": 7
+ },
+ "by_app.app-d.newly_rejected_share": {
+  "hi": 0.115789,
+  "lo": 0.031579,
+  "point": 0.073684
+ },
+ "by_app.app-d.newly_served": {
+  "hi": 14,
+  "lo": 5,
+  "point": 9
+ },
+ "by_app.app-d.newly_served_share": {
+  "hi": 0.147368,
+  "lo": 0.052632,
+  "point": 0.094737
+ },
+ "by_app.app-d.onprem_share.current": {
+  "hi": 1.0,
+  "lo": 1.0,
+  "point": 1.0
+ },
+ "by_app.app-d.onprem_share.proposed": {
+  "hi": 0.955056,
+  "lo": 0.855556,
+  "point": 0.908046
+ },
+ "by_app.app-d.quality_mean.current": {
+  "hi": 0.75,
+  "lo": 0.75,
+  "point": 0.75
+ },
+ "by_app.app-d.quality_mean.delta": {
+  "hi": 0.08352,
+  "lo": 0.008508,
+  "point": 0.043563
+ },
+ "by_app.app-d.quality_mean.proposed": {
+  "hi": 0.83352,
+  "lo": 0.758508,
+  "point": 0.793563
+ },
+ "by_app.app-d.route_changed": {
+  "hi": 44,
+  "lo": 28,
+  "point": 36
+ },
+ "by_app.app-d.route_changed_share": {
+  "hi": 0.463158,
+  "lo": 0.294737,
+  "point": 0.378947
+ },
+ "per_day.cost_usd.current": {
+  "hi": 0.97823,
+  "lo": 0.869689,
+  "point": 0.921984
+ },
+ "per_day.cost_usd.delta": {
+  "hi": 0.033477,
+  "lo": -0.141915,
+  "point": -0.059231
+ },
+ "per_day.cost_usd.proposed": {
+  "hi": 0.966121,
+  "lo": 0.766671,
+  "point": 0.862754
+ },
+ "per_day.cost_usd_both_routed.delta": {
+  "hi": 0.10635,
+  "lo": -0.06159,
+  "point": 0.01657
+ },
+ "totals.cost_usd.current": {
+  "hi": 2.934691,
+  "lo": 2.609066,
+  "point": 2.765953
+ },
+ "totals.cost_usd.delta": {
+  "hi": 0.10043,
+  "lo": -0.425745,
+  "point": -0.177692
+ },
+ "totals.cost_usd.proposed": {
+  "hi": 2.898362,
+  "lo": 2.300013,
+  "point": 2.588261
+ },
+ "totals.cost_usd_both_routed.current": {
+  "hi": 2.654622,
+  "lo": 2.313483,
+  "point": 2.484551
+ },
+ "totals.cost_usd_both_routed.delta": {
+  "hi": 0.319051,
+  "lo": -0.184769,
+  "point": 0.04971
+ },
+ "totals.cost_usd_both_routed.proposed": {
+  "hi": 2.852545,
+  "lo": 2.246977,
+  "point": 2.534261
+ },
+ "totals.latency_ms.p50.current": {
+  "hi": 800.0,
+  "lo": 800.0,
+  "point": 800.0
+ },
+ "totals.latency_ms.p50.delta": {
+  "hi": 0.0,
+  "lo": -100.0,
+  "point": -100.0
+ },
+ "totals.latency_ms.p50.proposed": {
+  "hi": 800.0,
+  "lo": 700.0,
+  "point": 700.0
+ },
+ "totals.latency_ms.p95.current": {
+  "hi": 950.0,
+  "lo": 950.0,
+  "point": 950.0
+ },
+ "totals.latency_ms.p95.delta": {
+  "hi": 550.0,
+  "lo": 550.0,
+  "point": 550.0
+ },
+ "totals.latency_ms.p95.proposed": {
+  "hi": 1500.0,
+  "lo": 1500.0,
+  "point": 1500.0
+ },
+ "totals.newly_rejected": {
+  "hi": 32,
+  "lo": 16,
+  "point": 24
+ },
+ "totals.newly_rejected_share": {
+  "hi": 0.110345,
+  "lo": 0.055172,
+  "point": 0.082759
+ },
+ "totals.newly_served": {
+  "hi": 31,
+  "lo": 17,
+  "point": 24
+ },
+ "totals.newly_served_share": {
+  "hi": 0.106897,
+  "lo": 0.058621,
+  "point": 0.082759
+ },
+ "totals.onprem_share.current": {
+  "hi": 1.0,
+  "lo": 1.0,
+  "point": 1.0
+ },
+ "totals.onprem_share.proposed": {
+  "hi": 0.916667,
+  "lo": 0.84739,
+  "point": 0.882812
+ },
+ "totals.quality_mean.current": {
+  "hi": 0.75,
+  "lo": 0.75,
+  "point": 0.75
+ },
+ "totals.quality_mean.delta": {
+  "hi": 0.07348,
+  "lo": 0.014082,
+  "point": 0.042187
+ },
+ "totals.quality_mean.proposed": {
+  "hi": 0.82348,
+  "lo": 0.764082,
+  "point": 0.792187
+ },
+ "totals.route_changed": {
+  "hi": 110,
+  "lo": 83,
+  "point": 96
+ },
+ "totals.route_changed_share": {
+  "hi": 0.37931,
+  "lo": 0.286207,
+  "point": 0.331034
+ }
+}

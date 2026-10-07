@@ -1,0 +1,157 @@
+{
+  "inputs": {
+    "export_sha256": "ee8397c852536629565ab737774dbf5ffd68cc607420ef6f22cbbf191d693ad8",
+    "proposal_sha256": null,
+    "proposal_title": null,
+    "registry_version": "test",
+    "routing_policy_version": "6e6fe2027862",
+    "serving_policy": {
+      "allow_app_passthrough": true,
+      "allow_app_pii_downgrade": true,
+      "default_policy_mode": "enforced",
+      "pii_detection": "presidio"
+    },
+    "since": null,
+    "snapshot_generated_at": "2026-09-24T00:00:00Z",
+    "snapshot_sha256": "dbec407b6ebba4f5a32decb60dd635d8edd4180c9b17a94305cd6f0d6bf72eb9"
+  },
+  "schema": "routeforge.simulation/v1",
+  "shadow_prices": {
+    "baseline": "snapshot",
+    "constraints": [
+      {
+        "affected_apps": [
+          "safe"
+        ],
+        "cost_saved_per_day": 0.010382,
+        "cost_usd": {
+          "baseline": 0.031864,
+          "delta": -0.021037,
+          "relaxed": 0.010827
+        },
+        "cost_usd_both_routed": {
+          "baseline": 0.031864,
+          "delta": -0.021037,
+          "relaxed": 0.010827
+        },
+        "latency_p50_delta": 0.0,
+        "moves": [
+          {
+            "count": 26,
+            "from": "local-mid",
+            "to": "azure-gpt-mid"
+          }
+        ],
+        "newly_rejected": 0,
+        "newly_rejected_reasons": {},
+        "onprem_share": {
+          "baseline": 1.0,
+          "relaxed": 0.35
+        },
+        "quality_mean_delta": 0.0,
+        "rejections_avoided": 0,
+        "relaxed_to": "any (escalation off)",
+        "requirement": "residency",
+        "route_changed": 26,
+        "rows_in_scope": 40,
+        "scope": {
+          "app": "safe"
+        },
+        "security": true
+      },
+      {
+        "affected_apps": [
+          "pinned"
+        ],
+        "cost_saved_per_day": 0.008982,
+        "cost_usd": {
+          "baseline": 0.03465,
+          "delta": -0.0182,
+          "relaxed": 0.01645
+        },
+        "cost_usd_both_routed": {
+          "baseline": 0.03465,
+          "delta": -0.0182,
+          "relaxed": 0.01645
+        },
+        "latency_p50_delta": 0.0,
+        "moves": [
+          {
+            "count": 20,
+            "from": "local-mid",
+            "to": "azure-gpt-mid"
+          },
+          {
+            "count": 10,
+            "from": "local-mid",
+            "to": "local-cheap"
+          }
+        ],
+        "newly_rejected": 0,
+        "newly_rejected_reasons": {},
+        "onprem_share": {
+          "baseline": 1.0,
+          "relaxed": 0.5
+        },
+        "quality_mean_delta": -0.0625,
+        "rejections_avoided": 0,
+        "relaxed_to": "null",
+        "requirement": "allowed_models",
+        "route_changed": 30,
+        "rows_in_scope": 40,
+        "scope": {
+          "app": "pinned"
+        },
+        "security": false
+      },
+      {
+        "affected_apps": [
+          "capped"
+        ],
+        "cost_saved_per_day": -0.000672,
+        "cost_usd": {
+          "baseline": 0.00264,
+          "delta": 0.01725,
+          "relaxed": 0.01989
+        },
+        "cost_usd_both_routed": {
+          "baseline": 0.00264,
+          "delta": 0.001362,
+          "relaxed": 0.004002
+        },
+        "latency_p50_delta": 380.0,
+        "moves": [
+          {
+            "count": 13,
+            "from": "(rejected)",
+            "to": "azure-gpt-mid"
+          },
+          {
+            "count": 13,
+            "from": "local-cheap",
+            "to": "azure-gpt-mid"
+          }
+        ],
+        "newly_rejected": 0,
+        "newly_rejected_reasons": {},
+        "onprem_share": {
+          "baseline": 1.0,
+          "relaxed": 0.35
+        },
+        "quality_mean_delta": 0.1625,
+        "rejections_avoided": 13,
+        "relaxed_to": "1e12",
+        "requirement": "max_cost_usd_per_request",
+        "route_changed": 13,
+        "rows_in_scope": 40,
+        "scope": {
+          "app": "capped"
+        },
+        "security": false
+      }
+    ],
+    "evaluated": 7,
+    "non_binding": 4,
+    "skipped_by_cap": 0
+  }
+}

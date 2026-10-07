@@ -27,6 +27,7 @@ requests could route to that endpoint.
 from __future__ import annotations
 
 import copy
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -49,6 +50,9 @@ from app.eval.simulate import (
     select_rows,
     simulate_row,
 )
+from app.eval.uncertainty import (OUTSIDE_FOOTNOTE, ZERO_RANGE_NOTE, UncertaintyPlan,
+                                  _count_outside, cost_line, insufficient_text, leaf,
+                                  level_text, run_bootstrap, with_range)
 
 from app.policy.core import (
     REQ_ALLOWED_MODELS,
@@ -424,6 +428,47 @@ def _entry(rel: Relaxation, results: list[RowResult], stats: dict,
     }
 
 
+def _entry_ranges(entry: dict, results: list[RowResult], plan: UncertaintyPlan,
+                   days: float | None) -> dict:
+    """P3c-3: the ranges of one binding relaxation's figures (spec §5.3),
+    bootstrapped over the rows it re-simulated: `route_changed`,
+    `rejections_avoided`, `newly_rejected`, the like-for-like cost delta
+    and, with a window of at least a day, `cost_saved_per_day`. Each leaf's
+    `point` is the entry's own figure. Fewer than `plan.min_rows` rows in
+    scope: `insufficient_data` and no range.
+
+    The draws are the ones every other part of the run uses for those rows,
+    so a relaxation's range and the proposal's are over the same resamples:
+    one application's rows are that application's stratum, and an
+    endpoint-scoped relaxation, which re-simulates every row, is resampled
+    in the export's own strata (small applications pooled). `totals_strata`
+    says which, as `uncertainty.results_block` does."""
+    head = {"requirement": entry["requirement"], "scope": entry["scope"],
+            "security": entry["security"], "n": entry["rows_in_scope"]}
+    # Only the totals of the rows in scope are read: no per-app figures.
+    boot = run_bootstrap(results, plan, totals_only=True)
+    if boot.totals is None:
+        return {**head, "insufficient_data": True}
+    both = boot.totals["cost_usd_both_routed.delta"]
+    return {
+        **head,
+        "totals_strata": boot.strata,
+        "route_changed": leaf(entry["route_changed"], boot.totals["route_changed"], plan),
+        "rejections_avoided": leaf(entry["rejections_avoided"],
+                                   boot.totals["newly_served"], plan),
+        # "0 newly rejected" is the count a reader takes as a safety claim,
+        # and its range is [0, 0] at any sample size: it carries the
+        # one-sided bound for the rows in scope (`uncertainty.zero_bound`).
+        "newly_rejected": leaf(entry["newly_rejected"], boot.totals["newly_rejected"], plan,
+                               zero_n=(entry["rows_in_scope"]
+                                       if entry["newly_rejected"] == 0 else None)),
+        "cost_usd_both_routed_delta": leaf(entry["cost_usd_both_routed"]["delta"], both, plan),
+        # The entry's own arithmetic: minus the like-for-like delta, per day.
+        "cost_saved_per_day": (leaf(entry["cost_saved_per_day"], [-v / days for v in both], plan)
+                               if days is not None else None),
+    }
+
+
 def _rank_key(entry: dict) -> tuple:
     saved = entry["cost_saved_per_day"]
     if saved is None:
@@ -435,7 +480,9 @@ def _rank_key(entry: dict) -> tuple:
 
 async def shadow_prices(records: list[dict], baseline_doc: dict, *, base: Settings,
                         cap: int = 50, baseline_label: str = "snapshot",
-                        since: datetime | None = None) -> dict:
+                        since: datetime | None = None,
+                        uncertainty: UncertaintyPlan | None = None,
+                        notify: Callable[[str], None] | None = None) -> dict:
     """The spec §5 `shadow_prices` block for `baseline_doc` (the snapshot,
     or the snapshot with a proposal already applied -- the caller decides and
     says which in `baseline_label`).
@@ -448,7 +495,15 @@ async def shadow_prices(records: list[dict], baseline_doc: dict, *, base: Settin
     (`newly_rejected`, `newly_rejected_reasons`), not raised. A relaxation
     is binding when it changes a route, avoids a rejection or newly rejects
     a row; the rest are counted as `non_binding`, not listed. `since` cuts
-    the export exactly as `simulate.run_rows` does (P3c-2)."""
+    the export exactly as `simulate.run_rows` does (P3c-2).
+
+    `uncertainty` (P3c-3) adds ONE key to the block, `uncertainty`:
+    `{"interval", "constraints", "points_outside_interval"}`, the second a
+    list parallel to `constraints` (same order) of `_entry_ranges`, the
+    third how many of its leaves have a point outside their own range.
+    Without a plan the block is exactly what it was. `notify` is told, once,
+    before any relaxation is evaluated, what the bootstraps can cost at most
+    (`uncertainty.cost_line`: only a binding relaxation is resampled)."""
     observed = observed_latencies([r for r in records if not _before_since(r, since)])
     baseline = await build_scenario(baseline_doc, base=base)
     try:
@@ -459,8 +514,16 @@ async def shadow_prices(records: list[dict], baseline_doc: dict, *, base: Settin
         days = _window_days([RowResult(row, base_arm[row["request_id"]],
                                        base_arm[row["request_id"]]) for row in rows])
         rels, skipped = enumerate_relaxations(baseline_doc, rows, cap=cap)
+        if uncertainty is not None and notify is not None:
+            sizes = Counter(row["application_id"] for row in rows)
+            # One pass per relaxation, over its rows in scope: one app's
+            # rows, or every row for the endpoint-scoped relaxation.
+            notify(cost_line(uncertainty, [
+                list(sizes.values()) if rel.requirement == REQ_ENDPOINT_APP_ALLOWLIST
+                else [sizes[rel.app]] for rel in rels], upper_bound=True))
 
         constraints: list[dict] = []
+        ranges: dict[int, dict] = {}        # id(entry) -> its ranges
         non_binding = 0
         for rel in rels:
             doc_r, scoped = rel.apply(baseline_doc, rows)
@@ -477,14 +540,24 @@ async def shadow_prices(records: list[dict], baseline_doc: dict, *, base: Settin
 
             stats = _bucket_stats(results)
             if stats["route_changed"] + stats["newly_served"] + stats["newly_rejected"] > 0:
-                constraints.append(_round6(_entry(rel, results, stats, days)))
+                entry = _round6(_entry(rel, results, stats, days))
+                constraints.append(entry)
+                if uncertainty is not None:
+                    ranges[id(entry)] = _entry_ranges(entry, results, uncertainty, days)
             else:
                 non_binding += 1
 
         constraints.sort(key=_rank_key)
-        return _round6({"baseline": baseline_label, "evaluated": len(rels),
-                        "skipped_by_cap": skipped, "non_binding": non_binding,
-                        "constraints": constraints})
+        block = {"baseline": baseline_label, "evaluated": len(rels),
+                 "skipped_by_cap": skipped, "non_binding": non_binding,
+                 "constraints": constraints}
+        if uncertainty is not None:
+            # Looked up by identity AFTER the sort, so the two lists stay
+            # parallel whatever the order is.
+            ordered = [ranges[id(e)] for e in constraints]
+            block["uncertainty"] = {"interval": uncertainty.interval, "constraints": ordered,
+                                    "points_outside_interval": _count_outside(ordered)}
+        return _round6(block)
     finally:
         await close_scenario(baseline)
 
@@ -500,6 +573,15 @@ SHADOW_CAVEAT = (
     "replays the same recorded traffic. Nothing is applied. Security constraints "
     "are shown as the\n"
     "cost of a protection — they are never a recommendation to relax them."
+)
+
+#: Printed under the shadow "Ranges" table (P3c-3 spec §10.3).
+RANGE_STRATA_NOTE = (
+    "A relaxation scoped to one application is resampled as that application's rows; an "
+    "endpoint-scoped one over every row, with small applications resampled together "
+    "(`totals_strata` on each entry of `shadow_prices.uncertainty.constraints`). Resampling "
+    "within strata leaves a total about the `variance_factor` share of its variance "
+    "(analytic, equal variance assumed, not measured); ranges are not corrected for it."
 )
 
 #: The sentence under the two tables (final-fix ruling C1, verbatim).
@@ -557,11 +639,51 @@ def _shadow_table(entries: list[dict], *, security: bool) -> list[str]:
     return lines
 
 
+_RANGE_COLUMNS = ("requirement", "scope", "rows", "cost saved/day (or Δcost both-routed)",
+                  "rejections avoided", "newly rejected", "route changed", "label")
+
+
+def _range_row(entry: dict) -> str:
+    """One relaxation's ranges. A security requirement keeps its label here
+    too: a range on the cost of a protection is still not a recommendation."""
+    cells = [entry["requirement"], _scope_str(entry["scope"]), str(entry["n"])]
+    if entry.get("insufficient_data"):
+        cells += [insufficient_text(entry), "", "", ""]
+    else:
+        per_day = entry["cost_saved_per_day"]
+        if per_day is not None:
+            cost = with_range(f"{_fmt(per_day['point'])}/day", per_day)
+        else:
+            both = entry["cost_usd_both_routed_delta"]
+            cost = with_range(f"{_fmt(both['point'])} (both-routed)", both)
+        cells += [cost] + [with_range(str(entry[key]["point"]), entry[key])
+                           for key in ("rejections_avoided", "newly_rejected", "route_changed")]
+    cells.append(_PROTECTION_LABEL if entry["security"] else "")
+    return "| " + " | ".join(cells) + " |"
+
+
+def _range_lines(ranges: dict) -> list[str]:
+    """The "Ranges" subsection, in the block's own order."""
+    lines = ["### Ranges", "",
+             f"`[lo, hi]` is the {level_text(ranges['interval'])} range of the figure before "
+             "it: sampling variability only (see \"Uncertainty ranges\").", ""]
+    if not ranges["constraints"]:
+        return lines + ["None.", ""]
+    lines += ["| " + " | ".join(_RANGE_COLUMNS) + " |", "|" + "---|" * len(_RANGE_COLUMNS)]
+    lines += [_range_row(entry) for entry in ranges["constraints"]]
+    lines += ["", ZERO_RANGE_NOTE, ""]
+    if ranges["points_outside_interval"]:
+        lines += [OUTSIDE_FOOTNOTE, ""]
+    lines += [RANGE_STRATA_NOTE, ""]
+    return lines
+
+
 def render_shadow_section(block: dict) -> str:
     """The `report.md` "Shadow prices" section (spec §5): the caveat, then
     the operational-constraints table, then the cost-of-protection table
     (every row labelled, never a recommendation), then the newly-rejected
-    note, then a non-binding/skipped footer."""
+    note, then (P3c-3, only when the block carries ranges) the ranges, then
+    a non-binding/skipped footer."""
     lines: list[str] = ["## Shadow prices", ""]
     lines += ["> " + line for line in SHADOW_CAVEAT.split("\n")]
     lines.append("")
@@ -582,6 +704,9 @@ def render_shadow_section(block: dict) -> str:
 
     lines.append(NEWLY_REJECTED_NOTE)
     lines.append("")
+
+    if block.get("uncertainty") is not None:
+        lines += _range_lines(block["uncertainty"])
 
     lines.append(f"Non-binding: {block['non_binding']} · "
                 f"skipped by cap: {block['skipped_by_cap']}")
