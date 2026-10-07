@@ -499,9 +499,8 @@ def window_lines(block: dict) -> list[str]:
     return lines
 
 
-def _limit_rows(entry: dict, active: int, volume_scales: dict[str, dict[str, float]] | None = None) -> list[str]:
+def _limit_rows(entry: dict, active: int) -> list[str]:
     rows = []
-    volume_scales = volume_scales or {}
     for limit in CAPACITY_LIMITS:
         for arm in ARMS:
             stated = entry[arm]["limits"].get(limit)
@@ -509,14 +508,8 @@ def _limit_rows(entry: dict, active: int, volume_scales: dict[str, dict[str, flo
                 if limit in entry["current"]["limits"] or limit in entry["proposed"]["limits"]:
                     rows.append(f"| {limit} | {arm} | not stated | n/a | n/a | n/a | n/a | n/a |")
                 continue
-            # Scale the stated limit by the proposal's volume_scale for the proposed arm
-            stated_limit = stated['limit']
-            if arm == "proposed" and volume_scales.get("proposal"):
-                # Get the "*" scale factor (applies to all) or use 1 if not present
-                scale_factor = volume_scales["proposal"].get("*", 1.0)
-                stated_limit = stated_limit * scale_factor
             rows.append(
-                f"| {limit} | {arm} | {_num(stated_limit)} | {_pct(stated['peak'])} | "
+                f"| {limit} | {arm} | {_num(stated['limit'])} | {_pct(stated['peak'])} | "
                 f"{_pct(stated['mean'])} | {stated['buckets_over']} of {active} | "
                 f"{_pct(stated['requests_over_share'])} | {stated['peak_bucket'] or 'n/a'} |")
     return rows
@@ -539,7 +532,7 @@ def endpoint_lines(slug: str, entry: dict, block: dict, *, depth: int) -> list[s
             lines += [f"**Note:** the {arm} arm's replayed latency is longer than a bucket, so a "
                       "request's whole service time is counted in the bucket it arrived in. "
                       "A longer `--capacity-bucket` avoids that.", ""]
-    limit_rows = _limit_rows(entry, block["window"]["active_buckets"], block.get("volume_scale"))
+    limit_rows = _limit_rows(entry, block["window"]["active_buckets"])
     if limit_rows:
         lines += ["| limit | arm | stated | peak | mean | buckets over 100% | "
                   "requests in those buckets | peak bucket |",

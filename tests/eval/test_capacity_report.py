@@ -59,7 +59,7 @@ def test_the_section_shows_each_stated_limit_per_arm_and_the_demand():
     assert "tier default" not in text
     assert ("| max_concurrency | current | 1 | 120.0% | 53.3% | 10 of 30 | 75.0% | "
             "2026-09-20T12:20:00+00:00 |") in text
-    assert ("| max_concurrency | proposed | 2 | 240.0% | 106.7% | 10 of 30 | 75.0% | "
+    assert ("| max_concurrency | proposed | 1 | 240.0% | 106.7% | 10 of 30 | 75.0% | "
             "2026-09-20T12:20:00+00:00 |") in text
     assert "| concurrency | 1.2 | 0.533333 | 2.4 | 1.06667 |" in text
     assert "| tokens_per_minute | 12000 | 5333.33 | 24000 | 10666.7 |" in text
