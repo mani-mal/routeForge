@@ -94,6 +94,12 @@ class ArmResult:
     # (`QualityScore.set_id`), None for every other source. It lets
     # `app/eval/uncertainty.py` find that score's posterior.
     quality_set_id: str | None = None
+    # P3c-4: the token counts this arm priced the routed call at -- the
+    # (scaled) prompt count and the completion count handed to `price_call`.
+    # None when the arm rejected the row. `app/eval/capacity.py` sums them
+    # into an endpoint's token demand. Serialised nowhere.
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
 
     @property
     def overflow_hops(self) -> int:
@@ -451,7 +457,8 @@ def simulate_row(scn: Scenario, row: dict, observed: dict[str, float]) -> ArmRes
                      cost, latency, latency_source, q.score, q.source,
                      complexity_estimated=estimated,
                      attempted=(*overflowed, pick.name),
-                     quality_set_id=q.set_id)
+                     quality_set_id=q.set_id,
+                     prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
 
 
 def arm_results(records: list[dict], scn: Scenario, *,
