@@ -1,0 +1,13 @@
+566acc7 docs(plan): P3c-3 uncertainty ranges implementation plan
+
+inputs/ and expected/ were written by
+    python -m tests.eval.test_uncertainty_golden rejections
+run in a `git archive` of commit 566acc7 -- the last commit before any P3c-3
+product code (no app/eval/uncertainty.py) -- with only
+tests/eval/test_uncertainty_golden.py copied in from the P3c-3 branch.
+Control: the same run regenerated the first case (../uncertainty_golden/)
+byte for byte (`diff -r`, 12 files).
+
+Do not regenerate these files from a later tree to make
+tests/eval/test_uncertainty_golden.py pass: they pin what the simulator wrote
+BEFORE P3c-3 for an operator who never passes --uncertainty.

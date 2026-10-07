@@ -1,0 +1,288 @@
+{
+  "apps": [
+    {
+      "application_id": "capped",
+      "name": "capped",
+      "policy": {
+        "max_cost_usd_per_request": 0.0004,
+        "residency": "any"
+      },
+      "sensitivity_rules": []
+    },
+    {
+      "application_id": "pinned",
+      "name": "pinned",
+      "policy": {
+        "allowed_models": [
+          "local-mid"
+        ],
+        "residency": "any"
+      },
+      "sensitivity_rules": []
+    },
+    {
+      "application_id": "safe",
+      "name": "safe",
+      "policy": {
+        "residency": "onprem_only"
+      },
+      "sensitivity_rules": []
+    },
+    {
+      "application_id": "steady",
+      "name": "steady",
+      "policy": {
+        "residency": "any"
+      },
+      "sensitivity_rules": []
+    }
+  ],
+  "generated_at": "2026-09-24T00:00:00Z",
+  "onboarded": [
+    {
+      "accepts_raw_sensitive": true,
+      "allowed_app_ids": null,
+      "context_window": null,
+      "display_name": "local-cheap",
+      "enabled": true,
+      "price_cached_input": null,
+      "price_input": 0.1,
+      "price_output": 0.2,
+      "prompt_retention": "none",
+      "provider": "onprem",
+      "quality": null,
+      "region": "onprem",
+      "slug": "local-cheap",
+      "tier": "cheap"
+    },
+    {
+      "accepts_raw_sensitive": true,
+      "allowed_app_ids": null,
+      "context_window": null,
+      "display_name": "local-mid",
+      "enabled": true,
+      "price_cached_input": null,
+      "price_input": 0.5,
+      "price_output": 1.0,
+      "prompt_retention": "none",
+      "provider": "onprem",
+      "quality": null,
+      "region": "onprem",
+      "slug": "local-mid",
+      "tier": "mid"
+    }
+  ],
+  "quality": {
+    "calibrated": [],
+    "customer": []
+  },
+  "registry_version": "test",
+  "routing_policy_version": "6e6fe2027862",
+  "schema": "routeforge.config-snapshot/v1",
+  "settings": {
+    "policy": {
+      "budgets": {
+        "default_estimated_output_tokens": 512.0,
+        "default_max_latency_ms": 15000.0,
+        "default_max_spend_usd": 0.05
+      },
+      "default_sensitivity": "public",
+      "sensitivity_rules": [
+        {
+          "entities": [
+            "US_SSN",
+            "MEDICAL_LICENSE",
+            "US_BANK_NUMBER",
+            "CREDIT_CARD",
+            "EMPLOYEE_ID"
+          ],
+          "require_verification": true,
+          "residency": "onprem_only",
+          "risk_class": "high",
+          "sensitivity": "restricted"
+        },
+        {
+          "entities": [
+            "PERSON",
+            "EMAIL_ADDRESS",
+            "PHONE_NUMBER",
+            "LOCATION",
+            "DATE_TIME"
+          ],
+          "require_verification": false,
+          "residency": "private_cloud_ok",
+          "risk_class": "medium",
+          "sensitivity": "confidential"
+        },
+        {
+          "entities": [],
+          "require_verification": false,
+          "residency": "any",
+          "risk_class": "low",
+          "sensitivity": "public"
+        }
+      ],
+      "sensitivity_scale": [
+        "public",
+        "internal",
+        "confidential",
+        "restricted"
+      ],
+      "tenants": {
+        "acme": {
+          "default_residency": "private_cloud_ok",
+          "display_name": "Acme Corp"
+        },
+        "default": {
+          "default_residency": "any",
+          "display_name": "Demo Tenant"
+        },
+        "hospital": {
+          "default_residency": "onprem_only",
+          "display_name": "General Health"
+        }
+      }
+    },
+    "pricing": {
+      "baseline_model": "bedrock-frontier",
+      "models": {
+        "azure-gpt-mid": {
+          "cached_input": null,
+          "input": 0.15,
+          "output": 0.6,
+          "provider": "azure",
+          "tier": "mid"
+        },
+        "bedrock-frontier": {
+          "cached_input": null,
+          "input": 3.0,
+          "output": 15.0,
+          "provider": "bedrock",
+          "tier": "frontier"
+        }
+      }
+    },
+    "providers": {
+      "azure": {
+        "accepts_raw_sensitive": null,
+        "enabled": true,
+        "prompt_retention": null,
+        "region": null
+      },
+      "bedrock": {
+        "accepts_raw_sensitive": null,
+        "enabled": false,
+        "prompt_retention": null,
+        "region": null
+      },
+      "onprem": {
+        "accepts_raw_sensitive": null,
+        "enabled": true,
+        "prompt_retention": null,
+        "region": null
+      }
+    },
+    "routing": {
+      "breaker": {
+        "cooldown_s": 30.0,
+        "enabled": true,
+        "failure_threshold": 3,
+        "max_cooldown_s": 300.0
+      },
+      "complexity_thresholds": {
+        "cheap_max": 0.35,
+        "mid_max": 0.7
+      },
+      "confidence_escalation_threshold": 0.6,
+      "confidence_logprob_temperature": 4.0,
+      "fallback": {
+        "backoff_base_ms": 100,
+        "max_retries_same_provider": 1
+      },
+      "max_escalations": 1,
+      "max_failover_attempts": 2,
+      "model_pool": [
+        {
+          "accepts_raw_sensitive": null,
+          "context_window": null,
+          "data_handling_source": {},
+          "display_name": "GPT-4o mini (Azure)",
+          "litellm_model": "azure/gpt-4o-mini",
+          "name": "azure-gpt-mid",
+          "prompt_retention": null,
+          "provider": "azure",
+          "quality": null,
+          "region": null,
+          "tier": "mid"
+        },
+        {
+          "accepts_raw_sensitive": null,
+          "context_window": null,
+          "data_handling_source": {},
+          "display_name": "Claude Sonnet (Bedrock)",
+          "litellm_model": "bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
+          "name": "bedrock-frontier",
+          "prompt_retention": null,
+          "provider": "bedrock",
+          "quality": null,
+          "region": null,
+          "tier": "frontier"
+        }
+      ],
+      "prompt_opt": {
+        "active": {},
+        "artifacts_dir": "config/prompts",
+        "enabled": false
+      },
+      "quality_refresh_s": 60.0,
+      "risk_floors": {
+        "high": "frontier",
+        "low": "cheap",
+        "medium": "mid"
+      },
+      "score_on": "post_compression",
+      "signals": {
+        "alpha_floor": 0.1,
+        "enabled": true,
+        "flush_interval_s": 5.0,
+        "half_life_s": 900.0,
+        "latency_scale_ms": 1000.0,
+        "max_buffer": 10000,
+        "max_latency_norm": 3.0,
+        "max_seed_obs_per_model": 200,
+        "min_samples": 5,
+        "seed_window_hours": 24,
+        "staleness_s": 3600.0,
+        "tier_latency_ms": {
+          "cheap": 200.0,
+          "frontier": 1000.0,
+          "mid": 500.0
+        }
+      },
+      "strategy": "default",
+      "tier_quality": {
+        "cheap": 0.5,
+        "frontier": 1.0,
+        "mid": 0.75
+      },
+      "tiers": [
+        "cheap",
+        "mid",
+        "frontier"
+      ],
+      "weights": {
+        "availability": 0.2,
+        "cost": 0.6,
+        "latency": 0.3,
+        "quality": 1.0
+      }
+    },
+    "serving_policy": {
+      "allow_app_passthrough": true,
+      "allow_app_pii_downgrade": true,
+      "default_policy_mode": "enforced",
+      "pii_detection": "presidio"
+    }
+  },
+  "signals": {}
+}

@@ -1,0 +1,14 @@
+{
+  "apps": {
+    "capped": {
+      "max_cost_usd_per_request": null
+    }
+  },
+  "endpoints": {
+    "remove": [
+      "local-mid"
+    ]
+  },
+  "schema": "routeforge.policy-proposal/v1",
+  "title": "Lift the cap, drop mid"
+}

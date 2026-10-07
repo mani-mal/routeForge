@@ -1,0 +1,45 @@
+{
+  "scenarios": [
+    {
+      "name": "no-change",
+      "proposal": {}
+    },
+    {
+      "name": "lift-cap",
+      "proposal": {
+        "apps": {
+          "capped": {
+            "max_cost_usd_per_request": null
+          }
+        }
+      }
+    },
+    {
+      "name": "drop-mid",
+      "proposal": {
+        "endpoints": {
+          "remove": [
+            "local-mid"
+          ]
+        }
+      }
+    },
+    {
+      "name": "lift-cap+drop-mid",
+      "proposal": {
+        "apps": {
+          "capped": {
+            "max_cost_usd_per_request": null
+          }
+        },
+        "endpoints": {
+          "remove": [
+            "local-mid"
+          ]
+        }
+      }
+    }
+  ],
+  "schema": "routeforge.policy-scenarios/v1",
+  "title": "Golden rejections"
+}
