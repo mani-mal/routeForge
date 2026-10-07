@@ -52,20 +52,24 @@ def test_f4_nothing_is_drawn_below_min_rows():
 
 def test_f4_cost_line_wording():
     line = unc.cost_line(PLAN, [[60, 6, 45]])
-    assert line.startswith(PREFIX + "1000 resamples x 111 rows x 1 pass: about ")
+    assert line.startswith(PREFIX + "1000 resamples x 111 rows x 1 pass: under 1 s (a rough ")
+    assert "about under" not in line
     assert "rough estimate" in line and "per resample per row" in line \
         and "per resample per stratum" in line
     assert unc.cost_line(PLAN, [[60, 6, 45]] * 3).startswith(
-        PREFIX + "1000 resamples x 111 rows x 3 passes: about ")
+        PREFIX + "1000 resamples x 111 rows x 3 passes: under 1 s (")
     # Passes over different rows (shadow-price relaxations): the total is given.
     mixed = unc.cost_line(PLAN, [[60], [45], [60, 6, 45]], upper_bound=True)
-    assert mixed.startswith(PREFIX + "1000 resamples x up to 3 passes (216 rows in all): about ")
+    assert mixed.startswith(PREFIX + "1000 resamples x up to 3 passes (216 rows in all): ")
+    big = unc.cost_line(PLAN, [[40] * 1000])
+    assert PREFIX + "1000 resamples x 40000 rows x 1 pass: about 46 s (a rough " in big
     assert "\n" not in line and "\n" not in mixed
 
 
-@pytest.mark.parametrize("seconds,text", [(0.0, "under 1 s"), (0.4, "under 1 s"), (1.0, "1 s"),
-                                          (59.4, "59 s"), (119.9, "120 s"), (120.0, "2 min"),
-                                          (3000.0, "50 min"), (36000.0, "600 min")])
+@pytest.mark.parametrize("seconds,text", [
+    (0.0, "under 1 s"), (0.4, "under 1 s"), (1.0, "about 1 s"), (59.4, "about 59 s"),
+    (119.9, "about 120 s"), (120.0, "about 2 min"), (3000.0, "about 50 min"),
+    (36000.0, "about 600 min")])
 def test_f4_duration_text(seconds, text):
     assert unc._duration(seconds) == text
 

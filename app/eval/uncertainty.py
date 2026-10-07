@@ -543,7 +543,7 @@ def estimate_seconds(plan: UncertaintyPlan, passes: list[list[int]]) -> float:
 def _duration(seconds: float) -> str:
     if seconds < 1:
         return "under 1 s"
-    return f"{seconds:.0f} s" if seconds < 120 else f"{seconds / 60:.0f} min"
+    return f"about {seconds:.0f} s" if seconds < 120 else f"about {seconds / 60:.0f} min"
 
 
 def cost_line(plan: UncertaintyPlan, passes: list[list[int]], *,
@@ -557,7 +557,7 @@ def cost_line(plan: UncertaintyPlan, passes: list[list[int]], *,
         work = (f"{'up to ' if upper_bound else ''}{count} ({sum(rows)} rows in all)")
     else:
         work = f"{rows[0] if rows else 0} rows x {count}"
-    return (f"policy_simulate: uncertainty: {plan.replicates} resamples x {work}: about "
+    return (f"policy_simulate: uncertainty: {plan.replicates} resamples x {work}: "
             f"{_duration(estimate_seconds(plan, passes))} (a rough estimate from two unit "
             f"costs measured on one laptop core: {ROW_SECONDS * 1e6:g} microseconds per "
             f"resample per row and {STRATUM_SECONDS * 1e6:g} per resample per stratum)")
