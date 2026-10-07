@@ -31,7 +31,7 @@ _SCHEMA_PREFIX = "routeforge.policy-proposal/"
 _SCHEMA_MAJOR = "v1"
 
 _TOP_KEYS = frozenset({"schema", "title", "apps", "providers", "endpoints", "prices",
-                       "workload"})
+                       "workload", "capacity"})
 _APP_EDIT_KEYS = frozenset({
     "residency", "allowed_regions", "require_no_retention", "allowed_tiers",
     "allowed_providers", "allowed_models", "max_cost_usd_per_request",
@@ -56,8 +56,15 @@ _ENDPOINT_UPDATE_KEYS = frozenset({
 })
 _PRICE_KEYS = frozenset({"input", "output", "cached_input"})
 # P3c-2 (spec §4.1): assumptions about the traffic itself, global and per app.
-_WORKLOAD_KEYS = frozenset({"token_scale", "cached_share", "apps"})
-_WORKLOAD_APP_KEYS = frozenset({"token_scale", "cached_share"})
+_WORKLOAD_KEYS = frozenset({"token_scale", "cached_share", "volume_scale", "apps"})
+_WORKLOAD_APP_KEYS = frozenset({"token_scale", "cached_share", "volume_scale"})
+#: P3c-4: the limits an operator may STATE for an endpoint, in report order.
+#: Every one is an assumption -- RouteForge measures none of them.
+CAPACITY_LIMITS = ("max_concurrency", "requests_per_minute", "tokens_per_minute",
+                   "output_tokens_per_minute")
+_CAPACITY_LIMIT_KEYS = frozenset(CAPACITY_LIMITS)
+#: P3c-4: `volume_scale` is finite, > 0 and at most this.
+MAX_VOLUME_SCALE = 1_000_000
 _RULE_KEYS = frozenset(
     {"entities", "sensitivity", "risk_class", "residency", "require_verification"})
 
@@ -161,6 +168,9 @@ def _validate_keys(doc: dict) -> None:
     _check_keys(workload, _WORKLOAD_KEYS, "workload")
     for app_id, fields in _opt_dict(workload, "apps", "workload.apps").items():
         _check_keys(fields, _WORKLOAD_APP_KEYS, f"workload.apps.{app_id}")
+
+    for slug, limits in _opt_dict(doc, "capacity", "capacity").items():
+        _check_keys(limits, _CAPACITY_LIMIT_KEYS, f"capacity.{slug}")
 
 
 def load_proposal(path: str) -> tuple[dict, str]:
@@ -433,6 +443,43 @@ def _validate_workload_fields(loc: str, fields: dict) -> None:
         if not (_finite_number(value) and 0 <= value <= 1):
             raise ProposalError(f"{loc}.cached_share",
                                 "must be a finite number in [0, 1]")
+    # P3c-4: how many times the recorded traffic. It changes no route and no
+    # cost figure; only `app/eval/capacity.py` reads it.
+    if "volume_scale" in fields:
+        value = fields["volume_scale"]
+        if not (_finite_number(value) and 0 < value <= MAX_VOLUME_SCALE):
+            raise ProposalError(f"{loc}.volume_scale",
+                                f"must be a finite number > 0 and <= {MAX_VOLUME_SCALE}")
+
+
+def validate_capacity_limits(loc: str, limits) -> None:
+    """One endpoint's stated limits (P3c-4): an object whose keys are in
+    `CAPACITY_LIMITS` and whose values are finite numbers > 0. A limit of 0
+    is refused, not read as "no capacity": leave the key out for "not
+    stated". Raises `ProposalError`; `app/eval/capacity.py` re-raises it for
+    a `--capacity` file."""
+    _check_keys(limits, _CAPACITY_LIMIT_KEYS, loc)
+    for key, value in limits.items():
+        if not _finite_positive(value):
+            raise ProposalError(
+                f"{loc}.{key}",
+                "must be a finite number > 0 (leave the key out for \"not stated\")")
+
+
+def volume_scale_block(workload: dict | None) -> dict[str, float]:
+    """A `workload` object's `volume_scale` values as `{"*": global,
+    "<app>": per-app}` (P3c-4); empty when it sets none. The shape
+    `assumptions_block` gives `token_scale`, but kept OUT of that block:
+    volume changes no route and no cost, so the applied document -- and
+    with it every default output -- must not change because of it."""
+    workload = workload or {}
+    block: dict[str, float] = {}
+    if "volume_scale" in workload:
+        block[ALL_APPS] = float(workload["volume_scale"])
+    for app_id, fields in sorted((workload.get("apps") or {}).items()):
+        if "volume_scale" in fields:
+            block[app_id] = float(fields["volume_scale"])
+    return block
 
 
 # --- application -----------------------------------------------------------
@@ -609,6 +656,19 @@ def apply_proposal(snapshot: dict, proposal: dict, *, base: Settings | None = No
         if app_id not in apps_by_id:
             raise ProposalError(f"workload.apps.{app_id}", "unknown application")
         _validate_workload_fields(f"workload.apps.{app_id}", fields)
+
+    # P3c-4: a stated capacity is an assumption about an endpoint that exists
+    # in the PROPOSED arm. It is validated here and written nowhere:
+    # `app/eval/capacity.py` reads it from the proposal after replay.
+    capacity_known = ((set(onboarded_by_slug) - removed) | pricing_models
+                      | {e["slug"] for e in add_list})
+    for slug, limits in (proposal.get("capacity") or {}).items():
+        if slug not in capacity_known:
+            raise ProposalError(
+                f"capacity.{slug}",
+                "not an onboarded endpoint, a priced model or an endpoint this proposal adds"
+                + (" (this proposal removes it)" if slug in removed else ""))
+        validate_capacity_limits(f"capacity.{slug}", limits)
 
     # -- everything validated; apply on a deep copy, in spec order --
     out = copy.deepcopy(snapshot)
