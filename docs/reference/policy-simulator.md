@@ -1106,7 +1106,7 @@ end, and each small application was drawn on its own.
 For a very large export lower `--bootstrap` or cut the export with `--since`. A
 1,000,000-row export at the default 1000 resamples is of the order of ten to twenty minutes
 per pass on this machine; nothing has been timed on a real export (**TO MEASURE**, research
-§20.6.2).
+§20.6.3).
 
 ### 10.10 Limits
 
