@@ -6,8 +6,9 @@ import re
 from datetime import timedelta
 
 from app.eval.capacity import (AVERAGES_NOTE, CAPACITY_CAVEAT, NO_RANGE_NOTE, NO_REMEDY_NOTE,
-                               NOT_MODELLED, PEAK_COLUMN_NOTE, CapacityPlan, capacity_block,
-                               caveat_lines, peak_text, render_capacity_section, too_short_text)
+                               NOT_MODELLED, PEAK_COLUMN_NOTE, VOLUME_NOTE, CapacityPlan,
+                               capacity_block, caveat_lines, peak_text, render_capacity_section,
+                               too_short_text)
 from app.eval.outcomes import _round6
 from tests.eval.sim_fixtures import make_row
 from tests.eval.test_capacity import (CAPACITY_BANNED, LIMITS, QUIET_THEN_BUSY, T0, _poisson,
@@ -120,6 +121,28 @@ def test_a_base_volume_scale_is_stated_once_for_both_arms():
     text = render_capacity_section(_block(volume={"*": 10.0, "app-b": 3.0}))
     assert "Volume scale stated for both arms: *=10, app-b=3." in text
     assert "assumed by the proposal" not in text
+
+
+def test_a_volume_scale_is_said_to_be_a_count_not_an_arrival_model():
+    """Pinned: whenever any volume scale is not 1, the section says once
+    what a scale does and what it does not."""
+    assert VOLUME_NOTE == (
+        "A volume scale counts each recorded request that many times, at its recorded time; "
+        "it does not model how more traffic would arrive.")
+    base = {"volume": {"*": 10.0, "app-b": 3.0}}
+    proposed = {"workload": {"volume_scale": 2}}
+    for text in (render_capacity_section(_block(proposed)),
+                 render_capacity_section(_block(**base)),
+                 render_capacity_section(_block(proposed, **base)),
+                 render_capacity_section(_block({"workload": {"apps": {
+                     "app-a": {"volume_scale": 0.5}}}})),
+                 render_capacity_section(_block(proposed), ranged=True)):
+        assert text.count(VOLUME_NOTE) == 1
+    for text in (render_capacity_section(_block()),
+                 render_capacity_section(_block({"workload": {"volume_scale": 1}})),
+                 render_capacity_section(_block({"workload": {"token_scale": 0.5}})),
+                 render_capacity_section(_block(volume={"*": 1.0}))):
+        assert VOLUME_NOTE not in text
 
 
 def test_c8_a_short_window_prints_the_state_and_no_figure():                           # C8
@@ -358,7 +381,11 @@ def test_c10_no_sentence_ranks_recommends_or_prescribes():                      
              render_capacity_section(_round6(block_for(
                  mixed_traffic(), three_endpoints(), {"endpoints": {"remove": ["local-mid"]}},
                  limits={"local-mid": {"max_concurrency": 2.0}}))),
-             CAPACITY_CAVEAT, NO_REMEDY_NOTE, NO_RANGE_NOTE, PEAK_COLUMN_NOTE, AVERAGES_NOTE]
+             CAPACITY_CAVEAT, NO_REMEDY_NOTE, NO_RANGE_NOTE, PEAK_COLUMN_NOTE, AVERAGES_NOTE,
+             VOLUME_NOTE,
+             render_capacity_section(_moved_to_a_tier_default(
+                 {"e": {"max_concurrency": 1.0}, "new": {"max_concurrency": 1.0}})),
+             render_capacity_section(_asserted(1800))]
     for text in texts:
         assert not [word for word in CAPACITY_BANNED if word in text.lower()], text[:60]
     assert NO_REMEDY_NOTE == ("This section reports load against stated limits and proposes no "

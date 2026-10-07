@@ -889,6 +889,27 @@ def test_c15_an_asserted_latency_too_long_to_place_is_refused(latency):         
     assert "24 hours" in err.value.message
 
 
+@pytest.mark.parametrize("source,where,what", [
+    ("signal", "snapshot.signals.new.latency_ms", "the snapshot's latency signal"),
+    ("observed", "export.latency_ms (rows served by new)", "the median recorded latency"),
+    ("tier_default", "snapshot.settings.routing.signals.tier_latency_ms",
+     "the tier default latency"),
+])
+def test_c15_a_replayed_latency_too_long_to_place_names_where_it_came_from(source, where, what):
+    """A service time of more than 24 hours cannot be placed, whoever
+    supplied it. When it is replay's own latency for the endpoint the error
+    names the real source -- the snapshot's signal, the export's rows or the
+    tier default -- and not `endpoints.<slug>.latency_ms`, a key the
+    operator never wrote."""
+    rows = synthetic([(10 * i + 1, 6.0) for i in range(60)],
+                     proposed=arm_on("new", 1e12, source))
+    with pytest.raises(CapacityError) as err:
+        capacity_block(rows, CapacityPlan())
+    assert err.value.where == where
+    assert what in err.value.message and "24 hours" in err.value.message
+    assert "asserted" not in err.value.message
+
+
 # --- C18, C19: one request is one request; the mean is the time-average ---------------
 
 def arm_on(model: str, latency_ms: float, source: str) -> ArmResult:
@@ -1403,7 +1424,10 @@ def test_c2_the_block_does_not_depend_on_hash_randomisation():                  
 def test_c10_no_key_ranks_recommends_or_prescribes():                                  # C10
     block = block_for(traffic(QUIET_THEN_BUSY), one_endpoint(),
                       {"workload": {"volume_scale": 2}}, limits=LIMITS)
-    assert block["method"] == METHOD == "bucketed_offered_load"
+    # Not the first model's id ("bucketed_offered_load"), which counted a
+    # request's whole service time in its arrival bucket: a block of that
+    # model can never be read as one of this.
+    assert block["method"] == METHOD == "spread_offered_load"
     assert block["not_modelled"] == list(NOT_MODELLED)
     words = keys_of(block) + list(NOT_MODELLED)
     assert not [w for w in words if any(b in w.lower() for b in CAPACITY_BANNED)]

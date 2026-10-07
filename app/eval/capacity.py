@@ -58,7 +58,10 @@ from app.eval.simulate import RowResult, _parse_ts, _utc, replay_tokens
 SCHEMA = "routeforge.capacity-assumptions/v1"
 _SCHEMA_PREFIX = "routeforge.capacity-assumptions/"
 _SCHEMA_MAJOR = "v1"
-METHOD = "bucketed_offered_load"
+#: The model's id. NOT the first model's ("bucketed_offered_load"), which
+#: counted a request's whole service time in the bucket it arrived in: a
+#: block written by that model must never be read as one of this.
+METHOD = "spread_offered_load"
 
 DEFAULT_BUCKET_SECONDS = 60
 MAX_BUCKET_SECONDS = 86_400
@@ -319,13 +322,32 @@ def endpoint_means(results: list[RowResult]) -> dict[str, int]:
     return {slug: (2 * total + n) // (2 * n) for slug, (total, n) in sums.items()}
 
 
-def _placeable_ms(latency: float | None, slug: str, what: str) -> int:
-    if not _finite_number(latency) or latency < 0 or latency > MAX_SERVICE_MS:
-        raise CapacityError(
-            f"endpoints.{slug}.latency_ms",
-            f"{what} latency {latency!r} ms cannot be placed: a service time is a finite "
-            f"number of milliseconds from 0 to {MAX_SERVICE_MS} (24 hours)")
-    return round(latency)
+#: Where replay's own latency for an endpoint came from, by
+#: `ArmResult.latency_source`: `(the location to name, what to call it)`.
+#: Nobody wrote `endpoints.<slug>.latency_ms` for these.
+_REPLAY_LATENCY = {
+    "signal": ("snapshot.signals.{slug}.latency_ms", "the snapshot's latency signal"),
+    "observed": ("export.latency_ms (rows served by {slug})", "the median recorded latency"),
+    "tier_default": ("snapshot.settings.routing.signals.tier_latency_ms",
+                     "the tier default latency"),
+}
+
+
+def _placeable_ms(latency: float | None, slug: str, source: str | None) -> int:
+    """`latency` in whole milliseconds, or a `CapacityError` naming where
+    the value came from when it cannot be placed: the proposal's key for an
+    asserted latency (`source == "proposal"`), else replay's real source."""
+    if _finite_number(latency) and 0 <= latency <= MAX_SERVICE_MS:
+        return round(latency)
+    if source == "proposal":
+        where, what = f"endpoints.{slug}.latency_ms", "the asserted latency"
+    else:
+        where, what = _REPLAY_LATENCY.get(
+            source, ("replay latency for {slug}", "replay's latency for the endpoint"))
+        where = where.format(slug=slug)
+    raise CapacityError(
+        where, f"{what} for {slug}, {latency!r} ms, cannot be placed: a service time is a "
+               f"finite number of milliseconds from 0 to {MAX_SERVICE_MS} (24 hours)")
 
 
 def service_time(r: RowResult, arm: str, means: dict[str, int]) -> tuple[int, str]:
@@ -344,12 +366,12 @@ def service_time(r: RowResult, arm: str, means: dict[str, int]) -> tuple[int, st
       a service time: `_arm_block` computes no concurrency figure from it."""
     result = getattr(r, arm)
     if result.latency_source == "proposal":
-        return _placeable_ms(result.latency_ms, result.model, "the asserted"), "asserted"
+        return _placeable_ms(result.latency_ms, result.model, "proposal"), "asserted"
     if served_alone_by(r.row) == result.model:
         return recorded_ms(r.row), "recorded"
     if result.model in means:
         return means[result.model], "endpoint_mean"
-    return _placeable_ms(result.latency_ms, result.model, "the replayed"), "replay"
+    return _placeable_ms(result.latency_ms, result.model, result.latency_source), "replay"
 
 
 # --- demand (spec §5) ---------------------------------------------------------------
@@ -724,6 +746,12 @@ PEAK_COLUMN_NOTE = (
     "every other column: a lower figure does not make a scenario the one to choose."
 )
 
+#: Printed once in a capacity section whenever any volume scale is not 1.
+VOLUME_NOTE = (
+    "A volume scale counts each recorded request that many times, at its recorded time; it "
+    "does not model how more traffic would arrive."
+)
+
 #: Says which bucket set each of the two averages is over (spec §6.2).
 AVERAGES_NOTE = (
     "`avg (window)` is over every bucket of the window, empty ones included: the "
@@ -979,10 +1007,22 @@ def scenario_lines(block: dict, *, depth: int) -> list[str]:
     return lines
 
 
-def intro_lines(block: dict, *, ranged: bool) -> list[str]:
+def scales_volume(block: dict) -> bool:
+    """True when the block was computed at any volume scale other than 1."""
+    scale = block["volume_scale"]
+    return any(value != 1 for stated in (scale["base"], scale["proposal"])
+               for value in stated.values())
+
+
+def intro_lines(block: dict, *, ranged: bool, volume: bool | None = None) -> list[str]:
     """The top of a capacity section: the caveat, the no-remedy sentence,
-    the shared window, and -- with `--uncertainty` -- why there is no range."""
+    the shared window, what a volume scale is when one is in use, and --
+    with `--uncertainty` -- why there is no range. `volume` says whether any
+    block the section covers scales volume; by default, whether `block`
+    does (a comparison passes it for all its scenarios)."""
     lines = [*caveat_lines(), "", NO_REMEDY_NOTE, "", *window_lines(block)]
+    if scales_volume(block) if volume is None else volume:
+        lines += [VOLUME_NOTE, ""]
     if ranged:
         lines += [NO_RANGE_NOTE, ""]
     return lines

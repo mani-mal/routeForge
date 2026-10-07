@@ -32,7 +32,7 @@ from datetime import datetime
 
 from app.config.schema import Settings
 from app.eval.capacity import (PEAK_COLUMN_NOTE, CapacityError, CapacityPlan, capacity_block,
-                               intro_lines, peak_text, scenario_lines)
+                               intro_lines, peak_text, scales_volume, scenario_lines)
 from app.eval.outcomes import _fmt, _round6
 from app.eval.proposal import (SCHEMA as PROPOSAL_SCHEMA, ProposalError, _validate_keys,
                                _validate_schema, apply_proposal, assumptions_block,
@@ -272,6 +272,11 @@ async def compare(records: list[dict], snapshot: dict, scenarios_doc: dict, *,
                 try:
                     block = capacity_block(results, capacity, item.proposal, excluded=excluded)
                 except CapacityError as exc:
+                    if not exc.where.startswith("endpoints."):
+                        # Not something the scenario wrote (the snapshot's
+                        # signal, the export, a tier default): no scenario
+                        # is to be named for it.
+                        raise
                     # Something this scenario asserts cannot be placed (a
                     # latency above 24 hours): name the scenario, as a bad
                     # proposal is named.
@@ -571,7 +576,10 @@ def render_comparison(doc: dict) -> str:
         # Every scenario replays the same rows against the same base plan,
         # so the window and the current arm's peak are the first one's.
         shared = capacity["scenarios"][0]
-        lines += ["## Capacity", "", *intro_lines(shared, ranged=bool(uncertainty)),
+        lines += ["## Capacity", "",
+                  *intro_lines(shared, ranged=bool(uncertainty),
+                               volume=any(scales_volume(entry)
+                                          for entry in capacity["scenarios"])),
                   f"Current arm peak load (the same for every scenario): "
                   f"{peak_text(shared, 'current')}.", ""]
 

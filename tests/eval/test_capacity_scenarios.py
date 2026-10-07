@@ -7,13 +7,13 @@ import json
 
 import pytest
 
-from app.eval.capacity import (NO_RANGE_NOTE, NO_REMEDY_NOTE, PEAK_COLUMN_NOTE, CapacityError,
-                               CapacityPlan, capacity_block, caveat_lines)
+from app.eval.capacity import (NO_RANGE_NOTE, NO_REMEDY_NOTE, PEAK_COLUMN_NOTE, VOLUME_NOTE,
+                               CapacityError, CapacityPlan, capacity_block, caveat_lines)
 from app.eval.outcomes import _round6
 from app.eval.scenarios import (NO_RANKING_NOTE, SCHEMA, ScenarioError, compare,
                                 comparison_doc, render_comparison)
 from app.eval.uncertainty import UncertaintyPlan
-from tests.eval.sim_fixtures import BASE_SETTINGS
+from tests.eval.sim_fixtures import BASE_SETTINGS, app_entry, make_snapshot
 from tests.eval.test_capacity import (CAPACITY_BANNED, LIMITS, QUIET_THEN_BUSY, keys_of,
                                       mixed_traffic, one_endpoint, replay, three_endpoints,
                                       traffic)
@@ -188,6 +188,10 @@ def test_the_report_has_one_capacity_section_and_one_per_scenario():
             "over 100% in 33.3% of 30 buckets (local-cheap, output_tokens_per_minute, "
             "60 s buckets).") in top
     second = text[text.index("## Scenario: second-box"):]
+    # The volume sentence is said once, with the shared window, because one
+    # scenario scales volume.
+    assert text.count(VOLUME_NOTE) == 1 and VOLUME_NOTE in top.split("## Scenario:")[0]
+    assert VOLUME_NOTE not in render_comparison(_doc(scenarios=(_TRIO[0], _TRIO[2])))
     assert "#### local-cheap" in second
     assert "| max_concurrency | proposed | 2 | 60.0% |" in second
     assert "| max_concurrency | current | 1 | 120.0% |" in second
@@ -266,6 +270,22 @@ def test_a_bad_capacity_in_a_scenario_names_the_scenario(body):
     with pytest.raises(ScenarioError) as err:
         _doc(scenarios=(("no-change", {}), ("bad", body)))
     assert err.value.where.startswith("scenarios[1](bad).proposal.capacity.local-")
+
+
+def test_c15_a_snapshot_signal_too_long_to_place_is_not_blamed_on_a_scenario():        # C15
+    """Through the real `compare`: the snapshot carries a latency signal of
+    1e12 ms for `local-mid`, the only endpoint `app-b` may use. No scenario
+    asserted it, so the error names the snapshot key and no scenario."""
+    signal = {"local-mid": {"latency_ms": 1e12, "latency_n": 10_000, "availability": 1.0,
+                            "availability_n": 10_000}}
+    snapshot = make_snapshot(apps=[app_entry("app-a"),
+                                   app_entry("app-b", allowed_models=["local-mid"])],
+                             signals=signal)
+    with pytest.raises(CapacityError) as err:
+        _doc(mixed_traffic(), snapshot, scenarios=(("no-change", {}),),
+             capacity=CapacityPlan(limits={"local-mid": {"max_concurrency": 2.0}}))
+    assert err.value.where == "snapshot.signals.local-mid.latency_ms"
+    assert "the snapshot's latency signal" in err.value.message
 
 
 def test_c15_a_latency_too_long_to_place_names_the_scenario():                         # C15
