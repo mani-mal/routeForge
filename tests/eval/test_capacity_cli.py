@@ -184,7 +184,8 @@ def test_c14_the_cli_reports_the_hand_computed_utilisation(tmp_path):           
     assert sim["capacity"]["peak"]["proposed"] == {
         "endpoint": "local-cheap", "limit": "output_tokens_per_minute", "utilisation": 4.8,
         "bucket": "2026-09-20T12:20:00+00:00", "mean_window": 2.133333,
-        "buckets_over_share": 0.333333, "bucket_seconds": 60, "buckets": 30}
+        "buckets_over_share": 0.333333, "bucket_seconds": 60, "buckets": 30,
+        "service_after_window_share": 0.0}
     # Volume changed nothing else: no route moved and no cost figure doubled.
     assert sim["totals"]["route_changed"] == 0 and sim["totals"]["cost_usd"]["delta"] == 0.0
     assert sim["assumptions"]["token_scale"] == {} and "volume_scale" not in sim["assumptions"]
@@ -209,7 +210,8 @@ def test_a_capacity_stated_only_in_the_proposal_is_enough(tmp_path):
     assert sim["capacity"]["peak"] == {"current": None, "proposed": {
         "endpoint": "local-cheap", "limit": "max_concurrency", "utilisation": 0.6,
         "bucket": "2026-09-20T12:20:00+00:00", "mean_window": 0.266667,
-        "buckets_over_share": 0.0, "bucket_seconds": 60, "buckets": 30}}
+        "buckets_over_share": 0.0, "bucket_seconds": 60, "buckets": 30,
+        "service_after_window_share": 0.0}}
 
 
 def test_since_cuts_the_demand_with_the_rows(tmp_path):

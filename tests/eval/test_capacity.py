@@ -359,7 +359,7 @@ def test_c14_utilisation_matches_the_closed_form():                             
         "endpoint": "local-cheap", "limit": "output_tokens_per_minute",
         "utilisation": pytest.approx(2.4), "bucket": "2026-09-20T12:20:00+00:00",
         "mean_window": pytest.approx(1.0666667), "buckets_over_share": pytest.approx(1 / 3),
-        "bucket_seconds": 60, "buckets": 30}
+        "bucket_seconds": 60, "buckets": 30, "service_after_window_share": 0.0}
     assert block["endpoints"]["local-cheap"]["proposed"] == arm          # nothing proposed
 
 
@@ -466,6 +466,63 @@ def test_c3_service_time_after_the_window_is_kept_and_reported():               
     assert block["endpoints"]["local-cheap"]["current"]["service_ms_after_window"] == 0.0
     # No bucket is ever fuller than the requests in service in it.
     assert proposed["demand"]["concurrency"]["peak"] <= 24
+
+
+#: 30 minutes, one request every 10 s, each recorded at 6 s on `e`.
+_STEADY_SIX_SECONDS = [(10 * i + 1, 6.0) for i in range(180)]
+
+
+@pytest.mark.parametrize("seconds,share", [(6, 0.0), (60, 156 / 10_800), (600, 17_760 / 108_000),
+                                           (1800, 161_280 / 324_000),
+                                           (7200, 1_133_280 / 1_296_000)])
+def test_service_time_after_the_window_is_a_share_of_the_arms_service_time(seconds, share):
+    """The window ends where the last RECORDED request ended, so an asserted
+    service time longer than the recorded one runs past it, and that part is
+    in no bucket: the proposed arm's average (and, before the load has built
+    up, its peak) is understated. The block says by how much, as a share.
+
+    By hand: request i (0..179) arrives at 10i + 1 s and, at S seconds,
+    would end at 10i + 1 + S; the window ends at 1800 s.
+
+        S = 60:    requests 174..179 run 1, 11, ..., 51 s past it
+                   = 156 s of 180 x 60 = 10,800 s              ->  1.44%
+        S = 600:   requests 120..179 run 10i - 1199 s past it
+                   = 17,760 s of 108,000 s                     -> 16.44%
+        S = 1800:  every request runs 10i + 1 s past it
+                   = 161,280 s of 324,000 s                    -> 49.78%
+        S = 7200:  every request runs 10i + 5401 s past it
+                   = 1,133,280 s of 1,296,000 s                -> 87.44%
+
+    Beyond the window's length the figures stop responding to the service
+    time at all."""
+    rows = synthetic(_STEADY_SIX_SECONDS, proposed=arm_on("e", seconds * 1000.0, "proposal"))
+    block = capacity_block(rows, CapacityPlan(limits={"e": {"max_concurrency": 4.0}}))
+    assert block["window"]["buckets"] == 30
+    current, proposed = block["endpoints"]["e"]["current"], block["endpoints"]["e"]["proposed"]
+    assert (current["service_after_window_share"], current["service_ms_after_window"]) == (
+        0.0, 0.0)
+    assert proposed["service_after_window_share"] == pytest.approx(share, rel=1e-12)
+    in_window = proposed["demand"]["concurrency"]["mean_window"] * 30 * 60_000
+    total = 180 * seconds * 1000
+    assert in_window + proposed["service_ms_after_window"] == pytest.approx(total)
+    assert proposed["service_after_window_share"] == pytest.approx(
+        proposed["service_ms_after_window"] / total)
+    if seconds == 600:
+        assert proposed["service_ms_after_window"] == 17_760_000.0
+    # The headline carries its own endpoint's share.
+    assert block["peak"]["proposed"]["service_after_window_share"] == (
+        proposed["service_after_window_share"])
+    assert block["peak"]["current"]["service_after_window_share"] == 0.0
+
+
+def test_an_endpoint_with_no_service_time_has_no_share_after_the_window():
+    """No row, or only a tier default: there is no service time to take a
+    share of."""
+    rows = synthetic(_STEADY_SIX_SECONDS, proposed=arm_on("new", 200.0, "tier_default"))
+    block = capacity_block(rows, CapacityPlan(limits={"e": {"max_concurrency": 4.0}}))
+    assert block["endpoints"]["e"]["proposed"]["service_after_window_share"] is None
+    assert block["endpoints"]["new"]["proposed"]["service_after_window_share"] is None
+    assert block["endpoints"]["new"]["current"]["service_after_window_share"] is None
 
 
 def test_c7_a_rejected_row_adds_no_demand():                                           # C7
@@ -1138,7 +1195,8 @@ def test_an_endpoint_with_a_limit_and_no_rows_is_shown_at_zero():
         "requests_over_share": None}
     assert block["peak"]["current"] == {
         "endpoint": "local-big", "limit": "max_concurrency", "utilisation": 0.0, "bucket": None,
-        "mean_window": 0.0, "buckets_over_share": 0.0, "bucket_seconds": 60, "buckets": 12}
+        "mean_window": 0.0, "buckets_over_share": 0.0, "bucket_seconds": 60, "buckets": 12,
+        "service_after_window_share": None}
 
 
 def test_an_endpoint_with_demand_and_no_limit_is_shown_without_a_utilisation():
@@ -1355,13 +1413,14 @@ def test_c10_no_key_ranks_recommends_or_prescribes():                           
                           "peak", "concurrency_not_computed"}
     assert set(block["endpoints"]["local-cheap"]["current"]) == {
         "requests", "active_buckets", "service_time_sources", "service_time_ms", "replay_share",
-        "replay_source", "service_ms_after_window", "estimated_token_rows", "demand", "limits"}
+        "replay_source", "service_ms_after_window", "service_after_window_share",
+        "estimated_token_rows", "demand", "limits"}
     assert set(block["endpoints"]["local-cheap"]["current"]["limits"]["max_concurrency"]) == {
         "limit", "not_computed", "peak", "peak_bucket", "mean_window", "mean_active",
         "buckets_over", "buckets_over_share", "requests_over_share"}
     assert set(block["peak"]["current"]) == {
         "endpoint", "limit", "utilisation", "bucket", "mean_window", "buckets_over_share",
-        "bucket_seconds", "buckets"}
+        "bucket_seconds", "buckets", "service_after_window_share"}
 
 
 def _peaks_without_an_average(node, path: str = "") -> list[str]:

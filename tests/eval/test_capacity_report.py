@@ -260,15 +260,71 @@ def test_notes_for_rows_that_are_not_in_the_demand():
 
 
 def test_service_time_past_the_window_is_said():
+    """As a share of the arm's service time and in seconds -- never a raw
+    millisecond count -- and with what it does to the figures."""
     body = {"endpoints": {"update": {"local-cheap": {"latency_ms": 600_000}}}}
     results, _ = replay(traffic([2] * 12), one_endpoint(), body)
     block = _round6(capacity_block(results, CapacityPlan(), body))
-    after = block["endpoints"]["local-cheap"]["proposed"]["service_ms_after_window"]
+    proposed = block["endpoints"]["local-cheap"]["proposed"]
+    # Two requests a minute, at seconds 5 and 9, for 12 minutes; the window
+    # ends at 720 s. From minute 2 on a pair runs 120m - 226 s past it:
+    # 5,540 s of 24 x 600 = 14,400 s.
+    assert proposed["service_ms_after_window"] == 5_540_000.0
+    assert proposed["service_after_window_share"] == 0.384722
     text = render_capacity_section(block)
-    assert after > 0 and text.count("falls after the window's last bucket") == 1
-    assert (f"**Note:** {after:.6g} ms of the proposed arm's service time on this endpoint "
-            "falls after the window's last bucket and is in no bucket.") in text
+    assert text.count("falls after the window's last bucket") == 1
+    assert ("**Note:** 38.5% of the proposed arm's service time on this endpoint (5,540 s) "
+            "falls after the window's last bucket and is in no bucket, so this arm's average "
+            "on this endpoint is understated and its peak may be.") in text
     assert "(24 asserted)" in text and "(24 recorded)" in text
+    assert " ms of the proposed arm" not in text
+
+
+def _asserted(seconds: float, limits: dict | None = None) -> dict:
+    """30 minutes, a request every 10 s recorded at 6 s; the proposal
+    asserts `seconds` for the endpoint."""
+    rows = synthetic([(10 * i + 1, 6.0) for i in range(180)],
+                     proposed=arm_on("e", seconds * 1000.0, "proposal"))
+    return _round6(capacity_block(rows, CapacityPlan(
+        limits={"e": {"max_concurrency": 4.0}} if limits is None else limits)))
+
+
+def test_a_material_share_after_the_window_is_in_the_headline():
+    """A tenth or more of an arm's service time past the window means its
+    concurrency is understated by about that much: the headline and the
+    comparison cell (both are `peak_text`) say so, for every endpoint with a
+    stated `max_concurrency` -- an understated figure can lose the maximum
+    to another limit, and must not leave it silently."""
+    block = _asserted(600)
+    assert peak_text(block, "proposed").endswith(
+        "(e, max_concurrency, 60 s buckets); 16.4% of service time on e falls after the window")
+    assert "falls after the window" not in peak_text(block, "current")
+    assert "falls after the window" not in peak_text(_asserted(60), "proposed")
+    # 1.4% is a note under the endpoint, not a clause of the headline.
+    assert ("**Note:** 1.4% of the proposed arm's service time on this endpoint (156 s) falls "
+            "after the window's last bucket") in render_capacity_section(_asserted(60))
+    # The headline is another limit; the understated concurrency is still named.
+    other = _asserted(1800, {"e": {"max_concurrency": 4000.0, "requests_per_minute": 6.0}})
+    assert other["peak"]["proposed"]["limit"] == "requests_per_minute"
+    assert peak_text(other, "proposed").endswith(
+        "(e, requests_per_minute, 60 s buckets); 49.8% of service time on e falls after the "
+        "window")
+    # With no concurrency limit stated nothing printed rests on service time.
+    rate_only = _asserted(1800, {"e": {"requests_per_minute": 6.0}})
+    assert "falls after the window" not in peak_text(rate_only, "proposed")
+
+
+def test_no_figure_is_printed_as_a_raw_millisecond_count():
+    """A day of asserted service time on 180 requests is 1.5e10 ms. The
+    report prints seconds and a share."""
+    text = render_capacity_section(_asserted(86_400))
+    assert not re.search(r"\de[+-]\d", text)
+    assert "of the proposed arm's service time on this endpoint (15,3" in text
+    tiny = render_capacity_section(_round6(block_for(
+        traffic(QUIET_THEN_BUSY), one_endpoint(),
+        {"endpoints": {"update": {"local-cheap": {"latency_ms": 12000}}}})))
+    assert ("**Note:** 0.1% of the proposed arm's service time on this endpoint (1 s) falls "
+            "after the window's last bucket") in tiny
 
 
 def test_a_response_longer_than_a_bucket_gets_no_warning():

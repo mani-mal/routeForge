@@ -542,6 +542,11 @@ def _arm_block(load: EndpointLoad | None, limits: dict[str, float],
                 math.fsum(scaled[index][REQUESTS] for index in over) / whole[REQUESTS]
                 if whole[REQUESTS] else None),
         }
+    # Service time past the window's last bucket is in no bucket (`arm_load`).
+    # As a share of everything the arm placed, it is how much of this
+    # endpoint's concurrency the window does not show.
+    after = _scaled_sum(load.after_window, volume)
+    placed = whole[SERVICE_MS] + after
     return {
         "requests": whole[REQUESTS],
         "active_buckets": active,
@@ -550,7 +555,9 @@ def _arm_block(load: EndpointLoad | None, limits: dict[str, float],
                             "max": load.service_max_ms if load.rows else None},
         "replay_share": load.replay_ms / load.service_ms if load.service_ms else None,
         "replay_source": min(load.replay_sources) if load.replay_sources else None,
-        "service_ms_after_window": _scaled_sum(load.after_window, volume),
+        "service_ms_after_window": after,
+        "service_after_window_share": (None if no_service_time or not placed
+                                       else after / placed),
         "estimated_token_rows": load.estimated_token_rows,
         "demand": demand,
         "limits": stated,
@@ -561,10 +568,11 @@ def _peak(endpoints: dict, arm: str, *, bucket_seconds: int, window_buckets: int
     """The most loaded STATED limit of `arm`: the largest peak utilisation,
     the first in (endpoint, `CAPACITY_LIMITS`) order on a tie. A limit whose
     utilisation is `not_computed` is never it (`_not_computed` lists those).
-    None when the arm has no stated limit with a figure. It carries its own context -- the
-    time-average and the share of the window over the limit, and the bucket
-    length and count they were computed over -- because a peak is a maximum
-    over buckets and means little without them."""
+    None when the arm has no stated limit with a figure. It carries its own
+    context -- the time-average and the share of the window over the limit,
+    the bucket length and count they were computed over, and the share of
+    that endpoint's service time the window cut off -- because a peak is a
+    maximum over buckets and means little without them."""
     top = None
     for slug in sorted(endpoints):
         for limit, entry in endpoints[slug][arm]["limits"].items():
@@ -574,7 +582,9 @@ def _peak(endpoints: dict, arm: str, *, bucket_seconds: int, window_buckets: int
                 top = {"endpoint": slug, "limit": limit, "utilisation": entry["peak"],
                        "bucket": entry["peak_bucket"], "mean_window": entry["mean_window"],
                        "buckets_over_share": entry["buckets_over_share"],
-                       "bucket_seconds": bucket_seconds, "buckets": window_buckets}
+                       "bucket_seconds": bucket_seconds, "buckets": window_buckets,
+                       "service_after_window_share": (
+                           endpoints[slug][arm]["service_after_window_share"])}
     return top
 
 
@@ -723,6 +733,9 @@ AVERAGES_NOTE = (
 #: A share of an endpoint's service time from replay's latency for the
 #: endpoint, rather than from recorded requests, that gets a sentence.
 MATERIAL_REPLAY_SHARE = 0.1
+#: A share of an arm's service time on an endpoint falling after the window
+#: that is said in the headline, not only in the endpoint's own note.
+MATERIAL_AFTER_WINDOW_SHARE = 0.1
 
 
 def caveat_lines() -> list[str]:
@@ -734,7 +747,40 @@ def _pct(value: float | None) -> str:
 
 
 def _num(value: float | None) -> str:
-    return "n/a" if value is None else f"{value:.6g}"
+    """Six significant figures, and never an exponent: `8.64e+07 ms` is not
+    something to read off a report."""
+    if value is None:
+        return "n/a"
+    text = f"{value:.6g}"
+    if "e" not in text:
+        return text
+    return f"{value:,.0f}" if abs(value) >= 1 else f"{value:.12f}".rstrip("0")
+
+
+def _share(value: float) -> str:
+    """A share that is known to be above zero: never printed as `0.0%`."""
+    return "less than 0.1%" if value < 0.0005 else _pct(value)
+
+
+def _seconds(milliseconds: float) -> str:
+    """Milliseconds as seconds, for a sentence: `17,760 s`, `0.4 s`. Never an
+    exponent, however long."""
+    return f"{milliseconds / 1000:,.1f}".removesuffix(".0") + " s"
+
+
+def _after_window(endpoints: dict, arm: str) -> list[tuple[str, float]]:
+    """`(endpoint, share)` for every endpoint whose stated `max_concurrency`
+    is understated in `arm` by a material share of service time falling
+    after the window, sorted by endpoint."""
+    late = []
+    for slug in sorted(endpoints):
+        figures = endpoints[slug][arm]
+        stated = figures["limits"].get("max_concurrency")
+        share = figures["service_after_window_share"]
+        if (stated is not None and not stated["not_computed"] and share is not None
+                and share >= MATERIAL_AFTER_WINDOW_SHARE):
+            late.append((slug, share))
+    return late
 
 
 def _service_text(arm: dict) -> str:
@@ -762,10 +808,16 @@ def peak_text(block: dict, arm: str) -> str:
     `not stated`, or the window-too-short state. Never a peak without the
     average over the window beside it (invariant C20).
 
-    An endpoint whose stated `max_concurrency` could not be computed is
-    named after it -- `...; concurrency not computed for new` -- because the
-    headline is a maximum, and a figure left out of a maximum must not
-    leave silently. With nothing else stated the cell is `n/a; ...`."""
+    The headline is a maximum over endpoints and limits, and a figure that
+    is missing from a maximum, or understated in it, must not leave it
+    silently. So two things are named after it, whichever limit it is on:
+
+    - `...; 16.4% of service time on e falls after the window` for an
+      endpoint whose stated `max_concurrency` is understated by a material
+      share of service time the window cut off;
+    - `...; concurrency not computed for new` for an endpoint whose stated
+      `max_concurrency` could not be computed. With nothing else stated the
+      cell is `n/a; ...`."""
     if block["window_too_short"]:
         return too_short_text(block)
     peak = block["peak"][arm]
@@ -773,9 +825,11 @@ def peak_text(block: dict, arm: str) -> str:
                        for slug in block["concurrency_not_computed"][arm])
     if peak is None:
         return "n/a" + left_out if left_out else "not stated"
+    cut_off = "".join(f"; {_pct(share)} of service time on {slug} falls after the window"
+                      for slug, share in _after_window(block["endpoints"], arm))
     return (f"peak {_pct(peak['utilisation'])} / avg {_pct(peak['mean_window'])} "
             f"({peak['endpoint']}, {peak['limit']}, {peak['bucket_seconds']} s buckets)"
-            + left_out)
+            + cut_off + left_out)
 
 
 def _scale_text(scale: dict[str, float]) -> str:
@@ -857,9 +911,11 @@ def _arm_notes(arm: str, figures: dict) -> list[str]:
                   f"replay's latency for the endpoint ({figures['replay_source']}), not a "
                   "recorded request's: no simulated row was served by it alone.", ""]
     if figures["service_ms_after_window"] and not no_service_time:
-        lines += [f"**Note:** {_num(figures['service_ms_after_window'])} ms of the {arm} arm's "
-                  "service time on this endpoint falls after the window's last bucket and is "
-                  "in no bucket.", ""]
+        lines += [f"**Note:** {_share(figures['service_after_window_share'])} of the {arm} "
+                  "arm's service time on this endpoint "
+                  f"({_seconds(figures['service_ms_after_window'])}) falls after the window's "
+                  "last bucket and is in no bucket, so this arm's average on this endpoint is "
+                  "understated and its peak may be.", ""]
     if figures["estimated_token_rows"]:
         lines += [f"**Note:** {figures['estimated_token_rows']} row(s) routed here in the {arm} "
                   "arm have no backend token count; their token demand is RouteForge's own "
