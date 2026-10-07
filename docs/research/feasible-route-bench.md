@@ -3533,6 +3533,43 @@ None of the following has been run. Each is listed with what it needs.
 - **Service-time sources on a real export**: the share of rows, and of service time, under
   `recorded`, `endpoint_mean` and `replay` for a realistic proposal. **TO MEASURE.**
 
+#### 21.5.4a First run on recorded rows — DGX lab, 2026-10-07 (a plumbing check)
+
+**Setup.** The lab deployment at api `0.29.0` (`main` through PR #90): application
+`paper-test`, endpoint `qwen3-coder-next`, the 96-row export of §20.6.2 (four identical passes
+of 24 requests, each pass about 30 s, spread over 5 h 23 min), cut with `--since
+2026-10-06T20:07:37Z`. Limits stated for the run — invented for it, not a property of the
+endpoint: `max_concurrency: 1`, `requests_per_minute: 60`, `tokens_per_minute: 40000`. Four
+scenarios: no-op, volume ×10, raise the per-request cap ($0.05 → $0.5), and both. Artifacts:
+`docs/research/results/p3c4-dgx-lab-2026-10-07/` (`comparison_id b803d9e233314a6a`, 5 s
+buckets).
+
+**Read this first.** Four bursts of test requests are not a workload. The run shows the
+states and the headline working on real records; no figure below says anything about the
+endpoint's capacity.
+
+| measurement | value |
+|---|---|
+| default 60 s buckets | `window too short (3 of the 10 buckets needed)` in every scenario — no figure printed |
+| 10 s buckets | `window too short (9 of the 10 buckets needed)` |
+| 5 s buckets | 16 buckets with an arrival in a window of 3,880; figures computed |
+| service time source, current arm | 68 of 68 routed rows `recorded` (mean 163 ms, longest 864 ms); 0 mean, 0 replay; 0% after the window |
+| `max_concurrency: 1`, current arm | peak 45.0%, window average 0.06%, 0 buckets over |
+| headline, current arm (the largest peak is on `tokens_per_minute`) | `peak 331.7% / avg 0.4%, over 100% in 0.2% of 3880 buckets (qwen3-coder-next, tokens_per_minute, 5 s buckets)` |
+| `volume-x10`, proposed | `peak 3317.4% / avg 4.4%, over 100% in 0.2% of 3880 buckets` — exactly 10× the peak and the average; buckets over go from 7 to 9 of 3,880 (the same bursts, taller) |
+| `raise-budget` (28 requests newly served), proposed | `peak 1272.5% / avg 2.6%, over 100% in 0.4% of 3880 buckets` — the rescued requests are the large ones |
+| `raise-budget-x10`, proposed | `peak 12724.8% / avg 25.7%, over 100% in 0.4% of 3880 buckets` |
+
+What the run does show, on real rows: (1) the short-window state fires where it should — at
+the default bucket this export supports no capacity figure at all; (2) the three-part headline
+is what keeps a burst from being misread: a "peak 332%" that sits beside a 0.4% average and
+0.2% of buckets over is visibly a few seconds of a test burst, which the peak alone would not
+tell a reader; (3) a per-minute limit evaluated on 5-second buckets scales a burst up to a
+per-minute rate — the bucket length is in the headline for that reason; (4) the interaction
+with the policy simulator is real: raising the budget cap changes the token demand on the
+endpoint (it serves the large requests it used to reject), which is the point of computing
+capacity from the replayed arm rather than from the recorded one.
+
 #### 21.5.5 The final review: a correct engine that could still mislead (synthetic)
 
 A second independent review, of the whole branch at commit `1928427`, compared the revised
