@@ -1,0 +1,59 @@
+# Outage scenario for B48/B45 (docs/superpowers/specs/2026-09-22-feasible-bench-
+# failure-injection-design.md §7). Use with eval/suites/outage.jsonl (30 public
+# FAQ cases, residency any) and eval/variants/b45.yaml:
+#
+#   uv run python scripts/feasible_bench.py --suite eval/suites/outage.jsonl \
+#       --endpoints eval/endpoints/outage-sim.yaml \
+#       --variants eval/variants/b45.yaml --seed 0 --seconds-per-case 30
+#
+# The question: during an outage of the endpoint the router prefers, does the
+# ONLINE router (which learns only from its own attempts) keep sending first
+# attempts to the dead endpoint -- paying a wasted attempt and its failure
+# latency each case -- and at which availability weight does it stop? And,
+# after the outage ends, how long does it take to go back?
+#
+# Design (two same-tier on-prem endpoints, both always eligible):
+#   fast-cheap  price 0.10/1M, published quality 0.90, ~300 ms. DOWN for case
+#               indices 10-19 inclusive (suite order, 0-based): every call
+#               fails connection-refused-shaped (no status code), which
+#               production's counts_as_endpoint_unhealth counts. A failed call
+#               costs 1000 ms (a connect timeout). Healthy, it is the router's
+#               first pick: the cost term is set-max normalised, so fast-cheap
+#               scores cost_norm 0.25 against steady's 1.0 -- a 0.45 lead at
+#               the shipped cost weight 0.6 -- plus a small measured-latency
+#               lead once measured.
+#   steady      price 0.40/1M, the same published quality, ~600 ms, and a
+#               small independent flake rate (error_rate 0.05, HTTP 503).
+#
+# Published quality is equal on purpose, so cost/latency pick the healthy
+# endpoint and availability is the only term that can move the choice
+# during the outage. Nothing here is tuned toward a particular B45 answer:
+# the outage span and prices were fixed before the first run.
+endpoints:
+  - slug: fast-cheap
+    provider: onprem
+    tier: cheap
+    price: {input: 0.10, output: 0.10}
+    quality: 0.90
+    region: us
+    prompt_retention: none
+    accepts_raw_sensitive: true
+    simulated:
+      quality: {faq: 0.97, default: 0.95}
+      latency_ms: {mean: 300, jitter: 30}
+      outages:
+        - {from: 10, to: 19}
+      failure_latency_ms: 1000
+
+  - slug: steady
+    provider: onprem
+    tier: cheap
+    price: {input: 0.40, output: 0.40}
+    quality: 0.90
+    region: us
+    prompt_retention: none
+    accepts_raw_sensitive: true
+    simulated:
+      quality: {faq: 0.95, default: 0.93}
+      latency_ms: {mean: 600, jitter: 60}
+      error_rate: 0.05

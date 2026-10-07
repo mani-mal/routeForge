@@ -1,0 +1,534 @@
+{
+  "cases": [
+    {
+      "calls": 0,
+      "case_id": "onprem-empty-001",
+      "eligible_post": [],
+      "eligible_pre": [],
+      "empty_probe_error": "NoEligibleCandidate",
+      "expect_empty": true,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "cloud-a",
+          "residency"
+        ],
+        [
+          "cloud-b",
+          "residency"
+        ]
+      ],
+      "rejected_ok": true
+    },
+    {
+      "calls": 0,
+      "case_id": "onprem-empty-002",
+      "eligible_post": [],
+      "eligible_pre": [],
+      "empty_probe_error": "NoEligibleCandidate",
+      "expect_empty": true,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "cloud-a",
+          "residency"
+        ],
+        [
+          "cloud-b",
+          "residency"
+        ]
+      ],
+      "rejected_ok": true
+    },
+    {
+      "calls": 0,
+      "case_id": "onprem-empty-003",
+      "eligible_post": [],
+      "eligible_pre": [],
+      "empty_probe_error": "NoEligibleCandidate",
+      "expect_empty": true,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "cloud-a",
+          "residency"
+        ],
+        [
+          "cloud-b",
+          "residency"
+        ]
+      ],
+      "rejected_ok": true
+    },
+    {
+      "calls": 0,
+      "case_id": "onprem-empty-004",
+      "eligible_post": [],
+      "eligible_pre": [],
+      "empty_probe_error": "NoEligibleCandidate",
+      "expect_empty": true,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "cloud-a",
+          "residency"
+        ],
+        [
+          "cloud-b",
+          "residency"
+        ]
+      ],
+      "rejected_ok": true
+    }
+  ],
+  "exit_code": 0,
+  "groups": {
+    "best_published_quality": {
+      "placement": {
+        "onprem_only": {
+          "cost_regret": null,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": null,
+          "floor_miss_rate": null,
+          "infeasible_at_floor": 0,
+          "latency_regret": null,
+          "mean_chosen_cost": null,
+          "n_cases": 4,
+          "pass_rate": null,
+          "quality_regret": null,
+          "violation_rate": 0.0,
+          "wasted_attempts": null
+        }
+      },
+      "protection": {
+        "enforced": {
+          "cost_regret": null,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": null,
+          "floor_miss_rate": null,
+          "infeasible_at_floor": 0,
+          "latency_regret": null,
+          "mean_chosen_cost": null,
+          "n_cases": 4,
+          "pass_rate": null,
+          "quality_regret": null,
+          "violation_rate": 0.0,
+          "wasted_attempts": null
+        }
+      },
+      "workload": {
+        "onprem_required": {
+          "cost_regret": null,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": null,
+          "floor_miss_rate": null,
+          "infeasible_at_floor": 0,
+          "latency_regret": null,
+          "mean_chosen_cost": null,
+          "n_cases": 4,
+          "pass_rate": null,
+          "quality_regret": null,
+          "violation_rate": 0.0,
+          "wasted_attempts": null
+        }
+      }
+    },
+    "cheapest": {
+      "placement": {
+        "onprem_only": {
+          "cost_regret": null,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": null,
+          "floor_miss_rate": null,
+          "infeasible_at_floor": 0,
+          "latency_regret": null,
+          "mean_chosen_cost": null,
+          "n_cases": 4,
+          "pass_rate": null,
+          "quality_regret": null,
+          "violation_rate": 0.0,
+          "wasted_attempts": null
+        }
+      },
+      "protection": {
+        "enforced": {
+          "cost_regret": null,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": null,
+          "floor_miss_rate": null,
+          "infeasible_at_floor": 0,
+          "latency_regret": null,
+          "mean_chosen_cost": null,
+          "n_cases": 4,
+          "pass_rate": null,
+          "quality_regret": null,
+          "violation_rate": 0.0,
+          "wasted_attempts": null
+        }
+      },
+      "workload": {
+        "onprem_required": {
+          "cost_regret": null,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": null,
+          "floor_miss_rate": null,
+          "infeasible_at_floor": 0,
+          "latency_regret": null,
+          "mean_chosen_cost": null,
+          "n_cases": 4,
+          "pass_rate": null,
+          "quality_regret": null,
+          "violation_rate": 0.0,
+          "wasted_attempts": null
+        }
+      }
+    },
+    "router_cold": {
+      "placement": {
+        "onprem_only": {
+          "cost_regret": null,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": null,
+          "floor_miss_rate": null,
+          "infeasible_at_floor": 0,
+          "latency_regret": null,
+          "mean_chosen_cost": null,
+          "n_cases": 4,
+          "pass_rate": null,
+          "quality_regret": null,
+          "violation_rate": 0.0,
+          "wasted_attempts": null
+        }
+      },
+      "protection": {
+        "enforced": {
+          "cost_regret": null,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": null,
+          "floor_miss_rate": null,
+          "infeasible_at_floor": 0,
+          "latency_regret": null,
+          "mean_chosen_cost": null,
+          "n_cases": 4,
+          "pass_rate": null,
+          "quality_regret": null,
+          "violation_rate": 0.0,
+          "wasted_attempts": null
+        }
+      },
+      "workload": {
+        "onprem_required": {
+          "cost_regret": null,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": null,
+          "floor_miss_rate": null,
+          "infeasible_at_floor": 0,
+          "latency_regret": null,
+          "mean_chosen_cost": null,
+          "n_cases": 4,
+          "pass_rate": null,
+          "quality_regret": null,
+          "violation_rate": 0.0,
+          "wasted_attempts": null
+        }
+      }
+    },
+    "router_online": {
+      "placement": {
+        "onprem_only": {
+          "cost_regret": null,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": null,
+          "floor_miss_rate": null,
+          "infeasible_at_floor": 0,
+          "latency_regret": null,
+          "mean_chosen_cost": null,
+          "n_cases": 4,
+          "pass_rate": null,
+          "quality_regret": null,
+          "violation_rate": 0.0,
+          "wasted_attempts": null
+        }
+      },
+      "protection": {
+        "enforced": {
+          "cost_regret": null,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": null,
+          "floor_miss_rate": null,
+          "infeasible_at_floor": 0,
+          "latency_regret": null,
+          "mean_chosen_cost": null,
+          "n_cases": 4,
+          "pass_rate": null,
+          "quality_regret": null,
+          "violation_rate": 0.0,
+          "wasted_attempts": null
+        }
+      },
+      "workload": {
+        "onprem_required": {
+          "cost_regret": null,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": null,
+          "floor_miss_rate": null,
+          "infeasible_at_floor": 0,
+          "latency_regret": null,
+          "mean_chosen_cost": null,
+          "n_cases": 4,
+          "pass_rate": null,
+          "quality_regret": null,
+          "violation_rate": 0.0,
+          "wasted_attempts": null
+        }
+      }
+    },
+    "router_online:breaker_off": {
+      "placement": {
+        "onprem_only": {
+          "cost_regret": null,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": null,
+          "floor_miss_rate": null,
+          "infeasible_at_floor": 0,
+          "latency_regret": null,
+          "mean_chosen_cost": null,
+          "n_cases": 4,
+          "pass_rate": null,
+          "quality_regret": null,
+          "violation_rate": 0.0,
+          "wasted_attempts": null
+        }
+      },
+      "protection": {
+        "enforced": {
+          "cost_regret": null,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": null,
+          "floor_miss_rate": null,
+          "infeasible_at_floor": 0,
+          "latency_regret": null,
+          "mean_chosen_cost": null,
+          "n_cases": 4,
+          "pass_rate": null,
+          "quality_regret": null,
+          "violation_rate": 0.0,
+          "wasted_attempts": null
+        }
+      },
+      "workload": {
+        "onprem_required": {
+          "cost_regret": null,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": null,
+          "floor_miss_rate": null,
+          "infeasible_at_floor": 0,
+          "latency_regret": null,
+          "mean_chosen_cost": null,
+          "n_cases": 4,
+          "pass_rate": null,
+          "quality_regret": null,
+          "violation_rate": 0.0,
+          "wasted_attempts": null
+        }
+      }
+    },
+    "router_warm_prior": {
+      "placement": {
+        "onprem_only": {
+          "cost_regret": null,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": null,
+          "floor_miss_rate": null,
+          "infeasible_at_floor": 0,
+          "latency_regret": null,
+          "mean_chosen_cost": null,
+          "n_cases": 4,
+          "pass_rate": null,
+          "quality_regret": null,
+          "violation_rate": 0.0,
+          "wasted_attempts": null
+        }
+      },
+      "protection": {
+        "enforced": {
+          "cost_regret": null,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": null,
+          "floor_miss_rate": null,
+          "infeasible_at_floor": 0,
+          "latency_regret": null,
+          "mean_chosen_cost": null,
+          "n_cases": 4,
+          "pass_rate": null,
+          "quality_regret": null,
+          "violation_rate": 0.0,
+          "wasted_attempts": null
+        }
+      },
+      "workload": {
+        "onprem_required": {
+          "cost_regret": null,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": null,
+          "floor_miss_rate": null,
+          "infeasible_at_floor": 0,
+          "latency_regret": null,
+          "mean_chosen_cost": null,
+          "n_cases": 4,
+          "pass_rate": null,
+          "quality_regret": null,
+          "violation_rate": 0.0,
+          "wasted_attempts": null
+        }
+      }
+    }
+  },
+  "headline": {
+    "comparable": false,
+    "parity_tol": 0.02,
+    "reference": "best_published_quality",
+    "reference_pass_rate": null,
+    "router": "router_online",
+    "router_pass_rate": null,
+    "saving_pct": null
+  },
+  "policy": {
+    "empty_set_mismatches": 0,
+    "pinned_mismatches": 0,
+    "post_gate_widened": 0,
+    "sweep_generate_mismatches": 0,
+    "sweep_violations": 0,
+    "violations_total": 0
+  },
+  "strategies": {
+    "best_published_quality": {
+      "cost_regret": null,
+      "empty_set_mismatches": 0,
+      "exhausted_rate": null,
+      "floor_miss_rate": null,
+      "infeasible_at_floor": 0,
+      "latency_regret": null,
+      "mean_chosen_cost": null,
+      "n_cases": 4,
+      "pass_rate": null,
+      "quality_regret": null,
+      "violation_rate": 0.0,
+      "wasted_attempts": null
+    },
+    "cheapest": {
+      "cost_regret": null,
+      "empty_set_mismatches": 0,
+      "exhausted_rate": null,
+      "floor_miss_rate": null,
+      "infeasible_at_floor": 0,
+      "latency_regret": null,
+      "mean_chosen_cost": null,
+      "n_cases": 4,
+      "pass_rate": null,
+      "quality_regret": null,
+      "violation_rate": 0.0,
+      "wasted_attempts": null
+    },
+    "router_cold": {
+      "cost_regret": null,
+      "empty_set_mismatches": 0,
+      "exhausted_rate": null,
+      "floor_miss_rate": null,
+      "infeasible_at_floor": 0,
+      "latency_regret": null,
+      "mean_chosen_cost": null,
+      "n_cases": 4,
+      "pass_rate": null,
+      "quality_regret": null,
+      "violation_rate": 0.0,
+      "wasted_attempts": null
+    },
+    "router_online": {
+      "cost_regret": null,
+      "empty_set_mismatches": 0,
+      "exhausted_rate": null,
+      "floor_miss_rate": null,
+      "infeasible_at_floor": 0,
+      "latency_regret": null,
+      "mean_chosen_cost": null,
+      "n_cases": 4,
+      "pass_rate": null,
+      "quality_regret": null,
+      "violation_rate": 0.0,
+      "wasted_attempts": null
+    },
+    "router_online:breaker_off": {
+      "cost_regret": null,
+      "empty_set_mismatches": 0,
+      "exhausted_rate": null,
+      "floor_miss_rate": null,
+      "infeasible_at_floor": 0,
+      "latency_regret": null,
+      "mean_chosen_cost": null,
+      "n_cases": 4,
+      "pass_rate": null,
+      "quality_regret": null,
+      "violation_rate": 0.0,
+      "wasted_attempts": null
+    },
+    "router_warm_prior": {
+      "cost_regret": null,
+      "empty_set_mismatches": 0,
+      "exhausted_rate": null,
+      "floor_miss_rate": null,
+      "infeasible_at_floor": 0,
+      "latency_regret": null,
+      "mean_chosen_cost": null,
+      "n_cases": 4,
+      "pass_rate": null,
+      "quality_regret": null,
+      "violation_rate": 0.0,
+      "wasted_attempts": null
+    }
+  },
+  "worst_groups": {
+    "best_published_quality": {
+      "cost_regret": null,
+      "floor_miss_rate": null,
+      "latency_regret": null,
+      "pass_rate": null,
+      "quality_regret": null
+    },
+    "cheapest": {
+      "cost_regret": null,
+      "floor_miss_rate": null,
+      "latency_regret": null,
+      "pass_rate": null,
+      "quality_regret": null
+    },
+    "router_cold": {
+      "cost_regret": null,
+      "floor_miss_rate": null,
+      "latency_regret": null,
+      "pass_rate": null,
+      "quality_regret": null
+    },
+    "router_online": {
+      "cost_regret": null,
+      "floor_miss_rate": null,
+      "latency_regret": null,
+      "pass_rate": null,
+      "quality_regret": null
+    },
+    "router_online:breaker_off": {
+      "cost_regret": null,
+      "floor_miss_rate": null,
+      "latency_regret": null,
+      "pass_rate": null,
+      "quality_regret": null
+    },
+    "router_warm_prior": {
+      "cost_regret": null,
+      "floor_miss_rate": null,
+      "latency_regret": null,
+      "pass_rate": null,
+      "quality_regret": null
+    }
+  }
+}

@@ -1,0 +1,3 @@
+commit: cb3afc5109f1d0bdf5a63ca462e160f31ad4b0b3
+command: LITELLM_LOCAL_MODEL_COST_MAP=True uv run python -m tests.eval.test_bench_golden
+Never regenerate to make a test pass (see tests/eval/test_bench_golden.py).
