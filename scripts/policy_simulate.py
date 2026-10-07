@@ -35,7 +35,8 @@ With a stated capacity (P3c-4) -- a `--capacity` file, or a `capacity` key in
 the proposal or in any scenario -- the output also says how loaded each
 endpoint would be: replayed demand per time bucket against the limits the
 operator stated, under one new `capacity` key and a "Capacity" report
-section. Nothing is measured and nothing is managed -- see
+section. Every peak is printed with its average over the whole window.
+Nothing is measured and nothing is managed -- see
 `app/eval/capacity.py::CAPACITY_CAVEAT`. With no capacity stated anywhere
 every output is byte-identical to what it was before.
 
@@ -65,7 +66,8 @@ from app.apps.snapshot import SERVING_POLICY_FIELDS  # noqa: E402
 from app.config.lint import ConfigLintError  # noqa: E402
 from app.config.loader import load_settings  # noqa: E402
 from app.eval.capacity import (  # noqa: E402
-    DEFAULT_BUCKET_SECONDS, DEFAULT_MIN_BUCKETS, MAX_BUCKET_SECONDS, CapacityPlan, build_plan,
+    DEFAULT_BUCKET_SECONDS, DEFAULT_MIN_BUCKETS, MAX_BUCKET_SECONDS, CapacityError, CapacityPlan,
+    build_plan,
     capacity_block, load_capacity, render_capacity_section, sets_volume, states_capacity,
 )
 from app.eval.capacity import plan_inputs as capacity_inputs  # noqa: E402
@@ -151,7 +153,7 @@ def _parser() -> argparse.ArgumentParser:
                    help=f"time bucket for demand, 1..{MAX_BUCKET_SECONDS} "
                         f"(default: {DEFAULT_BUCKET_SECONDS}). Needs a stated capacity")
     p.add_argument("--capacity-min-buckets", type=int, default=None, metavar="K",
-                   help="with fewer buckets holding traffic the capacity section says "
+                   help="with fewer buckets in which a request arrived the capacity section says "
                         f"\"window too short\" instead of a utilisation (default: "
                         f"{DEFAULT_MIN_BUCKETS}). Needs a stated capacity")
     return p
@@ -255,6 +257,11 @@ def _compare_scenarios(args: argparse.Namespace, *, records: list[dict], warning
         comparison = asyncio.run(compare(records, snapshot, scenarios_doc, base=base,
                                          since=since, uncertainty=plan, notify=_note,
                                          capacity=capacity))
+    except CapacityError as exc:
+        # P3c-4: something a scenario asserts cannot be placed (a latency
+        # above 24 hours). Named, exit 2, nothing written.
+        print(f"error: capacity: {exc}", file=sys.stderr)
+        return 2
     except (SnapshotError, ProposalError, ScenarioError) as exc:
         # All-or-nothing (spec §3): one invalid scenario fails the whole
         # file, named `scenarios[<i>](<name>).proposal.<path>`.
@@ -481,6 +488,11 @@ def main(argv: list[str] | None = None) -> int:
                 records, baseline_doc, base=base, cap=args.max_relaxations,
                 baseline_label=baseline_label, since=since, uncertainty=plan,
                 notify=_note))
+    except CapacityError as exc:
+        # P3c-4: something the proposal asserts cannot be placed (a latency
+        # above 24 hours). Named, exit 2, nothing written.
+        print(f"error: capacity: {exc}", file=sys.stderr)
+        return 2
     except (SnapshotError, ProposalError) as exc:
         # Spec §8 governs over the narrower "catch ProposalError" reading:
         # exit 2 is "an input file failed to load OR VALIDATE" -- a

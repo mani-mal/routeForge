@@ -12,15 +12,29 @@ would make it), exactly as they state `workload.token_scale` or an
 endpoint's `latency_ms`. Demand is computed from the rows replay already
 routed: per arm, per endpoint, per time bucket.
 
-    requests/min   = requests arriving in the bucket, per minute
+    requests/min   = requests ARRIVING in the bucket, per minute
     tokens/min     = prompt + completion tokens of those requests, per minute
     out tokens/min = completion tokens of those requests, per minute
-    concurrency    = sum of their replayed latency / bucket length
-                     (the Erlang offered load of the bucket)
+    concurrency    = milliseconds of service time that fall IN the bucket,
+                     over the bucket's length: the mean number of requests
+                     in service during it, had none ever waited
 
-Utilisation is demand divided by the stated limit. There is no queueing
-model, no predicted rejection and no predicted delay: RouteForge does not
-know what an endpoint does above a stated limit (`CAPACITY_CAVEAT`).
+A request is in service from its estimated arrival for its service time
+(`service_time`: its own recorded latency where replay serves it on the
+endpoint that served it), and that time is spread over every bucket it runs
+through. So one request is never more than one request of concurrency.
+
+Utilisation is demand divided by the stated limit. A peak is a maximum over
+buckets and is never reported alone: beside it are the mean over the whole
+window (`mean_window`, the time-average) and the mean over the endpoint's
+active buckets (`mean_active`). There is no queueing model, no predicted
+rejection and no predicted delay: RouteForge does not know what an endpoint
+does above a stated limit (`CAPACITY_CAVEAT`).
+
+Everything that decides a figure is exact integer arithmetic on
+milliseconds, requests and tokens; a volume scale is applied once per
+application, in sorted order. The block does not depend on the order rows
+come in.
 
 Never ranks a scenario and never proposes a remedy. Never imported by
 serving code (`tests/eval/test_isolation.py`).
@@ -29,9 +43,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.eval.proposal import (CAPACITY_LIMITS, MAX_VOLUME_SCALE, ProposalError, _check_keys,
                                _finite_number, _opt_dict, validate_capacity_limits,
@@ -57,8 +72,10 @@ DEMAND_FOR = {"max_concurrency": "concurrency",
 DEMANDS = tuple(DEMAND_FOR[limit] for limit in CAPACITY_LIMITS)
 
 #: What a capacity figure does NOT model, as stable ids for `capacity.not_modelled`.
+#: `moved_request_latency`: a request replay moves to an endpoint it never ran
+#: on gets that endpoint's mean service time, not one of its own.
 NOT_MODELLED = ("queueing", "batching", "autoscaling", "engine_concurrency", "external_load",
-                "sub_bucket_bursts", "failover_load", "per_request_latency",
+                "sub_bucket_bursts", "failover_load", "moved_request_latency",
                 "overload_behaviour")
 
 _TOP_KEYS = frozenset({"schema", "title", "endpoints", "workload"})
@@ -195,29 +212,68 @@ def sets_volume(proposal: dict | None) -> bool:
     return bool(volume_scale_block((proposal or {}).get("workload")))
 
 
-# --- demand (spec §5) -----------------------------------------------------------
+# --- placement (spec §5.2) ----------------------------------------------------------
 
-def arrival_bucket(row: dict, bucket_seconds: int) -> int | None:
-    """The index of the bucket `row` ARRIVED in, or None when it has no `ts`.
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+_MILLISECOND = timedelta(milliseconds=1)
+#: The longest service time the model will place: 24 hours. A recorded
+#: latency above it is unusable (like a negative or non-finite one); an
+#: asserted or replayed one above it is refused.
+MAX_SERVICE_MS = 86_400_000
 
-    `ts` is when the outcome row was written -- the END of the request
-    (`docs/reference/routing-outcomes.md` §3.2). Arrival is estimated as `ts`
-    minus the row's recorded `latency_ms`; a missing, negative or non-finite
-    latency subtracts nothing. Buckets are aligned to the Unix epoch, so a
-    row's bucket does not depend on which other rows the export holds.
-    Integer milliseconds throughout: no float decides a boundary."""
+
+def written_ms(row: dict) -> int | None:
+    """When the outcome row was written, in whole milliseconds since the
+    Unix epoch (floor, exact integer arithmetic), or None with no `ts`."""
     ts = row.get("ts")
     if not ts:
         return None
-    written_ms = round(_utc(_parse_ts(ts)).timestamp() * 1000)
+    return (_utc(_parse_ts(ts)) - _EPOCH) // _MILLISECOND
+
+
+def recorded_ms(row: dict) -> int | None:
+    """The row's recorded `latency_ms` in whole milliseconds (nearest), or
+    None when it is unusable: missing, not a number, negative, non-finite
+    or above `MAX_SERVICE_MS`."""
     latency = row.get("latency_ms")
-    service_ms = round(latency) if _finite_number(latency) and latency > 0 else 0
-    return (written_ms - service_ms) // (bucket_seconds * 1000)
+    if not _finite_number(latency) or latency < 0 or latency > MAX_SERVICE_MS:
+        return None
+    return round(latency)
+
+
+def arrival_ms(row: dict) -> int | None:
+    """The row's ESTIMATED ARRIVAL in milliseconds since the epoch, or None
+    with no `ts`. `ts` is when the outcome row was written -- the END of the
+    request (`docs/reference/routing-outcomes.md` §3.2) -- so arrival is `ts`
+    minus the row's recorded latency; an unusable latency subtracts nothing.
+    It is a property of the recorded request: the same in both arms,
+    whichever service time an arm gives the row."""
+    written = written_ms(row)
+    return None if written is None else written - (recorded_ms(row) or 0)
+
+
+def arrival_bucket(row: dict, bucket_seconds: int) -> int | None:
+    """The index of the bucket `row` ARRIVED in, or None when it has no
+    `ts`. Buckets are aligned to the Unix epoch, so a row's bucket does not
+    depend on which other rows the export holds. Integer milliseconds
+    throughout: no float decides a boundary."""
+    arrival = arrival_ms(row)
+    return None if arrival is None else arrival // (bucket_seconds * 1000)
+
+
+def _last_recorded_bucket(row: dict, bucket_seconds: int) -> int | None:
+    """The last bucket the RECORDED request was in service in: the bucket
+    of its last millisecond, `[arrival, written)`; its arrival bucket when
+    it has no usable latency."""
+    written = written_ms(row)
+    if written is None:
+        return None
+    return (written - (1 if recorded_ms(row) else 0)) // (bucket_seconds * 1000)
 
 
 def bucket_start(index: int, bucket_seconds: int) -> str:
     """A bucket's start as an ISO-8601 UTC timestamp."""
-    return datetime.fromtimestamp(index * bucket_seconds, tz=timezone.utc).isoformat()
+    return (_EPOCH + timedelta(seconds=index * bucket_seconds)).isoformat()
 
 
 def volume_for(volume: dict[str, float], app_id: str) -> float:
@@ -225,104 +281,255 @@ def volume_for(volume: dict[str, float], app_id: str) -> float:
     return volume.get(app_id, volume.get(ALL_APPS, 1.0))
 
 
-#: One endpoint's load in one bucket: `[requests, tokens, output_tokens, busy_ms]`.
-Load = list[float]
+# --- service time (spec §5.4) -------------------------------------------------------
+
+#: Where a row's service time came from, in the order they are tried.
+SERVICE_TIME_SOURCES = ("recorded", "endpoint_mean", "replay", "asserted")
 
 
-def arm_demand(results: list[RowResult], arm: str, *, bucket_seconds: int,
-               volume: Callable[[str], float]) -> dict[str, dict[int, Load]]:
-    """`{endpoint: {bucket: Load}}` for one arm: every row the arm ROUTED,
-    added to the endpoint replay served it from, in the bucket it arrived
-    in, `volume(application_id)` times. A rejected row adds nothing; a row
+def served_alone_by(row: dict) -> str | None:
+    """The endpoint whose service time the row's recorded latency is: the
+    one that served it (`status == "ok"`) on a single attempt, when that
+    latency is usable. None otherwise -- a row that failed over carries the
+    failed attempts' time too, and it cannot be divided between them."""
+    attempts = row.get("attempts") or []
+    if row.get("status") != "ok" or len(attempts) != 1 or row.get("chosen") != attempts[0]:
+        return None
+    return attempts[0] if recorded_ms(row) is not None else None
+
+
+def endpoint_means(results: list[RowResult]) -> dict[str, int]:
+    """Each endpoint's MEAN recorded latency in whole milliseconds, over the
+    simulated rows it served alone (`served_alone_by`). The mean, not the
+    median replay reports: offered load is rate times MEAN service time."""
+    sums: dict[str, list[int]] = {}
+    for r in results:
+        slug = served_alone_by(r.row)
+        if slug is not None:
+            pair = sums.setdefault(slug, [0, 0])
+            pair[0] += recorded_ms(r.row)
+            pair[1] += 1
+    # Round half up, in integers: independent of the order rows came in.
+    return {slug: (2 * total + n) // (2 * n) for slug, (total, n) in sums.items()}
+
+
+def _placeable_ms(latency: float | None, slug: str, what: str) -> int:
+    if not _finite_number(latency) or latency < 0 or latency > MAX_SERVICE_MS:
+        raise CapacityError(
+            f"endpoints.{slug}.latency_ms",
+            f"{what} latency {latency!r} ms cannot be placed: a service time is a finite "
+            f"number of milliseconds from 0 to {MAX_SERVICE_MS} (24 hours)")
+    return round(latency)
+
+
+def service_time(r: RowResult, arm: str, means: dict[str, int]) -> tuple[int, str]:
+    """`(milliseconds, source)` for a row `arm` routed (spec §5.4):
+
+    - `asserted`: the proposal asserts a latency for the arm's endpoint. It
+      is the operator's claim about the endpoint under that scenario, so it
+      replaces every other source;
+    - `recorded`: the arm serves the row on the endpoint that served it
+      alone, so the row's own recorded latency is its service time there;
+    - `endpoint_mean`: the endpoint's mean recorded latency (`means`);
+    - `replay`: no simulated row was served alone by the endpoint, so the
+      one latency replay has for it -- the snapshot's signal, else the tier
+      default (`ArmResult.latency_source` says which)."""
+    result = getattr(r, arm)
+    if result.latency_source == "proposal":
+        return _placeable_ms(result.latency_ms, result.model, "the asserted"), "asserted"
+    if served_alone_by(r.row) == result.model:
+        return recorded_ms(r.row), "recorded"
+    if result.model in means:
+        return means[result.model], "endpoint_mean"
+    return _placeable_ms(result.latency_ms, result.model, "the replayed"), "replay"
+
+
+# --- demand (spec §5) ---------------------------------------------------------------
+
+#: Indices into one application's exact integer load in one bucket:
+#: `[requests, tokens, output_tokens, service_ms]`.
+REQUESTS, TOKENS, OUTPUT_TOKENS, SERVICE_MS = range(4)
+
+
+@dataclass
+class EndpointLoad:
+    """One endpoint's load in one arm, as EXACT integers per (bucket,
+    application): no volume scale is applied here, and no float is summed,
+    so the figures cannot depend on the order rows came in.
+
+    A row's requests and tokens are in the bucket it ARRIVED in (a rate
+    limit counts admissions). Its service time is in every bucket its
+    service interval `[arrival, arrival + service time)` overlaps, by the
+    milliseconds of overlap -- so one request is never more than one
+    request's worth of concurrency in any bucket."""
+
+    cells: dict[int, dict[str, list[int]]] = field(default_factory=dict)
+    # Service milliseconds past the window's last bucket, per application:
+    # in no bucket, and reported so service time is conserved.
+    after_window: dict[str, int] = field(default_factory=dict)
+    rows: int = 0
+    sources: dict[str, int] = field(
+        default_factory=lambda: {source: 0 for source in SERVICE_TIME_SOURCES})
+    service_ms: int = 0              # every row's service time, unscaled
+    service_max_ms: int = 0
+    replay_ms: int = 0               # the part of `service_ms` from source "replay"
+    replay_sources: set[str] = field(default_factory=set)
+    estimated_token_rows: int = 0
+
+    def cell(self, bucket: int, app_id: str) -> list[int]:
+        return self.cells.setdefault(bucket, {}).setdefault(app_id, [0, 0, 0, 0])
+
+
+def arm_load(results: list[RowResult], arm: str, *, bucket_seconds: int,
+             last_bucket: int | None = None,
+             means: dict[str, int] | None = None) -> dict[str, EndpointLoad]:
+    """`{endpoint: EndpointLoad}` for one arm: every row the arm ROUTED, on
+    the endpoint replay served it from. A rejected row adds nothing; a row
     with no `ts` cannot be placed and adds nothing (the block counts those).
-    Tokens are the counts the arm priced the call at (`ArmResult`)."""
-    demand: dict[str, dict[int, Load]] = {}
+    Tokens are the counts the arm priced the call at (`ArmResult`).
+
+    Service time past `last_bucket` (the window's last) goes to
+    `after_window` instead of a bucket; with `last_bucket=None` nothing is
+    cut off. `means` defaults to `endpoint_means(results)`."""
+    means = endpoint_means(results) if means is None else means
+    bucket_ms = bucket_seconds * 1000
+    loads: dict[str, EndpointLoad] = {}
     for r in results:
         result = getattr(r, arm)
         if result.outcome != "routed":
             continue
-        bucket = arrival_bucket(r.row, bucket_seconds)
-        if bucket is None:
+        start = arrival_ms(r.row)
+        if start is None:
             continue
-        times = volume(r.row["application_id"])
+        app_id = r.row["application_id"]
+        load = loads.setdefault(result.model, EndpointLoad())
+        service, source = service_time(r, arm, means)
+        load.rows += 1
+        load.sources[source] += 1
+        load.service_ms += service
+        load.service_max_ms = max(load.service_max_ms, service)
+        if source == "replay":
+            load.replay_ms += service
+            load.replay_sources.add(result.latency_source or "unknown")
+        if replay_tokens(r.row)[2]:
+            load.estimated_token_rows += 1
         completion = result.completion_tokens or 0
-        load = demand.setdefault(result.model, {}).setdefault(bucket, [0.0, 0.0, 0.0, 0.0])
-        load[0] += times
-        load[1] += times * ((result.prompt_tokens or 0) + completion)
-        load[2] += times * completion
-        load[3] += times * (result.latency_ms or 0.0)
-    return demand
+        bucket = start // bucket_ms
+        arrived = load.cell(bucket, app_id)
+        arrived[REQUESTS] += 1
+        arrived[TOKENS] += (result.prompt_tokens or 0) + completion
+        arrived[OUTPUT_TOKENS] += completion
+        end = start + service
+        while bucket * bucket_ms < end:
+            overlap = min(end, (bucket + 1) * bucket_ms) - max(start, bucket * bucket_ms)
+            if last_bucket is not None and bucket > last_bucket:
+                load.after_window[app_id] = load.after_window.get(app_id, 0) + overlap
+            else:
+                load.cell(bucket, app_id)[SERVICE_MS] += overlap
+            bucket += 1
+    return loads
 
 
-def _rates(load: Load, bucket_seconds: int) -> dict[str, float]:
-    """One bucket's load as the four demands, each in its limit's unit."""
-    per_minute = 60.0 / bucket_seconds
-    return {"concurrency": load[3] / (bucket_seconds * 1000.0),
-            "requests_per_minute": load[0] * per_minute,
-            "tokens_per_minute": load[1] * per_minute,
-            "output_tokens_per_minute": load[2] * per_minute}
+def _scaled(per_app: dict[str, list[int]], volume: Callable[[str], float]) -> list[float]:
+    """One bucket's (or one total's) per-application integers as four
+    volume-scaled floats: each application's exact integer times its volume
+    scale, once, summed with `math.fsum` in sorted-application order."""
+    return [math.fsum(volume(app_id) * per_app[app_id][i] for app_id in sorted(per_app))
+            for i in range(4)]
 
 
-def _latencies(results: list[RowResult], arm: str) -> dict[str, tuple[float, str | None]]:
-    """The one `(latency_ms, source)` replay gave each endpoint in `arm`:
-    the first routed row's. Replay's ladder is a function of the endpoint
-    alone -- `proposal`, `observed`, `signal` or `tier_default`."""
-    out: dict[str, tuple[float, str | None]] = {}
-    for r in results:
-        result = getattr(r, arm)
-        if result.outcome == "routed" and result.latency_ms is not None:
-            out.setdefault(result.model, (float(result.latency_ms), result.latency_source))
-    return out
+def _rates(scaled: list[float], bucket_seconds: int) -> dict[str, float]:
+    """A scaled load over ONE bucket as the four demands, each in its
+    limit's unit."""
+    return {"concurrency": scaled[SERVICE_MS] / (bucket_seconds * 1000),
+            "requests_per_minute": scaled[REQUESTS] * 60 / bucket_seconds,
+            "tokens_per_minute": scaled[TOKENS] * 60 / bucket_seconds,
+            "output_tokens_per_minute": scaled[OUTPUT_TOKENS] * 60 / bucket_seconds}
 
 
-def _arm_block(buckets: dict[int, Load], limits: dict[str, float],
-               replayed: tuple[float, str | None] | None, *,
-               active: int, bucket_seconds: int) -> dict:
+def _arm_block(load: EndpointLoad | None, limits: dict[str, float],
+               volume: Callable[[str], float], *, window_buckets: int,
+               bucket_seconds: int) -> dict:
     """One endpoint in one arm: demand per dimension, and utilisation of
-    each STATED limit. `active` is the number of buckets the export has any
-    traffic in -- the same denominator for every endpoint and both arms."""
-    latency, source = replayed if replayed is not None else (None, None)
-    rates = {index: _rates(load, bucket_seconds) for index, load in sorted(buckets.items())}
-    requests = sum(load[0] for load in buckets.values())
-    demand = {}
+    each STATED limit. Three figures per demand, never a peak alone:
+
+    - `peak`: the largest bucket;
+    - `mean_window`: the total over EVERY bucket of the window, empty ones
+      included (`window.buckets`) -- the time-average;
+    - `mean_active`: the total over the endpoint's own `active_buckets`,
+      those in which it had an arrival or a request in service."""
+    load = load or EndpointLoad()
+    scaled = {index: _scaled(per_app, volume) for index, per_app in sorted(load.cells.items())}
+    rates = {index: _rates(values, bucket_seconds) for index, values in scaled.items()}
+    # Totals from exact per-application integers, scaled once.
+    totals: dict[str, list[int]] = {}
+    for per_app in load.cells.values():
+        for app_id, cell in per_app.items():
+            total = totals.setdefault(app_id, [0, 0, 0, 0])
+            for i in range(4):
+                total[i] += cell[i]
+    whole = _scaled(totals, volume)
+    whole_rates = _rates(whole, bucket_seconds)
+    active = len(load.cells)
+    demand, peak_at = {}, {}
     for name in DEMANDS:
-        values = [rate[name] for rate in rates.values()]
-        demand[name] = {"peak": max(values, default=0.0), "mean": sum(values) / active}
+        peak, at = 0.0, None
+        for index, rate in rates.items():           # ascending: the earliest peak wins
+            if rate[name] > peak:
+                peak, at = rate[name], index
+        peak_at[name] = at
+        demand[name] = {"peak": peak, "mean_window": whole_rates[name] / window_buckets,
+                        "mean_active": whole_rates[name] / active if active else 0.0}
     stated = {}
     for limit in CAPACITY_LIMITS:
         if limit not in limits:
             continue
         cap, name = limits[limit], DEMAND_FOR[limit]
-        peak_at = None
-        for index, rate in rates.items():           # ascending: the earliest peak wins
-            if rate[name] > (rates[peak_at][name] if peak_at is not None else 0.0):
-                peak_at = index
         over = [index for index, rate in rates.items() if rate[name] > cap * (1 + _OVER)]
         stated[limit] = {
             "limit": cap,
             "peak": demand[name]["peak"] / cap,
-            "mean": demand[name]["mean"] / cap,
-            "peak_bucket": None if peak_at is None else bucket_start(peak_at, bucket_seconds),
+            "peak_bucket": (None if peak_at[name] is None
+                            else bucket_start(peak_at[name], bucket_seconds)),
+            "mean_window": demand[name]["mean_window"] / cap,
+            "mean_active": demand[name]["mean_active"] / cap,
             "buckets_over": len(over),
-            "buckets_over_share": len(over) / active,
-            "requests_over_share": (sum(buckets[index][0] for index in over) / requests
-                                    if requests else None),
+            "buckets_over_share": len(over) / window_buckets,
+            "requests_over_share": (
+                math.fsum(scaled[index][REQUESTS] for index in over) / whole[REQUESTS]
+                if whole[REQUESTS] else None),
         }
-    return {"requests": requests, "latency_ms": latency, "latency_source": source,
-            "latency_exceeds_bucket": latency is not None and latency > bucket_seconds * 1000,
-            "demand": demand, "limits": stated}
+    return {
+        "requests": whole[REQUESTS],
+        "active_buckets": active,
+        "service_time_sources": dict(load.sources),
+        "service_time_ms": {"mean": load.service_ms / load.rows if load.rows else None,
+                            "max": load.service_max_ms if load.rows else None},
+        "replay_share": load.replay_ms / load.service_ms if load.service_ms else None,
+        "replay_source": min(load.replay_sources) if load.replay_sources else None,
+        "service_ms_after_window": math.fsum(
+            volume(app_id) * load.after_window[app_id] for app_id in sorted(load.after_window)),
+        "estimated_token_rows": load.estimated_token_rows,
+        "demand": demand,
+        "limits": stated,
+    }
 
 
-def _peak(endpoints: dict, arm: str) -> dict | None:
+def _peak(endpoints: dict, arm: str, *, bucket_seconds: int, window_buckets: int) -> dict | None:
     """The most loaded STATED limit of `arm`: the largest peak utilisation,
     the first in (endpoint, `CAPACITY_LIMITS`) order on a tie. None when the
-    arm has no stated limit at all."""
+    arm has no stated limit at all. It carries its own context -- the
+    time-average and the share of the window over the limit, and the bucket
+    length and count they were computed over -- because a peak is a maximum
+    over buckets and means little without them."""
     top = None
     for slug in sorted(endpoints):
         for limit, entry in endpoints[slug][arm]["limits"].items():
             if top is None or entry["peak"] > top["utilisation"]:
                 top = {"endpoint": slug, "limit": limit, "utilisation": entry["peak"],
-                       "bucket": entry["peak_bucket"]}
+                       "bucket": entry["peak_bucket"], "mean_window": entry["mean_window"],
+                       "buckets_over_share": entry["buckets_over_share"],
+                       "bucket_seconds": bucket_seconds, "buckets": window_buckets}
     return top
 
 
@@ -339,28 +546,37 @@ def capacity_block(results: list[RowResult], plan: CapacityPlan, proposal: dict 
     overridden, limit by limit, by the proposal's `capacity`, at the base
     volume TIMES the proposal's `workload.volume_scale`.
 
-    With fewer than `plan.min_buckets` buckets holding any traffic the block
+    The WINDOW runs from the bucket of the first estimated arrival to the
+    last bucket a recorded request was still in service in. It comes from
+    the recorded rows alone, so it is the same for both arms, every
+    endpoint and every scenario.
+
+    With fewer than `plan.min_buckets` buckets holding an ARRIVAL the block
     says `window_too_short` and carries no endpoint figure at all."""
     proposal = proposal or {}
     bucket_seconds = plan.bucket_seconds
     proposal_volume = volume_scale_block(proposal.get("workload"))
     stamped = [arrival_bucket(r.row, bucket_seconds) for r in results]
-    active = sorted({index for index in stamped if index is not None})
-    too_short = len(active) < plan.min_buckets
+    arrivals = sorted({index for index in stamped if index is not None})
+    ends = [index for index in (_last_recorded_bucket(r.row, bucket_seconds) for r in results)
+            if index is not None]
+    first, last = (arrivals[0], max(ends)) if arrivals else (None, None)
+    window_buckets = last - first + 1 if arrivals else 0
+    too_short = len(arrivals) < plan.min_buckets
     block = {
         "method": METHOD,
         "bucket_seconds": bucket_seconds,
         "min_buckets": plan.min_buckets,
         "window": {
-            "first_bucket": bucket_start(active[0], bucket_seconds) if active else None,
-            "last_bucket": bucket_start(active[-1], bucket_seconds) if active else None,
-            "buckets": active[-1] - active[0] + 1 if active else 0,
-            "active_buckets": len(active)},
+            "first_bucket": bucket_start(first, bucket_seconds) if arrivals else None,
+            "last_bucket": bucket_start(last, bucket_seconds) if arrivals else None,
+            "buckets": window_buckets,
+            "arrival_buckets": len(arrivals)},
         "rows": {
             "simulated": len(results),
             "without_ts": stamped.count(None),
-            "estimated_tokens": sum(1 for r, index in zip(results, stamped)
-                                    if index is not None and replay_tokens(r.row)[2]),
+            "unusable_latency": sum(1 for r, index in zip(results, stamped)
+                                    if index is not None and recorded_ms(r.row) is None),
             "excluded_not_counted": sum(n for reason, n in (excluded or {}).items()
                                         if reason not in _NOT_DEMAND)},
         "volume_scale": {"base": dict(plan.volume), "proposal": proposal_volume},
@@ -377,21 +593,23 @@ def capacity_block(results: list[RowResult], plan: CapacityPlan, proposal: dict 
               "proposed": {slug: {**plan.limits.get(slug, {}),
                                   **{key: float(value)
                                      for key, value in stated.get(slug, {}).items()}}
-                           for slug in {*plan.limits, *stated}}}
+                           for slug in sorted({*plan.limits, *stated})}}
     volumes = {"current": lambda app_id: volume_for(plan.volume, app_id),
                "proposed": lambda app_id: (volume_for(plan.volume, app_id)
                                            * volume_for(proposal_volume, app_id))}
-    demand = {arm: arm_demand(results, arm, bucket_seconds=bucket_seconds, volume=volumes[arm])
-              for arm in ARMS}
-    latency = {arm: _latencies(results, arm) for arm in ARMS}
-    slugs = sorted({slug for arm in ARMS for slug in (*demand[arm], *limits[arm])})
+    means = endpoint_means(results)
+    loads = {arm: arm_load(results, arm, bucket_seconds=bucket_seconds, last_bucket=last,
+                           means=means)
+             for arm in ARMS}
+    slugs = sorted({slug for arm in ARMS for slug in (*loads[arm], *limits[arm])})
     block["endpoints"] = {
-        slug: {arm: _arm_block(demand[arm].get(slug, {}), limits[arm].get(slug, {}),
-                               latency[arm].get(slug), active=len(active),
-                               bucket_seconds=bucket_seconds)
+        slug: {arm: _arm_block(loads[arm].get(slug), limits[arm].get(slug, {}), volumes[arm],
+                               window_buckets=window_buckets, bucket_seconds=bucket_seconds)
                for arm in ARMS}
         for slug in slugs}
-    block["peak"] = {arm: _peak(block["endpoints"], arm) for arm in ARMS}
+    block["peak"] = {arm: _peak(block["endpoints"], arm, bucket_seconds=bucket_seconds,
+                                window_buckets=window_buckets)
+                     for arm in ARMS}
     return block
 
 
@@ -402,14 +620,21 @@ def capacity_block(results: list[RowResult], plan: CapacityPlan, proposal: dict 
 CAPACITY_CAVEAT = (
     "**Stated capacity against replayed demand.** Every limit below is a figure the operator\n"
     "stated; RouteForge has not measured it and does not manage capacity. Demand is the replayed\n"
-    "route of each recorded request, grouped into buckets by estimated arrival time (the time\n"
-    "the record was written minus its recorded latency). Nothing here models queueing, batching,\n"
-    "autoscaling, the serving engine's real concurrency behaviour, load that reaches an endpoint\n"
-    "without passing through RouteForge, bursts shorter than a bucket, or the load of failover\n"
-    "attempts. Replay gives each endpoint one latency, so offered concurrency is the request\n"
-    "rate times that latency. RouteForge does not know what an endpoint does above a stated\n"
-    "limit (queue, shed or slow down), so no rejection and no delay is predicted. An export of\n"
-    "a few buckets says little."
+    "route of each recorded request. A request arrives at its estimated arrival time (the time\n"
+    "the record was written minus its recorded latency) and is in service from then for its\n"
+    "service time: requests and tokens are counted in the bucket of arrival, service time in\n"
+    "every bucket it runs through. Service time is the request's own recorded latency where\n"
+    "replay serves it on the endpoint that served it alone; otherwise that endpoint's mean\n"
+    "recorded latency; otherwise replay's latency for the endpoint. A latency the proposal\n"
+    "asserts replaces all three. A recorded latency includes the time RouteForge spent before\n"
+    "and after the backend call, and for a request that failed over it cannot be attributed to\n"
+    "one endpoint, so it is not used. A peak is a maximum over buckets: it grows with a longer\n"
+    "window and with a shorter bucket even for a steady stream, so every peak is printed with\n"
+    "the average over the whole window. Nothing here models queueing, batching, autoscaling, the\n"
+    "serving engine's real concurrency behaviour, load that reaches an endpoint without passing\n"
+    "through RouteForge, bursts shorter than a bucket, or the load of failover attempts.\n"
+    "RouteForge does not know what an endpoint does above a stated limit (queue, shed or slow\n"
+    "down), so no rejection and no delay is predicted. An export of a few buckets says little."
 )
 
 #: Printed under the caveat, verbatim (spec §9.4, invariant C10).
@@ -427,10 +652,22 @@ NO_RANGE_NOTE = (
 
 #: Printed under the comparison table when it has the peak-load column.
 PEAK_COLUMN_NOTE = (
-    "Peak load is the proposed arm's most loaded stated limit and the endpoint it is on. It "
-    "is listed in file order like every other column: a lower figure does not make a "
-    "scenario the one to choose."
+    "Peak load is the proposed arm's most loaded stated limit and the endpoint it is on: its "
+    "largest bucket, then its average over the whole window. A peak is a maximum over "
+    "buckets, so read it with the average. It is listed in file order like every other "
+    "column: a lower figure does not make a scenario the one to choose."
 )
+
+#: Says which bucket set each of the two averages is over (spec §6.2).
+AVERAGES_NOTE = (
+    "`avg (window)` is over every bucket of the window, empty ones included: the "
+    "time-average. `avg (active)` is over the buckets in which the endpoint had an arrival "
+    "or a request in service; that count is printed with it."
+)
+
+#: A share of an endpoint's service time from replay's latency for the
+#: endpoint, rather than from recorded requests, that gets a sentence.
+MATERIAL_REPLAY_SHARE = 0.1
 
 
 def caveat_lines() -> list[str]:
@@ -445,29 +682,37 @@ def _num(value: float | None) -> str:
     return "n/a" if value is None else f"{value:.6g}"
 
 
-def _latency_text(arm: dict) -> str:
-    if arm["latency_ms"] is None:
+def _service_text(arm: dict) -> str:
+    """`mean 6000 ms, longest 6000 ms over 160 row(s) (160 recorded)`."""
+    sources = arm["service_time_sources"]
+    rows = sum(sources.values())
+    if not rows:
         return "none (no row routed there)"
-    return f"{arm['latency_ms']:.6g} ms ({arm['latency_source']})"
+    used = ", ".join(f"{sources[source]} {source}" for source in SERVICE_TIME_SOURCES
+                     if sources[source])
+    return (f"mean {_num(arm['service_time_ms']['mean'])} ms, longest "
+            f"{_num(arm['service_time_ms']['max'])} ms over {rows} row(s) ({used})")
 
 
 def too_short_text(block: dict) -> str:
     """The explicit state a short export gets instead of a utilisation."""
     window = block["window"]
-    return (f"window too short ({window['active_buckets']} of the {block['min_buckets']} "
+    return (f"window too short ({window['arrival_buckets']} of the {block['min_buckets']} "
             f"buckets needed)")
 
 
 def peak_text(block: dict, arm: str) -> str:
     """One arm's most loaded stated limit, for a table cell or a line:
-    `230.0% (local-llama, max_concurrency)`, `not stated`, or the
-    window-too-short state."""
+    `peak 230.0% / avg 45.0% (local-llama, max_concurrency, 60 s buckets)`,
+    `not stated`, or the window-too-short state. Never a peak without the
+    average over the window beside it (invariant C20)."""
     if block["window_too_short"]:
         return too_short_text(block)
     peak = block["peak"][arm]
     if peak is None:
         return "not stated"
-    return f"{_pct(peak['utilisation'])} ({peak['endpoint']}, {peak['limit']})"
+    return (f"peak {_pct(peak['utilisation'])} / avg {_pct(peak['mean_window'])} "
+            f"({peak['endpoint']}, {peak['limit']}, {peak['bucket_seconds']} s buckets)")
 
 
 def _scale_text(scale: dict[str, float]) -> str:
@@ -478,74 +723,97 @@ def window_lines(block: dict) -> list[str]:
     """What every scenario of one run shares: the buckets, the window and
     the rows that could not be counted."""
     window, rows = block["window"], block["rows"]
-    lines = [f"Buckets of {block['bucket_seconds']} s by estimated arrival time. "
-             f"{window['active_buckets']} of {window['buckets']} bucket(s) in the window hold "
-             f"traffic" + (f" ({window['first_bucket']} to {window['last_bucket']})"
-                           if window["active_buckets"] else "")
-             + f"; {rows['simulated']} simulated row(s). Means are over the buckets that hold "
-             "traffic.", ""]
+    lines = [f"Buckets of {block['bucket_seconds']} s. The window is {window['buckets']} "
+             "bucket(s), from the first estimated arrival to the end of the last recorded "
+             "request" + (f" ({window['first_bucket']} to {window['last_bucket']})"
+                          if window["buckets"] else "")
+             + f"; a request arrived in {window['arrival_buckets']} of them; "
+             f"{rows['simulated']} simulated row(s).", "", AVERAGES_NOTE, ""]
     if block["volume_scale"]["base"]:
         lines += ["Volume scale stated for both arms: "
                   f"{_scale_text(block['volume_scale']['base'])}.", ""]
     if rows["without_ts"]:
         lines += [f"**Note:** {rows['without_ts']} simulated row(s) have no timestamp and are "
                   "in no bucket: demand is understated by them.", ""]
+    if rows["unusable_latency"]:
+        lines += [f"**Note:** {rows['unusable_latency']} simulated row(s) have no usable "
+                  "recorded latency (missing, negative, or above 24 hours): each is placed at "
+                  "the time it was written, and its service time is not its own.", ""]
     if rows["excluded_not_counted"]:
         lines += [f"**Note:** {rows['excluded_not_counted']} excluded row(s) (see \"Excluded "
                   "rows\") may have loaded an endpoint and are not in the demand.", ""]
-    if rows["estimated_tokens"]:
-        lines += [f"**Note:** {rows['estimated_tokens']} row(s) have no backend token count; "
-                  "their token demand is RouteForge's own estimate.", ""]
     return lines
 
 
-def _limit_rows(entry: dict, active: int) -> list[str]:
+def _limit_rows(entry: dict, window_buckets: int) -> list[str]:
     rows = []
     for limit in CAPACITY_LIMITS:
         for arm in ARMS:
             stated = entry[arm]["limits"].get(limit)
             if stated is None:
                 if limit in entry["current"]["limits"] or limit in entry["proposed"]["limits"]:
-                    rows.append(f"| {limit} | {arm} | not stated | n/a | n/a | n/a | n/a | n/a |")
+                    rows.append(f"| {limit} | {arm} | not stated | n/a | n/a | n/a | n/a | n/a "
+                                "| n/a |")
                 continue
             rows.append(
                 f"| {limit} | {arm} | {_num(stated['limit'])} | {_pct(stated['peak'])} | "
-                f"{_pct(stated['mean'])} | {stated['buckets_over']} of {active} | "
+                f"{_pct(stated['mean_window'])} | {_pct(stated['mean_active'])} | "
+                f"{stated['buckets_over']} of {window_buckets} | "
                 f"{_pct(stated['requests_over_share'])} | {stated['peak_bucket'] or 'n/a'} |")
     return rows
 
 
+def _arm_notes(arm: str, figures: dict) -> list[str]:
+    """The sentences one arm of one endpoint gets only when they apply."""
+    lines = []
+    share = figures["replay_share"]
+    if share is not None and share >= MATERIAL_REPLAY_SHARE:
+        text = (f"**Note:** {_pct(share)} of the {arm} arm's service time on this endpoint is "
+                f"replay's latency for the endpoint ({figures['replay_source']}), not a "
+                "recorded request's: no simulated row was served by it alone.")
+        if figures["replay_source"] == "tier_default":
+            text += (" A tier default is not a measurement: that part of the offered "
+                     "concurrency rests on the default alone.")
+        lines += [text, ""]
+    if figures["service_ms_after_window"]:
+        lines += [f"**Note:** {_num(figures['service_ms_after_window'])} ms of the {arm} arm's "
+                  "service time on this endpoint falls after the window's last bucket and is "
+                  "in no bucket.", ""]
+    if figures["estimated_token_rows"]:
+        lines += [f"**Note:** {figures['estimated_token_rows']} row(s) routed here in the {arm} "
+                  "arm have no backend token count; their token demand is RouteForge's own "
+                  "estimate.", ""]
+    return lines
+
+
 def endpoint_lines(slug: str, entry: dict, block: dict, *, depth: int) -> list[str]:
-    """One endpoint: requests and latency per arm, utilisation of each
-    stated limit, then the demand itself (stated limit or not)."""
+    """One endpoint: requests, active buckets and service time per arm,
+    utilisation of each stated limit, then the demand itself (stated limit
+    or not). Every peak has both averages in the same row."""
     current, proposed = entry["current"], entry["proposed"]
+    window_buckets = block["window"]["buckets"]
     lines = [f"{'#' * depth} {slug}", "",
              f"Requests: current {_num(current['requests'])}, proposed "
-             f"{_num(proposed['requests'])}. Replayed latency: current "
-             f"{_latency_text(current)}, proposed {_latency_text(proposed)}.", ""]
+             f"{_num(proposed['requests'])}. Active buckets (an arrival or a request in "
+             f"service): current {current['active_buckets']} of {window_buckets}, proposed "
+             f"{proposed['active_buckets']} of {window_buckets}.", "",
+             f"Service time: current {_service_text(current)}; proposed "
+             f"{_service_text(proposed)}.", ""]
     for arm in ARMS:
-        if entry[arm]["latency_source"] == "tier_default":
-            lines += [f"**Note:** the {arm} arm's latency for this endpoint is a tier default, "
-                      "not a measurement: its offered concurrency rests on that default alone.",
-                      ""]
-        if entry[arm]["latency_exceeds_bucket"]:
-            lines += [f"**Note:** the {arm} arm's replayed latency is longer than a bucket, so a "
-                      "request's whole service time is counted in the bucket it arrived in. "
-                      "A longer `--capacity-bucket` avoids that.", ""]
-    limit_rows = _limit_rows(entry, block["window"]["active_buckets"])
+        lines += _arm_notes(arm, entry[arm])
+    limit_rows = _limit_rows(entry, window_buckets)
     if limit_rows:
-        lines += ["| limit | arm | stated | peak | mean | buckets over 100% | "
-                  "requests in those buckets | peak bucket |",
-                  "|---|---|---|---|---|---|---|---|", *limit_rows, ""]
+        lines += ["| limit | arm | stated | peak | avg (window) | avg (active) | "
+                  "buckets over 100% | requests arriving in those buckets | peak bucket |",
+                  "|---|---|---|---|---|---|---|---|---|", *limit_rows, ""]
     else:
         lines += ["No limit is stated for this endpoint; demand only.", ""]
-    lines += ["| demand | current peak | current mean | proposed peak | proposed mean |",
-              "|---|---|---|---|---|"]
+    lines += ["| demand | arm | peak | avg (window) | avg (active) |", "|---|---|---|---|---|"]
     for name in DEMANDS:
-        lines.append(f"| {name} | {_num(current['demand'][name]['peak'])} | "
-                     f"{_num(current['demand'][name]['mean'])} | "
-                     f"{_num(proposed['demand'][name]['peak'])} | "
-                     f"{_num(proposed['demand'][name]['mean'])} |")
+        for arm in ARMS:
+            demand = entry[arm]["demand"][name]
+            lines.append(f"| {name} | {arm} | {_num(demand['peak'])} | "
+                         f"{_num(demand['mean_window'])} | {_num(demand['mean_active'])} |")
     lines.append("")
     return lines
 
@@ -559,8 +827,9 @@ def scenario_lines(block: dict, *, depth: int) -> list[str]:
         lines += [f"Volume scale assumed by the proposal (proposed arm only, multiplying any "
                   f"stated for both arms): {_scale_text(block['volume_scale']['proposal'])}.", ""]
     if block["window_too_short"]:
-        return lines + [f"No utilisation figure: {too_short_text(block)}. "
-                        "`--capacity-min-buckets` sets the number needed.", ""]
+        return lines + [f"No utilisation figure: {too_short_text(block)}. A bucket counts "
+                        "when a request arrived in it; `--capacity-min-buckets` sets the "
+                        "number needed.", ""]
     lines += [f"Peak load: current {peak_text(block, 'current')}; proposed "
               f"{peak_text(block, 'proposed')}.", ""]
     for slug in sorted(block["endpoints"]):

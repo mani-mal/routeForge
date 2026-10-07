@@ -1,5 +1,5 @@
 """P3c-4: capacity in the scenario comparison (spec §7.2, §8.2; invariants
-C1, C5, C8-C10, C17)."""
+C1, C5, C8-C10, C15, C17, C20)."""
 from __future__ import annotations
 
 import asyncio
@@ -7,8 +7,8 @@ import json
 
 import pytest
 
-from app.eval.capacity import (NO_RANGE_NOTE, NO_REMEDY_NOTE, PEAK_COLUMN_NOTE, CapacityPlan,
-                               capacity_block, caveat_lines)
+from app.eval.capacity import (NO_RANGE_NOTE, NO_REMEDY_NOTE, PEAK_COLUMN_NOTE, CapacityError,
+                               CapacityPlan, capacity_block, caveat_lines)
 from app.eval.outcomes import _round6
 from app.eval.scenarios import (NO_RANKING_NOTE, SCHEMA, ScenarioError, compare,
                                 comparison_doc, render_comparison)
@@ -17,6 +17,7 @@ from tests.eval.sim_fixtures import BASE_SETTINGS
 from tests.eval.test_capacity import (CAPACITY_BANNED, LIMITS, QUIET_THEN_BUSY, keys_of,
                                       mixed_traffic, one_endpoint, replay, three_endpoints,
                                       traffic)
+from tests.eval.test_capacity_report import unpaired_peaks
 
 _TRIO = (("no-change", {}),
          ("twice-the-traffic", {"workload": {"volume_scale": 2}}),
@@ -48,11 +49,12 @@ def test_c1_without_a_plan_nothing_is_added():                                  
     assert "apacity" not in text and "peak load" not in text
 
 
-def test_c1_a_plan_adds_one_key_and_three_table_keys_and_changes_nothing_else():       # C1
+def test_c1_a_plan_adds_one_key_and_four_table_keys_and_changes_nothing_else():        # C1
     plain, loaded = _doc(capacity=None), _doc()
     assert set(loaded) - set(plain) == {"capacity"}
     for before, after in zip(plain["table"], loaded["table"]):
-        assert set(after) - set(before) == {"peak_utilisation", "peak_endpoint", "peak_limit"}
+        assert set(after) - set(before) == {"peak_utilisation", "peak_mean_window",
+                                            "peak_endpoint", "peak_limit"}
         assert {k: after[k] for k in before} == before
     stripped = {k: v for k, v in loaded.items() if k not in ("capacity", "table")}
     assert stripped == {k: v for k, v in plain.items() if k != "table"}
@@ -89,15 +91,38 @@ def test_c5_the_empty_scenario_has_the_same_load_in_both_arms():                
 def test_the_table_carries_the_proposed_arms_most_loaded_limit():
     doc = _doc()
     rows = {row["name"]: row for row in doc["table"]}
-    assert (rows["no-change"]["peak_utilisation"], rows["no-change"]["peak_endpoint"],
-            rows["no-change"]["peak_limit"]) == (2.4, "local-cheap", "output_tokens_per_minute")
-    assert rows["twice-the-traffic"]["peak_utilisation"] == 4.8
+    assert (rows["no-change"]["peak_utilisation"], rows["no-change"]["peak_mean_window"],
+            rows["no-change"]["peak_endpoint"], rows["no-change"]["peak_limit"]) == (
+        2.4, 1.066667, "local-cheap", "output_tokens_per_minute")
+    assert (rows["twice-the-traffic"]["peak_utilisation"],
+            rows["twice-the-traffic"]["peak_mean_window"]) == (4.8, 2.133333)
     assert rows["second-box"]["peak_utilisation"] == 2.4       # output tokens still bind
     text = render_comparison(doc)
     header = next(line for line in text.split("\n") if line.startswith("| scenario |"))
-    assert header.endswith("| affected apps | peak load (proposed) |")
-    assert "| none | 240.0% (local-cheap, output_tokens_per_minute) |" in text
-    assert "| none | 480.0% (local-cheap, output_tokens_per_minute) |" in text
+    assert header.endswith("| affected apps | peak / avg load (proposed) |")
+    assert ("| none | peak 240.0% / avg 106.7% (local-cheap, output_tokens_per_minute, "
+            "60 s buckets) |") in text
+    assert ("| none | peak 480.0% / avg 213.3% (local-cheap, output_tokens_per_minute, "
+            "60 s buckets) |") in text
+
+
+def test_c20_no_cell_or_sentence_prints_a_peak_without_the_average():                  # C20
+    """The comparison table, the shared section and every scenario's
+    section: wherever a peak utilisation is printed, the average over the
+    window is beside it; and a table row never has one without the other."""
+    for doc in (_doc(), _doc(mixed_traffic(), three_endpoints(), scenarios=(
+            ("no-change", {}), ("drop-mid", {"endpoints": {"remove": ["local-mid"]}})),
+            capacity=CapacityPlan(limits={"local-mid": {"max_concurrency": 2.0},
+                                          "local-big": {"requests_per_minute": 5.0}}))):
+        text = render_comparison(doc)
+        assert text.count(" / avg ") >= 2 * len(doc["table"]) and unpaired_peaks(text) == []
+        for row in doc["table"]:
+            assert row["peak_utilisation"] is not None
+            assert row["peak_mean_window"] is not None
+        for entry in doc["capacity"]["scenarios"]:
+            for arm in ("current", "proposed"):
+                assert {"utilisation", "mean_window", "buckets_over_share", "bucket_seconds",
+                        "buckets"} <= set(entry["peak"][arm])
 
 
 def test_c10_the_table_stays_in_file_order_and_nothing_ranks():                        # C10
@@ -123,9 +148,9 @@ def test_the_report_has_one_capacity_section_and_one_per_scenario():
     assert text.count("\n## Capacity\n") == 1 and text.count("\n### Capacity\n") == 3
     top = text[text.index("\n## Capacity\n"):]
     lines = top.split("\n")
-    assert lines[3:13] == caveat_lines() and lines[14] == NO_REMEDY_NOTE
-    assert ("Current arm peak load (the same for every scenario): 240.0% (local-cheap, "
-            "output_tokens_per_minute).") in top
+    assert lines[3:20] == caveat_lines() and lines[21] == NO_REMEDY_NOTE
+    assert ("Current arm peak load (the same for every scenario): peak 240.0% / avg 106.7% "
+            "(local-cheap, output_tokens_per_minute, 60 s buckets).") in top
     second = text[text.index("## Scenario: second-box"):]
     assert "#### local-cheap" in second
     assert "| max_concurrency | proposed | 2 | 60.0% |" in second
@@ -138,8 +163,8 @@ def test_the_report_has_one_capacity_section_and_one_per_scenario():
 def test_c8_a_short_window_fills_the_cell_with_the_state():                            # C8
     doc = _doc(rows=traffic([3] * 4))
     for row in doc["table"]:
-        assert (row["peak_utilisation"], row["peak_endpoint"], row["peak_limit"]) == (
-            None, None, None)
+        assert (row["peak_utilisation"], row["peak_mean_window"], row["peak_endpoint"],
+                row["peak_limit"]) == (None, None, None, None)
     assert all(entry["window_too_short"] for entry in doc["capacity"]["scenarios"])
     text = render_comparison(doc)
     assert text.count("| window too short (4 of the 10 buckets needed) |") == 3
@@ -151,6 +176,7 @@ def test_c8_a_short_window_fills_the_cell_with_the_state():                     
 def test_a_scenario_with_no_limit_anywhere_says_not_stated():
     doc = _doc(scenarios=(("no-change", {}),), capacity=CapacityPlan())
     assert doc["table"][0]["peak_utilisation"] is None
+    assert doc["table"][0]["peak_mean_window"] is None
     assert "| none | not stated |" in render_comparison(doc)
 
 
@@ -168,7 +194,8 @@ def test_c9_ranges_and_capacity_together_leave_capacity_as_points():            
     assert text.count(NO_RANGE_NOTE) == 1
     cells = [line.rsplit("|", 2)[1] for line in text.split("\n")
              if line.startswith("| twice-the-traffic |")]
-    assert cells == [" 480.0% (local-cheap, output_tokens_per_minute) "]
+    assert cells == [" peak 480.0% / avg 213.3% (local-cheap, output_tokens_per_minute, "
+                     "60 s buckets) "]
 
 
 def test_c9_volume_scale_does_not_move_a_range_even_with_small_apps_pooled():          # C9
@@ -200,3 +227,14 @@ def test_a_bad_capacity_in_a_scenario_names_the_scenario(body):
     with pytest.raises(ScenarioError) as err:
         _doc(scenarios=(("no-change", {}), ("bad", body)))
     assert err.value.where.startswith("scenarios[1](bad).proposal.capacity.local-")
+
+
+def test_c15_a_latency_too_long_to_place_names_the_scenario():                         # C15
+    """A scenario that asserts a service time of more than 24 hours for an
+    endpoint rows land on is refused, naming the scenario and the endpoint
+    -- never silently ignored."""
+    body = {"endpoints": {"update": {"local-cheap": {"latency_ms": 1e12}}}}
+    with pytest.raises(CapacityError) as err:
+        _doc(scenarios=(("no-change", {}), ("slow-box", body)))
+    assert err.value.where == "scenarios[1](slow-box).endpoints.local-cheap.latency_ms"
+    assert "24 hours" in err.value.message

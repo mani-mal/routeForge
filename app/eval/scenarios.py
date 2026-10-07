@@ -10,8 +10,9 @@ file order, and nothing is applied (handoff §28).
 
 With a `CapacityPlan` (P3c-4) every scenario also gets a capacity block
 (`app/eval/capacity.py`) under one `capacity` key, and the table one more
-column: the proposed arm's most loaded stated limit. That is a figure, not
-an ordering; the table stays in file order.
+column: the proposed arm's most loaded stated limit, its peak and its
+average over the window. That is a figure, not an ordering; the table stays
+in file order.
 
 With an `UncertaintyPlan` (P3c-3) every scenario also gets ranges
 (`app/eval/uncertainty.py`), under one `uncertainty` key. Every scenario is
@@ -30,8 +31,8 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from app.config.schema import Settings
-from app.eval.capacity import (PEAK_COLUMN_NOTE, CapacityPlan, capacity_block, intro_lines,
-                               peak_text, scenario_lines)
+from app.eval.capacity import (PEAK_COLUMN_NOTE, CapacityError, CapacityPlan, capacity_block,
+                               intro_lines, peak_text, scenario_lines)
 from app.eval.outcomes import _fmt, _round6
 from app.eval.proposal import (SCHEMA as PROPOSAL_SCHEMA, ProposalError, _validate_keys,
                                _validate_schema, apply_proposal, assumptions_block,
@@ -268,9 +269,16 @@ async def compare(records: list[dict], snapshot: dict, scenarios_doc: dict, *,
                                       days=window_days(sim["inputs"]["window"]))
                 ranges.append({"name": item.name, **block, "table": table_ranges(block)})
             if capacity is not None:
-                loads.append({"name": item.name,
-                              **capacity_block(results, capacity, item.proposal,
-                                               excluded=excluded)})
+                try:
+                    block = capacity_block(results, capacity, item.proposal, excluded=excluded)
+                except CapacityError as exc:
+                    # Something this scenario asserts cannot be placed (a
+                    # latency above 24 hours): name the scenario, as a bad
+                    # proposal is named.
+                    raise CapacityError(
+                        f"scenarios[{len(loads)}]({item.name}).{exc.where}",
+                        exc.message) from exc
+                loads.append({"name": item.name, **block})
     finally:
         await close_scenario(current)
     rows, baseline, window = shared      # a file always holds at least one scenario
@@ -296,12 +304,14 @@ LIKE_FOR_LIKE_NOTE = (
 def _table_row(entry: dict, window: dict | None, capacity: dict | None = None) -> dict:
     """One comparison-table row. Exactly these keys -- there is no rank,
     score or recommendation field, by design (S8). With a capacity block
-    (P3c-4) three more: the proposed arm's most loaded stated limit, all
-    None when no limit is stated or the window is too short."""
+    (P3c-4) four more: the proposed arm's most loaded stated limit -- its
+    peak utilisation and, always beside it, its mean over the whole window
+    -- all None when no limit is stated or the window is too short."""
     row = _plain_table_row(entry, window)
     if capacity is not None:
         peak = capacity["peak"]["proposed"] or {}
         row["peak_utilisation"] = peak.get("utilisation")
+        row["peak_mean_window"] = peak.get("mean_window")
         row["peak_endpoint"] = peak.get("endpoint")
         row["peak_limit"] = peak.get("limit")
     return row
@@ -351,7 +361,7 @@ def comparison_doc(comparison: Comparison, *, inputs: dict) -> dict:
     }
     if comparison.capacity is not None:
         # The ONE top-level key a capacity plan adds (the table rows gain
-        # their three keys above); every other key is unchanged.
+        # their four keys above); every other key is unchanged.
         doc["capacity"] = comparison.capacity
     if comparison.uncertainty is not None:
         # The ONE key `--uncertainty` adds; every key above is unchanged.
@@ -524,7 +534,7 @@ def render_comparison(doc: dict) -> str:
     ranges = {entry["name"]: entry for entry in uncertainty["scenarios"]} if uncertainty else {}
     capacity = doc.get("capacity")
     loads = {entry["name"]: entry for entry in capacity["scenarios"]} if capacity else {}
-    columns = _TABLE_COLUMNS + (("peak load (proposed)",) if capacity else ())
+    columns = _TABLE_COLUMNS + (("peak / avg load (proposed)",) if capacity else ())
     lines.append("| " + " | ".join(columns) + " |")
     lines.append("|" + "---|" * len(columns))
     lines += [_comparison_row(row, ranges[row["name"]]["table"] if ranges else None,

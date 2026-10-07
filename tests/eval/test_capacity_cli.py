@@ -1,5 +1,5 @@
 """P3c-4: `scripts/policy_simulate.py` with a stated capacity, end to end
-(spec §3, §7, §8; invariants C1, C2, C8, C9, C13-C15).
+(spec §3, §7, §8; invariants C1, C2, C8, C9, C13-C15, C20).
 
 Runs the CLI in-process. "Capacity only adds" is checked against the outputs
 pinned from before P3c-3 (`tests/eval/test_uncertainty_golden.py`), which
@@ -14,6 +14,7 @@ import pytest
 
 from app.eval.capacity import NO_RANGE_NOTE, SCHEMA, caveat_lines, render_capacity_section
 from tests.eval.test_capacity import LIMITS, QUIET_THEN_BUSY, one_endpoint, traffic
+from tests.eval.test_capacity_report import unpaired_peaks
 from tests.eval.test_uncertainty_golden import (EXPECTED, MODES, ROOT, _dump, _export_lines,
                                                 load_cli, run_mode)
 
@@ -50,7 +51,7 @@ def _strip(doc: dict) -> dict:
     doc.pop("simulation_id", None)
     doc.pop("comparison_id", None)
     for row in doc.get("table", []):
-        for key in ("peak_utilisation", "peak_endpoint", "peak_limit"):
+        for key in ("peak_utilisation", "peak_mean_window", "peak_endpoint", "peak_limit"):
             row.pop(key, None)
     return doc
 
@@ -145,29 +146,35 @@ def test_c2_the_run_is_byte_identical_twice(tmp_path):                          
 def test_c14_the_cli_reports_the_hand_computed_utilisation(tmp_path):                  # C14
     """The pattern of `test_capacity.py::test_c14_utilisation_matches_the_closed_form`,
     from files, with twice the traffic proposed: 120% -> 240% of one
-    concurrent request, mean 53.3% -> 106.7%."""
+    concurrent request, 53.3% -> 106.7% on average over the window."""
     code, out = _own_run(tmp_path, {"workload": {"volume_scale": 2}}, capacity=LIMITS)
     assert code == 0
     sim = json.loads((out / "simulation.json").read_text())
     entry = sim["capacity"]["endpoints"]["local-cheap"]
     current, proposed = entry["current"]["limits"], entry["proposed"]["limits"]
-    assert (current["max_concurrency"]["peak"], current["max_concurrency"]["mean"]) == (
-        1.2, 0.533333)
-    assert (proposed["max_concurrency"]["peak"], proposed["max_concurrency"]["mean"]) == (
-        2.4, 1.066667)
+    for stated, peak, mean in ((current["max_concurrency"], 1.2, 0.533333),
+                               (proposed["max_concurrency"], 2.4, 1.066667)):
+        assert (stated["peak"], stated["mean_window"], stated["mean_active"]) == (
+            peak, mean, mean)
+    assert entry["proposed"]["service_time_sources"] == {
+        "recorded": 160, "endpoint_mean": 0, "replay": 0, "asserted": 0}
     assert current["max_concurrency"]["buckets_over"] == 10
     assert current["max_concurrency"]["requests_over_share"] == 0.75
     assert sim["capacity"]["peak"]["proposed"] == {
         "endpoint": "local-cheap", "limit": "output_tokens_per_minute", "utilisation": 4.8,
-        "bucket": "2026-09-20T12:20:00+00:00"}
+        "bucket": "2026-09-20T12:20:00+00:00", "mean_window": 2.133333,
+        "buckets_over_share": 0.333333, "bucket_seconds": 60, "buckets": 30}
     # Volume changed nothing else: no route moved and no cost figure doubled.
     assert sim["totals"]["route_changed"] == 0 and sim["totals"]["cost_usd"]["delta"] == 0.0
     assert sim["assumptions"]["token_scale"] == {} and "volume_scale" not in sim["assumptions"]
     assert sim["edits"] == {"workload": {"volume_scale": 2}}
     text = (out / "report.md").read_text()
-    assert ("| max_concurrency | proposed | 1 | 240.0% | 106.7% | 10 of 30 | 75.0% | "
+    assert ("| max_concurrency | proposed | 1 | 240.0% | 106.7% | 106.7% | 10 of 30 | 75.0% | "
             "2026-09-20T12:20:00+00:00 |") in text
-    assert text.split("## Capacity\n\n")[1].split("\n")[:10] == caveat_lines()
+    assert ("Peak load: current peak 240.0% / avg 106.7% (local-cheap, "
+            "output_tokens_per_minute, 60 s buckets); proposed peak 480.0% / avg 213.3% "
+            "(local-cheap, output_tokens_per_minute, 60 s buckets).") in text
+    assert text.split("## Capacity\n\n")[1].split("\n")[:17] == caveat_lines()
 
 
 def test_a_capacity_stated_only_in_the_proposal_is_enough(tmp_path):
@@ -180,7 +187,8 @@ def test_a_capacity_stated_only_in_the_proposal_is_enough(tmp_path):
     assert entry["proposed"]["limits"]["max_concurrency"]["peak"] == 0.6
     assert sim["capacity"]["peak"] == {"current": None, "proposed": {
         "endpoint": "local-cheap", "limit": "max_concurrency", "utilisation": 0.6,
-        "bucket": "2026-09-20T12:20:00+00:00"}}
+        "bucket": "2026-09-20T12:20:00+00:00", "mean_window": 0.266667,
+        "buckets_over_share": 0.0, "bucket_seconds": 60, "buckets": 30}}
 
 
 def test_since_cuts_the_demand_with_the_rows(tmp_path):
@@ -188,7 +196,7 @@ def test_since_cuts_the_demand_with_the_rows(tmp_path):
     assert code == 0
     capacity = json.loads((out / "simulation.json").read_text())["capacity"]
     assert capacity["window"]["first_bucket"] == "2026-09-20T12:20:00+00:00"
-    assert capacity["window"]["active_buckets"] == 10
+    assert capacity["window"]["arrival_buckets"] == 10 and capacity["window"]["buckets"] == 10
     assert capacity["endpoints"]["local-cheap"]["current"]["requests"] == 120.0
 
 
@@ -207,9 +215,27 @@ def test_c8_a_short_export_says_so_in_the_json_the_table_and_the_report(tmp_path
     single = tmp_path / "single"
     assert run_mode("proposal", single, "--capacity", path, "--capacity-bucket", "86400") == 0
     block = _doc("proposal", single)["capacity"]
-    assert block["window_too_short"] is True and block["window"]["active_buckets"] == 3
+    assert block["window_too_short"] is True and block["window"]["arrival_buckets"] == 3
     assert "No utilisation figure: window too short (3 of the 10 buckets needed)." in (
         single / "report.md").read_text()
+
+
+# --- C20: no peak without the average, in what is written --------------------------------
+
+@pytest.mark.parametrize("mode", ["proposal", "scenarios"])
+def test_c20_the_written_report_never_prints_a_peak_alone(mode, tmp_path):             # C20
+    out = tmp_path / "out"
+    assert run_mode(mode, out, "--capacity", _capacity_file(tmp_path)) == 0
+    text = (out / "report.md").read_text()
+    assert " / avg " in text and unpaired_peaks(text) == []
+    doc = _doc(mode, out)
+    blocks = [doc["capacity"]] if mode == "proposal" else doc["capacity"]["scenarios"]
+    for block in blocks:
+        for arm in ("current", "proposed"):
+            assert block["peak"][arm]["mean_window"] is not None
+    for row in doc.get("table", []):
+        assert (row["peak_utilisation"] is None) == (row["peak_mean_window"] is None)
+        assert row["peak_utilisation"] is not None
 
 
 # --- C9: with --uncertainty ------------------------------------------------------------
@@ -294,3 +320,27 @@ def test_the_agreement_gate_still_refuses_first(tmp_path, capsys):
     code, out = _own_run(tmp_path, {}, "--min-agreement", "0.9", rows=rows, capacity=LIMITS)
     assert code == 4 and "below --min-agreement" in capsys.readouterr().err
     assert not out.exists()
+
+
+@pytest.mark.parametrize("scenarios", [False, True])
+def test_c15_an_asserted_latency_too_long_to_place_is_refused(tmp_path, capsys, scenarios):  # C15
+    """More than 24 hours of service time cannot be placed in the window,
+    and an operator's claim is never dropped in silence: exit 2, nothing
+    written, the endpoint named."""
+    body = {"endpoints": {"update": {"local-cheap": {"latency_ms": 1e12}}}}
+    if not scenarios:
+        code, out = _own_run(tmp_path, body, capacity=LIMITS)
+        _refused(capsys, code, out, "error: capacity: endpoints.local-cheap.latency_ms: ")
+        return
+    export, snap, doc = tmp_path / "e.ndjson", tmp_path / "s.json", tmp_path / "sc.json"
+    export.write_text(_export_lines(traffic(QUIET_THEN_BUSY)), encoding="utf-8")
+    snap.write_text(_dump(one_endpoint()), encoding="utf-8")
+    doc.write_text(_dump({"schema": "routeforge.policy-scenarios/v1", "scenarios": [
+        {"name": "slow-box", "proposal": body}]}), encoding="utf-8")
+    out = tmp_path / "out"
+    code = load_cli().main(["--export", str(export), "--snapshot", str(snap),
+                            "--scenarios", str(doc), "--out", str(out),
+                            "--config-dir", str(ROOT / "config"),
+                            "--capacity", _capacity_file(tmp_path, LIMITS)])
+    _refused(capsys, code, out,
+             "error: capacity: scenarios[0](slow-box).endpoints.local-cheap.latency_ms: ")
