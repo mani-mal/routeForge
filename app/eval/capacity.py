@@ -393,3 +393,201 @@ def capacity_block(results: list[RowResult], plan: CapacityPlan, proposal: dict 
         for slug in slugs}
     block["peak"] = {arm: _peak(block["endpoints"], arm) for arm in ARMS}
     return block
+
+
+# --- report text (spec §8, §9) ----------------------------------------------------
+
+#: Opens every capacity section, verbatim (spec §9.1, invariant C12), one
+#: string per source line without the leading "> ".
+CAPACITY_CAVEAT = (
+    "**Stated capacity against replayed demand.** Every limit below is a figure the operator\n"
+    "stated; RouteForge has not measured it and does not manage capacity. Demand is the replayed\n"
+    "route of each recorded request, grouped into buckets by estimated arrival time (the time\n"
+    "the record was written minus its recorded latency). Nothing here models queueing, batching,\n"
+    "autoscaling, the serving engine's real concurrency behaviour, load that reaches an endpoint\n"
+    "without passing through RouteForge, bursts shorter than a bucket, or the load of failover\n"
+    "attempts. Replay gives each endpoint one latency, so offered concurrency is the request\n"
+    "rate times that latency. RouteForge does not know what an endpoint does above a stated\n"
+    "limit (queue, shed or slow down), so no rejection and no delay is predicted. An export of\n"
+    "a few buckets says little."
+)
+
+#: Printed under the caveat, verbatim (spec §9.4, invariant C10).
+NO_REMEDY_NOTE = (
+    "This section reports load against stated limits and proposes no remedy: not more "
+    "capacity, and not a change to any policy or protection."
+)
+
+#: Printed when the same run also has `--uncertainty` (spec §9.3, invariant C9).
+NO_RANGE_NOTE = (
+    "Capacity figures are points and carry no range. `--uncertainty` resamples rows as if "
+    "their order did not matter; capacity depends on when requests arrive, so a resample of "
+    "rows says nothing about it. Resampling whole blocks of time is not built."
+)
+
+#: Printed under the comparison table when it has the peak-load column.
+PEAK_COLUMN_NOTE = (
+    "Peak load is the proposed arm's most loaded stated limit and the endpoint it is on. It "
+    "is listed in file order like every other column: a lower figure does not make a "
+    "scenario the one to choose."
+)
+
+
+def caveat_lines() -> list[str]:
+    return ["> " + line for line in CAPACITY_CAVEAT.split("\n")]
+
+
+def _pct(value: float | None) -> str:
+    return "n/a" if value is None else f"{value * 100:.1f}%"
+
+
+def _num(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.6g}"
+
+
+def _latency_text(arm: dict) -> str:
+    if arm["latency_ms"] is None:
+        return "none (no row routed there)"
+    return f"{arm['latency_ms']:.6g} ms ({arm['latency_source']})"
+
+
+def too_short_text(block: dict) -> str:
+    """The explicit state a short export gets instead of a utilisation."""
+    window = block["window"]
+    return (f"window too short ({window['active_buckets']} of the {block['min_buckets']} "
+            f"buckets needed)")
+
+
+def peak_text(block: dict, arm: str) -> str:
+    """One arm's most loaded stated limit, for a table cell or a line:
+    `230.0% (local-llama, max_concurrency)`, `not stated`, or the
+    window-too-short state."""
+    if block["window_too_short"]:
+        return too_short_text(block)
+    peak = block["peak"][arm]
+    if peak is None:
+        return "not stated"
+    return f"{_pct(peak['utilisation'])} ({peak['endpoint']}, {peak['limit']})"
+
+
+def _scale_text(scale: dict[str, float]) -> str:
+    return ", ".join(f"{name}={_num(value)}" for name, value in sorted(scale.items())) or "none"
+
+
+def window_lines(block: dict) -> list[str]:
+    """What every scenario of one run shares: the buckets, the window and
+    the rows that could not be counted."""
+    window, rows = block["window"], block["rows"]
+    lines = [f"Buckets of {block['bucket_seconds']} s by estimated arrival time. "
+             f"{window['active_buckets']} of {window['buckets']} bucket(s) in the window hold "
+             f"traffic" + (f" ({window['first_bucket']} to {window['last_bucket']})"
+                           if window["active_buckets"] else "")
+             + f"; {rows['simulated']} simulated row(s). Means are over the buckets that hold "
+             "traffic.", ""]
+    if block["volume_scale"]["base"]:
+        lines += ["Volume scale stated for both arms: "
+                  f"{_scale_text(block['volume_scale']['base'])}.", ""]
+    if rows["without_ts"]:
+        lines += [f"**Note:** {rows['without_ts']} simulated row(s) have no timestamp and are "
+                  "in no bucket: demand is understated by them.", ""]
+    if rows["excluded_not_counted"]:
+        lines += [f"**Note:** {rows['excluded_not_counted']} excluded row(s) (see \"Excluded "
+                  "rows\") may have loaded an endpoint and are not in the demand.", ""]
+    if rows["estimated_tokens"]:
+        lines += [f"**Note:** {rows['estimated_tokens']} row(s) have no backend token count; "
+                  "their token demand is RouteForge's own estimate.", ""]
+    return lines
+
+
+def _limit_rows(entry: dict, active: int, volume_scales: dict[str, dict[str, float]] | None = None) -> list[str]:
+    rows = []
+    volume_scales = volume_scales or {}
+    for limit in CAPACITY_LIMITS:
+        for arm in ARMS:
+            stated = entry[arm]["limits"].get(limit)
+            if stated is None:
+                if limit in entry["current"]["limits"] or limit in entry["proposed"]["limits"]:
+                    rows.append(f"| {limit} | {arm} | not stated | n/a | n/a | n/a | n/a | n/a |")
+                continue
+            # Scale the stated limit by the proposal's volume_scale for the proposed arm
+            stated_limit = stated['limit']
+            if arm == "proposed" and volume_scales.get("proposal"):
+                # Get the "*" scale factor (applies to all) or use 1 if not present
+                scale_factor = volume_scales["proposal"].get("*", 1.0)
+                stated_limit = stated_limit * scale_factor
+            rows.append(
+                f"| {limit} | {arm} | {_num(stated_limit)} | {_pct(stated['peak'])} | "
+                f"{_pct(stated['mean'])} | {stated['buckets_over']} of {active} | "
+                f"{_pct(stated['requests_over_share'])} | {stated['peak_bucket'] or 'n/a'} |")
+    return rows
+
+
+def endpoint_lines(slug: str, entry: dict, block: dict, *, depth: int) -> list[str]:
+    """One endpoint: requests and latency per arm, utilisation of each
+    stated limit, then the demand itself (stated limit or not)."""
+    current, proposed = entry["current"], entry["proposed"]
+    lines = [f"{'#' * depth} {slug}", "",
+             f"Requests: current {_num(current['requests'])}, proposed "
+             f"{_num(proposed['requests'])}. Replayed latency: current "
+             f"{_latency_text(current)}, proposed {_latency_text(proposed)}.", ""]
+    for arm in ARMS:
+        if entry[arm]["latency_source"] == "tier_default":
+            lines += [f"**Note:** the {arm} arm's latency for this endpoint is a tier default, "
+                      "not a measurement: its offered concurrency rests on that default alone.",
+                      ""]
+        if entry[arm]["latency_exceeds_bucket"]:
+            lines += [f"**Note:** the {arm} arm's replayed latency is longer than a bucket, so a "
+                      "request's whole service time is counted in the bucket it arrived in. "
+                      "A longer `--capacity-bucket` avoids that.", ""]
+    limit_rows = _limit_rows(entry, block["window"]["active_buckets"], block.get("volume_scale"))
+    if limit_rows:
+        lines += ["| limit | arm | stated | peak | mean | buckets over 100% | "
+                  "requests in those buckets | peak bucket |",
+                  "|---|---|---|---|---|---|---|---|", *limit_rows, ""]
+    else:
+        lines += ["No limit is stated for this endpoint; demand only.", ""]
+    lines += ["| demand | current peak | current mean | proposed peak | proposed mean |",
+              "|---|---|---|---|---|"]
+    for name in DEMANDS:
+        lines.append(f"| {name} | {_num(current['demand'][name]['peak'])} | "
+                     f"{_num(current['demand'][name]['mean'])} | "
+                     f"{_num(proposed['demand'][name]['peak'])} | "
+                     f"{_num(proposed['demand'][name]['mean'])} |")
+    lines.append("")
+    return lines
+
+
+def scenario_lines(block: dict, *, depth: int) -> list[str]:
+    """One proposal's (or one scenario's) capacity figures: its own volume
+    scale, each arm's peak load, then every endpoint -- or the
+    window-too-short state and nothing else."""
+    lines = []
+    if block["volume_scale"]["proposal"]:
+        lines += [f"Volume scale assumed by the proposal (proposed arm only, multiplying any "
+                  f"stated for both arms): {_scale_text(block['volume_scale']['proposal'])}.", ""]
+    if block["window_too_short"]:
+        return lines + [f"No utilisation figure: {too_short_text(block)}. "
+                        "`--capacity-min-buckets` sets the number needed.", ""]
+    lines += [f"Peak load: current {peak_text(block, 'current')}; proposed "
+              f"{peak_text(block, 'proposed')}.", ""]
+    for slug in sorted(block["endpoints"]):
+        lines += endpoint_lines(slug, block["endpoints"][slug], block, depth=depth)
+    return lines
+
+
+def intro_lines(block: dict, *, ranged: bool) -> list[str]:
+    """The top of a capacity section: the caveat, the no-remedy sentence,
+    the shared window, and -- with `--uncertainty` -- why there is no range."""
+    lines = [*caveat_lines(), "", NO_REMEDY_NOTE, "", *window_lines(block)]
+    if ranged:
+        lines += [NO_RANGE_NOTE, ""]
+    return lines
+
+
+def render_capacity_section(block: dict, *, ranged: bool = False) -> str:
+    """The `## Capacity` section of a single-proposal report. `ranged` is
+    True when the same report also carries `--uncertainty` ranges. Ends with
+    exactly one newline."""
+    lines = ["## Capacity", "", *intro_lines(block, ranged=ranged),
+             *scenario_lines(block, depth=3)]
+    return "\n".join(lines).rstrip("\n") + "\n"
