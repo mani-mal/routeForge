@@ -77,12 +77,23 @@ CAVEAT_GROUPS = (
     "A group is the cases of this suite that carry one label. A figure over fewer "
     "cases than the minimum prints its case count and no rate. A group above the "
     "minimum is still small: read its case count with every figure.")
+CAVEAT_WORST = (
+    "The worst group is the extreme of many small-sample figures, so it is worse "
+    "than a typical group partly by selection. The same cases can carry several "
+    "labels, so one set of cases can appear under more than one dimension; a tie is "
+    "listed, not broken.")
+CAVEAT_LABELS = (
+    "Placement, protection and workload labels are the case author's tags. They are "
+    "not read from the compiled policy and can differ from it. An application with "
+    "no tag is a fingerprint of the case's policy as written.")
 CAVEAT_TO_MEASURE = "Live-backend results: TO MEASURE."
 
 
 def bench_caveats(mode: str) -> list[str]:
     """The caveats every new report opens with. `mode` is `run.json`'s
     `"simulated"` or `"live"`."""
+    if mode not in ("simulated", "live"):
+        raise ValueError(f"mode must be 'simulated' or 'live'; got {mode!r}")
     first = CAVEAT_SIMULATED if mode == "simulated" else CAVEAT_LIVE
     tail = [CAVEAT_TO_MEASURE] if mode == "simulated" else []
     return [first, CAVEAT_TIER_RULE, CAVEAT_SYNTHETIC, *tail]
@@ -176,12 +187,16 @@ def worst_groups(dimensions: dict[str, dict[str, dict]]) -> dict[str, dict | Non
             continue
         values = [block["metrics"][metric]["value"] for _, _, block in printed]
         target = min(values) if metric in LOWER_IS_WORSE else max(values)
-        dim, label, block = next(p for p, v in zip(printed, values) if v == target)
+        tied = [p for p, v in zip(printed, values) if v == target]
+        dim, label, block = tied[0]
         worst[metric] = {"dimension": dim, "group": label, "value": target,
                          "n": block["metrics"][metric]["n"],
                          "n_cases": block["n_cases"],
+                         "groups_total": sum(len(dimensions.get(d, {}))
+                                             for d in DIMENSIONS),
                          "groups_printed": len(printed),
-                         "groups_at_value": sum(1 for v in values if v == target)}
+                         "groups_at_value": len(tied),
+                         "tied": [f"{d}={g}" for d, g, _ in tied]}
     return worst
 
 
@@ -217,7 +232,7 @@ def group_report(scores_by_strategy: dict[str, list[CaseScore]],
                         for dim in DIMENSIONS},
         "strategies": {name: strategy_groups(scores, keys, min_size)
                        for name, scores in scores_by_strategy.items()},
-        "caveats": [*bench_caveats(mode), CAVEAT_GROUPS],
+        "caveats": [*bench_caveats(mode), CAVEAT_GROUPS, CAVEAT_WORST, CAVEAT_LABELS],
     })
 
 
@@ -241,25 +256,43 @@ def render_group_report(doc: dict, *, detail: str) -> str:
     for dim in doc["dimensions"]:
         for label, n in doc["group_sizes"][dim].items():
             lines.append(f"| {dim} | {label} | {n} |")
+    lines += ["", "## Counts per strategy", "",
+              "Counts over every case. They are never withheld for a small group.", "",
+              "| strategy | cases | violations | empty-set mismatches |",
+              "|---|---|---|---|"]
+    for name in sorted(doc["strategies"]):
+        overall = doc["strategies"][name]["overall"]
+        lines.append(f"| {name} | {overall['n_cases']} | {overall['violations']} | "
+                     f"{overall['empty_set_mismatches']} |")
     lines += ["", "## Worst group per metric", "",
               "The worst printed figure across every group of every dimension. It "
-              "names a set of cases, not a model or an endpoint.", "",
-              "| strategy | metric | dimension | group | figure | group cases |",
-              "|---|---|---|---|---|---|"]
-    for name, block in doc["strategies"].items():
+              "names a set of cases, not a model or an endpoint. `groups` is how many "
+              "groups print the metric, of how many exist, and how many share the "
+              "worst value.", "",
+              "| strategy | metric | dimension | group | figure | group cases | groups |",
+              "|---|---|---|---|---|---|---|"]
+    for name in sorted(doc["strategies"]):
+        block = doc["strategies"][name]
         for metric in doc["metrics"]:
             worst = block["worst"][metric]
             if worst is None:
                 lines.append(f"| {name} | {metric} | n/a | n/a | "
-                             "no group has enough cases | n/a |")
-            elif (worst["groups_printed"] > 1
-                  and worst["groups_at_value"] == worst["groups_printed"]):
+                             "no group has enough cases | n/a | n/a |")
+                continue
+            count = (f"{worst['groups_printed']} of {worst['groups_total']} printed; "
+                     f"{worst['groups_at_value']} at this value")
+            if (worst["groups_printed"] > 1
+                    and worst["groups_at_value"] == worst["groups_printed"]):
                 lines.append(f"| {name} | {metric} | all | all | {worst['value']:.6g} in "
-                             f"every printed group ({worst['groups_printed']}) | n/a |")
+                             f"every printed group | n/a | {count} |")
+            elif worst["groups_at_value"] > 1:
+                lines.append(f"| {name} | {metric} | tied | "
+                             f"{', '.join(worst['tied'])} | {worst['value']:.6g} | n/a | "
+                             f"{count} |")
             else:
                 lines.append(f"| {name} | {metric} | {worst['dimension']} | "
                              f"{worst['group']} | {figure_text(worst)} | "
-                             f"{worst['n_cases']} |")
+                             f"{worst['n_cases']} | {count} |")
     block = doc["strategies"].get(detail)
     if block is not None:
         lines += ["", f"## Every group: `{detail}`", "",

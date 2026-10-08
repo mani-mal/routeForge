@@ -31,6 +31,8 @@ from app.eval.groups import (CAVEAT_SIMULATED, CAVEAT_SYNTHETIC, CAVEAT_TIER_RUL
 from app.eval.oracle import CaseScore
 from app.eval.version_check import (
     CHECK_CONDITIONAL,
+    CHECK_CONDITIONAL_METRICS,
+    CHECK_MULTIPLICITY,
     CHECK_METRICS,
     CHECK_NO_EFFECT,
     CHECK_NO_TOLERANCE,
@@ -39,6 +41,7 @@ from app.eval.version_check import (
     change_of,
     compare,
     decide,
+    min_replicates,
     parse_tolerances,
     render_check,
     run_check,
@@ -87,36 +90,40 @@ def test_e10_worsening_is_signed_so_that_positive_is_worse():
     assert worsening("cost_regret", 1.0, None) is None
 
 
-@pytest.mark.parametrize("w, hi, tol, state", [
-    (None, None, 0.1, "undefined"),
-    (0.2, 0.3, 0.1, "regressed"),
-    (0.2, None, 0.1, "regressed"),          # the point decides, range or no range
-    (0.05, 0.2, 0.1, "inconclusive"),       # the point is inside, the range is not
-    (0.05, None, 0.1, "inconclusive"),      # no range: nothing shows it is inside
-    (0.05, 0.1, 0.1, "within_tolerance"),   # the boundary is inclusive
-    (0.1, 0.1, 0.1, "within_tolerance"),
-    (-0.3, -0.1, 0.0, "within_tolerance"),  # an improvement
-    (0.0, 0.0, 0.0, "within_tolerance"),
+@pytest.mark.parametrize("w, lo, hi, tol, state", [
+    (None, None, None, 0.1, "undefined"),
+    (0.3, 0.2, 0.4, 0.1, "regressed"),             # the WHOLE range is beyond
+    (0.2, 0.05, 0.3, 0.1, "inconclusive"),         # the point is beyond, the range is not
+    (0.2, None, None, 0.1, "inconclusive"),        # no range: the point decides nothing
+    (0.05, 0.0, 0.2, 0.1, "inconclusive"),         # the point is inside, the range is not
+    (0.05, None, None, 0.1, "inconclusive"),
+    (0.05, 0.0, 0.1, 0.1, "within_tolerance"),     # the boundary is inclusive
+    (0.1, 0.1, 0.1, 0.1, "within_tolerance"),
+    (0.2, 0.1, 0.3, 0.1, "inconclusive"),          # lo AT the tolerance is not beyond it
+    (-0.3, -0.5, -0.1, 0.0, "within_tolerance"),   # an improvement
+    (0.0, 0.0, 0.0, 0.0, "within_tolerance"),
+    (float("nan"), float("nan"), float("nan"), 10.0, "undefined"),   # never a pass
+    (float("inf"), 0.0, 0.0, 10.0, "undefined"),
+    (-float("inf"), 0.0, 0.0, 10.0, "undefined"),
+    (0.0, float("nan"), 0.0, 10.0, "inconclusive"),
+    (0.0, 0.0, float("nan"), 10.0, "inconclusive"),
 ])
-def test_e10_the_decision_rule_branch_by_branch(w, hi, tol, state):
-    assert decide(w, hi, tol) == state
+def test_e10_the_decision_rule_branch_by_branch(w, lo, hi, tol, state):
+    assert decide(w, lo, hi, tol) == state
 
 
 def test_e10_the_tolerance_boundary_is_not_decided_by_float_noise():
     w = 0.92 - 0.90
     assert w > 0.02                                   # 0.020000000000000018
-    assert decide(w, w, 0.02) == "within_tolerance"
+    assert decide(w, w, w, 0.02) == "within_tolerance"
 
 
-def test_e17_the_lower_end_of_a_range_never_enters_the_decision():
-    """`decide` does not take `lo` at all; `change_of` does not take a
-    tolerance. A range that includes 0 therefore decides nothing by itself."""
-    assert change_of(False, -0.1, 0.3) == "not_detectable"
-    assert change_of(False, 0.0, 0.3) == "not_detectable"
-    assert change_of(False, 0.1, 0.3) == "worse"
-    assert change_of(False, -0.3, -0.1) == "better"
-    assert change_of(False, None, None) == "undefined"
-    assert change_of(True, 0.0, 0.0) == "none"
+def test_e17_a_range_that_includes_zero_decides_nothing_on_its_own():
+    """`change_of` takes no tolerance: a range that includes 0 is
+    `not_detectable` whatever state the rule gave."""
+    assert change_of(False, -1.0, 2.0) == "not_detectable"
+    assert decide(1.5, -1.0, 2.0, 0.5) == "inconclusive"
+    assert decide(0.1, -1.0, 0.4, 0.5) == "within_tolerance"
 
 
 def test_e10_a_constant_shift_has_a_degenerate_range_by_hand():
@@ -139,8 +146,76 @@ def test_e17_a_regression_whose_range_includes_zero_is_both_things():
     f = compare(base, cand, "overall", plan)["mean_chosen_cost"]
     assert f["worsening"] == pytest.approx(4 / 6)
     assert f["lo"] == -1.0 and f["hi"] > 0.5
-    assert f["change"] == "not_detectable" and f["state"] == "regressed"
-    assert _check(base, cand, tolerances={"mean_chosen_cost": 0.5})["verdict"] == "regressed"
+    # One case moved by 10: worse than tolerance on these cases, and resampling
+    # the cases cannot separate that from within tolerance. Not `regressed`.
+    assert f["change"] == "not_detectable" and f["state"] == "inconclusive"
+    assert f["point_beyond_tolerance"] is True
+    doc = _check(base, cand, tolerances={"mean_chosen_cost": 0.5})
+    assert doc["verdict"] == "inconclusive" and doc["exit_code"] == 4
+    assert "inconclusive (point beyond tolerance)" in render_check(doc)
+
+
+def test_a_shift_on_every_case_is_regressed_across_its_whole_range():
+    base = [_score(i) for i in _ids(10)]
+    cand = [_score(i, cost=2.0) for i in _ids(10)]
+    f = compare(base, cand, "overall",
+                CheckPlan(tolerances={"mean_chosen_cost": 0.5}))["mean_chosen_cost"]
+    assert f["lo"] > 0.5 and f["state"] == "regressed" and f["change"] == "worse"
+    assert "point_beyond_tolerance" not in f
+
+
+def test_a_non_finite_score_never_passes():
+    base = [_score(i, cost=1.0) for i in _ids(10)]
+    cand = [_score(i, cost=float("nan") if i == "k01" else 1.0) for i in _ids(10)]
+    doc = _check(base, cand, tolerances={"mean_chosen_cost": 10.0})
+    f = doc["overall"]["mean_chosen_cost"]
+    assert f["state"] == "undefined" and f["worsening"] is None and f["candidate"] is None
+    assert doc["verdict"] == "inconclusive" and doc["exit_code"] == 4
+    json.dumps(doc, allow_nan=False)
+
+
+def test_too_few_replicates_for_the_level_are_refused():
+    assert min_replicates(0.90) == 20 and min_replicates(0.95) == 40
+    assert min_replicates(0.5) == 4
+    CheckPlan(replicates=20, interval=0.90)
+    with pytest.raises(ValueError, match="at least 20"):
+        CheckPlan(replicates=19, interval=0.90)
+    with pytest.raises(ValueError, match="at least 200"):
+        CheckPlan(replicates=100, interval=0.99)
+
+
+def test_a_group_the_candidate_thinned_is_judged_inconclusive_not_skipped():
+    """12 cases, two workload groups of 6. The baseline passes all; the
+    candidate fails two cases of group a, leaving 4 passing cases there --
+    below the minimum of 5 for cost regret. That figure is not dropped."""
+    ids = _ids(12)
+    keys = {i: {"placement": "p", "protection": "q", "application": "app",
+                "workload": "a" if n < 6 else "b"} for n, i in enumerate(ids)}
+    base = [_score(i) for i in ids]
+    cand = [_score(i, passed=0.0 if i in ("k01", "k02") else 1.0) for i in ids]
+    doc = _check(base, cand, keys=keys, tolerances={"cost_regret": 0.0})
+    figure = doc["groups"]["workload"]["a"]["metrics"]["cost_regret"]
+    assert figure["state"] == INSUFFICIENT
+    assert figure["support"] == {"baseline": 6, "candidate": 4}
+    assert {"scope": "workload=a", "metric": "cost_regret",
+            "state": INSUFFICIENT} in doc["inconclusive"]
+    assert doc["verdict"] == "inconclusive"
+    assert doc["notes"] and "pass_rate" in doc["notes"][0]
+
+
+def test_an_empty_suite_is_never_exit_zero():
+    for tolerances in ({}, {"pass_rate": 0.0}):
+        doc = _check([], [], keys={}, tolerances=tolerances)
+        assert doc["verdict"] == "inconclusive" and doc["exit_code"] == 4
+
+
+def test_the_report_counts_the_figures_judged():
+    scores = [_score(i) for i in _ids(10)]
+    doc = _check(scores, list(scores), tolerances={"pass_rate": 0.0})
+    assert doc["judged"]["metrics_named"] == 1
+    assert doc["judged"]["metrics_available"] == len(CHECK_METRICS)
+    assert doc["judged"]["figures"] >= 1
+    assert f"Figures judged: {doc['judged']['figures']} (1 of " in render_check(doc)
 
 
 def test_every_range_value_is_a_difference_some_resample_can_have():
@@ -423,12 +498,24 @@ def test_e14_the_check_text_is_the_spec_text():
         "config, scores it offline beside the current one, and writes this report. A "
         "routing change is still made by an operator editing config/routing.yaml.")
     assert CHECK_CONDITIONAL == (
-        "The verdict is conditional on this suite, this endpoint file, this simulation "
-        "seed and this case order. It is not a statement about live traffic.")
+        "The verdict is conditional on this suite, this endpoint file, the run's seed, "
+        "the resampling seed and replicate count, and this case order. It is not a "
+        "statement about live traffic.")
     assert CHECK_RANGE == (
         "A range is the spread of the paired difference when the suite's cases are "
         "resampled. It says how much the difference depends on which cases are in the "
-        "suite, and nothing about whether the suite resembles real traffic.")
+        "suite, and nothing about whether the suite resembles real traffic. A figure is "
+        "judged on its whole range: its upper end is a one-sided bound at half the "
+        "interval's miss rate (95% for a 90% interval).")
+    assert CHECK_MULTIPLICITY == (
+        "No correction is made for the number of figures judged. Every named metric is "
+        "judged overall and in every group with enough cases, each at the same level, so "
+        "the more figures are judged the more likely one is inconclusive by chance alone.")
+    assert CHECK_CONDITIONAL_METRICS == (
+        "Cost regret and latency regret are means over the cases whose served answer "
+        "passed, and that set can differ between the two arms. A candidate that fails "
+        "more cases can show a lower regret for that reason alone: read them beside "
+        "pass_rate.")
     assert CHECK_NO_TOLERANCE == (
         "No tolerance was named, so only the hard checks were applied: the differences "
         "below are shown, not judged.")
@@ -439,10 +526,10 @@ def test_e14_every_report_opens_with_the_caveats_in_order():
     doc = _check(scores, list(scores), tolerances={"pass_rate": 0.0})
     assert doc["caveats"] == [CHECK_NO_EFFECT, CAVEAT_SIMULATED, CAVEAT_TIER_RULE,
                               CAVEAT_SYNTHETIC, CAVEAT_TO_MEASURE, CHECK_CONDITIONAL,
-                              CHECK_RANGE]
+                              CHECK_RANGE, CHECK_MULTIPLICITY, CHECK_CONDITIONAL_METRICS]
     lines = render_check(doc).splitlines()
     assert lines[0] == "# Router-version check (offline)"
-    assert lines[2:9] == [f"> {text}" for text in doc["caveats"]]
+    assert lines[2:11] == [f"> {text}" for text in doc["caveats"]]
     assert doc["effect"] == "none"
     assert "**PASS** (exit 0)" in render_check(doc)
 

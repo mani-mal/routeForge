@@ -30,11 +30,13 @@ import pytest
 from app.eval import groups
 from app.eval.groups import (
     CAVEAT_GROUPS,
+    CAVEAT_LABELS,
     CAVEAT_LIVE,
     CAVEAT_SIMULATED,
     CAVEAT_SYNTHETIC,
     CAVEAT_TIER_RULE,
     CAVEAT_TO_MEASURE,
+    CAVEAT_WORST,
     DIMENSIONS,
     GROUP_METRICS,
     INSUFFICIENT,
@@ -157,7 +159,8 @@ def test_e6_the_worst_group_is_named_with_its_size():
     # Lowest pass rate: claim (1/3), not the onprem_only placement (2/4).
     assert worst["pass_rate"] == {
         "dimension": "workload", "group": "claim", "value": round(1 / 3, 12), "n": 3,
-        "n_cases": 3, "groups_printed": 7, "groups_at_value": 1}
+        "n_cases": 3, "groups_total": 7, "groups_printed": 7, "groups_at_value": 1,
+        "tied": ["workload=claim"]}
     # Highest cost regret among the PRINTED figures: claim's 0.6 is over one
     # case and is not printed; application app-a is (0.2 + 0 + 0.6) / 3.
     assert worst["cost_regret"]["group"] == "app-a"
@@ -172,7 +175,35 @@ def test_e6_no_group_is_named_when_every_printed_group_is_equal():
     assert worst["groups_at_value"] == worst["groups_printed"] == 7
     line = next(row for row in render_group_report(doc, detail="s").splitlines()
                 if row.startswith("| s | violation_rate |"))
-    assert line == "| s | violation_rate | all | all | 0 in every printed group (7) | n/a |"
+    assert line == ("| s | violation_rate | all | all | 0 in every printed group | n/a | "
+                    "7 of 7 printed; 7 at this value |")
+
+
+def test_e5_every_strategy_prints_its_counts_whatever_the_group_sizes():
+    """A violation in a group too small to print a rate is still in
+    `groups.md`, for every strategy, not only the detailed one."""
+    doc = _doc()
+    doc["strategies"]["other"] = json.loads(json.dumps(doc["strategies"]["s"]))
+    doc["strategies"]["other"]["overall"]["violations"] = 1
+    text = render_group_report(doc, detail="s")
+    assert "## Counts per strategy" in text
+    assert "| other | 8 | 1 | 0 |" in text
+    assert "| s | 8 | 0 | 0 |" in text
+
+
+def test_e6_a_tie_between_some_groups_is_listed_not_broken():
+    doc = _doc()
+    worst = doc["strategies"]["s"]["worst"]["pass_rate"]
+    worst.update(groups_at_value=2, tied=["placement=onprem_only", "application=app-a"])
+    line = next(row for row in render_group_report(doc, detail="s").splitlines()
+                if row.startswith("| s | pass_rate |"))
+    assert "| tied | placement=onprem_only, application=app-a |" in line
+    assert line.endswith("| 7 of 7 printed; 2 at this value |")
+
+
+def test_an_unknown_mode_is_refused_not_read_as_live():
+    with pytest.raises(ValueError, match="mode"):
+        bench_caveats("replay")
 
 
 def test_e6_a_metric_no_group_prints_has_no_worst_group():
@@ -299,10 +330,11 @@ def test_e14_the_caveats_are_the_spec_text():
 def test_e14_a_simulated_report_opens_with_the_caveats_in_order():
     doc = _doc()
     assert doc["caveats"] == [CAVEAT_SIMULATED, CAVEAT_TIER_RULE, CAVEAT_SYNTHETIC,
-                              CAVEAT_TO_MEASURE, CAVEAT_GROUPS]
+                              CAVEAT_TO_MEASURE, CAVEAT_GROUPS, CAVEAT_WORST,
+                              CAVEAT_LABELS]
     lines = render_group_report(doc, detail="s").splitlines()
     assert lines[0] == "# FeasibleRouteBench group report"
-    assert lines[2:7] == [f"> {text}" for text in doc["caveats"]]
+    assert lines[2:9] == [f"> {text}" for text in doc["caveats"]]
 
 
 def test_e14_a_live_run_does_not_claim_quality_is_an_input():

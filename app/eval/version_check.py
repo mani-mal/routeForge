@@ -17,10 +17,20 @@ no admin call, no config write and no hook into serving: the handoff's
 worsening of a metric (positive = worse), `[lo, hi]` its paired-bootstrap
 range, `tol` the operator's tolerance for that metric:
 
-1. `w` undefined                -> `undefined`
-2. `w > tol`                    -> `regressed`  (whatever the range says)
-3. no range, or `hi > tol`      -> `inconclusive`
-4. otherwise                    -> `within_tolerance`
+1. `w` undefined or not finite  -> `undefined`
+2. no range                     -> `inconclusive`
+3. `lo > tol`                   -> `regressed`        (the WHOLE range is beyond)
+4. `hi <= tol`                  -> `within_tolerance` (the WHOLE range is within)
+5. otherwise                    -> `inconclusive`
+
+The point estimate alone decides nothing. Under the first rule this module
+shipped with (`w > tol` -> `regressed`), a candidate identical in truth whose
+choices merely changed was labelled `regressed` in 66-100% of synthetic
+draws on a 22-case suite: five-case groups were being judged on their point
+estimate. A figure whose point is beyond the tolerance while its range is
+not carries `point_beyond_tolerance: true` and is `inconclusive` -- which
+still exits non-zero. No correction is made for the number of figures
+judged (`CHECK_MULTIPLICITY`).
 
 A range that includes 0 decides nothing on its own: it is reported as
 `change: "not_detectable"` beside whichever state the rule gave.
@@ -35,6 +45,8 @@ code (`tests/eval/test_isolation.py`).
 """
 from __future__ import annotations
 
+import json
+import math
 from dataclasses import dataclass, field
 
 from app.eval.groups import DIMENSIONS, INSUFFICIENT, bench_caveats, partition
@@ -64,19 +76,32 @@ CHECK_NO_EFFECT = (
     "config, scores it offline beside the current one, and writes this report. A "
     "routing change is still made by an operator editing config/routing.yaml.")
 CHECK_CONDITIONAL = (
-    "The verdict is conditional on this suite, this endpoint file, this simulation "
-    "seed and this case order. It is not a statement about live traffic.")
+    "The verdict is conditional on this suite, this endpoint file, the run's seed, "
+    "the resampling seed and replicate count, and this case order. It is not a "
+    "statement about live traffic.")
 CHECK_RANGE = (
     "A range is the spread of the paired difference when the suite's cases are "
     "resampled. It says how much the difference depends on which cases are in the "
-    "suite, and nothing about whether the suite resembles real traffic.")
+    "suite, and nothing about whether the suite resembles real traffic. A figure is "
+    "judged on its whole range: its upper end is a one-sided bound at half the "
+    "interval's miss rate (95% for a 90% interval).")
+CHECK_MULTIPLICITY = (
+    "No correction is made for the number of figures judged. Every named metric is "
+    "judged overall and in every group with enough cases, each at the same level, so "
+    "the more figures are judged the more likely one is inconclusive by chance alone.")
+CHECK_CONDITIONAL_METRICS = (
+    "Cost regret and latency regret are means over the cases whose served answer "
+    "passed, and that set can differ between the two arms. A candidate that fails "
+    "more cases can show a lower regret for that reason alone: read them beside "
+    "pass_rate.")
 CHECK_NO_TOLERANCE = (
     "No tolerance was named, so only the hard checks were applied: the differences "
     "below are shown, not judged.")
 
 
 def check_caveats(mode: str) -> list[str]:
-    return [CHECK_NO_EFFECT, *bench_caveats(mode), CHECK_CONDITIONAL, CHECK_RANGE]
+    return [CHECK_NO_EFFECT, *bench_caveats(mode), CHECK_CONDITIONAL, CHECK_RANGE,
+            CHECK_MULTIPLICITY, CHECK_CONDITIONAL_METRICS]
 
 
 @dataclass(frozen=True)
@@ -106,12 +131,23 @@ class CheckPlan:
                 or not 0.0 < self.interval < 1.0):
             raise ValueError(f"interval must be a number strictly between 0 and 1; "
                              f"got {self.interval!r}")
+        if self.replicates < min_replicates(self.interval):
+            raise ValueError(
+                f"replicates must be at least {min_replicates(self.interval)} for a "
+                f"{self.interval:g} interval (fewer and the range is the minimum and "
+                f"maximum of the resamples, not an interval); got {self.replicates}")
         if isinstance(self.seed, bool) or not isinstance(self.seed, int) or self.seed < 0:
             raise ValueError(f"seed must be an int >= 0; got {self.seed!r}")
         if (isinstance(self.min_group_size, bool)
                 or not isinstance(self.min_group_size, int) or self.min_group_size < 1):
             raise ValueError(f"min_group_size must be an int >= 1; "
                              f"got {self.min_group_size!r}")
+
+
+def min_replicates(interval: float) -> int:
+    """The fewest resamples at which each tail of a percentile interval at
+    `interval` drops at least one of them: `ceil(2 / (1 - interval))`."""
+    return max(1, math.ceil(round(2.0 / (1.0 - interval), 9)))
 
 
 def parse_tolerances(items: list[str]) -> dict[str, float]:
@@ -153,15 +189,22 @@ def worsening(metric: str, baseline: float | None, candidate: float | None
     return baseline - candidate if metric in LOWER_IS_WORSE else candidate - baseline
 
 
-def decide(w: float | None, hi: float | None, tol: float) -> str:
-    """The decision rule (module docstring, spec §7.4)."""
-    if w is None:
+def _finite(value: float | None) -> bool:
+    return value is not None and math.isfinite(value)
+
+
+def decide(w: float | None, lo: float | None, hi: float | None, tol: float) -> str:
+    """The decision rule (module docstring, spec §7.4). A figure is judged
+    on its whole range; anything that is not a finite number never passes."""
+    if not _finite(w):
         return "undefined"
-    if round(w, _DP) > tol:
-        return "regressed"
-    if hi is None or round(hi, _DP) > tol:
+    if not _finite(lo) or not _finite(hi):
         return "inconclusive"
-    return "within_tolerance"
+    if round(lo, _DP) > tol:
+        return "regressed"
+    if round(hi, _DP) <= tol:
+        return "within_tolerance"
+    return "inconclusive"
 
 
 def change_of(identical: bool, lo: float | None, hi: float | None) -> str:
@@ -223,12 +266,20 @@ def compare(baseline: list[CaseScore], candidate: list[CaseScore], scope: str,
             w = worsening(metric, b_value, c_value)
             values = samples[metric]
             lo = hi = None
-            if values and all(v is not None for v in values):
+            if values and all(_finite(v) for v in values):
                 lo, hi = interval_of(values, plan.interval)
+            if not _finite(w):
+                # A non-finite score (a NaN or infinite price) is not a figure.
+                w = lo = hi = None
+                figure.update({k: v if _finite(v) else None
+                               for k, v in (("baseline", b_value),
+                                            ("candidate", c_value))})
             figure.update(
                 worsening=w, lo=lo, hi=hi,
                 change=change_of(bcol == ccol, lo, hi),
-                state="not_checked" if tol is None else decide(w, hi, tol))
+                state="not_checked" if tol is None else decide(w, lo, hi, tol))
+            if tol is not None and w is not None and figure["state"] == "inconclusive":
+                figure["point_beyond_tolerance"] = round(w, _DP) > tol
         out[metric] = figure
     return out
 
@@ -244,6 +295,8 @@ def verdict_of(hard_failed: bool, states: list[str], tolerances_named: bool) -> 
         return "regressed"
     if any(s in ("inconclusive", "undefined", INSUFFICIENT) for s in states):
         return "inconclusive"
+    if tolerances_named and not states:
+        return "inconclusive"                      # nothing was judged: not a pass
     return "pass" if tolerances_named else "no_hard_failure"
 
 
@@ -280,14 +333,26 @@ def run_check(baseline: list[CaseScore], candidate: list[CaseScore],
                 scope = f"{dim}={label}"
                 block["metrics"] = compare([by_base[i] for i in members],
                                            [by_cand[i] for i in members], scope, plan)
-                # A group: a figure with too few cases behind it is listed,
-                # not judged ("any sufficiently large group").
+                # A group: a figure with too few BASELINE cases behind it is
+                # listed, not judged ("any sufficiently large group"). One the
+                # candidate thinned below the minimum is judged, and is
+                # inconclusive: the candidate caused the shortfall.
                 judged += [(scope, m, f["state"]) for m, f in block["metrics"].items()
-                           if f["tolerance"] is not None and f["state"] != INSUFFICIENT]
+                           if f["tolerance"] is not None
+                           and not (f["state"] == INSUFFICIENT
+                                    and f["support"]["baseline"] < plan.min_group_size)]
             groups[dim][label] = block
 
     verdict = verdict_of(hard_failed, [state for _, _, state in judged],
                          bool(plan.tolerances))
+    if not ids and verdict in ("pass", "no_hard_failure"):
+        verdict = "inconclusive"                   # an empty suite shows nothing
+    notes = []
+    for regret in ("cost_regret", "latency_regret"):
+        if regret in plan.tolerances and "pass_rate" not in plan.tolerances:
+            notes.append(f"{regret} has a tolerance and pass_rate does not: {regret} is "
+                         "over passing cases only, so it cannot see a candidate that "
+                         "fails more cases.")
 
     def named(*states: str) -> list[dict]:
         return [{"scope": scope, "metric": metric, "state": state}
@@ -313,6 +378,10 @@ def run_check(baseline: list[CaseScore], candidate: list[CaseScore],
                     "share": changed / len(ids) if ids else None},
         "overall": overall,
         "groups": groups,
+        "judged": {"figures": len(judged),
+                   "metrics_named": len(plan.tolerances),
+                   "metrics_available": len(CHECK_METRICS)},
+        "notes": notes,
         "regressed": named("regressed"),
         "inconclusive": named("inconclusive", "undefined", INSUFFICIENT),
         "caveats": caveats,
@@ -326,10 +395,13 @@ _VERDICT_LINE = {
                  "served a case whose feasible set is empty, or the run failed an "
                  "integrity check. No tolerance applies to this.",
     "regressed": "**REGRESSED** (exit 3). At least one named metric is worse than its "
-                 "tolerance allows, overall or in a group with enough cases.",
-    "inconclusive": "**INCONCLUSIVE** (exit 4). No named metric is worse than its "
-                    "tolerance at the point estimate, but at least one could not be "
-                    "shown to be within it.",
+                 "tolerance allows across its whole range, overall or in a group with "
+                 "enough cases.",
+    "inconclusive": "**INCONCLUSIVE** (exit 4). No named metric is beyond its "
+                    "tolerance across its whole range, but at least one could not be "
+                    "shown to be within it. A figure marked `point beyond tolerance` "
+                    "is worse than its tolerance on these cases; resampling the cases "
+                    "does not separate it from one that is within.",
     "pass": "**PASS** (exit 0). No hard failure, and every named metric is within its "
             "tolerance, range included, overall and in every group with enough cases.",
     "no_hard_failure": "**NO HARD FAILURE** (exit 0). No tolerance was named, so no "
@@ -351,7 +423,9 @@ def _figure_row(scope: str, metric: str, f: dict) -> str:
            else f"[{_num(f['lo'])}, {_num(f['hi'])}]")
     return (f"| {scope} | {metric} | {_num(f['baseline'])} | {_num(f['candidate'])} | "
             f"{_num(f['worsening'])} | {rng} | {f['change']} | {_num(f['tolerance'])} | "
-            f"{f['state']} |")
+            f"{f['state']}"
+            + (" (point beyond tolerance)" if f.get("point_beyond_tolerance") else "")
+            + " |")
 
 
 def render_check(doc: dict) -> str:
@@ -364,18 +438,25 @@ def render_check(doc: dict) -> str:
     cand = doc["candidate"]
     lines = ["# Router-version check (offline)", ""]
     lines += [f"> {text}" for text in doc["caveats"]]
-    lines += ["", "## Verdict", "", _VERDICT_LINE[doc["verdict"]], ""]
+    judged = doc["judged"]
+    lines += ["", "## Verdict", "", _VERDICT_LINE[doc["verdict"]], "",
+              f"Figures judged: {judged['figures']} ({judged['metrics_named']} of "
+              f"{judged['metrics_available']} metrics have a tolerance; the rest are "
+              "shown, not judged).", ""]
+    lines += [f"Note: {note}" for note in doc["notes"]]
+    lines += [""] if doc["notes"] else []
     lines += [f"- **baseline arm**: `{doc['arms']['baseline']}` (the routing config as "
               "loaded)",
               f"- **candidate arm**: `{doc['arms']['candidate']}` (id `{cand['id']}`"
               + (f", name `{cand['name']}`" if cand.get("name") else "") + ")",
-              f"- **candidate overlay**: `{cand['routing']}`",
+              f"- **candidate overlay**: "
+              f"`{json.dumps(cand['routing'], sort_keys=True)}`",
               f"- **cases whose attempt chain changed**: "
               f"{doc['changed']['choice_changed']} of {doc['changed']['n_cases']}",
               f"- **tolerances**: "
               + (", ".join(f"{m} {_num(t)}" for m, t in plan["tolerances"].items())
                  or "none named"),
-              f"- **range**: {level:.0%} percentile interval of the paired difference, "
+              f"- **range**: {level * 100:g}% percentile interval of the paired difference, "
               f"{plan['replicates']} resamples of the cases, seed {plan['seed']}",
               f"- **minimum cases behind a judged figure**: {plan['min_group_size']}", ""]
     hard = doc["hard"]

@@ -248,7 +248,7 @@ _MAY_IMPORT = {
     "candidate.py": {"yaml", "app.config.lint", "app.config.schema",
                      "app.eval.strategies", "app.routing.strategy"},
 }
-_STDLIB = {"__future__", "copy", "dataclasses", "hashlib", "json", "pathlib"}
+_STDLIB = {"__future__", "copy", "dataclasses", "hashlib", "json", "math", "pathlib"}
 _WRITES = {"write_text", "write_bytes", "unlink", "mkdir", "rename",
            "post", "put", "patch", "delete", "request", "commit", "execute", "open"}
 
