@@ -1,0 +1,152 @@
+# Serving Plane — startup configuration.
+# INFRASTRUCTURE SWITCHES ONLY. Everything switchable here; no code changes to
+# change modes. Budgets/sensitivity/residency live in policy.yaml; scoring,
+# thresholds, the pool and escalation live in routing.yaml. Do not restate their
+# values here — the startup config lint (see CLAUDE.md §Config lint) fails the boot
+# if the same concern is owned by two files.
+
+# On-prem models are onboarded at runtime (see docs/guides/onboarding-models.md);
+# routeForge deploys nothing. There is no `inference_backend` axis any more —
+# every provider (onprem/azure/bedrock alike) egresses through the single
+# LiteLLM SDK path, and on-prem endpoints come from the ModelRegistry (onboarded
+# rows), not a static base_url here. The cloud path (managed_cloud) is not
+# selected here either — its availability is providers.azure.enabled /
+# providers.bedrock.enabled below.
+
+# Step 5 — Conditional Context Optimization (Headroom). Infra switches only;
+# bypass thresholds that depend on policy classification read the canonical
+# sensitivity/risk enums owned by policy.yaml.
+context_optimization:
+  enabled: false                 # default OFF: demo shows before/after
+  mode: library                  # library | proxy (sidecar)
+  proxy_url: http://headroom:8787
+  min_tokens: 2000               # below this, bypass — overhead exceeds gain
+  bypass_on:
+    high_risk: true              # risk_class == high (see policy.yaml)
+    restricted_sensitivity: true # sensitivity == restricted (see policy.yaml enum)
+    user_prompt: true            # compress tool outputs/history, not the live question
+  ccr:
+    enabled: true
+    residency: local_only        # NEVER external object store — see hard rule 6
+    ttl_hours: 24                # enforced; unbounded cache = retention liability
+    export_to_telemetry: false   # must stay false
+  cache_alignment: true          # CacheAligner: stabilize prefixes for KV cache hits
+
+# Feature 5 (Task 1) — Persistent memory (mem0-style, step-5 extension).
+# CCR-class residency posture (rule 6): local-only, TTL-bounded,
+# tenant-partitioned, sanitized-only, NEVER exported. Store wired into the
+# pipeline (recall_memory / write_memory in app/pipeline.py); default OFF, opt-in. See
+# docs/architecture/specs/persistent-memory-residency-spec.md. Env override: SP_MEMORY.
+memory:
+  enabled: false                 # default OFF (store wired into pipeline; opt-in)
+  residency: local_only          # NEVER external store — see hard rule 6
+  ttl_hours: 24                  # enforced; ttl_hours <= 0 is a boot-fail
+  export_to_telemetry: false     # must stay false — only a counts-only MemoryRecord reaches a trace
+  max_recall: 3                  # most-recent-first cap per tenant partition
+  min_tokens: 0                  # small-request bypass knob (like compression's min_tokens)
+  bypass_on:
+    high_risk: true
+    restricted_sensitivity: true
+    user_prompt: false           # N/A for recall (no live prompt to protect); shape parity with compression
+# Feature #6 — semantic cache (design-gate substrate, Task 1). CCR-class: local,
+# TTL-enforced, never exported, tenant+residency-partitioned so an onprem_only
+# request can never be served a cloud-produced cached response (see
+# docs/architecture/specs/semantic-cache-residency-spec.md). Default OFF: with
+# enabled: false nothing in the pipeline constructs or touches a cache instance
+# at all — pipeline wiring shipped (self._cache.lookup / .store in app/pipeline.py),
+# gated behind this flag. Env override: SP_SEMANTIC_CACHE (see loader), mirrors
+# SP_CONTEXT_OPT above.
+semantic_cache:
+  enabled: false                 # default OFF (pipeline wiring shipped; opt-in)
+  residency: local_only          # NEVER external — see hard rule 6; lint-enforced
+  ttl_hours: 24                  # enforced; unbounded cache = retention liability
+  export_to_telemetry: false     # must stay false; only a counts-only CacheRecord traces
+  max_entries: 0                 # 0 = unbounded beyond TTL
+  bypass_on:
+    high_risk: true              # risk_class == high (see policy.yaml)
+    restricted_sensitivity: true # sensitivity == restricted (see policy.yaml enum)
+    user_prompt: true            # ignored by the cache (whole-request decision); kept for shape parity
+  embedding: "off"                # deferred seam (C8) — no embedder wired, no embedding lib imported
+
+# P2b-2 routing outcome records: one content-free row per routed request
+# (ids, enums, numbers, versions -- never text) plus local feedback scores,
+# kept `retention_days` then pruned hourly. Exported via
+# GET /admin/outcomes/export. See docs/reference/routing-outcomes.md.
+outcomes:
+  enabled: true
+  retention_days: 90
+
+policy:
+  pii_detection: presidio        # presidio | regex | off
+  fail_closed: true              # never relax this
+  allow_app_pii_downgrade: true  # false = locked-down deployment: no app may weaken PII detection
+  # Protection posture inherited by any app whose policy_mode is null.
+  # enforced = privacy-first (detection + redaction); passthrough = router,
+  # meter and tracer only. Placement (residency/onprem_only) is unaffected.
+  default_policy_mode: enforced  # enforced | passthrough
+  allow_app_passthrough: true    # false = locked-down deployment: no app may be passthrough
+  # sensitivity enum, default_sensitivity, budgets and residency: see policy.yaml
+
+observability:
+  langfuse:
+    enabled: true
+    host: ${LANGFUSE_HOST:-http://langfuse:3000}
+    redact_on_export: true       # mandatory; see nemo-agent-toolkit skill
+    project_id: ${LANGFUSE_PROJECT_ID:-demo-project}  # for UI trace deep-links
+    # Eval-capture of request/response I/O on the serving.request trace.
+    #   off      — capture nothing (demo default; Input column blank, rule 2 intact)
+    #   redacted — attach prompt/completion with entity VALUES masked to <TYPE>
+    #              (eval-usable structure, no raw PII); still re-redacted on egress
+    #   full     — attach RAW prompt/completion for eval; the config lint REJECTS
+    #              this whenever any tenant is onprem_only (residency beats eval —
+    #              rule 6), and it must target a residency-local Langfuse only.
+    # Env override: SP_CAPTURE_IO (see loader). See docs/archive/eval-logging-backlog.md
+    # (archived; current contract in docs/reference/per-app-config.md).
+    # Quoted: bare `off` is a YAML boolean, but this is a string enum.
+    capture_io: "off"   # off | redacted | full
+
+# Provider *availability* (infra on/off) only. Tier membership is defined by the
+# pool in routing.yaml — the single source of truth for which model is which tier.
+# Each provider block may also declare the three P1b endpoint data-handling
+# defaults (design docs/superpowers/specs/2026-09-19-endpoint-data-handling-p1b-design.md
+# §2) — DECLARATIONS an operator records, never verified facts, and the
+# fallback for any onboarded row / model_pool entry that leaves the field
+# unset. All three are optional; a block naming none of them (every entry
+# below today) resolves to "unknown" at every level, exactly as before this
+# feature existed:
+#   region:                 a token, lowercased (e.g. us / eu / de / onprem).
+#                            Customer vocabulary — no enum, never lint-checked.
+#   prompt_retention:        none | retained | unknown
+#   accepts_raw_sensitive:   "true" | "false" | "unknown"   (a STRING token here —
+#                            the onboarding API/DB column is a JSON boolean instead)
+# Example (commented — does not change shipped behavior):
+#   azure: {enabled: false, litellm_prefix: azure, region: us, prompt_retention: none,
+#           accepts_raw_sensitive: "false"}
+providers:
+  onprem:  {enabled: true,  litellm_prefix: openai,  api_key_env: SP_ONPREM_API_KEY}
+  azure:   {enabled: false, litellm_prefix: azure,   api_base_env: AZURE_API_BASE, api_key_env: AZURE_API_KEY, api_version_env: AZURE_API_VERSION}
+  bedrock: {enabled: false, litellm_prefix: bedrock}
+
+server:
+  host: 0.0.0.0
+  port: 8080
+  stream_decisions: true         # WebSocket/SSE for the UI (tenant-scoped + auth
+                                 # outside demo mode — see greenlake-deploy skill)
+  reject_stream_requests: true   # reject inbound `stream: true` in the demo (see
+                                 # output-controls skill); decision streaming above
+                                 # is a separate channel
+  # Streamed requests that must wait for a complete, verified answer (tool
+  # turns, verified_then_stream, runtime-floored requests) open the SSE response
+  # after this many seconds and send a keepalive comment at the same interval, so
+  # a client whose transport timeout covers only the first response bytes does
+  # not abort a long generation. Fast responses and fast rejections are
+  # unaffected (they finish inside the first interval and keep their HTTP status).
+  stream_keepalive_s: 5
+  # When a request has no x-routeforge-session header, derive a session id from
+  # a keyed HMAC-SHA256 of the app id, the first system message and the first
+  # user message, so an agent conversation groups into one session in Langfuse
+  # and the console as its history grows. No content is stored in the id. The
+  # HMAC key is the SP_SESSION_ID_KEY env var when set (same value on every
+  # replica keeps ids stable across restarts/replicas); otherwise a random
+  # per-process key, so ids reset on restart and differ across replicas.
+  derive_session_id: true

@@ -1,0 +1,122 @@
+# Scoring, thresholds, the model pool, and escalation. THIS FILE OWNS THEM.
+# Hot-reloadable — editing thresholds live and re-running traffic is a strong demo
+# moment. Keep the numbers legible. Budgets/residency/sensitivity are policy.yaml's;
+# infra switches are serving.yaml's. Provider names must be spelled `onprem` here,
+# identically to serving.yaml and pricing.yaml (the config lint enforces this).
+
+# Canonical tier list. There are exactly three tiers everywhere: cheap | mid |
+# frontier. There is no "strong" tier. Tiers may legally have zero static members
+# here — the on-prem tier's pool boots empty and fills at runtime as operators
+# onboard on-prem models via the ModelRegistry. Every risk_floor must still name
+# a tier that exists in this list (config lint).
+tiers: [cheap, mid, frontier]
+
+score_on: post_compression       # MUST be post_compression when Headroom is on
+weights: {quality: 1.0, cost: 0.6, latency: 0.3, availability: 0.2}
+
+# P2a measured routing signals. `tier_latency_ms` and `latency_scale_ms` are
+# paired: with the defaults below an UNMEASURED candidate's normalized latency
+# term is 0.2/0.5/1.0 -- exactly the pre-P2a hardcoded constants -- so turning
+# measurement on changes nothing until a measurement actually exists.
+signals:
+  enabled: true
+  tier_latency_ms:   {cheap: 200, mid: 500, frontier: 1000}
+  latency_scale_ms:  1000
+  max_latency_norm:  3.0
+  half_life_s:       900
+  min_samples:       5
+  staleness_s:       3600
+  seed_window_hours: 24
+
+# Step-7 endpoint circuit breaker (app/gateway/breaker.py). An endpoint that
+# fails `failure_threshold` times in a row (endpoint-side failures only -- a
+# 4xx never counts) is excluded from routing for `cooldown_s`, then admitted
+# to EVERY request (half-open, evidence-based, no single-trial lease) until
+# the first reported result: a success closes it, a failure reopens it and
+# doubles the cooldown up to `max_cooldown_s`. It can only remove candidates
+# policy already admitted, and if every eligible candidate is open the router
+# tries one anyway (circuit_bypass). Per-process state. `enabled: false` = no
+# breaker.
+breaker:
+  enabled: true
+  failure_threshold: 3
+  cooldown_s: 30
+  max_cooldown_s: 300
+
+# Step-6 scoring strategy (app/routing/strategy.py). "default" reproduces the
+# scoring above exactly. An unknown name fails the config lint at boot -- it
+# never silently falls back. Swap this to try an alternate ranking (e.g. a
+# future NeMo Switchyard strategy) without touching the residency/budget
+# filtering in Router.select.
+strategy: default
+
+# Tier-default quality (the last rung of the quality ladder in app/routing/quality.py).
+# Promoted from the router's old hardcoded _Q so it is single-sourced and lintable.
+# There is NO per-model published `quality` on the model_pool below yet — the demo
+# stays a tier-default regression. To add a published snapshot at onboarding, put e.g.
+#   - {name: azure-gpt-mid, ..., quality: 0.70}   # AA Intelligence Index / 100, dated
+# on a model_pool entry (see spec §9). Values must be in [0,1] (config lint).
+tier_quality: {cheap: 0.5, mid: 0.75, frontier: 1.0}
+
+complexity_thresholds:
+  cheap_max: 0.35
+  mid_max: 0.70
+  # above mid_max -> frontier
+
+# Confidence-driven escalation. ONE threshold, owned here. Below it, escalate one
+# tier and re-run; capped by max_escalations. See routing-and-gateway skill for what
+# "confidence" is (backend-reported).
+confidence_escalation_threshold: 0.60
+# Calibrates a REAL backend's mean-token-logprob into confidence:
+# confidence = exp(mean_logprob / T). T=1 is raw geometric-mean token probability
+# (~0.4-0.6 even for fluent answers → escalates almost everything, collapsing the
+# "~70% to cheap" story — see routeforge-router-targets-mid). T=4 with the 0.60
+# threshold means escalation fires only when mean per-token perplexity > ~7.7
+# (genuinely uncertain output), so confident cheap-tier answers stay put. The mock
+# backend ignores this (its confidence is seeded per persona).
+confidence_logprob_temperature: 4.0
+max_escalations: 1
+# On a retryable backend failure, try another healthy model in the SAME tier
+# first (lateral switch), escalating only when the tier empties -- bounded here.
+# 0 disables lateral retry (a single failure is terminal). Owned by this file.
+max_failover_attempts: 2
+
+# Risk floor = the minimum tier a request may use, applied AFTER the residency
+# filter. Precedence: residency beats risk floor. An onprem_only high-risk request
+# floors to the best ALLOWED (on-prem) tier and sets require_verification — it is
+# never lifted to a cloud tier. See CLAUDE.md "Residency beats risk floor".
+risk_floors:
+  high: frontier                 # best cloud tier when cloud is permitted; else best on-prem
+  medium: mid
+  low: cheap
+
+# `name` is the stable slug the router/pricing key on — do not rename it.
+# `display_name` is what the UI shows customers (the real model). There are no
+# built-in on-prem entries here any more: on-prem models are onboarded at
+# runtime (ModelRegistry merges enabled onboarded rows into the effective pool
+# at request time) — routeForge deploys nothing. An empty on-prem tier boots
+# clean; on-prem candidates only appear once a customer onboards one.
+# Each entry may also declare the three P1b endpoint data-handling attributes
+# (design docs/superpowers/specs/2026-09-19-endpoint-data-handling-p1b-design.md
+# §2) as a PER-MODEL override of the provider default in serving.yaml — most
+# specific wins (model > provider default > "unknown"). Same three
+# fields/shapes as serving.yaml's providers.<name> block (region has no enum;
+# prompt_retention is none|retained|unknown; accepts_raw_sensitive is the
+# STRING "true"|"false"|"unknown"). Optional; no entry below declares them
+# today, so this does not change shipped behavior.
+# Example (commented):
+#   - {name: azure-gpt-mid, provider: azure, tier: mid, region: us,
+#      prompt_retention: none, accepts_raw_sensitive: "false"}
+model_pool:
+  - {name: azure-gpt-mid,    provider: azure,   tier: mid,      display_name: "GPT-4o mini (Azure)",   litellm_model: "azure/gpt-4o-mini"}
+  - {name: bedrock-frontier, provider: bedrock, tier: frontier, display_name: "Claude Sonnet (Bedrock)", litellm_model: "bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0"}
+
+fallback:
+  max_retries_same_provider: 1
+  backoff_base_ms: 100
+
+# P2b-3 offline quality calibration: refresh interval (seconds) for the
+# boot-time background loop that re-reads model_quality overrides
+# (store.load_quality_overrides) into the shared QualityResolver snapshot.
+# Apply/revert also refresh at once. Single-owned here; must be > 0.
+quality_refresh_s: 60

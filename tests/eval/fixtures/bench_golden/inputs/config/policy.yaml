@@ -1,0 +1,43 @@
+# Budgets, sensitivity, and residency. THIS FILE OWNS THEM.
+# Scoring/pool/thresholds are routing.yaml's; infra switches are serving.yaml's.
+# Surfaced read-only in the UI: customers always ask "how does it decide?"
+
+# Canonical sensitivity enum — defined ONCE, referenced by name everywhere else
+# (skills, serving.yaml bypass rules, UI). Ordered least -> most sensitive.
+# Highest-severity match wins. `public` is the fallback when no entities match.
+sensitivity_scale: [public, internal, confidential, restricted]
+default_sensitivity: public
+
+# Residency values: any | private_cloud_ok | onprem_only  (spelled `onprem_only`
+# identically everywhere — the config lint enforces this).
+sensitivity_rules:
+  - entities: [US_SSN, MEDICAL_LICENSE, US_BANK_NUMBER, CREDIT_CARD, EMPLOYEE_ID]
+    sensitivity: restricted
+    residency: onprem_only
+    risk_class: high
+    require_verification: true    # step 9 must verify before egress — see output-controls skill
+
+  - entities: [PERSON, EMAIL_ADDRESS, PHONE_NUMBER, LOCATION, DATE_TIME]
+    sensitivity: confidential
+    residency: private_cloud_ok
+    risk_class: medium
+    require_verification: false
+
+  - entities: []
+    sensitivity: public
+    residency: any
+    risk_class: low
+    require_verification: false
+
+# Per-request budgets (defaults; a tenant/persona may tighten them).
+budgets:
+  default_max_spend_usd: 0.05
+  default_max_latency_ms: 15000
+  # Output tokens assumed by the per-request cost estimate when a request sets
+  # no max_tokens / max_completion_tokens.
+  default_estimated_output_tokens: 512
+
+tenants:
+  acme:     {display_name: "Acme Corp",      default_residency: private_cloud_ok}
+  hospital: {display_name: "General Health", default_residency: onprem_only}
+  default:  {display_name: "Demo Tenant",    default_residency: any}

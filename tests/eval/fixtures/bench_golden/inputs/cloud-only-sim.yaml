@@ -1,0 +1,36 @@
+# A deliberately onprem-EMPTY endpoint pool: pairs with
+# eval/suites/empty-set.jsonl to exercise expect_empty handling for
+# onprem_only requests when the operator has not onboarded any on-prem
+# endpoint (CLAUDE.md: "no on-prem model onboarded => derived reject, not a
+# backend value" -- `ModelRegistry.has_healthy_onprem()` is false, so
+# `onprem` drops out of `allowed_providers` and an onprem_only request has no
+# eligible candidate). Two ordinary cloud endpoints so a non-onprem_only case
+# still has somewhere to route -- only the onprem_only cases in
+# empty-set.jsonl are expected to reject.
+#
+# Slugs deliberately distinct from eval/endpoints/healthcare-sim.yaml and
+# from config/pricing.yaml's models (azure-gpt-mid, bedrock-frontier).
+endpoints:
+  - slug: cloud-a
+    provider: azure
+    tier: cheap
+    price: {input: 30, output: 30}
+    quality: 0.89
+    region: us
+    prompt_retention: none
+    accepts_raw_sensitive: false
+    simulated:
+      quality: {default: 0.90}
+      latency_ms: {mean: 600, jitter: 60}
+
+  - slug: cloud-b
+    provider: azure
+    tier: mid
+    price: {input: 50, output: 50}
+    quality: 0.93
+    region: us
+    prompt_retention: none
+    accepts_raw_sensitive: false
+    simulated:
+      quality: {default: 0.93}
+      latency_ms: {mean: 700, jitter: 70}

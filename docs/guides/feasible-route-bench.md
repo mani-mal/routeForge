@@ -186,6 +186,14 @@ the gateway is built to protect, so decide where `results/` lives before you kee
 | `--fixed SLUG` | adds `fixed:<slug>`: always that endpoint when it is eligible, otherwise `cheapest` (recorded as `fallback_used`) |
 | `--parity-tol X` | maximum pass-rate gap for the headline cost claim (default 0.02) |
 | `--keep-text` | stores completion text in `matrix.jsonl` |
+| `--group-report` | also writes `groups.json` and `groups.md`: every metric by placement, protection, application and workload (§6.2) |
+| `--min-group-size N` | the fewest cases behind a printed group figure (default 5, integer ≥ 1). Needs `--group-report` or `--candidate` |
+| `--candidate FILE` | the offline router-version check: scores a candidate routing overlay beside the current routing config and writes `check.json` and `check.md` (§6.3). **It applies nothing** |
+| `--tolerance METRIC=VALUE` | with `--candidate`, repeatable: the most a metric may worsen, in its own units (§6.3) |
+| `--check-replicates N`, `--check-interval X`, `--check-seed N` | with `--candidate`: the resamples behind each range (default 1000), its level (default 0.90) and the resampling seed (default 0) |
+
+A flag that needs another flag is a usage error (exit 1) when given alone: it would
+otherwise silently do nothing.
 
 **The sweep disables confidence escalation.** Each `(case, endpoint)` is a single-shot
 measurement: one backend call. With a pinned endpoint, the gateway's confidence
@@ -323,13 +331,178 @@ The first answer, simulated, is in
 [`docs/research/feasible-route-bench.md`](../research/feasible-route-bench.md) §9. Changing
 the production weight is a decision for the owner, not something this tool does.
 
+### 6.2 The group report (`--group-report`)
+
+```bash
+uv run python scripts/feasible_bench.py \
+    --suite eval/suites/starter.jsonl \
+    --endpoints eval/endpoints/healthcare-sim.yaml \
+    --seed 0 --group-report --out results/groups
+```
+
+Two more files, and no change to the other five:
+
+- `groups.json`: for **every** strategy, every metric overall and by four dimensions.
+- `groups.md`: the fixed text, the group sizes, a counts-per-strategy table, the worst
+  group per metric for every strategy, and the full table for `router_online`.
+
+**Dimensions.** `placement`, `protection` and `workload` are the case's tags of those
+names. `application` is `tags.app` when you set it, otherwise `policy-` plus a fingerprint
+of the case's `app_policy`: cases with the same policy are one application. There is no
+tenant dimension, because the bench runs every case under one tenant id. A case with no
+value for a dimension is in that dimension's `(untagged)` group, so every case is in
+exactly one group per dimension.
+
+**Every figure has its own `n`.** `0.75 (n = 8)` is a rate over eight cases. The
+denominators differ by metric:
+
+| Metric | Over |
+|---|---|
+| `violation_rate`, `empty_set_mismatch_rate` | every case in the group |
+| `pass_rate`, `quality_regret` | cases with a non-empty feasible set |
+| `floor_miss_rate` | those where at least one eligible endpoint passed |
+| `cost_regret`, `latency_regret` | those where the **served** answer passed |
+
+So a group of eight cases can print a cost regret that is over six, or over one. To
+combine groups, weight each figure by its own `n`, not by the group's case count.
+
+**Small groups print no rate.** A figure over fewer than `--min-group-size` cases
+(default 5) is `insufficient cases (n = k)`. The counts beside it — cases, violations,
+empty-set mismatches — are always printed: a violation in a one-case group stays visible.
+Five is a floor against reading a rate off two cases. A group above it is still small.
+
+**Counts per strategy.** `groups.md` also prints, for every strategy, its cases,
+violations and empty-set mismatches over the whole run — counts, never withheld for a
+small group.
+
+**The worst group** is, per metric, the worst printed figure across all groups of all
+dimensions, with the group's size and how many printed groups share that value. When
+every printed group has the same value the table says so (`0 in every printed group (7)`)
+and names none. A tie between some (not all) of the printed groups is listed, not broken.
+It names a set of cases. It does not order models or endpoints.
+
+`metrics.json` still carries its older `groups` and `worst_groups` blocks, unchanged. The
+report restates the same three tags with denominators and adds `application`.
+
+### 6.3 The router-version check (`--candidate`)
+
+**It applies nothing and promotes nothing.** It answers one question before **you** edit
+`config/routing.yaml`: scored offline on this suite, is this routing config worse than the
+current one? RouteForge has no in-process promotion path, and this is not one. It writes
+two files and an exit code.
+
+Write the routing keys you are thinking of changing:
+
+```yaml
+# candidate.yaml
+schema: routeforge.router-candidate/v1
+name: latency-only            # optional, a label for the report
+routing:
+  weights: {cost: 0.0, latency: 2.0}
+```
+
+```bash
+uv run python scripts/feasible_bench.py \
+    --suite eval/suites/starter.jsonl \
+    --endpoints eval/endpoints/healthcare-sim.yaml \
+    --seed 0 --candidate candidate.yaml \
+    --tolerance pass_rate=0.02 --tolerance mean_chosen_cost=0.0001 \
+    --out results/check
+echo $?    # 3: mean_chosen_cost regressed
+```
+
+- The **baseline** is your routing config as the bench loads it. The **candidate** is that
+  config with your keys laid over it, in memory. A mapping (`weights`, `signals`, …) is
+  merged one level over the base value; a scalar replaces.
+- Keys you may state: `weights`, `tier_quality`, `complexity_thresholds`, `risk_floors`,
+  `strategy`, `signals`, `breaker`. Any other `routing.yaml` key is **refused with the
+  reason** — for example `confidence_escalation_threshold`, because the sweep runs with
+  escalation off and a change to it would move no figure. A candidate the deployment could
+  not boot with (an unknown strategy, a tier that does not exist) is a load error.
+- The candidate is scored as three more router arms (`router_cold:candidate`,
+  `router_online:candidate`, `router_warm_prior:candidate`) **over the same sweep** as
+  every other strategy: the same cases, the same eligible sets, the same seed, the same
+  answer from every endpoint. The check compares `router_online` with
+  `router_online:candidate`.
+
+**Hard checks. No tolerance applies.** If the candidate names an endpoint outside a case's
+eligible set, or any endpoint for a case whose feasible set is empty, the verdict is
+`hard_fail` and the exit code is `2`, whatever tolerances you gave. So does a run that
+fails any of the bench's own integrity checks (§7).
+
+**Tolerances.** `--tolerance METRIC=VALUE` names a metric and the most it may worsen, in
+the metric's own units: `pass_rate=0.02` is two points, `mean_chosen_cost=0.0001` is a
+hundredth of a cent per request, `latency_regret=50` is 50 ms. The metrics are
+`pass_rate`, `quality_regret`, `cost_regret`, `latency_regret`, `floor_miss_rate`,
+`mean_chosen_cost`, `wasted_attempts` and `exhausted_rate`. A metric you do not name is
+shown and not judged.
+
+**Reading a row of `check.md`.**
+
+| Column | Meaning |
+|---|---|
+| `worsening` | candidate minus baseline **in the direction that is worse** (for `pass_rate`, baseline minus candidate). Positive is worse |
+| `range` | the 90% interval of that difference when the suite's cases are resampled, the same cases for both arms |
+| `change` | what the range says: `none` (the two arms agree case by case), `worse`, `better`, `not_detectable` (the range includes 0) |
+| `state` | what the tolerance says, below |
+
+**The decision rule judges a figure on its whole range, never on the point estimate
+alone.** For worsening `w`, range `[lo, hi]` and tolerance `tol`:
+
+| State | When |
+|---|---|
+| `regressed` | the **whole** range is beyond the tolerance (`lo > tol`) |
+| `within_tolerance` | the **whole** range is within the tolerance (`hi <= tol`) |
+| `inconclusive` | neither of the above: part of the range is within tolerance and part beyond. When the point estimate `w` itself is beyond `tol`, the row also carries `point_beyond_tolerance` and prints `inconclusive (point beyond tolerance)` — the suite could not separate this candidate from one that is within tolerance |
+| `insufficient_cases` | fewer than `--min-group-size` cases behind the figure: no figure at all |
+| `not_checked` | no tolerance was named for this metric |
+| `undefined` | the worsening itself is undefined (a non-finite score in either arm) |
+
+A range that includes 0 (`change: not_detectable`) does not by itself decide `regressed`
+or `within_tolerance` — a `not_detectable` change is common in `within_tolerance` rows
+too; only the whole-range comparison above decides. No correction is made for the number
+of figures judged: every named metric is judged overall and in every group with enough
+cases, each at the same level, so the more figures are judged the more likely one is
+`inconclusive` by chance alone, even for a candidate identical in truth.
+
+The same figures are judged in every group with at least `--min-group-size` cases. A
+candidate that is unchanged overall and worse for one workload is `regressed`.
+
+**Verdict and exit code.**
+
+| Verdict | Exit | Meaning |
+|---|---|---|
+| `hard_fail` | `2` | an ineligible choice, or a failed integrity check |
+| `regressed` | `3` | a named metric's whole range is worse than its tolerance, overall or in a large enough group |
+| `inconclusive` | `4` | no named metric's whole range is beyond its tolerance, but at least one figure's range could not be shown to lie entirely within it |
+| `pass` | `0` | every named metric's whole range is within its tolerance, overall and in every group with enough cases |
+| `no_hard_failure` | `0` | no tolerance was named: only the hard checks ran |
+
+On a suite of 22 cases, expect `inconclusive` often. That is the honest answer: the suite
+cannot show the difference is small. Use a larger suite or a wider tolerance.
+
+**What a verdict is not.** It is for this suite, this endpoint file, this simulation seed
+and this case order; the same candidate can pass at one seed and be `regressed` or
+`inconclusive` at another (research §22.5 has an example). On the simulated backend
+quality is an input, so a `pass_rate` verdict there measures the harness. The range
+covers which cases are in the suite, not whether the suite resembles your traffic. Every
+`check.md` opens with this text.
+
+`metrics.json`'s `exit_code` stays the bench run's own (0 or 2). The process exit code is
+in `check.json` and `run.json`.
+
 ## 7. Exit codes
 
 | Code | Meaning |
 |---|---|
 | `0` | ok |
-| `1` | load or usage error: a bad suite, endpoint file or variants file, an unknown `--fixed` slug, a missing detector, a declined `--live` prompt, a `--seconds-per-case` too small for this run's endpoint count or attempt cap, or **a gate exception on any case** |
+| `1` | load or usage error: a bad suite, endpoint file or variants file, an unknown `--fixed` slug, a missing detector, a declined `--live` prompt, a `--seconds-per-case` too small for this run's endpoint count or attempt cap, **a gate exception on any case**, a bad `--candidate` file (a key the check cannot evaluate, an unknown key, a config the deployment could not boot with), a bad `--tolerance`, `--min-group-size` or `--check-*` value, or one of those flags without the flag it needs (`--check-replicates` must also be at least `ceil(2 / (1 - interval))` -- 20 at the default 0.90 interval) |
 | `2` | policy violation or integrity failure: any strategy with `violation_rate > 0`, any sweep call (or empty-set probe) that served an ineligible model, any post-gate eligible set that is not a subset of the pre-gate set, any `expect_empty` disagreement, any `pinned_mismatches` (a pinned call served another endpoint; impossible by construction, so any occurrence is a harness integrity bug), or a signal arm's own leak guard firing (`LeakageError` -- an arm was asked to score a case out of order; also a harness integrity bug) |
+| `3` | **only with `--candidate`**: no hard failure, and a named metric's whole range is worse than its tolerance (§6.3) |
+| `4` | **only with `--candidate`**: no hard failure and no regression, but a named metric's range could not be shown to lie entirely within its tolerance (§6.3) |
+
+With `--candidate`, `2` also covers any ineligible choice by the candidate. No tolerance
+changes that.
 
 `sweep_generate_mismatches` does not by itself change the exit code: those rows are
 already error rows, scored as failed calls rather than credited to the endpoint.

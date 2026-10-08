@@ -127,6 +127,53 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
+## B67 — FEATURE: P2 evaluation-metric follow-ups — confidence on the record, policy-derived groups, a check over several seeds, a multiplicity correction, unevaluable candidate keys, a baseline overlay  🔴 OPEN
+
+**Severity:** low (the group report and the router-version check work as designed; these
+are what they do not yet cover).
+**Found:** 2026-10-07, the P2 evaluation-metrics design
+(`docs/superpowers/specs/2026-10-07-p2-eval-metrics-design.md` §14).
+
+1. **The answer confidence is recorded nowhere.** `GenerationResult.confidence` — the
+   backend's figure, `min(1, exp(mean token logprob / T))`, or `DEFAULT_CONFIDENCE = 0.9`
+   when the provider returns no logprobs — is read once, by `Gateway.run`, to decide an
+   escalation, and then dropped. It is not on the `step="router"` `DecisionRecord`, not in
+   `sp.scoring`, not on the response certificate and not in `routing_outcomes`. So the
+   escalation threshold cannot be calibrated on recorded traffic, and a 0.9 that is a real
+   measurement cannot be told from the default. **Smallest change:** two content-free
+   fields on the router `DecisionRecord` and the `routing_outcomes` row — the confidence,
+   and its source (`logprob` / `default` / `none`). A serving change (a column, an `ALTER`,
+   the export, the trace attribute), with its own review. A score-margin analysis from
+   `sp.scoring` (does the gap between the top two candidates predict regret?) belongs with
+   it. The bench-side measurement is the second plan of the P2 metrics spec (§9) and needs
+   none of this.
+2. **Groups are author tags, not the compiled policy.** A case tagged `placement: any`
+   whose policy is `onprem_only` is grouped as `any`. The run already computes the compiled
+   residency and protection axes per case; group by those, beside or instead of the tags.
+3. **A check is one simulation seed and one case order.** The same candidate (`no-cheap-tier`)
+   got two different verdicts across seeds 0–9 when the verdict rested on simulated pass
+   rate: `pass` at eight seeds, `inconclusive` at two (research §22.5.3). A
+   `--check-seeds 0-9` that runs the sweep per seed and reports the spread of verdicts is
+   the obvious next step; decide first what the exit code is when they disagree.
+4. **No multiplicity correction.** A check with two tolerances judges up to
+   `2 × (1 + groups)` figures, each at the same level: a SYNTHETIC re-run (research §22.7)
+   found an identical-in-truth candidate still read `regressed` in a quarter to a third of
+   draws on 22 cases at full redraw. Either state the count beside the verdict or correct
+   for it (a family-wise correction).
+5. **Candidate keys the bench cannot evaluate**, the escalation threshold above all. It
+   needs an escalation-aware sweep (a second call per case at the next tier), which the
+   bench deliberately does not make because it doubles a live run's cost.
+6. **A baseline overlay.** The baseline is always the routing config as loaded. Comparing
+   two candidates with each other needs one of them applied to a scratch config directory.
+7. **The starter suite is too small for its own group report.** Five of twelve groups are
+   below five cases, `onprem_only` among them, and there is one protection posture
+   (research §22.5.1). A suite with at least five cases per placement and protection group
+   is a data task, not a code one.
+
+See also B46 (weak test oracles) and research §14.4 (what online exploration would need;
+"FeasibleRouteBench wired in as a pre-apply gate" there is this check, run by hand or in
+CI — still not wired into anything).
+
 ## B66 — FEATURE: capacity follow-ups — a declaration on the onboarded endpoint, a time-block bootstrap, a service-time model for moved requests, a p95-bucket figure, a faster accumulation, a backend-time field  🔴 OPEN
 
 **Severity:** low (the capacity section works from a hand-written file; these make it less

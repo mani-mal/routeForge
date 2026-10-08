@@ -1,0 +1,1540 @@
+{
+  "cases": [
+    {
+      "calls": 4,
+      "case_id": "faq-001",
+      "eligible_post": [
+        "azure-us",
+        "european",
+        "general-us",
+        "local-llama"
+      ],
+      "eligible_pre": [
+        "azure-us",
+        "european",
+        "general-us",
+        "local-llama"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [],
+      "rejected_ok": false
+    },
+    {
+      "calls": 4,
+      "case_id": "faq-002",
+      "eligible_post": [
+        "azure-us",
+        "european",
+        "general-us",
+        "local-llama"
+      ],
+      "eligible_pre": [
+        "azure-us",
+        "european",
+        "general-us",
+        "local-llama"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [],
+      "rejected_ok": false
+    },
+    {
+      "calls": 4,
+      "case_id": "faq-003",
+      "eligible_post": [
+        "azure-us",
+        "european",
+        "general-us",
+        "local-llama"
+      ],
+      "eligible_pre": [
+        "azure-us",
+        "european",
+        "general-us",
+        "local-llama"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [],
+      "rejected_ok": false
+    },
+    {
+      "calls": 4,
+      "case_id": "faq-004",
+      "eligible_post": [
+        "azure-us",
+        "european",
+        "general-us",
+        "local-llama"
+      ],
+      "eligible_pre": [
+        "azure-us",
+        "european",
+        "general-us",
+        "local-llama"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [],
+      "rejected_ok": false
+    },
+    {
+      "calls": 4,
+      "case_id": "faq-005",
+      "eligible_post": [
+        "azure-us",
+        "european",
+        "general-us",
+        "local-llama"
+      ],
+      "eligible_pre": [
+        "azure-us",
+        "european",
+        "general-us",
+        "local-llama"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [],
+      "rejected_ok": false
+    },
+    {
+      "calls": 4,
+      "case_id": "faq-006",
+      "eligible_post": [
+        "azure-us",
+        "european",
+        "general-us",
+        "local-llama"
+      ],
+      "eligible_pre": [
+        "azure-us",
+        "european",
+        "general-us",
+        "local-llama"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [],
+      "rejected_ok": false
+    },
+    {
+      "calls": 4,
+      "case_id": "faq-007",
+      "eligible_post": [
+        "azure-us",
+        "european",
+        "general-us",
+        "local-llama"
+      ],
+      "eligible_pre": [
+        "azure-us",
+        "european",
+        "general-us",
+        "local-llama"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [],
+      "rejected_ok": false
+    },
+    {
+      "calls": 4,
+      "case_id": "faq-008",
+      "eligible_post": [
+        "azure-us",
+        "european",
+        "general-us",
+        "local-llama"
+      ],
+      "eligible_pre": [
+        "azure-us",
+        "european",
+        "general-us",
+        "local-llama"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "claim-001",
+      "eligible_post": [
+        "azure-us",
+        "local-llama"
+      ],
+      "eligible_pre": [
+        "azure-us",
+        "local-llama"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "european",
+          "region_not_allowed"
+        ],
+        [
+          "general-us",
+          "prompt_retention_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "claim-002",
+      "eligible_post": [
+        "azure-us",
+        "local-llama"
+      ],
+      "eligible_pre": [
+        "azure-us",
+        "local-llama"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "european",
+          "region_not_allowed"
+        ],
+        [
+          "general-us",
+          "prompt_retention_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "claim-003",
+      "eligible_post": [
+        "azure-us",
+        "local-llama"
+      ],
+      "eligible_pre": [
+        "azure-us",
+        "local-llama"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "european",
+          "region_not_allowed"
+        ],
+        [
+          "general-us",
+          "prompt_retention_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "claim-004",
+      "eligible_post": [
+        "azure-us",
+        "local-llama"
+      ],
+      "eligible_pre": [
+        "azure-us",
+        "local-llama"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "european",
+          "region_not_allowed"
+        ],
+        [
+          "general-us",
+          "prompt_retention_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "claim-005",
+      "eligible_post": [
+        "azure-us",
+        "local-llama"
+      ],
+      "eligible_pre": [
+        "azure-us",
+        "local-llama"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "european",
+          "region_not_allowed"
+        ],
+        [
+          "general-us",
+          "prompt_retention_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "claim-006",
+      "eligible_post": [
+        "azure-us",
+        "local-llama"
+      ],
+      "eligible_pre": [
+        "azure-us",
+        "local-llama"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "european",
+          "region_not_allowed"
+        ],
+        [
+          "general-us",
+          "prompt_retention_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "claim-007",
+      "eligible_post": [
+        "azure-us",
+        "local-llama"
+      ],
+      "eligible_pre": [
+        "azure-us",
+        "local-llama"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "european",
+          "region_not_allowed"
+        ],
+        [
+          "general-us",
+          "prompt_retention_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "claim-008",
+      "eligible_post": [
+        "azure-us",
+        "local-llama"
+      ],
+      "eligible_pre": [
+        "azure-us",
+        "local-llama"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "european",
+          "region_not_allowed"
+        ],
+        [
+          "general-us",
+          "prompt_retention_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 1,
+      "case_id": "claim-009",
+      "eligible_post": [
+        "local-llama"
+      ],
+      "eligible_pre": [
+        "azure-us",
+        "local-llama"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "azure-us",
+          "residency"
+        ],
+        [
+          "european",
+          "residency"
+        ],
+        [
+          "general-us",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 1,
+      "case_id": "claim-010",
+      "eligible_post": [
+        "local-llama"
+      ],
+      "eligible_pre": [
+        "azure-us",
+        "local-llama"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "azure-us",
+          "residency"
+        ],
+        [
+          "european",
+          "residency"
+        ],
+        [
+          "general-us",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 1,
+      "case_id": "onprem-001",
+      "eligible_post": [
+        "local-llama"
+      ],
+      "eligible_pre": [
+        "local-llama"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "azure-us",
+          "residency"
+        ],
+        [
+          "european",
+          "residency"
+        ],
+        [
+          "general-us",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 1,
+      "case_id": "onprem-002",
+      "eligible_post": [
+        "local-llama"
+      ],
+      "eligible_pre": [
+        "local-llama"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "azure-us",
+          "residency"
+        ],
+        [
+          "european",
+          "residency"
+        ],
+        [
+          "general-us",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 1,
+      "case_id": "onprem-003",
+      "eligible_post": [
+        "local-llama"
+      ],
+      "eligible_pre": [
+        "local-llama"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "azure-us",
+          "residency"
+        ],
+        [
+          "european",
+          "residency"
+        ],
+        [
+          "general-us",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 1,
+      "case_id": "onprem-004",
+      "eligible_post": [
+        "local-llama"
+      ],
+      "eligible_pre": [
+        "local-llama"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "azure-us",
+          "residency"
+        ],
+        [
+          "european",
+          "residency"
+        ],
+        [
+          "general-us",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    }
+  ],
+  "exit_code": 0,
+  "groups": {
+    "best_published_quality": {
+      "placement": {
+        "any": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.0002425,
+          "n_cases": 8,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "escalated": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.00428,
+          "n_cases": 2,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "onprem_only": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.00236,
+          "n_cases": 4,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "us_only": {
+          "cost_regret": 0.001771428571,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 1,
+          "latency_regret": 252.418282643823,
+          "mean_chosen_cost": 0.00393,
+          "n_cases": 8,
+          "pass_rate": 0.875,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      },
+      "protection": {
+        "enforced": {
+          "cost_regret": 0.00059047619,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 1,
+          "latency_regret": 84.139427547941,
+          "mean_chosen_cost": 0.002335454545,
+          "n_cases": 22,
+          "pass_rate": 0.954545454545,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      },
+      "workload": {
+        "claim_summary": {
+          "cost_regret": 0.001377777778,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 1,
+          "latency_regret": 196.325330945195,
+          "mean_chosen_cost": 0.004,
+          "n_cases": 10,
+          "pass_rate": 0.9,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "faq": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.0002425,
+          "n_cases": 8,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "onprem_required": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.00236,
+          "n_cases": 4,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      }
+    },
+    "cheapest": {
+      "placement": {
+        "any": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.0002425,
+          "n_cases": 8,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "escalated": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.00428,
+          "n_cases": 2,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "onprem_only": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.00236,
+          "n_cases": 4,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "us_only": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.285714285714,
+          "infeasible_at_floor": 1,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.0014625,
+          "n_cases": 8,
+          "pass_rate": 0.625,
+          "quality_regret": 0.25,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      },
+      "protection": {
+        "enforced": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.095238095238,
+          "infeasible_at_floor": 1,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.001438181818,
+          "n_cases": 22,
+          "pass_rate": 0.863636363636,
+          "quality_regret": 0.090909090909,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      },
+      "workload": {
+        "claim_summary": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.222222222222,
+          "infeasible_at_floor": 1,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.002026,
+          "n_cases": 10,
+          "pass_rate": 0.7,
+          "quality_regret": 0.2,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "faq": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.0002425,
+          "n_cases": 8,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "onprem_required": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.00236,
+          "n_cases": 4,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      }
+    },
+    "router_cold": {
+      "placement": {
+        "any": {
+          "cost_regret": 0.000135,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.25,
+          "infeasible_at_floor": 0,
+          "latency_regret": 107.085914495335,
+          "mean_chosen_cost": 0.00037875,
+          "n_cases": 8,
+          "pass_rate": 0.75,
+          "quality_regret": 0.25,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "escalated": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.00428,
+          "n_cases": 2,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "onprem_only": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.00236,
+          "n_cases": 4,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "us_only": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.285714285714,
+          "infeasible_at_floor": 1,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.0014625,
+          "n_cases": 8,
+          "pass_rate": 0.625,
+          "quality_regret": 0.25,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      },
+      "protection": {
+        "enforced": {
+          "cost_regret": 4.7647059e-05,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.190476190476,
+          "infeasible_at_floor": 1,
+          "latency_regret": 37.795028645412,
+          "mean_chosen_cost": 0.001487727273,
+          "n_cases": 22,
+          "pass_rate": 0.772727272727,
+          "quality_regret": 0.181818181818,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      },
+      "workload": {
+        "claim_summary": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.222222222222,
+          "infeasible_at_floor": 1,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.002026,
+          "n_cases": 10,
+          "pass_rate": 0.7,
+          "quality_regret": 0.2,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "faq": {
+          "cost_regret": 0.000135,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.25,
+          "infeasible_at_floor": 0,
+          "latency_regret": 107.085914495335,
+          "mean_chosen_cost": 0.00037875,
+          "n_cases": 8,
+          "pass_rate": 0.75,
+          "quality_regret": 0.25,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "onprem_required": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.00236,
+          "n_cases": 4,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      }
+    },
+    "router_online": {
+      "placement": {
+        "any": {
+          "cost_regret": 0.000135,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.25,
+          "infeasible_at_floor": 0,
+          "latency_regret": 107.085914495335,
+          "mean_chosen_cost": 0.00037875,
+          "n_cases": 8,
+          "pass_rate": 0.75,
+          "quality_regret": 0.25,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "escalated": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.00428,
+          "n_cases": 2,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "onprem_only": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.00236,
+          "n_cases": 4,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "us_only": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.285714285714,
+          "infeasible_at_floor": 1,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.0014625,
+          "n_cases": 8,
+          "pass_rate": 0.625,
+          "quality_regret": 0.25,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      },
+      "protection": {
+        "enforced": {
+          "cost_regret": 4.7647059e-05,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.190476190476,
+          "infeasible_at_floor": 1,
+          "latency_regret": 37.795028645412,
+          "mean_chosen_cost": 0.001487727273,
+          "n_cases": 22,
+          "pass_rate": 0.772727272727,
+          "quality_regret": 0.181818181818,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      },
+      "workload": {
+        "claim_summary": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.222222222222,
+          "infeasible_at_floor": 1,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.002026,
+          "n_cases": 10,
+          "pass_rate": 0.7,
+          "quality_regret": 0.2,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "faq": {
+          "cost_regret": 0.000135,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.25,
+          "infeasible_at_floor": 0,
+          "latency_regret": 107.085914495335,
+          "mean_chosen_cost": 0.00037875,
+          "n_cases": 8,
+          "pass_rate": 0.75,
+          "quality_regret": 0.25,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "onprem_required": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.00236,
+          "n_cases": 4,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      }
+    },
+    "router_online:breaker_off": {
+      "placement": {
+        "any": {
+          "cost_regret": 0.000135,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.25,
+          "infeasible_at_floor": 0,
+          "latency_regret": 107.085914495335,
+          "mean_chosen_cost": 0.00037875,
+          "n_cases": 8,
+          "pass_rate": 0.75,
+          "quality_regret": 0.25,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "escalated": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.00428,
+          "n_cases": 2,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "onprem_only": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.00236,
+          "n_cases": 4,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "us_only": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.285714285714,
+          "infeasible_at_floor": 1,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.0014625,
+          "n_cases": 8,
+          "pass_rate": 0.625,
+          "quality_regret": 0.25,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      },
+      "protection": {
+        "enforced": {
+          "cost_regret": 4.7647059e-05,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.190476190476,
+          "infeasible_at_floor": 1,
+          "latency_regret": 37.795028645412,
+          "mean_chosen_cost": 0.001487727273,
+          "n_cases": 22,
+          "pass_rate": 0.772727272727,
+          "quality_regret": 0.181818181818,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      },
+      "workload": {
+        "claim_summary": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.222222222222,
+          "infeasible_at_floor": 1,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.002026,
+          "n_cases": 10,
+          "pass_rate": 0.7,
+          "quality_regret": 0.2,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "faq": {
+          "cost_regret": 0.000135,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.25,
+          "infeasible_at_floor": 0,
+          "latency_regret": 107.085914495335,
+          "mean_chosen_cost": 0.00037875,
+          "n_cases": 8,
+          "pass_rate": 0.75,
+          "quality_regret": 0.25,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "onprem_required": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.00236,
+          "n_cases": 4,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      }
+    },
+    "router_warm_prior": {
+      "placement": {
+        "any": {
+          "cost_regret": 0.000135,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.25,
+          "infeasible_at_floor": 0,
+          "latency_regret": 107.085914495335,
+          "mean_chosen_cost": 0.00037875,
+          "n_cases": 8,
+          "pass_rate": 0.75,
+          "quality_regret": 0.25,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "escalated": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.00428,
+          "n_cases": 2,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "onprem_only": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.00236,
+          "n_cases": 4,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "us_only": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.285714285714,
+          "infeasible_at_floor": 1,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.0014625,
+          "n_cases": 8,
+          "pass_rate": 0.625,
+          "quality_regret": 0.25,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      },
+      "protection": {
+        "enforced": {
+          "cost_regret": 4.7647059e-05,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.190476190476,
+          "infeasible_at_floor": 1,
+          "latency_regret": 37.795028645412,
+          "mean_chosen_cost": 0.001487727273,
+          "n_cases": 22,
+          "pass_rate": 0.772727272727,
+          "quality_regret": 0.181818181818,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      },
+      "workload": {
+        "claim_summary": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.222222222222,
+          "infeasible_at_floor": 1,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.002026,
+          "n_cases": 10,
+          "pass_rate": 0.7,
+          "quality_regret": 0.2,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "faq": {
+          "cost_regret": 0.000135,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.25,
+          "infeasible_at_floor": 0,
+          "latency_regret": 107.085914495335,
+          "mean_chosen_cost": 0.00037875,
+          "n_cases": 8,
+          "pass_rate": 0.75,
+          "quality_regret": 0.25,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "onprem_required": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.00236,
+          "n_cases": 4,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      }
+    }
+  },
+  "headline": {
+    "comparable": false,
+    "parity_tol": 0.02,
+    "reference": "best_published_quality",
+    "reference_pass_rate": 0.954545454545,
+    "router": "router_online",
+    "router_pass_rate": 0.772727272727,
+    "saving_pct": null
+  },
+  "policy": {
+    "empty_set_mismatches": 0,
+    "pinned_mismatches": 0,
+    "post_gate_widened": 0,
+    "sweep_generate_mismatches": 0,
+    "sweep_violations": 0,
+    "violations_total": 0
+  },
+  "strategies": {
+    "best_published_quality": {
+      "cost_regret": 0.00059047619,
+      "empty_set_mismatches": 0,
+      "exhausted_rate": 0.0,
+      "floor_miss_rate": 0.0,
+      "infeasible_at_floor": 1,
+      "latency_regret": 84.139427547941,
+      "mean_chosen_cost": 0.002335454545,
+      "n_cases": 22,
+      "pass_rate": 0.954545454545,
+      "quality_regret": 0.0,
+      "violation_rate": 0.0,
+      "wasted_attempts": 0.0
+    },
+    "cheapest": {
+      "cost_regret": 0.0,
+      "empty_set_mismatches": 0,
+      "exhausted_rate": 0.0,
+      "floor_miss_rate": 0.095238095238,
+      "infeasible_at_floor": 1,
+      "latency_regret": 0.0,
+      "mean_chosen_cost": 0.001438181818,
+      "n_cases": 22,
+      "pass_rate": 0.863636363636,
+      "quality_regret": 0.090909090909,
+      "violation_rate": 0.0,
+      "wasted_attempts": 0.0
+    },
+    "router_cold": {
+      "cost_regret": 4.7647059e-05,
+      "empty_set_mismatches": 0,
+      "exhausted_rate": 0.0,
+      "floor_miss_rate": 0.190476190476,
+      "infeasible_at_floor": 1,
+      "latency_regret": 37.795028645412,
+      "mean_chosen_cost": 0.001487727273,
+      "n_cases": 22,
+      "pass_rate": 0.772727272727,
+      "quality_regret": 0.181818181818,
+      "violation_rate": 0.0,
+      "wasted_attempts": 0.0
+    },
+    "router_online": {
+      "cost_regret": 4.7647059e-05,
+      "empty_set_mismatches": 0,
+      "exhausted_rate": 0.0,
+      "floor_miss_rate": 0.190476190476,
+      "infeasible_at_floor": 1,
+      "latency_regret": 37.795028645412,
+      "mean_chosen_cost": 0.001487727273,
+      "n_cases": 22,
+      "pass_rate": 0.772727272727,
+      "quality_regret": 0.181818181818,
+      "violation_rate": 0.0,
+      "wasted_attempts": 0.0
+    },
+    "router_online:breaker_off": {
+      "cost_regret": 4.7647059e-05,
+      "empty_set_mismatches": 0,
+      "exhausted_rate": 0.0,
+      "floor_miss_rate": 0.190476190476,
+      "infeasible_at_floor": 1,
+      "latency_regret": 37.795028645412,
+      "mean_chosen_cost": 0.001487727273,
+      "n_cases": 22,
+      "pass_rate": 0.772727272727,
+      "quality_regret": 0.181818181818,
+      "violation_rate": 0.0,
+      "wasted_attempts": 0.0
+    },
+    "router_warm_prior": {
+      "cost_regret": 4.7647059e-05,
+      "empty_set_mismatches": 0,
+      "exhausted_rate": 0.0,
+      "floor_miss_rate": 0.190476190476,
+      "infeasible_at_floor": 1,
+      "latency_regret": 37.795028645412,
+      "mean_chosen_cost": 0.001487727273,
+      "n_cases": 22,
+      "pass_rate": 0.772727272727,
+      "quality_regret": 0.181818181818,
+      "violation_rate": 0.0,
+      "wasted_attempts": 0.0
+    }
+  },
+  "worst_groups": {
+    "best_published_quality": {
+      "cost_regret": [
+        "placement",
+        "us_only",
+        0.001771428571
+      ],
+      "floor_miss_rate": [
+        "workload",
+        "claim_summary",
+        0.0
+      ],
+      "latency_regret": [
+        "placement",
+        "us_only",
+        252.418282643823
+      ],
+      "pass_rate": [
+        "placement",
+        "us_only",
+        0.875
+      ],
+      "quality_regret": [
+        "workload",
+        "claim_summary",
+        0.0
+      ]
+    },
+    "cheapest": {
+      "cost_regret": [
+        "workload",
+        "claim_summary",
+        0.0
+      ],
+      "floor_miss_rate": [
+        "placement",
+        "us_only",
+        0.285714285714
+      ],
+      "latency_regret": [
+        "workload",
+        "claim_summary",
+        0.0
+      ],
+      "pass_rate": [
+        "placement",
+        "us_only",
+        0.625
+      ],
+      "quality_regret": [
+        "placement",
+        "us_only",
+        0.25
+      ]
+    },
+    "router_cold": {
+      "cost_regret": [
+        "workload",
+        "faq",
+        0.000135
+      ],
+      "floor_miss_rate": [
+        "placement",
+        "us_only",
+        0.285714285714
+      ],
+      "latency_regret": [
+        "workload",
+        "faq",
+        107.085914495335
+      ],
+      "pass_rate": [
+        "placement",
+        "us_only",
+        0.625
+      ],
+      "quality_regret": [
+        "workload",
+        "faq",
+        0.25
+      ]
+    },
+    "router_online": {
+      "cost_regret": [
+        "workload",
+        "faq",
+        0.000135
+      ],
+      "floor_miss_rate": [
+        "placement",
+        "us_only",
+        0.285714285714
+      ],
+      "latency_regret": [
+        "workload",
+        "faq",
+        107.085914495335
+      ],
+      "pass_rate": [
+        "placement",
+        "us_only",
+        0.625
+      ],
+      "quality_regret": [
+        "workload",
+        "faq",
+        0.25
+      ]
+    },
+    "router_online:breaker_off": {
+      "cost_regret": [
+        "workload",
+        "faq",
+        0.000135
+      ],
+      "floor_miss_rate": [
+        "placement",
+        "us_only",
+        0.285714285714
+      ],
+      "latency_regret": [
+        "workload",
+        "faq",
+        107.085914495335
+      ],
+      "pass_rate": [
+        "placement",
+        "us_only",
+        0.625
+      ],
+      "quality_regret": [
+        "workload",
+        "faq",
+        0.25
+      ]
+    },
+    "router_warm_prior": {
+      "cost_regret": [
+        "workload",
+        "faq",
+        0.000135
+      ],
+      "floor_miss_rate": [
+        "placement",
+        "us_only",
+        0.285714285714
+      ],
+      "latency_regret": [
+        "workload",
+        "faq",
+        107.085914495335
+      ],
+      "pass_rate": [
+        "placement",
+        "us_only",
+        0.625
+      ],
+      "quality_regret": [
+        "workload",
+        "faq",
+        0.25
+      ]
+    }
+  }
+}
