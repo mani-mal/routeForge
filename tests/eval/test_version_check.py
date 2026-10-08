@@ -164,6 +164,24 @@ def test_a_shift_on_every_case_is_regressed_across_its_whole_range():
     assert "point_beyond_tolerance" not in f
 
 
+def test_an_inconclusive_figure_inside_tolerance_carries_no_flag():
+    base = [_score(i) for i in _ids(6)]
+    cand = [_score(i, cost=10.0 if i == "k01" else 0.0) for i in _ids(6)]
+    f = compare(base, cand, "overall",
+                CheckPlan(tolerances={"mean_chosen_cost": 1.5}))["mean_chosen_cost"]
+    assert f["worsening"] < 1.5 < f["hi"] and f["state"] == "inconclusive"
+    assert "point_beyond_tolerance" not in f
+
+
+def test_a_non_finite_baseline_never_passes_either():
+    base = [_score(i, cost=float("inf") if i == "k01" else 1.0) for i in _ids(10)]
+    cand = [_score(i, cost=1.0) for i in _ids(10)]
+    doc = _check(base, cand, tolerances={"mean_chosen_cost": 10.0})
+    assert doc["overall"]["mean_chosen_cost"]["state"] == "undefined"
+    assert doc["verdict"] == "inconclusive"
+    json.dumps(doc, allow_nan=False)
+
+
 def test_a_non_finite_score_never_passes():
     base = [_score(i, cost=1.0) for i in _ids(10)]
     cand = [_score(i, cost=float("nan") if i == "k01" else 1.0) for i in _ids(10)]

@@ -278,8 +278,9 @@ def compare(baseline: list[CaseScore], candidate: list[CaseScore], scope: str,
                 worsening=w, lo=lo, hi=hi,
                 change=change_of(bcol == ccol, lo, hi),
                 state="not_checked" if tol is None else decide(w, lo, hi, tol))
-            if tol is not None and w is not None and figure["state"] == "inconclusive":
-                figure["point_beyond_tolerance"] = round(w, _DP) > tol
+            if (tol is not None and w is not None
+                    and figure["state"] == "inconclusive" and round(w, _DP) > tol):
+                figure["point_beyond_tolerance"] = True
         out[metric] = figure
     return out
 
