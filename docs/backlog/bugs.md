@@ -127,6 +127,37 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
+## B68 — Onboarding a keyed endpoint needs a redeploy: the key can only come from an env var in the API pod  🔴 OPEN
+
+**Severity:** medium (operator friction on the product's main runtime workflow; the
+definition of done says onboarding "takes effect with no restart").
+**Found:** 2026-10-08, onboarding `glm-5.3-flash` on the DGX lab (and `qwen3-coder-next`
+before it, 2026-10-06 — see B61).
+
+Onboarding takes `api_key_env`: the **name** of an environment variable in the API pod. For
+an endpoint that needs a key, the admin must therefore create a Kubernetes secret, add an
+`env` entry to the API deployment manifest, apply it and wait for the pod to roll — every
+time a new keyed model is onboarded. Until they do, the probe gets 401 and the model saves
+disabled. Both lab onboardings hit this; the second needed PR #93 to add one env line.
+
+**Wanted (owner, 2026-10-08):** an admin can supply the endpoint's token at onboarding
+time — in the console, or some other way that needs no deploy — and the model is usable at
+once.
+
+**Design notes (not decided):**
+- Store the token **encrypted at rest** with the existing `ENCRYPTION_KEY` mechanism the
+  per-app Langfuse secret key already uses (`app/apps/models.py`,
+  `app/apps/langfuse_provision.py`); never store or log it in clear, never return it from
+  any admin read (write-only field; show "set" / "not set" and a last-four hint at most),
+  never export it in the config snapshot, a trace or an outcome row.
+- Keep `api_key_env` as the alternative for operators who manage secrets outside RouteForge
+  (Vault, sealed secrets); exactly one of the two per model, and say which is in use.
+- Rotation: `PUT` replaces the token and re-probes; multi-replica deployments must pick the
+  new value up without a restart (the registry already reloads onboarded rows).
+- Needs a new column (manual `ALTER`, there are no migrations) and a UI password field.
+- Fix B61 in the same change: helper text, refuse a key-shaped value in `api_key_env`, and
+  report a 401/403 probe as "endpoint rejected the credentials", not "unreachable".
+
 ## B67 — FEATURE: P2 evaluation-metric follow-ups — confidence on the record, policy-derived groups, a check over several seeds, a multiplicity correction, unevaluable candidate keys, a baseline overlay  🔴 OPEN
 
 **Severity:** low (the group report and the router-version check work as designed; these
