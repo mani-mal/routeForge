@@ -18,7 +18,12 @@ case:
 After the last case it computes the feasible-oracle metrics (`metrics.json`),
 a human report (`report.md`) and a run stamp (`run.json`). With
 `group_report=True` it also writes `groups.json` and `groups.md`
-(`app/eval/groups.py`); without it, no output changes. Exit codes: `0` ok,
+(`app/eval/groups.py`). With `candidate_path` it scores a candidate routing
+config as extra router arms over the same sweep and writes `check.json` and
+`check.md` (`app/eval/version_check.py`), which adds exit codes `3` (a named
+metric regressed beyond its tolerance) and `4` (inconclusive). Neither is a
+promotion path: both write files and nothing else. Without those two
+arguments no output changes. Exit codes: `0` ok,
 `1` load/usage error (including a `seconds_per_case` too small for this run's
 endpoint count or attempt cap -- `strategies.min_seconds_per_case`), `2`
 policy violation, empty-set mismatch, post-gate widening, pinned-served
@@ -36,7 +41,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -46,6 +51,8 @@ from app.apps.privacy import AppPrivacyProfile
 from app.compression.ccr import CCRStore
 from app.config.loader import load_settings
 from app.errors import BackendUnavailable, ContextWindowExceeded, NoEligibleCandidate
+from app.eval.candidate import ARM as CANDIDATE_ARM
+from app.eval.candidate import Candidate, candidate_settings, load_candidate
 from app.eval.cases import Case, SuiteError, load_suite
 from app.eval.endpoints import (
     EndpointFileError,
@@ -73,6 +80,7 @@ from app.eval.oracle import (
     worst_groups,
 )
 from app.eval.simulated import SimulatedBackend
+from app.eval.version_check import CheckPlan, render_check, run_check
 from app.eval.strategies import (
     DEFAULT_SECONDS_PER_CASE,
     AttemptStrategy,
@@ -181,6 +189,7 @@ class RunResult:
     out_dir: str
     metrics: dict
     groups: dict | None = None    # the `groups.json` document, when asked for
+    check: dict | None = None     # the `check.json` document, when asked for
 
 
 class _CountingBackend:
@@ -388,7 +397,9 @@ async def run_bench(suite_path: str, endpoints_path: str, *, out_dir: str,
                     fixed: str | None = None,
                     seconds_per_case: float = DEFAULT_SECONDS_PER_CASE,
                     group_report: bool = False,
-                    min_group_size: int = DEFAULT_MIN_GROUP_SIZE) -> RunResult:
+                    min_group_size: int = DEFAULT_MIN_GROUP_SIZE,
+                    candidate_path: str | None = None,
+                    check_plan: CheckPlan | None = None) -> RunResult:
     """Run the benchmark end to end. Load/usage errors print to stderr and
     return exit code 1 before `out_dir` is touched.
 
@@ -397,18 +408,30 @@ async def run_bench(suite_path: str, endpoints_path: str, *, out_dir: str,
 
     `group_report` also writes `groups.json` and `groups.md`: every metric
     by placement, protection, application and workload, a figure over fewer
-    than `min_group_size` cases printed as a count and no rate."""
+    than `min_group_size` cases printed as a count and no rate.
+
+    `candidate_path` names a `routeforge.router-candidate/v1` file. Its
+    routing overlay is scored as `router_cold:candidate`,
+    `router_online:candidate` and `router_warm_prior:candidate` over the
+    same sweep, and `check.json` / `check.md` compare `router_online` with
+    `router_online:candidate` under `check_plan` (default `CheckPlan()`,
+    whose `min_group_size` is replaced by this call's). The returned
+    `exit_code` is then the check's: 0, 2, 3 or 4. Nothing is applied."""
     args = {"suite": suite_path, "endpoints": endpoints_path, "seed": seed,
             "live": live, "keep_text": keep_text, "variants": variants_path,
             "parity_tol": parity_tol, "fixed": fixed,
             "seconds_per_case": seconds_per_case}
     if group_report:   # only then: an unflagged run's `run.json` keeps its keys
         args.update(group_report=True, min_group_size=min_group_size)
+    if candidate_path is not None:
+        args.update(candidate=candidate_path, min_group_size=min_group_size)
     started = _now()
     try:
         if (isinstance(min_group_size, bool) or not isinstance(min_group_size, int)
                 or min_group_size < 1):
             raise BenchError(f"min_group_size must be an int >= 1; got {min_group_size!r}")
+        if check_plan is not None and candidate_path is None:
+            raise BenchError("a check plan was given without a candidate")
         seconds_per_case = check_seconds_per_case(seconds_per_case)
         cases, suite_hash = load_suite(suite_path)
         base = load_settings()
@@ -440,6 +463,16 @@ async def run_bench(suite_path: str, endpoints_path: str, *, out_dir: str,
                 variant_cfgs[name] = variant_settings(settings, weights)
             except Exception as exc:
                 raise BenchError(f"variant {name!r}: {exc}") from exc
+        candidate: Candidate | None = None
+        if candidate_path is not None:
+            if CANDIDATE_ARM in variants:
+                raise BenchError(f"variant name {CANDIDATE_ARM!r} is reserved when a "
+                                 "candidate is given")
+            candidate = load_candidate(candidate_path)
+            # Scored exactly like a weight variant: its own Settings, its own
+            # three router arms, the shared sweep matrix.
+            variant_cfgs[CANDIDATE_ARM] = candidate_settings(settings, candidate)
+            check_plan = replace(check_plan or CheckPlan(), min_group_size=min_group_size)
         try:
             detector = make_detector(settings.serving.pii_detection)
         except ImportError as exc:
@@ -464,6 +497,7 @@ async def run_bench(suite_path: str, endpoints_path: str, *, out_dir: str,
                 out_dir=out_dir, seed=seed,
                 live=live, keep_text=keep_text, parity_tol=parity_tol, fixed=fixed,
                 group_report=group_report, min_group_size=min_group_size,
+                candidate=candidate, check_plan=check_plan,
                 stamp={"suite_hash": suite_hash, "endpoints_hash": endpoints_hash,
                        "args": args, "started_at": started})
         except LeakageError as exc:
@@ -481,7 +515,8 @@ async def run_bench(suite_path: str, endpoints_path: str, *, out_dir: str,
 async def _run_loaded(*, cases, specs, settings, registry, detector,
                       variant_cfgs, max_attempts, seconds_per_case,
                       out_dir, seed, live, keep_text, parity_tol, fixed,
-                      group_report, min_group_size, stamp) -> RunResult:
+                      group_report, min_group_size, candidate, check_plan,
+                      stamp) -> RunResult:
     inner = make_backend(settings, registry) if live else SimulatedBackend(specs, seed)
     backend = _CountingBackend(inner)
     gate = Gate(settings, detector, registry=registry)
@@ -542,7 +577,8 @@ async def _run_loaded(*, cases, specs, settings, registry, detector,
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    for stale in ("metrics.json", "report.md", "run.json", "groups.json", "groups.md"):
+    for stale in ("metrics.json", "report.md", "run.json", "groups.json", "groups.md",
+                  "check.json", "check.md"):
         (out / stale).unlink(missing_ok=True)
 
     case_infos: list[CaseInfo] = []
@@ -738,8 +774,28 @@ async def _run_loaded(*, cases, specs, settings, registry, detector,
         "notes": {**ARM_NOTES, "base_routing_policy_version": BASE_RPV_NOTE},
     }
     groups_doc: dict | None = None
+    check_doc: dict | None = None
+    keys = {case.id: case_keys(case.tags, case.app_policy) for case in cases}
+    if candidate is not None:
+        arms = (HEADLINE_ROUTER, f"{HEADLINE_ROUTER}:{CANDIDATE_ARM}")
+        chains = tuple({c.case_id: c.attempts for c in choices if c.strategy == arm}
+                       for arm in arms)
+        check_doc = json.loads(_dump(run_check(
+            case_scores(case_infos, rows, choices, arms[0]),
+            case_scores(case_infos, rows, choices, arms[1]),
+            keys, chains, check_plan, arms=arms,
+            candidate_doc={"id": candidate.id, "name": candidate.name,
+                           "routing": candidate.routing},
+            run_exit_code=exit_code, mode=run_stamp["mode"])))
+        (out / "check.json").write_text(_dump(check_doc), encoding="utf-8")
+        (out / "check.md").write_text(render_check(check_doc), encoding="utf-8")
+        # The process exit code. `metrics.json`'s `exit_code` stays the bench
+        # run's own integrity code (0 or 2), as it always was.
+        run_stamp["candidate"] = {"id": candidate.id, "name": candidate.name,
+                                  "verdict": check_doc["verdict"]}
+        run_stamp["exit_code"] = check_doc["exit_code"]
+        exit_code = check_doc["exit_code"]
     if group_report:
-        keys = {case.id: case_keys(case.tags, case.app_policy) for case in cases}
         scores = {n: case_scores(case_infos, rows, choices, n) for n in strategy_names}
         groups_doc = json.loads(_dump(build_group_report(
             scores, keys, min_size=min_group_size, mode=run_stamp["mode"])))
@@ -749,7 +805,7 @@ async def _run_loaded(*, cases, specs, settings, registry, detector,
     (out / "run.json").write_text(_dump(run_stamp), encoding="utf-8")
     (out / "report.md").write_text(_report(metrics, run_stamp), encoding="utf-8")
     return RunResult(exit_code=exit_code, out_dir=str(out), metrics=metrics,
-                     groups=groups_doc)
+                     groups=groups_doc, check=check_doc)
 
 
 def _served(attempts: tuple[str, ...], rows_by_endpoint: dict[str, MatrixRow]
