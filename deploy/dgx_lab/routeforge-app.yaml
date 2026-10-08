@@ -106,6 +106,9 @@ items:
           # `optional: true` so the API still boots on a cluster without that model.
           - name: SP_QWEN_CODER_API_KEY
             valueFrom: {secretKeyRef: {name: qwen-coder-key, key: SP_QWEN_CODER_API_KEY, optional: true}}
+          # Same pattern for GLM 5.3 Flash (secret `glm-flash-key`, created out of band).
+          - name: GLM_FLASH_API_KEY
+            valueFrom: {secretKeyRef: {name: glm-flash-key, key: GLM_FLASH_API_KEY, optional: true}}
           # Optional: to auto-provision a Langfuse PROJECT per application on
           # onboard (POST /admin/applications), set the in-cluster Langfuse host
           # plus an organization-scoped API key pair (Langfuse org settings ->
