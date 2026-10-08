@@ -1,0 +1,2 @@
+{"schema": "routeforge.capacity-assumptions/v1", "title": "DGX lab 2026-10-08: stated limits for glm-5.3-flash (illustrative, stated for the experiment; not the serving engine's configured limit)",
+ "endpoints": {"glm-5.3-flash": {"max_concurrency": 2, "requests_per_minute": 90, "tokens_per_minute": 150000}}}
