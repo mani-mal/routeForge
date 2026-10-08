@@ -42,6 +42,7 @@ Handoff §37 Priority 1 criteria met:
 | Circuit breaker | #67 | Cross-request, per-endpoint circuit breaker, on by default; never lowers the target tier (closes B45) | `app/gateway/` |
 | **P2b-2** routing outcomes | #68, #69, #70 | Content-free `routing_outcomes` and `outcome_feedback` records, export, and report; nothing reads them back into routing | `docs/reference/routing-outcomes.md` |
 | **P2b-3** quality calibration | #71 | Offline, human-approved quality calibration: the estimator, a replay diff, `scripts/quality_recommend.py` (B54 fixed alongside) | `docs/reference/quality-calibration.md` |
+| **P2 metrics (1 of 2)** group report and router-version check | pending | `feasible_bench.py --group-report`: every metric by placement, protection, application and workload, each figure with its own denominator; a figure over fewer than `--min-group-size` cases prints a count and no rate; violation counts are never suppressed. `feasible_bench.py --candidate FILE`: an **offline** router-version check — a candidate routing overlay scored beside the current config over the same sweep; any ineligible choice is exit 2 whatever the tolerances; a named metric's whole range beyond its tolerance is exit 3; a range that straddles the tolerance is exit 4 (inconclusive). **It applies nothing and promotes nothing.** Both opt-in; without the flags the bench's output is byte-identical, now pinned by a golden test. | `docs/guides/feasible-route-bench.md` §6.2–§6.3, research §22 |
 
 Handoff §37 Priority 2 criteria met:
 - ineligible endpoints are masked before scoring;
@@ -153,13 +154,21 @@ uncertainty (P3c-3) and capacity (P3c-4) are built.
   - a workload taxonomy that clients actually send;
   - FeasibleRouteBench wired in as a pre-apply gate;
   - the served model credited on cache hits.
-- **Router-version promotion gates** (handoff §19, §36 Phase 2). The bench can compare
-  strategies offline, but nothing compares alternative router versions or blocks a promotion
-  on it.
-- **Handoff §18 metrics not yet reported:**
-  - calibration of routing confidence;
-  - policy-churn and endpoint-churn robustness as standing metrics;
-  - worst-group results by placement, protection, tenant and workload.
+- **Handoff §18 metrics not yet reported** — designed
+  (`docs/superpowers/specs/2026-10-07-p2-eval-metrics-design.md` §6, §9), not built; the
+  second plan of that spec:
+  - **policy-churn and endpoint-churn robustness**: one declared change at a time, the
+    suite re-run, violations required to stay 0;
+  - **calibration of confidence**. The router emits no confidence. The one that exists is
+    the backend's figure for an answer, which the gateway's escalation threshold reads and
+    nothing records; that is what the design measures. In simulation it is constant, so
+    the simulated result will be a stated "not measurable".
+
+Built from this list on 2026-10-07 (§1): worst-group results (as the group report; "tenant"
+is `application`, because the bench has one tenant id) and the router-version check. The
+check is the handoff's "promotion gate" in the only form the product boundary allows: it
+blocks nothing in process and promotes nothing. An operator, or their CI, reads its exit
+code before changing `config/routing.yaml`.
 
 ### 2.3 Open owner decisions
 
@@ -190,6 +199,11 @@ uncertainty (P3c-3) and capacity (P3c-4) are built.
 2. The simulator slices are built. The next Priority 3 item is the administrator review
    workflow (§2.1 item 3), or a fidelity gap from item 4; each starts with a design
    brainstorm, then a spec, plan and subagent build.
+2a. The next Priority 2 item is the second plan of the P2 metrics spec (churn robustness and
+   confidence calibration). Write that plan from the spec's §6 and §9; do not start from
+   the handoff. Before quoting a group figure or a check verdict, quote the suite, the
+   seed and each figure's `n`; a verdict that rests on simulated pass rate changes with
+   the seed (research §22.5.3).
 3. Before quoting any simulator number from the Spark, check both baseline agreements, and
    exclude rows recorded before B55. Rejected rows recorded before B60 are excluded
    automatically (`missing_routing_tokens`). A range from `--uncertainty` is sampling

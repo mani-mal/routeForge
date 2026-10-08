@@ -48,6 +48,12 @@ dataset. §13 records the dataset's model, its invariants, and what it can and c
 support. It contains no results: nothing has been deployed, so there is no production
 data yet.
 
+**Update 2026-10-07 (§22).** Two of the metrics §6.5 lists as missing are now reported,
+both opt-in and both offline: a group report with denominators and a minimum group size,
+and an offline router-version check that compares a candidate routing config with the
+current one over the same sweep. Calibration and churn robustness are designed and not yet
+built. §22's numbers are simulated.
+
 ---
 
 ## 0. File before you publish
@@ -554,6 +560,22 @@ The router emits no confidence, so calibration is undefined. Policy or endpoint 
 (endpoints joining, leaving or degrading mid-run) is not modelled: the registry is static
 for a run. Noninterference is P1a's harness. All three are named as deferred in every
 `report.md`.
+
+*Status 2026-10-07.* Still true of the code, and `report.md` still says so. What changed:
+
+- **Worst-group results** now have sizes, denominators, a minimum group size and an
+  application dimension (§22.1). That was §3's metric 6, half built.
+- **An offline router-version check** exists (§22.2).
+- **Calibration is designed, not built.** The router does emit no confidence. The gateway
+  does read one: the backend's own figure for an answer, which the escalation threshold is
+  compared with, and which is recorded nowhere. That is the only thing there is to
+  calibrate; the design measures it and says in fixed text that RouteForge has no
+  calibrated routing confidence. The simulated backend reports 1.0 for every answer, so in
+  simulation the result is, by construction, "not measurable".
+- **Churn robustness is designed, not built**: one declared change to the policy or the
+  registry at a time, the suite re-run, violations required to stay 0.
+
+Both designs are in `docs/superpowers/specs/2026-10-07-p2-eval-metrics-design.md` §6 and §9.
 
 ### 6.6 No live result
 
@@ -3764,3 +3786,383 @@ Figures in this list are synthetic; the method for each is in §21.5.5.
   make it O(1) per row (B66).
 - Everything in §21.5.1–§21.5.3 and §21.5.5 is synthetic. Every figure on recorded traffic
   is **TO MEASURE** (§21.5.4).
+
+---
+
+## 22. Group report and the offline router-version check (P2 evaluation metrics, 2026-10-07)
+
+**Status:** built, offline, opt-in. Spec
+`docs/superpowers/specs/2026-10-07-p2-eval-metrics-design.md` (§4, §5, §7, §8); plan
+`docs/superpowers/plans/2026-10-07-p2-eval-metrics.md`. Branch `feat/p2-eval-metrics`.
+Operator guide: `docs/guides/feasible-route-bench.md` §6.2–§6.3. **Every number in §22.5 is
+from a simulated run.** Read §22.6 before writing a sentence that claims a result.
+
+This is the first of two plans. The second builds churn robustness and confidence
+calibration (handoff §18 metrics 6–8); neither exists yet.
+
+### 22.1 Per-case scores and the group report
+
+**Per-case scores.** `strategy_metrics` computed every aggregate inside one loop. That loop
+is now `oracle.case_scores`, which returns one `CaseScore` per case: what the case adds to
+each aggregate, or `None` where the case is outside that aggregate's denominator.
+`strategy_metrics` is `aggregate_scores(case_scores(...))`, rounded, and its output did not
+move (§22.4, E1). A group figure is an aggregate over a subset of scores; a resample is an
+aggregate over a multiset of them.
+
+**Denominators.** For a strategy `s` and a set of cases `G`:
+
+| Metric | Denominator |
+|---|---|
+| `violation_rate`, `empty_set_mismatch_rate` | `|G|` |
+| `pass_rate`, `quality_regret` | `|{c ∈ G : E(c) ≠ ∅}|` |
+| `floor_miss_rate` | `|{c ∈ G : P(c) ≠ ∅}|` |
+| `cost_regret` | `|{c ∈ G : s(c) ∈ P(c)}|` |
+| `latency_regret` | the same, with both latencies known |
+
+Every printed figure carries its denominator `n`. For a partition of the suite into
+groups, `overall = Σ n_g · value_g / Σ n_g` with `n_g` the **figure's** denominator in
+group `g`. Weighting by the group's case count is correct for the two metrics over `|G|`
+and wrong for the others whenever groups differ in how many of their cases are empty or
+passed.
+
+*Worked example* (eight cases; `tests/eval/test_groups.py`): cost regret is 0.15 over four
+passing cases in one group of five and 0.6 over one passing case in a group of three. The
+overall figure is `1.2 / 5 = 0.24`. By denominator: `(4 × 0.15 + 1 × 0.6) / 5 = 0.24`. By
+case count: `(5 × 0.15 + 3 × 0.6) / 8 = 0.31875`.
+
+**Dimensions.** `placement`, `protection`, `workload` (author tags, as §3's metric 6) and
+`application`: `tags.app`, else a fingerprint of the case's `app_policy`. The bench has one
+tenant id, so there is no tenant dimension. A case with no value is in `(untagged)`: every
+case is in exactly one group per dimension.
+
+**Small groups.** A figure with `n` below `--min-group-size` (default 5, inclusive) is
+`insufficient_cases` and has no value. The rule is on the figure's denominator. Counts of
+violations and empty-set mismatches are never suppressed.
+
+**Counts per strategy.** `groups.md` also prints a table of cases, violations and
+empty-set mismatches over the whole run, for every strategy, in sorted order.
+
+**Worst group.** Per metric, the worst printed figure across all groups of all dimensions,
+with its `n`, the group's size, how many groups print that metric (of how many exist) and
+how many of the printed ones share the worst value. When all printed groups share it, none
+is named. A tie between some (not all) of the printed groups is listed, not broken.
+
+### 22.2 The router-version check
+
+**What is compared.** A candidate is an overlay of `routing.yaml` keys
+(`routeforge.router-candidate/v1`), laid over the deployment's routing config in memory. It
+is scored like a weight variant: three more router arms over **the same sweep matrix**.
+The check compares `router_online` (baseline) with `router_online:candidate`.
+
+This is a clean comparison because of two properties of the code, both checked before the
+design was written: `feasible_set` reads no routing weight or threshold, so the eligible
+set `E(c)` is the same for both arms; and a matrix row is one pinned call to one endpoint,
+so its quality, cost and latency do not depend on routing config either. Every difference
+between the two arms is the candidate's.
+
+**Worsening.** For a metric `m` over a set of cases, `w = m_cand − m_base`, or
+`m_base − m_cand` for `pass_rate`. Positive is worse.
+
+**Range.** A paired case bootstrap. Cases are sorted by id; replicate `b` draws `n`
+positions with replacement (`uncertainty.draw_indices(seed, b, scope, n)`); both arms'
+aggregates are recomputed on that one draw; `[lo, hi]` is the equal-tailed percentile
+interval of the `B` values of `w` (default `B = 1000`, level 0.90). `uncertainty.py`'s
+draw and interval functions are reused; its replicate loop, built around simulator rows
+and application strata, is not. `--check-replicates` must be at least
+`ceil(2 / (1 - interval))` (20 for the default 0.90 interval) or the run is a usage error
+(exit 1): fewer and a tail would drop none of the resamples, so the interval would really
+be the resamples' min and max.
+
+**Decision rule** (amended 2026-10-07; see §22.7). For tolerance `τ ≥ 0`:
+
+1. `w` undefined or not finite → `undefined`
+2. no range → `inconclusive`
+3. `lo > τ` → `regressed` (the **whole** range is beyond the tolerance)
+4. `hi ≤ τ` → `within_tolerance` (the **whole** range is within the tolerance)
+5. otherwise → `inconclusive`; when the point estimate `w > τ` the figure also carries
+   `point_beyond_tolerance: true` and `check.md` prints `inconclusive (point beyond
+   tolerance)`
+
+The point estimate alone decides nothing: a figure is judged on its whole range.
+`change ∈ {none, worse, better, not_detectable}` is reported beside the state and never
+decides it; a `not_detectable` range (one that includes 0) is common among
+`within_tolerance` rows too, since the decision is about where the whole range sits
+against `τ`, not about whether it reaches 0. No correction is made for the number of
+figures judged (`CHECK_MULTIPLICITY`).
+
+**Verdict.** `hard_fail` (exit 2) if the candidate has any violation — an attempt outside
+`E(c)`, including any attempt where `E(c) = ∅` — or the run's own integrity code is not 0.
+Otherwise the worst state over the judged figures: `regressed` (3), `inconclusive` (4),
+`pass` (0); `no_hard_failure` (0) when no tolerance was named. Judged figures: every named
+metric overall, and in every group with at least `--min-group-size` cases whose figure is
+not itself `insufficient_cases` (a group the *candidate* thinned below the minimum is
+still judged, and is `inconclusive`; only a figure with too few **baseline** cases is
+listed, not judged). An empty suite, or a run with tolerances named but zero figures
+judged, is `inconclusive` (exit 4), never a pass.
+
+### 22.3 What it deliberately is not
+
+- **Not a promotion path.** Nothing is applied. The modules import no admin route, no
+  application store and no HTTP client and call nothing that writes; the only writes are
+  the runner's, under `--out` (E11). The handoff's "promotion gate" is, here, a check an
+  operator runs before they edit a file.
+- **Not a ranking.** The report orders nothing by size and names no model or endpoint as
+  better.
+- **Not a test of routing keys the bench cannot evaluate.** The escalation threshold and
+  temperature, the escalation and failover bounds, the tier list and the pool are refused
+  with a reason. Accepting them would produce a false "no regression".
+- **Not corrected for multiplicity.** More groups mean more judged figures and more chances
+  of `regressed` or `inconclusive`. For a check that is the safe direction; it is not a
+  calibrated error rate.
+- **Not over seeds.** One run is one simulation seed and one case order (§22.5.3).
+
+### 22.4 Invariants, and the test that pins each
+
+All under `tests/eval/`. "Falsified" means the rule was broken on purpose and the named
+test failed (§22.5.4).
+
+| # | Invariant | Pinned by | Falsified? |
+|---|---|---|---|
+| E1 | With no new flag the output is byte-identical to the pre-slice tree | `test_bench_golden.py::test_e1_default_output_is_byte_identical` (four cases, written before any product code of the slice; the commit is in the fixture); `::test_e1_the_default_run_writes_exactly_the_five_files`; `test_group_report_run.py::test_e1_the_flag_adds_two_files_and_changes_no_other` | **Yes** (M15) |
+| E2 | Same inputs and flags give byte-identical new files | `test_group_report_run.py::test_e2_the_group_report_is_byte_identical_twice`; `test_version_check_run.py::test_e2_the_check_is_byte_identical_twice` | n/a |
+| E3 | Each case is in exactly one group per dimension; sizes sum to the suite | `test_groups.py::test_e3_every_case_is_in_exactly_one_group_per_dimension`, `::test_e3_group_sizes_sum_to_the_total`, `::test_e3_an_untagged_case_is_counted_not_dropped`; `test_group_report_run.py::test_e3_the_run_partitions_its_cases` | Yes (M8) |
+| E4 | Overall = the groups combined by each figure's own denominator; by case count is wrong for a conditional metric | `test_groups.py::test_e4_overall_is_the_denominator_weighted_combination` (7 metrics × 4 dimensions), `::test_e4_weighting_by_case_count_is_wrong_for_a_conditional_metric` | n/a (the second test is the counter-example) |
+| E5 | Below the minimum: a count and no rate; on the figure's denominator; counts never suppressed; inclusive | `test_groups.py::test_e5_*` (five tests); `test_group_report_run.py::test_e5_an_injected_violation_shows_in_its_group_however_small`; `test_version_check.py::test_e5_*` (two tests) | Yes (M6, M9) |
+| E6 | Group figures and the worst group match the hand-computed example | `test_groups.py::test_e6_*` (five tests) | Yes (M7) |
+| E7 | Any ineligible choice by the candidate is `hard_fail`, exit 2, whatever the tolerances | `test_version_check.py::test_e7_*` (three tests); `test_version_check_run.py::test_e7_an_injected_ineligible_candidate_exits_2_whatever_the_tolerances`, `::test_e7_a_candidate_that_serves_an_empty_feasible_set_is_a_hard_fail` | **Yes** (M3, M4): the run tests inject the fault |
+| E8 | Candidate = baseline: worsening 0, range `[0, 0]`, exit 0 at zero tolerance | `test_version_check.py::test_e8_identical_arms_are_no_change_everywhere`; `test_version_check_run.py::test_e8_a_candidate_that_restates_the_config_passes_with_zero_tolerance` | n/a |
+| E9 | The check does not depend on case order | `test_version_check.py::test_e9_the_document_does_not_depend_on_case_order` | Yes (M2) |
+| E10 | Worsening, the rule and the boundary match hand-computed examples | `test_version_check.py::test_e10_*` (four tests) | Yes (M1, M5) |
+| E11 | Nothing is applied | `test_version_check_run.py::test_e11_the_check_writes_only_under_out_and_touches_no_config`, `::test_e11_the_new_modules_have_no_way_to_apply_anything`, `::test_e11_no_admin_route_or_setting_was_added` | n/a |
+| E12 | No serving module imports `app.eval` | `test_isolation.py::test_no_serving_module_imports_app_eval` (unchanged) | Yes (its own scanner test) |
+| E13 | No ranking, recommendation or promotion vocabulary | `test_groups.py::test_e13_no_key_or_sentence_ranks_or_recommends`; `test_version_check.py::test_e13_no_key_or_sentence_ranks_recommends_or_promotes` | n/a |
+| E14 | The fixed text is the spec's and opens every new report | `test_groups.py::test_e14_*` (three tests); `test_version_check.py::test_e14_*` (two tests) | n/a |
+| E15 | Nothing stated is silently ignored | `test_candidate.py::test_e15_*`; `test_version_check_run.py::test_e15_*`, `::test_cli_a_check_flag_without_a_candidate_is_refused`, `::test_cli_a_bad_check_value_is_refused`; `test_group_report_run.py::test_cli_a_minimum_without_the_report_is_refused` | Yes (M10) |
+| E16 | The candidate adds arms and changes nothing else | `test_version_check_run.py::test_e16_the_candidate_shares_the_sweep_and_moves_no_other_arm`; `test_candidate.py::test_the_harness_settings_are_never_mutated` | Yes (M13) |
+| E17 | A figure is judged on its whole range, never the point estimate alone | `test_version_check.py::test_e17_*` | n/a |
+
+### 22.5 Results (simulated)
+
+**Stamp.** Starter suite × `healthcare-sim.yaml`, simulated, seed 0 unless stated,
+`seconds_per_case` 30, `attempt_cap` 3, 22 cases. `suite_hash` `3339c773…`,
+`endpoints_hash` `04eccd8f…`, `base_routing_policy_version` `6e6fe2027862`,
+`registry_version` `86294e62adea`. Quality in this profile is a hand-written probability
+per endpoint and workload (§6.1). Reproduced 2026-10-07 against the code as built
+(commit `afa03d2`); every number below was run, not copied.
+
+#### 22.5.1 Group report, `router_online`, seed 0
+
+Minimum 5. `-` is `insufficient cases`, with the `n` it had.
+
+| dimension | group | cases | violations | pass rate | cost regret (USD) | latency regret (ms) |
+|---|---|---|---|---|---|---|
+| overall | all | 22 | 0 | 0.909 (n = 22) | 0.000032 (n = 20) | 30.7 (n = 20) |
+| placement | any | 8 | 0 | 0.75 (n = 8) | 0.000107 (n = 6) | 102.5 (n = 6) |
+| placement | us_only | 8 | 0 | 1.0 (n = 8) | 0 (n = 8) | 0 (n = 8) |
+| placement | onprem_only | 4 | 0 | - (n = 4) | - (n = 4) | - (n = 4) |
+| placement | escalated | 2 | 0 | - (n = 2) | - (n = 2) | - (n = 2) |
+| workload | faq | 8 | 0 | 0.75 (n = 8) | 0.000107 (n = 6) | 102.5 (n = 6) |
+| workload | claim_summary | 10 | 0 | 1.0 (n = 10) | 0 (n = 10) | 0 (n = 10) |
+| workload | onprem_required | 4 | 0 | - (n = 4) | - (n = 4) | - (n = 4) |
+| protection | enforced | 22 | 0 | 0.909 (n = 22) | 0.000032 (n = 20) | 30.7 (n = 20) |
+| application | 4 groups | 8 / 8 / 4 / 2 | 0 | two printed, two not | | |
+
+What this shows, and all it shows:
+
+- **Every violation count is 0 in every group**, including the groups too small for a
+  rate.
+- **All of `router_online`'s regret on this suite is in one group**: the eight `faq` cases
+  (which are also the `placement: any` cases and one application). That is §6.7 again — the
+  tier rule excludes cheaper `mid` endpoints for short requests — now visible per group.
+- **Two of four placement groups and one of three workload groups print no rate.** The
+  `onprem_only` group, the one the product's main guarantee is about, has four cases.
+  Before this slice a "worst group" could be one of those. The suite needs more cases
+  there before a group claim about placement can be made.
+- **Only one protection posture is in the starter suite** (`enforced`). There is no
+  protection breakdown to read.
+- Check on the weighted identity: pass rate `(8 × 0.75 + 8 × 1.0 + 4 × p₁ + 2 × p₂) / 22 =
+  0.909` gives `4p₁ + 2p₂ = 6`, i.e. both unprinted groups passed every case; cost regret
+  `(6 × 0.000107 + 8 × 0 + …) / 20 = 0.000032` with the unprinted groups at 0. ✓
+
+#### 22.5.2 Three candidates, seed 0
+
+Tolerances `pass_rate=0.02`, `mean_chosen_cost=0.0001`; 1000 resamples, level 0.90,
+resampling seed 0.
+
+| Candidate | Chains changed | Violations | Mean chosen cost: baseline → candidate, worsening `[range]` | Pass rate worsening `[range]` | Verdict |
+|---|---|---|---|---|---|
+| `same` (restates the shipped weights) | 0 of 22 | 0 | 0.001490 → 0.001490, 0 `[0, 0]` | 0 `[0, 0]` | `pass` (0) |
+| `latency-only` (`weights: {cost: 0, latency: 2}`) | 16 of 22 | 0 | 0.001490 → 0.002596, +0.001106 `[0.000754, 0.001470]`, `worse` | −0.091 `[−0.182, 0]`, `not_detectable` | `regressed` (3) |
+| `no-cheap-tier` (`complexity_thresholds: {cheap_max: 0}`) | 8 of 22 | 0 | 0.001490 → 0.001441, −0.000050 `[−0.000077, −0.000025]`, `better` | −0.091 `[−0.182, 0]`, `not_detectable` | `pass` (0) |
+
+- `same` is the negative control: an overlay that changes nothing changes nothing, to the
+  last digit.
+- `latency-only` moves 16 of 22 choices and makes **no** ineligible choice: the eligible
+  set is not the router's to change. It costs 74% more per request
+  (`0.002596 / 0.001490 = 1.742`). The cost figure's whole range sits above the 0.0001
+  tolerance, so it is `regressed` overall and in all seven groups with enough cases; the
+  pass-rate figure's range reaches 0 (`not_detectable`) and stays `within_tolerance`
+  because its whole range sits at or below 0.02.
+- `no-cheap-tier` is the tier rule of §6.7 seen from the other side: with the cheap tier's
+  upper bound at 0, short requests target `mid`, where this profile's cheaper endpoints
+  are, and the candidate is cheaper. On simulated quality that proves nothing about
+  whether it is a good idea.
+
+#### 22.5.3 The same candidates at simulation seeds 0–9
+
+Reproduced against the code as built; the verdict/exit columns differ from an earlier run
+made under the check's first decision rule (§22.7) — the point values, ranges and
+violation counts do not.
+
+| Candidate | `pass` | `regressed` | `inconclusive` | `hard_fail` |
+|---|---|---|---|---|
+| `same` | 10 | 0 | 0 | 0 |
+| `latency-only` | 0 | 10 | 0 | 0 |
+| `no-cheap-tier` | 8 | 0 | 2 (seeds 3, 5) | 0 |
+
+- A large effect is stable: `latency-only`'s cost worsening is +0.00109 to +0.00113 at
+  every seed, and its range's lower end never comes near the tolerance, so it is
+  `regressed` at all ten seeds under either decision rule.
+- **A verdict that rests on simulated pass rate is not stable.** `no-cheap-tier` is `pass`
+  at eight seeds and `inconclusive` at two: seed 3 (pass rate 0.818 → 0.773, worsening
+  0.045 against a tolerance of 0.02, range `[0, 0.136]` — the range straddles the
+  tolerance, so the whole-range rule calls it `inconclusive` with `point_beyond_tolerance`
+  rather than `regressed`) and seed 5 (worsening −0.045, range `[−0.182, 0.091]`, which
+  also straddles 0 and the tolerance). The pass or fail of a case is a seeded draw against
+  a hand-written probability, so this is the harness's own noise, read through 22 cases.
+  It is the measured form of the fixed caveat "the verdict is conditional on … this
+  simulation seed".
+- No candidate at any seed made an ineligible choice.
+
+#### 22.5.4 The detectors, falsified
+
+Fifteen single-rule mutations, each run against the named test file; all fifteen were
+caught (2026-10-07, scratch tree, not committed):
+
+| # | Mutation | Caught by |
+|---|---|---|
+| M1 | the tolerance boundary made exclusive | `test_e10_the_decision_rule_branch_by_branch` |
+| M2 | the arms not sorted by case id | `test_e9_the_document_does_not_depend_on_case_order` |
+| M3 | candidate violations ignored by the hard check | `test_e7_one_ineligible_choice_is_a_hard_fail_whatever_the_tolerances` |
+| M4 | the run's exit code ignored by the hard check | `test_e7_a_failed_run_is_a_hard_fail_even_with_a_clean_candidate` |
+| M5 | the range never withholds a pass | `test_e10_the_decision_rule_branch_by_branch` |
+| M6 | the minimum made exclusive | `test_e6_group_figures_match_the_hand_computed_example` |
+| M7 | the worst `pass_rate` taken as the highest | `test_e6_the_worst_group_is_named_with_its_size` |
+| M8 | untagged cases dropped | `test_e3_an_untagged_case_is_counted_not_dropped` |
+| M9 | counts suppressed in a small group | `test_e5_a_violation_in_a_one_case_group_is_still_counted` |
+| M10 | a key the bench cannot evaluate accepted | `test_e15_a_key_the_bench_cannot_evaluate_is_refused_with_the_reason` |
+| M11 | the two arms resampled separately | `test_the_draw_is_paired_and_seeded` |
+| M12 | the check's exit code not returned | `test_a_candidate_that_costs_more_than_the_tolerance_exits_3` |
+| M13 | the candidate built on the shared settings object | `test_the_harness_settings_are_never_mutated` |
+| M14 | a floor miss scored where no endpoint passes (the per-case refactor) | `test_each_case_matches_the_hand_computed_matrix` |
+| M15 | the same mutation, against the golden pin alone | `test_e1_default_output_is_byte_identical[starter_seed1]` |
+
+M15 is why the golden pin has a fourth case. At seed 0 no starter case is infeasible at
+floor, and the first three cases did not notice M14; at seed 1 some are, and the pin does.
+
+#### 22.5.5 Live
+
+**TO MEASURE.** No `--live` run has been made with either flag. Wanted (arxiv.md E11):
+
+- the group report on a live suite with at least five cases in every placement and
+  protection group, and at least two endpoints of different placement;
+- the check for a weights candidate and a thresholds candidate on live endpoints, with the
+  verdict over repeated runs (a live run has no seed: repeat it);
+- the bootstrap range's coverage — split a larger suite in two and count how often one
+  half's range contains the other half's worsening.
+
+### 22.6 Limits: what this does NOT show
+
+- **Simulated quality is an input** (§6.1). Every pass rate, quality regret and floor-miss
+  figure in §22.5, and every verdict that rests on one, measures the harness. Cost and
+  latency are simulated too: prices from the file over real token counts, latency from a
+  declared mean and jitter.
+- **The router comparison is mostly the tier rule** (§6.7). Both non-trivial candidates
+  above act through it or around it.
+- **22 synthetic, single-turn cases.** Five of the twelve groups are below five cases; the
+  group that matters most (`onprem_only`) is one of them.
+- **A group is a label the case author wrote.** A case tagged `placement: any` with an
+  `onprem_only` policy is grouped as `any`. Grouping by the compiled policy is B67.
+- **The range is over cases only.** It does not cover the simulation seed, the case order
+  (the online arm learns in suite order), the endpoint file, or whether the suite
+  resembles any real traffic. Its coverage has not been measured.
+- **A percentile bootstrap on 22 cases is coarse.** A pass rate moves in steps of 1/22;
+  several ranges above end exactly at 0.
+- **No multiplicity correction** (§22.3).
+- **One arm is compared.** `router_online`; the cold and warm-prior candidate arms are in
+  `metrics.json` and are not judged.
+- **Calibration and churn are not built.** Handoff §18 metrics 6, 7 and 8 are still not
+  reported by any tool.
+
+### 22.7 Amendment: the decision rule, and a recorded counterexample
+
+The module shipped once with a first decision rule — `w > tol` alone failed a figure,
+with the range only able to withhold a pass that the point estimate had already earned —
+and was amended the same day, before this document's results were written, to the rule in
+§22.2: a figure is judged on its **whole range** against the tolerance; the point estimate
+never decides alone.
+
+**Why.** An independent review simulated a candidate identical in truth — same
+distribution, only which cases happened to be drawn differed — against both rules. Under
+the first rule, that candidate was labelled `regressed` in 66–100% of draws on a 22-case
+suite (20–100% at 200 cases), because five-case groups were being judged on their point
+estimate alone: at that size, a point estimate crossing a small tolerance by chance is
+common. The counterexample is recorded against commit `0a49682`.
+
+A synthetic re-run under both rules (**SYNTHETIC**: 300 draws per row, 400 resamples, two
+arms scored from one shared distribution so there is no true difference, a share `f` of
+cases redrawn between draws; the script that produced this table is not in the repository):
+
+| n | redrawn share | tolerances | figures judged | first rule: regressed | new rule: regressed | new rule: inconclusive | new rule: pass |
+|---|---|---|---|---|---|---|---|
+| 22 | 1.0 | pass_rate 0.05 | 14 | 90.3% | 24.7% | 74.3% | 1.0% |
+| 22 | 1.0 | pass_rate 0.10 + mean_chosen_cost 0.25 | 28 | 97.3% | 30.7% | 69.3% | 0% |
+| 22 | 1.0 | all eight metrics at 0 | 102 | 100% | 82.7% | 17.3% | 0% |
+| 22 | 0.3 | pass_rate 0.05 | 14 | 66.3% | 2.0% | 66.7% | 31.3% |
+| 22 | 0.3 | pass_rate 0.10 + mean_chosen_cost 0.25 | 28 | 73.0% | 0.3% | 92.7% | 7.0% |
+| 22 | 0.3 | all eight metrics at 0 | 108 | 100% | 55.0% | 45.0% | 0% |
+| 200 | 1.0 | pass_rate 0.05 | 14 | 74.7% | 9.3% | 90.7% | 0% |
+
+Read honestly: the new rule still calls an identical-in-truth candidate `regressed` in a
+quarter to a third of draws on 22 cases when every case is redrawn, because **no
+correction is made for the number of figures judged** (14–28 figures, each a one-sided 5%
+test; fixed text `CHECK_MULTIPLICITY`). A zero tolerance on an unchanged-in-truth metric is
+a coin flip by construction. Do not present `regressed` as a detection with a known error
+rate; it is a backlog item (a family-wise correction, B67 follow-up 4).
+
+### 22.8 Amendments (as built)
+
+Written against the code as it stands (commit `afa03d2`), after §22's text above was
+drafted against an earlier revision of the module. Where the two differ, this section is
+the correct one; §7.4 of
+`docs/superpowers/specs/2026-10-07-p2-eval-metrics-design.md` and its §16 deviation 8
+describe the superseded first rule.
+
+- **A. The decision rule** (§22.2, §22.7). Superseded: any sentence reading "the point
+  estimate alone fails a figure", "the range does not excuse it", "a figure can be
+  `regressed` and `not_detectable` at once" or "`lo` is never an input" described the
+  first rule and is false of the code as built. The rule now judges the whole range:
+  `lo > tol` → `regressed`, `hi <= tol` → `within_tolerance`, otherwise `inconclusive`
+  (with `point_beyond_tolerance` when the point itself crosses `tol`). Exit codes are
+  unchanged.
+- **B. Other behaviour.** A non-finite figure (NaN/inf score) is `undefined`, never a
+  pass, and `check.json` stays clean JSON. A group figure the **candidate** thinned below
+  the minimum is judged and is `inconclusive`; only a figure with too few **baseline**
+  cases is listed, not judged. An empty suite, or tolerances named with zero figures
+  judged, is `inconclusive` (exit 4), never exit 0. `--check-replicates` must be at least
+  `ceil(2 / (1 - interval))` (20 for the default 0.90) or the run exits 1. `check.json`
+  gains `judged: {figures, metrics_named, metrics_available}` and `notes`; `check.md`
+  prints "Figures judged: N (k of 8 metrics have a tolerance …)" and a note when
+  `cost_regret`/`latency_regret` has a tolerance and `pass_rate` does not. The fixed text
+  `CHECK_CONDITIONAL` and `CHECK_RANGE` were reworded for the new rule; `CHECK_MULTIPLICITY`
+  and `CHECK_CONDITIONAL_METRICS` are new.
+- **C. Group report.** `groups.md` gained a "Counts per strategy" table (cases,
+  violations, empty-set mismatches for every strategy). The worst-group table gained a
+  `groups` column ("k of m printed; t at this value"); a tie between some (not all)
+  groups is listed, not broken; strategies print in sorted order. `groups.json`'s `worst`
+  entries gained `groups_total` and `tied`. Fixed text gained `CAVEAT_WORST` (the worst
+  group is a selection effect, and the same cases can carry several labels) and
+  `CAVEAT_LABELS` (labels are the case author's tags, not the compiled policy). An unknown
+  `mode` argument to `bench_caveats` now raises, instead of silently reading as a live run.
+- **Not built.** The spec's §6 (churn robustness) and §9 (confidence calibration) are
+  designed, not built — a second plan (§22 preamble, §6.5 status note above).

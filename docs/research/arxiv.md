@@ -185,6 +185,7 @@ literature doesn't model".
   closing a circuit (`2d0d029`); `-0.0` regret (`820bec2`).
 - **Limits:** simulated quality is an input, not a measurement; deterministic graders;
   synthetic single-turn cases; one designed outage scenario; no live breaker run.
+- **Group report and router-version check** (FB §22, built 2026-10-07): §4.6.
 
 ### 3.4 P2b-2 content-free outcome records (PR #68–#70)
 
@@ -672,7 +673,67 @@ literature doesn't model".
 
 #### 4.4.2 Still pending: failover/escalation, breaker state, spend/RPM admission — *spec pending*
 ### 4.5 Administrator review workflow — *spec pending* (closes HO §37 P3 "admin approval")
-### 4.6 P2 evaluation metrics: confidence calibration, churn robustness, worst-group, router-version promotion gate — *spec pending* (FB §6.5 lists these as not yet demonstrated)
+### 4.6 P2 evaluation metrics (spec `docs/superpowers/specs/2026-10-07-p2-eval-metrics-design.md`; HO §18 metrics 6–9, §19, §36 Phase 2)
+
+Two plans. **Built (FB §22):** per-case scores, the group report, the offline
+router-version check. **Designed, not built:** churn robustness and confidence calibration.
+
+**What the built half lets the paper claim.**
+
+- *A feasible-set evaluation can report per-group results honestly at small n.* Each figure
+  carries its own denominator; the overall figure is the groups combined by those
+  denominators (a worked counter-example shows case-count weights are wrong for a
+  conditional metric: 0.31875 against 0.24); a figure over fewer than a stated minimum
+  prints a count and no rate, while violation counts are never suppressed (FB §22.1).
+- *Two router configurations can be compared with everything else held fixed.* Because the
+  eligible set is derived before scoring and a sweep row is a pinned call, a candidate
+  routing config scored as extra arms of one run shares the cases, the eligible sets, the
+  seed and every endpoint outcome with the baseline (FB §22.2). This is a property of the
+  eligibility-first architecture, and worth stating as one.
+- *A change to the router cannot produce a policy violation.* A candidate that moves 16 of
+  22 choices makes no ineligible choice at any of ten seeds (FB §22.5.2–§22.5.3). The check
+  treats any such choice as a hard failure that no tolerance can buy back, and a test
+  injects one to show the detector fires.
+- *An explicit, conservative decision rule*: a figure is judged on its **whole**
+  bootstrap range against the tolerance, never on the point estimate alone — `lo > tol`
+  regresses it, `hi <= tol` clears it, and anything straddling the tolerance is
+  inconclusive (FB §22.2, §22.7). An earlier, point-estimate-only rule was replaced the
+  same day it shipped after a simulated counterexample showed it calling an
+  identical-in-truth candidate `regressed` in most draws on a small suite (FB §22.7); that
+  replacement, not the original rule, is what fifteen single-rule mutations each caught by
+  a named test confirm (FB §22.5.4).
+
+**What it does not let the paper claim.**
+
+- Nothing about routing **quality**: on the simulated backend quality is an input
+  (FB §6.1), and the measured consequence is in FB §22.5.3 — the same candidate passes at
+  eight seeds and is inconclusive at two, on pass rate alone.
+- Nothing about **which** router configuration to use. The check judges against tolerances
+  an operator sets; it recommends nothing, ranks nothing and promotes nothing.
+- No per-group claim about `onprem_only` placement or about protection posture from the
+  starter suite: those groups are below the minimum, or there is only one (FB §22.5.1).
+- No statement that the bootstrap range has its nominal coverage (unmeasured), and no
+  multiplicity control — the SYNTHETIC null-rate table (FB §22.7) shows an
+  identical-in-truth candidate still reads `regressed` in a quarter to a third of draws on
+  22 cases at zero multiplicity correction.
+- No "promotion gate" in the sense of something that promotes. Say "offline pre-change
+  check"; nothing is applied (CLAUDE.md rule 4).
+
+**Still to build, and what each must deliver for the paper.**
+
+- *Churn robustness* (spec §6): a declared set of single changes to the policy and the
+  registry; per change, violations (the headline: 0), newly empty feasible sets and whether
+  each was rejected with a conflicting core, the share of choices that moved, and regret
+  deltas; and each change's expected effect on eligibility checked ("a tightening never
+  widens") — the bench-side witness of the P1 monotonicity result.
+- *Confidence calibration* (spec §9). The finding to state first is negative and
+  structural: **RouteForge's router emits no confidence.** The only confidence in the
+  system is the backend's figure for one answer (a temperature-softened geometric-mean
+  token probability, or a constant 0.9 when the provider returns no logprobs), which the
+  gateway's escalation threshold reads and nothing records. The measurement is that
+  figure's reliability and the threshold's operating point on live endpoints. In
+  simulation it is not measurable by construction (the simulated backend reports 1.0), and
+  the paper should say that rather than omit the metric.
 
 ---
 
@@ -713,7 +774,13 @@ literature doesn't model".
 | E10d | Peak and time-average utilisation against bucket length (10 / 60 / 300 / 3600 s) | §4.3, FB §21.5.4 | **TO MEASURE** on recorded traffic (synthetic: FB §21.5.2 F3) |
 | E10e | Share of rows whose bucket changes with the arrival estimate; error of write time − recorded latency (a sum of step latencies) against a logged request start | §4.3, FB §21.5.4 | **TO MEASURE** |
 | E10f | Error of giving a moved request its new endpoint's mean service time, by request size | §4.3, FB §21.5.4 | **TO MEASURE** |
-| E11+ | fidelity, P2 metrics, R2/R3/R4 | §4–§5 | specs pending |
+| E11a | Group report on the simulated starter suite: figures with denominators, groups below the minimum | §4.6, FB §22.5.1 | done (simulated, seed 0) |
+| E11b | Router-version check: negative control, a cost-regressing candidate, a tier-threshold candidate; verdicts at seeds 0–9 | §4.6, FB §22.5.2–§22.5.3 | done (simulated) |
+| E11c | The check's detectors under single-rule mutation | §4.6, FB §22.5.4 | done (15 of 15 caught) |
+| E11d | Group report and check on live endpoints, ≥ 5 cases per placement and protection group, two placements | §4.6, FB §22.5.5 | **TO MEASURE** |
+| E11e | Coverage of the paired case bootstrap on split halves of a larger suite | §4.6, FB §22.5.5 | **TO MEASURE** |
+| E11f | Churn robustness and confidence calibration | §4.6 | not built (second P2 plan) |
+| E12+ | fidelity, R2/R3/R4 | §4–§5 | specs pending |
 
 **Data caveat for every live number:** the Spark serves one app (`kit-gtm`, Qwen Code), all
 models priced $0 (FB §17.4). The DGX lab (the test target from 2026-10-06) has one priced
@@ -729,6 +796,12 @@ before writing the evaluation section.
 - Tier selection is length-based; the "router" contribution is mostly the eligibility seam,
   not learned routing (FB §6.7).
 - Simulated quality is an input (FB §6.1); deterministic graders; synthetic single-turn cases.
+- The router-version check (§4.6) judges one arm on one suite, one simulation seed and one
+  case order. Its range is a percentile bootstrap over 22 cases: coarse, of unmeasured
+  coverage, and sensitive to the seed — the same candidate gets a different verdict at two
+  of ten seeds when the verdict rests on simulated pass rate (FB §22.5.3). Group results
+  rest on labels the case author wrote, and five of twelve groups are below the five-case
+  minimum. No multiplicity correction is made.
 - Single tenant, single seed live runs; $0 prices on the Spark.
 - Replay is first-decision only (until §4.4), with frozen signals; cached tokens not recorded.
 - Uncertainty ranges (§4.2) are sampling variability under an independence assumption that
