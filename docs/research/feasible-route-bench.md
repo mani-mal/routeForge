@@ -4166,3 +4166,179 @@ describe the superseded first rule.
   `mode` argument to `bench_caveats` now raises, instead of silently reading as a live run.
 - **Not built.** The spec's §6 (churn robustness) and §9 (confidence calibration) are
   designed, not built — a second plan (§22 preamble, §6.5 status note above).
+
+---
+
+## 23. Live run on the DGX lab, one endpoint, three applications (2026-10-08)
+
+The first run with **independent** rows. Every earlier lab export was a 24-request pattern
+repeated (§18.4.1, §19.4.1, §20.6.2, §21.5.4a). Artifacts, all content-free:
+`docs/research/data/live-dgx-lab-2026-10-08/` (the outcome export, the config snapshot, the
+client log, the scenario and capacity files, every output quoted below, and the two scripts).
+
+> **Correction to §18–§21.** Those sections cite artifact folders under
+> `docs/research/results/`. That path is git-ignored (`.gitignore`: `results/`), so those
+> folders were **never committed** and no longer exist. The figures quoted in §18–§21 stand
+> as recorded at the time; they cannot be re-derived from the repository. From this section
+> on, artifacts live under `docs/research/data/`.
+
+### 23.1 Setup
+
+- **Deployment.** DGX lab, api `0.30.0` (`main` at PR #92). One onboarded endpoint:
+  `glm-5.3-flash` (vLLM, on-prem, tier `mid`, $10 / $10 per 1M tokens, context window
+  262,144), declared for this run as region `us-lab`, `prompt_retention: none`,
+  `accepts_raw_sensitive: true`. `qwen3-coder-next` (the endpoint of §18–§21) was no longer
+  deployed.
+- **Applications.** `paper-claims` (`max_cost_usd_per_request: 0.05`), `paper-dev` (no cap of
+  its own) and `paper-clinic` (`onprem_only`, `allowed_regions: [us-lab]`,
+  `require_no_retention`). All three `pii_detection: regex`, protection `enforced`. The
+  deployment default `budgets.default_max_spend_usd` is 0.05, so the two apps without their
+  own cap are capped at the same figure.
+- **Traffic** (`traffic_generator.py`, seed 2). 900 requests, each drawn independently:
+  application uniform over the three; content kind by application (prose, code, log lines,
+  JSON; 15% a bare question); context length heavy-tailed, 0 to 9,000 words; `max_tokens`
+  from {32, 48, 64, 96, 128}; a synthetic SSN and email in 50% of clinic requests and 15% of
+  the others. Poisson arrivals at 1 per second, six client workers, 917 s. A 12-request trial
+  (seed 1) precedes it in the export: **912 rows**.
+- **What this is not.** Synthetic text (random words, generated code, log and JSON lines),
+  single-turn, one endpoint, one tier. No request had more than one eligible endpoint, so
+  nothing here exercises ranking, failover, the breaker, or a placement difference between
+  endpoints. Those need a second endpoint and remain **TO MEASURE** (§23.7).
+
+### 23.2 Outcome and replay agreement
+
+876 served, 36 rejected, every rejection for `max_cost_usd_per_request` (claims 17, clinic
+12, dev 7). The baseline replay reproduces the record exactly: model agreement 1.0 over 876
+served rows, outcome agreement 1.0 over 912 (36 of 36 recorded rejections rejected in
+replay; 0 routed-but-rejected, 0 rejected-but-routed), no row excluded.
+
+### 23.3 Six scenarios, with 90% ranges
+
+`policy_simulate.py --scenarios scenarios.json --uncertainty` (1000 resamples, seed 0, each
+application its own stratum). Baseline cost of the served rows: $8.47.
+
+| scenario | newly served | newly rejected | Δcost USD |
+|---|---|---|---|
+| `no-change` | 0 `[0, 0]` | 0 `[0, 0]` | 0 `[0, 0]` |
+| `raise-request-budget` (0.5 for all three) | 36 `[27, 46]` | 0 | +3.16 `[2.34, 4.10]` |
+| `tighten-claims-budget-0.02` | 0 | 29 `[21, 38]` | −0.68 `[−0.94, −0.46]` |
+| `smaller-prompts-0.6` (`token_scale`) | 18 `[12, 25]` | 0 | −2.44 `[−2.77, −2.07]` |
+| `window-4000` (endpoint context window) | 0 | 26 `[18, 35]` | −1.38 `[−1.84, −0.94]` |
+| `clinic-eu-only` (`allowed_regions: [eu-lab]`) | 0 | 298 `[292, 303]` | −2.77 `[−3.11, −2.45]` |
+
+`clinic-eu-only` rejects every clinic row that was served (298 of 310; the other 12 were
+already rejected on budget): the one endpoint is declared `us-lab`. Route changes are 0 in
+every scenario, as they must be with one endpoint.
+
+### 23.4 The admission token estimate depends on the kind of text (B64)
+
+`routing_tokens` (RouteForge's count, `len // 4` over the model-facing text) against the
+backend's `prompt_tokens` (GLM's tokenizer), on served rows with at least 200 backend prompt
+tokens:
+
+| content | rows | median ratio | p10 | p90 |
+|---|---|---|---|---|
+| prose (random English words) | 274 | 1.72 | 1.63 | 1.76 |
+| generated Python | 123 | 0.79 | 0.78 | 0.80 |
+| JSON rows | 127 | 0.70 | 0.68 | 0.70 |
+| log lines (timestamps, hex ids) | 121 | 0.52 | 0.52 | 0.53 |
+| all | 645 | 0.80 | 0.52 | 1.75 |
+
+Summed over all 645 rows the two counts nearly cancel (ratio 0.955), which hides the
+effect. The estimate **over-counts prose by about 70% and under-counts log lines by about
+half**. A per-request budget enforced on this estimate therefore rejects prose requests the
+backend would have billed under the cap, and admits log-heavy requests it would have billed
+over it. §19.4.1 saw only the first half (1.54 on 17 prose rows). The text is synthetic —
+random words have no punctuation or short function words — so the prose figure is an upper
+indication, not a measurement of real documents: **real-traffic ratio TO MEASURE.**
+
+### 23.5 Recorded latency, wall-clock and the arrival estimate (E10c, E10e)
+
+The client logged each request's start and end. On the 876 served rows:
+
+| figure | median | p10 | p90 |
+|---|---|---|---|
+| recorded latency (ms; sum of the pipeline steps) | 497 | 264 | 865 |
+| client wall-clock − recorded latency (ms) | 159 | 152 | 207 |
+| recorded ÷ wall-clock | 0.75 | 0.61 | 0.84 |
+| (`ts` − recorded latency) − client start (s) | 0.21 | 0.19 | 0.25 |
+
+The recorded figure is short of client wall-clock by a near-constant ~160 ms (network, the
+gate and everything outside the timed steps), so it understates time in the system by about
+a quarter on these short requests; the capacity model's concurrency inherits that. The
+arrival estimate is late by ~0.2 s, a figure that **includes any clock offset** between the
+client and the API pod, which was not measured. Using `ts` in place of `ts − latency` moves
+4.2% of rows to another bucket at 10 s, 0.9% at 60 s and none at 300 s. Wall-clock against
+the backend's own time in service was not measured (no backend metrics were collected).
+
+### 23.6 Capacity headline against bucket length (E10d)
+
+Stated limits for the experiment (`capacity-assumptions.json`; **illustrative — not the
+serving engine's configured limits**): 2 concurrent, 90 requests per minute, 150,000 tokens
+per minute. The same export, the current arm:
+
+| bucket | buckets | peak | average | over 100% | binding limit |
+|---|---|---|---|---|---|
+| 10 s | 95 | 212.1% | 27.0% | 1.1% | `max_concurrency` |
+| 60 s | 17 | 87.8% | 57.3% | 0.0% | `requests_per_minute` |
+| 300 s | 4 | 64.2% | 48.7% | 0.0% | `requests_per_minute` |
+| 3600 s | 1 | 16.2% | 16.2% | 0.0% | `requests_per_minute` |
+
+One recording reads from "twice over" to "one sixth used" as the bucket goes from 10 s to an
+hour, and the binding limit changes. Two effects: a peak is a maximum over more, shorter
+buckets; and the window is whole buckets, so a 15-minute run in a one-hour bucket is
+averaged over the hour. Under `volume-x3` the 60 s headline is peak 263.3% / average 171.8%,
+over 100% in 88.2% of 17 buckets. Mean recorded service time 587 ms, longest 8,686 ms, all
+876 rows `recorded`.
+
+### 23.7 Range width against sample size, and split-half behaviour (E9a, E9b)
+
+`width_coverage_experiment.py`; four scenarios, 1000 resamples each.
+
+**Width against n.** Eight random subsamples at each size. Mean range width of the count,
+divided by n, times √n — constant if the width shrinks as 1/√n:
+
+| figure | n = 50 | 100 | 200 | 400 | 800 |
+|---|---|---|---|---|---|
+| `raise-request-budget`, newly served | 0.39 | 0.50 | 0.67 | 0.68 | 0.62 |
+| `tighten-claims-budget-0.02`, newly rejected | 0.41 | 0.55 | 0.53 | 0.54 | 0.56 |
+| `window-4000`, newly rejected | 0.58 | 0.59 | 0.53 | 0.51 | 0.55 |
+| `smaller-prompts-0.6`, newly served | 0.23 | 0.40 | 0.49 | 0.48 | 0.46 |
+
+From n = 200 the normalised width is flat (within sampling noise of eight subsamples), i.e.
+the range narrows as 1/√n. Below that it is **narrower** than that law predicts: these are
+rare events (about 4% of rows), and at n = 50 a resample holds only a handful, so the
+percentile interval is squeezed against 0. At n = 50 all three applications are below
+`--min-rows` and are pooled into one stratum. 5,000 and 50,000 rows: **TO MEASURE.**
+
+**Split halves.** 100 random splits into two halves of 456 rows. How often the half-A 90%
+range contains the half-B point estimate:
+
+| figure | contained |
+|---|---|
+| `raise-request-budget`, newly served / Δcost | 72% / 73% |
+| `tighten-claims-budget-0.02`, newly rejected / Δcost | 70% / 66% |
+| `window-4000`, newly rejected / Δcost | 73% / 74% |
+| `smaller-prompts-0.6`, newly served / Δcost | 76% / 68% |
+
+This is **not** a coverage shortfall, and the measurement as §20.6.3 defined it was the
+wrong test. A 90% range is about where the true value lies; the half-B figure is itself an
+estimate with the same sampling error, so the difference of the two has twice the variance,
+and a calibrated 90% range (±1.645σ) contains an independent equal-sized estimate with
+probability P(|Z| < 1.645/√2) = **75.5%**. The eight observed shares average 71.5%, each
+from 100 splits (standard error about 4 points, and the eight are not independent) —
+consistent with a calibrated range, possibly a little narrow. A direct coverage test needs a
+known truth: resample from a much larger export and check the range against the
+full-export figure. **TO MEASURE** (with E9a's larger exports).
+
+### 23.8 Still to measure, and what each needs
+
+| item | needs |
+|---|---|
+| ranking, failover, breaker, overflow re-selection on live traffic (E4, E7) | a second endpoint |
+| the healthcare scenario triad; the shadow-price counterexample live (E6, E8, E10a) | two endpoints of different placement or declaration |
+| group report and router-version check on live endpoints (E11d) | two endpoints; ≥ 5 cases per group |
+| token-estimate ratio on real documents (E7c) | real (non-synthetic) text |
+| direct coverage; width at 5,000 and 50,000 rows (E9a, E9b) | a larger export |
+| coverage under dependence (E9c) | agent-loop traffic |
+| stated capacity against observed behaviour; backend time in service (E10b, E10c) | the engine's configured limits and metrics |

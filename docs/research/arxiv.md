@@ -762,17 +762,17 @@ router-version check. **Designed, not built:** churn robustness and confidence c
 | E6 | Shadow-price non-monotonicity counterexample, live | FB §17.3 | **TO MEASURE** (not exercised live) |
 | E7 | Context-window replay effect on agreement | P3c-2, FB §18.4.1 | first run done (no overflow in the export: agreement 1.0, 0 hops); with real overflow failovers **TO MEASURE** |
 | E7b | Rejected rows replay as routed (B60) | FB §18.4.1, §19.4.1 | done: defect observed (7 of 7 rejections replayed as routed), fixed, re-run on post-upgrade rows — 7 of 7 rejected in replay, outcome agreement 1.0 over 24, raise-budget newly serves 7 |
-| E7c | Token-estimate gap and over-rejection (B64) | FB §19.4.1 | first measurement: routing/backend = 1.54 on 17 served rows (synthetic prose); real traffic **TO MEASURE** |
+| E7c | Token-estimate gap and over-rejection (B64) | FB §19.4.1, §23.4 | measured on synthetic text, 645 served rows (GLM tokenizer): routing/backend median 1.72 on prose, 0.79 on code, 0.70 on JSON, 0.52 on log lines; summed ratio 0.955 hides it. The estimate over-counts prose and under-counts logs. Real documents **TO MEASURE** |
 | E8 | Healthcare scenario triad, traffic-weighted vs static | P3c-2 | **TO MEASURE** |
-| E9a | Range width against sample size (500 / 5,000 / 50,000 rows; 24-row case) | §4.2, FB §20.6.2–§20.6.3 | 24-row case done (prints `insufficient data`); a 96-row lab run done as a plumbing check (four repeats of 24 requests — not independent rows): `raise-request-budget` newly serves 28 `[21, 35]`, no-op deltas exactly `[0, 0]`; width against `1/√n` on persona traffic **TO MEASURE** |
-| E9b | Empirical coverage of the 90% range on split halves of a real export | §4.2, FB §20.6.3 | **TO MEASURE** |
+| E9a | Range width against sample size | §4.2, FB §20.6.2–§20.6.3, §23.7 | done at n = 50–800 on 912 independent lab rows: width × √n / n flat from n = 200 (1/√n), narrower than that below it (rare events squeezed against 0). 5,000 / 50,000 rows **TO MEASURE** |
+| E9b | Split halves of a real export | §4.2, FB §23.7 | done (100 splits of 912 rows): half-A 90% range contains the half-B point 66–76% of the time (mean 71.5%); the reference for a calibrated range is 75.5%, not 90% — the planned test was mis-specified. Direct coverage against a larger export **TO MEASURE** |
 | E9c | Coverage under dependence (agent-loop traffic) | §4.2, FB §20.6.3 | **TO MEASURE** |
 | E9d | Quality range with and without calibration posteriors | §4.2, FB §20.6.3 | **TO MEASURE** |
 | E10a | Healthcare scenario pair with stated on-prem capacity: peak and time-average utilisation per arm, with bucket length and window | §4.3, FB §21.5.4 | **TO MEASURE** (synthetic verification of the arithmetic only, FB §21.5.1–§21.5.3) |
 | E10b | Stated capacity against observed endpoint behaviour at 50% / 100% / 150% average | §4.3, FB §21.5.4 | **TO MEASURE** |
-| E10c | Recorded latency (on a served row, the sum of the pipeline steps' latencies — not wall-clock) against wall-clock and against backend time in service, idle and under load | §4.3, FB §21.5.4 | **TO MEASURE** |
-| E10d | Peak and time-average utilisation against bucket length (10 / 60 / 300 / 3600 s) | §4.3, FB §21.5.4 | **TO MEASURE** on recorded traffic (synthetic: FB §21.5.2 F3) |
-| E10e | Share of rows whose bucket changes with the arrival estimate; error of write time − recorded latency (a sum of step latencies) against a logged request start | §4.3, FB §21.5.4 | **TO MEASURE** |
+| E10c | Recorded latency against wall-clock and backend time | §4.3, FB §21.5.4, §23.5 | first half done: recorded = 0.75 × client wall-clock (median), short by a near-constant ~160 ms, 876 rows. Wall-clock against backend time in service **TO MEASURE** |
+| E10d | Peak and time-average utilisation against bucket length (10 / 60 / 300 / 3600 s) | §4.3, FB §23.6 | done on recorded traffic (illustrative stated limits): peak 212% / 88% / 64% / 16%, average 27% / 57% / 49% / 16%; the binding limit changes from concurrency to requests per minute |
+| E10e | Arrival estimate | §4.3, FB §23.5 | done: bucket changes for 4.2% of rows at 10 s, 0.9% at 60 s, 0 at 300 s; `ts − latency` is ~0.2 s after the client start (includes an unmeasured clock offset) |
 | E10f | Error of giving a moved request its new endpoint's mean service time, by request size | §4.3, FB §21.5.4 | **TO MEASURE** |
 | E11a | Group report on the simulated starter suite: figures with denominators, groups below the minimum | §4.6, FB §22.5.1 | done (simulated, seed 0) |
 | E11b | Router-version check: negative control, a cost-regressing candidate, a tier-threshold candidate; verdicts at seeds 0–9 | §4.6, FB §22.5.2–§22.5.3 | done (simulated) |
@@ -783,11 +783,14 @@ router-version check. **Designed, not built:** churn robustness and confidence c
 | E12+ | fidelity, R2/R3/R4 | §4–§5 | specs pending |
 
 **Data caveat for every live number:** the Spark serves one app (`kit-gtm`, Qwen Code), all
-models priced $0 (FB §17.4). The DGX lab (the test target from 2026-10-06) has one priced
-on-prem endpoint (`qwen3-coder-next`) and a synthetic test app. Neither has two endpoints
-with different placement, so no live result yet exercises a residency or region constraint.
-Multi-tenant, multi-endpoint results need persona traffic plus a second endpoint — plan this
-before writing the evaluation section.
+models priced $0 (FB §17.4). The DGX lab has **one** priced on-prem endpoint at a time
+(`qwen3-coder-next` to 2026-10-07, `glm-5.3-flash` from 2026-10-08) and synthetic test apps.
+The 2026-10-08 run (FB §23) is the first with independent rows: 912 rows, three apps, one
+endpoint, synthetic text. No request has yet had two eligible endpoints, so no live result
+exercises ranking, failover, or a residency or region difference between endpoints. That
+needs a second endpoint — plan it before writing the evaluation section.
+**Artifacts:** `docs/research/data/`. The `docs/research/results/...` folders cited for the
+2026-10-06 and 2026-10-07 runs were git-ignored and never committed (FB §23, correction).
 
 ---
 

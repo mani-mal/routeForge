@@ -1,0 +1,6 @@
+{"schema":"routeforge.policy-scenarios/v1","title":"DGX lab capacity check 2026-10-08 (three paper apps, glm-5.3-flash)",
+ "scenarios":[
+  {"name":"no-change","proposal":{}},
+  {"name":"volume-x3","proposal":{"workload":{"volume_scale":3}}},
+  {"name":"raise-request-budget","proposal":{"apps":{"paper-claims":{"max_cost_usd_per_request":0.5},"paper-dev":{"max_cost_usd_per_request":0.5},"paper-clinic":{"max_cost_usd_per_request":0.5}}}}
+ ]}
