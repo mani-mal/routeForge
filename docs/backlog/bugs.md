@@ -158,7 +158,7 @@ rest are record and replay gaps that change numbers the paper reports).
    replay reads `circuit_open` from the recorded row (it is already there) and reports
    breaker-diverted rows as their own class instead of as disagreement.
 
-## B69 — Egress redaction rewrites tool-call arguments on a weak detector match, and the placeholder is executable shell  🔴 OPEN
+## B69 — Egress redaction rewrites tool-call arguments on a weak detector match, and the placeholder is executable shell  🟡 PARTLY FIXED
 
 **Severity:** high for coding-agent clients (a redacted argument is *executed* by the
 client; here it failed harmlessly, but a placeholder inside a command is not guaranteed to).
@@ -190,6 +190,18 @@ the same detector is also rewriting the prompt the model sees.
 `US_DRIVER_LICENSE` (and the other entity types that are noise for code) to
 `pii_entity_denylist`, or raise `pii_score_threshold` above 0.3, or use `pii_detection:
 regex`. Each of these narrows protection for that app and is the operator's decision.
+
+**Fixed 2026-10-08 (api `0.30.1`).** Inside tool-call arguments the placeholder is now
+written in word characters only: `REDACTED_US_SSN_1`, not `<US_SSN_1>`
+(`_inert_placeholders`, `app/policy/gate.py`; both directions, since ingress and egress
+share the helper). What is redacted is unchanged, and message text keeps `<TYPE_N>`. A
+redacted command can still be wrong, but it can no longer redirect, pipe or expand.
+Regression tests in `tests/test_tool_call_redaction_unit.py`. On the lab, the owner chose
+`pii_detection: regex` for the `opencode` app, which stops the name, location and licence
+matches there.
+
+**Still open:** the detector still matches shell text for any app on `presidio`; the items
+below other than the placeholder are not built.
 
 **Wanted (not decided):**
 - Tool-call arguments are a command channel, not prose. Options: a higher default score
