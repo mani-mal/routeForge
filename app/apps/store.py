@@ -412,7 +412,7 @@ POLICY_FIELDS: frozenset[str] = frozenset({
     "pii_entity_denylist", "pii_score_threshold", "pii_exempt_patterns",
     "model_input", "client_output", "content_integrity",
     "escalate_residency_on_detection",
-    "allowed_regions", "require_no_retention"})
+    "allowed_regions", "require_no_retention", "trajectory_mode"})
 
 
 async def upsert_policy(session: AsyncSession, app_id: str, **fields) -> AppPolicy:

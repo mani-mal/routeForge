@@ -163,6 +163,12 @@ class AppPolicy(Base):
     # tightening -- it can never lower the app's own residency floor.
     escalate_residency_on_detection: Mapped[bool | None] = mapped_column(
         Boolean, nullable=True)
+    # B72: trajectory-scoped policy envelope. null = off. `header` | `sticky`
+    # -- see app/policy/trajectory.py. Raise-only: it can add inherited entity
+    # types to a request's rule match and never removes one. Added after the
+    # table shipped: a deployed DB needs the ALTER in
+    # docs/reference/per-app-config.md.
+    trajectory_mode: Mapped[str | None] = mapped_column(String(16), nullable=True)
     # --- P1b app-side data-handling REQUIREMENTS (design doc §3). null = no
     # constraint. Resolved explicit-or-null in app/policy/compile.py -- unlike
     # the P1a axes above, neither has a `policy_mode` preset or a deployment
@@ -325,6 +331,14 @@ class RoutingOutcome(Base):
     # after the table shipped: a deployed DB needs the ALTER in
     # docs/reference/routing-outcomes.md.
     routing_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # B72: the hashed trajectory id (None = no envelope in use or no id sent)
+    # and the entity TYPES this request inherited from its envelope. Both are
+    # content-free. `detected_entity_types` above already includes the
+    # inherited types, so replay needs neither; they are here so an inherited
+    # restriction is never silent. Deployed DBs need the two ALTERs in
+    # docs/reference/routing-outcomes.md.
+    trajectory_key: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    inherited_entity_types: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
 
 class OutcomeFeedback(Base):
@@ -350,6 +364,20 @@ class OutcomeFeedback(Base):
     value_num: Mapped[float | None] = mapped_column(Float, nullable=True)
     value_cat: Mapped[str | None] = mapped_column(String(100), nullable=True)
     source: Mapped[str] = mapped_column(String(8))   # app | admin
+
+
+class TrajectoryEnvelope(Base):
+    """B72: the entity TYPES one trajectory has seen (app/policy/trajectory.py).
+    Type names and a hash of the client's id -- no text, no id in clear."""
+
+    __tablename__ = "trajectory_envelopes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    application_id: Mapped[str] = mapped_column(String(64), index=True)
+    trajectory_key: Mapped[str] = mapped_column(String(32), index=True)
+    entity_types: Mapped[list] = mapped_column(JSON)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class RequestSnapshot(Base):

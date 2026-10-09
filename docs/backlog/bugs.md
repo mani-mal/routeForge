@@ -127,7 +127,7 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
-## B72 — FEATURE: trajectory identity and a trajectory-scoped policy envelope (then task-level cost and switch-aware routing)  🔴 OPEN
+## B72 — FEATURE: trajectory identity and a trajectory-scoped policy envelope (then task-level cost and switch-aware routing)  🟡 STEPS 1–3 BUILT
 
 **Severity:** feature. **Filed:** 2026-10-09, from the owner's agentic-trajectory design
 note; problem statement and measurements in
@@ -138,6 +138,15 @@ restriction raised by a tool result held while the client re-sent the full histo
 gone when the client sent a summary without the identifier (3 of 3, request routed to a
 cloud endpoint). And one real agent session re-sent at least 94.5% of its input tokens,
 which a per-call router prices as new.
+
+**Built 2026-10-09 (api `0.32.1`): steps 1–3** — `app/policy/trajectory.py`, per-app
+`trajectory_mode` (`off` | `header` | `sticky`), table `trajectory_envelopes`, three ALTERs
+(`docs/reference/per-app-config.md`), sequence properties in
+`tests/test_trajectory_envelope.py`. Live: compacted turn on-prem 3 of 3 with `header`,
+6 of 6 with `sticky` under a changed or dropped id. Not built: binding the id to something
+the client cannot choose (`sticky` is the fail-closed answer for now), parent/child
+linkage, an explicit lowering operation, pruning of expired rows, a console control,
+and steps 4–6.
 
 **Build order** (each step usable alone):
 1. Trajectory id on the request (validated header; absent = today's behaviour) and on the

@@ -858,6 +858,52 @@ product, and this field is its switch.
   independent, and this switch governs whether a rule *may* move placement, not whether
   scanning happens.
 
+## `trajectory_mode` — carrying a restriction along a conversation
+
+An agent's task is a sequence of model calls, and RouteForge handles each call as its own
+request. By default a placement raised by a detected entity therefore holds for that
+request only: if the client later sends a summary that no longer contains the identifier,
+that request is routed as if nothing sensitive had happened.
+
+`trajectory_mode` makes the restriction follow the conversation. RouteForge remembers, per
+trajectory, the entity **types** it has seen, and on each later call adds them to what it
+detects before matching the sensitivity rules. Whatever the matched rule sets — placement,
+sensitivity, risk class, verification — is inherited.
+
+| value | behaviour |
+|---|---|
+| `off` (default, `null`) | No envelope. Each request stands alone, as before. |
+| `header` | Calls that send the same `x-routeforge-trajectory` header share an envelope. A call with no header, or an invalid one, has none. |
+| `sticky` | Every call inherits what **any** of the application's live envelopes has seen, whatever header it sends. |
+
+- **The header** is 1–128 characters of `A–Z a–z 0–9 . _ : -`. It is stored only as a hash
+  scoped to the application; two applications using the same id never share an envelope.
+- **`header` trusts the client.** A client that sends a new id, or none, starts clean. Use
+  it when the client is yours. **`sticky` does not trust the client**: once restricted data
+  is seen, all of the application's traffic is restricted until the envelope expires.
+  Harmless requests then go on-prem too; that is the price of failing closed.
+- **It only tightens.** Nothing lowers an envelope except expiry: an entity type stops
+  counting one lifetime (`SP_TRAJECTORY_TTL_HOURS`, default 24) after it was last
+  **detected** in a request of the trajectory. A call that merely inherits a type does not
+  renew it. Expiry is a loosening, so choose the lifetime deliberately.
+- **Safe under concurrency.** The envelope is a set of append-only observations that are
+  unioned on read, so simultaneous calls of one trajectory cannot overwrite each other.
+  Expired observations are deleted hourly.
+- **Placement and the rule's own signals only.** No protection axis changes. Redaction is
+  unaffected: it works on the text of the current request.
+- **Never silent.** The response's `policy` block carries `trajectory_mode` and
+  `inherited_entity_types`; the outcome row carries the hashed id and the inherited types;
+  `detected_entity_types` on both includes the inherited types, which is what replay reads.
+- **Fail closed.** If the envelope cannot be read or written, the request is rejected.
+  An unparseable stored value resolves to `sticky`.
+- It respects `escalate_residency_on_detection`: an application that has turned placement
+  escalation off inherits the rule's other signals but not a placement change.
+- Sub-agents are covered only if they send the parent's id. There is no parent/child
+  linkage, and no operation that lowers an envelope before it expires.
+
+Only type names and a hash are stored (table `trajectory_envelopes`, in the deployment's
+own database). No request text is kept.
+
 ## Model eligibility is two-sided
 
 Worth restating here because it is asked as a policy question and answered in two places:
@@ -1202,6 +1248,11 @@ B50 (published context limits) adds one more column to `onboarded_models`:
 ```sql
 -- 2026-09-22 (B50): where an onboarded model's context window came from
 ALTER TABLE onboarded_models ADD COLUMN context_window_source VARCHAR(16);
+-- 2026-10-09 (B72, trajectory envelope). The `trajectory_envelopes` table is new and
+-- is created at boot; these three columns are on existing tables.
+ALTER TABLE app_policies     ADD COLUMN trajectory_mode VARCHAR(16);
+ALTER TABLE routing_outcomes ADD COLUMN trajectory_key VARCHAR(32);
+ALTER TABLE routing_outcomes ADD COLUMN inherited_entity_types JSON;
 ```
 
 - `onboarded_models.context_window_source` — `"probed"` when the stored value

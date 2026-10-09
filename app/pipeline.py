@@ -353,6 +353,11 @@ class Pipeline:
             # own field name for it) -- both stay TYPES only, never values;
             # see `ExecutionPolicyContext.detected_entities`.
             "detected_entity_types": list(ctx.detected_entities),
+            # B72: the trajectory envelope. `inherited_entity_types` is the
+            # subset of the types above that came from earlier calls of the
+            # same trajectory, so an inherited restriction is never silent.
+            "trajectory_mode": eff.trajectory_mode,
+            "inherited_entity_types": list(ctx.inherited_entities),
             # P1b Task 6 additions (design §6) -- see docstring above.
             "endpoint_registry_version": endpoint_registry_version,
             "endpoint_data_handling": endpoint_data_handling,
@@ -696,7 +701,8 @@ class Pipeline:
                   profile: AppPrivacyProfile | None = None,
                   session_id: str | None = None,
                   internals: dict | None = None,
-                  workload: str | None = None) -> dict:
+                  workload: str | None = None,
+                  trajectory=None) -> dict:
         # `internals` is an out-parameter: a dict the CALLER owns, which this
         # method fills with the values the telemetry exporter needs and nobody
         # may serialize (`_publish_telemetry_views`). Optional, so a script or
@@ -723,9 +729,17 @@ class Pipeline:
         # default, and nothing external has run at this point.
         try:
             det, rules, eff = self._gate_inputs(app_policy, profile)
+            # B72: read the trajectory envelope before the gate and write it
+            # back after, both inside this fail-closed block -- an envelope
+            # that cannot be read or written rejects the request.
+            inherited = (await trajectory.inherited(eff.trajectory_mode)
+                         if trajectory is not None else frozenset())
             ctx, reps, eff = self._gate.evaluate(
                 request_id, tenant_id, request, app_policy=app_policy,
-                detector=det, rules=rules, eff=eff, workload=workload)
+                detector=det, rules=rules, eff=eff, workload=workload,
+                inherited_entity_types=inherited)
+            if trajectory is not None:
+                await trajectory.observe(eff.trajectory_mode, ctx.request_entities)
         except PolicyGateError:
             raise
         except Exception as e:
@@ -737,7 +751,9 @@ class Pipeline:
         # compression has run, below.
         if internals is not None:
             internals["outcome_ctx"] = outcome_context(
-                ctx, max_tokens=client_output_cap(request.generation_params()))
+                ctx, max_tokens=client_output_cap(request.generation_params()),
+                trajectory_key=(trajectory.recorded_key(eff.trajectory_mode)
+                                if trajectory is not None else None))
         self._publish_telemetry_views(internals, reps)
         policy_mode = self._policy_mode_stamp(eff)
         # The egress axis, read once and handed to every consumer that returns
@@ -1133,7 +1149,8 @@ class Pipeline:
                          profile: AppPrivacyProfile | None = None,
                          session_id: str | None = None,
                          internals: dict | None = None,
-                         workload: str | None = None
+                         workload: str | None = None,
+                         trajectory=None
                          ) -> tuple[AsyncIterator[str], Callable[[], dict]]:
         """Real backend token-streaming substrate for the direct (single-shot)
         path (Tasks 6-7 wire the route to this). Skips step-9 verification --
@@ -1173,9 +1190,17 @@ class Pipeline:
         # drift from the direct one.
         try:
             det, rules, eff = self._gate_inputs(app_policy, profile)
+            # B72: read the trajectory envelope before the gate and write it
+            # back after, both inside this fail-closed block -- an envelope
+            # that cannot be read or written rejects the request.
+            inherited = (await trajectory.inherited(eff.trajectory_mode)
+                         if trajectory is not None else frozenset())
             ctx, reps, eff = self._gate.evaluate(
                 request_id, tenant_id, request, app_policy=app_policy,
-                detector=det, rules=rules, eff=eff, workload=workload)
+                detector=det, rules=rules, eff=eff, workload=workload,
+                inherited_entity_types=inherited)
+            if trajectory is not None:
+                await trajectory.observe(eff.trajectory_mode, ctx.request_entities)
         except PolicyGateError:
             raise
         except Exception as e:
@@ -1185,7 +1210,9 @@ class Pipeline:
         # failure. `complexity` is folded in once compression has run, below.
         if internals is not None:
             internals["outcome_ctx"] = outcome_context(
-                ctx, max_tokens=client_output_cap(request.generation_params()))
+                ctx, max_tokens=client_output_cap(request.generation_params()),
+                trajectory_key=(trajectory.recorded_key(eff.trajectory_mode)
+                                if trajectory is not None else None))
         self._publish_telemetry_views(internals, reps)
         policy_mode = self._policy_mode_stamp(eff)
         # Same egress axis run() reads, selecting the detector `incremental_

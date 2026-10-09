@@ -18,6 +18,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.api.history import summarize
+from app.policy.trajectory import Trajectory, parse_trajectory_id
 from app.api.openai_errors import (
     CODE_BACKEND_UNAVAILABLE, CODE_CONTEXT_LENGTH_EXCEEDED, CODE_INSUFFICIENT_QUOTA,
     CODE_INTERNAL_ERROR, CODE_INVALID_API_KEY, CODE_INVALID_VALUE, CODE_MODEL_NOT_FOUND,
@@ -604,6 +605,15 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
         request.headers.get("x-routeforge-workload"),
         (body.model_extra or {}).get("metadata"))
     outcome_kw = {"workload": workload, "workload_source": workload_source}
+    # B72: the client's optional trajectory id. Only a handle is built here;
+    # whether an envelope applies is the app's compiled `trajectory_mode`,
+    # decided in the pipeline. An invalid id is dropped, never guessed at.
+    traj_id, traj_source = parse_trajectory_id(
+        request.headers.get("x-routeforge-trajectory"))
+    # No store on this process: the handle still exists, so an app whose mode
+    # is not `off` fails closed in the gate instead of losing its envelope.
+    trajectory = Trajectory(getattr(request.app.state, "trajectory_store", None),
+                            tenant, traj_id, traj_source)
 
     # Per-application quotas (fail closed). Rate limit first (cheap, in-memory),
     # then the daily spend cap (one indexed sum). Both reject with 429; the
@@ -698,7 +708,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
                 deltas, get_meta = await request.app.state.pipeline.run_stream(
                     request_id, tenant, body, app_policy=app_policy, profile=profile,
                     session_id=client_session_id, internals=internals,
-                    workload=workload)
+                    workload=workload, trajectory=trajectory)
             except StreamFallback:
                 pass  # fall through: run the FULL verified pipeline, then chunk it
             else:
@@ -726,7 +736,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
             task = asyncio.create_task(request.app.state.pipeline.run(
                 request_id, tenant, body, app_policy=app_policy, profile=profile,
                 session_id=client_session_id, internals=internals,
-                workload=workload))
+                workload=workload, trajectory=trajectory))
             keepalive = s.serving.stream_keepalive_s
             done, _ = await _wait_or_cancel_on_shutdown(task, keepalive)
             if not done:
@@ -742,7 +752,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
             task = asyncio.create_task(request.app.state.pipeline.run(
                 request_id, tenant, body, app_policy=app_policy, profile=profile,
                 session_id=client_session_id, internals=internals,
-                workload=workload))
+                workload=workload, trajectory=trajectory))
             resp = await _await_unless_disconnected(
                 task, request.is_disconnected, s.serving.stream_keepalive_s)
     except HTTPException:

@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.admin_routes import admin_router
+from app.policy.trajectory import DbTrajectoryStore, prune_envelopes
 from app.api.bus import DecisionBus
 from app.api.openai_errors import CODE_INVALID_REQUEST, error_payload
 from app.api.pg_bridge import PgDecisionBridge
@@ -123,6 +124,8 @@ async def _observation_loop(app: FastAPI) -> None:
                 async with app.state.db.session() as s:
                     n = await apps_store.prune_observations(
                         s, older_than_hours=cfg.seed_window_hours)
+                    # B72: expired trajectory-envelope observations.
+                    await prune_envelopes(s)
                     await s.commit()
                 logging.getLogger("serving.routing").info(
                     "observation log pruned rows=%d", n)
@@ -363,6 +366,11 @@ def create_app() -> FastAPI:
     # app/api/ui_routes.py) — own-port, single source.
     self_port = _self_port()
     app.state.self_port = self_port
+    # B72: trajectory envelopes live in the deployment's own database so
+    # every replica reads the same one. Lifetime is the operator's choice.
+    app.state.trajectory_store = DbTrajectoryStore(
+        app.state.db,
+        ttl_seconds=float(os.environ.get("SP_TRAJECTORY_TTL_HOURS", "24")) * 3600)
     app.state.pipeline = Pipeline(
         settings, gate, detector, gateway,
         co_cfg_provider=lambda: app.state.co_cfg, ccr=ccr, registry=registry,

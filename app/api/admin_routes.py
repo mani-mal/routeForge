@@ -39,6 +39,7 @@ from app.policy.enums import (
     STREAM_MODES,
 )
 from app.policy.recognizers import PRESIDIO_BUILTINS, validate_recognizer
+from app.policy.trajectory import TRAJECTORY_MODES
 
 admin_router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -64,6 +65,7 @@ def _policy_dict(p) -> dict | None:
             "max_cost_usd_per_request": p.max_cost_usd_per_request, "max_rpm": p.max_rpm,
             "compression_enabled": p.compression_enabled, "capture_io": p.capture_io,
             "pii_detection": p.pii_detection, "stream_mode": p.stream_mode,
+            "trajectory_mode": p.trajectory_mode,
             "policy_mode": p.policy_mode,
             "pii_entity_denylist": p.pii_entity_denylist,
             "pii_score_threshold": p.pii_score_threshold,
@@ -218,6 +220,8 @@ class PolicyIn(BaseModel):
     client_output: str | None = None
     content_integrity: str | None = None
     escalate_residency_on_detection: bool | None = None
+    # B72: off | header | sticky (app/policy/trajectory.py). None = inherit (off).
+    trajectory_mode: str | None = None
     # P1b app-side data-handling requirements (design doc §3; types only here
     # -- shape/normalisation validation is app/policy/compile.py::
     # validate_effective, like every other axis). None = no constraint. No
@@ -562,6 +566,8 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
             raise HTTPException(422, f"bad pii_detection {body.pii_detection!r}")
         if body.stream_mode is not None and body.stream_mode not in STREAM_MODES:
             raise HTTPException(422, f"bad stream_mode {body.stream_mode!r}")
+        if body.trajectory_mode is not None and body.trajectory_mode not in TRAJECTORY_MODES:
+            raise HTTPException(422, f"bad trajectory_mode {body.trajectory_mode!r}")
         if body.policy_mode is not None and body.policy_mode not in POLICY_MODES:
             raise HTTPException(422, f"bad policy_mode {body.policy_mode!r}")
         if body.pii_entity_denylist is not None:
@@ -660,6 +666,7 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
                 "escalate_residency_on_detection"),
             allowed_regions=_merged("allowed_regions"),
             require_no_retention=_merged("require_no_retention"),
+            trajectory_mode=_merged("trajectory_mode"),
         )
         # An app's own provisioned Langfuse project is the one condition the
         # compiler cannot see: it is DB state, not policy. Raw capture requires

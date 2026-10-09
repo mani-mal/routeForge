@@ -125,6 +125,7 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
                   content_integrity: str | None = None,
                   model_input: str | None = None,
                   workload: str | None = None,
+                  inherited_entity_types: frozenset[str] = frozenset(),
                   ) -> ExecutionPolicyContext:
     """Step 3: the immutable ExecutionPolicyContext.
 
@@ -150,7 +151,10 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
     No protection axis is read anywhere in this function; that is the
     noninterference property the compiler exists to make checkable.
     """
-    etypes = {e.type for e in entities}
+    # B72: entity types the request's trajectory envelope has already seen
+    # are matched exactly as if they had been detected in this request. A
+    # union can only select the same or a stricter rule.
+    etypes = {e.type for e in entities} | set(inherited_entity_types)
     rule = match_sensitivity_rule(settings, app_rules, etypes)
     # One compile, read for whatever the caller did not already supply. The
     # gate threads `content_integrity`/`model_input` in from the SAME
@@ -278,6 +282,8 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
         risk_class=rule.risk_class,
         require_verification=rule.require_verification,
         detected_entities=tuple(sorted(etypes)),
+        inherited_entities=tuple(sorted(inherited_entity_types)),
+        request_entities=tuple(sorted({e.type for e in entities})),
         redaction_map_id=redaction_map_id,
         # P2b-3: carried for the router's quality term ONLY. Nothing above --
         # placement, `feasible_set`, `allowed_models` -- reads it.

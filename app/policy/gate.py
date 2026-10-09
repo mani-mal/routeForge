@@ -351,6 +351,7 @@ class Gate:
                  rules: list | None = None,
                  eff: EffectivePolicy | None = None,
                  workload: str | None = None,
+                 inherited_entity_types: frozenset[str] = frozenset(),
                  ) -> tuple[ExecutionPolicyContext, Representations, EffectivePolicy]:
         """Step 2. Returns `(ctx, reps, eff)`:
 
@@ -402,7 +403,10 @@ class Gate:
         # sensitive data. It never leaves this method (only its id does), and
         # nothing detokenizes anywhere (design §9).
         map_id = f"map-{uuid.uuid4().hex[:8]}" if mapping else None
-        etypes = {e.type for e in entities}
+        # B72: types inherited from the trajectory envelope join the rule
+        # match (placement, sensitivity, verification). They never join
+        # redaction: there is no text of theirs in this request to redact.
+        etypes = {e.type for e in entities} | set(inherited_entity_types)
         ctx = build_context(self._settings, request_id, tenant_id, entities, map_id,
                             app_policy=app_policy, app_rules=rules,
                             registry=self._registry,
@@ -413,7 +417,8 @@ class Gate:
                             # needs it for P1b's raw-sensitive eligibility rule
                             # (design §4) and must not re-derive it.
                             model_input=eff.protection.model_input,
-                            workload=workload)
+                            workload=workload,
+                            inherited_entity_types=inherited_entity_types)
         ctx = ctx.model_copy(update={
             "requested_model": None if request.model == "auto" else request.model,
         })
