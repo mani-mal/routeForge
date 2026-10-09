@@ -1,0 +1,1023 @@
+{
+  "arms": {
+    "baseline": "router_online",
+    "candidate": "router_online:candidate"
+  },
+  "candidate": {
+    "id": "6af4e16f72b8",
+    "name": "latency-only",
+    "routing": {
+      "weights": {
+        "cost": 0,
+        "latency": 2
+      }
+    }
+  },
+  "caveats": [
+    "This check applies nothing and promotes nothing. It reads a candidate routing config, scores it offline beside the current one, and writes this report. A routing change is still made by an operator editing config/routing.yaml.",
+    "This run called the endpoints in the endpoint file, once per case and endpoint, and graded each answer with a deterministic grader. One call is one sample.",
+    "The router comparison is mostly the tier rule: the target tier is chosen from the request's length, so on short cases the router's regret against the oracle is set by which tier it may use, not by the four-term scorer.",
+    "Cases are synthetic and single-turn.",
+    "The verdict is conditional on this suite, this endpoint file, the run's seed, the resampling seed and replicate count, and this case order. It is not a statement about live traffic.",
+    "A range is the spread of the paired difference when the suite's cases are resampled. It says how much the difference depends on which cases are in the suite, and nothing about whether the suite resembles real traffic. A figure is judged on its whole range: its upper end is a one-sided bound at half the interval's miss rate (95% for a 90% interval).",
+    "No correction is made for the number of figures judged. Every named metric is judged overall and in every group with enough cases, each at the same level, so the more figures are judged the more likely one is inconclusive by chance alone.",
+    "Cost regret and latency regret are means over the cases whose served answer passed, and that set can differ between the two arms. A candidate that fails more cases can show a lower regret for that reason alone: read them beside pass_rate."
+  ],
+  "changed": {
+    "choice_changed": 0,
+    "n_cases": 22,
+    "share": 0.0
+  },
+  "effect": "none",
+  "exit_code": 0,
+  "groups": {
+    "application": {
+      "policy-57810d29": {
+        "metrics": {
+          "cost_regret": {
+            "baseline": 0.0,
+            "candidate": 0.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          },
+          "exhausted_rate": {
+            "baseline": 0.0,
+            "candidate": 0.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          },
+          "floor_miss_rate": {
+            "baseline": 0.0,
+            "candidate": 0.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          },
+          "latency_regret": {
+            "baseline": 127.238003522507,
+            "candidate": 127.238003522507,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          },
+          "mean_chosen_cost": {
+            "baseline": 0.000103125,
+            "candidate": 0.000103125,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "within_tolerance",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": 0.0005,
+            "worsening": 0.0
+          },
+          "pass_rate": {
+            "baseline": 1.0,
+            "candidate": 1.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "within_tolerance",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": 0.05,
+            "worsening": 0.0
+          },
+          "quality_regret": {
+            "baseline": 0.0,
+            "candidate": 0.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          },
+          "wasted_attempts": {
+            "baseline": 0.0,
+            "candidate": 0.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          }
+        },
+        "n_cases": 8
+      },
+      "policy-7b90407f": {
+        "metrics": {
+          "cost_regret": {
+            "baseline": null,
+            "candidate": null,
+            "change": "undefined",
+            "hi": null,
+            "lo": null,
+            "state": "insufficient_cases",
+            "support": {
+              "baseline": 3,
+              "candidate": 3
+            },
+            "tolerance": null,
+            "worsening": null
+          },
+          "exhausted_rate": {
+            "baseline": 0.0,
+            "candidate": 0.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          },
+          "floor_miss_rate": {
+            "baseline": null,
+            "candidate": null,
+            "change": "undefined",
+            "hi": null,
+            "lo": null,
+            "state": "insufficient_cases",
+            "support": {
+              "baseline": 3,
+              "candidate": 3
+            },
+            "tolerance": null,
+            "worsening": null
+          },
+          "latency_regret": {
+            "baseline": null,
+            "candidate": null,
+            "change": "undefined",
+            "hi": null,
+            "lo": null,
+            "state": "insufficient_cases",
+            "support": {
+              "baseline": 3,
+              "candidate": 3
+            },
+            "tolerance": null,
+            "worsening": null
+          },
+          "mean_chosen_cost": {
+            "baseline": 0.01455875,
+            "candidate": 0.01455875,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "within_tolerance",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": 0.0005,
+            "worsening": 0.0
+          },
+          "pass_rate": {
+            "baseline": 0.375,
+            "candidate": 0.375,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "within_tolerance",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": 0.05,
+            "worsening": 0.0
+          },
+          "quality_regret": {
+            "baseline": 0.0,
+            "candidate": 0.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          },
+          "wasted_attempts": {
+            "baseline": 0.0,
+            "candidate": 0.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          }
+        },
+        "n_cases": 8
+      },
+      "policy-8fb5374a": {
+        "n_cases": 4,
+        "state": "insufficient_cases"
+      },
+      "policy-d30395cb": {
+        "n_cases": 2,
+        "state": "insufficient_cases"
+      }
+    },
+    "placement": {
+      "any": {
+        "metrics": {
+          "cost_regret": {
+            "baseline": 0.0,
+            "candidate": 0.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          },
+          "exhausted_rate": {
+            "baseline": 0.0,
+            "candidate": 0.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          },
+          "floor_miss_rate": {
+            "baseline": 0.0,
+            "candidate": 0.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          },
+          "latency_regret": {
+            "baseline": 127.238003522507,
+            "candidate": 127.238003522507,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          },
+          "mean_chosen_cost": {
+            "baseline": 0.000103125,
+            "candidate": 0.000103125,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "within_tolerance",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": 0.0005,
+            "worsening": 0.0
+          },
+          "pass_rate": {
+            "baseline": 1.0,
+            "candidate": 1.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "within_tolerance",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": 0.05,
+            "worsening": 0.0
+          },
+          "quality_regret": {
+            "baseline": 0.0,
+            "candidate": 0.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          },
+          "wasted_attempts": {
+            "baseline": 0.0,
+            "candidate": 0.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          }
+        },
+        "n_cases": 8
+      },
+      "escalated": {
+        "n_cases": 2,
+        "state": "insufficient_cases"
+      },
+      "onprem_only": {
+        "n_cases": 4,
+        "state": "insufficient_cases"
+      },
+      "us_only": {
+        "metrics": {
+          "cost_regret": {
+            "baseline": null,
+            "candidate": null,
+            "change": "undefined",
+            "hi": null,
+            "lo": null,
+            "state": "insufficient_cases",
+            "support": {
+              "baseline": 3,
+              "candidate": 3
+            },
+            "tolerance": null,
+            "worsening": null
+          },
+          "exhausted_rate": {
+            "baseline": 0.0,
+            "candidate": 0.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          },
+          "floor_miss_rate": {
+            "baseline": null,
+            "candidate": null,
+            "change": "undefined",
+            "hi": null,
+            "lo": null,
+            "state": "insufficient_cases",
+            "support": {
+              "baseline": 3,
+              "candidate": 3
+            },
+            "tolerance": null,
+            "worsening": null
+          },
+          "latency_regret": {
+            "baseline": null,
+            "candidate": null,
+            "change": "undefined",
+            "hi": null,
+            "lo": null,
+            "state": "insufficient_cases",
+            "support": {
+              "baseline": 3,
+              "candidate": 3
+            },
+            "tolerance": null,
+            "worsening": null
+          },
+          "mean_chosen_cost": {
+            "baseline": 0.01455875,
+            "candidate": 0.01455875,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "within_tolerance",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": 0.0005,
+            "worsening": 0.0
+          },
+          "pass_rate": {
+            "baseline": 0.375,
+            "candidate": 0.375,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "within_tolerance",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": 0.05,
+            "worsening": 0.0
+          },
+          "quality_regret": {
+            "baseline": 0.0,
+            "candidate": 0.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          },
+          "wasted_attempts": {
+            "baseline": 0.0,
+            "candidate": 0.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          }
+        },
+        "n_cases": 8
+      }
+    },
+    "protection": {
+      "enforced": {
+        "metrics": {
+          "cost_regret": {
+            "baseline": 0.0,
+            "candidate": 0.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 16,
+              "candidate": 16
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          },
+          "exhausted_rate": {
+            "baseline": 0.0,
+            "candidate": 0.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 22,
+              "candidate": 22
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          },
+          "floor_miss_rate": {
+            "baseline": 0.0,
+            "candidate": 0.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 16,
+              "candidate": 16
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          },
+          "latency_regret": {
+            "baseline": 190.952425262367,
+            "candidate": 190.952425262367,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 16,
+              "candidate": 16
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          },
+          "mean_chosen_cost": {
+            "baseline": 0.006706590909,
+            "candidate": 0.006706590909,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "within_tolerance",
+            "support": {
+              "baseline": 22,
+              "candidate": 22
+            },
+            "tolerance": 0.0005,
+            "worsening": 0.0
+          },
+          "pass_rate": {
+            "baseline": 0.727272727273,
+            "candidate": 0.727272727273,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "within_tolerance",
+            "support": {
+              "baseline": 22,
+              "candidate": 22
+            },
+            "tolerance": 0.05,
+            "worsening": 0.0
+          },
+          "quality_regret": {
+            "baseline": 0.0,
+            "candidate": 0.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 22,
+              "candidate": 22
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          },
+          "wasted_attempts": {
+            "baseline": 0.0,
+            "candidate": 0.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 22,
+              "candidate": 22
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          }
+        },
+        "n_cases": 22
+      }
+    },
+    "workload": {
+      "claim_summary": {
+        "metrics": {
+          "cost_regret": {
+            "baseline": 0.0,
+            "candidate": 0.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 5,
+              "candidate": 5
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          },
+          "exhausted_rate": {
+            "baseline": 0.0,
+            "candidate": 0.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 10,
+              "candidate": 10
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          },
+          "floor_miss_rate": {
+            "baseline": 0.0,
+            "candidate": 0.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 5,
+              "candidate": 5
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          },
+          "latency_regret": {
+            "baseline": 0.0,
+            "candidate": 0.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 5,
+              "candidate": 5
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          },
+          "mean_chosen_cost": {
+            "baseline": 0.014551,
+            "candidate": 0.014551,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "within_tolerance",
+            "support": {
+              "baseline": 10,
+              "candidate": 10
+            },
+            "tolerance": 0.0005,
+            "worsening": 0.0
+          },
+          "pass_rate": {
+            "baseline": 0.5,
+            "candidate": 0.5,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "within_tolerance",
+            "support": {
+              "baseline": 10,
+              "candidate": 10
+            },
+            "tolerance": 0.05,
+            "worsening": 0.0
+          },
+          "quality_regret": {
+            "baseline": 0.0,
+            "candidate": 0.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 10,
+              "candidate": 10
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          },
+          "wasted_attempts": {
+            "baseline": 0.0,
+            "candidate": 0.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 10,
+              "candidate": 10
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          }
+        },
+        "n_cases": 10
+      },
+      "faq": {
+        "metrics": {
+          "cost_regret": {
+            "baseline": 0.0,
+            "candidate": 0.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          },
+          "exhausted_rate": {
+            "baseline": 0.0,
+            "candidate": 0.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          },
+          "floor_miss_rate": {
+            "baseline": 0.0,
+            "candidate": 0.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          },
+          "latency_regret": {
+            "baseline": 127.238003522507,
+            "candidate": 127.238003522507,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          },
+          "mean_chosen_cost": {
+            "baseline": 0.000103125,
+            "candidate": 0.000103125,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "within_tolerance",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": 0.0005,
+            "worsening": 0.0
+          },
+          "pass_rate": {
+            "baseline": 1.0,
+            "candidate": 1.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "within_tolerance",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": 0.05,
+            "worsening": 0.0
+          },
+          "quality_regret": {
+            "baseline": 0.0,
+            "candidate": 0.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          },
+          "wasted_attempts": {
+            "baseline": 0.0,
+            "candidate": 0.0,
+            "change": "none",
+            "hi": 0.0,
+            "lo": 0.0,
+            "state": "not_checked",
+            "support": {
+              "baseline": 8,
+              "candidate": 8
+            },
+            "tolerance": null,
+            "worsening": 0.0
+          }
+        },
+        "n_cases": 8
+      },
+      "onprem_required": {
+        "n_cases": 4,
+        "state": "insufficient_cases"
+      }
+    }
+  },
+  "hard": {
+    "candidate_served_on_empty": 0,
+    "candidate_violations": 0,
+    "failed": false,
+    "run_exit_code": 0
+  },
+  "inconclusive": [],
+  "judged": {
+    "figures": 16,
+    "metrics_available": 8,
+    "metrics_named": 2
+  },
+  "notes": [],
+  "overall": {
+    "cost_regret": {
+      "baseline": 0.0,
+      "candidate": 0.0,
+      "change": "none",
+      "hi": 0.0,
+      "lo": 0.0,
+      "state": "not_checked",
+      "support": {
+        "baseline": 16,
+        "candidate": 16
+      },
+      "tolerance": null,
+      "worsening": 0.0
+    },
+    "exhausted_rate": {
+      "baseline": 0.0,
+      "candidate": 0.0,
+      "change": "none",
+      "hi": 0.0,
+      "lo": 0.0,
+      "state": "not_checked",
+      "support": {
+        "baseline": 22,
+        "candidate": 22
+      },
+      "tolerance": null,
+      "worsening": 0.0
+    },
+    "floor_miss_rate": {
+      "baseline": 0.0,
+      "candidate": 0.0,
+      "change": "none",
+      "hi": 0.0,
+      "lo": 0.0,
+      "state": "not_checked",
+      "support": {
+        "baseline": 16,
+        "candidate": 16
+      },
+      "tolerance": null,
+      "worsening": 0.0
+    },
+    "latency_regret": {
+      "baseline": 190.952425262367,
+      "candidate": 190.952425262367,
+      "change": "none",
+      "hi": 0.0,
+      "lo": 0.0,
+      "state": "not_checked",
+      "support": {
+        "baseline": 16,
+        "candidate": 16
+      },
+      "tolerance": null,
+      "worsening": 0.0
+    },
+    "mean_chosen_cost": {
+      "baseline": 0.006706590909,
+      "candidate": 0.006706590909,
+      "change": "none",
+      "hi": 0.0,
+      "lo": 0.0,
+      "state": "within_tolerance",
+      "support": {
+        "baseline": 22,
+        "candidate": 22
+      },
+      "tolerance": 0.0005,
+      "worsening": 0.0
+    },
+    "pass_rate": {
+      "baseline": 0.727272727273,
+      "candidate": 0.727272727273,
+      "change": "none",
+      "hi": 0.0,
+      "lo": 0.0,
+      "state": "within_tolerance",
+      "support": {
+        "baseline": 22,
+        "candidate": 22
+      },
+      "tolerance": 0.05,
+      "worsening": 0.0
+    },
+    "quality_regret": {
+      "baseline": 0.0,
+      "candidate": 0.0,
+      "change": "none",
+      "hi": 0.0,
+      "lo": 0.0,
+      "state": "not_checked",
+      "support": {
+        "baseline": 22,
+        "candidate": 22
+      },
+      "tolerance": null,
+      "worsening": 0.0
+    },
+    "wasted_attempts": {
+      "baseline": 0.0,
+      "candidate": 0.0,
+      "change": "none",
+      "hi": 0.0,
+      "lo": 0.0,
+      "state": "not_checked",
+      "support": {
+        "baseline": 22,
+        "candidate": 22
+      },
+      "tolerance": null,
+      "worsening": 0.0
+    }
+  },
+  "plan": {
+    "interval": 0.9,
+    "method": "paired_case_bootstrap",
+    "min_group_size": 5,
+    "replicates": 1000,
+    "seed": 0,
+    "tolerances": {
+      "mean_chosen_cost": 0.0005,
+      "pass_rate": 0.05
+    }
+  },
+  "regressed": [],
+  "schema": "routeforge.router-version-check/v1",
+  "verdict": "pass"
+}

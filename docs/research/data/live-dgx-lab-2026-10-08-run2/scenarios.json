@@ -1,0 +1,8 @@
+{"schema":"routeforge.policy-scenarios/v1","title":"DGX lab live run 2, 2026-10-08 (three paper apps, three endpoint names over one server, 900 rows)",
+ "scenarios":[
+  {"name":"no-change","proposal":{}},
+  {"name":"all-apps-no-retention","proposal":{"apps":{"paper-claims":{"require_no_retention":true},"paper-dev":{"require_no_retention":true}}}},
+  {"name":"all-apps-us-lab-only","proposal":{"apps":{"paper-claims":{"allowed_regions":["us-lab"]},"paper-dev":{"allowed_regions":["us-lab"]}}}},
+  {"name":"clinic-may-use-eu-lab","proposal":{"apps":{"paper-clinic":{"allowed_regions":["us-lab","eu-lab"]}}}},
+  {"name":"raise-request-budget","proposal":{"apps":{"paper-claims":{"max_cost_usd_per_request":0.5},"paper-dev":{"max_cost_usd_per_request":0.5},"paper-clinic":{"max_cost_usd_per_request":0.5}}}}
+ ]}

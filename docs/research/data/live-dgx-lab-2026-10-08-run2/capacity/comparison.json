@@ -1,0 +1,4610 @@
+{
+  "baseline": {
+    "agreement": 0.926136,
+    "by_app": {
+      "paper-claims": 0.87218,
+      "paper-clinic": 1.0,
+      "paper-dev": 0.891228
+    },
+    "outcome_agreement": 1.0,
+    "outcome_by_app": {
+      "paper-claims": {
+        "agreement": 1.0,
+        "recorded_rejected": 3,
+        "recorded_rejected_but_routed": 0,
+        "recorded_routed_but_rejected": 0,
+        "rows": 269
+      },
+      "paper-clinic": {
+        "agreement": 1.0,
+        "recorded_rejected": 12,
+        "recorded_rejected_but_routed": 0,
+        "recorded_routed_but_rejected": 0,
+        "rows": 341
+      },
+      "paper-dev": {
+        "agreement": 1.0,
+        "recorded_rejected": 3,
+        "recorded_rejected_but_routed": 0,
+        "recorded_routed_but_rejected": 0,
+        "rows": 290
+      }
+    },
+    "outcome_rows_compared": 900,
+    "outcome_warning": false,
+    "overflow_contradicted": 0,
+    "recorded_rejected": 18,
+    "recorded_rejected_but_routed": 0,
+    "recorded_routed_but_rejected": 0,
+    "rows_compared": 880,
+    "top_disagreements": [
+      {
+        "count": 65,
+        "recorded": "glm-5.3-flash",
+        "simulated": "glm-flash-east"
+      }
+    ],
+    "warning": false
+  },
+  "capacity": {
+    "scenarios": [
+      {
+        "bucket_seconds": 60,
+        "concurrency_not_computed": {
+          "current": [],
+          "proposed": []
+        },
+        "endpoints": {
+          "glm-5.3-flash": {
+            "current": {
+              "active_buckets": 17,
+              "demand": {
+                "concurrency": {
+                  "mean_active": 0.168295,
+                  "mean_window": 0.168295,
+                  "peak": 0.28065
+                },
+                "output_tokens_per_minute": {
+                  "mean_active": 1407.470588,
+                  "mean_window": 1407.470588,
+                  "peak": 2208.0
+                },
+                "requests_per_minute": {
+                  "mean_active": 19.352941,
+                  "mean_window": 19.352941,
+                  "peak": 31.0
+                },
+                "tokens_per_minute": {
+                  "mean_active": 15254.823529,
+                  "mean_window": 15254.823529,
+                  "peak": 32058.0
+                }
+              },
+              "estimated_token_rows": 0,
+              "limits": {
+                "max_concurrency": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 2.0,
+                  "mean_active": 0.084148,
+                  "mean_window": 0.084148,
+                  "not_computed": null,
+                  "peak": 0.140325,
+                  "peak_bucket": "2026-10-08T23:38:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "requests_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 40.0,
+                  "mean_active": 0.483824,
+                  "mean_window": 0.483824,
+                  "not_computed": null,
+                  "peak": 0.775,
+                  "peak_bucket": "2026-10-08T23:38:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "tokens_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 80000.0,
+                  "mean_active": 0.190685,
+                  "mean_window": 0.190685,
+                  "not_computed": null,
+                  "peak": 0.400725,
+                  "peak_bucket": "2026-10-08T23:43:00+00:00",
+                  "requests_over_share": 0.0
+                }
+              },
+              "replay_share": 0.0,
+              "replay_source": null,
+              "requests": 329.0,
+              "service_after_window_share": 0.0,
+              "service_ms_after_window": 0.0,
+              "service_time_ms": {
+                "max": 1541,
+                "mean": 521.765957
+              },
+              "service_time_sources": {
+                "asserted": 0,
+                "endpoint_mean": 0,
+                "recorded": 329,
+                "replay": 0
+              }
+            },
+            "proposed": {
+              "active_buckets": 17,
+              "demand": {
+                "concurrency": {
+                  "mean_active": 0.168295,
+                  "mean_window": 0.168295,
+                  "peak": 0.28065
+                },
+                "output_tokens_per_minute": {
+                  "mean_active": 1407.470588,
+                  "mean_window": 1407.470588,
+                  "peak": 2208.0
+                },
+                "requests_per_minute": {
+                  "mean_active": 19.352941,
+                  "mean_window": 19.352941,
+                  "peak": 31.0
+                },
+                "tokens_per_minute": {
+                  "mean_active": 15254.823529,
+                  "mean_window": 15254.823529,
+                  "peak": 32058.0
+                }
+              },
+              "estimated_token_rows": 0,
+              "limits": {
+                "max_concurrency": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 2.0,
+                  "mean_active": 0.084148,
+                  "mean_window": 0.084148,
+                  "not_computed": null,
+                  "peak": 0.140325,
+                  "peak_bucket": "2026-10-08T23:38:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "requests_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 40.0,
+                  "mean_active": 0.483824,
+                  "mean_window": 0.483824,
+                  "not_computed": null,
+                  "peak": 0.775,
+                  "peak_bucket": "2026-10-08T23:38:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "tokens_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 80000.0,
+                  "mean_active": 0.190685,
+                  "mean_window": 0.190685,
+                  "not_computed": null,
+                  "peak": 0.400725,
+                  "peak_bucket": "2026-10-08T23:43:00+00:00",
+                  "requests_over_share": 0.0
+                }
+              },
+              "replay_share": 0.0,
+              "replay_source": null,
+              "requests": 329.0,
+              "service_after_window_share": 0.0,
+              "service_ms_after_window": 0.0,
+              "service_time_ms": {
+                "max": 1541,
+                "mean": 521.765957
+              },
+              "service_time_sources": {
+                "asserted": 0,
+                "endpoint_mean": 0,
+                "recorded": 329,
+                "replay": 0
+              }
+            }
+          },
+          "glm-flash-east": {
+            "current": {
+              "active_buckets": 17,
+              "demand": {
+                "concurrency": {
+                  "mean_active": 0.177677,
+                  "mean_window": 0.177677,
+                  "peak": 0.2754
+                },
+                "output_tokens_per_minute": {
+                  "mean_active": 1297.882353,
+                  "mean_window": 1297.882353,
+                  "peak": 1968.0
+                },
+                "requests_per_minute": {
+                  "mean_active": 17.705882,
+                  "mean_window": 17.705882,
+                  "peak": 27.0
+                },
+                "tokens_per_minute": {
+                  "mean_active": 32201.176471,
+                  "mean_window": 32201.176471,
+                  "peak": 57814.0
+                }
+              },
+              "estimated_token_rows": 2,
+              "limits": {
+                "max_concurrency": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 2.0,
+                  "mean_active": 0.088839,
+                  "mean_window": 0.088839,
+                  "not_computed": null,
+                  "peak": 0.1377,
+                  "peak_bucket": "2026-10-08T23:47:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "requests_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 40.0,
+                  "mean_active": 0.442647,
+                  "mean_window": 0.442647,
+                  "not_computed": null,
+                  "peak": 0.675,
+                  "peak_bucket": "2026-10-08T23:47:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "tokens_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 80000.0,
+                  "mean_active": 0.402515,
+                  "mean_window": 0.402515,
+                  "not_computed": null,
+                  "peak": 0.722675,
+                  "peak_bucket": "2026-10-08T23:47:00+00:00",
+                  "requests_over_share": 0.0
+                }
+              },
+              "replay_share": 0.0,
+              "replay_source": null,
+              "requests": 301.0,
+              "service_after_window_share": 0.0,
+              "service_ms_after_window": 0.0,
+              "service_time_ms": {
+                "max": 1377,
+                "mean": 602.096346
+              },
+              "service_time_sources": {
+                "asserted": 0,
+                "endpoint_mean": 73,
+                "recorded": 228,
+                "replay": 0
+              }
+            },
+            "proposed": {
+              "active_buckets": 17,
+              "demand": {
+                "concurrency": {
+                  "mean_active": 0.177677,
+                  "mean_window": 0.177677,
+                  "peak": 0.2754
+                },
+                "output_tokens_per_minute": {
+                  "mean_active": 1297.882353,
+                  "mean_window": 1297.882353,
+                  "peak": 1968.0
+                },
+                "requests_per_minute": {
+                  "mean_active": 17.705882,
+                  "mean_window": 17.705882,
+                  "peak": 27.0
+                },
+                "tokens_per_minute": {
+                  "mean_active": 32201.176471,
+                  "mean_window": 32201.176471,
+                  "peak": 57814.0
+                }
+              },
+              "estimated_token_rows": 2,
+              "limits": {
+                "max_concurrency": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 2.0,
+                  "mean_active": 0.088839,
+                  "mean_window": 0.088839,
+                  "not_computed": null,
+                  "peak": 0.1377,
+                  "peak_bucket": "2026-10-08T23:47:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "requests_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 40.0,
+                  "mean_active": 0.442647,
+                  "mean_window": 0.442647,
+                  "not_computed": null,
+                  "peak": 0.675,
+                  "peak_bucket": "2026-10-08T23:47:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "tokens_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 80000.0,
+                  "mean_active": 0.402515,
+                  "mean_window": 0.402515,
+                  "not_computed": null,
+                  "peak": 0.722675,
+                  "peak_bucket": "2026-10-08T23:47:00+00:00",
+                  "requests_over_share": 0.0
+                }
+              },
+              "replay_share": 0.0,
+              "replay_source": null,
+              "requests": 301.0,
+              "service_after_window_share": 0.0,
+              "service_ms_after_window": 0.0,
+              "service_time_ms": {
+                "max": 1377,
+                "mean": 602.096346
+              },
+              "service_time_sources": {
+                "asserted": 0,
+                "endpoint_mean": 73,
+                "recorded": 228,
+                "replay": 0
+              }
+            }
+          },
+          "glm-flash-econ": {
+            "current": {
+              "active_buckets": 17,
+              "demand": {
+                "concurrency": {
+                  "mean_active": 0.115285,
+                  "mean_window": 0.115285,
+                  "peak": 0.185717
+                },
+                "output_tokens_per_minute": {
+                  "mean_active": 1039.117647,
+                  "mean_window": 1039.117647,
+                  "peak": 1536.0
+                },
+                "requests_per_minute": {
+                  "mean_active": 14.823529,
+                  "mean_window": 14.823529,
+                  "peak": 24.0
+                },
+                "tokens_per_minute": {
+                  "mean_active": 7264.294118,
+                  "mean_window": 7264.294118,
+                  "peak": 21262.0
+                }
+              },
+              "estimated_token_rows": 0,
+              "limits": {
+                "max_concurrency": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 2.0,
+                  "mean_active": 0.057643,
+                  "mean_window": 0.057643,
+                  "not_computed": null,
+                  "peak": 0.092858,
+                  "peak_bucket": "2026-10-08T23:48:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "requests_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 40.0,
+                  "mean_active": 0.370588,
+                  "mean_window": 0.370588,
+                  "not_computed": null,
+                  "peak": 0.6,
+                  "peak_bucket": "2026-10-08T23:48:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "tokens_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 80000.0,
+                  "mean_active": 0.090804,
+                  "mean_window": 0.090804,
+                  "not_computed": null,
+                  "peak": 0.265775,
+                  "peak_bucket": "2026-10-08T23:34:00+00:00",
+                  "requests_over_share": 0.0
+                }
+              },
+              "replay_share": 0.0,
+              "replay_source": null,
+              "requests": 252.0,
+              "service_after_window_share": 0.0,
+              "service_ms_after_window": 0.0,
+              "service_time_ms": {
+                "max": 1375,
+                "mean": 466.630952
+              },
+              "service_time_sources": {
+                "asserted": 0,
+                "endpoint_mean": 0,
+                "recorded": 252,
+                "replay": 0
+              }
+            },
+            "proposed": {
+              "active_buckets": 17,
+              "demand": {
+                "concurrency": {
+                  "mean_active": 0.115285,
+                  "mean_window": 0.115285,
+                  "peak": 0.185717
+                },
+                "output_tokens_per_minute": {
+                  "mean_active": 1039.117647,
+                  "mean_window": 1039.117647,
+                  "peak": 1536.0
+                },
+                "requests_per_minute": {
+                  "mean_active": 14.823529,
+                  "mean_window": 14.823529,
+                  "peak": 24.0
+                },
+                "tokens_per_minute": {
+                  "mean_active": 7264.294118,
+                  "mean_window": 7264.294118,
+                  "peak": 21262.0
+                }
+              },
+              "estimated_token_rows": 0,
+              "limits": {
+                "max_concurrency": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 2.0,
+                  "mean_active": 0.057643,
+                  "mean_window": 0.057643,
+                  "not_computed": null,
+                  "peak": 0.092858,
+                  "peak_bucket": "2026-10-08T23:48:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "requests_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 40.0,
+                  "mean_active": 0.370588,
+                  "mean_window": 0.370588,
+                  "not_computed": null,
+                  "peak": 0.6,
+                  "peak_bucket": "2026-10-08T23:48:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "tokens_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 80000.0,
+                  "mean_active": 0.090804,
+                  "mean_window": 0.090804,
+                  "not_computed": null,
+                  "peak": 0.265775,
+                  "peak_bucket": "2026-10-08T23:34:00+00:00",
+                  "requests_over_share": 0.0
+                }
+              },
+              "replay_share": 0.0,
+              "replay_source": null,
+              "requests": 252.0,
+              "service_after_window_share": 0.0,
+              "service_ms_after_window": 0.0,
+              "service_time_ms": {
+                "max": 1375,
+                "mean": 466.630952
+              },
+              "service_time_sources": {
+                "asserted": 0,
+                "endpoint_mean": 0,
+                "recorded": 252,
+                "replay": 0
+              }
+            }
+          }
+        },
+        "method": "spread_offered_load",
+        "min_buckets": 10,
+        "name": "no-change",
+        "not_modelled": [
+          "queueing",
+          "batching",
+          "autoscaling",
+          "engine_concurrency",
+          "external_load",
+          "sub_bucket_bursts",
+          "failover_load",
+          "moved_request_latency",
+          "overload_behaviour"
+        ],
+        "peak": {
+          "current": {
+            "bucket": "2026-10-08T23:38:00+00:00",
+            "bucket_seconds": 60,
+            "buckets": 17,
+            "buckets_over_share": 0.0,
+            "endpoint": "glm-5.3-flash",
+            "limit": "requests_per_minute",
+            "mean_window": 0.483824,
+            "service_after_window_share": 0.0,
+            "utilisation": 0.775
+          },
+          "proposed": {
+            "bucket": "2026-10-08T23:38:00+00:00",
+            "bucket_seconds": 60,
+            "buckets": 17,
+            "buckets_over_share": 0.0,
+            "endpoint": "glm-5.3-flash",
+            "limit": "requests_per_minute",
+            "mean_window": 0.483824,
+            "service_after_window_share": 0.0,
+            "utilisation": 0.775
+          }
+        },
+        "rows": {
+          "excluded_not_counted": 0,
+          "simulated": 900,
+          "unusable_latency": 0,
+          "without_ts": 0
+        },
+        "volume_scale": {
+          "base": {},
+          "proposal": {}
+        },
+        "window": {
+          "arrival_buckets": 17,
+          "buckets": 17,
+          "first_bucket": "2026-10-08T23:33:00+00:00",
+          "last_bucket": "2026-10-08T23:49:00+00:00"
+        },
+        "window_too_short": false
+      },
+      {
+        "bucket_seconds": 60,
+        "concurrency_not_computed": {
+          "current": [],
+          "proposed": []
+        },
+        "endpoints": {
+          "glm-5.3-flash": {
+            "current": {
+              "active_buckets": 17,
+              "demand": {
+                "concurrency": {
+                  "mean_active": 0.168295,
+                  "mean_window": 0.168295,
+                  "peak": 0.28065
+                },
+                "output_tokens_per_minute": {
+                  "mean_active": 1407.470588,
+                  "mean_window": 1407.470588,
+                  "peak": 2208.0
+                },
+                "requests_per_minute": {
+                  "mean_active": 19.352941,
+                  "mean_window": 19.352941,
+                  "peak": 31.0
+                },
+                "tokens_per_minute": {
+                  "mean_active": 15254.823529,
+                  "mean_window": 15254.823529,
+                  "peak": 32058.0
+                }
+              },
+              "estimated_token_rows": 0,
+              "limits": {
+                "max_concurrency": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 2.0,
+                  "mean_active": 0.084148,
+                  "mean_window": 0.084148,
+                  "not_computed": null,
+                  "peak": 0.140325,
+                  "peak_bucket": "2026-10-08T23:38:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "requests_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 40.0,
+                  "mean_active": 0.483824,
+                  "mean_window": 0.483824,
+                  "not_computed": null,
+                  "peak": 0.775,
+                  "peak_bucket": "2026-10-08T23:38:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "tokens_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 80000.0,
+                  "mean_active": 0.190685,
+                  "mean_window": 0.190685,
+                  "not_computed": null,
+                  "peak": 0.400725,
+                  "peak_bucket": "2026-10-08T23:43:00+00:00",
+                  "requests_over_share": 0.0
+                }
+              },
+              "replay_share": 0.0,
+              "replay_source": null,
+              "requests": 329.0,
+              "service_after_window_share": 0.0,
+              "service_ms_after_window": 0.0,
+              "service_time_ms": {
+                "max": 1541,
+                "mean": 521.765957
+              },
+              "service_time_sources": {
+                "asserted": 0,
+                "endpoint_mean": 0,
+                "recorded": 329,
+                "replay": 0
+              }
+            },
+            "proposed": {
+              "active_buckets": 17,
+              "demand": {
+                "concurrency": {
+                  "mean_active": 0.168295,
+                  "mean_window": 0.168295,
+                  "peak": 0.28065
+                },
+                "output_tokens_per_minute": {
+                  "mean_active": 1407.470588,
+                  "mean_window": 1407.470588,
+                  "peak": 2208.0
+                },
+                "requests_per_minute": {
+                  "mean_active": 19.352941,
+                  "mean_window": 19.352941,
+                  "peak": 31.0
+                },
+                "tokens_per_minute": {
+                  "mean_active": 15254.823529,
+                  "mean_window": 15254.823529,
+                  "peak": 32058.0
+                }
+              },
+              "estimated_token_rows": 0,
+              "limits": {
+                "max_concurrency": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 2.0,
+                  "mean_active": 0.084148,
+                  "mean_window": 0.084148,
+                  "not_computed": null,
+                  "peak": 0.140325,
+                  "peak_bucket": "2026-10-08T23:38:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "requests_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 40.0,
+                  "mean_active": 0.483824,
+                  "mean_window": 0.483824,
+                  "not_computed": null,
+                  "peak": 0.775,
+                  "peak_bucket": "2026-10-08T23:38:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "tokens_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 80000.0,
+                  "mean_active": 0.190685,
+                  "mean_window": 0.190685,
+                  "not_computed": null,
+                  "peak": 0.400725,
+                  "peak_bucket": "2026-10-08T23:43:00+00:00",
+                  "requests_over_share": 0.0
+                }
+              },
+              "replay_share": 0.0,
+              "replay_source": null,
+              "requests": 329.0,
+              "service_after_window_share": 0.0,
+              "service_ms_after_window": 0.0,
+              "service_time_ms": {
+                "max": 1541,
+                "mean": 521.765957
+              },
+              "service_time_sources": {
+                "asserted": 0,
+                "endpoint_mean": 0,
+                "recorded": 329,
+                "replay": 0
+              }
+            }
+          },
+          "glm-flash-east": {
+            "current": {
+              "active_buckets": 17,
+              "demand": {
+                "concurrency": {
+                  "mean_active": 0.177677,
+                  "mean_window": 0.177677,
+                  "peak": 0.2754
+                },
+                "output_tokens_per_minute": {
+                  "mean_active": 1297.882353,
+                  "mean_window": 1297.882353,
+                  "peak": 1968.0
+                },
+                "requests_per_minute": {
+                  "mean_active": 17.705882,
+                  "mean_window": 17.705882,
+                  "peak": 27.0
+                },
+                "tokens_per_minute": {
+                  "mean_active": 32201.176471,
+                  "mean_window": 32201.176471,
+                  "peak": 57814.0
+                }
+              },
+              "estimated_token_rows": 2,
+              "limits": {
+                "max_concurrency": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 2.0,
+                  "mean_active": 0.088839,
+                  "mean_window": 0.088839,
+                  "not_computed": null,
+                  "peak": 0.1377,
+                  "peak_bucket": "2026-10-08T23:47:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "requests_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 40.0,
+                  "mean_active": 0.442647,
+                  "mean_window": 0.442647,
+                  "not_computed": null,
+                  "peak": 0.675,
+                  "peak_bucket": "2026-10-08T23:47:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "tokens_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 80000.0,
+                  "mean_active": 0.402515,
+                  "mean_window": 0.402515,
+                  "not_computed": null,
+                  "peak": 0.722675,
+                  "peak_bucket": "2026-10-08T23:47:00+00:00",
+                  "requests_over_share": 0.0
+                }
+              },
+              "replay_share": 0.0,
+              "replay_source": null,
+              "requests": 301.0,
+              "service_after_window_share": 0.0,
+              "service_ms_after_window": 0.0,
+              "service_time_ms": {
+                "max": 1377,
+                "mean": 602.096346
+              },
+              "service_time_sources": {
+                "asserted": 0,
+                "endpoint_mean": 73,
+                "recorded": 228,
+                "replay": 0
+              }
+            },
+            "proposed": {
+              "active_buckets": 17,
+              "demand": {
+                "concurrency": {
+                  "mean_active": 0.324046,
+                  "mean_window": 0.324046,
+                  "peak": 0.457233
+                },
+                "output_tokens_per_minute": {
+                  "mean_active": 2322.882353,
+                  "mean_window": 2322.882353,
+                  "peak": 3101.0
+                },
+                "requests_per_minute": {
+                  "mean_active": 32.294118,
+                  "mean_window": 32.294118,
+                  "peak": 46.0
+                },
+                "tokens_per_minute": {
+                  "mean_active": 37706.470588,
+                  "mean_window": 37706.470588,
+                  "peak": 64216.0
+                }
+              },
+              "estimated_token_rows": 2,
+              "limits": {
+                "max_concurrency": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 2.0,
+                  "mean_active": 0.162023,
+                  "mean_window": 0.162023,
+                  "not_computed": null,
+                  "peak": 0.228617,
+                  "peak_bucket": "2026-10-08T23:47:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "requests_per_minute": {
+                  "buckets_over": 3,
+                  "buckets_over_share": 0.176471,
+                  "limit": 40.0,
+                  "mean_active": 0.807353,
+                  "mean_window": 0.807353,
+                  "not_computed": null,
+                  "peak": 1.15,
+                  "peak_bucket": "2026-10-08T23:48:00+00:00",
+                  "requests_over_share": 0.240437
+                },
+                "tokens_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 80000.0,
+                  "mean_active": 0.471331,
+                  "mean_window": 0.471331,
+                  "not_computed": null,
+                  "peak": 0.8027,
+                  "peak_bucket": "2026-10-08T23:47:00+00:00",
+                  "requests_over_share": 0.0
+                }
+              },
+              "replay_share": 0.0,
+              "replay_source": null,
+              "requests": 549.0,
+              "service_after_window_share": 0.0,
+              "service_ms_after_window": 0.0,
+              "service_time_ms": {
+                "max": 1377,
+                "mean": 602.052823
+              },
+              "service_time_sources": {
+                "asserted": 0,
+                "endpoint_mean": 321,
+                "recorded": 228,
+                "replay": 0
+              }
+            }
+          },
+          "glm-flash-econ": {
+            "current": {
+              "active_buckets": 17,
+              "demand": {
+                "concurrency": {
+                  "mean_active": 0.115285,
+                  "mean_window": 0.115285,
+                  "peak": 0.185717
+                },
+                "output_tokens_per_minute": {
+                  "mean_active": 1039.117647,
+                  "mean_window": 1039.117647,
+                  "peak": 1536.0
+                },
+                "requests_per_minute": {
+                  "mean_active": 14.823529,
+                  "mean_window": 14.823529,
+                  "peak": 24.0
+                },
+                "tokens_per_minute": {
+                  "mean_active": 7264.294118,
+                  "mean_window": 7264.294118,
+                  "peak": 21262.0
+                }
+              },
+              "estimated_token_rows": 0,
+              "limits": {
+                "max_concurrency": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 2.0,
+                  "mean_active": 0.057643,
+                  "mean_window": 0.057643,
+                  "not_computed": null,
+                  "peak": 0.092858,
+                  "peak_bucket": "2026-10-08T23:48:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "requests_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 40.0,
+                  "mean_active": 0.370588,
+                  "mean_window": 0.370588,
+                  "not_computed": null,
+                  "peak": 0.6,
+                  "peak_bucket": "2026-10-08T23:48:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "tokens_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 80000.0,
+                  "mean_active": 0.090804,
+                  "mean_window": 0.090804,
+                  "not_computed": null,
+                  "peak": 0.265775,
+                  "peak_bucket": "2026-10-08T23:34:00+00:00",
+                  "requests_over_share": 0.0
+                }
+              },
+              "replay_share": 0.0,
+              "replay_source": null,
+              "requests": 252.0,
+              "service_after_window_share": 0.0,
+              "service_ms_after_window": 0.0,
+              "service_time_ms": {
+                "max": 1375,
+                "mean": 466.630952
+              },
+              "service_time_sources": {
+                "asserted": 0,
+                "endpoint_mean": 0,
+                "recorded": 252,
+                "replay": 0
+              }
+            },
+            "proposed": {
+              "active_buckets": 0,
+              "demand": {
+                "concurrency": {
+                  "mean_active": 0.0,
+                  "mean_window": 0.0,
+                  "peak": 0.0
+                },
+                "output_tokens_per_minute": {
+                  "mean_active": 0.0,
+                  "mean_window": 0.0,
+                  "peak": 0.0
+                },
+                "requests_per_minute": {
+                  "mean_active": 0.0,
+                  "mean_window": 0.0,
+                  "peak": 0.0
+                },
+                "tokens_per_minute": {
+                  "mean_active": 0.0,
+                  "mean_window": 0.0,
+                  "peak": 0.0
+                }
+              },
+              "estimated_token_rows": 0,
+              "limits": {
+                "max_concurrency": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 2.0,
+                  "mean_active": 0.0,
+                  "mean_window": 0.0,
+                  "not_computed": null,
+                  "peak": 0.0,
+                  "peak_bucket": null,
+                  "requests_over_share": null
+                },
+                "requests_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 40.0,
+                  "mean_active": 0.0,
+                  "mean_window": 0.0,
+                  "not_computed": null,
+                  "peak": 0.0,
+                  "peak_bucket": null,
+                  "requests_over_share": null
+                },
+                "tokens_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 80000.0,
+                  "mean_active": 0.0,
+                  "mean_window": 0.0,
+                  "not_computed": null,
+                  "peak": 0.0,
+                  "peak_bucket": null,
+                  "requests_over_share": null
+                }
+              },
+              "replay_share": null,
+              "replay_source": null,
+              "requests": 0.0,
+              "service_after_window_share": null,
+              "service_ms_after_window": 0.0,
+              "service_time_ms": {
+                "max": null,
+                "mean": null
+              },
+              "service_time_sources": {
+                "asserted": 0,
+                "endpoint_mean": 0,
+                "recorded": 0,
+                "replay": 0
+              }
+            }
+          }
+        },
+        "method": "spread_offered_load",
+        "min_buckets": 10,
+        "name": "all-apps-no-retention",
+        "not_modelled": [
+          "queueing",
+          "batching",
+          "autoscaling",
+          "engine_concurrency",
+          "external_load",
+          "sub_bucket_bursts",
+          "failover_load",
+          "moved_request_latency",
+          "overload_behaviour"
+        ],
+        "peak": {
+          "current": {
+            "bucket": "2026-10-08T23:38:00+00:00",
+            "bucket_seconds": 60,
+            "buckets": 17,
+            "buckets_over_share": 0.0,
+            "endpoint": "glm-5.3-flash",
+            "limit": "requests_per_minute",
+            "mean_window": 0.483824,
+            "service_after_window_share": 0.0,
+            "utilisation": 0.775
+          },
+          "proposed": {
+            "bucket": "2026-10-08T23:48:00+00:00",
+            "bucket_seconds": 60,
+            "buckets": 17,
+            "buckets_over_share": 0.176471,
+            "endpoint": "glm-flash-east",
+            "limit": "requests_per_minute",
+            "mean_window": 0.807353,
+            "service_after_window_share": 0.0,
+            "utilisation": 1.15
+          }
+        },
+        "rows": {
+          "excluded_not_counted": 0,
+          "simulated": 900,
+          "unusable_latency": 0,
+          "without_ts": 0
+        },
+        "volume_scale": {
+          "base": {},
+          "proposal": {}
+        },
+        "window": {
+          "arrival_buckets": 17,
+          "buckets": 17,
+          "first_bucket": "2026-10-08T23:33:00+00:00",
+          "last_bucket": "2026-10-08T23:49:00+00:00"
+        },
+        "window_too_short": false
+      },
+      {
+        "bucket_seconds": 60,
+        "concurrency_not_computed": {
+          "current": [],
+          "proposed": []
+        },
+        "endpoints": {
+          "glm-5.3-flash": {
+            "current": {
+              "active_buckets": 17,
+              "demand": {
+                "concurrency": {
+                  "mean_active": 0.168295,
+                  "mean_window": 0.168295,
+                  "peak": 0.28065
+                },
+                "output_tokens_per_minute": {
+                  "mean_active": 1407.470588,
+                  "mean_window": 1407.470588,
+                  "peak": 2208.0
+                },
+                "requests_per_minute": {
+                  "mean_active": 19.352941,
+                  "mean_window": 19.352941,
+                  "peak": 31.0
+                },
+                "tokens_per_minute": {
+                  "mean_active": 15254.823529,
+                  "mean_window": 15254.823529,
+                  "peak": 32058.0
+                }
+              },
+              "estimated_token_rows": 0,
+              "limits": {
+                "max_concurrency": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 2.0,
+                  "mean_active": 0.084148,
+                  "mean_window": 0.084148,
+                  "not_computed": null,
+                  "peak": 0.140325,
+                  "peak_bucket": "2026-10-08T23:38:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "requests_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 40.0,
+                  "mean_active": 0.483824,
+                  "mean_window": 0.483824,
+                  "not_computed": null,
+                  "peak": 0.775,
+                  "peak_bucket": "2026-10-08T23:38:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "tokens_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 80000.0,
+                  "mean_active": 0.190685,
+                  "mean_window": 0.190685,
+                  "not_computed": null,
+                  "peak": 0.400725,
+                  "peak_bucket": "2026-10-08T23:43:00+00:00",
+                  "requests_over_share": 0.0
+                }
+              },
+              "replay_share": 0.0,
+              "replay_source": null,
+              "requests": 329.0,
+              "service_after_window_share": 0.0,
+              "service_ms_after_window": 0.0,
+              "service_time_ms": {
+                "max": 1541,
+                "mean": 521.765957
+              },
+              "service_time_sources": {
+                "asserted": 0,
+                "endpoint_mean": 0,
+                "recorded": 329,
+                "replay": 0
+              }
+            },
+            "proposed": {
+              "active_buckets": 17,
+              "demand": {
+                "concurrency": {
+                  "mean_active": 0.318393,
+                  "mean_window": 0.318393,
+                  "peak": 0.459433
+                },
+                "output_tokens_per_minute": {
+                  "mean_active": 2651.705882,
+                  "mean_window": 2651.705882,
+                  "peak": 3824.0
+                },
+                "requests_per_minute": {
+                  "mean_active": 36.176471,
+                  "mean_window": 36.176471,
+                  "peak": 51.0
+                },
+                "tokens_per_minute": {
+                  "mean_active": 41064.882353,
+                  "mean_window": 41064.882353,
+                  "peak": 65649.0
+                }
+              },
+              "estimated_token_rows": 0,
+              "limits": {
+                "max_concurrency": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 2.0,
+                  "mean_active": 0.159197,
+                  "mean_window": 0.159197,
+                  "not_computed": null,
+                  "peak": 0.229717,
+                  "peak_bucket": "2026-10-08T23:47:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "requests_per_minute": {
+                  "buckets_over": 8,
+                  "buckets_over_share": 0.470588,
+                  "limit": 40.0,
+                  "mean_active": 0.904412,
+                  "mean_window": 0.904412,
+                  "not_computed": null,
+                  "peak": 1.275,
+                  "peak_bucket": "2026-10-08T23:47:00+00:00",
+                  "requests_over_share": 0.590244
+                },
+                "tokens_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 80000.0,
+                  "mean_active": 0.513311,
+                  "mean_window": 0.513311,
+                  "not_computed": null,
+                  "peak": 0.820612,
+                  "peak_bucket": "2026-10-08T23:43:00+00:00",
+                  "requests_over_share": 0.0
+                }
+              },
+              "replay_share": 0.0,
+              "replay_source": null,
+              "requests": 615.0,
+              "service_after_window_share": 0.0,
+              "service_ms_after_window": 0.0,
+              "service_time_ms": {
+                "max": 1541,
+                "mean": 528.066667
+              },
+              "service_time_sources": {
+                "asserted": 0,
+                "endpoint_mean": 221,
+                "recorded": 394,
+                "replay": 0
+              }
+            }
+          },
+          "glm-flash-east": {
+            "current": {
+              "active_buckets": 17,
+              "demand": {
+                "concurrency": {
+                  "mean_active": 0.177677,
+                  "mean_window": 0.177677,
+                  "peak": 0.2754
+                },
+                "output_tokens_per_minute": {
+                  "mean_active": 1297.882353,
+                  "mean_window": 1297.882353,
+                  "peak": 1968.0
+                },
+                "requests_per_minute": {
+                  "mean_active": 17.705882,
+                  "mean_window": 17.705882,
+                  "peak": 27.0
+                },
+                "tokens_per_minute": {
+                  "mean_active": 32201.176471,
+                  "mean_window": 32201.176471,
+                  "peak": 57814.0
+                }
+              },
+              "estimated_token_rows": 2,
+              "limits": {
+                "max_concurrency": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 2.0,
+                  "mean_active": 0.088839,
+                  "mean_window": 0.088839,
+                  "not_computed": null,
+                  "peak": 0.1377,
+                  "peak_bucket": "2026-10-08T23:47:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "requests_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 40.0,
+                  "mean_active": 0.442647,
+                  "mean_window": 0.442647,
+                  "not_computed": null,
+                  "peak": 0.675,
+                  "peak_bucket": "2026-10-08T23:47:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "tokens_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 80000.0,
+                  "mean_active": 0.402515,
+                  "mean_window": 0.402515,
+                  "not_computed": null,
+                  "peak": 0.722675,
+                  "peak_bucket": "2026-10-08T23:47:00+00:00",
+                  "requests_over_share": 0.0
+                }
+              },
+              "replay_share": 0.0,
+              "replay_source": null,
+              "requests": 301.0,
+              "service_after_window_share": 0.0,
+              "service_ms_after_window": 0.0,
+              "service_time_ms": {
+                "max": 1377,
+                "mean": 602.096346
+              },
+              "service_time_sources": {
+                "asserted": 0,
+                "endpoint_mean": 73,
+                "recorded": 228,
+                "replay": 0
+              }
+            },
+            "proposed": {
+              "active_buckets": 0,
+              "demand": {
+                "concurrency": {
+                  "mean_active": 0.0,
+                  "mean_window": 0.0,
+                  "peak": 0.0
+                },
+                "output_tokens_per_minute": {
+                  "mean_active": 0.0,
+                  "mean_window": 0.0,
+                  "peak": 0.0
+                },
+                "requests_per_minute": {
+                  "mean_active": 0.0,
+                  "mean_window": 0.0,
+                  "peak": 0.0
+                },
+                "tokens_per_minute": {
+                  "mean_active": 0.0,
+                  "mean_window": 0.0,
+                  "peak": 0.0
+                }
+              },
+              "estimated_token_rows": 0,
+              "limits": {
+                "max_concurrency": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 2.0,
+                  "mean_active": 0.0,
+                  "mean_window": 0.0,
+                  "not_computed": null,
+                  "peak": 0.0,
+                  "peak_bucket": null,
+                  "requests_over_share": null
+                },
+                "requests_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 40.0,
+                  "mean_active": 0.0,
+                  "mean_window": 0.0,
+                  "not_computed": null,
+                  "peak": 0.0,
+                  "peak_bucket": null,
+                  "requests_over_share": null
+                },
+                "tokens_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 80000.0,
+                  "mean_active": 0.0,
+                  "mean_window": 0.0,
+                  "not_computed": null,
+                  "peak": 0.0,
+                  "peak_bucket": null,
+                  "requests_over_share": null
+                }
+              },
+              "replay_share": null,
+              "replay_source": null,
+              "requests": 0.0,
+              "service_after_window_share": null,
+              "service_ms_after_window": 0.0,
+              "service_time_ms": {
+                "max": null,
+                "mean": null
+              },
+              "service_time_sources": {
+                "asserted": 0,
+                "endpoint_mean": 0,
+                "recorded": 0,
+                "replay": 0
+              }
+            }
+          },
+          "glm-flash-econ": {
+            "current": {
+              "active_buckets": 17,
+              "demand": {
+                "concurrency": {
+                  "mean_active": 0.115285,
+                  "mean_window": 0.115285,
+                  "peak": 0.185717
+                },
+                "output_tokens_per_minute": {
+                  "mean_active": 1039.117647,
+                  "mean_window": 1039.117647,
+                  "peak": 1536.0
+                },
+                "requests_per_minute": {
+                  "mean_active": 14.823529,
+                  "mean_window": 14.823529,
+                  "peak": 24.0
+                },
+                "tokens_per_minute": {
+                  "mean_active": 7264.294118,
+                  "mean_window": 7264.294118,
+                  "peak": 21262.0
+                }
+              },
+              "estimated_token_rows": 0,
+              "limits": {
+                "max_concurrency": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 2.0,
+                  "mean_active": 0.057643,
+                  "mean_window": 0.057643,
+                  "not_computed": null,
+                  "peak": 0.092858,
+                  "peak_bucket": "2026-10-08T23:48:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "requests_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 40.0,
+                  "mean_active": 0.370588,
+                  "mean_window": 0.370588,
+                  "not_computed": null,
+                  "peak": 0.6,
+                  "peak_bucket": "2026-10-08T23:48:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "tokens_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 80000.0,
+                  "mean_active": 0.090804,
+                  "mean_window": 0.090804,
+                  "not_computed": null,
+                  "peak": 0.265775,
+                  "peak_bucket": "2026-10-08T23:34:00+00:00",
+                  "requests_over_share": 0.0
+                }
+              },
+              "replay_share": 0.0,
+              "replay_source": null,
+              "requests": 252.0,
+              "service_after_window_share": 0.0,
+              "service_ms_after_window": 0.0,
+              "service_time_ms": {
+                "max": 1375,
+                "mean": 466.630952
+              },
+              "service_time_sources": {
+                "asserted": 0,
+                "endpoint_mean": 0,
+                "recorded": 252,
+                "replay": 0
+              }
+            },
+            "proposed": {
+              "active_buckets": 17,
+              "demand": {
+                "concurrency": {
+                  "mean_active": 0.119864,
+                  "mean_window": 0.119864,
+                  "peak": 0.1935
+                },
+                "output_tokens_per_minute": {
+                  "mean_active": 1073.0,
+                  "mean_window": 1073.0,
+                  "peak": 1632.0
+                },
+                "requests_per_minute": {
+                  "mean_active": 15.411765,
+                  "mean_window": 15.411765,
+                  "peak": 25.0
+                },
+                "tokens_per_minute": {
+                  "mean_active": 11329.529412,
+                  "mean_window": 11329.529412,
+                  "peak": 21262.0
+                }
+              },
+              "estimated_token_rows": 0,
+              "limits": {
+                "max_concurrency": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 2.0,
+                  "mean_active": 0.059932,
+                  "mean_window": 0.059932,
+                  "not_computed": null,
+                  "peak": 0.09675,
+                  "peak_bucket": "2026-10-08T23:48:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "requests_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 40.0,
+                  "mean_active": 0.385294,
+                  "mean_window": 0.385294,
+                  "not_computed": null,
+                  "peak": 0.625,
+                  "peak_bucket": "2026-10-08T23:48:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "tokens_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 80000.0,
+                  "mean_active": 0.141619,
+                  "mean_window": 0.141619,
+                  "not_computed": null,
+                  "peak": 0.265775,
+                  "peak_bucket": "2026-10-08T23:34:00+00:00",
+                  "requests_over_share": 0.0
+                }
+              },
+              "replay_share": 0.0,
+              "replay_source": null,
+              "requests": 262.0,
+              "service_after_window_share": 0.0,
+              "service_ms_after_window": 0.0,
+              "service_time_ms": {
+                "max": 1375,
+                "mean": 466.645038
+              },
+              "service_time_sources": {
+                "asserted": 0,
+                "endpoint_mean": 10,
+                "recorded": 252,
+                "replay": 0
+              }
+            }
+          }
+        },
+        "method": "spread_offered_load",
+        "min_buckets": 10,
+        "name": "all-apps-us-lab-only",
+        "not_modelled": [
+          "queueing",
+          "batching",
+          "autoscaling",
+          "engine_concurrency",
+          "external_load",
+          "sub_bucket_bursts",
+          "failover_load",
+          "moved_request_latency",
+          "overload_behaviour"
+        ],
+        "peak": {
+          "current": {
+            "bucket": "2026-10-08T23:38:00+00:00",
+            "bucket_seconds": 60,
+            "buckets": 17,
+            "buckets_over_share": 0.0,
+            "endpoint": "glm-5.3-flash",
+            "limit": "requests_per_minute",
+            "mean_window": 0.483824,
+            "service_after_window_share": 0.0,
+            "utilisation": 0.775
+          },
+          "proposed": {
+            "bucket": "2026-10-08T23:47:00+00:00",
+            "bucket_seconds": 60,
+            "buckets": 17,
+            "buckets_over_share": 0.470588,
+            "endpoint": "glm-5.3-flash",
+            "limit": "requests_per_minute",
+            "mean_window": 0.904412,
+            "service_after_window_share": 0.0,
+            "utilisation": 1.275
+          }
+        },
+        "rows": {
+          "excluded_not_counted": 0,
+          "simulated": 900,
+          "unusable_latency": 0,
+          "without_ts": 0
+        },
+        "volume_scale": {
+          "base": {},
+          "proposal": {}
+        },
+        "window": {
+          "arrival_buckets": 17,
+          "buckets": 17,
+          "first_bucket": "2026-10-08T23:33:00+00:00",
+          "last_bucket": "2026-10-08T23:49:00+00:00"
+        },
+        "window_too_short": false
+      },
+      {
+        "bucket_seconds": 60,
+        "concurrency_not_computed": {
+          "current": [],
+          "proposed": []
+        },
+        "endpoints": {
+          "glm-5.3-flash": {
+            "current": {
+              "active_buckets": 17,
+              "demand": {
+                "concurrency": {
+                  "mean_active": 0.168295,
+                  "mean_window": 0.168295,
+                  "peak": 0.28065
+                },
+                "output_tokens_per_minute": {
+                  "mean_active": 1407.470588,
+                  "mean_window": 1407.470588,
+                  "peak": 2208.0
+                },
+                "requests_per_minute": {
+                  "mean_active": 19.352941,
+                  "mean_window": 19.352941,
+                  "peak": 31.0
+                },
+                "tokens_per_minute": {
+                  "mean_active": 15254.823529,
+                  "mean_window": 15254.823529,
+                  "peak": 32058.0
+                }
+              },
+              "estimated_token_rows": 0,
+              "limits": {
+                "max_concurrency": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 2.0,
+                  "mean_active": 0.084148,
+                  "mean_window": 0.084148,
+                  "not_computed": null,
+                  "peak": 0.140325,
+                  "peak_bucket": "2026-10-08T23:38:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "requests_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 40.0,
+                  "mean_active": 0.483824,
+                  "mean_window": 0.483824,
+                  "not_computed": null,
+                  "peak": 0.775,
+                  "peak_bucket": "2026-10-08T23:38:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "tokens_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 80000.0,
+                  "mean_active": 0.190685,
+                  "mean_window": 0.190685,
+                  "not_computed": null,
+                  "peak": 0.400725,
+                  "peak_bucket": "2026-10-08T23:43:00+00:00",
+                  "requests_over_share": 0.0
+                }
+              },
+              "replay_share": 0.0,
+              "replay_source": null,
+              "requests": 329.0,
+              "service_after_window_share": 0.0,
+              "service_ms_after_window": 0.0,
+              "service_time_ms": {
+                "max": 1541,
+                "mean": 521.765957
+              },
+              "service_time_sources": {
+                "asserted": 0,
+                "endpoint_mean": 0,
+                "recorded": 329,
+                "replay": 0
+              }
+            },
+            "proposed": {
+              "active_buckets": 0,
+              "demand": {
+                "concurrency": {
+                  "mean_active": 0.0,
+                  "mean_window": 0.0,
+                  "peak": 0.0
+                },
+                "output_tokens_per_minute": {
+                  "mean_active": 0.0,
+                  "mean_window": 0.0,
+                  "peak": 0.0
+                },
+                "requests_per_minute": {
+                  "mean_active": 0.0,
+                  "mean_window": 0.0,
+                  "peak": 0.0
+                },
+                "tokens_per_minute": {
+                  "mean_active": 0.0,
+                  "mean_window": 0.0,
+                  "peak": 0.0
+                }
+              },
+              "estimated_token_rows": 0,
+              "limits": {
+                "max_concurrency": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 2.0,
+                  "mean_active": 0.0,
+                  "mean_window": 0.0,
+                  "not_computed": null,
+                  "peak": 0.0,
+                  "peak_bucket": null,
+                  "requests_over_share": null
+                },
+                "requests_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 40.0,
+                  "mean_active": 0.0,
+                  "mean_window": 0.0,
+                  "not_computed": null,
+                  "peak": 0.0,
+                  "peak_bucket": null,
+                  "requests_over_share": null
+                },
+                "tokens_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 80000.0,
+                  "mean_active": 0.0,
+                  "mean_window": 0.0,
+                  "not_computed": null,
+                  "peak": 0.0,
+                  "peak_bucket": null,
+                  "requests_over_share": null
+                }
+              },
+              "replay_share": null,
+              "replay_source": null,
+              "requests": 0.0,
+              "service_after_window_share": null,
+              "service_ms_after_window": 0.0,
+              "service_time_ms": {
+                "max": null,
+                "mean": null
+              },
+              "service_time_sources": {
+                "asserted": 0,
+                "endpoint_mean": 0,
+                "recorded": 0,
+                "replay": 0
+              }
+            }
+          },
+          "glm-flash-east": {
+            "current": {
+              "active_buckets": 17,
+              "demand": {
+                "concurrency": {
+                  "mean_active": 0.177677,
+                  "mean_window": 0.177677,
+                  "peak": 0.2754
+                },
+                "output_tokens_per_minute": {
+                  "mean_active": 1297.882353,
+                  "mean_window": 1297.882353,
+                  "peak": 1968.0
+                },
+                "requests_per_minute": {
+                  "mean_active": 17.705882,
+                  "mean_window": 17.705882,
+                  "peak": 27.0
+                },
+                "tokens_per_minute": {
+                  "mean_active": 32201.176471,
+                  "mean_window": 32201.176471,
+                  "peak": 57814.0
+                }
+              },
+              "estimated_token_rows": 2,
+              "limits": {
+                "max_concurrency": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 2.0,
+                  "mean_active": 0.088839,
+                  "mean_window": 0.088839,
+                  "not_computed": null,
+                  "peak": 0.1377,
+                  "peak_bucket": "2026-10-08T23:47:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "requests_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 40.0,
+                  "mean_active": 0.442647,
+                  "mean_window": 0.442647,
+                  "not_computed": null,
+                  "peak": 0.675,
+                  "peak_bucket": "2026-10-08T23:47:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "tokens_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 80000.0,
+                  "mean_active": 0.402515,
+                  "mean_window": 0.402515,
+                  "not_computed": null,
+                  "peak": 0.722675,
+                  "peak_bucket": "2026-10-08T23:47:00+00:00",
+                  "requests_over_share": 0.0
+                }
+              },
+              "replay_share": 0.0,
+              "replay_source": null,
+              "requests": 301.0,
+              "service_after_window_share": 0.0,
+              "service_ms_after_window": 0.0,
+              "service_time_ms": {
+                "max": 1377,
+                "mean": 602.096346
+              },
+              "service_time_sources": {
+                "asserted": 0,
+                "endpoint_mean": 73,
+                "recorded": 228,
+                "replay": 0
+              }
+            },
+            "proposed": {
+              "active_buckets": 17,
+              "demand": {
+                "concurrency": {
+                  "mean_active": 0.377754,
+                  "mean_window": 0.377754,
+                  "peak": 0.536267
+                },
+                "output_tokens_per_minute": {
+                  "mean_active": 2750.529412,
+                  "mean_window": 2750.529412,
+                  "peak": 3904.0
+                },
+                "requests_per_minute": {
+                  "mean_active": 37.647059,
+                  "mean_window": 37.647059,
+                  "peak": 53.0
+                },
+                "tokens_per_minute": {
+                  "mean_active": 51491.823529,
+                  "mean_window": 51491.823529,
+                  "peak": 80767.0
+                }
+              },
+              "estimated_token_rows": 12,
+              "limits": {
+                "max_concurrency": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 2.0,
+                  "mean_active": 0.188877,
+                  "mean_window": 0.188877,
+                  "not_computed": null,
+                  "peak": 0.268133,
+                  "peak_bucket": "2026-10-08T23:47:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "requests_per_minute": {
+                  "buckets_over": 9,
+                  "buckets_over_share": 0.529412,
+                  "limit": 40.0,
+                  "mean_active": 0.941176,
+                  "mean_window": 0.941176,
+                  "not_computed": null,
+                  "peak": 1.325,
+                  "peak_bucket": "2026-10-08T23:47:00+00:00",
+                  "requests_over_share": 0.651563
+                },
+                "tokens_per_minute": {
+                  "buckets_over": 1,
+                  "buckets_over_share": 0.058824,
+                  "limit": 80000.0,
+                  "mean_active": 0.643648,
+                  "mean_window": 0.643648,
+                  "not_computed": null,
+                  "peak": 1.009588,
+                  "peak_bucket": "2026-10-08T23:43:00+00:00",
+                  "requests_over_share": 0.070312
+                }
+              },
+              "replay_share": 0.0,
+              "replay_source": null,
+              "requests": 640.0,
+              "service_after_window_share": 0.0,
+              "service_ms_after_window": 0.0,
+              "service_time_ms": {
+                "max": 1377,
+                "mean": 602.045313
+              },
+              "service_time_sources": {
+                "asserted": 0,
+                "endpoint_mean": 412,
+                "recorded": 228,
+                "replay": 0
+              }
+            }
+          },
+          "glm-flash-econ": {
+            "current": {
+              "active_buckets": 17,
+              "demand": {
+                "concurrency": {
+                  "mean_active": 0.115285,
+                  "mean_window": 0.115285,
+                  "peak": 0.185717
+                },
+                "output_tokens_per_minute": {
+                  "mean_active": 1039.117647,
+                  "mean_window": 1039.117647,
+                  "peak": 1536.0
+                },
+                "requests_per_minute": {
+                  "mean_active": 14.823529,
+                  "mean_window": 14.823529,
+                  "peak": 24.0
+                },
+                "tokens_per_minute": {
+                  "mean_active": 7264.294118,
+                  "mean_window": 7264.294118,
+                  "peak": 21262.0
+                }
+              },
+              "estimated_token_rows": 0,
+              "limits": {
+                "max_concurrency": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 2.0,
+                  "mean_active": 0.057643,
+                  "mean_window": 0.057643,
+                  "not_computed": null,
+                  "peak": 0.092858,
+                  "peak_bucket": "2026-10-08T23:48:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "requests_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 40.0,
+                  "mean_active": 0.370588,
+                  "mean_window": 0.370588,
+                  "not_computed": null,
+                  "peak": 0.6,
+                  "peak_bucket": "2026-10-08T23:48:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "tokens_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 80000.0,
+                  "mean_active": 0.090804,
+                  "mean_window": 0.090804,
+                  "not_computed": null,
+                  "peak": 0.265775,
+                  "peak_bucket": "2026-10-08T23:34:00+00:00",
+                  "requests_over_share": 0.0
+                }
+              },
+              "replay_share": 0.0,
+              "replay_source": null,
+              "requests": 252.0,
+              "service_after_window_share": 0.0,
+              "service_ms_after_window": 0.0,
+              "service_time_ms": {
+                "max": 1375,
+                "mean": 466.630952
+              },
+              "service_time_sources": {
+                "asserted": 0,
+                "endpoint_mean": 0,
+                "recorded": 252,
+                "replay": 0
+              }
+            },
+            "proposed": {
+              "active_buckets": 17,
+              "demand": {
+                "concurrency": {
+                  "mean_active": 0.115285,
+                  "mean_window": 0.115285,
+                  "peak": 0.185717
+                },
+                "output_tokens_per_minute": {
+                  "mean_active": 1039.117647,
+                  "mean_window": 1039.117647,
+                  "peak": 1536.0
+                },
+                "requests_per_minute": {
+                  "mean_active": 14.823529,
+                  "mean_window": 14.823529,
+                  "peak": 24.0
+                },
+                "tokens_per_minute": {
+                  "mean_active": 7264.294118,
+                  "mean_window": 7264.294118,
+                  "peak": 21262.0
+                }
+              },
+              "estimated_token_rows": 0,
+              "limits": {
+                "max_concurrency": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 2.0,
+                  "mean_active": 0.057643,
+                  "mean_window": 0.057643,
+                  "not_computed": null,
+                  "peak": 0.092858,
+                  "peak_bucket": "2026-10-08T23:48:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "requests_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 40.0,
+                  "mean_active": 0.370588,
+                  "mean_window": 0.370588,
+                  "not_computed": null,
+                  "peak": 0.6,
+                  "peak_bucket": "2026-10-08T23:48:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "tokens_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 80000.0,
+                  "mean_active": 0.090804,
+                  "mean_window": 0.090804,
+                  "not_computed": null,
+                  "peak": 0.265775,
+                  "peak_bucket": "2026-10-08T23:34:00+00:00",
+                  "requests_over_share": 0.0
+                }
+              },
+              "replay_share": 0.0,
+              "replay_source": null,
+              "requests": 252.0,
+              "service_after_window_share": 0.0,
+              "service_ms_after_window": 0.0,
+              "service_time_ms": {
+                "max": 1375,
+                "mean": 466.630952
+              },
+              "service_time_sources": {
+                "asserted": 0,
+                "endpoint_mean": 0,
+                "recorded": 252,
+                "replay": 0
+              }
+            }
+          }
+        },
+        "method": "spread_offered_load",
+        "min_buckets": 10,
+        "name": "clinic-may-use-eu-lab",
+        "not_modelled": [
+          "queueing",
+          "batching",
+          "autoscaling",
+          "engine_concurrency",
+          "external_load",
+          "sub_bucket_bursts",
+          "failover_load",
+          "moved_request_latency",
+          "overload_behaviour"
+        ],
+        "peak": {
+          "current": {
+            "bucket": "2026-10-08T23:38:00+00:00",
+            "bucket_seconds": 60,
+            "buckets": 17,
+            "buckets_over_share": 0.0,
+            "endpoint": "glm-5.3-flash",
+            "limit": "requests_per_minute",
+            "mean_window": 0.483824,
+            "service_after_window_share": 0.0,
+            "utilisation": 0.775
+          },
+          "proposed": {
+            "bucket": "2026-10-08T23:47:00+00:00",
+            "bucket_seconds": 60,
+            "buckets": 17,
+            "buckets_over_share": 0.529412,
+            "endpoint": "glm-flash-east",
+            "limit": "requests_per_minute",
+            "mean_window": 0.941176,
+            "service_after_window_share": 0.0,
+            "utilisation": 1.325
+          }
+        },
+        "rows": {
+          "excluded_not_counted": 0,
+          "simulated": 900,
+          "unusable_latency": 0,
+          "without_ts": 0
+        },
+        "volume_scale": {
+          "base": {},
+          "proposal": {}
+        },
+        "window": {
+          "arrival_buckets": 17,
+          "buckets": 17,
+          "first_bucket": "2026-10-08T23:33:00+00:00",
+          "last_bucket": "2026-10-08T23:49:00+00:00"
+        },
+        "window_too_short": false
+      },
+      {
+        "bucket_seconds": 60,
+        "concurrency_not_computed": {
+          "current": [],
+          "proposed": []
+        },
+        "endpoints": {
+          "glm-5.3-flash": {
+            "current": {
+              "active_buckets": 17,
+              "demand": {
+                "concurrency": {
+                  "mean_active": 0.168295,
+                  "mean_window": 0.168295,
+                  "peak": 0.28065
+                },
+                "output_tokens_per_minute": {
+                  "mean_active": 1407.470588,
+                  "mean_window": 1407.470588,
+                  "peak": 2208.0
+                },
+                "requests_per_minute": {
+                  "mean_active": 19.352941,
+                  "mean_window": 19.352941,
+                  "peak": 31.0
+                },
+                "tokens_per_minute": {
+                  "mean_active": 15254.823529,
+                  "mean_window": 15254.823529,
+                  "peak": 32058.0
+                }
+              },
+              "estimated_token_rows": 0,
+              "limits": {
+                "max_concurrency": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 2.0,
+                  "mean_active": 0.084148,
+                  "mean_window": 0.084148,
+                  "not_computed": null,
+                  "peak": 0.140325,
+                  "peak_bucket": "2026-10-08T23:38:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "requests_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 40.0,
+                  "mean_active": 0.483824,
+                  "mean_window": 0.483824,
+                  "not_computed": null,
+                  "peak": 0.775,
+                  "peak_bucket": "2026-10-08T23:38:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "tokens_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 80000.0,
+                  "mean_active": 0.190685,
+                  "mean_window": 0.190685,
+                  "not_computed": null,
+                  "peak": 0.400725,
+                  "peak_bucket": "2026-10-08T23:43:00+00:00",
+                  "requests_over_share": 0.0
+                }
+              },
+              "replay_share": 0.0,
+              "replay_source": null,
+              "requests": 329.0,
+              "service_after_window_share": 0.0,
+              "service_ms_after_window": 0.0,
+              "service_time_ms": {
+                "max": 1541,
+                "mean": 521.765957
+              },
+              "service_time_sources": {
+                "asserted": 0,
+                "endpoint_mean": 0,
+                "recorded": 329,
+                "replay": 0
+              }
+            },
+            "proposed": {
+              "active_buckets": 17,
+              "demand": {
+                "concurrency": {
+                  "mean_active": 0.174507,
+                  "mean_window": 0.174507,
+                  "peak": 0.28065
+                },
+                "output_tokens_per_minute": {
+                  "mean_active": 1458.294118,
+                  "mean_window": 1458.294118,
+                  "peak": 2208.0
+                },
+                "requests_per_minute": {
+                  "mean_active": 20.058824,
+                  "mean_window": 20.058824,
+                  "peak": 31.0
+                },
+                "tokens_per_minute": {
+                  "mean_active": 20854.529412,
+                  "mean_window": 20854.529412,
+                  "peak": 39885.0
+                }
+              },
+              "estimated_token_rows": 12,
+              "limits": {
+                "max_concurrency": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 2.0,
+                  "mean_active": 0.087253,
+                  "mean_window": 0.087253,
+                  "not_computed": null,
+                  "peak": 0.140325,
+                  "peak_bucket": "2026-10-08T23:38:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "requests_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 40.0,
+                  "mean_active": 0.501471,
+                  "mean_window": 0.501471,
+                  "not_computed": null,
+                  "peak": 0.775,
+                  "peak_bucket": "2026-10-08T23:38:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "tokens_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 80000.0,
+                  "mean_active": 0.260682,
+                  "mean_window": 0.260682,
+                  "not_computed": null,
+                  "peak": 0.498563,
+                  "peak_bucket": "2026-10-08T23:34:00+00:00",
+                  "requests_over_share": 0.0
+                }
+              },
+              "replay_share": 0.0,
+              "replay_source": null,
+              "requests": 341.0,
+              "service_after_window_share": 0.0,
+              "service_ms_after_window": 0.0,
+              "service_time_ms": {
+                "max": 1541,
+                "mean": 521.985337
+              },
+              "service_time_sources": {
+                "asserted": 0,
+                "endpoint_mean": 12,
+                "recorded": 329,
+                "replay": 0
+              }
+            }
+          },
+          "glm-flash-east": {
+            "current": {
+              "active_buckets": 17,
+              "demand": {
+                "concurrency": {
+                  "mean_active": 0.177677,
+                  "mean_window": 0.177677,
+                  "peak": 0.2754
+                },
+                "output_tokens_per_minute": {
+                  "mean_active": 1297.882353,
+                  "mean_window": 1297.882353,
+                  "peak": 1968.0
+                },
+                "requests_per_minute": {
+                  "mean_active": 17.705882,
+                  "mean_window": 17.705882,
+                  "peak": 27.0
+                },
+                "tokens_per_minute": {
+                  "mean_active": 32201.176471,
+                  "mean_window": 32201.176471,
+                  "peak": 57814.0
+                }
+              },
+              "estimated_token_rows": 2,
+              "limits": {
+                "max_concurrency": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 2.0,
+                  "mean_active": 0.088839,
+                  "mean_window": 0.088839,
+                  "not_computed": null,
+                  "peak": 0.1377,
+                  "peak_bucket": "2026-10-08T23:47:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "requests_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 40.0,
+                  "mean_active": 0.442647,
+                  "mean_window": 0.442647,
+                  "not_computed": null,
+                  "peak": 0.675,
+                  "peak_bucket": "2026-10-08T23:47:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "tokens_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 80000.0,
+                  "mean_active": 0.402515,
+                  "mean_window": 0.402515,
+                  "not_computed": null,
+                  "peak": 0.722675,
+                  "peak_bucket": "2026-10-08T23:47:00+00:00",
+                  "requests_over_share": 0.0
+                }
+              },
+              "replay_share": 0.0,
+              "replay_source": null,
+              "requests": 301.0,
+              "service_after_window_share": 0.0,
+              "service_ms_after_window": 0.0,
+              "service_time_ms": {
+                "max": 1377,
+                "mean": 602.096346
+              },
+              "service_time_sources": {
+                "asserted": 0,
+                "endpoint_mean": 73,
+                "recorded": 228,
+                "replay": 0
+              }
+            },
+            "proposed": {
+              "active_buckets": 17,
+              "demand": {
+                "concurrency": {
+                  "mean_active": 0.183579,
+                  "mean_window": 0.183579,
+                  "peak": 0.2754
+                },
+                "output_tokens_per_minute": {
+                  "mean_active": 1343.058824,
+                  "mean_window": 1343.058824,
+                  "peak": 1984.0
+                },
+                "requests_per_minute": {
+                  "mean_active": 18.294118,
+                  "mean_window": 18.294118,
+                  "peak": 27.0
+                },
+                "tokens_per_minute": {
+                  "mean_active": 37423.823529,
+                  "mean_window": 37423.823529,
+                  "peak": 61245.0
+                }
+              },
+              "estimated_token_rows": 8,
+              "limits": {
+                "max_concurrency": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 2.0,
+                  "mean_active": 0.09179,
+                  "mean_window": 0.09179,
+                  "not_computed": null,
+                  "peak": 0.1377,
+                  "peak_bucket": "2026-10-08T23:47:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "requests_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 40.0,
+                  "mean_active": 0.457353,
+                  "mean_window": 0.457353,
+                  "not_computed": null,
+                  "peak": 0.675,
+                  "peak_bucket": "2026-10-08T23:47:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "tokens_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 80000.0,
+                  "mean_active": 0.467798,
+                  "mean_window": 0.467798,
+                  "not_computed": null,
+                  "peak": 0.765563,
+                  "peak_bucket": "2026-10-08T23:43:00+00:00",
+                  "requests_over_share": 0.0
+                }
+              },
+              "replay_share": 0.0,
+              "replay_source": null,
+              "requests": 311.0,
+              "service_after_window_share": 0.0,
+              "service_ms_after_window": 0.0,
+              "service_time_ms": {
+                "max": 1377,
+                "mean": 602.093248
+              },
+              "service_time_sources": {
+                "asserted": 0,
+                "endpoint_mean": 83,
+                "recorded": 228,
+                "replay": 0
+              }
+            }
+          },
+          "glm-flash-econ": {
+            "current": {
+              "active_buckets": 17,
+              "demand": {
+                "concurrency": {
+                  "mean_active": 0.115285,
+                  "mean_window": 0.115285,
+                  "peak": 0.185717
+                },
+                "output_tokens_per_minute": {
+                  "mean_active": 1039.117647,
+                  "mean_window": 1039.117647,
+                  "peak": 1536.0
+                },
+                "requests_per_minute": {
+                  "mean_active": 14.823529,
+                  "mean_window": 14.823529,
+                  "peak": 24.0
+                },
+                "tokens_per_minute": {
+                  "mean_active": 7264.294118,
+                  "mean_window": 7264.294118,
+                  "peak": 21262.0
+                }
+              },
+              "estimated_token_rows": 0,
+              "limits": {
+                "max_concurrency": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 2.0,
+                  "mean_active": 0.057643,
+                  "mean_window": 0.057643,
+                  "not_computed": null,
+                  "peak": 0.092858,
+                  "peak_bucket": "2026-10-08T23:48:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "requests_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 40.0,
+                  "mean_active": 0.370588,
+                  "mean_window": 0.370588,
+                  "not_computed": null,
+                  "peak": 0.6,
+                  "peak_bucket": "2026-10-08T23:48:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "tokens_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 80000.0,
+                  "mean_active": 0.090804,
+                  "mean_window": 0.090804,
+                  "not_computed": null,
+                  "peak": 0.265775,
+                  "peak_bucket": "2026-10-08T23:34:00+00:00",
+                  "requests_over_share": 0.0
+                }
+              },
+              "replay_share": 0.0,
+              "replay_source": null,
+              "requests": 252.0,
+              "service_after_window_share": 0.0,
+              "service_ms_after_window": 0.0,
+              "service_time_ms": {
+                "max": 1375,
+                "mean": 466.630952
+              },
+              "service_time_sources": {
+                "asserted": 0,
+                "endpoint_mean": 0,
+                "recorded": 252,
+                "replay": 0
+              }
+            },
+            "proposed": {
+              "active_buckets": 17,
+              "demand": {
+                "concurrency": {
+                  "mean_active": 0.1124,
+                  "mean_window": 0.1124,
+                  "peak": 0.185717
+                },
+                "output_tokens_per_minute": {
+                  "mean_active": 1025.0,
+                  "mean_window": 1025.0,
+                  "peak": 1536.0
+                },
+                "requests_per_minute": {
+                  "mean_active": 14.588235,
+                  "mean_window": 14.588235,
+                  "peak": 24.0
+                },
+                "tokens_per_minute": {
+                  "mean_active": 5505.294118,
+                  "mean_window": 5505.294118,
+                  "peak": 10128.0
+                }
+              },
+              "estimated_token_rows": 0,
+              "limits": {
+                "max_concurrency": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 2.0,
+                  "mean_active": 0.0562,
+                  "mean_window": 0.0562,
+                  "not_computed": null,
+                  "peak": 0.092858,
+                  "peak_bucket": "2026-10-08T23:48:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "requests_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 40.0,
+                  "mean_active": 0.364706,
+                  "mean_window": 0.364706,
+                  "not_computed": null,
+                  "peak": 0.6,
+                  "peak_bucket": "2026-10-08T23:48:00+00:00",
+                  "requests_over_share": 0.0
+                },
+                "tokens_per_minute": {
+                  "buckets_over": 0,
+                  "buckets_over_share": 0.0,
+                  "limit": 80000.0,
+                  "mean_active": 0.068816,
+                  "mean_window": 0.068816,
+                  "not_computed": null,
+                  "peak": 0.1266,
+                  "peak_bucket": "2026-10-08T23:38:00+00:00",
+                  "requests_over_share": 0.0
+                }
+              },
+              "replay_share": 0.0,
+              "replay_source": null,
+              "requests": 248.0,
+              "service_after_window_share": 0.0,
+              "service_ms_after_window": 0.0,
+              "service_time_ms": {
+                "max": 1375,
+                "mean": 462.290323
+              },
+              "service_time_sources": {
+                "asserted": 0,
+                "endpoint_mean": 0,
+                "recorded": 248,
+                "replay": 0
+              }
+            }
+          }
+        },
+        "method": "spread_offered_load",
+        "min_buckets": 10,
+        "name": "raise-request-budget",
+        "not_modelled": [
+          "queueing",
+          "batching",
+          "autoscaling",
+          "engine_concurrency",
+          "external_load",
+          "sub_bucket_bursts",
+          "failover_load",
+          "moved_request_latency",
+          "overload_behaviour"
+        ],
+        "peak": {
+          "current": {
+            "bucket": "2026-10-08T23:38:00+00:00",
+            "bucket_seconds": 60,
+            "buckets": 17,
+            "buckets_over_share": 0.0,
+            "endpoint": "glm-5.3-flash",
+            "limit": "requests_per_minute",
+            "mean_window": 0.483824,
+            "service_after_window_share": 0.0,
+            "utilisation": 0.775
+          },
+          "proposed": {
+            "bucket": "2026-10-08T23:38:00+00:00",
+            "bucket_seconds": 60,
+            "buckets": 17,
+            "buckets_over_share": 0.0,
+            "endpoint": "glm-5.3-flash",
+            "limit": "requests_per_minute",
+            "mean_window": 0.501471,
+            "service_after_window_share": 0.0,
+            "utilisation": 0.775
+          }
+        },
+        "rows": {
+          "excluded_not_counted": 0,
+          "simulated": 900,
+          "unusable_latency": 0,
+          "without_ts": 0
+        },
+        "volume_scale": {
+          "base": {},
+          "proposal": {}
+        },
+        "window": {
+          "arrival_buckets": 17,
+          "buckets": 17,
+          "first_bucket": "2026-10-08T23:33:00+00:00",
+          "last_bucket": "2026-10-08T23:49:00+00:00"
+        },
+        "window_too_short": false
+      }
+    ]
+  },
+  "comparison_id": "08f4ac30b055ee0b",
+  "inputs": {
+    "capacity": {
+      "bucket_seconds": 60,
+      "file_sha256": "b23ecda716560086f3836e17a009c53add16cffcfe8acaa57dd1a016a713fe57",
+      "min_buckets": 10
+    },
+    "export_sha256": "a899f995be918662e20c78fc00c9aefc68298ea7027d4c824f983606e65051b8",
+    "registry_version": "4c33b6b14ae6",
+    "routing_policy_version": "6e6fe2027862",
+    "scenarios_sha256": "868db05bb066677c5ef47dbaaa125d8d7ac6f708812af74e2212a5708d6b76e2",
+    "serving_policy": {
+      "allow_app_passthrough": true,
+      "allow_app_pii_downgrade": true,
+      "default_policy_mode": "enforced",
+      "pii_detection": "presidio"
+    },
+    "since": null,
+    "snapshot_generated_at": "2026-10-08T23:49:23Z",
+    "snapshot_sha256": "af6ebdf58f430169188d9d984bc02483e2983b2a2fa524c7aae54e2e5b2a3476",
+    "title": "DGX lab live run 2, 2026-10-08 (three paper apps, three endpoint names over one server, 900 rows)",
+    "window": {
+      "end": "2026-10-08T23:49:09.080625+00:00",
+      "start": "2026-10-08T23:33:45.960758+00:00"
+    }
+  },
+  "rows": {
+    "estimated_tokens": 20,
+    "excluded": {
+      "before_since": 0,
+      "cache_hit": 0,
+      "missing_features": 0,
+      "missing_routing_tokens": 0,
+      "unknown_app": 0,
+      "unknown_status": 0
+    },
+    "simulated": 900
+  },
+  "scenarios": [
+    {
+      "assumptions": {
+        "cached_share": {},
+        "latency_ms": {},
+        "saturated_complexity_estimated": 0,
+        "token_scale": {}
+      },
+      "edits": {},
+      "name": "no-change",
+      "summary": {
+        "affected_apps": [],
+        "by_app": {
+          "paper-claims": {
+            "cost_usd": {
+              "current": 1.299249,
+              "delta": 0.0,
+              "proposed": 1.299249
+            },
+            "cost_usd_both_routed": {
+              "current": 1.299249,
+              "delta": 0.0,
+              "proposed": 1.299249
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.647556,
+              "delta": 0.0,
+              "proposed": 0.647556
+            },
+            "requests": 269,
+            "route_changed": 0
+          },
+          "paper-clinic": {
+            "cost_usd": {
+              "current": 2.59332,
+              "delta": 0.0,
+              "proposed": 2.59332
+            },
+            "cost_usd_both_routed": {
+              "current": 2.59332,
+              "delta": 0.0,
+              "proposed": 2.59332
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 485.740873,
+                "delta": 0.0,
+                "proposed": 485.740873
+              },
+              "p95": {
+                "current": 485.740873,
+                "delta": 0.0,
+                "proposed": 485.740873
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.75,
+              "delta": 0.0,
+              "proposed": 0.75
+            },
+            "requests": 341,
+            "route_changed": 0
+          },
+          "paper-dev": {
+            "cost_usd": {
+              "current": 2.108764,
+              "delta": 0.0,
+              "proposed": 2.108764
+            },
+            "cost_usd_both_routed": {
+              "current": 2.108764,
+              "delta": 0.0,
+              "proposed": 2.108764
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.625436,
+              "delta": 0.0,
+              "proposed": 0.625436
+            },
+            "requests": 290,
+            "route_changed": 0
+          }
+        },
+        "by_workload": {
+          "claims_qa": {
+            "cost_usd": {
+              "current": 1.299249,
+              "delta": 0.0,
+              "proposed": 1.299249
+            },
+            "cost_usd_both_routed": {
+              "current": 1.299249,
+              "delta": 0.0,
+              "proposed": 1.299249
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.647556,
+              "delta": 0.0,
+              "proposed": 0.647556
+            },
+            "requests": 269,
+            "route_changed": 0
+          },
+          "clinic_notes": {
+            "cost_usd": {
+              "current": 2.59332,
+              "delta": 0.0,
+              "proposed": 2.59332
+            },
+            "cost_usd_both_routed": {
+              "current": 2.59332,
+              "delta": 0.0,
+              "proposed": 2.59332
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 485.740873,
+                "delta": 0.0,
+                "proposed": 485.740873
+              },
+              "p95": {
+                "current": 485.740873,
+                "delta": 0.0,
+                "proposed": 485.740873
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.75,
+              "delta": 0.0,
+              "proposed": 0.75
+            },
+            "requests": 341,
+            "route_changed": 0
+          },
+          "dev_assist": {
+            "cost_usd": {
+              "current": 2.108764,
+              "delta": 0.0,
+              "proposed": 2.108764
+            },
+            "cost_usd_both_routed": {
+              "current": 2.108764,
+              "delta": 0.0,
+              "proposed": 2.108764
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.625436,
+              "delta": 0.0,
+              "proposed": 0.625436
+            },
+            "requests": 290,
+            "route_changed": 0
+          }
+        },
+        "moves": [],
+        "new_rejections": {
+          "by_app": {},
+          "by_code": {},
+          "by_core": {}
+        },
+        "per_day": null,
+        "sources": {
+          "current": {
+            "latency": {
+              "observed": 882
+            },
+            "quality": {
+              "tier_default": 882
+            }
+          },
+          "proposed": {
+            "latency": {
+              "observed": 882
+            },
+            "quality": {
+              "tier_default": 882
+            }
+          }
+        },
+        "totals": {
+          "cost_usd": {
+            "current": 6.001333,
+            "delta": 0.0,
+            "proposed": 6.001333
+          },
+          "cost_usd_both_routed": {
+            "current": 6.001333,
+            "delta": 0.0,
+            "proposed": 6.001333
+          },
+          "latency_ms": {
+            "p50": {
+              "current": 485.740873,
+              "delta": 0.0,
+              "proposed": 485.740873
+            },
+            "p95": {
+              "current": 569.311961,
+              "delta": 0.0,
+              "proposed": 569.311961
+            }
+          },
+          "newly_rejected": 0,
+          "newly_served": 0,
+          "onprem_share": {
+            "current": 1.0,
+            "proposed": 1.0
+          },
+          "overflow_hops": {
+            "current": 0,
+            "proposed": 0
+          },
+          "quality_mean": {
+            "current": 0.678571,
+            "delta": 0.0,
+            "proposed": 0.678571
+          },
+          "requests": 900,
+          "route_changed": 0
+        }
+      }
+    },
+    {
+      "assumptions": {
+        "cached_share": {},
+        "latency_ms": {},
+        "saturated_complexity_estimated": 0,
+        "token_scale": {}
+      },
+      "edits": {
+        "apps": {
+          "paper-claims": {
+            "require_no_retention": true
+          },
+          "paper-dev": {
+            "require_no_retention": true
+          }
+        }
+      },
+      "name": "all-apps-no-retention",
+      "summary": {
+        "affected_apps": [
+          "paper-claims",
+          "paper-dev"
+        ],
+        "by_app": {
+          "paper-claims": {
+            "cost_usd": {
+              "current": 1.299249,
+              "delta": 0.121917,
+              "proposed": 1.421166
+            },
+            "cost_usd_both_routed": {
+              "current": 1.269346,
+              "delta": 0.15182,
+              "proposed": 1.421166
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 4,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.647556,
+              "delta": 0.102444,
+              "proposed": 0.75
+            },
+            "requests": 269,
+            "route_changed": 105
+          },
+          "paper-clinic": {
+            "cost_usd": {
+              "current": 2.59332,
+              "delta": 0.0,
+              "proposed": 2.59332
+            },
+            "cost_usd_both_routed": {
+              "current": 2.59332,
+              "delta": 0.0,
+              "proposed": 2.59332
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 485.740873,
+                "delta": 0.0,
+                "proposed": 485.740873
+              },
+              "p95": {
+                "current": 485.740873,
+                "delta": 0.0,
+                "proposed": 485.740873
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.75,
+              "delta": 0.0,
+              "proposed": 0.75
+            },
+            "requests": 341,
+            "route_changed": 0
+          },
+          "paper-dev": {
+            "cost_usd": {
+              "current": 2.108764,
+              "delta": 0.31613,
+              "proposed": 2.424894
+            },
+            "cost_usd_both_routed": {
+              "current": 2.108764,
+              "delta": 0.31613,
+              "proposed": 2.424894
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.625436,
+              "delta": 0.124564,
+              "proposed": 0.75
+            },
+            "requests": 290,
+            "route_changed": 143
+          }
+        },
+        "by_workload": {
+          "claims_qa": {
+            "cost_usd": {
+              "current": 1.299249,
+              "delta": 0.121917,
+              "proposed": 1.421166
+            },
+            "cost_usd_both_routed": {
+              "current": 1.269346,
+              "delta": 0.15182,
+              "proposed": 1.421166
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 4,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.647556,
+              "delta": 0.102444,
+              "proposed": 0.75
+            },
+            "requests": 269,
+            "route_changed": 105
+          },
+          "clinic_notes": {
+            "cost_usd": {
+              "current": 2.59332,
+              "delta": 0.0,
+              "proposed": 2.59332
+            },
+            "cost_usd_both_routed": {
+              "current": 2.59332,
+              "delta": 0.0,
+              "proposed": 2.59332
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 485.740873,
+                "delta": 0.0,
+                "proposed": 485.740873
+              },
+              "p95": {
+                "current": 485.740873,
+                "delta": 0.0,
+                "proposed": 485.740873
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.75,
+              "delta": 0.0,
+              "proposed": 0.75
+            },
+            "requests": 341,
+            "route_changed": 0
+          },
+          "dev_assist": {
+            "cost_usd": {
+              "current": 2.108764,
+              "delta": 0.31613,
+              "proposed": 2.424894
+            },
+            "cost_usd_both_routed": {
+              "current": 2.108764,
+              "delta": 0.31613,
+              "proposed": 2.424894
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.625436,
+              "delta": 0.124564,
+              "proposed": 0.75
+            },
+            "requests": 290,
+            "route_changed": 143
+          }
+        },
+        "moves": [
+          {
+            "count": 248,
+            "from": "glm-flash-econ",
+            "to": "glm-flash-east"
+          },
+          {
+            "count": 4,
+            "from": "glm-flash-econ",
+            "to": "(rejected)"
+          }
+        ],
+        "new_rejections": {
+          "by_app": {
+            "paper-claims": 4
+          },
+          "by_code": {
+            "over_budget": 4
+          },
+          "by_core": {
+            "max_cost_usd_per_request": 4
+          }
+        },
+        "per_day": null,
+        "sources": {
+          "current": {
+            "latency": {
+              "observed": 882
+            },
+            "quality": {
+              "tier_default": 882
+            }
+          },
+          "proposed": {
+            "latency": {
+              "observed": 878
+            },
+            "quality": {
+              "tier_default": 878
+            }
+          }
+        },
+        "totals": {
+          "cost_usd": {
+            "current": 6.001333,
+            "delta": 0.438047,
+            "proposed": 6.43938
+          },
+          "cost_usd_both_routed": {
+            "current": 5.97143,
+            "delta": 0.46795,
+            "proposed": 6.43938
+          },
+          "latency_ms": {
+            "p50": {
+              "current": 485.740873,
+              "delta": 83.571088,
+              "proposed": 569.311961
+            },
+            "p95": {
+              "current": 569.311961,
+              "delta": 0.0,
+              "proposed": 569.311961
+            }
+          },
+          "newly_rejected": 4,
+          "newly_served": 0,
+          "onprem_share": {
+            "current": 1.0,
+            "proposed": 1.0
+          },
+          "overflow_hops": {
+            "current": 0,
+            "proposed": 0
+          },
+          "quality_mean": {
+            "current": 0.678571,
+            "delta": 0.071429,
+            "proposed": 0.75
+          },
+          "requests": 900,
+          "route_changed": 248
+        }
+      }
+    },
+    {
+      "assumptions": {
+        "cached_share": {},
+        "latency_ms": {},
+        "saturated_complexity_estimated": 0,
+        "token_scale": {}
+      },
+      "edits": {
+        "apps": {
+          "paper-claims": {
+            "allowed_regions": [
+              "us-lab"
+            ]
+          },
+          "paper-dev": {
+            "allowed_regions": [
+              "us-lab"
+            ]
+          }
+        }
+      },
+      "name": "all-apps-us-lab-only",
+      "summary": {
+        "affected_apps": [
+          "paper-claims",
+          "paper-dev"
+        ],
+        "by_app": {
+          "paper-claims": {
+            "cost_usd": {
+              "current": 1.299249,
+              "delta": 0.589816,
+              "proposed": 1.889065
+            },
+            "cost_usd_both_routed": {
+              "current": 1.253655,
+              "delta": 0.63541,
+              "proposed": 1.889065
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": -83.571088,
+                "proposed": 485.740873
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": -83.571088,
+                "proposed": 485.740873
+              }
+            },
+            "newly_rejected": 1,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.647556,
+              "delta": -0.005104,
+              "proposed": 0.642453
+            },
+            "requests": 269,
+            "route_changed": 156
+          },
+          "paper-clinic": {
+            "cost_usd": {
+              "current": 2.59332,
+              "delta": 0.0,
+              "proposed": 2.59332
+            },
+            "cost_usd_both_routed": {
+              "current": 2.59332,
+              "delta": 0.0,
+              "proposed": 2.59332
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 485.740873,
+                "delta": 0.0,
+                "proposed": 485.740873
+              },
+              "p95": {
+                "current": 485.740873,
+                "delta": 0.0,
+                "proposed": 485.740873
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.75,
+              "delta": 0.0,
+              "proposed": 0.75
+            },
+            "requests": 341,
+            "route_changed": 0
+          },
+          "paper-dev": {
+            "cost_usd": {
+              "current": 2.108764,
+              "delta": 0.582483,
+              "proposed": 2.691247
+            },
+            "cost_usd_both_routed": {
+              "current": 1.917118,
+              "delta": 0.774129,
+              "proposed": 2.691247
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": -148.679126,
+                "proposed": 420.632835
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": -83.571088,
+                "proposed": 485.740873
+              }
+            },
+            "newly_rejected": 4,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.625436,
+              "delta": -0.006178,
+              "proposed": 0.619258
+            },
+            "requests": 290,
+            "route_changed": 140
+          }
+        },
+        "by_workload": {
+          "claims_qa": {
+            "cost_usd": {
+              "current": 1.299249,
+              "delta": 0.589816,
+              "proposed": 1.889065
+            },
+            "cost_usd_both_routed": {
+              "current": 1.253655,
+              "delta": 0.63541,
+              "proposed": 1.889065
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": -83.571088,
+                "proposed": 485.740873
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": -83.571088,
+                "proposed": 485.740873
+              }
+            },
+            "newly_rejected": 1,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.647556,
+              "delta": -0.005104,
+              "proposed": 0.642453
+            },
+            "requests": 269,
+            "route_changed": 156
+          },
+          "clinic_notes": {
+            "cost_usd": {
+              "current": 2.59332,
+              "delta": 0.0,
+              "proposed": 2.59332
+            },
+            "cost_usd_both_routed": {
+              "current": 2.59332,
+              "delta": 0.0,
+              "proposed": 2.59332
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 485.740873,
+                "delta": 0.0,
+                "proposed": 485.740873
+              },
+              "p95": {
+                "current": 485.740873,
+                "delta": 0.0,
+                "proposed": 485.740873
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.75,
+              "delta": 0.0,
+              "proposed": 0.75
+            },
+            "requests": 341,
+            "route_changed": 0
+          },
+          "dev_assist": {
+            "cost_usd": {
+              "current": 2.108764,
+              "delta": 0.582483,
+              "proposed": 2.691247
+            },
+            "cost_usd_both_routed": {
+              "current": 1.917118,
+              "delta": 0.774129,
+              "proposed": 2.691247
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": -148.679126,
+                "proposed": 420.632835
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": -83.571088,
+                "proposed": 485.740873
+              }
+            },
+            "newly_rejected": 4,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.625436,
+              "delta": -0.006178,
+              "proposed": 0.619258
+            },
+            "requests": 290,
+            "route_changed": 140
+          }
+        },
+        "moves": [
+          {
+            "count": 286,
+            "from": "glm-flash-east",
+            "to": "glm-5.3-flash"
+          },
+          {
+            "count": 10,
+            "from": "glm-flash-east",
+            "to": "glm-flash-econ"
+          },
+          {
+            "count": 5,
+            "from": "glm-flash-east",
+            "to": "(rejected)"
+          }
+        ],
+        "new_rejections": {
+          "by_app": {
+            "paper-claims": 1,
+            "paper-dev": 4
+          },
+          "by_code": {
+            "over_budget": 5
+          },
+          "by_core": {
+            "max_cost_usd_per_request+risk_floor": 5
+          }
+        },
+        "per_day": null,
+        "sources": {
+          "current": {
+            "latency": {
+              "observed": 882
+            },
+            "quality": {
+              "tier_default": 882
+            }
+          },
+          "proposed": {
+            "latency": {
+              "observed": 877
+            },
+            "quality": {
+              "tier_default": 877
+            }
+          }
+        },
+        "totals": {
+          "cost_usd": {
+            "current": 6.001333,
+            "delta": 1.172299,
+            "proposed": 7.173632
+          },
+          "cost_usd_both_routed": {
+            "current": 5.764093,
+            "delta": 1.409539,
+            "proposed": 7.173632
+          },
+          "latency_ms": {
+            "p50": {
+              "current": 485.740873,
+              "delta": 0.0,
+              "proposed": 485.740873
+            },
+            "p95": {
+              "current": 569.311961,
+              "delta": -83.571088,
+              "proposed": 485.740873
+            }
+          },
+          "newly_rejected": 5,
+          "newly_served": 0,
+          "onprem_share": {
+            "current": 1.0,
+            "proposed": 1.0
+          },
+          "overflow_hops": {
+            "current": 0,
+            "proposed": 0
+          },
+          "quality_mean": {
+            "current": 0.678571,
+            "delta": -0.003258,
+            "proposed": 0.675314
+          },
+          "requests": 900,
+          "route_changed": 296
+        }
+      }
+    },
+    {
+      "assumptions": {
+        "cached_share": {},
+        "latency_ms": {},
+        "saturated_complexity_estimated": 0,
+        "token_scale": {}
+      },
+      "edits": {
+        "apps": {
+          "paper-clinic": {
+            "allowed_regions": [
+              "us-lab",
+              "eu-lab"
+            ]
+          }
+        }
+      },
+      "name": "clinic-may-use-eu-lab",
+      "summary": {
+        "affected_apps": [
+          "paper-clinic"
+        ],
+        "by_app": {
+          "paper-claims": {
+            "cost_usd": {
+              "current": 1.299249,
+              "delta": 0.0,
+              "proposed": 1.299249
+            },
+            "cost_usd_both_routed": {
+              "current": 1.299249,
+              "delta": 0.0,
+              "proposed": 1.299249
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.647556,
+              "delta": 0.0,
+              "proposed": 0.647556
+            },
+            "requests": 269,
+            "route_changed": 0
+          },
+          "paper-clinic": {
+            "cost_usd": {
+              "current": 2.59332,
+              "delta": -0.625674,
+              "proposed": 1.967646
+            },
+            "cost_usd_both_routed": {
+              "current": 2.59332,
+              "delta": -1.037328,
+              "proposed": 1.555992
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 485.740873,
+                "delta": 83.571088,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 485.740873,
+                "delta": 83.571088,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 10,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.75,
+              "delta": 0.0,
+              "proposed": 0.75
+            },
+            "requests": 341,
+            "route_changed": 329
+          },
+          "paper-dev": {
+            "cost_usd": {
+              "current": 2.108764,
+              "delta": 0.0,
+              "proposed": 2.108764
+            },
+            "cost_usd_both_routed": {
+              "current": 2.108764,
+              "delta": 0.0,
+              "proposed": 2.108764
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.625436,
+              "delta": 0.0,
+              "proposed": 0.625436
+            },
+            "requests": 290,
+            "route_changed": 0
+          }
+        },
+        "by_workload": {
+          "claims_qa": {
+            "cost_usd": {
+              "current": 1.299249,
+              "delta": 0.0,
+              "proposed": 1.299249
+            },
+            "cost_usd_both_routed": {
+              "current": 1.299249,
+              "delta": 0.0,
+              "proposed": 1.299249
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.647556,
+              "delta": 0.0,
+              "proposed": 0.647556
+            },
+            "requests": 269,
+            "route_changed": 0
+          },
+          "clinic_notes": {
+            "cost_usd": {
+              "current": 2.59332,
+              "delta": -0.625674,
+              "proposed": 1.967646
+            },
+            "cost_usd_both_routed": {
+              "current": 2.59332,
+              "delta": -1.037328,
+              "proposed": 1.555992
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 485.740873,
+                "delta": 83.571088,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 485.740873,
+                "delta": 83.571088,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 10,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.75,
+              "delta": 0.0,
+              "proposed": 0.75
+            },
+            "requests": 341,
+            "route_changed": 329
+          },
+          "dev_assist": {
+            "cost_usd": {
+              "current": 2.108764,
+              "delta": 0.0,
+              "proposed": 2.108764
+            },
+            "cost_usd_both_routed": {
+              "current": 2.108764,
+              "delta": 0.0,
+              "proposed": 2.108764
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.625436,
+              "delta": 0.0,
+              "proposed": 0.625436
+            },
+            "requests": 290,
+            "route_changed": 0
+          }
+        },
+        "moves": [
+          {
+            "count": 329,
+            "from": "glm-5.3-flash",
+            "to": "glm-flash-east"
+          },
+          {
+            "count": 10,
+            "from": "(rejected)",
+            "to": "glm-flash-east"
+          }
+        ],
+        "new_rejections": {
+          "by_app": {},
+          "by_code": {},
+          "by_core": {}
+        },
+        "per_day": null,
+        "sources": {
+          "current": {
+            "latency": {
+              "observed": 882
+            },
+            "quality": {
+              "tier_default": 882
+            }
+          },
+          "proposed": {
+            "latency": {
+              "observed": 892
+            },
+            "quality": {
+              "tier_default": 892
+            }
+          }
+        },
+        "totals": {
+          "cost_usd": {
+            "current": 6.001333,
+            "delta": -0.625674,
+            "proposed": 5.375659
+          },
+          "cost_usd_both_routed": {
+            "current": 6.001333,
+            "delta": -1.037328,
+            "proposed": 4.964005
+          },
+          "latency_ms": {
+            "p50": {
+              "current": 485.740873,
+              "delta": 83.571088,
+              "proposed": 569.311961
+            },
+            "p95": {
+              "current": 569.311961,
+              "delta": 0.0,
+              "proposed": 569.311961
+            }
+          },
+          "newly_rejected": 0,
+          "newly_served": 10,
+          "onprem_share": {
+            "current": 1.0,
+            "proposed": 1.0
+          },
+          "overflow_hops": {
+            "current": 0,
+            "proposed": 0
+          },
+          "quality_mean": {
+            "current": 0.678571,
+            "delta": 0.000801,
+            "proposed": 0.679372
+          },
+          "requests": 900,
+          "route_changed": 329
+        }
+      }
+    },
+    {
+      "assumptions": {
+        "cached_share": {},
+        "latency_ms": {},
+        "saturated_complexity_estimated": 0,
+        "token_scale": {}
+      },
+      "edits": {
+        "apps": {
+          "paper-claims": {
+            "max_cost_usd_per_request": 0.5
+          },
+          "paper-clinic": {
+            "max_cost_usd_per_request": 0.5
+          },
+          "paper-dev": {
+            "max_cost_usd_per_request": 0.5
+          }
+        }
+      },
+      "name": "raise-request-budget",
+      "summary": {
+        "affected_apps": [
+          "paper-claims",
+          "paper-clinic",
+          "paper-dev"
+        ],
+        "by_app": {
+          "paper-claims": {
+            "cost_usd": {
+              "current": 1.299249,
+              "delta": 0.332533,
+              "proposed": 1.631782
+            },
+            "cost_usd_both_routed": {
+              "current": 1.299249,
+              "delta": 0.149515,
+              "proposed": 1.448764
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 3,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.647556,
+              "delta": 0.00486,
+              "proposed": 0.652416
+            },
+            "requests": 269,
+            "route_changed": 4
+          },
+          "paper-clinic": {
+            "cost_usd": {
+              "current": 2.59332,
+              "delta": 0.95195,
+              "proposed": 3.54527
+            },
+            "cost_usd_both_routed": {
+              "current": 2.59332,
+              "delta": 0.0,
+              "proposed": 2.59332
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 485.740873,
+                "delta": 0.0,
+                "proposed": 485.740873
+              },
+              "p95": {
+                "current": 485.740873,
+                "delta": 0.0,
+                "proposed": 485.740873
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 12,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.75,
+              "delta": 0.0,
+              "proposed": 0.75
+            },
+            "requests": 341,
+            "route_changed": 0
+          },
+          "paper-dev": {
+            "cost_usd": {
+              "current": 2.108764,
+              "delta": 0.170274,
+              "proposed": 2.279038
+            },
+            "cost_usd_both_routed": {
+              "current": 2.108764,
+              "delta": 0.0,
+              "proposed": 2.108764
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 3,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.625436,
+              "delta": 0.001289,
+              "proposed": 0.626724
+            },
+            "requests": 290,
+            "route_changed": 0
+          }
+        },
+        "by_workload": {
+          "claims_qa": {
+            "cost_usd": {
+              "current": 1.299249,
+              "delta": 0.332533,
+              "proposed": 1.631782
+            },
+            "cost_usd_both_routed": {
+              "current": 1.299249,
+              "delta": 0.149515,
+              "proposed": 1.448764
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 3,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.647556,
+              "delta": 0.00486,
+              "proposed": 0.652416
+            },
+            "requests": 269,
+            "route_changed": 4
+          },
+          "clinic_notes": {
+            "cost_usd": {
+              "current": 2.59332,
+              "delta": 0.95195,
+              "proposed": 3.54527
+            },
+            "cost_usd_both_routed": {
+              "current": 2.59332,
+              "delta": 0.0,
+              "proposed": 2.59332
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 485.740873,
+                "delta": 0.0,
+                "proposed": 485.740873
+              },
+              "p95": {
+                "current": 485.740873,
+                "delta": 0.0,
+                "proposed": 485.740873
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 12,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.75,
+              "delta": 0.0,
+              "proposed": 0.75
+            },
+            "requests": 341,
+            "route_changed": 0
+          },
+          "dev_assist": {
+            "cost_usd": {
+              "current": 2.108764,
+              "delta": 0.170274,
+              "proposed": 2.279038
+            },
+            "cost_usd_both_routed": {
+              "current": 2.108764,
+              "delta": 0.0,
+              "proposed": 2.108764
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 3,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.625436,
+              "delta": 0.001289,
+              "proposed": 0.626724
+            },
+            "requests": 290,
+            "route_changed": 0
+          }
+        },
+        "moves": [
+          {
+            "count": 12,
+            "from": "(rejected)",
+            "to": "glm-5.3-flash"
+          },
+          {
+            "count": 6,
+            "from": "(rejected)",
+            "to": "glm-flash-east"
+          },
+          {
+            "count": 4,
+            "from": "glm-flash-econ",
+            "to": "glm-flash-east"
+          }
+        ],
+        "new_rejections": {
+          "by_app": {},
+          "by_code": {},
+          "by_core": {}
+        },
+        "per_day": null,
+        "sources": {
+          "current": {
+            "latency": {
+              "observed": 882
+            },
+            "quality": {
+              "tier_default": 882
+            }
+          },
+          "proposed": {
+            "latency": {
+              "observed": 900
+            },
+            "quality": {
+              "tier_default": 900
+            }
+          }
+        },
+        "totals": {
+          "cost_usd": {
+            "current": 6.001333,
+            "delta": 1.454757,
+            "proposed": 7.45609
+          },
+          "cost_usd_both_routed": {
+            "current": 6.001333,
+            "delta": 0.149515,
+            "proposed": 6.150848
+          },
+          "latency_ms": {
+            "p50": {
+              "current": 485.740873,
+              "delta": 0.0,
+              "proposed": 485.740873
+            },
+            "p95": {
+              "current": 569.311961,
+              "delta": 0.0,
+              "proposed": 569.311961
+            }
+          },
+          "newly_rejected": 0,
+          "newly_served": 18,
+          "onprem_share": {
+            "current": 1.0,
+            "proposed": 1.0
+          },
+          "overflow_hops": {
+            "current": 0,
+            "proposed": 0
+          },
+          "quality_mean": {
+            "current": 0.678571,
+            "delta": 0.00254,
+            "proposed": 0.681111
+          },
+          "requests": 900,
+          "route_changed": 4
+        }
+      }
+    }
+  ],
+  "schema": "routeforge.scenario-comparison/v1",
+  "table": [
+    {
+      "affected_apps": [],
+      "cost_delta_usd": 0.0,
+      "cost_per_day_delta_usd": null,
+      "latency_p50_delta_ms": 0.0,
+      "latency_p95_delta_ms": 0.0,
+      "name": "no-change",
+      "newly_rejected": 0,
+      "newly_served": 0,
+      "onprem_share_current": 1.0,
+      "onprem_share_proposed": 1.0,
+      "overflow_hops": 0,
+      "peak_buckets_over_share": 0.0,
+      "peak_concurrency_not_computed": [],
+      "peak_endpoint": "glm-5.3-flash",
+      "peak_limit": "requests_per_minute",
+      "peak_mean_window": 0.483824,
+      "peak_utilisation": 0.775,
+      "quality_mean_delta": 0.0,
+      "route_changed": 0
+    },
+    {
+      "affected_apps": [
+        "paper-claims",
+        "paper-dev"
+      ],
+      "cost_delta_usd": 0.46795,
+      "cost_per_day_delta_usd": null,
+      "latency_p50_delta_ms": 83.571088,
+      "latency_p95_delta_ms": 0.0,
+      "name": "all-apps-no-retention",
+      "newly_rejected": 4,
+      "newly_served": 0,
+      "onprem_share_current": 1.0,
+      "onprem_share_proposed": 1.0,
+      "overflow_hops": 0,
+      "peak_buckets_over_share": 0.176471,
+      "peak_concurrency_not_computed": [],
+      "peak_endpoint": "glm-flash-east",
+      "peak_limit": "requests_per_minute",
+      "peak_mean_window": 0.807353,
+      "peak_utilisation": 1.15,
+      "quality_mean_delta": 0.071429,
+      "route_changed": 248
+    },
+    {
+      "affected_apps": [
+        "paper-claims",
+        "paper-dev"
+      ],
+      "cost_delta_usd": 1.409539,
+      "cost_per_day_delta_usd": null,
+      "latency_p50_delta_ms": 0.0,
+      "latency_p95_delta_ms": -83.571088,
+      "name": "all-apps-us-lab-only",
+      "newly_rejected": 5,
+      "newly_served": 0,
+      "onprem_share_current": 1.0,
+      "onprem_share_proposed": 1.0,
+      "overflow_hops": 0,
+      "peak_buckets_over_share": 0.470588,
+      "peak_concurrency_not_computed": [],
+      "peak_endpoint": "glm-5.3-flash",
+      "peak_limit": "requests_per_minute",
+      "peak_mean_window": 0.904412,
+      "peak_utilisation": 1.275,
+      "quality_mean_delta": -0.003258,
+      "route_changed": 296
+    },
+    {
+      "affected_apps": [
+        "paper-clinic"
+      ],
+      "cost_delta_usd": -1.037328,
+      "cost_per_day_delta_usd": null,
+      "latency_p50_delta_ms": 83.571088,
+      "latency_p95_delta_ms": 0.0,
+      "name": "clinic-may-use-eu-lab",
+      "newly_rejected": 0,
+      "newly_served": 10,
+      "onprem_share_current": 1.0,
+      "onprem_share_proposed": 1.0,
+      "overflow_hops": 0,
+      "peak_buckets_over_share": 0.529412,
+      "peak_concurrency_not_computed": [],
+      "peak_endpoint": "glm-flash-east",
+      "peak_limit": "requests_per_minute",
+      "peak_mean_window": 0.941176,
+      "peak_utilisation": 1.325,
+      "quality_mean_delta": 0.000801,
+      "route_changed": 329
+    },
+    {
+      "affected_apps": [
+        "paper-claims",
+        "paper-clinic",
+        "paper-dev"
+      ],
+      "cost_delta_usd": 0.149515,
+      "cost_per_day_delta_usd": null,
+      "latency_p50_delta_ms": 0.0,
+      "latency_p95_delta_ms": 0.0,
+      "name": "raise-request-budget",
+      "newly_rejected": 0,
+      "newly_served": 18,
+      "onprem_share_current": 1.0,
+      "onprem_share_proposed": 1.0,
+      "overflow_hops": 0,
+      "peak_buckets_over_share": 0.0,
+      "peak_concurrency_not_computed": [],
+      "peak_endpoint": "glm-5.3-flash",
+      "peak_limit": "requests_per_minute",
+      "peak_mean_window": 0.501471,
+      "peak_utilisation": 0.775,
+      "quality_mean_delta": 0.00254,
+      "route_changed": 4
+    }
+  ]
+}

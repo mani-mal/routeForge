@@ -1,0 +1,5166 @@
+{
+  "baseline": {
+    "agreement": 0.926136,
+    "by_app": {
+      "paper-claims": 0.87218,
+      "paper-clinic": 1.0,
+      "paper-dev": 0.891228
+    },
+    "outcome_agreement": 1.0,
+    "outcome_by_app": {
+      "paper-claims": {
+        "agreement": 1.0,
+        "recorded_rejected": 3,
+        "recorded_rejected_but_routed": 0,
+        "recorded_routed_but_rejected": 0,
+        "rows": 269
+      },
+      "paper-clinic": {
+        "agreement": 1.0,
+        "recorded_rejected": 12,
+        "recorded_rejected_but_routed": 0,
+        "recorded_routed_but_rejected": 0,
+        "rows": 341
+      },
+      "paper-dev": {
+        "agreement": 1.0,
+        "recorded_rejected": 3,
+        "recorded_rejected_but_routed": 0,
+        "recorded_routed_but_rejected": 0,
+        "rows": 290
+      }
+    },
+    "outcome_rows_compared": 900,
+    "outcome_warning": false,
+    "overflow_contradicted": 0,
+    "recorded_rejected": 18,
+    "recorded_rejected_but_routed": 0,
+    "recorded_routed_but_rejected": 0,
+    "rows_compared": 880,
+    "top_disagreements": [
+      {
+        "count": 65,
+        "recorded": "glm-5.3-flash",
+        "simulated": "glm-flash-east"
+      }
+    ],
+    "warning": false
+  },
+  "comparison_id": "ff80cf5565cb811f",
+  "inputs": {
+    "export_sha256": "a899f995be918662e20c78fc00c9aefc68298ea7027d4c824f983606e65051b8",
+    "registry_version": "4c33b6b14ae6",
+    "routing_policy_version": "6e6fe2027862",
+    "scenarios_sha256": "868db05bb066677c5ef47dbaaa125d8d7ac6f708812af74e2212a5708d6b76e2",
+    "serving_policy": {
+      "allow_app_passthrough": true,
+      "allow_app_pii_downgrade": true,
+      "default_policy_mode": "enforced",
+      "pii_detection": "presidio"
+    },
+    "since": null,
+    "snapshot_generated_at": "2026-10-08T23:49:23Z",
+    "snapshot_sha256": "af6ebdf58f430169188d9d984bc02483e2983b2a2fa524c7aae54e2e5b2a3476",
+    "title": "DGX lab live run 2, 2026-10-08 (three paper apps, three endpoint names over one server, 900 rows)",
+    "uncertainty": {
+      "interval": 0.9,
+      "min_rows": 30,
+      "quality_posteriors_sha256": [],
+      "replicates": 1000,
+      "seed": 0
+    },
+    "window": {
+      "end": "2026-10-08T23:49:09.080625+00:00",
+      "start": "2026-10-08T23:33:45.960758+00:00"
+    }
+  },
+  "rows": {
+    "estimated_tokens": 20,
+    "excluded": {
+      "before_since": 0,
+      "cache_hit": 0,
+      "missing_features": 0,
+      "missing_routing_tokens": 0,
+      "unknown_app": 0,
+      "unknown_status": 0
+    },
+    "simulated": 900
+  },
+  "scenarios": [
+    {
+      "assumptions": {
+        "cached_share": {},
+        "latency_ms": {},
+        "saturated_complexity_estimated": 0,
+        "token_scale": {}
+      },
+      "edits": {},
+      "name": "no-change",
+      "summary": {
+        "affected_apps": [],
+        "by_app": {
+          "paper-claims": {
+            "cost_usd": {
+              "current": 1.299249,
+              "delta": 0.0,
+              "proposed": 1.299249
+            },
+            "cost_usd_both_routed": {
+              "current": 1.299249,
+              "delta": 0.0,
+              "proposed": 1.299249
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.647556,
+              "delta": 0.0,
+              "proposed": 0.647556
+            },
+            "requests": 269,
+            "route_changed": 0
+          },
+          "paper-clinic": {
+            "cost_usd": {
+              "current": 2.59332,
+              "delta": 0.0,
+              "proposed": 2.59332
+            },
+            "cost_usd_both_routed": {
+              "current": 2.59332,
+              "delta": 0.0,
+              "proposed": 2.59332
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 485.740873,
+                "delta": 0.0,
+                "proposed": 485.740873
+              },
+              "p95": {
+                "current": 485.740873,
+                "delta": 0.0,
+                "proposed": 485.740873
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.75,
+              "delta": 0.0,
+              "proposed": 0.75
+            },
+            "requests": 341,
+            "route_changed": 0
+          },
+          "paper-dev": {
+            "cost_usd": {
+              "current": 2.108764,
+              "delta": 0.0,
+              "proposed": 2.108764
+            },
+            "cost_usd_both_routed": {
+              "current": 2.108764,
+              "delta": 0.0,
+              "proposed": 2.108764
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.625436,
+              "delta": 0.0,
+              "proposed": 0.625436
+            },
+            "requests": 290,
+            "route_changed": 0
+          }
+        },
+        "by_workload": {
+          "claims_qa": {
+            "cost_usd": {
+              "current": 1.299249,
+              "delta": 0.0,
+              "proposed": 1.299249
+            },
+            "cost_usd_both_routed": {
+              "current": 1.299249,
+              "delta": 0.0,
+              "proposed": 1.299249
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.647556,
+              "delta": 0.0,
+              "proposed": 0.647556
+            },
+            "requests": 269,
+            "route_changed": 0
+          },
+          "clinic_notes": {
+            "cost_usd": {
+              "current": 2.59332,
+              "delta": 0.0,
+              "proposed": 2.59332
+            },
+            "cost_usd_both_routed": {
+              "current": 2.59332,
+              "delta": 0.0,
+              "proposed": 2.59332
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 485.740873,
+                "delta": 0.0,
+                "proposed": 485.740873
+              },
+              "p95": {
+                "current": 485.740873,
+                "delta": 0.0,
+                "proposed": 485.740873
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.75,
+              "delta": 0.0,
+              "proposed": 0.75
+            },
+            "requests": 341,
+            "route_changed": 0
+          },
+          "dev_assist": {
+            "cost_usd": {
+              "current": 2.108764,
+              "delta": 0.0,
+              "proposed": 2.108764
+            },
+            "cost_usd_both_routed": {
+              "current": 2.108764,
+              "delta": 0.0,
+              "proposed": 2.108764
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.625436,
+              "delta": 0.0,
+              "proposed": 0.625436
+            },
+            "requests": 290,
+            "route_changed": 0
+          }
+        },
+        "moves": [],
+        "new_rejections": {
+          "by_app": {},
+          "by_code": {},
+          "by_core": {}
+        },
+        "per_day": null,
+        "sources": {
+          "current": {
+            "latency": {
+              "observed": 882
+            },
+            "quality": {
+              "tier_default": 882
+            }
+          },
+          "proposed": {
+            "latency": {
+              "observed": 882
+            },
+            "quality": {
+              "tier_default": 882
+            }
+          }
+        },
+        "totals": {
+          "cost_usd": {
+            "current": 6.001333,
+            "delta": 0.0,
+            "proposed": 6.001333
+          },
+          "cost_usd_both_routed": {
+            "current": 6.001333,
+            "delta": 0.0,
+            "proposed": 6.001333
+          },
+          "latency_ms": {
+            "p50": {
+              "current": 485.740873,
+              "delta": 0.0,
+              "proposed": 485.740873
+            },
+            "p95": {
+              "current": 569.311961,
+              "delta": 0.0,
+              "proposed": 569.311961
+            }
+          },
+          "newly_rejected": 0,
+          "newly_served": 0,
+          "onprem_share": {
+            "current": 1.0,
+            "proposed": 1.0
+          },
+          "overflow_hops": {
+            "current": 0,
+            "proposed": 0
+          },
+          "quality_mean": {
+            "current": 0.678571,
+            "delta": 0.0,
+            "proposed": 0.678571
+          },
+          "requests": 900,
+          "route_changed": 0
+        }
+      }
+    },
+    {
+      "assumptions": {
+        "cached_share": {},
+        "latency_ms": {},
+        "saturated_complexity_estimated": 0,
+        "token_scale": {}
+      },
+      "edits": {
+        "apps": {
+          "paper-claims": {
+            "require_no_retention": true
+          },
+          "paper-dev": {
+            "require_no_retention": true
+          }
+        }
+      },
+      "name": "all-apps-no-retention",
+      "summary": {
+        "affected_apps": [
+          "paper-claims",
+          "paper-dev"
+        ],
+        "by_app": {
+          "paper-claims": {
+            "cost_usd": {
+              "current": 1.299249,
+              "delta": 0.121917,
+              "proposed": 1.421166
+            },
+            "cost_usd_both_routed": {
+              "current": 1.269346,
+              "delta": 0.15182,
+              "proposed": 1.421166
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 4,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.647556,
+              "delta": 0.102444,
+              "proposed": 0.75
+            },
+            "requests": 269,
+            "route_changed": 105
+          },
+          "paper-clinic": {
+            "cost_usd": {
+              "current": 2.59332,
+              "delta": 0.0,
+              "proposed": 2.59332
+            },
+            "cost_usd_both_routed": {
+              "current": 2.59332,
+              "delta": 0.0,
+              "proposed": 2.59332
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 485.740873,
+                "delta": 0.0,
+                "proposed": 485.740873
+              },
+              "p95": {
+                "current": 485.740873,
+                "delta": 0.0,
+                "proposed": 485.740873
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.75,
+              "delta": 0.0,
+              "proposed": 0.75
+            },
+            "requests": 341,
+            "route_changed": 0
+          },
+          "paper-dev": {
+            "cost_usd": {
+              "current": 2.108764,
+              "delta": 0.31613,
+              "proposed": 2.424894
+            },
+            "cost_usd_both_routed": {
+              "current": 2.108764,
+              "delta": 0.31613,
+              "proposed": 2.424894
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.625436,
+              "delta": 0.124564,
+              "proposed": 0.75
+            },
+            "requests": 290,
+            "route_changed": 143
+          }
+        },
+        "by_workload": {
+          "claims_qa": {
+            "cost_usd": {
+              "current": 1.299249,
+              "delta": 0.121917,
+              "proposed": 1.421166
+            },
+            "cost_usd_both_routed": {
+              "current": 1.269346,
+              "delta": 0.15182,
+              "proposed": 1.421166
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 4,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.647556,
+              "delta": 0.102444,
+              "proposed": 0.75
+            },
+            "requests": 269,
+            "route_changed": 105
+          },
+          "clinic_notes": {
+            "cost_usd": {
+              "current": 2.59332,
+              "delta": 0.0,
+              "proposed": 2.59332
+            },
+            "cost_usd_both_routed": {
+              "current": 2.59332,
+              "delta": 0.0,
+              "proposed": 2.59332
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 485.740873,
+                "delta": 0.0,
+                "proposed": 485.740873
+              },
+              "p95": {
+                "current": 485.740873,
+                "delta": 0.0,
+                "proposed": 485.740873
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.75,
+              "delta": 0.0,
+              "proposed": 0.75
+            },
+            "requests": 341,
+            "route_changed": 0
+          },
+          "dev_assist": {
+            "cost_usd": {
+              "current": 2.108764,
+              "delta": 0.31613,
+              "proposed": 2.424894
+            },
+            "cost_usd_both_routed": {
+              "current": 2.108764,
+              "delta": 0.31613,
+              "proposed": 2.424894
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.625436,
+              "delta": 0.124564,
+              "proposed": 0.75
+            },
+            "requests": 290,
+            "route_changed": 143
+          }
+        },
+        "moves": [
+          {
+            "count": 248,
+            "from": "glm-flash-econ",
+            "to": "glm-flash-east"
+          },
+          {
+            "count": 4,
+            "from": "glm-flash-econ",
+            "to": "(rejected)"
+          }
+        ],
+        "new_rejections": {
+          "by_app": {
+            "paper-claims": 4
+          },
+          "by_code": {
+            "over_budget": 4
+          },
+          "by_core": {
+            "max_cost_usd_per_request": 4
+          }
+        },
+        "per_day": null,
+        "sources": {
+          "current": {
+            "latency": {
+              "observed": 882
+            },
+            "quality": {
+              "tier_default": 882
+            }
+          },
+          "proposed": {
+            "latency": {
+              "observed": 878
+            },
+            "quality": {
+              "tier_default": 878
+            }
+          }
+        },
+        "totals": {
+          "cost_usd": {
+            "current": 6.001333,
+            "delta": 0.438047,
+            "proposed": 6.43938
+          },
+          "cost_usd_both_routed": {
+            "current": 5.97143,
+            "delta": 0.46795,
+            "proposed": 6.43938
+          },
+          "latency_ms": {
+            "p50": {
+              "current": 485.740873,
+              "delta": 83.571088,
+              "proposed": 569.311961
+            },
+            "p95": {
+              "current": 569.311961,
+              "delta": 0.0,
+              "proposed": 569.311961
+            }
+          },
+          "newly_rejected": 4,
+          "newly_served": 0,
+          "onprem_share": {
+            "current": 1.0,
+            "proposed": 1.0
+          },
+          "overflow_hops": {
+            "current": 0,
+            "proposed": 0
+          },
+          "quality_mean": {
+            "current": 0.678571,
+            "delta": 0.071429,
+            "proposed": 0.75
+          },
+          "requests": 900,
+          "route_changed": 248
+        }
+      }
+    },
+    {
+      "assumptions": {
+        "cached_share": {},
+        "latency_ms": {},
+        "saturated_complexity_estimated": 0,
+        "token_scale": {}
+      },
+      "edits": {
+        "apps": {
+          "paper-claims": {
+            "allowed_regions": [
+              "us-lab"
+            ]
+          },
+          "paper-dev": {
+            "allowed_regions": [
+              "us-lab"
+            ]
+          }
+        }
+      },
+      "name": "all-apps-us-lab-only",
+      "summary": {
+        "affected_apps": [
+          "paper-claims",
+          "paper-dev"
+        ],
+        "by_app": {
+          "paper-claims": {
+            "cost_usd": {
+              "current": 1.299249,
+              "delta": 0.589816,
+              "proposed": 1.889065
+            },
+            "cost_usd_both_routed": {
+              "current": 1.253655,
+              "delta": 0.63541,
+              "proposed": 1.889065
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": -83.571088,
+                "proposed": 485.740873
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": -83.571088,
+                "proposed": 485.740873
+              }
+            },
+            "newly_rejected": 1,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.647556,
+              "delta": -0.005104,
+              "proposed": 0.642453
+            },
+            "requests": 269,
+            "route_changed": 156
+          },
+          "paper-clinic": {
+            "cost_usd": {
+              "current": 2.59332,
+              "delta": 0.0,
+              "proposed": 2.59332
+            },
+            "cost_usd_both_routed": {
+              "current": 2.59332,
+              "delta": 0.0,
+              "proposed": 2.59332
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 485.740873,
+                "delta": 0.0,
+                "proposed": 485.740873
+              },
+              "p95": {
+                "current": 485.740873,
+                "delta": 0.0,
+                "proposed": 485.740873
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.75,
+              "delta": 0.0,
+              "proposed": 0.75
+            },
+            "requests": 341,
+            "route_changed": 0
+          },
+          "paper-dev": {
+            "cost_usd": {
+              "current": 2.108764,
+              "delta": 0.582483,
+              "proposed": 2.691247
+            },
+            "cost_usd_both_routed": {
+              "current": 1.917118,
+              "delta": 0.774129,
+              "proposed": 2.691247
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": -148.679126,
+                "proposed": 420.632835
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": -83.571088,
+                "proposed": 485.740873
+              }
+            },
+            "newly_rejected": 4,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.625436,
+              "delta": -0.006178,
+              "proposed": 0.619258
+            },
+            "requests": 290,
+            "route_changed": 140
+          }
+        },
+        "by_workload": {
+          "claims_qa": {
+            "cost_usd": {
+              "current": 1.299249,
+              "delta": 0.589816,
+              "proposed": 1.889065
+            },
+            "cost_usd_both_routed": {
+              "current": 1.253655,
+              "delta": 0.63541,
+              "proposed": 1.889065
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": -83.571088,
+                "proposed": 485.740873
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": -83.571088,
+                "proposed": 485.740873
+              }
+            },
+            "newly_rejected": 1,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.647556,
+              "delta": -0.005104,
+              "proposed": 0.642453
+            },
+            "requests": 269,
+            "route_changed": 156
+          },
+          "clinic_notes": {
+            "cost_usd": {
+              "current": 2.59332,
+              "delta": 0.0,
+              "proposed": 2.59332
+            },
+            "cost_usd_both_routed": {
+              "current": 2.59332,
+              "delta": 0.0,
+              "proposed": 2.59332
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 485.740873,
+                "delta": 0.0,
+                "proposed": 485.740873
+              },
+              "p95": {
+                "current": 485.740873,
+                "delta": 0.0,
+                "proposed": 485.740873
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.75,
+              "delta": 0.0,
+              "proposed": 0.75
+            },
+            "requests": 341,
+            "route_changed": 0
+          },
+          "dev_assist": {
+            "cost_usd": {
+              "current": 2.108764,
+              "delta": 0.582483,
+              "proposed": 2.691247
+            },
+            "cost_usd_both_routed": {
+              "current": 1.917118,
+              "delta": 0.774129,
+              "proposed": 2.691247
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": -148.679126,
+                "proposed": 420.632835
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": -83.571088,
+                "proposed": 485.740873
+              }
+            },
+            "newly_rejected": 4,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.625436,
+              "delta": -0.006178,
+              "proposed": 0.619258
+            },
+            "requests": 290,
+            "route_changed": 140
+          }
+        },
+        "moves": [
+          {
+            "count": 286,
+            "from": "glm-flash-east",
+            "to": "glm-5.3-flash"
+          },
+          {
+            "count": 10,
+            "from": "glm-flash-east",
+            "to": "glm-flash-econ"
+          },
+          {
+            "count": 5,
+            "from": "glm-flash-east",
+            "to": "(rejected)"
+          }
+        ],
+        "new_rejections": {
+          "by_app": {
+            "paper-claims": 1,
+            "paper-dev": 4
+          },
+          "by_code": {
+            "over_budget": 5
+          },
+          "by_core": {
+            "max_cost_usd_per_request+risk_floor": 5
+          }
+        },
+        "per_day": null,
+        "sources": {
+          "current": {
+            "latency": {
+              "observed": 882
+            },
+            "quality": {
+              "tier_default": 882
+            }
+          },
+          "proposed": {
+            "latency": {
+              "observed": 877
+            },
+            "quality": {
+              "tier_default": 877
+            }
+          }
+        },
+        "totals": {
+          "cost_usd": {
+            "current": 6.001333,
+            "delta": 1.172299,
+            "proposed": 7.173632
+          },
+          "cost_usd_both_routed": {
+            "current": 5.764093,
+            "delta": 1.409539,
+            "proposed": 7.173632
+          },
+          "latency_ms": {
+            "p50": {
+              "current": 485.740873,
+              "delta": 0.0,
+              "proposed": 485.740873
+            },
+            "p95": {
+              "current": 569.311961,
+              "delta": -83.571088,
+              "proposed": 485.740873
+            }
+          },
+          "newly_rejected": 5,
+          "newly_served": 0,
+          "onprem_share": {
+            "current": 1.0,
+            "proposed": 1.0
+          },
+          "overflow_hops": {
+            "current": 0,
+            "proposed": 0
+          },
+          "quality_mean": {
+            "current": 0.678571,
+            "delta": -0.003258,
+            "proposed": 0.675314
+          },
+          "requests": 900,
+          "route_changed": 296
+        }
+      }
+    },
+    {
+      "assumptions": {
+        "cached_share": {},
+        "latency_ms": {},
+        "saturated_complexity_estimated": 0,
+        "token_scale": {}
+      },
+      "edits": {
+        "apps": {
+          "paper-clinic": {
+            "allowed_regions": [
+              "us-lab",
+              "eu-lab"
+            ]
+          }
+        }
+      },
+      "name": "clinic-may-use-eu-lab",
+      "summary": {
+        "affected_apps": [
+          "paper-clinic"
+        ],
+        "by_app": {
+          "paper-claims": {
+            "cost_usd": {
+              "current": 1.299249,
+              "delta": 0.0,
+              "proposed": 1.299249
+            },
+            "cost_usd_both_routed": {
+              "current": 1.299249,
+              "delta": 0.0,
+              "proposed": 1.299249
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.647556,
+              "delta": 0.0,
+              "proposed": 0.647556
+            },
+            "requests": 269,
+            "route_changed": 0
+          },
+          "paper-clinic": {
+            "cost_usd": {
+              "current": 2.59332,
+              "delta": -0.625674,
+              "proposed": 1.967646
+            },
+            "cost_usd_both_routed": {
+              "current": 2.59332,
+              "delta": -1.037328,
+              "proposed": 1.555992
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 485.740873,
+                "delta": 83.571088,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 485.740873,
+                "delta": 83.571088,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 10,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.75,
+              "delta": 0.0,
+              "proposed": 0.75
+            },
+            "requests": 341,
+            "route_changed": 329
+          },
+          "paper-dev": {
+            "cost_usd": {
+              "current": 2.108764,
+              "delta": 0.0,
+              "proposed": 2.108764
+            },
+            "cost_usd_both_routed": {
+              "current": 2.108764,
+              "delta": 0.0,
+              "proposed": 2.108764
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.625436,
+              "delta": 0.0,
+              "proposed": 0.625436
+            },
+            "requests": 290,
+            "route_changed": 0
+          }
+        },
+        "by_workload": {
+          "claims_qa": {
+            "cost_usd": {
+              "current": 1.299249,
+              "delta": 0.0,
+              "proposed": 1.299249
+            },
+            "cost_usd_both_routed": {
+              "current": 1.299249,
+              "delta": 0.0,
+              "proposed": 1.299249
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.647556,
+              "delta": 0.0,
+              "proposed": 0.647556
+            },
+            "requests": 269,
+            "route_changed": 0
+          },
+          "clinic_notes": {
+            "cost_usd": {
+              "current": 2.59332,
+              "delta": -0.625674,
+              "proposed": 1.967646
+            },
+            "cost_usd_both_routed": {
+              "current": 2.59332,
+              "delta": -1.037328,
+              "proposed": 1.555992
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 485.740873,
+                "delta": 83.571088,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 485.740873,
+                "delta": 83.571088,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 10,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.75,
+              "delta": 0.0,
+              "proposed": 0.75
+            },
+            "requests": 341,
+            "route_changed": 329
+          },
+          "dev_assist": {
+            "cost_usd": {
+              "current": 2.108764,
+              "delta": 0.0,
+              "proposed": 2.108764
+            },
+            "cost_usd_both_routed": {
+              "current": 2.108764,
+              "delta": 0.0,
+              "proposed": 2.108764
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 0,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.625436,
+              "delta": 0.0,
+              "proposed": 0.625436
+            },
+            "requests": 290,
+            "route_changed": 0
+          }
+        },
+        "moves": [
+          {
+            "count": 329,
+            "from": "glm-5.3-flash",
+            "to": "glm-flash-east"
+          },
+          {
+            "count": 10,
+            "from": "(rejected)",
+            "to": "glm-flash-east"
+          }
+        ],
+        "new_rejections": {
+          "by_app": {},
+          "by_code": {},
+          "by_core": {}
+        },
+        "per_day": null,
+        "sources": {
+          "current": {
+            "latency": {
+              "observed": 882
+            },
+            "quality": {
+              "tier_default": 882
+            }
+          },
+          "proposed": {
+            "latency": {
+              "observed": 892
+            },
+            "quality": {
+              "tier_default": 892
+            }
+          }
+        },
+        "totals": {
+          "cost_usd": {
+            "current": 6.001333,
+            "delta": -0.625674,
+            "proposed": 5.375659
+          },
+          "cost_usd_both_routed": {
+            "current": 6.001333,
+            "delta": -1.037328,
+            "proposed": 4.964005
+          },
+          "latency_ms": {
+            "p50": {
+              "current": 485.740873,
+              "delta": 83.571088,
+              "proposed": 569.311961
+            },
+            "p95": {
+              "current": 569.311961,
+              "delta": 0.0,
+              "proposed": 569.311961
+            }
+          },
+          "newly_rejected": 0,
+          "newly_served": 10,
+          "onprem_share": {
+            "current": 1.0,
+            "proposed": 1.0
+          },
+          "overflow_hops": {
+            "current": 0,
+            "proposed": 0
+          },
+          "quality_mean": {
+            "current": 0.678571,
+            "delta": 0.000801,
+            "proposed": 0.679372
+          },
+          "requests": 900,
+          "route_changed": 329
+        }
+      }
+    },
+    {
+      "assumptions": {
+        "cached_share": {},
+        "latency_ms": {},
+        "saturated_complexity_estimated": 0,
+        "token_scale": {}
+      },
+      "edits": {
+        "apps": {
+          "paper-claims": {
+            "max_cost_usd_per_request": 0.5
+          },
+          "paper-clinic": {
+            "max_cost_usd_per_request": 0.5
+          },
+          "paper-dev": {
+            "max_cost_usd_per_request": 0.5
+          }
+        }
+      },
+      "name": "raise-request-budget",
+      "summary": {
+        "affected_apps": [
+          "paper-claims",
+          "paper-clinic",
+          "paper-dev"
+        ],
+        "by_app": {
+          "paper-claims": {
+            "cost_usd": {
+              "current": 1.299249,
+              "delta": 0.332533,
+              "proposed": 1.631782
+            },
+            "cost_usd_both_routed": {
+              "current": 1.299249,
+              "delta": 0.149515,
+              "proposed": 1.448764
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 3,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.647556,
+              "delta": 0.00486,
+              "proposed": 0.652416
+            },
+            "requests": 269,
+            "route_changed": 4
+          },
+          "paper-clinic": {
+            "cost_usd": {
+              "current": 2.59332,
+              "delta": 0.95195,
+              "proposed": 3.54527
+            },
+            "cost_usd_both_routed": {
+              "current": 2.59332,
+              "delta": 0.0,
+              "proposed": 2.59332
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 485.740873,
+                "delta": 0.0,
+                "proposed": 485.740873
+              },
+              "p95": {
+                "current": 485.740873,
+                "delta": 0.0,
+                "proposed": 485.740873
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 12,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.75,
+              "delta": 0.0,
+              "proposed": 0.75
+            },
+            "requests": 341,
+            "route_changed": 0
+          },
+          "paper-dev": {
+            "cost_usd": {
+              "current": 2.108764,
+              "delta": 0.170274,
+              "proposed": 2.279038
+            },
+            "cost_usd_both_routed": {
+              "current": 2.108764,
+              "delta": 0.0,
+              "proposed": 2.108764
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 3,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.625436,
+              "delta": 0.001289,
+              "proposed": 0.626724
+            },
+            "requests": 290,
+            "route_changed": 0
+          }
+        },
+        "by_workload": {
+          "claims_qa": {
+            "cost_usd": {
+              "current": 1.299249,
+              "delta": 0.332533,
+              "proposed": 1.631782
+            },
+            "cost_usd_both_routed": {
+              "current": 1.299249,
+              "delta": 0.149515,
+              "proposed": 1.448764
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 3,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.647556,
+              "delta": 0.00486,
+              "proposed": 0.652416
+            },
+            "requests": 269,
+            "route_changed": 4
+          },
+          "clinic_notes": {
+            "cost_usd": {
+              "current": 2.59332,
+              "delta": 0.95195,
+              "proposed": 3.54527
+            },
+            "cost_usd_both_routed": {
+              "current": 2.59332,
+              "delta": 0.0,
+              "proposed": 2.59332
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 485.740873,
+                "delta": 0.0,
+                "proposed": 485.740873
+              },
+              "p95": {
+                "current": 485.740873,
+                "delta": 0.0,
+                "proposed": 485.740873
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 12,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.75,
+              "delta": 0.0,
+              "proposed": 0.75
+            },
+            "requests": 341,
+            "route_changed": 0
+          },
+          "dev_assist": {
+            "cost_usd": {
+              "current": 2.108764,
+              "delta": 0.170274,
+              "proposed": 2.279038
+            },
+            "cost_usd_both_routed": {
+              "current": 2.108764,
+              "delta": 0.0,
+              "proposed": 2.108764
+            },
+            "latency_ms": {
+              "p50": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              },
+              "p95": {
+                "current": 569.311961,
+                "delta": 0.0,
+                "proposed": 569.311961
+              }
+            },
+            "newly_rejected": 0,
+            "newly_served": 3,
+            "onprem_share": {
+              "current": 1.0,
+              "proposed": 1.0
+            },
+            "overflow_hops": {
+              "current": 0,
+              "proposed": 0
+            },
+            "quality_mean": {
+              "current": 0.625436,
+              "delta": 0.001289,
+              "proposed": 0.626724
+            },
+            "requests": 290,
+            "route_changed": 0
+          }
+        },
+        "moves": [
+          {
+            "count": 12,
+            "from": "(rejected)",
+            "to": "glm-5.3-flash"
+          },
+          {
+            "count": 6,
+            "from": "(rejected)",
+            "to": "glm-flash-east"
+          },
+          {
+            "count": 4,
+            "from": "glm-flash-econ",
+            "to": "glm-flash-east"
+          }
+        ],
+        "new_rejections": {
+          "by_app": {},
+          "by_code": {},
+          "by_core": {}
+        },
+        "per_day": null,
+        "sources": {
+          "current": {
+            "latency": {
+              "observed": 882
+            },
+            "quality": {
+              "tier_default": 882
+            }
+          },
+          "proposed": {
+            "latency": {
+              "observed": 900
+            },
+            "quality": {
+              "tier_default": 900
+            }
+          }
+        },
+        "totals": {
+          "cost_usd": {
+            "current": 6.001333,
+            "delta": 1.454757,
+            "proposed": 7.45609
+          },
+          "cost_usd_both_routed": {
+            "current": 6.001333,
+            "delta": 0.149515,
+            "proposed": 6.150848
+          },
+          "latency_ms": {
+            "p50": {
+              "current": 485.740873,
+              "delta": 0.0,
+              "proposed": 485.740873
+            },
+            "p95": {
+              "current": 569.311961,
+              "delta": 0.0,
+              "proposed": 569.311961
+            }
+          },
+          "newly_rejected": 0,
+          "newly_served": 18,
+          "onprem_share": {
+            "current": 1.0,
+            "proposed": 1.0
+          },
+          "overflow_hops": {
+            "current": 0,
+            "proposed": 0
+          },
+          "quality_mean": {
+            "current": 0.678571,
+            "delta": 0.00254,
+            "proposed": 0.681111
+          },
+          "requests": 900,
+          "route_changed": 4
+        }
+      }
+    }
+  ],
+  "schema": "routeforge.scenario-comparison/v1",
+  "table": [
+    {
+      "affected_apps": [],
+      "cost_delta_usd": 0.0,
+      "cost_per_day_delta_usd": null,
+      "latency_p50_delta_ms": 0.0,
+      "latency_p95_delta_ms": 0.0,
+      "name": "no-change",
+      "newly_rejected": 0,
+      "newly_served": 0,
+      "onprem_share_current": 1.0,
+      "onprem_share_proposed": 1.0,
+      "overflow_hops": 0,
+      "quality_mean_delta": 0.0,
+      "route_changed": 0
+    },
+    {
+      "affected_apps": [
+        "paper-claims",
+        "paper-dev"
+      ],
+      "cost_delta_usd": 0.46795,
+      "cost_per_day_delta_usd": null,
+      "latency_p50_delta_ms": 83.571088,
+      "latency_p95_delta_ms": 0.0,
+      "name": "all-apps-no-retention",
+      "newly_rejected": 4,
+      "newly_served": 0,
+      "onprem_share_current": 1.0,
+      "onprem_share_proposed": 1.0,
+      "overflow_hops": 0,
+      "quality_mean_delta": 0.071429,
+      "route_changed": 248
+    },
+    {
+      "affected_apps": [
+        "paper-claims",
+        "paper-dev"
+      ],
+      "cost_delta_usd": 1.409539,
+      "cost_per_day_delta_usd": null,
+      "latency_p50_delta_ms": 0.0,
+      "latency_p95_delta_ms": -83.571088,
+      "name": "all-apps-us-lab-only",
+      "newly_rejected": 5,
+      "newly_served": 0,
+      "onprem_share_current": 1.0,
+      "onprem_share_proposed": 1.0,
+      "overflow_hops": 0,
+      "quality_mean_delta": -0.003258,
+      "route_changed": 296
+    },
+    {
+      "affected_apps": [
+        "paper-clinic"
+      ],
+      "cost_delta_usd": -1.037328,
+      "cost_per_day_delta_usd": null,
+      "latency_p50_delta_ms": 83.571088,
+      "latency_p95_delta_ms": 0.0,
+      "name": "clinic-may-use-eu-lab",
+      "newly_rejected": 0,
+      "newly_served": 10,
+      "onprem_share_current": 1.0,
+      "onprem_share_proposed": 1.0,
+      "overflow_hops": 0,
+      "quality_mean_delta": 0.000801,
+      "route_changed": 329
+    },
+    {
+      "affected_apps": [
+        "paper-claims",
+        "paper-clinic",
+        "paper-dev"
+      ],
+      "cost_delta_usd": 0.149515,
+      "cost_per_day_delta_usd": null,
+      "latency_p50_delta_ms": 0.0,
+      "latency_p95_delta_ms": 0.0,
+      "name": "raise-request-budget",
+      "newly_rejected": 0,
+      "newly_served": 18,
+      "onprem_share_current": 1.0,
+      "onprem_share_proposed": 1.0,
+      "overflow_hops": 0,
+      "quality_mean_delta": 0.00254,
+      "route_changed": 4
+    }
+  ],
+  "uncertainty": {
+    "interval": 0.9,
+    "interval_is_min_max": false,
+    "method": "stratified_paired_row_bootstrap",
+    "min_rows": 30,
+    "not_covered": [
+      "replay_model_error",
+      "admission_estimate_error",
+      "unrecorded_inputs",
+      "traffic_shift",
+      "per_request_latency"
+    ],
+    "quality_posterior_sets": [],
+    "replicates": 1000,
+    "scenarios": [
+      {
+        "by_app": {
+          "paper-claims": {
+            "cost_usd": {
+              "current": {
+                "hi": 1.472528,
+                "lo": 1.128076,
+                "point": 1.299249
+              },
+              "delta": {
+                "hi": 0.0,
+                "lo": 0.0,
+                "point": 0.0
+              },
+              "proposed": {
+                "hi": 1.472528,
+                "lo": 1.128076,
+                "point": 1.299249
+              }
+            },
+            "cost_usd_both_routed": {
+              "current": {
+                "hi": 1.472528,
+                "lo": 1.128076,
+                "point": 1.299249
+              },
+              "delta": {
+                "hi": 0.0,
+                "lo": 0.0,
+                "point": 0.0
+              },
+              "proposed": {
+                "hi": 1.472528,
+                "lo": 1.128076,
+                "point": 1.299249
+              }
+            },
+            "estimated_token_rows": 3,
+            "latency_ms": {
+              "p50": {
+                "current": {
+                  "hi": 569.311961,
+                  "lo": 569.311961,
+                  "point": 569.311961
+                },
+                "delta": {
+                  "hi": 0.0,
+                  "lo": 0.0,
+                  "point": 0.0
+                },
+                "proposed": {
+                  "hi": 569.311961,
+                  "lo": 569.311961,
+                  "point": 569.311961
+                }
+              },
+              "p95": {
+                "current": {
+                  "hi": 569.311961,
+                  "lo": 569.311961,
+                  "point": 569.311961
+                },
+                "delta": {
+                  "hi": 0.0,
+                  "lo": 0.0,
+                  "point": 0.0
+                },
+                "proposed": {
+                  "hi": 569.311961,
+                  "lo": 569.311961,
+                  "point": 569.311961
+                }
+              }
+            },
+            "n": 269,
+            "newly_rejected": {
+              "hi": 0,
+              "lo": 0,
+              "point": 0
+            },
+            "newly_rejected_share": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0,
+              "zero_bound": 0.008523
+            },
+            "newly_served": {
+              "hi": 0,
+              "lo": 0,
+              "point": 0
+            },
+            "newly_served_share": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0,
+              "zero_bound": 0.008523
+            },
+            "onprem_share": {
+              "current": {
+                "hi": 1.0,
+                "lo": 1.0,
+                "one_bound": 0.991381,
+                "point": 1.0
+              },
+              "proposed": {
+                "hi": 1.0,
+                "lo": 1.0,
+                "one_bound": 0.991381,
+                "point": 1.0
+              }
+            },
+            "quality_mean": {
+              "current": {
+                "hi": 0.658835,
+                "lo": 0.635768,
+                "point": 0.647556
+              },
+              "delta": {
+                "hi": 0.0,
+                "lo": 0.0,
+                "point": 0.0
+              },
+              "proposed": {
+                "hi": 0.658835,
+                "lo": 0.635768,
+                "point": 0.647556
+              }
+            },
+            "route_changed": {
+              "hi": 0,
+              "lo": 0,
+              "point": 0
+            },
+            "route_changed_share": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0,
+              "zero_bound": 0.008523
+            },
+            "routed": {
+              "current": 266,
+              "proposed": 266
+            }
+          },
+          "paper-clinic": {
+            "cost_usd": {
+              "current": {
+                "hi": 2.88867,
+                "lo": 2.31474,
+                "point": 2.59332
+              },
+              "delta": {
+                "hi": 0.0,
+                "lo": 0.0,
+                "point": 0.0
+              },
+              "proposed": {
+                "hi": 2.88867,
+                "lo": 2.31474,
+                "point": 2.59332
+              }
+            },
+            "cost_usd_both_routed": {
+              "current": {
+                "hi": 2.88867,
+                "lo": 2.31474,
+                "point": 2.59332
+              },
+              "delta": {
+                "hi": 0.0,
+                "lo": 0.0,
+                "point": 0.0
+              },
+              "proposed": {
+                "hi": 2.88867,
+                "lo": 2.31474,
+                "point": 2.59332
+              }
+            },
+            "estimated_token_rows": 12,
+            "latency_ms": {
+              "p50": {
+                "current": {
+                  "hi": 485.740873,
+                  "lo": 485.740873,
+                  "point": 485.740873
+                },
+                "delta": {
+                  "hi": 0.0,
+                  "lo": 0.0,
+                  "point": 0.0
+                },
+                "proposed": {
+                  "hi": 485.740873,
+                  "lo": 485.740873,
+                  "point": 485.740873
+                }
+              },
+              "p95": {
+                "current": {
+                  "hi": 485.740873,
+                  "lo": 485.740873,
+                  "point": 485.740873
+                },
+                "delta": {
+                  "hi": 0.0,
+                  "lo": 0.0,
+                  "point": 0.0
+                },
+                "proposed": {
+                  "hi": 485.740873,
+                  "lo": 485.740873,
+                  "point": 485.740873
+                }
+              }
+            },
+            "n": 341,
+            "newly_rejected": {
+              "hi": 0,
+              "lo": 0,
+              "point": 0
+            },
+            "newly_rejected_share": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0,
+              "zero_bound": 0.00673
+            },
+            "newly_served": {
+              "hi": 0,
+              "lo": 0,
+              "point": 0
+            },
+            "newly_served_share": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0,
+              "zero_bound": 0.00673
+            },
+            "onprem_share": {
+              "current": {
+                "hi": 1.0,
+                "lo": 1.0,
+                "one_bound": 0.993026,
+                "point": 1.0
+              },
+              "proposed": {
+                "hi": 1.0,
+                "lo": 1.0,
+                "one_bound": 0.993026,
+                "point": 1.0
+              }
+            },
+            "quality_mean": {
+              "current": {
+                "hi": 0.75,
+                "lo": 0.75,
+                "point": 0.75
+              },
+              "delta": {
+                "hi": 0.0,
+                "lo": 0.0,
+                "point": 0.0
+              },
+              "proposed": {
+                "hi": 0.75,
+                "lo": 0.75,
+                "point": 0.75
+              }
+            },
+            "route_changed": {
+              "hi": 0,
+              "lo": 0,
+              "point": 0
+            },
+            "route_changed_share": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0,
+              "zero_bound": 0.00673
+            },
+            "routed": {
+              "current": 329,
+              "proposed": 329
+            }
+          },
+          "paper-dev": {
+            "cost_usd": {
+              "current": {
+                "hi": 2.433995,
+                "lo": 1.775532,
+                "point": 2.108764
+              },
+              "delta": {
+                "hi": 0.0,
+                "lo": 0.0,
+                "point": 0.0
+              },
+              "proposed": {
+                "hi": 2.433995,
+                "lo": 1.775532,
+                "point": 2.108764
+              }
+            },
+            "cost_usd_both_routed": {
+              "current": {
+                "hi": 2.433995,
+                "lo": 1.775532,
+                "point": 2.108764
+              },
+              "delta": {
+                "hi": 0.0,
+                "lo": 0.0,
+                "point": 0.0
+              },
+              "proposed": {
+                "hi": 2.433995,
+                "lo": 1.775532,
+                "point": 2.108764
+              }
+            },
+            "estimated_token_rows": 5,
+            "latency_ms": {
+              "p50": {
+                "current": {
+                  "hi": 569.311961,
+                  "lo": 420.632835,
+                  "point": 569.311961
+                },
+                "delta": {
+                  "hi": 0.0,
+                  "lo": 0.0,
+                  "point": 0.0
+                },
+                "proposed": {
+                  "hi": 569.311961,
+                  "lo": 420.632835,
+                  "point": 569.311961
+                }
+              },
+              "p95": {
+                "current": {
+                  "hi": 569.311961,
+                  "lo": 569.311961,
+                  "point": 569.311961
+                },
+                "delta": {
+                  "hi": 0.0,
+                  "lo": 0.0,
+                  "point": 0.0
+                },
+                "proposed": {
+                  "hi": 569.311961,
+                  "lo": 569.311961,
+                  "point": 569.311961
+                }
+              }
+            },
+            "n": 290,
+            "newly_rejected": {
+              "hi": 0,
+              "lo": 0,
+              "point": 0
+            },
+            "newly_rejected_share": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0,
+              "zero_bound": 0.007909
+            },
+            "newly_served": {
+              "hi": 0,
+              "lo": 0,
+              "point": 0
+            },
+            "newly_served_share": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0,
+              "zero_bound": 0.007909
+            },
+            "onprem_share": {
+              "current": {
+                "hi": 1.0,
+                "lo": 1.0,
+                "one_bound": 0.992009,
+                "point": 1.0
+              },
+              "proposed": {
+                "hi": 1.0,
+                "lo": 1.0,
+                "one_bound": 0.992009,
+                "point": 1.0
+              }
+            },
+            "quality_mean": {
+              "current": {
+                "hi": 0.637153,
+                "lo": 0.612847,
+                "point": 0.625436
+              },
+              "delta": {
+                "hi": 0.0,
+                "lo": 0.0,
+                "point": 0.0
+              },
+              "proposed": {
+                "hi": 0.637153,
+                "lo": 0.612847,
+                "point": 0.625436
+              }
+            },
+            "route_changed": {
+              "hi": 0,
+              "lo": 0,
+              "point": 0
+            },
+            "route_changed_share": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0,
+              "zero_bound": 0.007909
+            },
+            "routed": {
+              "current": 287,
+              "proposed": 287
+            }
+          }
+        },
+        "name": "no-change",
+        "per_day": null,
+        "points_outside_interval": 0,
+        "quality_posterior": {
+          "current": {
+            "calibrated": 0,
+            "posterior": 0,
+            "routed": 882
+          },
+          "proposed": {
+            "calibrated": 0,
+            "posterior": 0,
+            "routed": 882
+          }
+        },
+        "table": {
+          "cost_delta_usd": {
+            "hi": 0.0,
+            "lo": 0.0,
+            "point": 0.0
+          },
+          "cost_per_day_delta_usd": null,
+          "latency_p50_delta_ms": {
+            "hi": 0.0,
+            "lo": 0.0,
+            "point": 0.0
+          },
+          "latency_p95_delta_ms": {
+            "hi": 0.0,
+            "lo": 0.0,
+            "point": 0.0
+          },
+          "newly_rejected": {
+            "hi": 0,
+            "lo": 0,
+            "point": 0
+          },
+          "newly_served": {
+            "hi": 0,
+            "lo": 0,
+            "point": 0
+          },
+          "onprem_share_current": {
+            "hi": 1.0,
+            "lo": 1.0,
+            "one_bound": 0.997393,
+            "point": 1.0
+          },
+          "onprem_share_proposed": {
+            "hi": 1.0,
+            "lo": 1.0,
+            "one_bound": 0.997393,
+            "point": 1.0
+          },
+          "quality_mean_delta": {
+            "hi": 0.0,
+            "lo": 0.0,
+            "point": 0.0
+          },
+          "route_changed": {
+            "hi": 0,
+            "lo": 0,
+            "point": 0
+          }
+        },
+        "totals": {
+          "cost_usd": {
+            "current": {
+              "hi": 6.443545,
+              "lo": 5.525467,
+              "point": 6.001333
+            },
+            "delta": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0
+            },
+            "proposed": {
+              "hi": 6.443545,
+              "lo": 5.525467,
+              "point": 6.001333
+            }
+          },
+          "cost_usd_both_routed": {
+            "current": {
+              "hi": 6.443545,
+              "lo": 5.525467,
+              "point": 6.001333
+            },
+            "delta": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0
+            },
+            "proposed": {
+              "hi": 6.443545,
+              "lo": 5.525467,
+              "point": 6.001333
+            }
+          },
+          "estimated_token_rows": 20,
+          "latency_ms": {
+            "p50": {
+              "current": {
+                "hi": 485.740873,
+                "lo": 485.740873,
+                "point": 485.740873
+              },
+              "delta": {
+                "hi": 0.0,
+                "lo": 0.0,
+                "point": 0.0
+              },
+              "proposed": {
+                "hi": 485.740873,
+                "lo": 485.740873,
+                "point": 485.740873
+              }
+            },
+            "p95": {
+              "current": {
+                "hi": 569.311961,
+                "lo": 569.311961,
+                "point": 569.311961
+              },
+              "delta": {
+                "hi": 0.0,
+                "lo": 0.0,
+                "point": 0.0
+              },
+              "proposed": {
+                "hi": 569.311961,
+                "lo": 569.311961,
+                "point": 569.311961
+              }
+            }
+          },
+          "n": 900,
+          "newly_rejected": {
+            "hi": 0,
+            "lo": 0,
+            "point": 0
+          },
+          "newly_rejected_share": {
+            "hi": 0.0,
+            "lo": 0.0,
+            "point": 0.0,
+            "zero_bound": 0.002555
+          },
+          "newly_served": {
+            "hi": 0,
+            "lo": 0,
+            "point": 0
+          },
+          "newly_served_share": {
+            "hi": 0.0,
+            "lo": 0.0,
+            "point": 0.0,
+            "zero_bound": 0.002555
+          },
+          "onprem_share": {
+            "current": {
+              "hi": 1.0,
+              "lo": 1.0,
+              "one_bound": 0.997393,
+              "point": 1.0
+            },
+            "proposed": {
+              "hi": 1.0,
+              "lo": 1.0,
+              "one_bound": 0.997393,
+              "point": 1.0
+            }
+          },
+          "quality_mean": {
+            "current": {
+              "hi": 0.683673,
+              "lo": 0.673099,
+              "point": 0.678571
+            },
+            "delta": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0
+            },
+            "proposed": {
+              "hi": 0.683673,
+              "lo": 0.673099,
+              "point": 0.678571
+            }
+          },
+          "route_changed": {
+            "hi": 0,
+            "lo": 0,
+            "point": 0
+          },
+          "route_changed_share": {
+            "hi": 0.0,
+            "lo": 0.0,
+            "point": 0.0,
+            "zero_bound": 0.002555
+          },
+          "routed": {
+            "current": 882,
+            "proposed": 882
+          }
+        },
+        "totals_strata": {
+          "own": 3,
+          "pooled_apps": 0,
+          "pooled_rows": 0,
+          "smallest": 269,
+          "variance_factor": 0.996667
+        }
+      },
+      {
+        "by_app": {
+          "paper-claims": {
+            "cost_usd": {
+              "current": {
+                "hi": 1.472528,
+                "lo": 1.128076,
+                "point": 1.299249
+              },
+              "delta": {
+                "hi": 0.159356,
+                "lo": 0.084132,
+                "point": 0.121917
+              },
+              "proposed": {
+                "hi": 1.599294,
+                "lo": 1.250412,
+                "point": 1.421166
+              }
+            },
+            "cost_usd_both_routed": {
+              "current": {
+                "hi": 1.446778,
+                "lo": 1.096156,
+                "point": 1.269346
+              },
+              "delta": {
+                "hi": 0.18146,
+                "lo": 0.124385,
+                "point": 0.15182
+              },
+              "proposed": {
+                "hi": 1.599294,
+                "lo": 1.250412,
+                "point": 1.421166
+              }
+            },
+            "estimated_token_rows": 3,
+            "latency_ms": {
+              "p50": {
+                "current": {
+                  "hi": 569.311961,
+                  "lo": 569.311961,
+                  "point": 569.311961
+                },
+                "delta": {
+                  "hi": 0.0,
+                  "lo": 0.0,
+                  "point": 0.0
+                },
+                "proposed": {
+                  "hi": 569.311961,
+                  "lo": 569.311961,
+                  "point": 569.311961
+                }
+              },
+              "p95": {
+                "current": {
+                  "hi": 569.311961,
+                  "lo": 569.311961,
+                  "point": 569.311961
+                },
+                "delta": {
+                  "hi": 0.0,
+                  "lo": 0.0,
+                  "point": 0.0
+                },
+                "proposed": {
+                  "hi": 569.311961,
+                  "lo": 569.311961,
+                  "point": 569.311961
+                }
+              }
+            },
+            "n": 269,
+            "newly_rejected": {
+              "hi": 7,
+              "lo": 1,
+              "point": 4
+            },
+            "newly_rejected_share": {
+              "hi": 0.026022,
+              "lo": 0.003717,
+              "point": 0.01487
+            },
+            "newly_served": {
+              "hi": 0,
+              "lo": 0,
+              "point": 0
+            },
+            "newly_served_share": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0,
+              "zero_bound": 0.008523
+            },
+            "onprem_share": {
+              "current": {
+                "hi": 1.0,
+                "lo": 1.0,
+                "one_bound": 0.991381,
+                "point": 1.0
+              },
+              "proposed": {
+                "hi": 1.0,
+                "lo": 1.0,
+                "one_bound": 0.99125,
+                "point": 1.0
+              }
+            },
+            "quality_mean": {
+              "current": {
+                "hi": 0.658835,
+                "lo": 0.635768,
+                "point": 0.647556
+              },
+              "delta": {
+                "hi": 0.114232,
+                "lo": 0.091165,
+                "point": 0.102444
+              },
+              "proposed": {
+                "hi": 0.75,
+                "lo": 0.75,
+                "point": 0.75
+              }
+            },
+            "route_changed": {
+              "hi": 118,
+              "lo": 93,
+              "point": 105
+            },
+            "route_changed_share": {
+              "hi": 0.438662,
+              "lo": 0.345725,
+              "point": 0.390335
+            },
+            "routed": {
+              "current": 266,
+              "proposed": 262
+            }
+          },
+          "paper-clinic": {
+            "cost_usd": {
+              "current": {
+                "hi": 2.88867,
+                "lo": 2.31474,
+                "point": 2.59332
+              },
+              "delta": {
+                "hi": 0.0,
+                "lo": 0.0,
+                "point": 0.0
+              },
+              "proposed": {
+                "hi": 2.88867,
+                "lo": 2.31474,
+                "point": 2.59332
+              }
+            },
+            "cost_usd_both_routed": {
+              "current": {
+                "hi": 2.88867,
+                "lo": 2.31474,
+                "point": 2.59332
+              },
+              "delta": {
+                "hi": 0.0,
+                "lo": 0.0,
+                "point": 0.0
+              },
+              "proposed": {
+                "hi": 2.88867,
+                "lo": 2.31474,
+                "point": 2.59332
+              }
+            },
+            "estimated_token_rows": 12,
+            "latency_ms": {
+              "p50": {
+                "current": {
+                  "hi": 485.740873,
+                  "lo": 485.740873,
+                  "point": 485.740873
+                },
+                "delta": {
+                  "hi": 0.0,
+                  "lo": 0.0,
+                  "point": 0.0
+                },
+                "proposed": {
+                  "hi": 485.740873,
+                  "lo": 485.740873,
+                  "point": 485.740873
+                }
+              },
+              "p95": {
+                "current": {
+                  "hi": 485.740873,
+                  "lo": 485.740873,
+                  "point": 485.740873
+                },
+                "delta": {
+                  "hi": 0.0,
+                  "lo": 0.0,
+                  "point": 0.0
+                },
+                "proposed": {
+                  "hi": 485.740873,
+                  "lo": 485.740873,
+                  "point": 485.740873
+                }
+              }
+            },
+            "n": 341,
+            "newly_rejected": {
+              "hi": 0,
+              "lo": 0,
+              "point": 0
+            },
+            "newly_rejected_share": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0,
+              "zero_bound": 0.00673
+            },
+            "newly_served": {
+              "hi": 0,
+              "lo": 0,
+              "point": 0
+            },
+            "newly_served_share": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0,
+              "zero_bound": 0.00673
+            },
+            "onprem_share": {
+              "current": {
+                "hi": 1.0,
+                "lo": 1.0,
+                "one_bound": 0.993026,
+                "point": 1.0
+              },
+              "proposed": {
+                "hi": 1.0,
+                "lo": 1.0,
+                "one_bound": 0.993026,
+                "point": 1.0
+              }
+            },
+            "quality_mean": {
+              "current": {
+                "hi": 0.75,
+                "lo": 0.75,
+                "point": 0.75
+              },
+              "delta": {
+                "hi": 0.0,
+                "lo": 0.0,
+                "point": 0.0
+              },
+              "proposed": {
+                "hi": 0.75,
+                "lo": 0.75,
+                "point": 0.75
+              }
+            },
+            "route_changed": {
+              "hi": 0,
+              "lo": 0,
+              "point": 0
+            },
+            "route_changed_share": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0,
+              "zero_bound": 0.00673
+            },
+            "routed": {
+              "current": 329,
+              "proposed": 329
+            }
+          },
+          "paper-dev": {
+            "cost_usd": {
+              "current": {
+                "hi": 2.433995,
+                "lo": 1.775532,
+                "point": 2.108764
+              },
+              "delta": {
+                "hi": 0.36035,
+                "lo": 0.273595,
+                "point": 0.31613
+              },
+              "proposed": {
+                "hi": 2.745774,
+                "lo": 2.10942,
+                "point": 2.424894
+              }
+            },
+            "cost_usd_both_routed": {
+              "current": {
+                "hi": 2.433995,
+                "lo": 1.775532,
+                "point": 2.108764
+              },
+              "delta": {
+                "hi": 0.36035,
+                "lo": 0.273595,
+                "point": 0.31613
+              },
+              "proposed": {
+                "hi": 2.745774,
+                "lo": 2.10942,
+                "point": 2.424894
+              }
+            },
+            "estimated_token_rows": 5,
+            "latency_ms": {
+              "p50": {
+                "current": {
+                  "hi": 569.311961,
+                  "lo": 420.632835,
+                  "point": 569.311961
+                },
+                "delta": {
+                  "hi": 148.679126,
+                  "lo": 0.0,
+                  "point": 0.0
+                },
+                "proposed": {
+                  "hi": 569.311961,
+                  "lo": 569.311961,
+                  "point": 569.311961
+                }
+              },
+              "p95": {
+                "current": {
+                  "hi": 569.311961,
+                  "lo": 569.311961,
+                  "point": 569.311961
+                },
+                "delta": {
+                  "hi": 0.0,
+                  "lo": 0.0,
+                  "point": 0.0
+                },
+                "proposed": {
+                  "hi": 569.311961,
+                  "lo": 569.311961,
+                  "point": 569.311961
+                }
+              }
+            },
+            "n": 290,
+            "newly_rejected": {
+              "hi": 0,
+              "lo": 0,
+              "point": 0
+            },
+            "newly_rejected_share": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0,
+              "zero_bound": 0.007909
+            },
+            "newly_served": {
+              "hi": 0,
+              "lo": 0,
+              "point": 0
+            },
+            "newly_served_share": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0,
+              "zero_bound": 0.007909
+            },
+            "onprem_share": {
+              "current": {
+                "hi": 1.0,
+                "lo": 1.0,
+                "one_bound": 0.992009,
+                "point": 1.0
+              },
+              "proposed": {
+                "hi": 1.0,
+                "lo": 1.0,
+                "one_bound": 0.992009,
+                "point": 1.0
+              }
+            },
+            "quality_mean": {
+              "current": {
+                "hi": 0.637153,
+                "lo": 0.612847,
+                "point": 0.625436
+              },
+              "delta": {
+                "hi": 0.137153,
+                "lo": 0.112847,
+                "point": 0.124564
+              },
+              "proposed": {
+                "hi": 0.75,
+                "lo": 0.75,
+                "point": 0.75
+              }
+            },
+            "route_changed": {
+              "hi": 158,
+              "lo": 130,
+              "point": 143
+            },
+            "route_changed_share": {
+              "hi": 0.544828,
+              "lo": 0.448276,
+              "point": 0.493103
+            },
+            "routed": {
+              "current": 287,
+              "proposed": 287
+            }
+          }
+        },
+        "name": "all-apps-no-retention",
+        "per_day": null,
+        "points_outside_interval": 0,
+        "quality_posterior": {
+          "current": {
+            "calibrated": 0,
+            "posterior": 0,
+            "routed": 882
+          },
+          "proposed": {
+            "calibrated": 0,
+            "posterior": 0,
+            "routed": 878
+          }
+        },
+        "table": {
+          "cost_delta_usd": {
+            "hi": 0.521085,
+            "lo": 0.41865,
+            "point": 0.46795
+          },
+          "cost_per_day_delta_usd": null,
+          "latency_p50_delta_ms": {
+            "hi": 83.571088,
+            "lo": 83.571088,
+            "point": 83.571088
+          },
+          "latency_p95_delta_ms": {
+            "hi": 0.0,
+            "lo": 0.0,
+            "point": 0.0
+          },
+          "newly_rejected": {
+            "hi": 7,
+            "lo": 1,
+            "point": 4
+          },
+          "newly_served": {
+            "hi": 0,
+            "lo": 0,
+            "point": 0
+          },
+          "onprem_share_current": {
+            "hi": 1.0,
+            "lo": 1.0,
+            "one_bound": 0.997393,
+            "point": 1.0
+          },
+          "onprem_share_proposed": {
+            "hi": 1.0,
+            "lo": 1.0,
+            "one_bound": 0.997381,
+            "point": 1.0
+          },
+          "quality_mean_delta": {
+            "hi": 0.076901,
+            "lo": 0.066327,
+            "point": 0.071429
+          },
+          "route_changed": {
+            "hi": 268,
+            "lo": 230,
+            "point": 248
+          }
+        },
+        "totals": {
+          "cost_usd": {
+            "current": {
+              "hi": 6.443545,
+              "lo": 5.525467,
+              "point": 6.001333
+            },
+            "delta": {
+              "hi": 0.495151,
+              "lo": 0.380968,
+              "point": 0.438047
+            },
+            "proposed": {
+              "hi": 6.864868,
+              "lo": 5.979362,
+              "point": 6.43938
+            }
+          },
+          "cost_usd_both_routed": {
+            "current": {
+              "hi": 6.41079,
+              "lo": 5.491804,
+              "point": 5.97143
+            },
+            "delta": {
+              "hi": 0.521085,
+              "lo": 0.41865,
+              "point": 0.46795
+            },
+            "proposed": {
+              "hi": 6.864868,
+              "lo": 5.979362,
+              "point": 6.43938
+            }
+          },
+          "estimated_token_rows": 20,
+          "latency_ms": {
+            "p50": {
+              "current": {
+                "hi": 485.740873,
+                "lo": 485.740873,
+                "point": 485.740873
+              },
+              "delta": {
+                "hi": 83.571088,
+                "lo": 83.571088,
+                "point": 83.571088
+              },
+              "proposed": {
+                "hi": 569.311961,
+                "lo": 569.311961,
+                "point": 569.311961
+              }
+            },
+            "p95": {
+              "current": {
+                "hi": 569.311961,
+                "lo": 569.311961,
+                "point": 569.311961
+              },
+              "delta": {
+                "hi": 0.0,
+                "lo": 0.0,
+                "point": 0.0
+              },
+              "proposed": {
+                "hi": 569.311961,
+                "lo": 569.311961,
+                "point": 569.311961
+              }
+            }
+          },
+          "n": 900,
+          "newly_rejected": {
+            "hi": 7,
+            "lo": 1,
+            "point": 4
+          },
+          "newly_rejected_share": {
+            "hi": 0.007778,
+            "lo": 0.001111,
+            "point": 0.004444
+          },
+          "newly_served": {
+            "hi": 0,
+            "lo": 0,
+            "point": 0
+          },
+          "newly_served_share": {
+            "hi": 0.0,
+            "lo": 0.0,
+            "point": 0.0,
+            "zero_bound": 0.002555
+          },
+          "onprem_share": {
+            "current": {
+              "hi": 1.0,
+              "lo": 1.0,
+              "one_bound": 0.997393,
+              "point": 1.0
+            },
+            "proposed": {
+              "hi": 1.0,
+              "lo": 1.0,
+              "one_bound": 0.997381,
+              "point": 1.0
+            }
+          },
+          "quality_mean": {
+            "current": {
+              "hi": 0.683673,
+              "lo": 0.673099,
+              "point": 0.678571
+            },
+            "delta": {
+              "hi": 0.076901,
+              "lo": 0.066327,
+              "point": 0.071429
+            },
+            "proposed": {
+              "hi": 0.75,
+              "lo": 0.75,
+              "point": 0.75
+            }
+          },
+          "route_changed": {
+            "hi": 268,
+            "lo": 230,
+            "point": 248
+          },
+          "route_changed_share": {
+            "hi": 0.297778,
+            "lo": 0.255556,
+            "point": 0.275556
+          },
+          "routed": {
+            "current": 882,
+            "proposed": 878
+          }
+        },
+        "totals_strata": {
+          "own": 3,
+          "pooled_apps": 0,
+          "pooled_rows": 0,
+          "smallest": 269,
+          "variance_factor": 0.996667
+        }
+      },
+      {
+        "by_app": {
+          "paper-claims": {
+            "cost_usd": {
+              "current": {
+                "hi": 1.472528,
+                "lo": 1.128076,
+                "point": 1.299249
+              },
+              "delta": {
+                "hi": 0.732092,
+                "lo": 0.434465,
+                "point": 0.589816
+              },
+              "proposed": {
+                "hi": 2.136253,
+                "lo": 1.644882,
+                "point": 1.889065
+              }
+            },
+            "cost_usd_both_routed": {
+              "current": {
+                "hi": 1.415694,
+                "lo": 1.096416,
+                "point": 1.253655
+              },
+              "delta": {
+                "hi": 0.761709,
+                "lo": 0.498974,
+                "point": 0.63541
+              },
+              "proposed": {
+                "hi": 2.136253,
+                "lo": 1.644882,
+                "point": 1.889065
+              }
+            },
+            "estimated_token_rows": 3,
+            "latency_ms": {
+              "p50": {
+                "current": {
+                  "hi": 569.311961,
+                  "lo": 569.311961,
+                  "point": 569.311961
+                },
+                "delta": {
+                  "hi": -83.571088,
+                  "lo": -83.571088,
+                  "point": -83.571088
+                },
+                "proposed": {
+                  "hi": 485.740873,
+                  "lo": 485.740873,
+                  "point": 485.740873
+                }
+              },
+              "p95": {
+                "current": {
+                  "hi": 569.311961,
+                  "lo": 569.311961,
+                  "point": 569.311961
+                },
+                "delta": {
+                  "hi": -83.571088,
+                  "lo": -83.571088,
+                  "point": -83.571088
+                },
+                "proposed": {
+                  "hi": 485.740873,
+                  "lo": 485.740873,
+                  "point": 485.740873
+                }
+              }
+            },
+            "n": 269,
+            "newly_rejected": {
+              "hi": 3,
+              "lo": 0,
+              "point": 1
+            },
+            "newly_rejected_share": {
+              "hi": 0.011152,
+              "lo": 0.0,
+              "point": 0.003717
+            },
+            "newly_served": {
+              "hi": 0,
+              "lo": 0,
+              "point": 0
+            },
+            "newly_served_share": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0,
+              "zero_bound": 0.008523
+            },
+            "onprem_share": {
+              "current": {
+                "hi": 1.0,
+                "lo": 1.0,
+                "one_bound": 0.991381,
+                "point": 1.0
+              },
+              "proposed": {
+                "hi": 1.0,
+                "lo": 1.0,
+                "one_bound": 0.991349,
+                "point": 1.0
+              }
+            },
+            "quality_mean": {
+              "current": {
+                "hi": 0.658835,
+                "lo": 0.635768,
+                "point": 0.647556
+              },
+              "delta": {
+                "hi": -0.001873,
+                "lo": -0.009204,
+                "point": -0.005104
+              },
+              "proposed": {
+                "hi": 0.654135,
+                "lo": 0.62931,
+                "point": 0.642453
+              }
+            },
+            "route_changed": {
+              "hi": 168,
+              "lo": 143,
+              "point": 156
+            },
+            "route_changed_share": {
+              "hi": 0.624535,
+              "lo": 0.531599,
+              "point": 0.579926
+            },
+            "routed": {
+              "current": 266,
+              "proposed": 265
+            }
+          },
+          "paper-clinic": {
+            "cost_usd": {
+              "current": {
+                "hi": 2.88867,
+                "lo": 2.31474,
+                "point": 2.59332
+              },
+              "delta": {
+                "hi": 0.0,
+                "lo": 0.0,
+                "point": 0.0
+              },
+              "proposed": {
+                "hi": 2.88867,
+                "lo": 2.31474,
+                "point": 2.59332
+              }
+            },
+            "cost_usd_both_routed": {
+              "current": {
+                "hi": 2.88867,
+                "lo": 2.31474,
+                "point": 2.59332
+              },
+              "delta": {
+                "hi": 0.0,
+                "lo": 0.0,
+                "point": 0.0
+              },
+              "proposed": {
+                "hi": 2.88867,
+                "lo": 2.31474,
+                "point": 2.59332
+              }
+            },
+            "estimated_token_rows": 12,
+            "latency_ms": {
+              "p50": {
+                "current": {
+                  "hi": 485.740873,
+                  "lo": 485.740873,
+                  "point": 485.740873
+                },
+                "delta": {
+                  "hi": 0.0,
+                  "lo": 0.0,
+                  "point": 0.0
+                },
+                "proposed": {
+                  "hi": 485.740873,
+                  "lo": 485.740873,
+                  "point": 485.740873
+                }
+              },
+              "p95": {
+                "current": {
+                  "hi": 485.740873,
+                  "lo": 485.740873,
+                  "point": 485.740873
+                },
+                "delta": {
+                  "hi": 0.0,
+                  "lo": 0.0,
+                  "point": 0.0
+                },
+                "proposed": {
+                  "hi": 485.740873,
+                  "lo": 485.740873,
+                  "point": 485.740873
+                }
+              }
+            },
+            "n": 341,
+            "newly_rejected": {
+              "hi": 0,
+              "lo": 0,
+              "point": 0
+            },
+            "newly_rejected_share": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0,
+              "zero_bound": 0.00673
+            },
+            "newly_served": {
+              "hi": 0,
+              "lo": 0,
+              "point": 0
+            },
+            "newly_served_share": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0,
+              "zero_bound": 0.00673
+            },
+            "onprem_share": {
+              "current": {
+                "hi": 1.0,
+                "lo": 1.0,
+                "one_bound": 0.993026,
+                "point": 1.0
+              },
+              "proposed": {
+                "hi": 1.0,
+                "lo": 1.0,
+                "one_bound": 0.993026,
+                "point": 1.0
+              }
+            },
+            "quality_mean": {
+              "current": {
+                "hi": 0.75,
+                "lo": 0.75,
+                "point": 0.75
+              },
+              "delta": {
+                "hi": 0.0,
+                "lo": 0.0,
+                "point": 0.0
+              },
+              "proposed": {
+                "hi": 0.75,
+                "lo": 0.75,
+                "point": 0.75
+              }
+            },
+            "route_changed": {
+              "hi": 0,
+              "lo": 0,
+              "point": 0
+            },
+            "route_changed_share": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0,
+              "zero_bound": 0.00673
+            },
+            "routed": {
+              "current": 329,
+              "proposed": 329
+            }
+          },
+          "paper-dev": {
+            "cost_usd": {
+              "current": {
+                "hi": 2.433995,
+                "lo": 1.775532,
+                "point": 2.108764
+              },
+              "delta": {
+                "hi": 0.88175,
+                "lo": 0.287842,
+                "point": 0.582483
+              },
+              "proposed": {
+                "hi": 3.056134,
+                "lo": 2.321053,
+                "point": 2.691247
+              }
+            },
+            "cost_usd_both_routed": {
+              "current": {
+                "hi": 2.215591,
+                "lo": 1.623859,
+                "point": 1.917118
+              },
+              "delta": {
+                "hi": 1.01405,
+                "lo": 0.531511,
+                "point": 0.774129
+              },
+              "proposed": {
+                "hi": 3.056134,
+                "lo": 2.321053,
+                "point": 2.691247
+              }
+            },
+            "estimated_token_rows": 5,
+            "latency_ms": {
+              "p50": {
+                "current": {
+                  "hi": 569.311961,
+                  "lo": 420.632835,
+                  "point": 569.311961
+                },
+                "delta": {
+                  "hi": 0.0,
+                  "lo": -148.679126,
+                  "point": -148.679126
+                },
+                "proposed": {
+                  "hi": 485.740873,
+                  "lo": 420.632835,
+                  "point": 420.632835
+                }
+              },
+              "p95": {
+                "current": {
+                  "hi": 569.311961,
+                  "lo": 569.311961,
+                  "point": 569.311961
+                },
+                "delta": {
+                  "hi": -83.571088,
+                  "lo": -83.571088,
+                  "point": -83.571088
+                },
+                "proposed": {
+                  "hi": 485.740873,
+                  "lo": 485.740873,
+                  "point": 485.740873
+                }
+              }
+            },
+            "n": 290,
+            "newly_rejected": {
+              "hi": 8,
+              "lo": 1,
+              "point": 4
+            },
+            "newly_rejected_share": {
+              "hi": 0.027586,
+              "lo": 0.003448,
+              "point": 0.013793
+            },
+            "newly_served": {
+              "hi": 0,
+              "lo": 0,
+              "point": 0
+            },
+            "newly_served_share": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0,
+              "zero_bound": 0.007909
+            },
+            "onprem_share": {
+              "current": {
+                "hi": 1.0,
+                "lo": 1.0,
+                "one_bound": 0.992009,
+                "point": 1.0
+              },
+              "proposed": {
+                "hi": 1.0,
+                "lo": 1.0,
+                "one_bound": 0.991897,
+                "point": 1.0
+              }
+            },
+            "quality_mean": {
+              "current": {
+                "hi": 0.637153,
+                "lo": 0.612847,
+                "point": 0.625436
+              },
+              "delta": {
+                "hi": -0.002971,
+                "lo": -0.009471,
+                "point": -0.006178
+              },
+              "proposed": {
+                "hi": 0.631206,
+                "lo": 0.606401,
+                "point": 0.619258
+              }
+            },
+            "route_changed": {
+              "hi": 153,
+              "lo": 125,
+              "point": 140
+            },
+            "route_changed_share": {
+              "hi": 0.527586,
+              "lo": 0.431034,
+              "point": 0.482759
+            },
+            "routed": {
+              "current": 287,
+              "proposed": 283
+            }
+          }
+        },
+        "name": "all-apps-us-lab-only",
+        "per_day": null,
+        "points_outside_interval": 0,
+        "quality_posterior": {
+          "current": {
+            "calibrated": 0,
+            "posterior": 0,
+            "routed": 882
+          },
+          "proposed": {
+            "calibrated": 0,
+            "posterior": 0,
+            "routed": 877
+          }
+        },
+        "table": {
+          "cost_delta_usd": {
+            "hi": 1.672344,
+            "lo": 1.132133,
+            "point": 1.409539
+          },
+          "cost_per_day_delta_usd": null,
+          "latency_p50_delta_ms": {
+            "hi": 0.0,
+            "lo": 0.0,
+            "point": 0.0
+          },
+          "latency_p95_delta_ms": {
+            "hi": -83.571088,
+            "lo": -83.571088,
+            "point": -83.571088
+          },
+          "newly_rejected": {
+            "hi": 9,
+            "lo": 2,
+            "point": 5
+          },
+          "newly_served": {
+            "hi": 0,
+            "lo": 0,
+            "point": 0
+          },
+          "onprem_share_current": {
+            "hi": 1.0,
+            "lo": 1.0,
+            "one_bound": 0.997393,
+            "point": 1.0
+          },
+          "onprem_share_proposed": {
+            "hi": 1.0,
+            "lo": 1.0,
+            "one_bound": 0.997378,
+            "point": 1.0
+          },
+          "quality_mean_delta": {
+            "hi": -0.001812,
+            "lo": -0.004782,
+            "point": -0.003258
+          },
+          "route_changed": {
+            "hi": 314,
+            "lo": 277,
+            "point": 296
+          }
+        },
+        "totals": {
+          "cost_usd": {
+            "current": {
+              "hi": 6.443545,
+              "lo": 5.525467,
+              "point": 6.001333
+            },
+            "delta": {
+              "hi": 1.502568,
+              "lo": 0.839082,
+              "point": 1.172299
+            },
+            "proposed": {
+              "hi": 7.683876,
+              "lo": 6.638599,
+              "point": 7.173632
+            }
+          },
+          "cost_usd_both_routed": {
+            "current": {
+              "hi": 6.200104,
+              "lo": 5.316893,
+              "point": 5.764093
+            },
+            "delta": {
+              "hi": 1.672344,
+              "lo": 1.132133,
+              "point": 1.409539
+            },
+            "proposed": {
+              "hi": 7.683876,
+              "lo": 6.638599,
+              "point": 7.173632
+            }
+          },
+          "estimated_token_rows": 20,
+          "latency_ms": {
+            "p50": {
+              "current": {
+                "hi": 485.740873,
+                "lo": 485.740873,
+                "point": 485.740873
+              },
+              "delta": {
+                "hi": 0.0,
+                "lo": 0.0,
+                "point": 0.0
+              },
+              "proposed": {
+                "hi": 485.740873,
+                "lo": 485.740873,
+                "point": 485.740873
+              }
+            },
+            "p95": {
+              "current": {
+                "hi": 569.311961,
+                "lo": 569.311961,
+                "point": 569.311961
+              },
+              "delta": {
+                "hi": -83.571088,
+                "lo": -83.571088,
+                "point": -83.571088
+              },
+              "proposed": {
+                "hi": 485.740873,
+                "lo": 485.740873,
+                "point": 485.740873
+              }
+            }
+          },
+          "n": 900,
+          "newly_rejected": {
+            "hi": 9,
+            "lo": 2,
+            "point": 5
+          },
+          "newly_rejected_share": {
+            "hi": 0.01,
+            "lo": 0.002222,
+            "point": 0.005556
+          },
+          "newly_served": {
+            "hi": 0,
+            "lo": 0,
+            "point": 0
+          },
+          "newly_served_share": {
+            "hi": 0.0,
+            "lo": 0.0,
+            "point": 0.0,
+            "zero_bound": 0.002555
+          },
+          "onprem_share": {
+            "current": {
+              "hi": 1.0,
+              "lo": 1.0,
+              "one_bound": 0.997393,
+              "point": 1.0
+            },
+            "proposed": {
+              "hi": 1.0,
+              "lo": 1.0,
+              "one_bound": 0.997378,
+              "point": 1.0
+            }
+          },
+          "quality_mean": {
+            "current": {
+              "hi": 0.683673,
+              "lo": 0.673099,
+              "point": 0.678571
+            },
+            "delta": {
+              "hi": -0.001812,
+              "lo": -0.004782,
+              "point": -0.003258
+            },
+            "proposed": {
+              "hi": 0.680524,
+              "lo": 0.669817,
+              "point": 0.675314
+            }
+          },
+          "route_changed": {
+            "hi": 314,
+            "lo": 277,
+            "point": 296
+          },
+          "route_changed_share": {
+            "hi": 0.348889,
+            "lo": 0.307778,
+            "point": 0.328889
+          },
+          "routed": {
+            "current": 882,
+            "proposed": 877
+          }
+        },
+        "totals_strata": {
+          "own": 3,
+          "pooled_apps": 0,
+          "pooled_rows": 0,
+          "smallest": 269,
+          "variance_factor": 0.996667
+        }
+      },
+      {
+        "by_app": {
+          "paper-claims": {
+            "cost_usd": {
+              "current": {
+                "hi": 1.472528,
+                "lo": 1.128076,
+                "point": 1.299249
+              },
+              "delta": {
+                "hi": 0.0,
+                "lo": 0.0,
+                "point": 0.0
+              },
+              "proposed": {
+                "hi": 1.472528,
+                "lo": 1.128076,
+                "point": 1.299249
+              }
+            },
+            "cost_usd_both_routed": {
+              "current": {
+                "hi": 1.472528,
+                "lo": 1.128076,
+                "point": 1.299249
+              },
+              "delta": {
+                "hi": 0.0,
+                "lo": 0.0,
+                "point": 0.0
+              },
+              "proposed": {
+                "hi": 1.472528,
+                "lo": 1.128076,
+                "point": 1.299249
+              }
+            },
+            "estimated_token_rows": 3,
+            "latency_ms": {
+              "p50": {
+                "current": {
+                  "hi": 569.311961,
+                  "lo": 569.311961,
+                  "point": 569.311961
+                },
+                "delta": {
+                  "hi": 0.0,
+                  "lo": 0.0,
+                  "point": 0.0
+                },
+                "proposed": {
+                  "hi": 569.311961,
+                  "lo": 569.311961,
+                  "point": 569.311961
+                }
+              },
+              "p95": {
+                "current": {
+                  "hi": 569.311961,
+                  "lo": 569.311961,
+                  "point": 569.311961
+                },
+                "delta": {
+                  "hi": 0.0,
+                  "lo": 0.0,
+                  "point": 0.0
+                },
+                "proposed": {
+                  "hi": 569.311961,
+                  "lo": 569.311961,
+                  "point": 569.311961
+                }
+              }
+            },
+            "n": 269,
+            "newly_rejected": {
+              "hi": 0,
+              "lo": 0,
+              "point": 0
+            },
+            "newly_rejected_share": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0,
+              "zero_bound": 0.008523
+            },
+            "newly_served": {
+              "hi": 0,
+              "lo": 0,
+              "point": 0
+            },
+            "newly_served_share": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0,
+              "zero_bound": 0.008523
+            },
+            "onprem_share": {
+              "current": {
+                "hi": 1.0,
+                "lo": 1.0,
+                "one_bound": 0.991381,
+                "point": 1.0
+              },
+              "proposed": {
+                "hi": 1.0,
+                "lo": 1.0,
+                "one_bound": 0.991381,
+                "point": 1.0
+              }
+            },
+            "quality_mean": {
+              "current": {
+                "hi": 0.658835,
+                "lo": 0.635768,
+                "point": 0.647556
+              },
+              "delta": {
+                "hi": 0.0,
+                "lo": 0.0,
+                "point": 0.0
+              },
+              "proposed": {
+                "hi": 0.658835,
+                "lo": 0.635768,
+                "point": 0.647556
+              }
+            },
+            "route_changed": {
+              "hi": 0,
+              "lo": 0,
+              "point": 0
+            },
+            "route_changed_share": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0,
+              "zero_bound": 0.008523
+            },
+            "routed": {
+              "current": 266,
+              "proposed": 266
+            }
+          },
+          "paper-clinic": {
+            "cost_usd": {
+              "current": {
+                "hi": 2.88867,
+                "lo": 2.31474,
+                "point": 2.59332
+              },
+              "delta": {
+                "hi": -0.35748,
+                "lo": -0.858088,
+                "point": -0.625674
+              },
+              "proposed": {
+                "hi": 2.216664,
+                "lo": 1.713612,
+                "point": 1.967646
+              }
+            },
+            "cost_usd_both_routed": {
+              "current": {
+                "hi": 2.88867,
+                "lo": 2.31474,
+                "point": 2.59332
+              },
+              "delta": {
+                "hi": -0.925896,
+                "lo": -1.155468,
+                "point": -1.037328
+              },
+              "proposed": {
+                "hi": 1.733202,
+                "lo": 1.388844,
+                "point": 1.555992
+              }
+            },
+            "estimated_token_rows": 12,
+            "latency_ms": {
+              "p50": {
+                "current": {
+                  "hi": 485.740873,
+                  "lo": 485.740873,
+                  "point": 485.740873
+                },
+                "delta": {
+                  "hi": 83.571088,
+                  "lo": 83.571088,
+                  "point": 83.571088
+                },
+                "proposed": {
+                  "hi": 569.311961,
+                  "lo": 569.311961,
+                  "point": 569.311961
+                }
+              },
+              "p95": {
+                "current": {
+                  "hi": 485.740873,
+                  "lo": 485.740873,
+                  "point": 485.740873
+                },
+                "delta": {
+                  "hi": 83.571088,
+                  "lo": 83.571088,
+                  "point": 83.571088
+                },
+                "proposed": {
+                  "hi": 569.311961,
+                  "lo": 569.311961,
+                  "point": 569.311961
+                }
+              }
+            },
+            "n": 341,
+            "newly_rejected": {
+              "hi": 0,
+              "lo": 0,
+              "point": 0
+            },
+            "newly_rejected_share": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0,
+              "zero_bound": 0.00673
+            },
+            "newly_served": {
+              "hi": 15,
+              "lo": 5,
+              "point": 10
+            },
+            "newly_served_share": {
+              "hi": 0.043988,
+              "lo": 0.014663,
+              "point": 0.029326
+            },
+            "onprem_share": {
+              "current": {
+                "hi": 1.0,
+                "lo": 1.0,
+                "one_bound": 0.993026,
+                "point": 1.0
+              },
+              "proposed": {
+                "hi": 1.0,
+                "lo": 1.0,
+                "one_bound": 0.993231,
+                "point": 1.0
+              }
+            },
+            "quality_mean": {
+              "current": {
+                "hi": 0.75,
+                "lo": 0.75,
+                "point": 0.75
+              },
+              "delta": {
+                "hi": 0.0,
+                "lo": 0.0,
+                "point": 0.0
+              },
+              "proposed": {
+                "hi": 0.75,
+                "lo": 0.75,
+                "point": 0.75
+              }
+            },
+            "route_changed": {
+              "hi": 334,
+              "lo": 324,
+              "point": 329
+            },
+            "route_changed_share": {
+              "hi": 0.979472,
+              "lo": 0.950147,
+              "point": 0.964809
+            },
+            "routed": {
+              "current": 329,
+              "proposed": 339
+            }
+          },
+          "paper-dev": {
+            "cost_usd": {
+              "current": {
+                "hi": 2.433995,
+                "lo": 1.775532,
+                "point": 2.108764
+              },
+              "delta": {
+                "hi": 0.0,
+                "lo": 0.0,
+                "point": 0.0
+              },
+              "proposed": {
+                "hi": 2.433995,
+                "lo": 1.775532,
+                "point": 2.108764
+              }
+            },
+            "cost_usd_both_routed": {
+              "current": {
+                "hi": 2.433995,
+                "lo": 1.775532,
+                "point": 2.108764
+              },
+              "delta": {
+                "hi": 0.0,
+                "lo": 0.0,
+                "point": 0.0
+              },
+              "proposed": {
+                "hi": 2.433995,
+                "lo": 1.775532,
+                "point": 2.108764
+              }
+            },
+            "estimated_token_rows": 5,
+            "latency_ms": {
+              "p50": {
+                "current": {
+                  "hi": 569.311961,
+                  "lo": 420.632835,
+                  "point": 569.311961
+                },
+                "delta": {
+                  "hi": 0.0,
+                  "lo": 0.0,
+                  "point": 0.0
+                },
+                "proposed": {
+                  "hi": 569.311961,
+                  "lo": 420.632835,
+                  "point": 569.311961
+                }
+              },
+              "p95": {
+                "current": {
+                  "hi": 569.311961,
+                  "lo": 569.311961,
+                  "point": 569.311961
+                },
+                "delta": {
+                  "hi": 0.0,
+                  "lo": 0.0,
+                  "point": 0.0
+                },
+                "proposed": {
+                  "hi": 569.311961,
+                  "lo": 569.311961,
+                  "point": 569.311961
+                }
+              }
+            },
+            "n": 290,
+            "newly_rejected": {
+              "hi": 0,
+              "lo": 0,
+              "point": 0
+            },
+            "newly_rejected_share": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0,
+              "zero_bound": 0.007909
+            },
+            "newly_served": {
+              "hi": 0,
+              "lo": 0,
+              "point": 0
+            },
+            "newly_served_share": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0,
+              "zero_bound": 0.007909
+            },
+            "onprem_share": {
+              "current": {
+                "hi": 1.0,
+                "lo": 1.0,
+                "one_bound": 0.992009,
+                "point": 1.0
+              },
+              "proposed": {
+                "hi": 1.0,
+                "lo": 1.0,
+                "one_bound": 0.992009,
+                "point": 1.0
+              }
+            },
+            "quality_mean": {
+              "current": {
+                "hi": 0.637153,
+                "lo": 0.612847,
+                "point": 0.625436
+              },
+              "delta": {
+                "hi": 0.0,
+                "lo": 0.0,
+                "point": 0.0
+              },
+              "proposed": {
+                "hi": 0.637153,
+                "lo": 0.612847,
+                "point": 0.625436
+              }
+            },
+            "route_changed": {
+              "hi": 0,
+              "lo": 0,
+              "point": 0
+            },
+            "route_changed_share": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0,
+              "zero_bound": 0.007909
+            },
+            "routed": {
+              "current": 287,
+              "proposed": 287
+            }
+          }
+        },
+        "name": "clinic-may-use-eu-lab",
+        "per_day": null,
+        "points_outside_interval": 0,
+        "quality_posterior": {
+          "current": {
+            "calibrated": 0,
+            "posterior": 0,
+            "routed": 882
+          },
+          "proposed": {
+            "calibrated": 0,
+            "posterior": 0,
+            "routed": 892
+          }
+        },
+        "table": {
+          "cost_delta_usd": {
+            "hi": -0.925896,
+            "lo": -1.155468,
+            "point": -1.037328
+          },
+          "cost_per_day_delta_usd": null,
+          "latency_p50_delta_ms": {
+            "hi": 83.571088,
+            "lo": 83.571088,
+            "point": 83.571088
+          },
+          "latency_p95_delta_ms": {
+            "hi": 0.0,
+            "lo": 0.0,
+            "point": 0.0
+          },
+          "newly_rejected": {
+            "hi": 0,
+            "lo": 0,
+            "point": 0
+          },
+          "newly_served": {
+            "hi": 15,
+            "lo": 5,
+            "point": 10
+          },
+          "onprem_share_current": {
+            "hi": 1.0,
+            "lo": 1.0,
+            "one_bound": 0.997393,
+            "point": 1.0
+          },
+          "onprem_share_proposed": {
+            "hi": 1.0,
+            "lo": 1.0,
+            "one_bound": 0.997422,
+            "point": 1.0
+          },
+          "quality_mean_delta": {
+            "hi": 0.00123,
+            "lo": 0.000413,
+            "point": 0.000801
+          },
+          "route_changed": {
+            "hi": 334,
+            "lo": 324,
+            "point": 329
+          }
+        },
+        "totals": {
+          "cost_usd": {
+            "current": {
+              "hi": 6.443545,
+              "lo": 5.525467,
+              "point": 6.001333
+            },
+            "delta": {
+              "hi": -0.35748,
+              "lo": -0.858088,
+              "point": -0.625674
+            },
+            "proposed": {
+              "hi": 5.808896,
+              "lo": 4.915495,
+              "point": 5.375659
+            }
+          },
+          "cost_usd_both_routed": {
+            "current": {
+              "hi": 6.443545,
+              "lo": 5.525467,
+              "point": 6.001333
+            },
+            "delta": {
+              "hi": -0.925896,
+              "lo": -1.155468,
+              "point": -1.037328
+            },
+            "proposed": {
+              "hi": 5.353588,
+              "lo": 4.544307,
+              "point": 4.964005
+            }
+          },
+          "estimated_token_rows": 20,
+          "latency_ms": {
+            "p50": {
+              "current": {
+                "hi": 485.740873,
+                "lo": 485.740873,
+                "point": 485.740873
+              },
+              "delta": {
+                "hi": 83.571088,
+                "lo": 83.571088,
+                "point": 83.571088
+              },
+              "proposed": {
+                "hi": 569.311961,
+                "lo": 569.311961,
+                "point": 569.311961
+              }
+            },
+            "p95": {
+              "current": {
+                "hi": 569.311961,
+                "lo": 569.311961,
+                "point": 569.311961
+              },
+              "delta": {
+                "hi": 0.0,
+                "lo": 0.0,
+                "point": 0.0
+              },
+              "proposed": {
+                "hi": 569.311961,
+                "lo": 569.311961,
+                "point": 569.311961
+              }
+            }
+          },
+          "n": 900,
+          "newly_rejected": {
+            "hi": 0,
+            "lo": 0,
+            "point": 0
+          },
+          "newly_rejected_share": {
+            "hi": 0.0,
+            "lo": 0.0,
+            "point": 0.0,
+            "zero_bound": 0.002555
+          },
+          "newly_served": {
+            "hi": 15,
+            "lo": 5,
+            "point": 10
+          },
+          "newly_served_share": {
+            "hi": 0.016667,
+            "lo": 0.005556,
+            "point": 0.011111
+          },
+          "onprem_share": {
+            "current": {
+              "hi": 1.0,
+              "lo": 1.0,
+              "one_bound": 0.997393,
+              "point": 1.0
+            },
+            "proposed": {
+              "hi": 1.0,
+              "lo": 1.0,
+              "one_bound": 0.997422,
+              "point": 1.0
+            }
+          },
+          "quality_mean": {
+            "current": {
+              "hi": 0.683673,
+              "lo": 0.673099,
+              "point": 0.678571
+            },
+            "delta": {
+              "hi": 0.00123,
+              "lo": 0.000413,
+              "point": 0.000801
+            },
+            "proposed": {
+              "hi": 0.68449,
+              "lo": 0.673852,
+              "point": 0.679372
+            }
+          },
+          "route_changed": {
+            "hi": 334,
+            "lo": 324,
+            "point": 329
+          },
+          "route_changed_share": {
+            "hi": 0.371111,
+            "lo": 0.36,
+            "point": 0.365556
+          },
+          "routed": {
+            "current": 882,
+            "proposed": 892
+          }
+        },
+        "totals_strata": {
+          "own": 3,
+          "pooled_apps": 0,
+          "pooled_rows": 0,
+          "smallest": 269,
+          "variance_factor": 0.996667
+        }
+      },
+      {
+        "by_app": {
+          "paper-claims": {
+            "cost_usd": {
+              "current": {
+                "hi": 1.472528,
+                "lo": 1.128076,
+                "point": 1.299249
+              },
+              "delta": {
+                "hi": 0.557546,
+                "lo": 0.14217,
+                "point": 0.332533
+              },
+              "proposed": {
+                "hi": 1.927236,
+                "lo": 1.380625,
+                "point": 1.631782
+              }
+            },
+            "cost_usd_both_routed": {
+              "current": {
+                "hi": 1.472528,
+                "lo": 1.128076,
+                "point": 1.299249
+              },
+              "delta": {
+                "hi": 0.28036,
+                "lo": 0.04081,
+                "point": 0.149515
+              },
+              "proposed": {
+                "hi": 1.674741,
+                "lo": 1.247266,
+                "point": 1.448764
+              }
+            },
+            "estimated_token_rows": 3,
+            "latency_ms": {
+              "p50": {
+                "current": {
+                  "hi": 569.311961,
+                  "lo": 569.311961,
+                  "point": 569.311961
+                },
+                "delta": {
+                  "hi": 0.0,
+                  "lo": 0.0,
+                  "point": 0.0
+                },
+                "proposed": {
+                  "hi": 569.311961,
+                  "lo": 569.311961,
+                  "point": 569.311961
+                }
+              },
+              "p95": {
+                "current": {
+                  "hi": 569.311961,
+                  "lo": 569.311961,
+                  "point": 569.311961
+                },
+                "delta": {
+                  "hi": 0.0,
+                  "lo": 0.0,
+                  "point": 0.0
+                },
+                "proposed": {
+                  "hi": 569.311961,
+                  "lo": 569.311961,
+                  "point": 569.311961
+                }
+              }
+            },
+            "n": 269,
+            "newly_rejected": {
+              "hi": 0,
+              "lo": 0,
+              "point": 0
+            },
+            "newly_rejected_share": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0,
+              "zero_bound": 0.008523
+            },
+            "newly_served": {
+              "hi": 6,
+              "lo": 1,
+              "point": 3
+            },
+            "newly_served_share": {
+              "hi": 0.022305,
+              "lo": 0.003717,
+              "point": 0.011152
+            },
+            "onprem_share": {
+              "current": {
+                "hi": 1.0,
+                "lo": 1.0,
+                "one_bound": 0.991381,
+                "point": 1.0
+              },
+              "proposed": {
+                "hi": 1.0,
+                "lo": 1.0,
+                "one_bound": 0.991477,
+                "point": 1.0
+              }
+            },
+            "quality_mean": {
+              "current": {
+                "hi": 0.658835,
+                "lo": 0.635768,
+                "point": 0.647556
+              },
+              "delta": {
+                "hi": 0.008173,
+                "lo": 0.002019,
+                "point": 0.00486
+              },
+              "proposed": {
+                "hi": 0.663569,
+                "lo": 0.640335,
+                "point": 0.652416
+              }
+            },
+            "route_changed": {
+              "hi": 7,
+              "lo": 1,
+              "point": 4
+            },
+            "route_changed_share": {
+              "hi": 0.026022,
+              "lo": 0.003717,
+              "point": 0.01487
+            },
+            "routed": {
+              "current": 266,
+              "proposed": 269
+            }
+          },
+          "paper-clinic": {
+            "cost_usd": {
+              "current": {
+                "hi": 2.88867,
+                "lo": 2.31474,
+                "point": 2.59332
+              },
+              "delta": {
+                "hi": 1.43549,
+                "lo": 0.52307,
+                "point": 0.95195
+              },
+              "proposed": {
+                "hi": 4.07553,
+                "lo": 3.03965,
+                "point": 3.54527
+              }
+            },
+            "cost_usd_both_routed": {
+              "current": {
+                "hi": 2.88867,
+                "lo": 2.31474,
+                "point": 2.59332
+              },
+              "delta": {
+                "hi": 0.0,
+                "lo": 0.0,
+                "point": 0.0
+              },
+              "proposed": {
+                "hi": 2.88867,
+                "lo": 2.31474,
+                "point": 2.59332
+              }
+            },
+            "estimated_token_rows": 12,
+            "latency_ms": {
+              "p50": {
+                "current": {
+                  "hi": 485.740873,
+                  "lo": 485.740873,
+                  "point": 485.740873
+                },
+                "delta": {
+                  "hi": 0.0,
+                  "lo": 0.0,
+                  "point": 0.0
+                },
+                "proposed": {
+                  "hi": 485.740873,
+                  "lo": 485.740873,
+                  "point": 485.740873
+                }
+              },
+              "p95": {
+                "current": {
+                  "hi": 485.740873,
+                  "lo": 485.740873,
+                  "point": 485.740873
+                },
+                "delta": {
+                  "hi": 0.0,
+                  "lo": 0.0,
+                  "point": 0.0
+                },
+                "proposed": {
+                  "hi": 485.740873,
+                  "lo": 485.740873,
+                  "point": 485.740873
+                }
+              }
+            },
+            "n": 341,
+            "newly_rejected": {
+              "hi": 0,
+              "lo": 0,
+              "point": 0
+            },
+            "newly_rejected_share": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0,
+              "zero_bound": 0.00673
+            },
+            "newly_served": {
+              "hi": 17,
+              "lo": 7,
+              "point": 12
+            },
+            "newly_served_share": {
+              "hi": 0.049853,
+              "lo": 0.020528,
+              "point": 0.035191
+            },
+            "onprem_share": {
+              "current": {
+                "hi": 1.0,
+                "lo": 1.0,
+                "one_bound": 0.993026,
+                "point": 1.0
+              },
+              "proposed": {
+                "hi": 1.0,
+                "lo": 1.0,
+                "one_bound": 0.99327,
+                "point": 1.0
+              }
+            },
+            "quality_mean": {
+              "current": {
+                "hi": 0.75,
+                "lo": 0.75,
+                "point": 0.75
+              },
+              "delta": {
+                "hi": 0.0,
+                "lo": 0.0,
+                "point": 0.0
+              },
+              "proposed": {
+                "hi": 0.75,
+                "lo": 0.75,
+                "point": 0.75
+              }
+            },
+            "route_changed": {
+              "hi": 0,
+              "lo": 0,
+              "point": 0
+            },
+            "route_changed_share": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0,
+              "zero_bound": 0.00673
+            },
+            "routed": {
+              "current": 329,
+              "proposed": 341
+            }
+          },
+          "paper-dev": {
+            "cost_usd": {
+              "current": {
+                "hi": 2.433995,
+                "lo": 1.775532,
+                "point": 2.108764
+              },
+              "delta": {
+                "hi": 0.344016,
+                "lo": 0.05043,
+                "point": 0.170274
+              },
+              "proposed": {
+                "hi": 2.626682,
+                "lo": 1.929247,
+                "point": 2.279038
+              }
+            },
+            "cost_usd_both_routed": {
+              "current": {
+                "hi": 2.433995,
+                "lo": 1.775532,
+                "point": 2.108764
+              },
+              "delta": {
+                "hi": 0.0,
+                "lo": 0.0,
+                "point": 0.0
+              },
+              "proposed": {
+                "hi": 2.433995,
+                "lo": 1.775532,
+                "point": 2.108764
+              }
+            },
+            "estimated_token_rows": 5,
+            "latency_ms": {
+              "p50": {
+                "current": {
+                  "hi": 569.311961,
+                  "lo": 420.632835,
+                  "point": 569.311961
+                },
+                "delta": {
+                  "hi": 148.679126,
+                  "lo": 0.0,
+                  "point": 0.0
+                },
+                "proposed": {
+                  "hi": 569.311961,
+                  "lo": 420.632835,
+                  "point": 569.311961
+                }
+              },
+              "p95": {
+                "current": {
+                  "hi": 569.311961,
+                  "lo": 569.311961,
+                  "point": 569.311961
+                },
+                "delta": {
+                  "hi": 0.0,
+                  "lo": 0.0,
+                  "point": 0.0
+                },
+                "proposed": {
+                  "hi": 569.311961,
+                  "lo": 569.311961,
+                  "point": 569.311961
+                }
+              }
+            },
+            "n": 290,
+            "newly_rejected": {
+              "hi": 0,
+              "lo": 0,
+              "point": 0
+            },
+            "newly_rejected_share": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0,
+              "zero_bound": 0.007909
+            },
+            "newly_served": {
+              "hi": 6,
+              "lo": 1,
+              "point": 3
+            },
+            "newly_served_share": {
+              "hi": 0.02069,
+              "lo": 0.003448,
+              "point": 0.010345
+            },
+            "onprem_share": {
+              "current": {
+                "hi": 1.0,
+                "lo": 1.0,
+                "one_bound": 0.992009,
+                "point": 1.0
+              },
+              "proposed": {
+                "hi": 1.0,
+                "lo": 1.0,
+                "one_bound": 0.992091,
+                "point": 1.0
+              }
+            },
+            "quality_mean": {
+              "current": {
+                "hi": 0.637153,
+                "lo": 0.612847,
+                "point": 0.625436
+              },
+              "delta": {
+                "hi": 0.002604,
+                "lo": 0.000385,
+                "point": 0.001289
+              },
+              "proposed": {
+                "hi": 0.637931,
+                "lo": 0.613793,
+                "point": 0.626724
+              }
+            },
+            "route_changed": {
+              "hi": 0,
+              "lo": 0,
+              "point": 0
+            },
+            "route_changed_share": {
+              "hi": 0.0,
+              "lo": 0.0,
+              "point": 0.0,
+              "zero_bound": 0.007909
+            },
+            "routed": {
+              "current": 287,
+              "proposed": 290
+            }
+          }
+        },
+        "name": "raise-request-budget",
+        "per_day": null,
+        "points_outside_interval": 0,
+        "quality_posterior": {
+          "current": {
+            "calibrated": 0,
+            "posterior": 0,
+            "routed": 882
+          },
+          "proposed": {
+            "calibrated": 0,
+            "posterior": 0,
+            "routed": 900
+          }
+        },
+        "table": {
+          "cost_delta_usd": {
+            "hi": 0.28036,
+            "lo": 0.04081,
+            "point": 0.149515
+          },
+          "cost_per_day_delta_usd": null,
+          "latency_p50_delta_ms": {
+            "hi": 0.0,
+            "lo": 0.0,
+            "point": 0.0
+          },
+          "latency_p95_delta_ms": {
+            "hi": 0.0,
+            "lo": 0.0,
+            "point": 0.0
+          },
+          "newly_rejected": {
+            "hi": 0,
+            "lo": 0,
+            "point": 0
+          },
+          "newly_served": {
+            "hi": 25,
+            "lo": 12,
+            "point": 18
+          },
+          "onprem_share_current": {
+            "hi": 1.0,
+            "lo": 1.0,
+            "one_bound": 0.997393,
+            "point": 1.0
+          },
+          "onprem_share_proposed": {
+            "hi": 1.0,
+            "lo": 1.0,
+            "one_bound": 0.997445,
+            "point": 1.0
+          },
+          "quality_mean_delta": {
+            "hi": 0.00365,
+            "lo": 0.001575,
+            "point": 0.00254
+          },
+          "route_changed": {
+            "hi": 7,
+            "lo": 1,
+            "point": 4
+          }
+        },
+        "totals": {
+          "cost_usd": {
+            "current": {
+              "hi": 6.443545,
+              "lo": 5.525467,
+              "point": 6.001333
+            },
+            "delta": {
+              "hi": 2.005073,
+              "lo": 0.924678,
+              "point": 1.454757
+            },
+            "proposed": {
+              "hi": 8.146857,
+              "lo": 6.723779,
+              "point": 7.45609
+            }
+          },
+          "cost_usd_both_routed": {
+            "current": {
+              "hi": 6.443545,
+              "lo": 5.525467,
+              "point": 6.001333
+            },
+            "delta": {
+              "hi": 0.28036,
+              "lo": 0.04081,
+              "point": 0.149515
+            },
+            "proposed": {
+              "hi": 6.638645,
+              "lo": 5.649353,
+              "point": 6.150848
+            }
+          },
+          "estimated_token_rows": 20,
+          "latency_ms": {
+            "p50": {
+              "current": {
+                "hi": 485.740873,
+                "lo": 485.740873,
+                "point": 485.740873
+              },
+              "delta": {
+                "hi": 0.0,
+                "lo": 0.0,
+                "point": 0.0
+              },
+              "proposed": {
+                "hi": 485.740873,
+                "lo": 485.740873,
+                "point": 485.740873
+              }
+            },
+            "p95": {
+              "current": {
+                "hi": 569.311961,
+                "lo": 569.311961,
+                "point": 569.311961
+              },
+              "delta": {
+                "hi": 0.0,
+                "lo": 0.0,
+                "point": 0.0
+              },
+              "proposed": {
+                "hi": 569.311961,
+                "lo": 569.311961,
+                "point": 569.311961
+              }
+            }
+          },
+          "n": 900,
+          "newly_rejected": {
+            "hi": 0,
+            "lo": 0,
+            "point": 0
+          },
+          "newly_rejected_share": {
+            "hi": 0.0,
+            "lo": 0.0,
+            "point": 0.0,
+            "zero_bound": 0.002555
+          },
+          "newly_served": {
+            "hi": 25,
+            "lo": 12,
+            "point": 18
+          },
+          "newly_served_share": {
+            "hi": 0.027778,
+            "lo": 0.013333,
+            "point": 0.02
+          },
+          "onprem_share": {
+            "current": {
+              "hi": 1.0,
+              "lo": 1.0,
+              "one_bound": 0.997393,
+              "point": 1.0
+            },
+            "proposed": {
+              "hi": 1.0,
+              "lo": 1.0,
+              "one_bound": 0.997445,
+              "point": 1.0
+            }
+          },
+          "quality_mean": {
+            "current": {
+              "hi": 0.683673,
+              "lo": 0.673099,
+              "point": 0.678571
+            },
+            "delta": {
+              "hi": 0.00365,
+              "lo": 0.001575,
+              "point": 0.00254
+            },
+            "proposed": {
+              "hi": 0.686111,
+              "lo": 0.675556,
+              "point": 0.681111
+            }
+          },
+          "route_changed": {
+            "hi": 7,
+            "lo": 1,
+            "point": 4
+          },
+          "route_changed_share": {
+            "hi": 0.007778,
+            "lo": 0.001111,
+            "point": 0.004444
+          },
+          "routed": {
+            "current": 882,
+            "proposed": 900
+          }
+        },
+        "totals_strata": {
+          "own": 3,
+          "pooled_apps": 0,
+          "pooled_rows": 0,
+          "smallest": 269,
+          "variance_factor": 0.996667
+        }
+      }
+    ],
+    "seed": 0,
+    "strata": "application_id"
+  }
+}

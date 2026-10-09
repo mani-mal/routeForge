@@ -1,0 +1,4 @@
+{"schema": "routeforge.capacity-assumptions/v1", "title": "DGX lab 2026-10-08 run 2: stated limits (illustrative, stated for the experiment; all three names are one server)",
+ "endpoints": {"glm-5.3-flash": {"max_concurrency": 2, "requests_per_minute": 40, "tokens_per_minute": 80000},
+               "glm-flash-east": {"max_concurrency": 2, "requests_per_minute": 40, "tokens_per_minute": 80000},
+               "glm-flash-econ": {"max_concurrency": 2, "requests_per_minute": 40, "tokens_per_minute": 80000}}}
