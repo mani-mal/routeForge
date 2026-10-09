@@ -111,7 +111,7 @@ def test_model_generated_tool_call_arguments_are_verified_on_egress(client, monk
     assert tool_calls[0]["id"] == "c1"
     assert tool_calls[0]["type"] == "function"
     assert tool_calls[0]["function"]["name"] == "find_support_ticket"
-    assert json.loads(tool_calls[0]["function"]["arguments"]) == {"ssn": "<US_SSN_1>"}
+    assert json.loads(tool_calls[0]["function"]["arguments"]) == {"ssn": "REDACTED_US_SSN_1"}
     # Whole-body check (fix round 1): the SSN must not leak through ANY key of
     # the response, not just `choices` -- `display.output` fed the same raw
     # tool_calls JSON before that fix.
@@ -166,7 +166,7 @@ def test_model_generated_tool_call_arguments_stream_ssn_absent_from_sse(client, 
                 for tcd in (choice.get("delta") or {}).get("tool_calls") or []:
                     fn = tcd.get("function") or {}
                     if (fn.get("name") == "find_support_ticket"
-                            and "<US_SSN" in (fn.get("arguments") or "")):
+                            and "REDACTED_US_SSN" in (fn.get("arguments") or "")):
                         redacted_tool_call_frames += 1
     # Non-vacuous: the tool call must actually have been streamed, redacted.
     assert redacted_tool_call_frames >= 1

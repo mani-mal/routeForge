@@ -113,6 +113,20 @@ def _occurrences(needle: str, haystack: str) -> list[tuple[int, int]]:
     return found
 
 
+def _inert_placeholders(redacted: str, mapping: dict[str, str]) -> str:
+    """Rewrite each `<TYPE_N>` placeholder `anonymize` just wrote as
+    `REDACTED_TYPE_N`. A tool-call argument is a command channel: the client
+    EXECUTES it, and in a shell `<NAME>` is a redirection (B69: a redacted
+    `xargs -0 -n1` came back as `xargs -0 -<US_DRIVER_LICENSE_1>` and bash
+    tried to read a file of that name). Word characters only are inert in a
+    shell, a path, SQL and JSON alike. What is redacted does not change --
+    only how the placeholder is spelled."""
+    for ph in mapping:
+        if ph.startswith("<") and ph.endswith(">"):
+            redacted = redacted.replace(ph, "REDACTED_" + ph[1:-1])
+    return redacted
+
+
 def redact_tool_calls_with_entities(tool_calls: list[dict] | None,
                                     det: Detector) -> ToolCallRedaction:
     """Return a COPY of `tool_calls` with each `function.arguments` STRING
@@ -143,8 +157,10 @@ def redact_tool_calls_with_entities(tool_calls: list[dict] | None,
          which Presidio only scores as US_SSN with the key in view, so a
          per-app `pii_score_threshold`/denylist (which can never exempt
          US_SSN) cannot un-redact it.
-    Placeholders are numbered per value (`<US_SSN_1>` may repeat across
-    values); the redaction map is not kept for tool calls."""
+    Placeholders are numbered per value (`REDACTED_US_SSN_1` may repeat across
+    values); the redaction map is not kept for tool calls. They are written
+    in word characters only, not as `<US_SSN_1>` -- see `_inert_placeholders`
+    (B69)."""
     if not tool_calls:
         return ToolCallRedaction(tool_calls, frozenset())
 
@@ -205,9 +221,10 @@ def redact_tool_calls_with_entities(tool_calls: list[dict] | None,
         for leaf in target.leaves:
             if not leaf.spans:
                 continue
-            redacted, _ = det.anonymize(leaf.text, dedupe(leaf.spans))
+            redacted, mapping = det.anonymize(leaf.text, dedupe(leaf.spans))
             if redacted == leaf.text:
                 continue
+            redacted = _inert_placeholders(redacted, mapping)
             changed = True
             if leaf.parent is None:
                 target.root = redacted

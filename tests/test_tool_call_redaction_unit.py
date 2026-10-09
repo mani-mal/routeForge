@@ -28,7 +28,7 @@ def test_numeric_leaf_matching_detector_yields_valid_json():
     # `{"ts": <US_BANK_NUMBER_1>, ...}` -- unparseable.
     out = redact_tool_calls([_call(json.dumps({"ts": 1757980800, "ssn": SSN}))], RegexDetector())
     parsed = json.loads(_args(out))
-    assert parsed == {"ts": "<US_BANK_NUMBER_1>", "ssn": "<US_SSN_1>"}
+    assert parsed == {"ts": "REDACTED_US_BANK_NUMBER_1", "ssn": "REDACTED_US_SSN_1"}
     assert SSN not in _args(out)
 
 
@@ -36,14 +36,14 @@ def test_unmatched_numeric_leaf_stays_a_number():
     out = redact_tool_calls([_call(json.dumps({"n": 42, "ssn": SSN, "f": 1.5, "b": True}))],
                             RegexDetector())
     parsed = json.loads(_args(out))
-    assert parsed == {"n": 42, "ssn": "<US_SSN_1>", "f": 1.5, "b": True}
+    assert parsed == {"n": 42, "ssn": "REDACTED_US_SSN_1", "f": 1.5, "b": True}
 
 
 def test_url_value_yields_valid_json():
     args = json.dumps({"url": "https://example.com/a?b=1", "email": "a.b@example.com"})
     out = redact_tool_calls([_call(args)], RegexDetector())
     parsed = json.loads(_args(out))
-    assert parsed == {"url": "https://example.com/a?b=1", "email": "<EMAIL_ADDRESS_1>"}
+    assert parsed == {"url": "https://example.com/a?b=1", "email": "REDACTED_EMAIL_ADDRESS_1"}
 
 
 def test_nested_dicts_and_lists_are_walked():
@@ -51,8 +51,8 @@ def test_nested_dicts_and_lists_are_walked():
                        "note": None})
     out = redact_tool_calls([_call(args)], RegexDetector())
     parsed = json.loads(_args(out))
-    assert parsed == {"q": {"people": [{"ssn": "<US_SSN_1>"}, {"ssn": "<US_SSN_1>"}],
-                            "ids": [1, "<US_BANK_NUMBER_1>"]},
+    assert parsed == {"q": {"people": [{"ssn": "REDACTED_US_SSN_1"}, {"ssn": "REDACTED_US_SSN_1"}],
+                            "ids": [1, "REDACTED_US_BANK_NUMBER_1"]},
                       "note": None}
     assert SSN not in _args(out) and "123-45-6789" not in _args(out)
 
@@ -67,19 +67,19 @@ def test_escaped_string_is_redacted_and_non_ascii_preserved():
     args = '{"note": "na\\u00efve ssn 482-73-1946", "quote": "say \\"hi\\""}'
     out = redact_tool_calls([_call(args)], RegexDetector())
     parsed = json.loads(_args(out))
-    assert parsed == {"note": "naïve ssn <US_SSN_1>", "quote": 'say "hi"'}
+    assert parsed == {"note": "naïve ssn REDACTED_US_SSN_1", "quote": 'say "hi"'}
     assert "naïve" in _args(out)  # ensure_ascii=False
 
 
 def test_top_level_json_scalar_is_redacted_to_valid_json():
     out = redact_tool_calls([_call(json.dumps(SSN))], RegexDetector())
-    assert json.loads(_args(out)) == "<US_SSN_1>"
+    assert json.loads(_args(out)) == "REDACTED_US_SSN_1"
 
 
 def test_non_json_arguments_fall_back_to_whole_string_splice():
     args = "ssn=482-73-1946, not json {"
     res = redact_tool_calls_with_entities([_call(args)], RegexDetector())
-    assert _args(res.tool_calls) == "ssn=<US_SSN_1>, not json {"
+    assert _args(res.tool_calls) == "ssn=REDACTED_US_SSN_1, not json {"
     assert res.entity_types == frozenset({"US_SSN"})
 
 
@@ -129,7 +129,7 @@ def test_extra_keys_preserved_and_input_not_mutated():
     assert got["index"] == 0 and got["custom"] == {"k": 1}
     assert got["function"]["name"] == "find_support_ticket"
     assert got["function"]["strict"] is True
-    assert json.loads(got["function"]["arguments"]) == {"ssn": "<US_SSN_1>"}
+    assert json.loads(got["function"]["arguments"]) == {"ssn": "REDACTED_US_SSN_1"}
 
 
 def test_entity_types_are_collected_across_calls():
@@ -195,7 +195,7 @@ def test_raw_pass_redacts_value_only_detected_with_json_context():
     args = json.dumps({"ssn": "482731946", "n": 482731946, "other": "keep"})
     res = redact_tool_calls_with_entities([_call(args)], _KeyContextDetector())
     out = _args(res.tool_calls)
-    assert json.loads(out) == {"ssn": "<US_SSN_1>", "n": "<US_SSN_1>", "other": "keep"}
+    assert json.loads(out) == {"ssn": "REDACTED_US_SSN_1", "n": "REDACTED_US_SSN_1", "other": "keep"}
     assert "482731946" not in out
     assert res.entity_types == frozenset({"US_SSN"})
 
@@ -208,7 +208,7 @@ def test_raw_pass_value_embedded_in_longer_word_is_not_redacted():
             return [Entity(type="PERSON", start=i, end=i + 4, value='"Al"')] if i >= 0 else []
     args = json.dumps({"who": "Al", "note": "Also fine"})
     out = _args(redact_tool_calls([_call(args)], _Det()))
-    assert json.loads(out) == {"who": "<PERSON_1>", "note": "Also fine"}
+    assert json.loads(out) == {"who": "REDACTED_PERSON_1", "note": "Also fine"}
 
 
 _BARE_SSN_ARGS = json.dumps({"ssn": "482731946"})
@@ -229,3 +229,37 @@ def test_presidio_hyphenless_ssn_under_ssn_key_is_always_redacted(presidio, make
     json.loads(out)
     assert "482731946" not in out
     assert "US_SSN" in res.entity_types
+
+
+# --- B69: a redacted argument is executed by the client ----------------------
+
+_SHELL_ACTIVE = set("<>|&;$`(){}*?!\\\"'")
+
+
+@pytest.mark.parametrize("command", [
+    "grep -r 482-73-1946 /var/log | xargs -0 -n1 printf '%q\\n'",
+    "echo 482-73-1946 > /tmp/out.txt",
+])
+def test_placeholder_in_a_shell_command_is_word_characters_only(command):
+    """B69: `<US_SSN_1>` inside a command is a shell redirection. The
+    placeholder must add no shell-active character the command did not have."""
+    args = json.dumps({"command": command})
+    out = json.loads(_args(redact_tool_calls([_call(args)], RegexDetector())))["command"]
+    assert SSN not in out
+    assert "REDACTED_US_SSN_1" in out
+    assert "<" not in out.replace(" > /tmp/out.txt", "")
+    assert out == command.replace(SSN, "REDACTED_US_SSN_1")
+    assert not (_SHELL_ACTIVE & set("REDACTED_US_SSN_1"))
+
+
+def test_non_json_command_placeholder_is_word_characters_only():
+    res = redact_tool_calls_with_entities([_call(f"cat notes | grep {SSN}")], RegexDetector())
+    assert _args(res.tool_calls) == "cat notes | grep REDACTED_US_SSN_1"
+    assert res.entity_types == frozenset({"US_SSN"})
+
+
+def test_message_text_keeps_the_angle_bracket_placeholder():
+    """Only tool-call arguments change spelling; prose redaction is untouched."""
+    det = RegexDetector()
+    text, _ = det.anonymize(f"ssn {SSN}", det.analyze(f"ssn {SSN}"))
+    assert text == "ssn <US_SSN_1>"

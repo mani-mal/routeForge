@@ -541,6 +541,11 @@ detector's redaction is applied to the arguments. Redaction keeps `arguments` va
 JSON arguments are redacted value by value (object keys are left alone) and re-serialized
 only if something was redacted — arguments with no detected entity are forwarded
 byte-for-byte; arguments that are not valid JSON are redacted as a plain string.
+Inside tool-call arguments the placeholder is spelled in word characters only —
+`REDACTED_US_SSN_1`, not the `<US_SSN_1>` used in message text — because a client executes
+those arguments and `<NAME>` is a redirection in a shell. A general-purpose detector such
+as `presidio` can match ordinary shell and code text (`-n1`, a file name); for a coding
+agent, choose the detector for that app deliberately.
 `passthrough` leaves tool call arguments untouched in both directions, same as message
 content.
 
