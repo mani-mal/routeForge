@@ -2,7 +2,7 @@
 
 **As of 2026-10-08**, `main` is through PR #92 (P2 evaluation metrics, part 1). The DGX
 Spark runs `4bfb0b3` (through PR #79). The DGX lab (Run:ai) cluster was rebuilt and
-redeployed by PR #83, and is the deployment target for P3c-2 onward (api/ui `0.30.1`).
+redeployed by PR #83, and is the deployment target for P3c-2 onward (api/ui `0.31.0`).
 
 This is the status of the program set out in `docs/new/RouteForge-Priorities-1-3-LLM-Handoff.md`
 (the "handoff"). Each shipped slice went through the same pipeline: design spec

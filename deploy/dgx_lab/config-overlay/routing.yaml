@@ -1,0 +1,6 @@
+# DGX lab overlay: appended to the shipped model_pool by name.
+# Free variants are rate-limited and are withdrawn without notice; these two answered
+# 3 of 3 probe calls from the lab on 2026-10-09.
+model_pool:
+  - {name: openrouter-mid,      provider: openrouter, tier: mid,      display_name: "Nemotron 3 Super 120B (OpenRouter, free)", litellm_model: "openrouter/nvidia/nemotron-3-super-120b-a12b:free"}
+  - {name: openrouter-frontier, provider: openrouter, tier: frontier, display_name: "Nemotron 3 Ultra 550B (OpenRouter, free)", litellm_model: "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"}

@@ -1,0 +1,7 @@
+# DGX lab overlay (SP_CONFIG_OVERLAY_DIR): merged over the shipped config/serving.yaml.
+# OpenRouter is a public model aggregator, used here as the cloud path for the paper's
+# placement experiments, with synthetic prompts only. The declarations are the cautious
+# ones: RouteForge cannot verify what an upstream provider keeps.
+providers:
+  openrouter: {enabled: false, litellm_prefix: openrouter, api_key_env: OPENROUTER_API_KEY,
+               prompt_retention: retained, accepts_raw_sensitive: "false"}

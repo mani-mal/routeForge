@@ -22,8 +22,39 @@ def _expand_env(value: str) -> str:
     return _ENV_PAT.sub(repl, value)
 
 
+def _overlay(base, over):
+    """Merge a deployment overlay onto a shipped config value. Mappings merge
+    key by key; a list whose items are all named mappings (`model_pool`) merges
+    by `name`, an overlay entry replacing the shipped one of that name and new
+    names appended; anything else is replaced by the overlay's value."""
+    if isinstance(base, dict) and isinstance(over, dict):
+        out = dict(base)
+        for k, v in over.items():
+            out[k] = _overlay(base[k], v) if k in base else v
+        return out
+    named = lambda xs: isinstance(xs, list) and all(  # noqa: E731
+        isinstance(x, dict) and "name" in x for x in xs)
+    if named(base) and named(over) and over:
+        merged = {x["name"]: x for x in base}
+        for x in over:
+            merged[x["name"]] = _overlay(merged[x["name"]], x) if x["name"] in merged else x
+        return list(merged.values())
+    return over
+
+
 def _read(config_dir: str, name: str) -> dict:
-    return yaml.safe_load(Path(config_dir, name).read_text()) or {}
+    """Read one shipped config file, then merge the same-named file from
+    `SP_CONFIG_OVERLAY_DIR` over it if there is one. The overlay is how a
+    deployment adds what is specific to it -- a cloud provider, its pool
+    entries and their prices -- without carrying a full copy of the shipped
+    file. The cross-file lint runs on the merged result, and the routing
+    policy version is hashed from it, so an overlay can neither skip a check
+    nor change routing without changing the version."""
+    raw = yaml.safe_load(Path(config_dir, name).read_text()) or {}
+    overlay_dir = os.environ.get("SP_CONFIG_OVERLAY_DIR")
+    if overlay_dir and Path(overlay_dir, name).is_file():
+        raw = _overlay(raw, yaml.safe_load(Path(overlay_dir, name).read_text()) or {})
+    return raw
 
 
 def _policy_version(routing_raw: dict, pricing_raw: dict) -> str:
@@ -130,8 +161,19 @@ def load_settings(config_dir: str = "config") -> Settings:
         bool(sc_raw.get("enabled", False)) if _sc_opt_env is None
         else _sc_opt_env.strip().lower() in ("on", "true", "1", "yes")
     )
+    # SP_PROVIDER_<NAME>_ENABLED overrides serving.yaml's
+    # providers.<name>.enabled -- same env-override pattern as SP_CONTEXT_OPT
+    # above, so a deployment can switch a provider on or off without mounting
+    # its own serving.yaml. Only the on/off switch: transport and declarations
+    # stay the file's.
+    providers_raw = {}
+    for _pname, _pcfg in serving_raw["providers"].items():
+        _penv = os.environ.get(f"SP_PROVIDER_{_pname.upper()}_ENABLED")
+        providers_raw[_pname] = (
+            _pcfg if _penv is None
+            else {**_pcfg, "enabled": _penv.strip().lower() in ("on", "true", "1", "yes")})
     serving = ServingCfg(
-        providers=serving_raw["providers"],
+        providers=providers_raw,
         pii_detection=os.environ.get(
             "SP_PII_DETECTION", serving_raw["policy"]["pii_detection"]),
         allow_app_pii_downgrade=allow_app_pii_downgrade,
