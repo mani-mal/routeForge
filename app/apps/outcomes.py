@@ -116,7 +116,8 @@ def prompt_bucket(tokens: int) -> str:
     return ">64k"
 
 
-def outcome_context(ctx, *, max_tokens: int | None = None) -> dict:
+def outcome_context(ctx, *, max_tokens: int | None = None,
+                    trajectory_key: str | None = None) -> dict:
     """The content-free policy features of an `ExecutionPolicyContext`,
     shared verbatim by `build_ok_outcome` and `build_failure_outcome` since
     both are known the moment the gate has run, win or lose downstream.
@@ -134,6 +135,9 @@ def outcome_context(ctx, *, max_tokens: int | None = None) -> dict:
         # A model slug and an int -- content-free.
         "requested_model": ctx.requested_model,
         "max_tokens": max_tokens,
+        # B72: a hash and TYPES -- content-free.
+        "trajectory_key": trajectory_key,
+        "inherited_entity_types": sorted(set(getattr(ctx, "inherited_entities", ()) or ())),
     }
 
 
@@ -286,6 +290,8 @@ def _policy_features(outcome_ctx: dict) -> dict:
         "requested_model": outcome_ctx.get("requested_model"),
         "max_tokens": outcome_ctx.get("max_tokens"),
         "routing_tokens": outcome_ctx.get("routing_tokens"),
+        "trajectory_key": outcome_ctx.get("trajectory_key"),
+        "inherited_entity_types": list(outcome_ctx.get("inherited_entity_types") or []),
     }
 
 

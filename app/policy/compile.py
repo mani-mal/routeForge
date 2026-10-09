@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, Callable, Literal, Mapping
 
 from app.config.schema import Settings
 from app.policy.enums import PII_MODES, POLICY_MODES, RESIDENCY, STREAM_MODES
+from app.policy.trajectory import resolve_trajectory_mode
 
 if TYPE_CHECKING:
     from app.apps.policy import AppPolicyView
@@ -163,6 +164,10 @@ class EffectivePolicy:
     # resolves and validates the shape.
     allowed_regions: frozenset[str] | None = None
     require_no_retention: bool = False
+    #: B72: `off` | `header` | `sticky` (app/policy/trajectory.py). Raise-only
+    #: like the cross-axis rule it feeds: it can add inherited entity types to
+    #: a request's rule match, never remove one, and reads no protection axis.
+    trajectory_mode: str = "off"
     #: Sensitivity label, raised by a cross-axis rule in `apply_signals`.
     sensitivity: str | None = None
     #: Every declared cross-axis rule that fired, whether or not it was allowed
@@ -444,6 +449,11 @@ def compile_policy(app_policy, deployment: Settings) -> EffectivePolicy:
 
     require_no_retention = bool(_get(app_policy, "require_no_retention"))
 
+    stored_trajectory_mode = _get(app_policy, "trajectory_mode")
+    trajectory_mode, tm_parsed = resolve_trajectory_mode(stored_trajectory_mode)
+    if not tm_parsed:
+        rejected.append(("trajectory_mode", str(stored_trajectory_mode)))
+
     return EffectivePolicy(
         placement=placement,
         protection=protection,
@@ -454,6 +464,7 @@ def compile_policy(app_policy, deployment: Settings) -> EffectivePolicy:
         clamped=tuple(clamped),
         allowed_regions=allowed_regions,
         require_no_retention=require_no_retention,
+        trajectory_mode=trajectory_mode,
     )
 
 

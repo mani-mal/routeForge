@@ -58,7 +58,9 @@ literature doesn't model".
 6. A statement of **trajectory-level feasible routing** with a live counterexample to the
    request-level model: a placement restriction raised by a tool result did not survive a
    compacted history (3 of 3), and 94.5% of one agent session's input tokens had been sent
-   before. Problem formulation only; nothing built
+   before. The policy half is built (trajectory envelope, api `0.32.1`): with it the
+   compacted turn stayed on-prem 3 of 3, and 6 of 6 under the fail-closed mode when the
+   client changed or dropped its id. The routing half is formulation only
    ([`trajectory-feasible-routing.md`](trajectory-feasible-routing.md), draft §8). The
    follow-on paper is "FeasibleRouteBench-Agent".
 7. (Optional, separate papers) R2 cost of redaction, R4 streaming verification, R3
@@ -770,7 +772,8 @@ router-version check. **Designed, not built:** churn robustness and confidence c
 | E12+ | fidelity, R2/R3/R4 | §4–§5 | specs pending |
 | E13a | Trajectory probe: does a detection-raised placement survive a compacted history? | TR §2.1 | done live 2026-10-09: no, 3 of 3 runs (T2 and T3a on-prem, T3b cloud). Synthetic conversation, hand-written summary |
 | E13b | Token profile of a real agent session | TR §2.2 | done on one session: 21 calls, 496,422 prompt / 1,310 completion tokens; ≥ 94.5% of prompt tokens re-sent if each call extends the last (inferred from sizes) |
-| E13c | The probe and its variants with a trajectory envelope; per-call against prefix-aware task cost; switch-aware routing; trajectory-oracle regret | TR §5 | **TO MEASURE** — needs the envelope and trajectory id (B72) |
+| E13c | The probe with the trajectory envelope, per mode | TR §2.4 | done live 2026-10-09 (api 0.32.1), 18 conversations, 54 requests: compacted turn on-prem 3 of 3 under `header` (cloud 3 of 3 with it off); cloud 6 of 6 when a `header` client changed or dropped its id (stated limit); on-prem 6 of 6 under `sticky`. 21 of 21 inheriting requests on-prem. Replay agreement 1.0 over 54. Sequence properties in `tests/test_trajectory_envelope.py` |
+| E13d | Probe variants (sub-agent, retry, failover, resume); per-call against prefix-aware task cost; switch-aware routing; trajectory-oracle regret | TR §5 | **TO MEASURE** — the routing half is not built (B72 steps 4–6) |
 
 **Update 2026-10-09 (FB §25).** The lab now has four different models: two on-prem
 (`qwen3.6-35b` cheap, `glm-5.3-flash` mid) and two reached through a cloud provider

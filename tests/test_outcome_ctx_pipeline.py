@@ -67,7 +67,8 @@ def test_outcome_ctx_populated_on_success():
     assert oc.keys() == {
         "sensitivity", "risk_class", "onprem_only",
         "detected_entity_types", "app_policy_version", "complexity",
-        "requested_model", "max_tokens", "routing_tokens"}
+        "requested_model", "max_tokens", "routing_tokens",
+        "trajectory_key", "inherited_entity_types"}
     assert isinstance(oc["complexity"], float)
     # B60: the count the router was given, set on the same line as the
     # complexity derived from it.

@@ -54,6 +54,8 @@ class AppPolicyView:
     # the candidate set only; never widens allowed_providers/onprem_only.
     allowed_regions: frozenset[str] | None = None       # None = no regional constraint
     require_no_retention: bool | None = None            # None = inherit (false)
+    # B72: off | header | sticky; None = off. app/policy/trajectory.py.
+    trajectory_mode: str | None = None
 
     def version(self) -> str:
         """First 12 hex of sha256 over this app policy's decision-relevant
@@ -110,6 +112,8 @@ class AppPolicyView:
         if self.escalate_residency_on_detection is not None:
             fields["escalate_residency_on_detection"] = \
                 self.escalate_residency_on_detection
+        if self.trajectory_mode is not None:
+            fields["trajectory_mode"] = self.trajectory_mode
         # P1b data-handling requirements: same "fold in only when set" rule.
         if self.allowed_regions is not None:
             fields["allowed_regions"] = sorted(self.allowed_regions)
@@ -152,6 +156,7 @@ def policy_view_from(app: Application) -> AppPolicyView:
         escalate_residency_on_detection=p.escalate_residency_on_detection,
         allowed_regions=_fs(p.allowed_regions),
         require_no_retention=p.require_no_retention,
+        trajectory_mode=p.trajectory_mode,
     )
 
 

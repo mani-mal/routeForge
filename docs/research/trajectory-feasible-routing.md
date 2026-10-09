@@ -1,9 +1,12 @@
 # From request-level to trajectory-level feasible routing
 
-**Status: problem statement and first measurements. Nothing in this document is built.**
+**Status: the policy envelope (§3, steps 1–3 of §4) is built and measured live (§2.4,
+api `0.32.1`, 2026-10-09). The routing half — switching cost, the sequential objective,
+the trajectory oracle — is not built.**
 Written 2026-10-09 from the owner's design note on agentic trajectories. It records what
-RouteForge does today, two measurements that show where the request-level model stops, a
-formulation of the trajectory-level problem, and the experiments that would test it. For
+RouteForge did before the envelope, two measurements that show where the request-level
+model stops, a formulation of the trajectory-level problem, what was then built and
+measured, and the experiments that remain. For
 the paper, it is the source of the "trajectory" section in
 [`paper-draft.md`](paper-draft.md); for the product, the build order is backlog B72.
 
@@ -87,6 +90,61 @@ One session, one client, one model. It is a motivation, not a distribution.
 - An agent's **first** call was about 14,000 tokens; a per-request cap sized for chat
   rejected it (§24.9). Budgets are per call, and an agent's cost is per task.
 
+### 2.4 The same conversation with the envelope (live, 2026-10-09, api `0.32.1`)
+
+The envelope of §3 was then built for the placement side (`app/policy/trajectory.py`,
+per-app `trajectory_mode`; reference in `docs/reference/per-app-config.md`). The
+conversation of §2.1 was run three times under each setting, 18 conversations and 54
+requests, with a fresh trajectory id per conversation.
+
+| setting | id on the last turn | T1 | T2 | T3b (compacted) | inherited on T3b |
+|---|---|---|---|---|---|
+| `off` | same | cloud ×3 | on-prem ×3 | **cloud ×3** | — |
+| `header` | same | cloud ×3 | on-prem ×3 | **on-prem ×3** | `US_SSN`, `EMAIL_ADDRESS` |
+| `header` | a new id | cloud ×3 | on-prem ×3 | cloud ×3 | — |
+| `header` | none | cloud ×3 | on-prem ×3 | cloud ×3 | — |
+| `sticky` | a new id | on-prem ×3 | on-prem ×3 | **on-prem ×3** | `US_SSN`, `EMAIL_ADDRESS` |
+| `sticky` | none | on-prem ×3 | on-prem ×3 | **on-prem ×3** | `US_SSN`, `EMAIL_ADDRESS` |
+
+- With the envelope, the compacted turn stays on-premises: 0 of 3 reached a cloud
+  endpoint, against 3 of 3 without it.
+- `header` trusts the client, and rows 3 and 4 show the cost of that: a client that
+  changes or drops its id starts clean. This is the stated limit of `header`, not a
+  defect, and it is the reason `sticky` exists.
+- `sticky` held in both escape attempts. Its price is visible in the T1 column: by the
+  time the sticky arms ran, the application had live envelopes from the earlier arms, so
+  even the public first turn went on-premises. That is what failing closed costs.
+- All 21 requests that inherited an entity type were on-premises only and were served by
+  the on-prem endpoint. The export contains the hashed id and type names; neither a raw
+  trajectory id nor the SSN appears in it.
+- **Replay stays faithful.** The outcome row's `detected_entity_types` includes the
+  inherited types, so the simulator reproduces the decision without knowing about
+  envelopes: model and outcome agreement 1.0 over the 54 rows.
+
+Properties are checked over generated event sequences (applications × trajectory ids ×
+"carries an identifier") in `tests/test_trajectory_envelope.py`: `off` is exactly the
+per-request behaviour; `header` accumulates per trajectory and never across trajectories
+or applications; `sticky` restricts the whole application and only it; no protection axis
+changes along any sequence; and against the same events with no envelope, no call is
+less restricted.
+
+**Review and a second run.** The table above was measured on api `0.32.0`. A code review
+of that version found that its store read an envelope and wrote it back, so two
+simultaneous calls of one trajectory could overwrite each other on Postgres and drop a
+recorded type; the test suite, on SQLite, could not see it. It also found that a call
+wrote back the types it had inherited, so an envelope renewed itself on every call. Both
+are fixed in `0.32.1`: the envelope is a set of append-only observations unioned on read,
+and only types detected in a request's own text are written, so a type stops counting one
+lifetime after it was last detected. The whole probe was repeated on `0.32.1` with the
+same result in all 18 conversations
+(`probe_with_envelope_results_0.32.1.json`). The concurrency fix is tested by
+construction (no update exists to lose) and by a concurrent-writers test, **not** by a
+concurrent load test against Postgres.
+
+Limits: one synthetic conversation shape, a hand-written summary, three repetitions per
+setting, run twice. Sub-agents are covered only if they send the parent's id. Nothing lowers an
+envelope before it expires. A `header`-mode client is trusted to keep its id.
+
 ## 3. The trajectory-level problem
 
 A *trajectory* is the sequence of model calls one task makes: planning, tool calls and
@@ -137,9 +195,9 @@ that leaves the envelope — the trajectory form of FeasibleRouteBench's oracle.
 
 | step | what | depends on |
 |---|---|---|
-| 1 | A trajectory id (client-supplied header, validated; absent = today's behaviour) on the outcome row | nothing; content-free |
-| 2 | A per-trajectory envelope store with a TTL, inside the deployment boundary; the gate reads and tightens it | 1 |
-| 3 | Sequence properties in the harness: the seven invariants over generated event sequences, with the shortest violating sequence as the failure artifact | 2 |
+| 1 | A trajectory id (client-supplied header, validated; absent = today's behaviour) on the outcome row | **built** (hashed, scoped to the application) |
+| 2 | A per-trajectory envelope store with a TTL, inside the deployment boundary; the gate reads and tightens it | **built**, for placement and the matched rule's signals; `header` and `sticky` modes |
+| 3 | Sequence properties in the harness over generated event sequences | **built** for invariants 1, 2, 5 and 6; 3 and 4 hold only through a shared id; 7 (an explicit lowering operation) does not exist — only expiry lowers |
 | 4 | Task-level reporting: cost and calls per trajectory, switches, tokens re-sent | 1 |
 | 5 | Cached-token counts recorded per call where the endpoint reports them | exists for pricing (P2a); not on the outcome row |
 | 6 | A switch-cost term in scoring and in replay | 4, 5 |
@@ -160,7 +218,7 @@ client cannot choose freely. That binding is the open design question.
 
 | id | experiment | measures |
 |---|---|---|
-| T-E1 | §2.1's sequence and its variants (sub-agent, retry, failover, resume, two tools with different rules), with and without the envelope | calls that leave the envelope: expected 3 of 3 without, 0 with |
+| T-E1 | §2.1's sequence with and without the envelope | **done (§2.4): 3 of 3 leave without, 0 of 3 with.** Variants (sub-agent, retry, failover, resume, two tools with different rules) still to run |
 | T-E2 | Replay real agent sessions with per-call pricing against prefix-aware pricing | how far per-call cost overstates or understates task cost |
 | T-E3 | Per-call router against a switch-aware router on recorded sessions | cost per completed task, switches per task |
 | T-E4 | A policy change that moves agent traffic on-premises, with capacity read per trajectory | concurrent trajectories against stated limits |
@@ -173,8 +231,8 @@ T-E1 needs steps 1 to 3. T-E2 needs only step 5 and more recorded sessions.
 - §2.1 is three repetitions of one synthetic conversation, with a hand-written summary
   standing in for a client's compaction.
 - §2.2 is one session; the prefix assumption is inferred from sizes, not observed.
-- No part of §3 or §4 exists. No claim is made that a trajectory-aware router would do
-  better; that is what §5 is for.
+- Of §3 and §4, only the envelope exists (§2.4). No claim is made that a
+  trajectory-aware router would do better on cost; that is what §5 is for.
 - Cache-aware and load-aware routing exist in serving systems. What is specific here is
   the envelope: eligibility that is computed first, per step, and carried along the
   sequence.

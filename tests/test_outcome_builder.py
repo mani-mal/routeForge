@@ -180,6 +180,8 @@ def test_outcome_context_sorts_and_dedupes_entity_types():
         "app_policy_version": "apv-1",
         "requested_model": None,
         "max_tokens": None,
+        "trajectory_key": None,
+        "inherited_entity_types": [],
     }
 
 

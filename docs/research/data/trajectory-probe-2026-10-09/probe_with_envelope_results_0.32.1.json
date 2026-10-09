@@ -1,0 +1,569 @@
+[
+ {
+  "arm": "off",
+  "rep": 0,
+  "T1": {
+   "status": 200,
+   "model": "openrouter-frontier",
+   "onprem_only": false,
+   "inherited": [],
+   "mode": "off",
+   "id": "req-4cecbe089e6c4a5ab40c32ade24148cf"
+  },
+  "T2": {
+   "status": 200,
+   "model": "glm-5.3-flash",
+   "onprem_only": true,
+   "inherited": [],
+   "mode": "off",
+   "id": "req-4661842e6bc74719b4d595f169863559"
+  },
+  "T3b": {
+   "status": 200,
+   "model": "openrouter-frontier",
+   "onprem_only": false,
+   "inherited": [],
+   "mode": "off",
+   "id": "req-a41d8fbd44714f5b98f0ca781e53df11"
+  }
+ },
+ {
+  "arm": "off",
+  "rep": 1,
+  "T1": {
+   "status": 200,
+   "model": "openrouter-frontier",
+   "onprem_only": false,
+   "inherited": [],
+   "mode": "off",
+   "id": "req-4b92044729554da3920227cb62a0d8cb"
+  },
+  "T2": {
+   "status": 200,
+   "model": "glm-5.3-flash",
+   "onprem_only": true,
+   "inherited": [],
+   "mode": "off",
+   "id": "req-3f13350322e247e2a073c5f77a3ecc0c"
+  },
+  "T3b": {
+   "status": 200,
+   "model": "openrouter-frontier",
+   "onprem_only": false,
+   "inherited": [],
+   "mode": "off",
+   "id": "req-e4a156a910b6433fb25b4126f53196b7"
+  }
+ },
+ {
+  "arm": "off",
+  "rep": 2,
+  "T1": {
+   "status": 200,
+   "model": "openrouter-mid",
+   "onprem_only": false,
+   "inherited": [],
+   "mode": "off",
+   "id": "req-629e72a7078a46079244bdae34c3af60"
+  },
+  "T2": {
+   "status": 200,
+   "model": "glm-5.3-flash",
+   "onprem_only": true,
+   "inherited": [],
+   "mode": "off",
+   "id": "req-d20a6021280449ec99ecf24c5bb7c6ee"
+  },
+  "T3b": {
+   "status": 200,
+   "model": "openrouter-mid",
+   "onprem_only": false,
+   "inherited": [],
+   "mode": "off",
+   "id": "req-494e158829eb4437b25dbc13db4318a0"
+  }
+ },
+ {
+  "arm": "header",
+  "rep": 0,
+  "T1": {
+   "status": 200,
+   "model": "openrouter-mid",
+   "onprem_only": false,
+   "inherited": [],
+   "mode": "header",
+   "id": "req-f8befc96338d42f99a41786715e63e66"
+  },
+  "T2": {
+   "status": 200,
+   "model": "glm-5.3-flash",
+   "onprem_only": true,
+   "inherited": [],
+   "mode": "header",
+   "id": "req-eb0bb8437fc640d0a9a6cf8de9ab2a63"
+  },
+  "T3b": {
+   "status": 200,
+   "model": "glm-5.3-flash",
+   "onprem_only": true,
+   "inherited": [
+    "EMAIL_ADDRESS",
+    "US_SSN"
+   ],
+   "mode": "header",
+   "id": "req-064f5a27a7c94b7daf2d45adf40467d0"
+  }
+ },
+ {
+  "arm": "header",
+  "rep": 1,
+  "T1": {
+   "status": 200,
+   "model": "openrouter-frontier",
+   "onprem_only": false,
+   "inherited": [],
+   "mode": "header",
+   "id": "req-58213d018b614782b9661ffbaefba93a"
+  },
+  "T2": {
+   "status": 200,
+   "model": "glm-5.3-flash",
+   "onprem_only": true,
+   "inherited": [],
+   "mode": "header",
+   "id": "req-00b04066520c4fb8969fac949cb3293e"
+  },
+  "T3b": {
+   "status": 200,
+   "model": "glm-5.3-flash",
+   "onprem_only": true,
+   "inherited": [
+    "EMAIL_ADDRESS",
+    "US_SSN"
+   ],
+   "mode": "header",
+   "id": "req-70be0ef7e27d4bcc9ec09cb0809a0a73"
+  }
+ },
+ {
+  "arm": "header",
+  "rep": 2,
+  "T1": {
+   "status": 200,
+   "model": "openrouter-mid",
+   "onprem_only": false,
+   "inherited": [],
+   "mode": "header",
+   "id": "req-bb1ee3d8e36e4c06886f679522a947ee"
+  },
+  "T2": {
+   "status": 200,
+   "model": "glm-5.3-flash",
+   "onprem_only": true,
+   "inherited": [],
+   "mode": "header",
+   "id": "req-c471ad53cd8d401eb26e787c0bd85d3b"
+  },
+  "T3b": {
+   "status": 200,
+   "model": "glm-5.3-flash",
+   "onprem_only": true,
+   "inherited": [
+    "EMAIL_ADDRESS",
+    "US_SSN"
+   ],
+   "mode": "header",
+   "id": "req-9c8698b61b7b4ac0a7eb8ff422f3276d"
+  }
+ },
+ {
+  "arm": "header, new id on last turn",
+  "rep": 0,
+  "T1": {
+   "status": 200,
+   "model": "openrouter-frontier",
+   "onprem_only": false,
+   "inherited": [],
+   "mode": "header",
+   "id": "req-921099b1a9c0460ca2adde530b6b4b93"
+  },
+  "T2": {
+   "status": 200,
+   "model": "glm-5.3-flash",
+   "onprem_only": true,
+   "inherited": [],
+   "mode": "header",
+   "id": "req-42c5fc11227c4ab0bf3938e82f6829f9"
+  },
+  "T3b": {
+   "status": 200,
+   "model": "openrouter-frontier",
+   "onprem_only": false,
+   "inherited": [],
+   "mode": "header",
+   "id": "req-339cca3ecb1841cfa9b34a1ea1a5ff42"
+  }
+ },
+ {
+  "arm": "header, new id on last turn",
+  "rep": 1,
+  "T1": {
+   "status": 200,
+   "model": "openrouter-mid",
+   "onprem_only": false,
+   "inherited": [],
+   "mode": "header",
+   "id": "req-1daff699769e433198fb8e0dcd4dca77"
+  },
+  "T2": {
+   "status": 200,
+   "model": "glm-5.3-flash",
+   "onprem_only": true,
+   "inherited": [],
+   "mode": "header",
+   "id": "req-e7078b9165d1433a9243a51b330cf891"
+  },
+  "T3b": {
+   "status": 200,
+   "model": "openrouter-frontier",
+   "onprem_only": false,
+   "inherited": [],
+   "mode": "header",
+   "id": "req-60283e1b48f541b783bfe40b4e3ba166"
+  }
+ },
+ {
+  "arm": "header, new id on last turn",
+  "rep": 2,
+  "T1": {
+   "status": 200,
+   "model": "openrouter-mid",
+   "onprem_only": false,
+   "inherited": [],
+   "mode": "header",
+   "id": "req-a2431de02c574d81a11e4f71a73a3c3c"
+  },
+  "T2": {
+   "status": 200,
+   "model": "glm-5.3-flash",
+   "onprem_only": true,
+   "inherited": [],
+   "mode": "header",
+   "id": "req-6b0af0096136438cae17b9d66f65d9a2"
+  },
+  "T3b": {
+   "status": 200,
+   "model": "openrouter-frontier",
+   "onprem_only": false,
+   "inherited": [],
+   "mode": "header",
+   "id": "req-fecf8da9846a4254afa3d92e3c408fe5"
+  }
+ },
+ {
+  "arm": "header, no id on last turn",
+  "rep": 0,
+  "T1": {
+   "status": 200,
+   "model": "openrouter-frontier",
+   "onprem_only": false,
+   "inherited": [],
+   "mode": "header",
+   "id": "req-5f4f083b9ecb4307a5af7e4e1c092612"
+  },
+  "T2": {
+   "status": 200,
+   "model": "glm-5.3-flash",
+   "onprem_only": true,
+   "inherited": [],
+   "mode": "header",
+   "id": "req-c8347b910eb04d228ece0926cfac98a7"
+  },
+  "T3b": {
+   "status": 200,
+   "model": "openrouter-mid",
+   "onprem_only": false,
+   "inherited": [],
+   "mode": "header",
+   "id": "req-fb8f814ed2fc442aa5cabb912486727d"
+  }
+ },
+ {
+  "arm": "header, no id on last turn",
+  "rep": 1,
+  "T1": {
+   "status": 200,
+   "model": "openrouter-mid",
+   "onprem_only": false,
+   "inherited": [],
+   "mode": "header",
+   "id": "req-6641e03f81fa4aff95b1c7b7edc99c4c"
+  },
+  "T2": {
+   "status": 200,
+   "model": "glm-5.3-flash",
+   "onprem_only": true,
+   "inherited": [],
+   "mode": "header",
+   "id": "req-dc90597f535a43148bed77105a496246"
+  },
+  "T3b": {
+   "status": 200,
+   "model": "openrouter-mid",
+   "onprem_only": false,
+   "inherited": [],
+   "mode": "header",
+   "id": "req-e15cf42f02cc4f8f93f53f93a8741770"
+  }
+ },
+ {
+  "arm": "header, no id on last turn",
+  "rep": 2,
+  "T1": {
+   "status": 200,
+   "model": "openrouter-mid",
+   "onprem_only": false,
+   "inherited": [],
+   "mode": "header",
+   "id": "req-0d07153e118047f98c0b2b7d3191f9be"
+  },
+  "T2": {
+   "status": 200,
+   "model": "glm-5.3-flash",
+   "onprem_only": true,
+   "inherited": [],
+   "mode": "header",
+   "id": "req-50af54199a694f0390a37f2ec7b18191"
+  },
+  "T3b": {
+   "status": 200,
+   "model": "openrouter-frontier",
+   "onprem_only": false,
+   "inherited": [],
+   "mode": "header",
+   "id": "req-5cb7594d9a13449aa67db6e60b609c5c"
+  }
+ },
+ {
+  "arm": "sticky, new id on last turn",
+  "rep": 0,
+  "T1": {
+   "status": 200,
+   "model": "glm-5.3-flash",
+   "onprem_only": true,
+   "inherited": [
+    "EMAIL_ADDRESS",
+    "US_SSN"
+   ],
+   "mode": "sticky",
+   "id": "req-9c83b6580b2a49b49660f98d47095e11"
+  },
+  "T2": {
+   "status": 200,
+   "model": "glm-5.3-flash",
+   "onprem_only": true,
+   "inherited": [
+    "EMAIL_ADDRESS",
+    "US_SSN"
+   ],
+   "mode": "sticky",
+   "id": "req-f5dd41582a9249e79a9fee0487d30646"
+  },
+  "T3b": {
+   "status": 200,
+   "model": "glm-5.3-flash",
+   "onprem_only": true,
+   "inherited": [
+    "EMAIL_ADDRESS",
+    "US_SSN"
+   ],
+   "mode": "sticky",
+   "id": "req-0d4770e78be9438cae97370514c4ff67"
+  }
+ },
+ {
+  "arm": "sticky, new id on last turn",
+  "rep": 1,
+  "T1": {
+   "status": 200,
+   "model": "glm-5.3-flash",
+   "onprem_only": true,
+   "inherited": [
+    "EMAIL_ADDRESS",
+    "US_SSN"
+   ],
+   "mode": "sticky",
+   "id": "req-a9974fb53a4d47af99ba8240271f529c"
+  },
+  "T2": {
+   "status": 200,
+   "model": "glm-5.3-flash",
+   "onprem_only": true,
+   "inherited": [
+    "EMAIL_ADDRESS",
+    "US_SSN"
+   ],
+   "mode": "sticky",
+   "id": "req-417fc48b93f047cbb74a1b88f12bae1b"
+  },
+  "T3b": {
+   "status": 200,
+   "model": "glm-5.3-flash",
+   "onprem_only": true,
+   "inherited": [
+    "EMAIL_ADDRESS",
+    "US_SSN"
+   ],
+   "mode": "sticky",
+   "id": "req-5228e2f28e3a404faa67d9f2e7dd09e9"
+  }
+ },
+ {
+  "arm": "sticky, new id on last turn",
+  "rep": 2,
+  "T1": {
+   "status": 200,
+   "model": "glm-5.3-flash",
+   "onprem_only": true,
+   "inherited": [
+    "EMAIL_ADDRESS",
+    "US_SSN"
+   ],
+   "mode": "sticky",
+   "id": "req-6bfac63fecf84249a14896665d9d2ea0"
+  },
+  "T2": {
+   "status": 200,
+   "model": "glm-5.3-flash",
+   "onprem_only": true,
+   "inherited": [
+    "EMAIL_ADDRESS",
+    "US_SSN"
+   ],
+   "mode": "sticky",
+   "id": "req-9032fb8c572c465bbf5622280b4ff6da"
+  },
+  "T3b": {
+   "status": 200,
+   "model": "glm-5.3-flash",
+   "onprem_only": true,
+   "inherited": [
+    "EMAIL_ADDRESS",
+    "US_SSN"
+   ],
+   "mode": "sticky",
+   "id": "req-efb88b7e59ac49d1accc6e8a80e894d3"
+  }
+ },
+ {
+  "arm": "sticky, no id on last turn",
+  "rep": 0,
+  "T1": {
+   "status": 200,
+   "model": "glm-5.3-flash",
+   "onprem_only": true,
+   "inherited": [
+    "EMAIL_ADDRESS",
+    "US_SSN"
+   ],
+   "mode": "sticky",
+   "id": "req-1d284d9f49284f4b87df3d4f7331e748"
+  },
+  "T2": {
+   "status": 200,
+   "model": "glm-5.3-flash",
+   "onprem_only": true,
+   "inherited": [
+    "EMAIL_ADDRESS",
+    "US_SSN"
+   ],
+   "mode": "sticky",
+   "id": "req-17994b430d364d24b3c0fa1b66a946a5"
+  },
+  "T3b": {
+   "status": 200,
+   "model": "glm-5.3-flash",
+   "onprem_only": true,
+   "inherited": [
+    "EMAIL_ADDRESS",
+    "US_SSN"
+   ],
+   "mode": "sticky",
+   "id": "req-31f6045e0c6d4db2b032932bf5834874"
+  }
+ },
+ {
+  "arm": "sticky, no id on last turn",
+  "rep": 1,
+  "T1": {
+   "status": 200,
+   "model": "glm-5.3-flash",
+   "onprem_only": true,
+   "inherited": [
+    "EMAIL_ADDRESS",
+    "US_SSN"
+   ],
+   "mode": "sticky",
+   "id": "req-1b13ed4d7568409f9f5bfa08b772cadf"
+  },
+  "T2": {
+   "status": 200,
+   "model": "glm-5.3-flash",
+   "onprem_only": true,
+   "inherited": [
+    "EMAIL_ADDRESS",
+    "US_SSN"
+   ],
+   "mode": "sticky",
+   "id": "req-3e99d914f9b5421dba6cc1151a4db013"
+  },
+  "T3b": {
+   "status": 200,
+   "model": "glm-5.3-flash",
+   "onprem_only": true,
+   "inherited": [
+    "EMAIL_ADDRESS",
+    "US_SSN"
+   ],
+   "mode": "sticky",
+   "id": "req-6e90d55d649b40c6a3dd9e0f45909b14"
+  }
+ },
+ {
+  "arm": "sticky, no id on last turn",
+  "rep": 2,
+  "T1": {
+   "status": 200,
+   "model": "glm-5.3-flash",
+   "onprem_only": true,
+   "inherited": [
+    "EMAIL_ADDRESS",
+    "US_SSN"
+   ],
+   "mode": "sticky",
+   "id": "req-c8dc304b92414624aeaed3315f8db057"
+  },
+  "T2": {
+   "status": 200,
+   "model": "glm-5.3-flash",
+   "onprem_only": true,
+   "inherited": [
+    "EMAIL_ADDRESS",
+    "US_SSN"
+   ],
+   "mode": "sticky",
+   "id": "req-4a5183ce2b5e4a10baefd3d80c3e7f1d"
+  },
+  "T3b": {
+   "status": 200,
+   "model": "glm-5.3-flash",
+   "onprem_only": true,
+   "inherited": [
+    "EMAIL_ADDRESS",
+    "US_SSN"
+   ],
+   "mode": "sticky",
+   "id": "req-4ea713f89a0447f7a09ed7ffc27838d2"
+  }
+ }
+]

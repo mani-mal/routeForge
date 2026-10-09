@@ -169,6 +169,12 @@ class ExecutionPolicyContext(BaseModel):
     risk_class: str
     require_verification: bool
     detected_entities: tuple[str, ...]  # TYPES only
+    # B72: the subset of `detected_entities` that came from the request's
+    # trajectory envelope rather than from this request's own text. TYPES only.
+    inherited_entities: tuple[str, ...] = ()
+    # B72: the types detected in THIS request's own text -- what is written
+    # back to the envelope. `detected_entities` = these | `inherited_entities`.
+    request_entities: tuple[str, ...] = ()
     redaction_map_id: str | None
     # Per-app Headroom (step 5) override, resolved at gate time so it travels
     # with the request into the pipeline. None = inherit the live global

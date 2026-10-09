@@ -40,9 +40,12 @@ models (a fixed "cheapest eligible" rule passed more benchmark cases, twice), no
 against a frontier-only baseline was measured, and relaxing a requirement can, by
 construction, cause a new rejection. Finally, we show where request-level eligibility
 stops: in a live three-turn conversation, a placement restriction raised by a tool result
-did not survive the client compacting its history, and in one recorded agent session
-94.5% of input tokens had been sent before. We state the trajectory-level problem these
-two observations point to.
+did not survive the client compacting its history (3 of 3), and in one recorded agent
+session 94.5% of input tokens had been sent before. We state the trajectory-level problem
+these point to and implement its policy half, an envelope that carries detected entity
+types along a conversation: with it the compacted turn stayed on-premises in 3 of 3 runs,
+and in 6 of 6 when the client dropped or changed its conversation identifier under the
+fail-closed mode.
 
 ---
 
@@ -87,7 +90,8 @@ Treating `E` as a first-class quantity has consequences that this paper works th
    negative results that we consider as useful as the positive ones (§7).
 5. A statement of *trajectory-level* feasible routing — eligibility carried along the
    sequence of calls an agent makes — motivated by a live counterexample to the
-   request-level model and by the token profile of a real agent session (§8).
+   request-level model and by the token profile of a real agent session, with its policy
+   half implemented and measured (§8).
 
 We do not claim a better routing algorithm. The scoring rule is simple and, as §6.5 and
 §7 show, not good at choosing among eligible models. The contribution is the constraint
@@ -464,9 +468,10 @@ first-decision with frozen signals.
 
 Everything above treats a request as the unit. An agent does not make a request; it makes
 a *trajectory*: tens of related calls while it plans, calls tools, reads results, retries
-and resumes. RouteForge sees each call separately and keeps no state between them. Two
-observations show what that leaves out. Neither feature discussed in this section is
-built.
+and resumes. By default RouteForge sees each call separately and keeps no state between
+them. Two observations show what that leaves out (§8.1, §8.2). We then state the problem
+(§8.3) and report an implementation of its policy half (§8.4). The routing half —
+switching cost and a sequential objective — is not built.
 
 ### 8.1 A restriction that does not survive compaction
 
@@ -539,11 +544,65 @@ client is an input to validate, not a policy; a client must not be able to widen
 envelope by starting a new trajectory, and binding the identifier to something the client
 cannot choose freely is the open design question.
 
-**Experiments this defines.** The sequence of §8.1 and its variants (sub-agent, retry,
-failover, resume) with and without an envelope; replay of recorded agent sessions under
-per-call and prefix-aware pricing, to measure how far per-call accounting misstates the
-cost of a task; a per-call router against a switch-aware one on cost per completed task;
-and regret against the feasible trajectory oracle.
+### 8.4 The envelope, implemented
+
+We implemented the envelope for placement. An application opts in with a per-application
+mode. RouteForge then stores, per trajectory, the *types* of entity it has detected — no
+text, and the client's identifier only as a hash scoped to the application — and adds
+them to what it detects in each later request before matching the sensitivity rules.
+Whatever the matched rule sets (placement, sensitivity, verification) is inherited; no
+protection axis is read or changed; if the store cannot be read or written the request is
+rejected. Two modes differ in whom they trust:
+
+- **`header`**: calls carrying the same client-supplied identifier share an envelope.
+- **`sticky`**: every call inherits what any live envelope of the application has seen,
+  whatever identifier it sends.
+
+The conversation of §8.1, three runs per row, 54 requests in all:
+
+| mode | identifier on the last turn | compacted turn T3b served by | entity types inherited |
+|---|---|---|---|
+| off | same | cloud ×3 | none |
+| `header` | same | **on-premises ×3** | SSN, e-mail |
+| `header` | a new one | cloud ×3 | none |
+| `header` | none | cloud ×3 | none |
+| `sticky` | a new one | **on-premises ×3** | SSN, e-mail |
+| `sticky` | none | **on-premises ×3** | SSN, e-mail |
+
+With the envelope the compacted turn no longer reaches a cloud endpoint. Rows three and
+four are the limit of trusting the client: a new or missing identifier starts clean.
+`sticky` closes that, and its cost was visible in the same run — once the application had
+any live envelope, its public first turns went on-premises too. All 21 requests that
+inherited a type were confined to on-premises endpoints and served there.
+
+Two properties of the design matter beyond this example. First, the record of a request
+lists the inherited types among its detected types, so the replay of §5 reproduces these
+decisions without any knowledge of envelopes: agreement was 1.0 over the 54 rows. Second,
+the properties are checked over generated *event sequences* (applications × identifiers ×
+whether a call carries an identifier): with the mode off the behaviour is exactly
+per-request; `header` accumulates within a trajectory and never across trajectories or
+applications; `sticky` restricts one application and only it; no protection value changes
+along any sequence; and compared with the same events and no envelope, no call is less
+restricted.
+
+The store is a set of append-only observations that are unioned on read, so
+simultaneous calls of one trajectory cannot overwrite each other, and only types detected
+in a request's own text are written, so a restriction ends one lifetime after the data
+was last seen rather than renewing itself. Both properties came from a review of a first
+version that had neither; the probe was repeated after the change with the same result.
+
+Limits. One conversation shape, a hand-written summary, three repetitions per row, run
+twice.
+Sub-agents inherit only by sending the parent's identifier. Nothing lowers an envelope but
+its expiry, which is therefore an operator's decision and a loosening. The envelope
+tracks entity types that a detector found; data that is sensitive but undetected is
+outside it, as it is outside the request-level gate.
+
+**Experiments that remain.** Variants of the sequence (sub-agent, retry, failover,
+resume, two tools under different rules); replay of recorded agent sessions under per-call
+and prefix-aware pricing, to measure how far per-call accounting misstates the cost of a
+task; a per-call router against a switch-aware one on cost per completed task; and regret
+against the feasible trajectory oracle.
 
 ---
 
@@ -590,9 +649,9 @@ plainly that the router's own choices among eligible models are its weakest part
 think that is the right order of priorities for the deployments this is built for, and
 that a better scoring rule is a separable problem that the harness described here can
 evaluate. The same construction extends from a request to the sequence of calls an
-agent makes, where our measurements show both the privacy gap and the cost that a
-request-level router cannot see; we leave that as the problem we think is worth solving
-next.
+agent makes. There our measurements show a privacy gap, which a small envelope closes,
+and a cost that a request-level router cannot see, which we leave as the problem we think
+is worth solving next.
 
 ---
 
@@ -611,5 +670,5 @@ next.
 | run 3: provider outage, agreement 0.919, +$3.12, benchmark | FB §25 |
 | run 4: cloud share, agreement 1.0, +$3.74, capacity, version check | FB §26 |
 | non-monotonicity counterexample | FB §17.3 |
-| trajectory probe; agent session token profile | [`trajectory-feasible-routing.md`](trajectory-feasible-routing.md) §2 |
+| trajectory probe, with and without the envelope; agent session token profile | [`trajectory-feasible-routing.md`](trajectory-feasible-routing.md) §2 |
 | artifacts | `docs/research/data/live-dgx-lab-2026-10-0{8,9}*` |
