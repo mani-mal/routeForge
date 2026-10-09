@@ -3,42 +3,12 @@
 **Status:** research notes, written as the code landed. 2026-09-18.
 **Branch:** `feat/policy-compiler-p1a` (merge base `a7db4f5`). Design:
 `docs/superpowers/specs/2026-09-18-policy-compiler-p1a-design.md`.
-**Audience:** whoever writes the paper, and whoever talks to counsel first.
+**Audience:** whoever writes the paper.
 
 This is the evidence file, not the paper. Its job is to record exactly what was built,
 exactly what was demonstrated, and — with more care than the rest of it — **exactly what
 was not**. A paper written from this document should be able to survive a reviewer who
 reads the test suite.
-
----
-
-## 0. File before you publish
-
-**P1a overlaps three items in
-[`docs/roadmap/ip-and-research-opportunities.md`](../roadmap/ip-and-research-opportunities.md):**
-
-| Item | Overlap with P1a |
-|---|---|
-| **IP-1** — monotonically narrowing policy context, "a lattice of policy contexts with a meet operation" | This is the same algebra. §3 below *is* IP-1's formalization, applied to a single request rather than across hops. `apply_signals` is the meet, and the raise-only property is IP-1's non-increasing eligibility. The roadmap calls IP-1 "the single strongest idea in this document." |
-| **IP-4** — decisions bound to content hashes of the policy that produced them | The decision certificate (§6 of the design) binds every request to `app_policy_version` and `routing_policy_version`, and the save-time invariant check is what makes the binding mean something: a persisted `app_policy_version` has passed the invariant grid. |
-| **IP-9** — derived rejection from an empty eligible set | Invariant 5. The harness quantifies over it. |
-
-**Public disclosure — an arXiv preprint, a conference talk, a public repo, a blog post —
-starts clocks and, in most jurisdictions outside the US, destroys novelty for a later
-filing.** The US grace period is limited and does not extend abroad. Several of these are
-*both* patent candidates and paper candidates, so **the filing decision has to precede the
-publication decision for each one**, and that decision belongs with counsel.
-
-Two facts counsel will want early, and neither is comfortable:
-
-1. **The Tier-3 mechanisms are already in a public repository.** IP-9 among them. That is
-   a disclosure that has already happened, whatever this document does next.
-2. **Four patent areas were already found foreclosed** by the roadmap's own landscape scan
-   (HiddenLayer, CastAI, Inventus, Infobip — see that document's §1). The scan was
-   explicitly incomplete: no assignee-scoped search was run against the large filers.
-   Treat it as a floor on prior art, never a ceiling.
-
-Nothing in this document is legal advice.
 
 ---
 

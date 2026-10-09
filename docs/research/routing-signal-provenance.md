@@ -5,7 +5,7 @@
 `docs/superpowers/specs/2026-09-19-routing-signal-measurement-p2a-design.md`.
 **Predecessors:** P1a (`docs/research/policy-compiler-noninterference.md`), P1b.
 **Successor:** P2b — the evaluation plane. Not built.
-**Audience:** whoever writes the paper, and whoever talks to counsel first.
+**Audience:** whoever writes the paper.
 
 This is the evidence file, not the paper. Its job is to record exactly what was built,
 exactly what was demonstrated, and — with more care than the rest of it — **exactly what
@@ -15,27 +15,6 @@ The honest one-line summary is uncomfortable and should stay in the paper: **thi
 does not make routing better, and no part of it measures whether routing is better.** It
 makes a routing decision say what it rested on, and it removes two terms that were
 pretending to measure something. That is a precondition for evaluation, not evaluation.
-
----
-
-## 0. File before you publish
-
-**P2a touches four items in
-[`docs/roadmap/ip-and-research-opportunities.md`](../roadmap/ip-and-research-opportunities.md):**
-
-| Item | Overlap with P2a |
-|---|---|
-| **R1** — "Eligibility-Constrained LLM Routing" | P2a is the *scoring* half of R1's asset list. R1 already names `sp.candidates` (chosen + rejected, with reasons) as ground truth; `sp.scoring` adds, for each candidate that was actually scored, the term values and their provenance. The composition property R1 wants to prove — that a signal cannot escape the eligible set — is §2.1 here. |
-| **IP-4 / R7** — decisions bound to content hashes; decision records as compliance artifacts | The scoring record extends the certificate from *what policy applied* to *what the ranking rested on*, including the admission that a term was a constant. R7's "compliance by construction" argument gains a second example. |
-| **IP-8 / R8** — zero-traffic cold-start routing | P2a is adjacent but is **not** IP-8. It measures endpoints *after* they serve traffic. IP-8's claim is a probe battery at onboarding time, before any traffic exists. P2a's boot seeding from `usage_records` is a warm restart, not a cold start; §6 says so. |
-| **IP-11** — raise-only, residency-clamped advisory signals | ⚠️ **A naming trap.** IP-11 cites `app/routing/signals.py`, which at the time meant the *stage-signals* tier bias, deleted 2026-09-17. That file name is now P2a's measured-signal store, and it is a **different mechanism**: P2a signals never touch a tier floor, never raise anything, and act only as an ordering preference inside an already-filtered set. Do not let a draft conflate the two. |
-
-**Public disclosure — an arXiv preprint, a conference talk, a public repo, a blog post —
-starts clocks and, in most jurisdictions outside the US, destroys novelty for a later
-filing.** The same two uncomfortable facts P1a recorded still hold: the Tier-3 mechanisms
-are already in a public repository, and four patent areas were already found foreclosed by
-an admittedly incomplete landscape scan. Treat that scan as a floor on prior art, never a
-ceiling. Nothing here is legal advice.
 
 ---
 

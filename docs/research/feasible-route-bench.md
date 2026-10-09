@@ -56,18 +56,6 @@ built. §22's numbers are simulated.
 
 ---
 
-## 0. File before you publish
-
-The harness is the evaluation half of **R1**, "Eligibility-Constrained LLM Routing: When
-the Candidate Pool Is a Per-Request Variable", in
-[`docs/roadmap/ip-and-research-opportunities.md`](../roadmap/ip-and-research-opportunities.md).
-The *feasible oracle* (best **allowed** endpoint, not best registry endpoint) is R1's
-evaluation claim. The same caution as P1a and P2a applies. Public disclosure starts
-clocks. The landscape scan behind that document is a floor on prior art, not a ceiling.
-Nothing here is legal advice.
-
----
-
 ## 1. The problem
 
 Router benchmarks score a choice against the best model in a **fixed** candidate set.
