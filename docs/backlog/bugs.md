@@ -127,6 +127,82 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
+## B70 — Failover and breaker findings from live run 2 (three endpoint names, one outage)  🔴 OPEN
+
+**Severity:** medium (two requests failed that a different ordering could have served; the
+rest are record and replay gaps that change numbers the paper reports).
+**Found:** 2026-10-08, DGX lab, 900 requests with a 181.5-second outage of one endpoint
+(research notes [`feasible-route-bench.md`](../research/feasible-route-bench.md) §24).
+
+1. **The per-request budget can leave no failover candidate.** Two requests (5,877 and 7,207
+   routing tokens, cap $0.05) had exactly one affordable endpoint, the $6 one, which was
+   down. They returned 502. The budget filter is correct; what is missing is any signal to
+   the caller that the request had a feasible set of one. *Wanted:* say so in the error and
+   on the outcome row (a "no failover candidate" reason), so it is not read as a backend bug.
+2. **A failed outcome row loses its routing detail.** Those two `backend_failed` rows record
+   `eligible: []` and `tier_target: null`, although an endpoint was eligible and attempted.
+   Replay cannot reconstruct them. *Wanted:* write the eligible set, tier target and attempt
+   chain on every row that reached the router, whatever its final status.
+3. **A circuit-bypass request failed over down a tier.** One request (7,555 tokens) had only
+   the open-breaker endpoint in its budget, bypassed the breaker, failed, and was then served
+   by the `cheap` endpoint. The breaker itself "never lowers the target tier"; failover
+   after a bypass did. *To decide:* whether that is allowed, and if so record it as a
+   tier downgrade on the row.
+4. **The breaker stayed open about 38 seconds after the endpoint recovered** (rows carry
+   `circuit_open` from 19.7 s to 219.4 s after the outage began; the outage ended at
+   181.5 s). Five half-open probes were seen during the outage. *To decide:* whether the
+   probe interval should shorten after the first probe, or stay as it is.
+5. **Replay does not model breaker state.** All 65 model disagreements in the run (agreement
+   0.926 over 880 served rows) are rows the live router sent to the next endpoint because the
+   breaker was open, and replay sent to the down one. Outcome agreement was 1.0. *Wanted:*
+   replay reads `circuit_open` from the recorded row (it is already there) and reports
+   breaker-diverted rows as their own class instead of as disagreement.
+
+## B69 — Egress redaction rewrites tool-call arguments on a weak detector match, and the placeholder is executable shell  🔴 OPEN
+
+**Severity:** high for coding-agent clients (a redacted argument is *executed* by the
+client; here it failed harmlessly, but a placeholder inside a command is not guaranteed to).
+**Found:** 2026-10-08, the `opencode` app on the DGX lab (enforced posture, `presidio`).
+
+**Symptom.** opencode ran a model-issued shell tool call and got:
+
+```
+$ find packages/web-console/src/pages -type f -print0 | xargs -0 -<US_DRIVER_LICENSE_1> printf '%q\n'
+/bin/bash: line 1: US_DRIVER_LICENSE_1: No such file or directory
+```
+
+A second instance the same day, with other entity types: `/bin/bash: -c: line 1:
+`<LOCATION_1> /tmp/opencode/list_<URL_1>'` — a command word and a file name (a
+`name.ext` string read as a URL) were both replaced. So the fix cannot be a
+`US_DRIVER_LICENSE` special case.
+
+**Cause (reproduced).** The model wrote `xargs -0 -n1 …`. Presidio's `US_DRIVER_LICENSE`
+recogniser has a weak pattern (score 0.3) that matches a letter followed by digits: on the
+analyzer alone, `n1`, `L1`, `P4`, `n20` (`tail -n20`) and `c1500` (`head -c1500`) all come
+back as `US_DRIVER_LICENSE` at 0.3. The app's posture is `client_output: redact`, so
+`app/pipeline.py` (`redact_tool_calls_with_entities`, step 9 egress) replaced `n1` inside the
+tool call's `arguments` with `<US_DRIVER_LICENSE_1>`. In a shell, `<NAME>` is a redirection,
+so bash tried to read a file called `US_DRIVER_LICENSE_1`. All 40 of the app's outcome rows
+record `US_DRIVER_LICENSE`, `PERSON`, `LOCATION`, `NRP`, `DATE_TIME` and `URL` as detected, so
+the same detector is also rewriting the prompt the model sees.
+
+**Operator workaround today (no code change).** In the app's Settings, step 3: add
+`US_DRIVER_LICENSE` (and the other entity types that are noise for code) to
+`pii_entity_denylist`, or raise `pii_score_threshold` above 0.3, or use `pii_detection:
+regex`. Each of these narrows protection for that app and is the operator's decision.
+
+**Wanted (not decided):**
+- Tool-call arguments are a command channel, not prose. Options: a higher default score
+  floor for redaction inside `tool_calls.arguments`; or, when an argument would be redacted,
+  fail the tool call visibly (the client gets a refusal it can show) instead of handing back
+  a rewritten command. Never silently loosen: whichever is chosen is recorded on the trace.
+- A placeholder that cannot be shell syntax (no `<`, `>`, `|`, `$`, backtick) so a redacted
+  argument that does get executed cannot redirect, pipe or expand.
+- Count redactions inside tool-call arguments on the outcome row, so an operator can see
+  this happening without reading a client's terminal.
+- Regression test: `xargs -0 -n1`, `tail -n20`, `head -c1500` through an enforced app with
+  `presidio`.
+
 ## B68 — Onboarding a keyed endpoint needs a redeploy: the key can only come from an env var in the API pod  🔴 OPEN
 
 **Severity:** medium (operator friction on the product's main runtime workflow; the

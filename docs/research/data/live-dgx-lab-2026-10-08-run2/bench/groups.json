@@ -1,0 +1,5448 @@
+{
+  "caveats": [
+    "This run called the endpoints in the endpoint file, once per case and endpoint, and graded each answer with a deterministic grader. One call is one sample.",
+    "The router comparison is mostly the tier rule: the target tier is chosen from the request's length, so on short cases the router's regret against the oracle is set by which tier it may use, not by the four-term scorer.",
+    "Cases are synthetic and single-turn.",
+    "A group is the cases of this suite that carry one label. A figure over fewer cases than the minimum prints its case count and no rate. A group above the minimum is still small: read its case count with every figure.",
+    "The worst group is the extreme of many small-sample figures, so it is worse than a typical group partly by selection. The same cases can carry several labels, so one set of cases can appear under more than one dimension; a tie is listed, not broken.",
+    "Placement, protection and workload labels are the case author's tags. They are not read from the compiled policy and can differ from it. An application with no tag is a fingerprint of the case's policy as written."
+  ],
+  "dimensions": [
+    "placement",
+    "protection",
+    "application",
+    "workload"
+  ],
+  "group_sizes": {
+    "application": {
+      "policy-57810d29": 8,
+      "policy-7b90407f": 8,
+      "policy-8fb5374a": 4,
+      "policy-d30395cb": 2
+    },
+    "placement": {
+      "any": 8,
+      "escalated": 2,
+      "onprem_only": 4,
+      "us_only": 8
+    },
+    "protection": {
+      "enforced": 22
+    },
+    "workload": {
+      "claim_summary": 10,
+      "faq": 8,
+      "onprem_required": 4
+    }
+  },
+  "metrics": [
+    "violation_rate",
+    "pass_rate",
+    "quality_regret",
+    "cost_regret",
+    "latency_regret",
+    "floor_miss_rate",
+    "empty_set_mismatch_rate"
+  ],
+  "min_group_size": 5,
+  "n_cases": 22,
+  "schema": "routeforge.bench-group-report/v1",
+  "strategies": {
+    "best_published_quality": {
+      "dimensions": {
+        "application": {
+          "policy-57810d29": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 8,
+                "value": 0.000535875
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 8,
+                "value": 75.146354880417
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "policy-7b90407f": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 0.375
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "policy-8fb5374a": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 4,
+            "violations": 0
+          },
+          "policy-d30395cb": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 2,
+            "violations": 0
+          }
+        },
+        "placement": {
+          "any": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 8,
+                "value": 0.000535875
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 8,
+                "value": 75.146354880417
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "escalated": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 2,
+            "violations": 0
+          },
+          "onprem_only": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 4,
+            "violations": 0
+          },
+          "us_only": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 0.375
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          }
+        },
+        "protection": {
+          "enforced": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 16,
+                "value": 0.0007203125
+              },
+              "empty_set_mismatch_rate": {
+                "n": 22,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 16,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 16,
+                "value": 295.611250308866
+              },
+              "pass_rate": {
+                "n": 22,
+                "value": 0.727272727273
+              },
+              "quality_regret": {
+                "n": 22,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 22,
+                "value": 0.0
+              }
+            },
+            "n_cases": 22,
+            "violations": 0
+          }
+        },
+        "workload": {
+          "claim_summary": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 5,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 10,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 5,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 5,
+                "value": 0.0
+              },
+              "pass_rate": {
+                "n": 10,
+                "value": 0.5
+              },
+              "quality_regret": {
+                "n": 10,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 10,
+                "value": 0.0
+              }
+            },
+            "n_cases": 10,
+            "violations": 0
+          },
+          "faq": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 8,
+                "value": 0.000535875
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 8,
+                "value": 75.146354880417
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "onprem_required": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 4,
+            "violations": 0
+          }
+        }
+      },
+      "overall": {
+        "empty_cases": 0,
+        "empty_set_mismatches": 0,
+        "metrics": {
+          "cost_regret": {
+            "n": 16,
+            "value": 0.0007203125
+          },
+          "empty_set_mismatch_rate": {
+            "n": 22,
+            "value": 0.0
+          },
+          "floor_miss_rate": {
+            "n": 16,
+            "value": 0.0
+          },
+          "latency_regret": {
+            "n": 16,
+            "value": 295.611250308866
+          },
+          "pass_rate": {
+            "n": 22,
+            "value": 0.727272727273
+          },
+          "quality_regret": {
+            "n": 22,
+            "value": 0.0
+          },
+          "violation_rate": {
+            "n": 22,
+            "value": 0.0
+          }
+        },
+        "n_cases": 22,
+        "violations": 0
+      },
+      "worst": {
+        "cost_regret": {
+          "dimension": "protection",
+          "group": "enforced",
+          "groups_at_value": 1,
+          "groups_printed": 5,
+          "groups_total": 12,
+          "n": 16,
+          "n_cases": 22,
+          "tied": [
+            "protection=enforced"
+          ],
+          "value": 0.0007203125
+        },
+        "empty_set_mismatch_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 7,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "placement=us_only",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "application=policy-7b90407f",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "floor_miss_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 5,
+          "groups_printed": 5,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "latency_regret": {
+          "dimension": "protection",
+          "group": "enforced",
+          "groups_at_value": 1,
+          "groups_printed": 5,
+          "groups_total": 12,
+          "n": 16,
+          "n_cases": 22,
+          "tied": [
+            "protection=enforced"
+          ],
+          "value": 295.611250308866
+        },
+        "pass_rate": {
+          "dimension": "placement",
+          "group": "us_only",
+          "groups_at_value": 2,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=us_only",
+            "application=policy-7b90407f"
+          ],
+          "value": 0.375
+        },
+        "quality_regret": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 7,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "placement=us_only",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "application=policy-7b90407f",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "violation_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 7,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "placement=us_only",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "application=policy-7b90407f",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        }
+      }
+    },
+    "cheapest": {
+      "dimensions": {
+        "application": {
+          "policy-57810d29": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 8,
+                "value": 127.238003522507
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "policy-7b90407f": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 0.375
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "policy-8fb5374a": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 4,
+            "violations": 0
+          },
+          "policy-d30395cb": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 2,
+            "violations": 0
+          }
+        },
+        "placement": {
+          "any": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 8,
+                "value": 127.238003522507
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "escalated": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 2,
+            "violations": 0
+          },
+          "onprem_only": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 4,
+            "violations": 0
+          },
+          "us_only": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 0.375
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          }
+        },
+        "protection": {
+          "enforced": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 16,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 22,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 16,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 16,
+                "value": 190.952425262367
+              },
+              "pass_rate": {
+                "n": 22,
+                "value": 0.727272727273
+              },
+              "quality_regret": {
+                "n": 22,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 22,
+                "value": 0.0
+              }
+            },
+            "n_cases": 22,
+            "violations": 0
+          }
+        },
+        "workload": {
+          "claim_summary": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 5,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 10,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 5,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 5,
+                "value": 0.0
+              },
+              "pass_rate": {
+                "n": 10,
+                "value": 0.5
+              },
+              "quality_regret": {
+                "n": 10,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 10,
+                "value": 0.0
+              }
+            },
+            "n_cases": 10,
+            "violations": 0
+          },
+          "faq": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 8,
+                "value": 127.238003522507
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "onprem_required": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 4,
+            "violations": 0
+          }
+        }
+      },
+      "overall": {
+        "empty_cases": 0,
+        "empty_set_mismatches": 0,
+        "metrics": {
+          "cost_regret": {
+            "n": 16,
+            "value": 0.0
+          },
+          "empty_set_mismatch_rate": {
+            "n": 22,
+            "value": 0.0
+          },
+          "floor_miss_rate": {
+            "n": 16,
+            "value": 0.0
+          },
+          "latency_regret": {
+            "n": 16,
+            "value": 190.952425262367
+          },
+          "pass_rate": {
+            "n": 22,
+            "value": 0.727272727273
+          },
+          "quality_regret": {
+            "n": 22,
+            "value": 0.0
+          },
+          "violation_rate": {
+            "n": 22,
+            "value": 0.0
+          }
+        },
+        "n_cases": 22,
+        "violations": 0
+      },
+      "worst": {
+        "cost_regret": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 5,
+          "groups_printed": 5,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "empty_set_mismatch_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 7,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "placement=us_only",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "application=policy-7b90407f",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "floor_miss_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 5,
+          "groups_printed": 5,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "latency_regret": {
+          "dimension": "protection",
+          "group": "enforced",
+          "groups_at_value": 1,
+          "groups_printed": 5,
+          "groups_total": 12,
+          "n": 16,
+          "n_cases": 22,
+          "tied": [
+            "protection=enforced"
+          ],
+          "value": 190.952425262367
+        },
+        "pass_rate": {
+          "dimension": "placement",
+          "group": "us_only",
+          "groups_at_value": 2,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=us_only",
+            "application=policy-7b90407f"
+          ],
+          "value": 0.375
+        },
+        "quality_regret": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 7,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "placement=us_only",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "application=policy-7b90407f",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "violation_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 7,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "placement=us_only",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "application=policy-7b90407f",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        }
+      }
+    },
+    "router_cold": {
+      "dimensions": {
+        "application": {
+          "policy-57810d29": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 8,
+                "value": 127.238003522507
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "policy-7b90407f": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 0.375
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "policy-8fb5374a": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 4,
+            "violations": 0
+          },
+          "policy-d30395cb": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 2,
+            "violations": 0
+          }
+        },
+        "placement": {
+          "any": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 8,
+                "value": 127.238003522507
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "escalated": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 2,
+            "violations": 0
+          },
+          "onprem_only": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 4,
+            "violations": 0
+          },
+          "us_only": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 0.375
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          }
+        },
+        "protection": {
+          "enforced": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 16,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 22,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 16,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 16,
+                "value": 190.952425262367
+              },
+              "pass_rate": {
+                "n": 22,
+                "value": 0.727272727273
+              },
+              "quality_regret": {
+                "n": 22,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 22,
+                "value": 0.0
+              }
+            },
+            "n_cases": 22,
+            "violations": 0
+          }
+        },
+        "workload": {
+          "claim_summary": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 5,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 10,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 5,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 5,
+                "value": 0.0
+              },
+              "pass_rate": {
+                "n": 10,
+                "value": 0.5
+              },
+              "quality_regret": {
+                "n": 10,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 10,
+                "value": 0.0
+              }
+            },
+            "n_cases": 10,
+            "violations": 0
+          },
+          "faq": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 8,
+                "value": 127.238003522507
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "onprem_required": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 4,
+            "violations": 0
+          }
+        }
+      },
+      "overall": {
+        "empty_cases": 0,
+        "empty_set_mismatches": 0,
+        "metrics": {
+          "cost_regret": {
+            "n": 16,
+            "value": 0.0
+          },
+          "empty_set_mismatch_rate": {
+            "n": 22,
+            "value": 0.0
+          },
+          "floor_miss_rate": {
+            "n": 16,
+            "value": 0.0
+          },
+          "latency_regret": {
+            "n": 16,
+            "value": 190.952425262367
+          },
+          "pass_rate": {
+            "n": 22,
+            "value": 0.727272727273
+          },
+          "quality_regret": {
+            "n": 22,
+            "value": 0.0
+          },
+          "violation_rate": {
+            "n": 22,
+            "value": 0.0
+          }
+        },
+        "n_cases": 22,
+        "violations": 0
+      },
+      "worst": {
+        "cost_regret": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 5,
+          "groups_printed": 5,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "empty_set_mismatch_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 7,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "placement=us_only",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "application=policy-7b90407f",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "floor_miss_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 5,
+          "groups_printed": 5,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "latency_regret": {
+          "dimension": "protection",
+          "group": "enforced",
+          "groups_at_value": 1,
+          "groups_printed": 5,
+          "groups_total": 12,
+          "n": 16,
+          "n_cases": 22,
+          "tied": [
+            "protection=enforced"
+          ],
+          "value": 190.952425262367
+        },
+        "pass_rate": {
+          "dimension": "placement",
+          "group": "us_only",
+          "groups_at_value": 2,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=us_only",
+            "application=policy-7b90407f"
+          ],
+          "value": 0.375
+        },
+        "quality_regret": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 7,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "placement=us_only",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "application=policy-7b90407f",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "violation_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 7,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "placement=us_only",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "application=policy-7b90407f",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        }
+      }
+    },
+    "router_cold:candidate": {
+      "dimensions": {
+        "application": {
+          "policy-57810d29": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 8,
+                "value": 127.238003522507
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "policy-7b90407f": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 0.375
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "policy-8fb5374a": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 4,
+            "violations": 0
+          },
+          "policy-d30395cb": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 2,
+            "violations": 0
+          }
+        },
+        "placement": {
+          "any": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 8,
+                "value": 127.238003522507
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "escalated": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 2,
+            "violations": 0
+          },
+          "onprem_only": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 4,
+            "violations": 0
+          },
+          "us_only": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 0.375
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          }
+        },
+        "protection": {
+          "enforced": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 16,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 22,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 16,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 16,
+                "value": 190.952425262367
+              },
+              "pass_rate": {
+                "n": 22,
+                "value": 0.727272727273
+              },
+              "quality_regret": {
+                "n": 22,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 22,
+                "value": 0.0
+              }
+            },
+            "n_cases": 22,
+            "violations": 0
+          }
+        },
+        "workload": {
+          "claim_summary": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 5,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 10,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 5,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 5,
+                "value": 0.0
+              },
+              "pass_rate": {
+                "n": 10,
+                "value": 0.5
+              },
+              "quality_regret": {
+                "n": 10,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 10,
+                "value": 0.0
+              }
+            },
+            "n_cases": 10,
+            "violations": 0
+          },
+          "faq": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 8,
+                "value": 127.238003522507
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "onprem_required": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 4,
+            "violations": 0
+          }
+        }
+      },
+      "overall": {
+        "empty_cases": 0,
+        "empty_set_mismatches": 0,
+        "metrics": {
+          "cost_regret": {
+            "n": 16,
+            "value": 0.0
+          },
+          "empty_set_mismatch_rate": {
+            "n": 22,
+            "value": 0.0
+          },
+          "floor_miss_rate": {
+            "n": 16,
+            "value": 0.0
+          },
+          "latency_regret": {
+            "n": 16,
+            "value": 190.952425262367
+          },
+          "pass_rate": {
+            "n": 22,
+            "value": 0.727272727273
+          },
+          "quality_regret": {
+            "n": 22,
+            "value": 0.0
+          },
+          "violation_rate": {
+            "n": 22,
+            "value": 0.0
+          }
+        },
+        "n_cases": 22,
+        "violations": 0
+      },
+      "worst": {
+        "cost_regret": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 5,
+          "groups_printed": 5,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "empty_set_mismatch_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 7,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "placement=us_only",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "application=policy-7b90407f",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "floor_miss_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 5,
+          "groups_printed": 5,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "latency_regret": {
+          "dimension": "protection",
+          "group": "enforced",
+          "groups_at_value": 1,
+          "groups_printed": 5,
+          "groups_total": 12,
+          "n": 16,
+          "n_cases": 22,
+          "tied": [
+            "protection=enforced"
+          ],
+          "value": 190.952425262367
+        },
+        "pass_rate": {
+          "dimension": "placement",
+          "group": "us_only",
+          "groups_at_value": 2,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=us_only",
+            "application=policy-7b90407f"
+          ],
+          "value": 0.375
+        },
+        "quality_regret": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 7,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "placement=us_only",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "application=policy-7b90407f",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "violation_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 7,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "placement=us_only",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "application=policy-7b90407f",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        }
+      }
+    },
+    "router_online": {
+      "dimensions": {
+        "application": {
+          "policy-57810d29": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 8,
+                "value": 127.238003522507
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "policy-7b90407f": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 0.375
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "policy-8fb5374a": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 4,
+            "violations": 0
+          },
+          "policy-d30395cb": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 2,
+            "violations": 0
+          }
+        },
+        "placement": {
+          "any": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 8,
+                "value": 127.238003522507
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "escalated": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 2,
+            "violations": 0
+          },
+          "onprem_only": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 4,
+            "violations": 0
+          },
+          "us_only": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 0.375
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          }
+        },
+        "protection": {
+          "enforced": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 16,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 22,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 16,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 16,
+                "value": 190.952425262367
+              },
+              "pass_rate": {
+                "n": 22,
+                "value": 0.727272727273
+              },
+              "quality_regret": {
+                "n": 22,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 22,
+                "value": 0.0
+              }
+            },
+            "n_cases": 22,
+            "violations": 0
+          }
+        },
+        "workload": {
+          "claim_summary": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 5,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 10,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 5,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 5,
+                "value": 0.0
+              },
+              "pass_rate": {
+                "n": 10,
+                "value": 0.5
+              },
+              "quality_regret": {
+                "n": 10,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 10,
+                "value": 0.0
+              }
+            },
+            "n_cases": 10,
+            "violations": 0
+          },
+          "faq": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 8,
+                "value": 127.238003522507
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "onprem_required": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 4,
+            "violations": 0
+          }
+        }
+      },
+      "overall": {
+        "empty_cases": 0,
+        "empty_set_mismatches": 0,
+        "metrics": {
+          "cost_regret": {
+            "n": 16,
+            "value": 0.0
+          },
+          "empty_set_mismatch_rate": {
+            "n": 22,
+            "value": 0.0
+          },
+          "floor_miss_rate": {
+            "n": 16,
+            "value": 0.0
+          },
+          "latency_regret": {
+            "n": 16,
+            "value": 190.952425262367
+          },
+          "pass_rate": {
+            "n": 22,
+            "value": 0.727272727273
+          },
+          "quality_regret": {
+            "n": 22,
+            "value": 0.0
+          },
+          "violation_rate": {
+            "n": 22,
+            "value": 0.0
+          }
+        },
+        "n_cases": 22,
+        "violations": 0
+      },
+      "worst": {
+        "cost_regret": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 5,
+          "groups_printed": 5,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "empty_set_mismatch_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 7,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "placement=us_only",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "application=policy-7b90407f",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "floor_miss_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 5,
+          "groups_printed": 5,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "latency_regret": {
+          "dimension": "protection",
+          "group": "enforced",
+          "groups_at_value": 1,
+          "groups_printed": 5,
+          "groups_total": 12,
+          "n": 16,
+          "n_cases": 22,
+          "tied": [
+            "protection=enforced"
+          ],
+          "value": 190.952425262367
+        },
+        "pass_rate": {
+          "dimension": "placement",
+          "group": "us_only",
+          "groups_at_value": 2,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=us_only",
+            "application=policy-7b90407f"
+          ],
+          "value": 0.375
+        },
+        "quality_regret": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 7,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "placement=us_only",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "application=policy-7b90407f",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "violation_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 7,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "placement=us_only",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "application=policy-7b90407f",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        }
+      }
+    },
+    "router_online:breaker_off": {
+      "dimensions": {
+        "application": {
+          "policy-57810d29": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 8,
+                "value": 127.238003522507
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "policy-7b90407f": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 0.375
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "policy-8fb5374a": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 4,
+            "violations": 0
+          },
+          "policy-d30395cb": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 2,
+            "violations": 0
+          }
+        },
+        "placement": {
+          "any": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 8,
+                "value": 127.238003522507
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "escalated": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 2,
+            "violations": 0
+          },
+          "onprem_only": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 4,
+            "violations": 0
+          },
+          "us_only": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 0.375
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          }
+        },
+        "protection": {
+          "enforced": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 16,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 22,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 16,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 16,
+                "value": 190.952425262367
+              },
+              "pass_rate": {
+                "n": 22,
+                "value": 0.727272727273
+              },
+              "quality_regret": {
+                "n": 22,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 22,
+                "value": 0.0
+              }
+            },
+            "n_cases": 22,
+            "violations": 0
+          }
+        },
+        "workload": {
+          "claim_summary": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 5,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 10,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 5,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 5,
+                "value": 0.0
+              },
+              "pass_rate": {
+                "n": 10,
+                "value": 0.5
+              },
+              "quality_regret": {
+                "n": 10,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 10,
+                "value": 0.0
+              }
+            },
+            "n_cases": 10,
+            "violations": 0
+          },
+          "faq": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 8,
+                "value": 127.238003522507
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "onprem_required": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 4,
+            "violations": 0
+          }
+        }
+      },
+      "overall": {
+        "empty_cases": 0,
+        "empty_set_mismatches": 0,
+        "metrics": {
+          "cost_regret": {
+            "n": 16,
+            "value": 0.0
+          },
+          "empty_set_mismatch_rate": {
+            "n": 22,
+            "value": 0.0
+          },
+          "floor_miss_rate": {
+            "n": 16,
+            "value": 0.0
+          },
+          "latency_regret": {
+            "n": 16,
+            "value": 190.952425262367
+          },
+          "pass_rate": {
+            "n": 22,
+            "value": 0.727272727273
+          },
+          "quality_regret": {
+            "n": 22,
+            "value": 0.0
+          },
+          "violation_rate": {
+            "n": 22,
+            "value": 0.0
+          }
+        },
+        "n_cases": 22,
+        "violations": 0
+      },
+      "worst": {
+        "cost_regret": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 5,
+          "groups_printed": 5,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "empty_set_mismatch_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 7,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "placement=us_only",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "application=policy-7b90407f",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "floor_miss_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 5,
+          "groups_printed": 5,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "latency_regret": {
+          "dimension": "protection",
+          "group": "enforced",
+          "groups_at_value": 1,
+          "groups_printed": 5,
+          "groups_total": 12,
+          "n": 16,
+          "n_cases": 22,
+          "tied": [
+            "protection=enforced"
+          ],
+          "value": 190.952425262367
+        },
+        "pass_rate": {
+          "dimension": "placement",
+          "group": "us_only",
+          "groups_at_value": 2,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=us_only",
+            "application=policy-7b90407f"
+          ],
+          "value": 0.375
+        },
+        "quality_regret": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 7,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "placement=us_only",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "application=policy-7b90407f",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "violation_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 7,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "placement=us_only",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "application=policy-7b90407f",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        }
+      }
+    },
+    "router_online:candidate": {
+      "dimensions": {
+        "application": {
+          "policy-57810d29": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 8,
+                "value": 127.238003522507
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "policy-7b90407f": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 0.375
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "policy-8fb5374a": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 4,
+            "violations": 0
+          },
+          "policy-d30395cb": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 2,
+            "violations": 0
+          }
+        },
+        "placement": {
+          "any": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 8,
+                "value": 127.238003522507
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "escalated": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 2,
+            "violations": 0
+          },
+          "onprem_only": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 4,
+            "violations": 0
+          },
+          "us_only": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 0.375
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          }
+        },
+        "protection": {
+          "enforced": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 16,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 22,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 16,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 16,
+                "value": 190.952425262367
+              },
+              "pass_rate": {
+                "n": 22,
+                "value": 0.727272727273
+              },
+              "quality_regret": {
+                "n": 22,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 22,
+                "value": 0.0
+              }
+            },
+            "n_cases": 22,
+            "violations": 0
+          }
+        },
+        "workload": {
+          "claim_summary": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 5,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 10,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 5,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 5,
+                "value": 0.0
+              },
+              "pass_rate": {
+                "n": 10,
+                "value": 0.5
+              },
+              "quality_regret": {
+                "n": 10,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 10,
+                "value": 0.0
+              }
+            },
+            "n_cases": 10,
+            "violations": 0
+          },
+          "faq": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 8,
+                "value": 127.238003522507
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "onprem_required": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 4,
+            "violations": 0
+          }
+        }
+      },
+      "overall": {
+        "empty_cases": 0,
+        "empty_set_mismatches": 0,
+        "metrics": {
+          "cost_regret": {
+            "n": 16,
+            "value": 0.0
+          },
+          "empty_set_mismatch_rate": {
+            "n": 22,
+            "value": 0.0
+          },
+          "floor_miss_rate": {
+            "n": 16,
+            "value": 0.0
+          },
+          "latency_regret": {
+            "n": 16,
+            "value": 190.952425262367
+          },
+          "pass_rate": {
+            "n": 22,
+            "value": 0.727272727273
+          },
+          "quality_regret": {
+            "n": 22,
+            "value": 0.0
+          },
+          "violation_rate": {
+            "n": 22,
+            "value": 0.0
+          }
+        },
+        "n_cases": 22,
+        "violations": 0
+      },
+      "worst": {
+        "cost_regret": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 5,
+          "groups_printed": 5,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "empty_set_mismatch_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 7,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "placement=us_only",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "application=policy-7b90407f",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "floor_miss_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 5,
+          "groups_printed": 5,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "latency_regret": {
+          "dimension": "protection",
+          "group": "enforced",
+          "groups_at_value": 1,
+          "groups_printed": 5,
+          "groups_total": 12,
+          "n": 16,
+          "n_cases": 22,
+          "tied": [
+            "protection=enforced"
+          ],
+          "value": 190.952425262367
+        },
+        "pass_rate": {
+          "dimension": "placement",
+          "group": "us_only",
+          "groups_at_value": 2,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=us_only",
+            "application=policy-7b90407f"
+          ],
+          "value": 0.375
+        },
+        "quality_regret": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 7,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "placement=us_only",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "application=policy-7b90407f",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "violation_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 7,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "placement=us_only",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "application=policy-7b90407f",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        }
+      }
+    },
+    "router_warm_prior": {
+      "dimensions": {
+        "application": {
+          "policy-57810d29": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 8,
+                "value": 127.238003522507
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "policy-7b90407f": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 0.375
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "policy-8fb5374a": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 4,
+            "violations": 0
+          },
+          "policy-d30395cb": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 2,
+            "violations": 0
+          }
+        },
+        "placement": {
+          "any": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 8,
+                "value": 127.238003522507
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "escalated": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 2,
+            "violations": 0
+          },
+          "onprem_only": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 4,
+            "violations": 0
+          },
+          "us_only": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 0.375
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          }
+        },
+        "protection": {
+          "enforced": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 16,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 22,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 16,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 16,
+                "value": 190.952425262367
+              },
+              "pass_rate": {
+                "n": 22,
+                "value": 0.727272727273
+              },
+              "quality_regret": {
+                "n": 22,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 22,
+                "value": 0.0
+              }
+            },
+            "n_cases": 22,
+            "violations": 0
+          }
+        },
+        "workload": {
+          "claim_summary": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 5,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 10,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 5,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 5,
+                "value": 0.0
+              },
+              "pass_rate": {
+                "n": 10,
+                "value": 0.5
+              },
+              "quality_regret": {
+                "n": 10,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 10,
+                "value": 0.0
+              }
+            },
+            "n_cases": 10,
+            "violations": 0
+          },
+          "faq": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 8,
+                "value": 127.238003522507
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "onprem_required": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 4,
+            "violations": 0
+          }
+        }
+      },
+      "overall": {
+        "empty_cases": 0,
+        "empty_set_mismatches": 0,
+        "metrics": {
+          "cost_regret": {
+            "n": 16,
+            "value": 0.0
+          },
+          "empty_set_mismatch_rate": {
+            "n": 22,
+            "value": 0.0
+          },
+          "floor_miss_rate": {
+            "n": 16,
+            "value": 0.0
+          },
+          "latency_regret": {
+            "n": 16,
+            "value": 190.952425262367
+          },
+          "pass_rate": {
+            "n": 22,
+            "value": 0.727272727273
+          },
+          "quality_regret": {
+            "n": 22,
+            "value": 0.0
+          },
+          "violation_rate": {
+            "n": 22,
+            "value": 0.0
+          }
+        },
+        "n_cases": 22,
+        "violations": 0
+      },
+      "worst": {
+        "cost_regret": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 5,
+          "groups_printed": 5,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "empty_set_mismatch_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 7,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "placement=us_only",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "application=policy-7b90407f",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "floor_miss_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 5,
+          "groups_printed": 5,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "latency_regret": {
+          "dimension": "protection",
+          "group": "enforced",
+          "groups_at_value": 1,
+          "groups_printed": 5,
+          "groups_total": 12,
+          "n": 16,
+          "n_cases": 22,
+          "tied": [
+            "protection=enforced"
+          ],
+          "value": 190.952425262367
+        },
+        "pass_rate": {
+          "dimension": "placement",
+          "group": "us_only",
+          "groups_at_value": 2,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=us_only",
+            "application=policy-7b90407f"
+          ],
+          "value": 0.375
+        },
+        "quality_regret": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 7,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "placement=us_only",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "application=policy-7b90407f",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "violation_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 7,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "placement=us_only",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "application=policy-7b90407f",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        }
+      }
+    },
+    "router_warm_prior:candidate": {
+      "dimensions": {
+        "application": {
+          "policy-57810d29": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 8,
+                "value": 127.238003522507
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "policy-7b90407f": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 0.375
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "policy-8fb5374a": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 4,
+            "violations": 0
+          },
+          "policy-d30395cb": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 2,
+            "violations": 0
+          }
+        },
+        "placement": {
+          "any": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 8,
+                "value": 127.238003522507
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "escalated": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 2,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 2,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 2,
+            "violations": 0
+          },
+          "onprem_only": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 4,
+            "violations": 0
+          },
+          "us_only": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 0.375
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          }
+        },
+        "protection": {
+          "enforced": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 16,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 22,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 16,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 16,
+                "value": 190.952425262367
+              },
+              "pass_rate": {
+                "n": 22,
+                "value": 0.727272727273
+              },
+              "quality_regret": {
+                "n": 22,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 22,
+                "value": 0.0
+              }
+            },
+            "n_cases": 22,
+            "violations": 0
+          }
+        },
+        "workload": {
+          "claim_summary": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 5,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 10,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 5,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 5,
+                "value": 0.0
+              },
+              "pass_rate": {
+                "n": 10,
+                "value": 0.5
+              },
+              "quality_regret": {
+                "n": 10,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 10,
+                "value": 0.0
+              }
+            },
+            "n_cases": 10,
+            "violations": 0
+          },
+          "faq": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 8,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 8,
+                "value": 127.238003522507
+              },
+              "pass_rate": {
+                "n": 8,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 8,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 8,
+                "value": 0.0
+              }
+            },
+            "n_cases": 8,
+            "violations": 0
+          },
+          "onprem_required": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "empty_set_mismatch_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "floor_miss_rate": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "latency_regret": {
+                "n": 3,
+                "state": "insufficient_cases"
+              },
+              "pass_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "quality_regret": {
+                "n": 4,
+                "state": "insufficient_cases"
+              },
+              "violation_rate": {
+                "n": 4,
+                "state": "insufficient_cases"
+              }
+            },
+            "n_cases": 4,
+            "violations": 0
+          }
+        }
+      },
+      "overall": {
+        "empty_cases": 0,
+        "empty_set_mismatches": 0,
+        "metrics": {
+          "cost_regret": {
+            "n": 16,
+            "value": 0.0
+          },
+          "empty_set_mismatch_rate": {
+            "n": 22,
+            "value": 0.0
+          },
+          "floor_miss_rate": {
+            "n": 16,
+            "value": 0.0
+          },
+          "latency_regret": {
+            "n": 16,
+            "value": 190.952425262367
+          },
+          "pass_rate": {
+            "n": 22,
+            "value": 0.727272727273
+          },
+          "quality_regret": {
+            "n": 22,
+            "value": 0.0
+          },
+          "violation_rate": {
+            "n": 22,
+            "value": 0.0
+          }
+        },
+        "n_cases": 22,
+        "violations": 0
+      },
+      "worst": {
+        "cost_regret": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 5,
+          "groups_printed": 5,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "empty_set_mismatch_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 7,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "placement=us_only",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "application=policy-7b90407f",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "floor_miss_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 5,
+          "groups_printed": 5,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "latency_regret": {
+          "dimension": "protection",
+          "group": "enforced",
+          "groups_at_value": 1,
+          "groups_printed": 5,
+          "groups_total": 12,
+          "n": 16,
+          "n_cases": 22,
+          "tied": [
+            "protection=enforced"
+          ],
+          "value": 190.952425262367
+        },
+        "pass_rate": {
+          "dimension": "placement",
+          "group": "us_only",
+          "groups_at_value": 2,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=us_only",
+            "application=policy-7b90407f"
+          ],
+          "value": 0.375
+        },
+        "quality_regret": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 7,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "placement=us_only",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "application=policy-7b90407f",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        },
+        "violation_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 7,
+          "groups_printed": 7,
+          "groups_total": 12,
+          "n": 8,
+          "n_cases": 8,
+          "tied": [
+            "placement=any",
+            "placement=us_only",
+            "protection=enforced",
+            "application=policy-57810d29",
+            "application=policy-7b90407f",
+            "workload=claim_summary",
+            "workload=faq"
+          ],
+          "value": 0.0
+        }
+      }
+    }
+  }
+}

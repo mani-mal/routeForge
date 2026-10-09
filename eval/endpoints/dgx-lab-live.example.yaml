@@ -1,0 +1,50 @@
+# EXAMPLE --live endpoint file for the DGX lab run of 2026-10-08
+# (docs/research/feasible-route-bench.md §24). NEVER run live by the test suite.
+#
+# ONE real server (glm-5.3-flash) under three names: the real one, and two
+# aliases served by deploy/dgx_lab/alias-proxy.yaml. The declarations differ BY
+# STATEMENT, for the experiment; every name is the same model, so nothing
+# measured with this file says anything about quality differences between
+# endpoints. Tiers, prices, retention and raw-sensitive mirror what was onboarded in
+# the lab registry that day; regions are written `us` / `eu` (the registry had
+# `us-lab` / `eu-lab`) so that the starter suite's `allowed_regions: [us]` cases apply.
+#
+# From a workstation (the alias proxy has no NodePort):
+#   kubectl -n runai-routeforge port-forward svc/alias-proxy 18000:8000 &
+#   export GLM_FLASH_API_KEY=...        # the vLLM key; never in this file
+#   SP_PII_DETECTION=regex uv run python scripts/feasible_bench.py \
+#     --suite eval/suites/starter.jsonl \
+#     --endpoints eval/endpoints/dgx-lab-live.example.yaml --live --out <dir>
+endpoints:
+  - slug: glm-5.3-flash
+    provider: onprem
+    tier: mid
+    price: {input: 10, output: 10}
+    region: us
+    prompt_retention: none
+    accepts_raw_sensitive: true
+    live:
+      endpoint: "http://10.89.195.201:30856/v1"
+      api_key_env: GLM_FLASH_API_KEY
+
+  - slug: glm-flash-east
+    provider: onprem
+    tier: mid
+    price: {input: 6, output: 6}
+    region: eu
+    prompt_retention: none
+    accepts_raw_sensitive: true
+    live:
+      endpoint: "http://127.0.0.1:18000/a/glm-flash-east/v1"
+      api_key_env: GLM_FLASH_API_KEY
+
+  - slug: glm-flash-econ
+    provider: onprem
+    tier: cheap
+    price: {input: 1, output: 1}
+    region: us
+    prompt_retention: retained
+    accepts_raw_sensitive: false
+    live:
+      endpoint: "http://127.0.0.1:18000/a/glm-flash-econ/v1"
+      api_key_env: GLM_FLASH_API_KEY

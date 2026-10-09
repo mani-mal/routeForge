@@ -4342,3 +4342,196 @@ full-export figure. **TO MEASURE** (with E9a's larger exports).
 | direct coverage; width at 5,000 and 50,000 rows (E9a, E9b) | a larger export |
 | coverage under dependence (E9c) | agent-loop traffic |
 | stated capacity against observed behaviour; backend time in service (E10b, E10c) | the engine's configured limits and metrics |
+
+## 24. Live run 2 on the DGX lab: three endpoint names, one outage, and agent-loop rows (2026-10-08)
+
+Artifacts, all content-free: `docs/research/data/live-dgx-lab-2026-10-08-run2/` (outcome
+export, config snapshot, client log, outage log, scenario and capacity files, every output
+quoted below, the bench output, the generator, and the agent-loop export).
+
+> **What this run is and is not.** The lab has one model server. The three endpoint names
+> are **one model on one server**: `glm-5.3-flash` directly, and `glm-flash-east` and
+> `glm-flash-econ` through a small test proxy (`deploy/dgx_lab/alias-proxy.yaml`) that
+> renames the model and can be told to refuse one name. They differ only in what the
+> operator **declared** at onboarding. So this run measures eligibility, routing, failover,
+> the breaker and replay across endpoints with different declarations and prices. It says
+> **nothing** about quality differences, and nothing about cloud against on-prem placement
+> (all three are provider `onprem`). The request text is synthetic.
+
+### 24.1 Setup
+
+| endpoint name | tier | declared price in/out, $ per 1M | region | prompt retention | accepts raw sensitive |
+|---|---|---|---|---|---|
+| `glm-5.3-flash` | mid | 10 / 10 | us-lab | none | true |
+| `glm-flash-east` | mid | 6 / 6 | eu-lab | none | true |
+| `glm-flash-econ` | cheap | 1 / 1 | us-lab | retained | false |
+
+Applications as in §23.1: `paper-claims` (per-request cap $0.05), `paper-dev`,
+`paper-clinic` (`onprem_only`, `allowed_regions: [us-lab]`, `require_no_retention`), all
+`pii_detection: regex`. 900 requests at 1 per second, seed 3. 300 s into the run the proxy
+was told to refuse `glm-flash-east`; 181.5 s later it was told to serve it again
+(`outage.log`).
+
+### 24.2 Outcomes and attempt chains
+
+880 served, 18 `no_eligible` (budget), 2 `backend_failed`.
+
+| attempt chain | rows |
+|---|---|
+| `glm-5.3-flash` | 394 |
+| `glm-flash-econ` | 252 |
+| `glm-flash-east` | 230 |
+| `glm-flash-east` → `glm-5.3-flash` | 5 |
+| `glm-flash-east` → `glm-flash-econ` | 1 |
+| none (rejected before routing) | 18 |
+
+### 24.3 The outage: failover and the breaker (E4, live)
+
+Times are seconds after the proxy began refusing `glm-flash-east`.
+
+- Three requests in a row failed on it at 3.3 s, 6.8 s and 8.2 s. Each failed over and was
+  served. The third failure opened the breaker.
+- 65 rows carry `circuit_open` for `glm-flash-east`, from 19.7 s to 219.4 s. The endpoint
+  was back at 181.5 s, so the breaker stayed open about 38 s after recovery.
+- Half-open probes were sent at about 33.9, 40.2, 41.3, 62.7 and 101.2 s.
+- Of the 58 routed mid-tier rows from the two unrestricted applications in the outage
+  window, **8 touched the dead endpoint**; the breaker kept the rest off it.
+- **Two requests failed with 502** (5,877 and 7,207 routing tokens). Under the $0.05 cap only
+  the $6 endpoint was affordable, so there was no second candidate to fail over to. Their
+  outcome rows record `eligible: []` and `tier_target: null`.
+- One row has `circuit_bypass`: 7,555 tokens, only `glm-flash-east` in budget. It bypassed
+  the open breaker, failed, and was served by `glm-flash-econ`, one tier down.
+
+These are filed as B70. One outage, one endpoint, one run: this is an observation of the
+mechanism, not a rate.
+
+### 24.4 Replay agreement
+
+| | value |
+|---|---|
+| outcome agreement (served / rejected / failed), 900 rows | 1.0 |
+| model agreement, 880 served rows | 0.926 |
+| by application: claims / dev / clinic | 0.872 / 0.891 / 1.0 |
+
+All 65 model disagreements have the same shape: live chose `glm-5.3-flash`, replay chose
+`glm-flash-east`. They are exactly the rows that carry `circuit_open`. Replay does not model
+breaker state, so it sends those requests to the endpoint the live router was avoiding.
+`paper-clinic` could never use `glm-flash-east` (region), which is why it agrees fully.
+
+### 24.5 Scenarios, with 90% ranges
+
+Baseline cost over the export: $6.00. Ranges are the paired bootstrap of §20.
+
+| scenario | route changed | newly rejected | newly served | Δ cost, $ |
+|---|---|---|---|---|
+| `all-apps-no-retention` | 248 [230, 268] | 4 [1, 7] | 0 | +0.438 [0.381, 0.495] |
+| `all-apps-us-lab-only` | 296 [277, 314] | 5 [2, 9] | 0 | +1.172 [0.839, 1.503] |
+| `clinic-may-use-eu-lab` | 329 [324, 334] | 0 | 10 | −0.626 [−0.858, −0.357] |
+| `raise-request-budget` | 4 [1, 7] | 0 | 18 | +1.455 [0.925, 2.005] |
+
+Moves: no-retention sends 248 rows from `econ` to `east` and rejects 4; us-lab-only sends
+286 from `east` to `glm-5.3-flash`, 10 from `east` to `econ`, and rejects 5. A tightening
+that looks free on a static check (another endpoint still qualifies) rejected 4 and 5
+requests here, because the remaining endpoint was over those requests' budget.
+
+### 24.6 Shadow prices (E6: not exercised)
+
+| application | requirement relaxed | route changes | rejections avoided | Δ cost, $ |
+|---|---|---|---|---|
+| clinic | `allowed_regions` | 329 | 10 [5, 15] | −1.037 [−1.155, −0.926] |
+| clinic | `require_no_retention` | 78 | 8 [4, 13] | −0.163 |
+| clinic | `max_cost_usd_per_request` | — | 12 [7, 17] | — |
+| dev / claims | `risk_floor` | 36 / 39 | 3 / 3 | — |
+| dev / claims | `max_cost_usd_per_request` | — | 3 / 3 | — |
+
+**Newly rejected was 0 on every relaxation.** The non-monotonicity counterexample of §17.3
+(relaxing one requirement makes a request newly rejected) did not occur in this traffic. It
+remains a constructed example, not a live observation.
+
+### 24.7 Capacity under each scenario (E10a analogue)
+
+Illustrative stated limits, the same for each name: 2 concurrent, 40 requests per minute,
+80,000 tokens per minute; 60 s buckets, 17 buckets. The limits are assumptions, not the
+server's configuration.
+
+| arm | busiest endpoint | peak | time-average | buckets over |
+|---|---|---|---|---|
+| no change | `glm-5.3-flash` | 77.5% | 48.4% | 0 |
+| `all-apps-no-retention` | `glm-flash-east` | 115.0% | 80.7% | 17.6% |
+| `all-apps-us-lab-only` | `glm-5.3-flash` | 127.5% | 90.4% | 47.1% |
+| `clinic-may-use-eu-lab` | `glm-flash-east` | 132.5% | 94.1% | 52.9% |
+| `raise-request-budget` | `glm-5.3-flash` | 77.5% | 50.1% | 0 |
+
+Three of the four changes push one endpoint over its stated limit in some minutes while the
+no-change arm stays under. That is the point of reading capacity beside the scenario: the
+route and cost table alone does not show it. Because the three names are one server, the
+real server saw the same total load in every arm; the table is about stated limits only.
+
+### 24.8 Group report and router-version check on live endpoints (E11d)
+
+`feasible_bench --live` on the 22-case starter suite, three endpoint names, 66 calls, seed
+0, with `--group-report` and a candidate overlay `weights: {cost: 0, latency: 2}`,
+tolerances `pass_rate` 0.05 and `mean_chosen_cost` 0.0005. Output in `bench/`.
+
+- **Check verdict: PASS, exit 0.** 16 figures judged, all `within_tolerance`, every range
+  `[0, 0]`. **The candidate changed the attempt chain on 0 of 22 cases**, so this is the
+  tool running end to end on live endpoints, not evidence that it can detect a regression.
+  On this suite the tier rule and the feasible set decide the route; the scoring weights
+  never got a choice to change.
+- Hard checks: 0 candidate attempts outside the eligible set; 0 on an empty feasible set.
+- Group report, `router_online`: violations 0 of 22; pass rate 0.727 overall, 1.0 for
+  `placement=any` (n = 8), 0.375 for `placement=us_only` (n = 8), 0.5 for
+  `workload=claim_summary` (n = 10). `escalated` (n = 2) and `onprem_only` (n = 4) are below
+  the minimum of 5 and print no rate. Why the `us_only` cases fail the grader was **not
+  investigated**.
+- Every strategy shows the same pass rates, as expected when all endpoints are one model.
+
+The planned E11d asked for at least 5 cases in each placement and protection group and two
+placements. This run has one protection group and two placement groups below 5, so E11d is
+**partly** met: a larger suite is still needed.
+
+### 24.9 Agent-loop rows from a real coding client
+
+The owner used a coding agent (opencode) through RouteForge on the same lab, application
+`opencode`, enforced posture with `presidio`, and allowed its content-free outcome rows to
+be used. 40 rows over about 15 minutes, one session (`outcomes-opencode-agent-loop.ndjson`).
+
+| | value |
+|---|---|
+| rows | 40: 21 served, 19 `no_eligible` |
+| the 19 rejections | all `max_cost_usd_per_request` (cap $0.05, before it was raised); routing tokens 14,256 to 14,264 — about four requests, retried by the client |
+| backend prompt tokens, served rows | 13,962 to 27,480, median 24,965 |
+| completion tokens, median | 35 |
+| routing estimate / backend prompt tokens | summed 0.976; per row 0.960 to 1.022, median 0.976 |
+| recorded latency | median 441 ms, 90th percentile 1,162 ms |
+| cost recorded for 21 calls | $4.98 at the declared $10 per 1M |
+| entity types detected | `PERSON`, `LOCATION`, `NRP`, `DATE_TIME`, `URL`, `US_DRIVER_LICENSE` on all 40; `IP_ADDRESS` on 16 |
+
+Three things this shows that the synthetic runs could not:
+
+1. **The first agent call is already large.** The smallest request was about 14,000 tokens
+   (system prompt plus tool definitions). A per-request cap set for chat traffic rejects an
+   agent client on its first call.
+2. **On real agent prompts the token estimate was close**: 0.976 summed and 0.96 to 1.02 per
+   row, against 0.52 to 1.72 by kind of text in §23.4. This is 21 rows from one session and
+   one client, whose prompts share most of their text, so the rows are **not independent**
+   and it is one data point for E7c, not a distribution.
+3. **A general-purpose detector fires on every coding prompt.** The same six entity types
+   are detected on every row, which is what a constant system prompt would produce. On the
+   output side this broke tool calls (B69): `xargs -0 -n1` came back as
+   `xargs -0 -<US_DRIVER_LICENSE_1>`.
+
+These rows are short and dependent (each call carries the conversation so far). They are a
+first look at agent-loop traffic for E9c, far too few to measure coverage under dependence.
+
+### 24.10 Still to measure
+
+| item | needs |
+|---|---|
+| quality-sensitive routing; cloud against on-prem placement (E8) | endpoints that are different models, and a second provider |
+| shadow-price counterexample, live (E6) | a fixture built to produce it; ordinary traffic did not |
+| a check that detects a real difference (E11d) | a suite where scoring weights change a route; ≥ 5 cases per group |
+| replay with breaker state (E7) | B70 item 5 |
+| token-estimate ratio as a distribution on real text (E7c) | many sessions and clients |
+| coverage under dependence; width at 5,000 and 50,000 rows (E9a–c) | a long agent-loop export |
+| stated capacity against observed behaviour (E10b, E10c) | the engine's configured limits and metrics |

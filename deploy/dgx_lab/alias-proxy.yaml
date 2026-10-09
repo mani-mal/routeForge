@@ -1,0 +1,117 @@
+# TEST-AND-EVAL TOOLING ONLY. Not part of RouteForge and never part of serving.
+#
+# Presents ONE real OpenAI-compatible server under extra endpoint names, so a lab
+# with a single model server can still exercise eligibility, ranking, failover and
+# the circuit breaker (docs/research/feasible-route-bench.md §24). CPU-only; the
+# real server is never modified or stopped.
+#
+#   http://alias-proxy.runai-routeforge:8000/a/<alias>/v1   -> UPSTREAM/v1, model name rewritten
+#   GET /_ctl?alias=<alias>&down=1|0                        -> drop (or restore) that alias's chat calls
+#   GET /_ctl                                               -> current state
+#
+# A "down" alias closes the connection with no HTTP response: a dead server. Every
+# alias is the SAME model, so nothing measured through this proxy says anything
+# about quality differences between endpoints.
+apiVersion: v1
+kind: List
+items:
+  - apiVersion: v1
+    kind: ConfigMap
+    metadata: {name: alias-proxy, namespace: runai-routeforge}
+    data:
+      proxy.py: |
+        import http.server, json, os, urllib.parse, urllib.request, urllib.error
+        UPSTREAM = os.environ["UPSTREAM"].rstrip("/")
+        REAL = os.environ["REAL_MODEL"]
+        DOWN = set()
+        class H(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+            def _send(self, status, data, ctype="application/json"):
+                self.send_response(status); self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
+            def _split(self):
+                parts = self.path.split("/", 3)          # '', 'a', alias, 'v1/...'
+                if len(parts) < 4 or parts[1] != "a":
+                    return None, None
+                return parts[2], "/" + parts[3]
+            def _relay(self, alias, path, body=None):
+                req = urllib.request.Request(UPSTREAM + path, data=body, method=self.command,
+                    headers={k: v for k, v in self.headers.items()
+                             if k.lower() not in ("host", "connection", "content-length", "accept-encoding")})
+                try:
+                    resp = urllib.request.urlopen(req, timeout=600); status, data = resp.status, resp.read()
+                except urllib.error.HTTPError as e:
+                    status, data = e.code, e.read()
+                try:
+                    doc = json.loads(data)
+                    if isinstance(doc.get("data"), list):
+                        for m in doc["data"]:
+                            if m.get("id") == REAL: m["id"] = alias
+                    if doc.get("model") == REAL: doc["model"] = alias
+                    data = json.dumps(doc).encode()
+                except Exception:
+                    pass
+                self._send(status, data)
+            def do_GET(self):
+                if self.path.startswith("/_ctl"):
+                    q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                    if "alias" in q:
+                        (DOWN.add if q.get("down", ["0"])[0] == "1" else DOWN.discard)(q["alias"][0])
+                    return self._send(200, json.dumps({"down": sorted(DOWN)}).encode())
+                alias, path = self._split()
+                if alias is None: return self._send(404, b'{"error":"use /a/<alias>/v1/..."}')
+                self._relay(alias, path)
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+                alias, path = self._split()
+                if alias is None: return self._send(404, b'{"error":"use /a/<alias>/v1/..."}')
+                if alias in DOWN:
+                    self.close_connection = True; self.connection.shutdown(2); return
+                try:
+                    doc = json.loads(body)
+                    if doc.get("model") == alias: doc["model"] = REAL
+                    doc.pop("stream", None); doc.pop("stream_options", None)
+                    body = json.dumps(doc).encode()
+                except Exception:
+                    pass
+                self._relay(alias, path, body)
+            def log_message(self, *a): pass
+        http.server.ThreadingHTTPServer(("0.0.0.0", 8000), H).serve_forever()
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata: {name: alias-proxy, namespace: runai-routeforge}
+    spec:
+      replicas: 1
+      selector: {matchLabels: {app: alias-proxy}}
+      template:
+        metadata:
+          labels: {app: alias-proxy, runai/node-pool: default}
+        spec:
+          tolerations:
+            - {key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule}
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - {key: nvidia.com/gpu.present, operator: DoesNotExist}
+          containers:
+            - name: proxy
+              image: python:3.12-slim
+              command: ["python", "-u", "/app/proxy.py"]
+              env:
+                - {name: UPSTREAM, value: "http://glm-flash.runai-glm-coding:8000"}
+                - {name: REAL_MODEL, value: "glm-5.3-flash"}
+              ports: [{containerPort: 8000}]
+              resources:
+                requests: {cpu: 100m, memory: 128Mi}
+                limits: {cpu: "1", memory: 256Mi}
+              volumeMounts: [{name: app, mountPath: /app}]
+          volumes:
+            - {name: app, configMap: {name: alias-proxy}}
+  - apiVersion: v1
+    kind: Service
+    metadata: {name: alias-proxy, namespace: runai-routeforge}
+    spec:
+      selector: {app: alias-proxy}
+      ports: [{port: 8000, targetPort: 8000}]

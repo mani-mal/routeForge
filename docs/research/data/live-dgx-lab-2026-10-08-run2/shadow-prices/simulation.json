@@ -1,0 +1,621 @@
+{
+  "inputs": {
+    "export_sha256": "a899f995be918662e20c78fc00c9aefc68298ea7027d4c824f983606e65051b8",
+    "proposal_sha256": null,
+    "proposal_title": null,
+    "registry_version": "4c33b6b14ae6",
+    "routing_policy_version": "6e6fe2027862",
+    "serving_policy": {
+      "allow_app_passthrough": true,
+      "allow_app_pii_downgrade": true,
+      "default_policy_mode": "enforced",
+      "pii_detection": "presidio"
+    },
+    "since": null,
+    "snapshot_generated_at": "2026-10-08T23:49:23Z",
+    "snapshot_sha256": "af6ebdf58f430169188d9d984bc02483e2983b2a2fa524c7aae54e2e5b2a3476",
+    "uncertainty": {
+      "interval": 0.9,
+      "min_rows": 30,
+      "quality_posteriors_sha256": [],
+      "replicates": 1000,
+      "seed": 0
+    }
+  },
+  "schema": "routeforge.simulation/v1",
+  "shadow_prices": {
+    "baseline": "snapshot",
+    "constraints": [
+      {
+        "affected_apps": [
+          "paper-clinic"
+        ],
+        "cost_saved_per_day": null,
+        "cost_usd": {
+          "baseline": 2.59332,
+          "delta": -0.625674,
+          "relaxed": 1.967646
+        },
+        "cost_usd_both_routed": {
+          "baseline": 2.59332,
+          "delta": -1.037328,
+          "relaxed": 1.555992
+        },
+        "latency_p50_delta": 83.571088,
+        "moves": [
+          {
+            "count": 329,
+            "from": "glm-5.3-flash",
+            "to": "glm-flash-east"
+          },
+          {
+            "count": 10,
+            "from": "(rejected)",
+            "to": "glm-flash-east"
+          }
+        ],
+        "newly_rejected": 0,
+        "newly_rejected_reasons": {},
+        "onprem_share": {
+          "baseline": 1.0,
+          "relaxed": 1.0
+        },
+        "quality_mean_delta": 0.0,
+        "rejections_avoided": 10,
+        "relaxed_to": "null",
+        "requirement": "allowed_regions",
+        "route_changed": 329,
+        "rows_in_scope": 341,
+        "scope": {
+          "app": "paper-clinic"
+        },
+        "security": true
+      },
+      {
+        "affected_apps": [
+          "paper-clinic"
+        ],
+        "cost_saved_per_day": null,
+        "cost_usd": {
+          "baseline": 2.59332,
+          "delta": -0.098041,
+          "relaxed": 2.495279
+        },
+        "cost_usd_both_routed": {
+          "baseline": 2.59332,
+          "delta": -0.163224,
+          "relaxed": 2.430096
+        },
+        "latency_p50_delta": 0.0,
+        "moves": [
+          {
+            "count": 78,
+            "from": "glm-5.3-flash",
+            "to": "glm-flash-econ"
+          },
+          {
+            "count": 8,
+            "from": "(rejected)",
+            "to": "glm-flash-econ"
+          }
+        ],
+        "newly_rejected": 0,
+        "newly_rejected_reasons": {},
+        "onprem_share": {
+          "baseline": 1.0,
+          "relaxed": 1.0
+        },
+        "quality_mean_delta": -0.063798,
+        "rejections_avoided": 8,
+        "relaxed_to": "false",
+        "requirement": "require_no_retention",
+        "route_changed": 78,
+        "rows_in_scope": 341,
+        "scope": {
+          "app": "paper-clinic"
+        },
+        "security": true
+      },
+      {
+        "affected_apps": [
+          "paper-dev"
+        ],
+        "cost_saved_per_day": null,
+        "cost_usd": {
+          "baseline": 2.108764,
+          "delta": -0.073626,
+          "relaxed": 2.035138
+        },
+        "cost_usd_both_routed": {
+          "baseline": 2.108764,
+          "delta": -0.102005,
+          "relaxed": 2.006759
+        },
+        "latency_p50_delta": -148.679126,
+        "moves": [
+          {
+            "count": 36,
+            "from": "glm-flash-east",
+            "to": "glm-flash-econ"
+          },
+          {
+            "count": 3,
+            "from": "(rejected)",
+            "to": "glm-flash-econ"
+          }
+        ],
+        "newly_rejected": 0,
+        "newly_rejected_reasons": {},
+        "onprem_share": {
+          "baseline": 1.0,
+          "relaxed": 1.0
+        },
+        "quality_mean_delta": -0.032332,
+        "rejections_avoided": 3,
+        "relaxed_to": "cheap",
+        "requirement": "risk_floor",
+        "route_changed": 36,
+        "rows_in_scope": 290,
+        "scope": {
+          "app": "paper-dev"
+        },
+        "security": true
+      },
+      {
+        "affected_apps": [
+          "paper-claims"
+        ],
+        "cost_saved_per_day": null,
+        "cost_usd": {
+          "baseline": 1.299249,
+          "delta": -0.061657,
+          "relaxed": 1.237592
+        },
+        "cost_usd_both_routed": {
+          "baseline": 1.299249,
+          "delta": -0.09216,
+          "relaxed": 1.207089
+        },
+        "latency_p50_delta": -148.679126,
+        "moves": [
+          {
+            "count": 39,
+            "from": "glm-flash-east",
+            "to": "glm-flash-econ"
+          },
+          {
+            "count": 3,
+            "from": "(rejected)",
+            "to": "glm-flash-econ"
+          }
+        ],
+        "newly_rejected": 0,
+        "newly_rejected_reasons": {},
+        "onprem_share": {
+          "baseline": 1.0,
+          "relaxed": 1.0
+        },
+        "quality_mean_delta": -0.037891,
+        "rejections_avoided": 3,
+        "relaxed_to": "cheap",
+        "requirement": "risk_floor",
+        "route_changed": 39,
+        "rows_in_scope": 269,
+        "scope": {
+          "app": "paper-claims"
+        },
+        "security": true
+      },
+      {
+        "affected_apps": [
+          "paper-clinic"
+        ],
+        "cost_saved_per_day": null,
+        "cost_usd": {
+          "baseline": 2.59332,
+          "delta": 0.95195,
+          "relaxed": 3.54527
+        },
+        "cost_usd_both_routed": {
+          "baseline": 2.59332,
+          "delta": 0.0,
+          "relaxed": 2.59332
+        },
+        "latency_p50_delta": 0.0,
+        "moves": [
+          {
+            "count": 12,
+            "from": "(rejected)",
+            "to": "glm-5.3-flash"
+          }
+        ],
+        "newly_rejected": 0,
+        "newly_rejected_reasons": {},
+        "onprem_share": {
+          "baseline": 1.0,
+          "relaxed": 1.0
+        },
+        "quality_mean_delta": 0.0,
+        "rejections_avoided": 12,
+        "relaxed_to": "1e12",
+        "requirement": "max_cost_usd_per_request",
+        "route_changed": 0,
+        "rows_in_scope": 341,
+        "scope": {
+          "app": "paper-clinic"
+        },
+        "security": false
+      },
+      {
+        "affected_apps": [
+          "paper-dev"
+        ],
+        "cost_saved_per_day": null,
+        "cost_usd": {
+          "baseline": 2.108764,
+          "delta": 0.170274,
+          "relaxed": 2.279038
+        },
+        "cost_usd_both_routed": {
+          "baseline": 2.108764,
+          "delta": 0.0,
+          "relaxed": 2.108764
+        },
+        "latency_p50_delta": 0.0,
+        "moves": [
+          {
+            "count": 3,
+            "from": "(rejected)",
+            "to": "glm-flash-east"
+          }
+        ],
+        "newly_rejected": 0,
+        "newly_rejected_reasons": {},
+        "onprem_share": {
+          "baseline": 1.0,
+          "relaxed": 1.0
+        },
+        "quality_mean_delta": 0.001289,
+        "rejections_avoided": 3,
+        "relaxed_to": "1e12",
+        "requirement": "max_cost_usd_per_request",
+        "route_changed": 0,
+        "rows_in_scope": 290,
+        "scope": {
+          "app": "paper-dev"
+        },
+        "security": false
+      },
+      {
+        "affected_apps": [
+          "paper-claims"
+        ],
+        "cost_saved_per_day": null,
+        "cost_usd": {
+          "baseline": 1.299249,
+          "delta": 0.332533,
+          "relaxed": 1.631782
+        },
+        "cost_usd_both_routed": {
+          "baseline": 1.299249,
+          "delta": 0.149515,
+          "relaxed": 1.448764
+        },
+        "latency_p50_delta": 0.0,
+        "moves": [
+          {
+            "count": 4,
+            "from": "glm-flash-econ",
+            "to": "glm-flash-east"
+          },
+          {
+            "count": 3,
+            "from": "(rejected)",
+            "to": "glm-flash-east"
+          }
+        ],
+        "newly_rejected": 0,
+        "newly_rejected_reasons": {},
+        "onprem_share": {
+          "baseline": 1.0,
+          "relaxed": 1.0
+        },
+        "quality_mean_delta": 0.00486,
+        "rejections_avoided": 3,
+        "relaxed_to": "1e12",
+        "requirement": "max_cost_usd_per_request",
+        "route_changed": 4,
+        "rows_in_scope": 269,
+        "scope": {
+          "app": "paper-claims"
+        },
+        "security": false
+      }
+    ],
+    "evaluated": 16,
+    "non_binding": 9,
+    "skipped_by_cap": 0,
+    "uncertainty": {
+      "constraints": [
+        {
+          "cost_saved_per_day": null,
+          "cost_usd_both_routed_delta": {
+            "hi": -0.925896,
+            "lo": -1.155468,
+            "point": -1.037328
+          },
+          "n": 341,
+          "newly_rejected": {
+            "hi": 0,
+            "lo": 0,
+            "point": 0,
+            "zero_bound": 0.00673
+          },
+          "rejections_avoided": {
+            "hi": 15,
+            "lo": 5,
+            "point": 10
+          },
+          "requirement": "allowed_regions",
+          "route_changed": {
+            "hi": 334,
+            "lo": 324,
+            "point": 329
+          },
+          "scope": {
+            "app": "paper-clinic"
+          },
+          "security": true,
+          "totals_strata": {
+            "own": 1,
+            "pooled_apps": 0,
+            "pooled_rows": 0,
+            "smallest": 341,
+            "variance_factor": 0.997067
+          }
+        },
+        {
+          "cost_saved_per_day": null,
+          "cost_usd_both_routed_delta": {
+            "hi": -0.128889,
+            "lo": -0.198099,
+            "point": -0.163224
+          },
+          "n": 341,
+          "newly_rejected": {
+            "hi": 0,
+            "lo": 0,
+            "point": 0,
+            "zero_bound": 0.00673
+          },
+          "rejections_avoided": {
+            "hi": 13,
+            "lo": 4,
+            "point": 8
+          },
+          "requirement": "require_no_retention",
+          "route_changed": {
+            "hi": 90,
+            "lo": 65,
+            "point": 78
+          },
+          "scope": {
+            "app": "paper-clinic"
+          },
+          "security": true,
+          "totals_strata": {
+            "own": 1,
+            "pooled_apps": 0,
+            "pooled_rows": 0,
+            "smallest": 341,
+            "variance_factor": 0.997067
+          }
+        },
+        {
+          "cost_saved_per_day": null,
+          "cost_usd_both_routed_delta": {
+            "hi": -0.07256,
+            "lo": -0.13477,
+            "point": -0.102005
+          },
+          "n": 290,
+          "newly_rejected": {
+            "hi": 0,
+            "lo": 0,
+            "point": 0,
+            "zero_bound": 0.007909
+          },
+          "rejections_avoided": {
+            "hi": 6,
+            "lo": 1,
+            "point": 3
+          },
+          "requirement": "risk_floor",
+          "route_changed": {
+            "hi": 46,
+            "lo": 27,
+            "point": 36
+          },
+          "scope": {
+            "app": "paper-dev"
+          },
+          "security": true,
+          "totals_strata": {
+            "own": 1,
+            "pooled_apps": 0,
+            "pooled_rows": 0,
+            "smallest": 290,
+            "variance_factor": 0.996552
+          }
+        },
+        {
+          "cost_saved_per_day": null,
+          "cost_usd_both_routed_delta": {
+            "hi": -0.066785,
+            "lo": -0.11841,
+            "point": -0.09216
+          },
+          "n": 269,
+          "newly_rejected": {
+            "hi": 0,
+            "lo": 0,
+            "point": 0,
+            "zero_bound": 0.008523
+          },
+          "rejections_avoided": {
+            "hi": 6,
+            "lo": 1,
+            "point": 3
+          },
+          "requirement": "risk_floor",
+          "route_changed": {
+            "hi": 49,
+            "lo": 30,
+            "point": 39
+          },
+          "scope": {
+            "app": "paper-claims"
+          },
+          "security": true,
+          "totals_strata": {
+            "own": 1,
+            "pooled_apps": 0,
+            "pooled_rows": 0,
+            "smallest": 269,
+            "variance_factor": 0.996283
+          }
+        },
+        {
+          "cost_saved_per_day": null,
+          "cost_usd_both_routed_delta": {
+            "hi": 0.0,
+            "lo": 0.0,
+            "point": 0.0
+          },
+          "n": 341,
+          "newly_rejected": {
+            "hi": 0,
+            "lo": 0,
+            "point": 0,
+            "zero_bound": 0.00673
+          },
+          "rejections_avoided": {
+            "hi": 17,
+            "lo": 7,
+            "point": 12
+          },
+          "requirement": "max_cost_usd_per_request",
+          "route_changed": {
+            "hi": 0,
+            "lo": 0,
+            "point": 0
+          },
+          "scope": {
+            "app": "paper-clinic"
+          },
+          "security": false,
+          "totals_strata": {
+            "own": 1,
+            "pooled_apps": 0,
+            "pooled_rows": 0,
+            "smallest": 341,
+            "variance_factor": 0.997067
+          }
+        },
+        {
+          "cost_saved_per_day": null,
+          "cost_usd_both_routed_delta": {
+            "hi": 0.0,
+            "lo": 0.0,
+            "point": 0.0
+          },
+          "n": 290,
+          "newly_rejected": {
+            "hi": 0,
+            "lo": 0,
+            "point": 0,
+            "zero_bound": 0.007909
+          },
+          "rejections_avoided": {
+            "hi": 6,
+            "lo": 1,
+            "point": 3
+          },
+          "requirement": "max_cost_usd_per_request",
+          "route_changed": {
+            "hi": 0,
+            "lo": 0,
+            "point": 0
+          },
+          "scope": {
+            "app": "paper-dev"
+          },
+          "security": false,
+          "totals_strata": {
+            "own": 1,
+            "pooled_apps": 0,
+            "pooled_rows": 0,
+            "smallest": 290,
+            "variance_factor": 0.996552
+          }
+        },
+        {
+          "cost_saved_per_day": null,
+          "cost_usd_both_routed_delta": {
+            "hi": 0.28036,
+            "lo": 0.04081,
+            "point": 0.149515
+          },
+          "n": 269,
+          "newly_rejected": {
+            "hi": 0,
+            "lo": 0,
+            "point": 0,
+            "zero_bound": 0.008523
+          },
+          "rejections_avoided": {
+            "hi": 6,
+            "lo": 1,
+            "point": 3
+          },
+          "requirement": "max_cost_usd_per_request",
+          "route_changed": {
+            "hi": 7,
+            "lo": 1,
+            "point": 4
+          },
+          "scope": {
+            "app": "paper-claims"
+          },
+          "security": false,
+          "totals_strata": {
+            "own": 1,
+            "pooled_apps": 0,
+            "pooled_rows": 0,
+            "smallest": 269,
+            "variance_factor": 0.996283
+          }
+        }
+      ],
+      "interval": 0.9,
+      "points_outside_interval": 0
+    }
+  },
+  "uncertainty": {
+    "interval": 0.9,
+    "interval_is_min_max": false,
+    "method": "stratified_paired_row_bootstrap",
+    "min_rows": 30,
+    "not_covered": [
+      "replay_model_error",
+      "admission_estimate_error",
+      "unrecorded_inputs",
+      "traffic_shift",
+      "per_request_latency"
+    ],
+    "quality_posterior_sets": [],
+    "replicates": 1000,
+    "seed": 0,
+    "strata": "application_id"
+  }
+}
