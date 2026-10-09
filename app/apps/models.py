@@ -339,6 +339,14 @@ class RoutingOutcome(Base):
     # docs/reference/routing-outcomes.md.
     trajectory_key: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     inherited_entity_types: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # B71 item 6: the content-free shape of the backend's reply. An HTTP 200
+    # with no text and no tool call is a served row; these say so. Null on a
+    # row with no reply and on rows written before the columns existed.
+    # Deployed DBs need the four ALTERs in docs/reference/routing-outcomes.md.
+    finish_reason: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    reply_has_text: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    reply_tool_calls: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reasoning_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class OutcomeFeedback(Base):

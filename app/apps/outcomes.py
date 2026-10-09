@@ -116,6 +116,20 @@ def prompt_bucket(tokens: int) -> str:
     return ">64k"
 
 
+def reply_shape(result) -> dict:
+    """The content-free shape of a backend reply (B71 item 6): did it carry
+    any text, how many tool calls, the backend's finish reason, and its
+    reasoning tokens. Two numbers, a boolean and an enum -- never the text.
+    An HTTP 200 with no text and no tool call is otherwise indistinguishable,
+    on the record, from an answer."""
+    return {
+        "finish_reason": getattr(result, "finish_reason", None),
+        "reply_has_text": bool((getattr(result, "text", "") or "").strip()),
+        "reply_tool_calls": len(getattr(result, "tool_calls", None) or []),
+        "reasoning_tokens": getattr(result, "reasoning_tokens", None),
+    }
+
+
 def outcome_context(ctx, *, max_tokens: int | None = None,
                     trajectory_key: str | None = None) -> dict:
     """The content-free policy features of an `ExecutionPolicyContext`,
@@ -292,6 +306,11 @@ def _policy_features(outcome_ctx: dict) -> dict:
         "routing_tokens": outcome_ctx.get("routing_tokens"),
         "trajectory_key": outcome_ctx.get("trajectory_key"),
         "inherited_entity_types": list(outcome_ctx.get("inherited_entity_types") or []),
+        # B71 item 6: absent (None) on a row whose request never got a reply.
+        "finish_reason": outcome_ctx.get("finish_reason"),
+        "reply_has_text": outcome_ctx.get("reply_has_text"),
+        "reply_tool_calls": outcome_ctx.get("reply_tool_calls"),
+        "reasoning_tokens": outcome_ctx.get("reasoning_tokens"),
     }
 
 

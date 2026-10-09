@@ -1,0 +1,4 @@
+schema: routeforge.router-candidate/v1
+name: no-cheap-tier
+routing:
+  complexity_thresholds: {cheap_max: 0.0}

@@ -81,6 +81,26 @@ ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS conflicting_core JSON;
 Rows written before the ALTER keep the column null, same as any `no_eligible` row the
 router's core computation itself failed to explain (`app/routing/router.py::_safe_core`).
 
+**Upgrade: reply shape (B71 item 6, 2026-10-09).** Four nullable columns say what kind of
+reply the backend gave, without recording any of it: `finish_reason` (the backend's own:
+`stop` | `length` | `tool_calls` | `content_filter` | `function_call` | `other`; any other
+string a backend sends is recorded as `other`, never verbatim), `reply_has_text` (was
+there any non-blank text), `reply_tool_calls` (how many), and `reasoning_tokens` (when the
+backend reports them). A served row with `reply_has_text = false` and
+`reply_tool_calls = 0` is an HTTP 200 that said nothing — a reasoning model that spent its
+whole budget thinking, for example. Null on rows with no reply and on older rows. The
+`finish_reason` the *client* receives is RouteForge's own and is unchanged.
+
+```sql
+ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS finish_reason VARCHAR(16);
+ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS reply_has_text BOOLEAN;
+ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS reply_tool_calls INTEGER;
+ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS reasoning_tokens INTEGER;
+```
+
+(SQLite: the same four statements without `IF NOT EXISTS`.) Run them before rolling the
+image, for the reason given under `routing_tokens` below.
+
 **Upgrade: `routing_tokens` (B60, 2026-10-06).** `routing_outcomes` gained one nullable
 integer column (§3.2). `create_all` never adds a column to a table that already exists, so a
 database that already has `routing_outcomes` (the Spark, the DGX lab) needs it added by hand.

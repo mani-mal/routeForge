@@ -4722,7 +4722,8 @@ endpoints are not measured**.
 | `best_published_quality` | 0.727 | 0.182 | 0.0064 |
 | `router_online` | 0.682 | 0.227 | 0.0057 |
 
-- **The cheap model passed more cases than the mid model**, and "always the cheapest"
+- *(Reading withdrawn in §27.3: the gap came from unanswerable starter cases.)*
+  **The cheap model passed more cases than the mid model**, and "always the cheapest"
   beat the router on pass rate at roughly a tenth of the cost. The router's quality term for an
   endpoint with no published score is its tier's default (mid 0.75, cheap 0.5), and for
   this pair the tier order is the wrong way round. 22 cases, one sample each, a
@@ -4868,7 +4869,8 @@ was again not what bound.
 | `best_published_quality` | 0.727 | 0.136 | 0.0059 |
 | `router_online` | 0.727 | 0.136 | 0.0053 |
 
-Violations: 0 of 22 for every strategy. The cheap on-prem model again passed more cases
+Violations: 0 of 22 for every strategy. *(The ranking below is withdrawn in §27.3.)* The
+cheap on-prem model again passed more cases
 than the mid one (19 against 16; 18 against 16 in §25.9), and `cheapest` again beat the
 router. Two runs of 22 cases agree in direction; it is still a small suite with one
 sample per case.
@@ -4909,3 +4911,94 @@ endpoint beyond a tier default (larger graded suite, several samples); a saving 
 frontier baseline (paid prices); the shadow-price counterexample on live traffic (a built
 fixture); coverage under dependence and width at 5,000 and 50,000 rows (a long agent-loop
 export); real text.
+
+## 27. A larger, well-posed suite on the four live endpoints, three samples (2026-10-09)
+
+Artifacts: `docs/research/data/live-dgx-lab-2026-10-09-extended-suite/` (three samples;
+the version check is in `sample-1/`). Suite: `eval/suites/extended.jsonl`, written by
+`eval/suites/build_extended.py`.
+
+### 27.1 Why a new suite
+
+The 22-case starter suite limited three results. Two placement groups were below the
+five-case minimum. Every case was short enough to target the cheap tier, so no candidate
+that changed scoring weights could change a route (§24.8, §25.9). And some cases cannot be
+answered from their own prompt: `claim-001` asks for "the approval decision" of a claim
+whose text states none, and is graded on the word "approved".
+
+The extended suite is generated and balanced: 108 cases, five placements (`any` 36, the
+others 18 each), two protections (enforced 90, passthrough 18), six workloads (18 each),
+three length bands (36 each) that target the cheap, mid and frontier tier under the
+length-based rule. Every case carries its answer in its own text; a test checks that each
+grader accepts its own literal answer and rejects a refusal. Synthetic text.
+
+### 27.2 Three samples
+
+Same suite, same four endpoints (§25.1), seeds 0, 1 and 2; one call per case and eligible
+endpoint, 252 calls a sample.
+
+| endpoint | calls, 3 samples | errored | answered | passed |
+|---|---|---|---|---|
+| `glm-5.3-flash` (on-prem, mid) | 324 | 1 | 323 | 323 |
+| `qwen3.6-35b` (on-prem, cheap) | 324 | 2 | 322 | 322 |
+| cloud mid | 54 | 0 | 54 | 54 |
+| cloud frontier | 54 | 15 | 39 | 39 |
+
+**Every answered call passed: 738 of 738.** The 18 errors are refused calls (15 on the
+free cloud frontier endpoint: overloaded, API errors, two rate limits; three HTTP 500s
+on-prem), not wrong answers. Violations: 0 in every strategy and sample.
+
+### 27.3 What this withdraws
+
+§25.9 and §26.7 reported the cheap on-prem model passing more starter cases than the mid
+one (18 and 19 of 22 against 16) and read it as "the tier order is the wrong way round for
+this pair". **That reading is withdrawn.** On well-posed cases the two models are
+indistinguishable, at 100%. The earlier gap came from the starter suite: unanswerable
+cases and strict graders on which the models happened to differ. What survives is the
+weaker statement, that a tier default is not a quality measurement, and nothing measured
+here says which of the two models is better.
+
+It also means **this suite cannot rank models**: it is at ceiling. A suite hard enough to
+separate these models, with deterministic grading, is still to build.
+
+### 27.4 What it does show: cost regret at equal quality
+
+With every endpoint passing every case, the cheapest eligible endpoint is the oracle.
+
+| strategy | pass rate | mean chosen cost, $ (samples 1 / 2 / 3) | cost regret, $ |
+|---|---|---|---|
+| `cheapest` | 1.0 | 0.0009 / 0.0009 / 0.0009 | 0 |
+| `router_online` | 1.0 | 0.0059 / 0.0060 / 0.0059 | 0.0050 / 0.0051 / 0.0050 |
+| `best_published_quality` | 1.0 | 0.0061 (sample 1) | 0.0052 |
+
+The router pays about **6.7 times** the cheapest eligible price for the same result
+(sample 1: $0.00592 against $0.00088, stated prices). The cause is the tier rule: a longer
+request targets a higher tier whether or not it is harder, and two thirds of this suite is
+long by construction. The size of the ratio is therefore a property of the suite's length
+mix and the stated prices; the direction is a property of the rule. The starter suite could
+not show it because all its cases were short.
+
+### 27.5 The version check with a real difference in front of it
+
+Candidate `complexity_thresholds: {cheap_max: 0.0}` (no cheap tier), tolerances set before
+the run at `mean_chosen_cost` 0.0005 and `pass_rate` 0.05, sample 1.
+
+- Attempt chain changed on **30 of 108** cases (0 of 22 and 12 of 22 on the starter suite).
+- `mean_chosen_cost`: 0.00592 → 0.00606, worse by 0.00014, 90% range **[0.000085,
+  0.00020]**. The range excludes zero: the check sees the worsening.
+- The whole range is inside the tolerance, so the state is `within_tolerance` and the
+  verdict is **PASS** (exit 0). That is the correct verdict for the tolerance that was set.
+  Under the same rule, any tolerance below 0.000085 would make this figure `regressed`,
+  and any between 0.000085 and 0.00020 `inconclusive`; that is arithmetic on the rule, not
+  a second run.
+- 38 figures were judged, overall and in every group; **no group was below the minimum
+  size**. `latency_regret` improved by 212 ms [148, 290] (shown, not judged).
+
+So the check has now been shown, on live endpoints, to measure a real difference with a
+range that excludes zero. A `regressed` *verdict* on live endpoints has still not been
+produced, because the one real difference tested was smaller than its tolerance.
+
+### 27.6 Still to measure
+
+A suite that separates the models on quality; a candidate whose effect exceeds a
+tolerance set in advance; several samples per case for a pass-rate range within a case.

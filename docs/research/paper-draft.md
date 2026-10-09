@@ -7,9 +7,12 @@ research notes it points to (FB = [`feasible-route-bench.md`](feasible-route-ben
 brackets are for the author and come out before submission.
 
 > **Before this is posted.**
-> 1. **Related work (§9) is not verified.** The papers listed there are leads from the
->    author's notes. None has been read against this draft, and some identifiers may not
->    exist. No sentence in this draft relies on what any of them says.
+> 1. **Related work (§9) was checked by an automated pass on 2026-10-09** that fetched each
+>    work's page and read its abstract; three were spot-checked again by hand. Nobody has
+>    read the papers in full. References [5], [6], [34] carry first-author initials or a
+>    title that the check did not confirm character for character, and [33], [36] were
+>    confirmed from secondary sources. Check each entry against its source before
+>    submission.
 > 2. **Authors, affiliation, acknowledgements** are not filled in.
 
 ---
@@ -36,7 +39,8 @@ endpoints were answering; a replayed prediction of 180 requests reaching the clo
 range 163 to 199) was followed by a recorded 178; and keeping two applications
 on-premises was priced at +$3.74 over 900 requests (3.20 to 4.30) at stated prices. We
 also report what the system does not show: its router does not choose well among eligible
-models (a fixed "cheapest eligible" rule passed more benchmark cases, twice), no saving
+models (on a 108-case benchmark where every model passed, it paid 6.7 times the cheapest
+eligible price), no saving
 against a frontier-only baseline was measured, and relaxing a requirement can, by
 construction, cause a new rejection. Finally, we show where request-level eligibility
 stops: in a live three-turn conversation, a placement restriction raised by a tool result
@@ -361,36 +365,50 @@ other half's point estimate 66% to 76% of the time, against a reference of 75.5%
 calibrated 90% range of a difference between two independent halves [FB §23.7]. Coverage
 has not been measured directly, nor under the dependence of agent-loop traffic.
 
-### 6.5 Routing quality on the benchmark
+### 6.5 The router's choices, on a benchmark
 
-22 cases, one call per case and eligible endpoint, a deterministic grader.
+We use two suites. The *starter* suite has 22 short cases. The *extended* suite is
+generated: 108 cases, balanced over five placements, two protections, six workloads and
+three length bands that target the cheap, mid and frontier tier, each case answerable from
+its own text. One call per case and eligible endpoint, a deterministic grader, three
+samples of the extended suite (756 calls).
 
-| | run 3 | run 4 |
-|---|---|---|
-| cheap on-premises model, cases passed | 18 of 22 | 19 of 22 |
-| mid on-premises model, cases passed | 16 of 22 | 16 of 22 |
-| "cheapest eligible" strategy, pass rate | 0.818 | 0.864 |
-| RouteForge router, pass rate | 0.682 | 0.727 |
-| violations, every strategy | 0 | 0 |
+**Quality.** On the extended suite every answered call passed: 738 of 738 (18 calls were
+refused by an endpoint, 15 of them by the free cloud frontier model). The suite is at
+ceiling and cannot rank the models. An earlier run on the starter suite had the cheap
+model passing 18 and 19 of 22 cases against the mid model's 16, which invites the reading
+that the tier order is wrong for this pair. **We do not make that claim.** The starter
+suite contains cases that cannot be answered from their prompt, and the gap did not
+survive well-posed cases. What the two suites support together is narrower: a tier is not
+a quality measurement, and a small suite with strict graders can manufacture a ranking.
 
-The cheap model passed more cases than the mid model both times, and a rule that always
-picks the cheapest eligible endpoint beat the router on pass rate at about a tenth of the
-cost. With no published quality for either model, the router's quality term is a default
-for the tier, and for this pair the tier order is wrong. The suite is small and each case
-is sampled once; we read it as evidence that a tier is not a quality measurement, not as
-a ranking of two models.
+**Cost at equal quality.** Because every endpoint passed every case, the cheapest eligible
+endpoint is the oracle, and the router's regret is pure cost:
 
-Where two endpoints shared a tier and a quality default, the cost term decided: all 84
-unrestricted mid-tier requests in run 4 went to the cloud endpoint.
+| strategy | pass rate | mean chosen cost, $ | cost regret, $ |
+|---|---|---|---|
+| cheapest eligible | 1.0 | 0.0009 | 0 |
+| RouteForge router | 1.0 | 0.0059 | 0.0050 |
 
-**The version check on live endpoints.** Two candidates that changed scoring weights
-altered no route on this suite (the tier is set by length, and each tier offered one
-endpoint), and passed trivially. A candidate that removes the cheap tier changed 12 of 22
-routes. Its mean chosen cost was worse by 0.00062 [0.00003, 0.00154] against a tolerance
-of 0.0005, and the verdict was `inconclusive`: a real worsening that the check neither
-passed nor called a regression on 22 cases [FB §26.7]. In simulation the check catches 15
-of 15 single-rule mutations of its own detectors and flags planted regressions [FB §22.5].
-A `regressed` verdict on live endpoints has not been observed.
+The router pays about 6.7 times the cheapest eligible price for the same result, in all
+three samples. The cause is the length-based tier rule: a longer request targets a higher
+tier whether or not it is harder. Two thirds of this suite is long by construction and the
+prices are stated, so the ratio is a property of the suite; the direction is a property of
+the rule. No strategy chose an endpoint outside a case's eligible set in any run.
+
+Where two endpoints shared a tier and a quality default in live traffic, the cost term
+decided: all 84 unrestricted mid-tier requests in run 4 went to the cloud endpoint.
+
+**The version check on live endpoints.** On the starter suite, two candidates that changed
+scoring weights altered no route and passed trivially; a candidate that removes the cheap
+tier changed 12 of 22 routes and was `inconclusive`. On the extended suite the same
+candidate changed 30 of 108 routes and raised mean chosen cost by 0.00014 per case, with a
+90% range of [0.000085, 0.00020] that excludes zero. The tolerance had been set in advance
+at 0.0005, the whole range lies inside it, and the verdict was `pass`: a real worsening,
+measured, and smaller than what we had said we would accept. All 38 judged figures had
+enough cases; no group was skipped. In simulation the check catches 15 of 15 single-rule
+mutations of its own detectors and flags planted regressions. A `regressed` verdict on
+live endpoints has not been produced.
 
 ### 6.6 Failures
 
@@ -449,16 +467,22 @@ gave identical outcomes [SP §1.1]. Recording each term's value and source per d
 what exposed it.
 
 **The router does not choose well among eligible models** (§6.5). Tier is a function of
-length, and quality is a default unless measured.
+length, and quality is a default unless measured. On a benchmark at ceiling it paid 6.7
+times the cheapest eligible price for the same answers.
+
+**A small suite can manufacture a ranking.** Our first benchmark runs suggested the cheap
+model was better than the mid one. A larger suite of well-posed cases removed the gap. We
+report the episode because the first reading was ours, and it was wrong.
 
 **Not measured.** A saving against a frontier-only baseline: the lab has no paid prices.
-A `regressed` verdict from the version check on live endpoints. Coverage of the
+Any difference in quality between the models: the larger suite is at ceiling. A
+`regressed` verdict from the version check on live endpoints. Coverage of the
 uncertainty ranges, directly or under dependence. Any effect on real text: every prompt in
 §6 is synthetic except 40 content-free records from one coding-agent session.
 
 **Other threats.** One deployment; each outage is a single event; run 2's three endpoints
 were one model under three declarations; endpoint declarations are the operator's and are
-not verified; the benchmark has 22 single-turn cases with a deterministic grader; the
+not verified; the benchmarks are synthetic single-turn cases with deterministic graders; the
 version check makes no correction for the number of figures it judges; replay is
 first-decision with frozen signals.
 
@@ -608,31 +632,115 @@ against the feasible trajectory oracle.
 
 ## 9. Related work
 
-**Not verified — see the note at the top.** The areas this paper should be placed against,
-with the leads recorded in `arxiv.md` §8:
+**Routing over a fixed pool.** FrugalGPT [1] cascades a query through a given set of
+models to cut cost; Hybrid LLM [2] and RouteLLM [3] learn to send a query to a small or a
+large model; AutoMix [4] escalates on a model's own verification signal. RouterBench [5]
+and RouterEval [6] are benchmarks for such routers, and a recent survey [7] covers the
+area. In all of these the candidate set is an input. UniRoute [8] is the nearest in
+spirit: it routes when the pool changes because new models appear at test time. In our
+setting the pool changes per request, because of policy, and a model that is excluded
+must be unreachable rather than merely unlikely. WISERouter [9] adds a budget, as a
+workload-level constraint in a bandit formulation; our budget is one of several
+per-request requirements that decide membership before any scoring. Our evaluation
+differs from [5, 6] in one respect that matters for a constrained router: the oracle
+credits only endpoints the request was allowed to use.
 
-- *LLM routing and router benchmarks* — cost/quality routing over a fixed pool, and
-  benchmarks for it (leads: RouteLLM, RouterBench, RouterEval, UniRoute, WISERouter, and
-  several 2026 preprints). The difference to argue: these optimise within a pool; this
-  paper is about the pool being a per-request, policy-derived variable, and about
-  evaluating with an oracle that respects it.
-- *Policy languages and analysis* — XACML, OPA/Rego, and solver-based policy analysis such
-  as AWS Zelkova; the literature on configuration errors. The difference to argue: here
-  policy is evaluated against recorded traffic, not only against itself.
-- *Privacy and redaction for LLM applications* — detection and redaction proxies. The paper's contribution is not in
-  this area, and it should say so.
-- *Counterfactual and off-policy evaluation* — why it does not apply to logs from a
-  deterministic router (§5), and what replay offers instead.
-- *Agent serving and cache-aware routing* — prefix-cache and load-aware routing inside
-  serving systems, and task-level agent benchmarks (leads: NVIDIA Dynamo's routing and
-  agentic-inference documentation; Artificial Analysis AA-AgentPerf). The difference to
-  argue for §8: those optimise a trajectory within a serving system; §8 asks what may be
-  optimised at all once policy is carried along the trajectory.
-- *Information-flow control for agents* — taint and label propagation across tool calls.
-  §8.3's envelope is a coarse, per-call instance; the paper should say how it relates.
-- *Noninterference* — the classical information-flow property, to which §3's use of the
-  term should be related carefully: ours is a property of a policy compiler's outputs, not
-  of program executions.
+**Routing for agents.** Agentic Routing [10], Agent-as-a-Router [11] and ORACLE [12]
+(earlier versions of [12] were titled TRACE-Router) observe, as §8 does, that routing each
+call independently can be wrong for a multi-step task, and optimise accuracy and cost at
+the level of the task; Agora [13] allocates reasoning steps among experts by auction.
+None carries a policy constraint along the trajectory. Inside serving systems, cache-aware
+routing places a request on the worker that already holds its prefix [14, 15], and
+AA-AgentPerf [16] benchmarks hardware on agent trajectories. These operate within a pool
+that is already eligible, and §8's switching cost is a statement about them, not a
+replacement for them.
+
+**Privacy for LLM applications and agents.** SlotGuard [17] replaces sensitive values in
+agent transcripts with typed placeholders and restores them locally; MathEd-PII [18]
+studies why generic detectors over-redact numbers in one domain, a failure we also
+observed (§6.2, and digit strings in code). These concern what a model is shown, our
+*protection* axes; neither decides where a request may run. For trajectories, CaMeL [19]
+propagates capabilities across an agent's tool calls so that untrusted data cannot drive
+control flow or leave by an unauthorised path, and OCELOT [20] budgets what an adversary
+can infer about a secret across a trajectory. The envelope of §8 is a much coarser
+instance of the same idea — a label carried across calls — applied to a different
+decision: which endpoints may serve the next call.
+
+**Policy languages, analysis and compilation.** XACML [21] and Open Policy Agent [22]
+evaluate declarative policy before an action and answer allow or deny. Our gate answers a
+different question — which subset of endpoints is eligible — and hands that set to an
+optimiser. Zelkova [23] proves properties of access policies with an SMT solver; we check
+properties of a policy *compiler* with property-based testing [24, 25], which is weaker
+than proof and was enough to find two fail-open defects. Policy-as-Prompt [26] compiles
+governance documents into prompt-based guardrails, and Traccia [27] builds compliance
+evidence on telemetry; both are complementary to routing. Work on misconfiguration [28,
+29] motivates treating a policy change as something to test against real behaviour, which
+is what §5 does with traffic; [30] studies how audited parties adapt to continuous
+compliance monitoring.
+
+**Predicting the effect of a change from logs.** Counterfactual reasoning from logged
+data [31] and off-policy estimators such as the doubly robust estimator [32] predict the
+effect of a new policy from data collected under another, and require the logging policy
+to explore. A deterministic router gives no such overlap, so we replay: the router is a
+pure function of recorded inputs and can be re-run under a proposal. The price is that
+replay is only as faithful as what was recorded (§6.3). The minimal conflicting core of §3
+is a minimum hitting set in the sense of model-based diagnosis [33] and of minimal
+unsatisfiable subsets [34]; our instance is small enough to solve exactly. Ranges use the
+bootstrap [35].
+
+**Noninterference.** The term is due to Goguen and Meseguer [36], for whom it is a
+property of a system's executions: low-level outputs do not depend on high-level inputs.
+We use it for a narrower, static property of a compiler's output — changing a protection
+setting leaves the compiled placement unchanged, and the reverse — and do not claim an
+information-flow guarantee about model outputs.
+
+**What we did not find.** A search for routers that treat data residency, retention or
+tenant policy as a per-request eligibility constraint, with an evaluation that respects
+it, did not turn up a closer match than the work above. The search was limited and this
+is not a claim that none exists.
+
+### References
+
+Bibliographic details were checked against each work's arXiv, publisher or project page
+on 2026-10-09; [33] and [36] were confirmed from secondary sources only and should be
+checked against the originals before submission.
+
+1. L. Chen, M. Zaharia, J. Zou. FrugalGPT: How to Use Large Language Models While Reducing Cost and Improving Performance. arXiv:2305.05176, 2023.
+2. D. Ding et al. Hybrid LLM: Cost-Efficient and Quality-Aware Query Routing. ICLR 2024. arXiv:2404.14618.
+3. I. Ong et al. RouteLLM: Learning to Route LLMs with Preference Data. arXiv:2406.18665.
+4. P. Aggarwal, A. Madaan et al. AutoMix: Automatically Mixing Language Models. NeurIPS 2024. arXiv:2310.12963.
+5. Q. J. Hu et al. RouterBench: A Benchmark for Multi-LLM Routing System. arXiv:2403.12031.
+6. Z. Huang, G. Ling et al. RouterEval: A Comprehensive Benchmark for Routing LLMs to Explore Model-level Scaling Up in LLMs. Findings of EMNLP 2025. arXiv:2503.10657.
+7. Y. Moslem, J. D. Kelleher. Dynamic Model Routing and Cascading for Efficient LLM Inference: A Survey. TMLR 2026. arXiv:2603.04445.
+8. W. Jitkrittum, H. Narasimhan, A. S. Rawat et al. Universal Model Routing for Efficient LLM Inference. arXiv:2502.08773.
+9. Y. Li, Z. Gao, L. V. S. Lakshmanan. WISERouter: LLM Routing with Workload Budget Constraint. arXiv:2607.23765.
+10. X. Liu, H. Zhou, Y. Zong et al. Agentic Routing: The Harness-Native Data Flywheel. arXiv:2607.11399.
+11. P. Zhou, Z. Tang, Y. Ma et al. Agent-as-a-Router: Agentic Model Routing for Coding Tasks. arXiv:2606.22902.
+12. R. Raj, S. Kundu, D. Joshi, T. Krishna. ORACLE: Agentic AI Orchestrator Routing Via Adaptive Verifier Calibration Feedback. arXiv:2607.22465 (v1–v2 titled TRACE-Router).
+13. K. Zhou, A. Leonardis, Y. Feng. Agora: Enhancing LLM Agent Reasoning Via Auction-Based Task Allocation. EMNLP 2026. arXiv:2607.09600.
+14. NVIDIA. Dynamo documentation: KV-aware routing; agentic inference. docs.nvidia.com/dynamo.
+15. W. Kwon et al. Efficient Memory Management for Large Language Model Serving with PagedAttention. SOSP 2023. arXiv:2309.06180.
+16. Artificial Analysis. AA-AgentPerf. artificialanalysis.ai/articles/aa-agentperf, 2026.
+17. H. Xia, Y. Park. SlotGuard: Stop Oversharing Private Local Context in LLM Agent Transcripts. arXiv:2607.17147.
+18. Z. Zhou, K. Vanacore, B. Ahtisham et al. Utility-Preserving De-Identification for Math Tutoring: Investigating Numeric Ambiguity in the MathEd-PII Benchmark Dataset. arXiv:2602.16571.
+19. E. Debenedetti et al. Defeating Prompt Injections by Design. arXiv:2503.18813, 2025.
+20. J. Xie, S. Li. OCELOT: Inference-Leakage Budgets for Privacy-Preserving LLM Agents. arXiv:2606.12341.
+21. OASIS. eXtensible Access Control Markup Language (XACML) Version 3.0. 2013.
+22. Open Policy Agent. Policy language (Rego) documentation. openpolicyagent.org/docs.
+23. J. Backes et al. Semantic-based Automated Reasoning for AWS Access Policies using SMT. FMCAD 2018.
+24. K. Claessen, J. Hughes. QuickCheck: A Lightweight Tool for Random Testing of Haskell Programs. ICFP 2000.
+25. D. R. MacIver, Z. Hatfield-Dodds et al. Hypothesis: A New Approach to Property-Based Testing. Journal of Open Source Software 4(43):1891, 2019.
+26. G. Kholkar, R. Ahuja. Policy-as-Prompt: Turning AI Governance Rules into Guardrails for AI Agents. Regulatable ML Workshop, NeurIPS 2025. arXiv:2509.23994.
+27. N. K. Naik et al. Traccia: An OpenTelemetry-Based Governance Platform for AI Systems. arXiv:2607.14309.
+28. T. Xu et al. Do Not Blame Users for Misconfigurations. SOSP 2013.
+29. Z. Yin et al. An Empirical Study on Configuration Errors in Commercial and Open Source Systems. SOSP 2011.
+30. F. A. D. Burnat, B. I. Davidson. A Benchmark for Strategic Auditee Gaming Under Continuous Compliance Monitoring. arXiv:2605.06340.
+31. L. Bottou et al. Counterfactual Reasoning and Learning Systems: The Example of Computational Advertising. JMLR 14:3207–3260, 2013.
+32. M. Dudík, J. Langford, L. Li. Doubly Robust Policy Evaluation and Learning. ICML 2011.
+33. R. Reiter. A Theory of Diagnosis from First Principles. Artificial Intelligence 32(1):57–95, 1987.
+34. M. H. Liffiton, K. A. Sakallah. Algorithms for Computing Minimal Unsatisfiable Subsets of Constraints. Journal of Automated Reasoning, 2008.
+35. B. Efron. Bootstrap Methods: Another Look at the Jackknife. Annals of Statistics 7(1):1–26, 1979.
+36. J. A. Goguen, J. Meseguer. Security Policies and Security Models. IEEE Symposium on Security and Privacy, 1982.
 
 ---
 
@@ -645,7 +753,8 @@ that does not penalise a router for obeying its policy; and a way to tell an ope
 a policy change will do to their own traffic before they make it. On a lab with
 on-premises and cloud endpoints the first held without exception, the third reproduced
 recorded outcomes and predicted a cloud share later observed, and the middle one showed
-plainly that the router's own choices among eligible models are its weakest part. We
+plainly that the router's own choices among eligible models are its weakest part: where
+every model was good enough, it paid several times the cheapest eligible price. We
 think that is the right order of priorities for the deployments this is built for, and
 that a better scoring rule is a separable problem that the harness described here can
 evaluate. The same construction extends from a request to the sequence of calls an
@@ -669,6 +778,7 @@ is worth solving next.
 | agent-loop rows: token ratio 0.96–1.02 | FB §24.9 |
 | run 3: provider outage, agreement 0.919, +$3.12, benchmark | FB §25 |
 | run 4: cloud share, agreement 1.0, +$3.74, capacity, version check | FB §26 |
+| extended suite: 738 of 738, cost regret, version check on 108 cases; withdrawn ranking | FB §27 |
 | non-monotonicity counterexample | FB §17.3 |
 | trajectory probe, with and without the envelope; agent session token profile | [`trajectory-feasible-routing.md`](trajectory-feasible-routing.md) §2 |
 | artifacts | `docs/research/data/live-dgx-lab-2026-10-0{8,9}*` |

@@ -5,7 +5,7 @@ import logging
 import time
 from typing import AsyncIterator, Callable, TYPE_CHECKING
 
-from app.apps.outcomes import outcome_context, outcome_trace
+from app.apps.outcomes import outcome_context, outcome_trace, reply_shape
 from app.cache.store import CacheEntry, DeterministicSemanticCache
 from app.config.schema import ContextOptimizationCfg, PoolCandidate, Settings
 from app.errors import PolicyGateError
@@ -944,6 +944,8 @@ class Pipeline:
         result, records = await self._gateway.run(
             ctx, comp.messages, comp.tokens_after, complexity, hint,
             tools=tools, tool_choice=tool_choice, params=request.generation_params())
+        if internals is not None:
+            internals["outcome_ctx"].update(reply_shape(result))
 
         text, vrec = verify(det, ctx, result.text, client_output=client_output)
         if not vrec.passed:
@@ -1304,6 +1306,8 @@ class Pipeline:
                     yield chunk.delta
                 if chunk.final is not None:
                     result = chunk.final
+                    if internals is not None and "outcome_ctx" in internals:
+                        internals["outcome_ctx"].update(reply_shape(result))
             # The backend stream ended normally: anything raised from here on
             # is a pipeline outcome, not a backend failure (spec §4).
             get_meta.backend_completed = True   # type: ignore[attr-defined]

@@ -350,3 +350,9 @@ class GenerationResult(BaseModel):
     # (`usage.prompt_tokens_details.cached_tokens`). 0 when the provider does
     # not report the field, which is indistinguishable from a genuine miss.
     cached_prompt_tokens: int = 0
+    # B71 item 6: the BACKEND's own finish reason (an enum value; None when it
+    # reported none) and its reasoning-token count, for the content-free
+    # outcome row. Distinct from the `finish_reason` RouteForge sends the
+    # client, which is derived from whether tool calls are present.
+    finish_reason: str | None = None
+    reasoning_tokens: int | None = None

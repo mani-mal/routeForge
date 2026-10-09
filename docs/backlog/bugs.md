@@ -186,11 +186,16 @@ spots in what is recorded).
 4. **A quota on another time scale is invisible to the capacity model.** The provider's
    stated 20 requests a minute was 30% used when its 50-a-day allowance ran out. *Wanted:* a
    per-day limit in the capacity file.
-5. **The tier default misordered two real models.** The cheap endpoint passed 18 of 22
+5. *(Withdrawn 2026-10-09: on a well-posed 108-case suite both models pass every case;
+   the gap came from unanswerable starter cases — research notes §27.3. What stands: on
+   that suite the router paid 6.7× the cheapest eligible price, because tier follows
+   length.)* **The tier default misordered two real models.** The cheap endpoint passed 18 of 22
    benchmark cases, the mid endpoint 16. With no published quality the router uses 0.75
    for mid and 0.5 for cheap. *Wanted:* surface "quality is a tier default" on the endpoint
    in the console, and make the benchmark the documented way to replace it.
-6. **An answer with no text is recorded as served.** With thinking models and a token limit
+6. *(Fixed 2026-10-09, api `0.33.0`: the outcome row records `finish_reason`,
+   `reply_has_text`, `reply_tool_calls` and `reasoning_tokens` — content-free.)*
+   **An answer with no text is recorded as served.** With thinking models and a token limit
    sized for the answer, 46% of the cheap endpoint's answers and 16% of the mid endpoint's
    were empty, at full cost. *Wanted:* record on the outcome row that the completion had no
    text (a boolean; content-free).

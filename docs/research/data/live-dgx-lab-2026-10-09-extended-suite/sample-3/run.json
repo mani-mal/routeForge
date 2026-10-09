@@ -1,0 +1,54 @@
+{
+  "args": {
+    "endpoints": "eval/endpoints/dgx-lab-live-cloud.example.yaml",
+    "fixed": null,
+    "group_report": true,
+    "keep_text": false,
+    "live": true,
+    "min_group_size": 5,
+    "parity_tol": 0.02,
+    "seconds_per_case": 30.0,
+    "seed": 2,
+    "suite": "eval/suites/extended.jsonl",
+    "variants": null
+  },
+  "attempt_cap": 3,
+  "base_routing_policy_version": "e9bc55f94883",
+  "endpoints": [
+    "glm-5.3-flash",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "qwen3.6-35b"
+  ],
+  "endpoints_hash": "cbd3dc26bbeed1cdfe25143d4a4625e1659a5a96ee915536aa4b88c612d6d890",
+  "exit_code": 0,
+  "finished_at": "2026-10-09T20:49:52Z",
+  "git_sha": "f035a079a7fe052c992fd05802d40a8e02fc0f1d",
+  "keep_text": false,
+  "mode": "live",
+  "n_cases": 108,
+  "notes": {
+    "base_routing_policy_version": "base_routing_policy_version is the deployment's routing+pricing hash BEFORE the harness overrides (emptied model_pool, endpoint-file prices, max_escalations 0, and any --variants weights); it identifies the base config, not the exact settings the sweep ran under.",
+    "breaker_off": "router_online:breaker_off is the control: the same online arm with the step-7 circuit breaker disabled.",
+    "case_clock": "Both non-cold arms use a synthetic case clock: case k happens at t_k = k x seconds_per_case (1 ms sub-steps within a case) and is scored reading at t_k, so availability decay (half_life_s) and latency staleness depend on seconds_per_case -- quote it with any number. The step-7 breaker (router_online, unless breaker_off) runs on the SAME case clock, so seconds_per_case also sets how much of an open cooldown a case gap actually covers: at seconds_per_case == cooldown_s (30 by default) the FIRST open period ends exactly at the next case (its read lands at t >= open_until, i.e. already half-open), so that first cooldown is invisible in the chosen chains -- only a later, doubled cooldown can span a full case gap. At seconds_per_case >= max_cooldown_s no cooldown, however many times it has doubled, can ever outlast one case gap, so the breaker never excludes anything: router_online and router_online:breaker_off produce identical chains (a documented no-op, not a bug -- see TestBreakerCaseClockInteraction).",
+    "case_order": "router_online and router_warm_prior depend on the suite's case order: a case is scored with what earlier cases taught the arm, and outages are indexed by case position.",
+    "failure_latency": "A failed attempt with unknown failure latency (e.g. a live failure) counts as 0 ms in latency figures.",
+    "router_cold": "router_cold scores every case with an empty signal store: the no-measurement baseline.",
+    "router_online": "router_online is the reported arm: its store holds only the attempts this arm itself made on earlier cases (failovers included), applied after each case is scored; an error counts only when production's counts_as_endpoint_unhealth would count it. B45 is read from router_online:<variant>.",
+    "router_warm_prior": "router_warm_prior replays every matrix row of every earlier case (all eligible endpoints) before scoring a case: a full-information reference (not an upper bound), never the reported number.",
+    "violations_units": "policy.violations_total counts ATTEMPTS (every attempt outside the case's eligible set, plus sweep calls); each strategy's violation_rate is per CASE (at most one per case)."
+  },
+  "registry_version": "53e59e0dc239",
+  "seconds_per_case": 30.0,
+  "seed": 2,
+  "started_at": "2026-10-09T20:45:37Z",
+  "strategies": [
+    "cheapest",
+    "best_published_quality",
+    "router_cold",
+    "router_online",
+    "router_online:breaker_off",
+    "router_warm_prior"
+  ],
+  "suite_hash": "2d9b863c44abc524ddf75be8fd60f648561d1502d5c4d3dae009a97586788047"
+}
