@@ -1,0 +1,5319 @@
+{
+  "caveats": [
+    "This run called the endpoints in the endpoint file, once per case and endpoint, and graded each answer with a deterministic grader. One call is one sample.",
+    "The router comparison is mostly the tier rule: the target tier is chosen from the request's length, so on short cases the router's regret against the oracle is set by which tier it may use, not by the four-term scorer.",
+    "Cases are synthetic and single-turn.",
+    "A group is the cases of this suite that carry one label. A figure over fewer cases than the minimum prints its case count and no rate. A group above the minimum is still small: read its case count with every figure.",
+    "The worst group is the extreme of many small-sample figures, so it is worse than a typical group partly by selection. The same cases can carry several labels, so one set of cases can appear under more than one dimension; a tie is listed, not broken.",
+    "Placement, protection and workload labels are the case author's tags. They are not read from the compiled policy and can differ from it. An application with no tag is a fingerprint of the case's policy as written."
+  ],
+  "dimensions": [
+    "placement",
+    "protection",
+    "application",
+    "workload"
+  ],
+  "group_sizes": {
+    "application": {
+      "policy-57810d29": 36,
+      "policy-8ec16158": 18,
+      "policy-8fb5374a": 18,
+      "policy-a66919ec": 18,
+      "policy-dc5269b2": 18
+    },
+    "placement": {
+      "any": 36,
+      "escalated": 18,
+      "no_retention": 18,
+      "onprem_only": 18,
+      "us_only": 18
+    },
+    "protection": {
+      "enforced": 90,
+      "passthrough": 18
+    },
+    "workload": {
+      "arithmetic": 18,
+      "classification": 18,
+      "code": 18,
+      "extraction": 18,
+      "json": 18,
+      "reading": 18
+    }
+  },
+  "metrics": [
+    "violation_rate",
+    "pass_rate",
+    "quality_regret",
+    "cost_regret",
+    "latency_regret",
+    "floor_miss_rate",
+    "empty_set_mismatch_rate"
+  ],
+  "min_group_size": 5,
+  "n_cases": 108,
+  "schema": "routeforge.bench-group-report/v1",
+  "strategies": {
+    "best_published_quality": {
+      "dimensions": {
+        "application": {
+          "policy-57810d29": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 36,
+                "value": 0.003331900278
+              },
+              "empty_set_mismatch_rate": {
+                "n": 36,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 36,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 36,
+                "value": 1081.397844805098
+              },
+              "pass_rate": {
+                "n": 36,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 36,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 36,
+                "value": 0.0
+              }
+            },
+            "n_cases": 36,
+            "violations": 0
+          },
+          "policy-8ec16158": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.006122
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "policy-8fb5374a": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.006160111111
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 0.077549827337
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "policy-a66919ec": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.006133777778
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "policy-dc5269b2": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.006105555556
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          }
+        },
+        "placement": {
+          "any": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 36,
+                "value": 0.0032126225
+              },
+              "empty_set_mismatch_rate": {
+                "n": 36,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 36,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 36,
+                "value": 1080.241181803608
+              },
+              "pass_rate": {
+                "n": 36,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 36,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 36,
+                "value": 0.0
+              }
+            },
+            "n_cases": 36,
+            "violations": 0
+          },
+          "escalated": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.006360555556
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 2.313326002978
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "no_retention": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.006133777778
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "onprem_only": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.006160111111
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 0.077549827337
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "us_only": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.006105555556
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          }
+        },
+        "protection": {
+          "enforced": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 90,
+                "value": 0.005012649
+              },
+              "empty_set_mismatch_rate": {
+                "n": 90,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 90,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 90,
+                "value": 432.574647887506
+              },
+              "pass_rate": {
+                "n": 90,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 90,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 90,
+                "value": 0.0
+              }
+            },
+            "n_cases": 90,
+            "violations": 0
+          },
+          "passthrough": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.006122
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          }
+        },
+        "workload": {
+          "arithmetic": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.004842088333
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 472.188069006532
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "classification": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005133972222
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 406.192898161761
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "code": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.004992666667
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 66.567236376512
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "extraction": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005594781111
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 162.145096718127
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "json": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005269030556
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 751.462008674732
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "reading": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005352706111
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 304.317930499868
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          }
+        }
+      },
+      "overall": {
+        "empty_cases": 0,
+        "empty_set_mismatches": 0,
+        "metrics": {
+          "cost_regret": {
+            "n": 108,
+            "value": 0.005197540833
+          },
+          "empty_set_mismatch_rate": {
+            "n": 108,
+            "value": 0.0
+          },
+          "floor_miss_rate": {
+            "n": 108,
+            "value": 0.0
+          },
+          "latency_regret": {
+            "n": 108,
+            "value": 360.478873239589
+          },
+          "pass_rate": {
+            "n": 108,
+            "value": 1.0
+          },
+          "quality_regret": {
+            "n": 108,
+            "value": 0.0
+          },
+          "violation_rate": {
+            "n": 108,
+            "value": 0.0
+          }
+        },
+        "n_cases": 108,
+        "violations": 0
+      },
+      "worst": {
+        "cost_regret": {
+          "dimension": "placement",
+          "group": "escalated",
+          "groups_at_value": 1,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 18,
+          "n_cases": 18,
+          "tied": [
+            "placement=escalated"
+          ],
+          "value": 0.006360555556
+        },
+        "empty_set_mismatch_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 18,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any",
+            "placement=escalated",
+            "placement=no_retention",
+            "placement=onprem_only",
+            "placement=us_only",
+            "protection=enforced",
+            "protection=passthrough",
+            "application=policy-57810d29",
+            "application=policy-8ec16158",
+            "application=policy-8fb5374a",
+            "application=policy-a66919ec",
+            "application=policy-dc5269b2",
+            "workload=arithmetic",
+            "workload=classification",
+            "workload=code",
+            "workload=extraction",
+            "workload=json",
+            "workload=reading"
+          ],
+          "value": 0.0
+        },
+        "floor_miss_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 18,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any",
+            "placement=escalated",
+            "placement=no_retention",
+            "placement=onprem_only",
+            "placement=us_only",
+            "protection=enforced",
+            "protection=passthrough",
+            "application=policy-57810d29",
+            "application=policy-8ec16158",
+            "application=policy-8fb5374a",
+            "application=policy-a66919ec",
+            "application=policy-dc5269b2",
+            "workload=arithmetic",
+            "workload=classification",
+            "workload=code",
+            "workload=extraction",
+            "workload=json",
+            "workload=reading"
+          ],
+          "value": 0.0
+        },
+        "latency_regret": {
+          "dimension": "application",
+          "group": "policy-57810d29",
+          "groups_at_value": 1,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "application=policy-57810d29"
+          ],
+          "value": 1081.397844805098
+        },
+        "pass_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 18,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any",
+            "placement=escalated",
+            "placement=no_retention",
+            "placement=onprem_only",
+            "placement=us_only",
+            "protection=enforced",
+            "protection=passthrough",
+            "application=policy-57810d29",
+            "application=policy-8ec16158",
+            "application=policy-8fb5374a",
+            "application=policy-a66919ec",
+            "application=policy-dc5269b2",
+            "workload=arithmetic",
+            "workload=classification",
+            "workload=code",
+            "workload=extraction",
+            "workload=json",
+            "workload=reading"
+          ],
+          "value": 1.0
+        },
+        "quality_regret": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 18,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any",
+            "placement=escalated",
+            "placement=no_retention",
+            "placement=onprem_only",
+            "placement=us_only",
+            "protection=enforced",
+            "protection=passthrough",
+            "application=policy-57810d29",
+            "application=policy-8ec16158",
+            "application=policy-8fb5374a",
+            "application=policy-a66919ec",
+            "application=policy-dc5269b2",
+            "workload=arithmetic",
+            "workload=classification",
+            "workload=code",
+            "workload=extraction",
+            "workload=json",
+            "workload=reading"
+          ],
+          "value": 0.0
+        },
+        "violation_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 18,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any",
+            "placement=escalated",
+            "placement=no_retention",
+            "placement=onprem_only",
+            "placement=us_only",
+            "protection=enforced",
+            "protection=passthrough",
+            "application=policy-57810d29",
+            "application=policy-8ec16158",
+            "application=policy-8fb5374a",
+            "application=policy-a66919ec",
+            "application=policy-dc5269b2",
+            "workload=arithmetic",
+            "workload=classification",
+            "workload=code",
+            "workload=extraction",
+            "workload=json",
+            "workload=reading"
+          ],
+          "value": 0.0
+        }
+      }
+    },
+    "cheapest": {
+      "dimensions": {
+        "application": {
+          "policy-57810d29": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 36,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 36,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 36,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 36,
+                "value": 547.409437273422
+              },
+              "pass_rate": {
+                "n": 36,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 36,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 36,
+                "value": 0.0
+              }
+            },
+            "n_cases": 36,
+            "violations": 0
+          },
+          "policy-8ec16158": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 749.488806151526
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "policy-8fb5374a": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 919.166802693831
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "policy-a66919ec": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 754.82367555378
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "policy-dc5269b2": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 1037.428579241451
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          }
+        },
+        "placement": {
+          "any": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 36,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 36,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 36,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 36,
+                "value": 584.595518662051
+              },
+              "pass_rate": {
+                "n": 36,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 36,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 36,
+                "value": 0.0
+              }
+            },
+            "n_cases": 36,
+            "violations": 0
+          },
+          "escalated": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 675.116643374268
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "no_retention": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 754.82367555378
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "onprem_only": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 919.166802693831
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "us_only": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 1037.428579241451
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          }
+        },
+        "protection": {
+          "enforced": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 90,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 90,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 90,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 90,
+                "value": 761.247586407181
+              },
+              "pass_rate": {
+                "n": 90,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 90,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 90,
+                "value": 0.0
+              }
+            },
+            "n_cases": 90,
+            "violations": 0
+          },
+          "passthrough": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 749.488806151526
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          }
+        },
+        "workload": {
+          "arithmetic": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 911.148573562969
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "classification": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 475.972582223929
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "code": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 598.087536901908
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "extraction": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 844.968972164982
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "json": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 1200.060856328087
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "reading": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 525.488217005558
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          }
+        }
+      },
+      "overall": {
+        "empty_cases": 0,
+        "empty_set_mismatches": 0,
+        "metrics": {
+          "cost_regret": {
+            "n": 108,
+            "value": 0.0
+          },
+          "empty_set_mismatch_rate": {
+            "n": 108,
+            "value": 0.0
+          },
+          "floor_miss_rate": {
+            "n": 108,
+            "value": 0.0
+          },
+          "latency_regret": {
+            "n": 108,
+            "value": 759.287789697905
+          },
+          "pass_rate": {
+            "n": 108,
+            "value": 1.0
+          },
+          "quality_regret": {
+            "n": 108,
+            "value": 0.0
+          },
+          "violation_rate": {
+            "n": 108,
+            "value": 0.0
+          }
+        },
+        "n_cases": 108,
+        "violations": 0
+      },
+      "worst": {
+        "cost_regret": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 18,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any",
+            "placement=escalated",
+            "placement=no_retention",
+            "placement=onprem_only",
+            "placement=us_only",
+            "protection=enforced",
+            "protection=passthrough",
+            "application=policy-57810d29",
+            "application=policy-8ec16158",
+            "application=policy-8fb5374a",
+            "application=policy-a66919ec",
+            "application=policy-dc5269b2",
+            "workload=arithmetic",
+            "workload=classification",
+            "workload=code",
+            "workload=extraction",
+            "workload=json",
+            "workload=reading"
+          ],
+          "value": 0.0
+        },
+        "empty_set_mismatch_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 18,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any",
+            "placement=escalated",
+            "placement=no_retention",
+            "placement=onprem_only",
+            "placement=us_only",
+            "protection=enforced",
+            "protection=passthrough",
+            "application=policy-57810d29",
+            "application=policy-8ec16158",
+            "application=policy-8fb5374a",
+            "application=policy-a66919ec",
+            "application=policy-dc5269b2",
+            "workload=arithmetic",
+            "workload=classification",
+            "workload=code",
+            "workload=extraction",
+            "workload=json",
+            "workload=reading"
+          ],
+          "value": 0.0
+        },
+        "floor_miss_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 18,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any",
+            "placement=escalated",
+            "placement=no_retention",
+            "placement=onprem_only",
+            "placement=us_only",
+            "protection=enforced",
+            "protection=passthrough",
+            "application=policy-57810d29",
+            "application=policy-8ec16158",
+            "application=policy-8fb5374a",
+            "application=policy-a66919ec",
+            "application=policy-dc5269b2",
+            "workload=arithmetic",
+            "workload=classification",
+            "workload=code",
+            "workload=extraction",
+            "workload=json",
+            "workload=reading"
+          ],
+          "value": 0.0
+        },
+        "latency_regret": {
+          "dimension": "workload",
+          "group": "json",
+          "groups_at_value": 1,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 18,
+          "n_cases": 18,
+          "tied": [
+            "workload=json"
+          ],
+          "value": 1200.060856328087
+        },
+        "pass_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 18,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any",
+            "placement=escalated",
+            "placement=no_retention",
+            "placement=onprem_only",
+            "placement=us_only",
+            "protection=enforced",
+            "protection=passthrough",
+            "application=policy-57810d29",
+            "application=policy-8ec16158",
+            "application=policy-8fb5374a",
+            "application=policy-a66919ec",
+            "application=policy-dc5269b2",
+            "workload=arithmetic",
+            "workload=classification",
+            "workload=code",
+            "workload=extraction",
+            "workload=json",
+            "workload=reading"
+          ],
+          "value": 1.0
+        },
+        "quality_regret": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 18,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any",
+            "placement=escalated",
+            "placement=no_retention",
+            "placement=onprem_only",
+            "placement=us_only",
+            "protection=enforced",
+            "protection=passthrough",
+            "application=policy-57810d29",
+            "application=policy-8ec16158",
+            "application=policy-8fb5374a",
+            "application=policy-a66919ec",
+            "application=policy-dc5269b2",
+            "workload=arithmetic",
+            "workload=classification",
+            "workload=code",
+            "workload=extraction",
+            "workload=json",
+            "workload=reading"
+          ],
+          "value": 0.0
+        },
+        "violation_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 18,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any",
+            "placement=escalated",
+            "placement=no_retention",
+            "placement=onprem_only",
+            "placement=us_only",
+            "protection=enforced",
+            "protection=passthrough",
+            "application=policy-57810d29",
+            "application=policy-8ec16158",
+            "application=policy-8fb5374a",
+            "application=policy-a66919ec",
+            "application=policy-dc5269b2",
+            "workload=arithmetic",
+            "workload=classification",
+            "workload=code",
+            "workload=extraction",
+            "workload=json",
+            "workload=reading"
+          ],
+          "value": 0.0
+        }
+      }
+    },
+    "router_cold": {
+      "dimensions": {
+        "application": {
+          "policy-57810d29": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 36,
+                "value": 0.003330950833
+              },
+              "empty_set_mismatch_rate": {
+                "n": 36,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 36,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 36,
+                "value": 568.147591648287
+              },
+              "pass_rate": {
+                "n": 36,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 36,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 36,
+                "value": 0.0
+              }
+            },
+            "n_cases": 36,
+            "violations": 0
+          },
+          "policy-8ec16158": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005921111111
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 315.292419723442
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "policy-8fb5374a": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005927277778
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 306.171948148403
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "policy-a66919ec": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005894333333
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 234.061122658507
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "policy-dc5269b2": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005872388889
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 399.829703609511
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          }
+        },
+        "placement": {
+          "any": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 36,
+                "value": 0.003111228611
+              },
+              "empty_set_mismatch_rate": {
+                "n": 36,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 36,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 36,
+                "value": 724.637138508519
+              },
+              "pass_rate": {
+                "n": 36,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 36,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 36,
+                "value": 0.0
+              }
+            },
+            "n_cases": 36,
+            "violations": 0
+          },
+          "escalated": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.006360555556
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 2.313326002978
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "no_retention": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005894333333
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 234.061122658507
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "onprem_only": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005927277778
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 306.171948148403
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "us_only": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005872388889
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 399.829703609511
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          }
+        },
+        "protection": {
+          "enforced": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 90,
+                "value": 0.004871180333
+              },
+              "empty_set_mismatch_rate": {
+                "n": 90,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 90,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 90,
+                "value": 415.271591542599
+              },
+              "pass_rate": {
+                "n": 90,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 90,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 90,
+                "value": 0.0
+              }
+            },
+            "n_cases": 90,
+            "violations": 0
+          },
+          "passthrough": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005921111111
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 315.292419723442
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          }
+        },
+        "workload": {
+          "arithmetic": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.004774357222
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 333.008449104252
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "classification": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.004968715556
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 346.194320604102
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "code": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.004920525
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 320.980311552477
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "extraction": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005329889444
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 454.472923942376
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "json": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005134841667
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 689.152556788435
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "reading": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005148683889
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 247.841815444796
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          }
+        }
+      },
+      "overall": {
+        "empty_cases": 0,
+        "empty_set_mismatches": 0,
+        "metrics": {
+          "cost_regret": {
+            "n": 108,
+            "value": 0.005046168796
+          },
+          "empty_set_mismatch_rate": {
+            "n": 108,
+            "value": 0.0
+          },
+          "floor_miss_rate": {
+            "n": 108,
+            "value": 0.0
+          },
+          "latency_regret": {
+            "n": 108,
+            "value": 398.608396239406
+          },
+          "pass_rate": {
+            "n": 108,
+            "value": 1.0
+          },
+          "quality_regret": {
+            "n": 108,
+            "value": 0.0
+          },
+          "violation_rate": {
+            "n": 108,
+            "value": 0.0
+          }
+        },
+        "n_cases": 108,
+        "violations": 0
+      },
+      "worst": {
+        "cost_regret": {
+          "dimension": "placement",
+          "group": "escalated",
+          "groups_at_value": 1,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 18,
+          "n_cases": 18,
+          "tied": [
+            "placement=escalated"
+          ],
+          "value": 0.006360555556
+        },
+        "empty_set_mismatch_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 18,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any",
+            "placement=escalated",
+            "placement=no_retention",
+            "placement=onprem_only",
+            "placement=us_only",
+            "protection=enforced",
+            "protection=passthrough",
+            "application=policy-57810d29",
+            "application=policy-8ec16158",
+            "application=policy-8fb5374a",
+            "application=policy-a66919ec",
+            "application=policy-dc5269b2",
+            "workload=arithmetic",
+            "workload=classification",
+            "workload=code",
+            "workload=extraction",
+            "workload=json",
+            "workload=reading"
+          ],
+          "value": 0.0
+        },
+        "floor_miss_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 18,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any",
+            "placement=escalated",
+            "placement=no_retention",
+            "placement=onprem_only",
+            "placement=us_only",
+            "protection=enforced",
+            "protection=passthrough",
+            "application=policy-57810d29",
+            "application=policy-8ec16158",
+            "application=policy-8fb5374a",
+            "application=policy-a66919ec",
+            "application=policy-dc5269b2",
+            "workload=arithmetic",
+            "workload=classification",
+            "workload=code",
+            "workload=extraction",
+            "workload=json",
+            "workload=reading"
+          ],
+          "value": 0.0
+        },
+        "latency_regret": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 1,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any"
+          ],
+          "value": 724.637138508519
+        },
+        "pass_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 18,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any",
+            "placement=escalated",
+            "placement=no_retention",
+            "placement=onprem_only",
+            "placement=us_only",
+            "protection=enforced",
+            "protection=passthrough",
+            "application=policy-57810d29",
+            "application=policy-8ec16158",
+            "application=policy-8fb5374a",
+            "application=policy-a66919ec",
+            "application=policy-dc5269b2",
+            "workload=arithmetic",
+            "workload=classification",
+            "workload=code",
+            "workload=extraction",
+            "workload=json",
+            "workload=reading"
+          ],
+          "value": 1.0
+        },
+        "quality_regret": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 18,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any",
+            "placement=escalated",
+            "placement=no_retention",
+            "placement=onprem_only",
+            "placement=us_only",
+            "protection=enforced",
+            "protection=passthrough",
+            "application=policy-57810d29",
+            "application=policy-8ec16158",
+            "application=policy-8fb5374a",
+            "application=policy-a66919ec",
+            "application=policy-dc5269b2",
+            "workload=arithmetic",
+            "workload=classification",
+            "workload=code",
+            "workload=extraction",
+            "workload=json",
+            "workload=reading"
+          ],
+          "value": 0.0
+        },
+        "violation_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 18,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any",
+            "placement=escalated",
+            "placement=no_retention",
+            "placement=onprem_only",
+            "placement=us_only",
+            "protection=enforced",
+            "protection=passthrough",
+            "application=policy-57810d29",
+            "application=policy-8ec16158",
+            "application=policy-8fb5374a",
+            "application=policy-a66919ec",
+            "application=policy-dc5269b2",
+            "workload=arithmetic",
+            "workload=classification",
+            "workload=code",
+            "workload=extraction",
+            "workload=json",
+            "workload=reading"
+          ],
+          "value": 0.0
+        }
+      }
+    },
+    "router_online": {
+      "dimensions": {
+        "application": {
+          "policy-57810d29": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 36,
+                "value": 0.003330950833
+              },
+              "empty_set_mismatch_rate": {
+                "n": 36,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 36,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 36,
+                "value": 568.147591648287
+              },
+              "pass_rate": {
+                "n": 36,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 36,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 36,
+                "value": 0.0
+              }
+            },
+            "n_cases": 36,
+            "violations": 0
+          },
+          "policy-8ec16158": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005921111111
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 315.292419723442
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "policy-8fb5374a": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005927277778
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 306.171948148403
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "policy-a66919ec": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005894333333
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 234.061122658507
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "policy-dc5269b2": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005872388889
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 399.829703609511
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          }
+        },
+        "placement": {
+          "any": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 36,
+                "value": 0.003111228611
+              },
+              "empty_set_mismatch_rate": {
+                "n": 36,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 36,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 36,
+                "value": 724.637138508519
+              },
+              "pass_rate": {
+                "n": 36,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 36,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 36,
+                "value": 0.0
+              }
+            },
+            "n_cases": 36,
+            "violations": 0
+          },
+          "escalated": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.006360555556
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 2.313326002978
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "no_retention": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005894333333
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 234.061122658507
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "onprem_only": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005927277778
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 306.171948148403
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "us_only": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005872388889
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 399.829703609511
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          }
+        },
+        "protection": {
+          "enforced": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 90,
+                "value": 0.004871180333
+              },
+              "empty_set_mismatch_rate": {
+                "n": 90,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 90,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 90,
+                "value": 415.271591542599
+              },
+              "pass_rate": {
+                "n": 90,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 90,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 90,
+                "value": 0.0
+              }
+            },
+            "n_cases": 90,
+            "violations": 0
+          },
+          "passthrough": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005921111111
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 315.292419723442
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          }
+        },
+        "workload": {
+          "arithmetic": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.004774357222
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 333.008449104252
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "classification": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.004968715556
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 346.194320604102
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "code": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.004920525
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 320.980311552477
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "extraction": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005329889444
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 454.472923942376
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "json": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005134841667
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 689.152556788435
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "reading": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005148683889
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 247.841815444796
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          }
+        }
+      },
+      "overall": {
+        "empty_cases": 0,
+        "empty_set_mismatches": 0,
+        "metrics": {
+          "cost_regret": {
+            "n": 108,
+            "value": 0.005046168796
+          },
+          "empty_set_mismatch_rate": {
+            "n": 108,
+            "value": 0.0
+          },
+          "floor_miss_rate": {
+            "n": 108,
+            "value": 0.0
+          },
+          "latency_regret": {
+            "n": 108,
+            "value": 398.608396239406
+          },
+          "pass_rate": {
+            "n": 108,
+            "value": 1.0
+          },
+          "quality_regret": {
+            "n": 108,
+            "value": 0.0
+          },
+          "violation_rate": {
+            "n": 108,
+            "value": 0.0
+          }
+        },
+        "n_cases": 108,
+        "violations": 0
+      },
+      "worst": {
+        "cost_regret": {
+          "dimension": "placement",
+          "group": "escalated",
+          "groups_at_value": 1,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 18,
+          "n_cases": 18,
+          "tied": [
+            "placement=escalated"
+          ],
+          "value": 0.006360555556
+        },
+        "empty_set_mismatch_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 18,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any",
+            "placement=escalated",
+            "placement=no_retention",
+            "placement=onprem_only",
+            "placement=us_only",
+            "protection=enforced",
+            "protection=passthrough",
+            "application=policy-57810d29",
+            "application=policy-8ec16158",
+            "application=policy-8fb5374a",
+            "application=policy-a66919ec",
+            "application=policy-dc5269b2",
+            "workload=arithmetic",
+            "workload=classification",
+            "workload=code",
+            "workload=extraction",
+            "workload=json",
+            "workload=reading"
+          ],
+          "value": 0.0
+        },
+        "floor_miss_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 18,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any",
+            "placement=escalated",
+            "placement=no_retention",
+            "placement=onprem_only",
+            "placement=us_only",
+            "protection=enforced",
+            "protection=passthrough",
+            "application=policy-57810d29",
+            "application=policy-8ec16158",
+            "application=policy-8fb5374a",
+            "application=policy-a66919ec",
+            "application=policy-dc5269b2",
+            "workload=arithmetic",
+            "workload=classification",
+            "workload=code",
+            "workload=extraction",
+            "workload=json",
+            "workload=reading"
+          ],
+          "value": 0.0
+        },
+        "latency_regret": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 1,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any"
+          ],
+          "value": 724.637138508519
+        },
+        "pass_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 18,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any",
+            "placement=escalated",
+            "placement=no_retention",
+            "placement=onprem_only",
+            "placement=us_only",
+            "protection=enforced",
+            "protection=passthrough",
+            "application=policy-57810d29",
+            "application=policy-8ec16158",
+            "application=policy-8fb5374a",
+            "application=policy-a66919ec",
+            "application=policy-dc5269b2",
+            "workload=arithmetic",
+            "workload=classification",
+            "workload=code",
+            "workload=extraction",
+            "workload=json",
+            "workload=reading"
+          ],
+          "value": 1.0
+        },
+        "quality_regret": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 18,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any",
+            "placement=escalated",
+            "placement=no_retention",
+            "placement=onprem_only",
+            "placement=us_only",
+            "protection=enforced",
+            "protection=passthrough",
+            "application=policy-57810d29",
+            "application=policy-8ec16158",
+            "application=policy-8fb5374a",
+            "application=policy-a66919ec",
+            "application=policy-dc5269b2",
+            "workload=arithmetic",
+            "workload=classification",
+            "workload=code",
+            "workload=extraction",
+            "workload=json",
+            "workload=reading"
+          ],
+          "value": 0.0
+        },
+        "violation_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 18,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any",
+            "placement=escalated",
+            "placement=no_retention",
+            "placement=onprem_only",
+            "placement=us_only",
+            "protection=enforced",
+            "protection=passthrough",
+            "application=policy-57810d29",
+            "application=policy-8ec16158",
+            "application=policy-8fb5374a",
+            "application=policy-a66919ec",
+            "application=policy-dc5269b2",
+            "workload=arithmetic",
+            "workload=classification",
+            "workload=code",
+            "workload=extraction",
+            "workload=json",
+            "workload=reading"
+          ],
+          "value": 0.0
+        }
+      }
+    },
+    "router_online:breaker_off": {
+      "dimensions": {
+        "application": {
+          "policy-57810d29": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 36,
+                "value": 0.003330950833
+              },
+              "empty_set_mismatch_rate": {
+                "n": 36,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 36,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 36,
+                "value": 568.147591648287
+              },
+              "pass_rate": {
+                "n": 36,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 36,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 36,
+                "value": 0.0
+              }
+            },
+            "n_cases": 36,
+            "violations": 0
+          },
+          "policy-8ec16158": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005921111111
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 315.292419723442
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "policy-8fb5374a": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005927277778
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 306.171948148403
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "policy-a66919ec": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005894333333
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 234.061122658507
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "policy-dc5269b2": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005872388889
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 399.829703609511
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          }
+        },
+        "placement": {
+          "any": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 36,
+                "value": 0.003111228611
+              },
+              "empty_set_mismatch_rate": {
+                "n": 36,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 36,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 36,
+                "value": 724.637138508519
+              },
+              "pass_rate": {
+                "n": 36,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 36,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 36,
+                "value": 0.0
+              }
+            },
+            "n_cases": 36,
+            "violations": 0
+          },
+          "escalated": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.006360555556
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 2.313326002978
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "no_retention": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005894333333
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 234.061122658507
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "onprem_only": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005927277778
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 306.171948148403
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "us_only": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005872388889
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 399.829703609511
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          }
+        },
+        "protection": {
+          "enforced": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 90,
+                "value": 0.004871180333
+              },
+              "empty_set_mismatch_rate": {
+                "n": 90,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 90,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 90,
+                "value": 415.271591542599
+              },
+              "pass_rate": {
+                "n": 90,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 90,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 90,
+                "value": 0.0
+              }
+            },
+            "n_cases": 90,
+            "violations": 0
+          },
+          "passthrough": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005921111111
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 315.292419723442
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          }
+        },
+        "workload": {
+          "arithmetic": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.004774357222
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 333.008449104252
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "classification": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.004968715556
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 346.194320604102
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "code": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.004920525
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 320.980311552477
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "extraction": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005329889444
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 454.472923942376
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "json": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005134841667
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 689.152556788435
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "reading": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005148683889
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 247.841815444796
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          }
+        }
+      },
+      "overall": {
+        "empty_cases": 0,
+        "empty_set_mismatches": 0,
+        "metrics": {
+          "cost_regret": {
+            "n": 108,
+            "value": 0.005046168796
+          },
+          "empty_set_mismatch_rate": {
+            "n": 108,
+            "value": 0.0
+          },
+          "floor_miss_rate": {
+            "n": 108,
+            "value": 0.0
+          },
+          "latency_regret": {
+            "n": 108,
+            "value": 398.608396239406
+          },
+          "pass_rate": {
+            "n": 108,
+            "value": 1.0
+          },
+          "quality_regret": {
+            "n": 108,
+            "value": 0.0
+          },
+          "violation_rate": {
+            "n": 108,
+            "value": 0.0
+          }
+        },
+        "n_cases": 108,
+        "violations": 0
+      },
+      "worst": {
+        "cost_regret": {
+          "dimension": "placement",
+          "group": "escalated",
+          "groups_at_value": 1,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 18,
+          "n_cases": 18,
+          "tied": [
+            "placement=escalated"
+          ],
+          "value": 0.006360555556
+        },
+        "empty_set_mismatch_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 18,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any",
+            "placement=escalated",
+            "placement=no_retention",
+            "placement=onprem_only",
+            "placement=us_only",
+            "protection=enforced",
+            "protection=passthrough",
+            "application=policy-57810d29",
+            "application=policy-8ec16158",
+            "application=policy-8fb5374a",
+            "application=policy-a66919ec",
+            "application=policy-dc5269b2",
+            "workload=arithmetic",
+            "workload=classification",
+            "workload=code",
+            "workload=extraction",
+            "workload=json",
+            "workload=reading"
+          ],
+          "value": 0.0
+        },
+        "floor_miss_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 18,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any",
+            "placement=escalated",
+            "placement=no_retention",
+            "placement=onprem_only",
+            "placement=us_only",
+            "protection=enforced",
+            "protection=passthrough",
+            "application=policy-57810d29",
+            "application=policy-8ec16158",
+            "application=policy-8fb5374a",
+            "application=policy-a66919ec",
+            "application=policy-dc5269b2",
+            "workload=arithmetic",
+            "workload=classification",
+            "workload=code",
+            "workload=extraction",
+            "workload=json",
+            "workload=reading"
+          ],
+          "value": 0.0
+        },
+        "latency_regret": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 1,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any"
+          ],
+          "value": 724.637138508519
+        },
+        "pass_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 18,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any",
+            "placement=escalated",
+            "placement=no_retention",
+            "placement=onprem_only",
+            "placement=us_only",
+            "protection=enforced",
+            "protection=passthrough",
+            "application=policy-57810d29",
+            "application=policy-8ec16158",
+            "application=policy-8fb5374a",
+            "application=policy-a66919ec",
+            "application=policy-dc5269b2",
+            "workload=arithmetic",
+            "workload=classification",
+            "workload=code",
+            "workload=extraction",
+            "workload=json",
+            "workload=reading"
+          ],
+          "value": 1.0
+        },
+        "quality_regret": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 18,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any",
+            "placement=escalated",
+            "placement=no_retention",
+            "placement=onprem_only",
+            "placement=us_only",
+            "protection=enforced",
+            "protection=passthrough",
+            "application=policy-57810d29",
+            "application=policy-8ec16158",
+            "application=policy-8fb5374a",
+            "application=policy-a66919ec",
+            "application=policy-dc5269b2",
+            "workload=arithmetic",
+            "workload=classification",
+            "workload=code",
+            "workload=extraction",
+            "workload=json",
+            "workload=reading"
+          ],
+          "value": 0.0
+        },
+        "violation_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 18,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any",
+            "placement=escalated",
+            "placement=no_retention",
+            "placement=onprem_only",
+            "placement=us_only",
+            "protection=enforced",
+            "protection=passthrough",
+            "application=policy-57810d29",
+            "application=policy-8ec16158",
+            "application=policy-8fb5374a",
+            "application=policy-a66919ec",
+            "application=policy-dc5269b2",
+            "workload=arithmetic",
+            "workload=classification",
+            "workload=code",
+            "workload=extraction",
+            "workload=json",
+            "workload=reading"
+          ],
+          "value": 0.0
+        }
+      }
+    },
+    "router_warm_prior": {
+      "dimensions": {
+        "application": {
+          "policy-57810d29": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 36,
+                "value": 0.003330950833
+              },
+              "empty_set_mismatch_rate": {
+                "n": 36,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 36,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 36,
+                "value": 568.147591648287
+              },
+              "pass_rate": {
+                "n": 36,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 36,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 36,
+                "value": 0.0
+              }
+            },
+            "n_cases": 36,
+            "violations": 0
+          },
+          "policy-8ec16158": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005921111111
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 315.292419723442
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "policy-8fb5374a": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005927277778
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 306.171948148403
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "policy-a66919ec": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005894333333
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 234.061122658507
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "policy-dc5269b2": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005872388889
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 399.829703609511
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          }
+        },
+        "placement": {
+          "any": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 36,
+                "value": 0.003111228611
+              },
+              "empty_set_mismatch_rate": {
+                "n": 36,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 36,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 36,
+                "value": 724.637138508519
+              },
+              "pass_rate": {
+                "n": 36,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 36,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 36,
+                "value": 0.0
+              }
+            },
+            "n_cases": 36,
+            "violations": 0
+          },
+          "escalated": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.006360555556
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 2.313326002978
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "no_retention": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005894333333
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 234.061122658507
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "onprem_only": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005927277778
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 306.171948148403
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "us_only": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005872388889
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 399.829703609511
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          }
+        },
+        "protection": {
+          "enforced": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 90,
+                "value": 0.004871180333
+              },
+              "empty_set_mismatch_rate": {
+                "n": 90,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 90,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 90,
+                "value": 415.271591542599
+              },
+              "pass_rate": {
+                "n": 90,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 90,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 90,
+                "value": 0.0
+              }
+            },
+            "n_cases": 90,
+            "violations": 0
+          },
+          "passthrough": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005921111111
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 315.292419723442
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          }
+        },
+        "workload": {
+          "arithmetic": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.004774357222
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 333.008449104252
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "classification": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.004968715556
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 346.194320604102
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "code": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.004920525
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 320.980311552477
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "extraction": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005329889444
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 454.472923942376
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "json": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005134841667
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 689.152556788435
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          },
+          "reading": {
+            "empty_cases": 0,
+            "empty_set_mismatches": 0,
+            "metrics": {
+              "cost_regret": {
+                "n": 18,
+                "value": 0.005148683889
+              },
+              "empty_set_mismatch_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "floor_miss_rate": {
+                "n": 18,
+                "value": 0.0
+              },
+              "latency_regret": {
+                "n": 18,
+                "value": 247.841815444796
+              },
+              "pass_rate": {
+                "n": 18,
+                "value": 1.0
+              },
+              "quality_regret": {
+                "n": 18,
+                "value": 0.0
+              },
+              "violation_rate": {
+                "n": 18,
+                "value": 0.0
+              }
+            },
+            "n_cases": 18,
+            "violations": 0
+          }
+        }
+      },
+      "overall": {
+        "empty_cases": 0,
+        "empty_set_mismatches": 0,
+        "metrics": {
+          "cost_regret": {
+            "n": 108,
+            "value": 0.005046168796
+          },
+          "empty_set_mismatch_rate": {
+            "n": 108,
+            "value": 0.0
+          },
+          "floor_miss_rate": {
+            "n": 108,
+            "value": 0.0
+          },
+          "latency_regret": {
+            "n": 108,
+            "value": 398.608396239406
+          },
+          "pass_rate": {
+            "n": 108,
+            "value": 1.0
+          },
+          "quality_regret": {
+            "n": 108,
+            "value": 0.0
+          },
+          "violation_rate": {
+            "n": 108,
+            "value": 0.0
+          }
+        },
+        "n_cases": 108,
+        "violations": 0
+      },
+      "worst": {
+        "cost_regret": {
+          "dimension": "placement",
+          "group": "escalated",
+          "groups_at_value": 1,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 18,
+          "n_cases": 18,
+          "tied": [
+            "placement=escalated"
+          ],
+          "value": 0.006360555556
+        },
+        "empty_set_mismatch_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 18,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any",
+            "placement=escalated",
+            "placement=no_retention",
+            "placement=onprem_only",
+            "placement=us_only",
+            "protection=enforced",
+            "protection=passthrough",
+            "application=policy-57810d29",
+            "application=policy-8ec16158",
+            "application=policy-8fb5374a",
+            "application=policy-a66919ec",
+            "application=policy-dc5269b2",
+            "workload=arithmetic",
+            "workload=classification",
+            "workload=code",
+            "workload=extraction",
+            "workload=json",
+            "workload=reading"
+          ],
+          "value": 0.0
+        },
+        "floor_miss_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 18,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any",
+            "placement=escalated",
+            "placement=no_retention",
+            "placement=onprem_only",
+            "placement=us_only",
+            "protection=enforced",
+            "protection=passthrough",
+            "application=policy-57810d29",
+            "application=policy-8ec16158",
+            "application=policy-8fb5374a",
+            "application=policy-a66919ec",
+            "application=policy-dc5269b2",
+            "workload=arithmetic",
+            "workload=classification",
+            "workload=code",
+            "workload=extraction",
+            "workload=json",
+            "workload=reading"
+          ],
+          "value": 0.0
+        },
+        "latency_regret": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 1,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any"
+          ],
+          "value": 724.637138508519
+        },
+        "pass_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 18,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any",
+            "placement=escalated",
+            "placement=no_retention",
+            "placement=onprem_only",
+            "placement=us_only",
+            "protection=enforced",
+            "protection=passthrough",
+            "application=policy-57810d29",
+            "application=policy-8ec16158",
+            "application=policy-8fb5374a",
+            "application=policy-a66919ec",
+            "application=policy-dc5269b2",
+            "workload=arithmetic",
+            "workload=classification",
+            "workload=code",
+            "workload=extraction",
+            "workload=json",
+            "workload=reading"
+          ],
+          "value": 1.0
+        },
+        "quality_regret": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 18,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any",
+            "placement=escalated",
+            "placement=no_retention",
+            "placement=onprem_only",
+            "placement=us_only",
+            "protection=enforced",
+            "protection=passthrough",
+            "application=policy-57810d29",
+            "application=policy-8ec16158",
+            "application=policy-8fb5374a",
+            "application=policy-a66919ec",
+            "application=policy-dc5269b2",
+            "workload=arithmetic",
+            "workload=classification",
+            "workload=code",
+            "workload=extraction",
+            "workload=json",
+            "workload=reading"
+          ],
+          "value": 0.0
+        },
+        "violation_rate": {
+          "dimension": "placement",
+          "group": "any",
+          "groups_at_value": 18,
+          "groups_printed": 18,
+          "groups_total": 18,
+          "n": 36,
+          "n_cases": 36,
+          "tied": [
+            "placement=any",
+            "placement=escalated",
+            "placement=no_retention",
+            "placement=onprem_only",
+            "placement=us_only",
+            "protection=enforced",
+            "protection=passthrough",
+            "application=policy-57810d29",
+            "application=policy-8ec16158",
+            "application=policy-8fb5374a",
+            "application=policy-a66919ec",
+            "application=policy-dc5269b2",
+            "workload=arithmetic",
+            "workload=classification",
+            "workload=code",
+            "workload=extraction",
+            "workload=json",
+            "workload=reading"
+          ],
+          "value": 0.0
+        }
+      }
+    }
+  }
+}

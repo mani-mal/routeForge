@@ -37,6 +37,30 @@ async def _acompletion(model: str, call: dict):
             f"{model}: {_LITELLM_PREFIX.sub('', str(exc))}") from exc
 
 
+_FINISH_REASONS = frozenset({"stop", "length", "tool_calls", "content_filter",
+                             "function_call"})
+
+
+def _finish_reason(value) -> str | None:
+    """The backend's own finish reason, kept only if it is one of the known
+    enum values -- it goes on the content-free outcome row, so an arbitrary
+    string from a backend is recorded as `other`, never verbatim."""
+    if value is None:
+        return None
+    return value if value in _FINISH_REASONS else "other"
+
+
+def _reasoning_tokens(u) -> int | None:
+    """`usage.completion_tokens_details.reasoning_tokens` when the backend
+    reports it (a thinking model bills its reasoning as output); else None."""
+    det = (u.get("completion_tokens_details") if isinstance(u, dict)
+           else getattr(u, "completion_tokens_details", None))
+    if det is None:
+        return None
+    n = det.get("reasoning_tokens") if isinstance(det, dict) else getattr(det, "reasoning_tokens", None)
+    return n if isinstance(n, int) and not isinstance(n, bool) else None
+
+
 def _cached_tokens(u) -> int:
     """`usage.prompt_tokens_details.cached_tokens`, across the dict, pydantic
     and SimpleNamespace shapes litellm hands back. A provider that does not
@@ -176,7 +200,9 @@ class LiteLLMBackend:
         return GenerationResult(
             model=model, text=text, tokens_in=tokens_in, tokens_out=tokens_out,
             latency_ms=latency_ms, cost_usd=cost_usd, confidence=confidence,
-            tool_calls=tool_calls, cached_prompt_tokens=cached_in)
+            tool_calls=tool_calls, cached_prompt_tokens=cached_in,
+            finish_reason=_finish_reason(choice.get("finish_reason")),
+            reasoning_tokens=_reasoning_tokens(usage))
 
     async def generate_stream(self, model: str, messages: list[Message], price: PriceCfg,
                               tier: str, hint: dict,
@@ -210,10 +236,12 @@ class LiteLLMBackend:
         start = time.monotonic()
         parts: list[str] = []
         usage: dict = {}
+        finish = None
         async for chunk in await _acompletion(model, call):
             choices = getattr(chunk, "choices", None)
             content = None
             if choices:
+                finish = getattr(choices[0], "finish_reason", None) or finish
                 delta = getattr(choices[0], "delta", None)
                 content = getattr(delta, "content", None) if delta is not None else None
             u = getattr(chunk, "usage", None)
@@ -233,7 +261,8 @@ class LiteLLMBackend:
         yield StreamChunk(final=GenerationResult(
             model=model, text=text, tokens_in=tokens_in, tokens_out=tokens_out,
             latency_ms=latency_ms, cost_usd=cost_usd, confidence=None,
-            tool_calls=[], cached_prompt_tokens=cached_in))
+            tool_calls=[], cached_prompt_tokens=cached_in,
+            finish_reason=_finish_reason(finish)))
 
     async def health(self) -> BackendHealth:
         # Per-model reachability is probed at onboard time (registry), not at

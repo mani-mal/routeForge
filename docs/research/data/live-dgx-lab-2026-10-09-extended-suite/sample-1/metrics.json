@@ -1,0 +1,4897 @@
+{
+  "cases": [
+    {
+      "calls": 4,
+      "case_id": "x-any-enfo-arithmetic-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [],
+      "rejected_ok": false
+    },
+    {
+      "calls": 4,
+      "case_id": "x-any-enfo-arithmetic-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [],
+      "rejected_ok": false
+    },
+    {
+      "calls": 4,
+      "case_id": "x-any-enfo-arithmetic-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [],
+      "rejected_ok": false
+    },
+    {
+      "calls": 4,
+      "case_id": "x-any-enfo-extraction-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [],
+      "rejected_ok": false
+    },
+    {
+      "calls": 4,
+      "case_id": "x-any-enfo-extraction-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [],
+      "rejected_ok": false
+    },
+    {
+      "calls": 4,
+      "case_id": "x-any-enfo-extraction-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [],
+      "rejected_ok": false
+    },
+    {
+      "calls": 4,
+      "case_id": "x-any-enfo-json-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [],
+      "rejected_ok": false
+    },
+    {
+      "calls": 4,
+      "case_id": "x-any-enfo-json-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [],
+      "rejected_ok": false
+    },
+    {
+      "calls": 4,
+      "case_id": "x-any-enfo-json-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [],
+      "rejected_ok": false
+    },
+    {
+      "calls": 4,
+      "case_id": "x-any-enfo-classification-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [],
+      "rejected_ok": false
+    },
+    {
+      "calls": 4,
+      "case_id": "x-any-enfo-classification-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [],
+      "rejected_ok": false
+    },
+    {
+      "calls": 4,
+      "case_id": "x-any-enfo-classification-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [],
+      "rejected_ok": false
+    },
+    {
+      "calls": 4,
+      "case_id": "x-any-enfo-reading-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [],
+      "rejected_ok": false
+    },
+    {
+      "calls": 4,
+      "case_id": "x-any-enfo-reading-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [],
+      "rejected_ok": false
+    },
+    {
+      "calls": 4,
+      "case_id": "x-any-enfo-reading-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [],
+      "rejected_ok": false
+    },
+    {
+      "calls": 4,
+      "case_id": "x-any-enfo-code-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [],
+      "rejected_ok": false
+    },
+    {
+      "calls": 4,
+      "case_id": "x-any-enfo-code-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [],
+      "rejected_ok": false
+    },
+    {
+      "calls": 4,
+      "case_id": "x-any-enfo-code-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-onprem_only-enfo-arithmetic-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-onprem_only-enfo-arithmetic-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-onprem_only-enfo-arithmetic-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-onprem_only-enfo-extraction-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-onprem_only-enfo-extraction-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-onprem_only-enfo-extraction-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-onprem_only-enfo-json-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-onprem_only-enfo-json-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-onprem_only-enfo-json-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-onprem_only-enfo-classification-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-onprem_only-enfo-classification-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-onprem_only-enfo-classification-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-onprem_only-enfo-reading-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-onprem_only-enfo-reading-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-onprem_only-enfo-reading-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-onprem_only-enfo-code-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-onprem_only-enfo-code-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-onprem_only-enfo-code-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-us_only-enfo-arithmetic-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "region_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "region_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-us_only-enfo-arithmetic-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "region_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "region_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-us_only-enfo-arithmetic-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "region_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "region_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-us_only-enfo-extraction-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "region_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "region_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-us_only-enfo-extraction-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "region_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "region_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-us_only-enfo-extraction-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "region_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "region_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-us_only-enfo-json-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "region_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "region_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-us_only-enfo-json-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "region_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "region_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-us_only-enfo-json-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "region_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "region_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-us_only-enfo-classification-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "region_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "region_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-us_only-enfo-classification-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "region_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "region_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-us_only-enfo-classification-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "region_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "region_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-us_only-enfo-reading-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "region_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "region_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-us_only-enfo-reading-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "region_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "region_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-us_only-enfo-reading-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "region_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "region_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-us_only-enfo-code-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "region_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "region_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-us_only-enfo-code-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "region_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "region_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-us_only-enfo-code-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "region_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "region_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-no_retention-enfo-arithmetic-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "prompt_retention_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "prompt_retention_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-no_retention-enfo-arithmetic-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "prompt_retention_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "prompt_retention_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-no_retention-enfo-arithmetic-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "prompt_retention_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "prompt_retention_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-no_retention-enfo-extraction-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "prompt_retention_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "prompt_retention_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-no_retention-enfo-extraction-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "prompt_retention_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "prompt_retention_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-no_retention-enfo-extraction-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "prompt_retention_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "prompt_retention_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-no_retention-enfo-json-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "prompt_retention_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "prompt_retention_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-no_retention-enfo-json-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "prompt_retention_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "prompt_retention_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-no_retention-enfo-json-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "prompt_retention_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "prompt_retention_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-no_retention-enfo-classification-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "prompt_retention_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "prompt_retention_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-no_retention-enfo-classification-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "prompt_retention_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "prompt_retention_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-no_retention-enfo-classification-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "prompt_retention_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "prompt_retention_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-no_retention-enfo-reading-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "prompt_retention_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "prompt_retention_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-no_retention-enfo-reading-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "prompt_retention_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "prompt_retention_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-no_retention-enfo-reading-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "prompt_retention_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "prompt_retention_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-no_retention-enfo-code-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "prompt_retention_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "prompt_retention_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-no_retention-enfo-code-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "prompt_retention_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "prompt_retention_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-no_retention-enfo-code-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "prompt_retention_not_allowed"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "prompt_retention_not_allowed"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-escalated-enfo-arithmetic-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-escalated-enfo-arithmetic-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-escalated-enfo-arithmetic-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-escalated-enfo-extraction-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-escalated-enfo-extraction-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-escalated-enfo-extraction-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-escalated-enfo-json-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-escalated-enfo-json-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-escalated-enfo-json-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-escalated-enfo-classification-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-escalated-enfo-classification-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-escalated-enfo-classification-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-escalated-enfo-reading-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-escalated-enfo-reading-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-escalated-enfo-reading-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-escalated-enfo-code-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-escalated-enfo-code-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-escalated-enfo-code-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "residency"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "residency"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-any-pass-arithmetic-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "raw_sensitive_not_accepted"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "raw_sensitive_not_accepted"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-any-pass-arithmetic-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "raw_sensitive_not_accepted"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "raw_sensitive_not_accepted"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-any-pass-arithmetic-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "raw_sensitive_not_accepted"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "raw_sensitive_not_accepted"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-any-pass-extraction-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "raw_sensitive_not_accepted"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "raw_sensitive_not_accepted"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-any-pass-extraction-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "raw_sensitive_not_accepted"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "raw_sensitive_not_accepted"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-any-pass-extraction-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "raw_sensitive_not_accepted"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "raw_sensitive_not_accepted"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-any-pass-json-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "raw_sensitive_not_accepted"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "raw_sensitive_not_accepted"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-any-pass-json-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "raw_sensitive_not_accepted"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "raw_sensitive_not_accepted"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-any-pass-json-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "raw_sensitive_not_accepted"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "raw_sensitive_not_accepted"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-any-pass-classification-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "raw_sensitive_not_accepted"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "raw_sensitive_not_accepted"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-any-pass-classification-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "raw_sensitive_not_accepted"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "raw_sensitive_not_accepted"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-any-pass-classification-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "raw_sensitive_not_accepted"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "raw_sensitive_not_accepted"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-any-pass-reading-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "raw_sensitive_not_accepted"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "raw_sensitive_not_accepted"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-any-pass-reading-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "raw_sensitive_not_accepted"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "raw_sensitive_not_accepted"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-any-pass-reading-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "raw_sensitive_not_accepted"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "raw_sensitive_not_accepted"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-any-pass-code-short",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "raw_sensitive_not_accepted"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "raw_sensitive_not_accepted"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-any-pass-code-medium",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "raw_sensitive_not_accepted"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "raw_sensitive_not_accepted"
+        ]
+      ],
+      "rejected_ok": false
+    },
+    {
+      "calls": 2,
+      "case_id": "x-any-pass-code-long",
+      "eligible_post": [
+        "glm-5.3-flash",
+        "qwen3.6-35b"
+      ],
+      "eligible_pre": [
+        "glm-5.3-flash",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "qwen3.6-35b"
+      ],
+      "empty_probe_error": null,
+      "expect_empty": false,
+      "post_gate_widened": [],
+      "rejected": [
+        [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "raw_sensitive_not_accepted"
+        ],
+        [
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "raw_sensitive_not_accepted"
+        ]
+      ],
+      "rejected_ok": false
+    }
+  ],
+  "exit_code": 0,
+  "groups": {
+    "best_published_quality": {
+      "placement": {
+        "any": {
+          "cost_regret": 0.003265365,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 1234.551705264797,
+          "mean_chosen_cost": 0.003818553056,
+          "n_cases": 36,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.138888888889
+        },
+        "escalated": {
+          "cost_regret": 0.006382888889,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 11.592462102676,
+          "mean_chosen_cost": 0.007391666667,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "no_retention": {
+          "cost_regret": 0.006130111111,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.007171111111,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "onprem_only": {
+          "cost_regret": 0.006105833333,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.583940166204,
+          "mean_chosen_cost": 0.007176666667,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "us_only": {
+          "cost_regret": 0.006124,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 9.81932144431,
+          "mean_chosen_cost": 0.007192777778,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      },
+      "protection": {
+        "enforced": {
+          "cost_regret": 0.005020979333,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 498.219826848557,
+          "mean_chosen_cost": 0.005875532333,
+          "n_cases": 90,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.055555555556
+        },
+        "passthrough": {
+          "cost_regret": 0.006168666667,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.007191666667,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      },
+      "workload": {
+        "arithmetic": {
+          "cost_regret": 0.004827850556,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 329.17591199253,
+          "mean_chosen_cost": 0.005687837222,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.055555555556
+        },
+        "classification": {
+          "cost_regret": 0.005176113889,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 364.723494328145,
+          "mean_chosen_cost": 0.005938772222,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.055555555556
+        },
+        "code": {
+          "cost_regret": 0.005205996667,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 358.845886657946,
+          "mean_chosen_cost": 0.005994927778,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "extraction": {
+          "cost_regret": 0.005644263889,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 270.560032882107,
+          "mean_chosen_cost": 0.006514457778,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.055555555556
+        },
+        "json": {
+          "cost_regret": 0.00514325,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 669.241917720582,
+          "mean_chosen_cost": 0.006246486111,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.055555555556
+        },
+        "reading": {
+          "cost_regret": 0.005276088333,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 498.551890661474,
+          "mean_chosen_cost": 0.006186847222,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.055555555556
+        }
+      }
+    },
+    "cheapest": {
+      "placement": {
+        "any": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 650.472114360633,
+          "mean_chosen_cost": 0.000553188056,
+          "n_cases": 36,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "escalated": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 656.325067943221,
+          "mean_chosen_cost": 0.001008777778,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "no_retention": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 791.105020694279,
+          "mean_chosen_cost": 0.001041,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "onprem_only": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 872.915242992652,
+          "mean_chosen_cost": 0.001070833333,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "us_only": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 886.477307300083,
+          "mean_chosen_cost": 0.001068777778,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      },
+      "protection": {
+        "enforced": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 760.185406328593,
+          "mean_chosen_cost": 0.000854553,
+          "n_cases": 90,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "passthrough": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 706.839836008536,
+          "mean_chosen_cost": 0.001023,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      },
+      "workload": {
+        "arithmetic": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 759.82885496665,
+          "mean_chosen_cost": 0.000859986667,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "classification": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 424.093167873151,
+          "mean_chosen_cost": 0.000762658333,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "code": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 422.359787315751,
+          "mean_chosen_cost": 0.000788931111,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "extraction": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 540.627681876584,
+          "mean_chosen_cost": 0.000870193889,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "json": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 1316.367034780948,
+          "mean_chosen_cost": 0.001103236111,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "reading": {
+          "cost_regret": 0.0,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 1044.490340838416,
+          "mean_chosen_cost": 0.000910758889,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      }
+    },
+    "router_cold": {
+      "placement": {
+        "any": {
+          "cost_regret": 0.003118128611,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 712.546626018593,
+          "mean_chosen_cost": 0.003671316667,
+          "n_cases": 36,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.083333333333
+        },
+        "escalated": {
+          "cost_regret": 0.006382888889,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 11.592462102676,
+          "mean_chosen_cost": 0.007391666667,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "no_retention": {
+          "cost_regret": 0.005885611111,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 225.544428653342,
+          "mean_chosen_cost": 0.006926611111,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "onprem_only": {
+          "cost_regret": 0.005833777778,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 278.904796371029,
+          "mean_chosen_cost": 0.006904611111,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "us_only": {
+          "cost_regret": 0.005914277778,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 296.457086948471,
+          "mean_chosen_cost": 0.006983055556,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      },
+      "protection": {
+        "enforced": {
+          "cost_regret": 0.004860829222,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 382.806204120991,
+          "mean_chosen_cost": 0.005715382222,
+          "n_cases": 90,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.033333333333
+        },
+        "passthrough": {
+          "cost_regret": 0.005948666667,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 323.561005507751,
+          "mean_chosen_cost": 0.006971666667,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      },
+      "workload": {
+        "arithmetic": {
+          "cost_regret": 0.004777372222,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 328.978098443865,
+          "mean_chosen_cost": 0.005637358889,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.055555555556
+        },
+        "classification": {
+          "cost_regret": 0.005039115556,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 316.069403993121,
+          "mean_chosen_cost": 0.005801773889,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.055555555556
+        },
+        "code": {
+          "cost_regret": 0.005000616111,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 259.424616983678,
+          "mean_chosen_cost": 0.005789547222,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "extraction": {
+          "cost_regret": 0.005376541667,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 376.293435544034,
+          "mean_chosen_cost": 0.006246735556,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "json": {
+          "cost_regret": 0.004983375,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 494.456010553727,
+          "mean_chosen_cost": 0.006086611111,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.055555555556
+        },
+        "reading": {
+          "cost_regret": 0.005075792222,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 462.37046059428,
+          "mean_chosen_cost": 0.005986551111,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      }
+    },
+    "router_cold:candidate": {
+      "placement": {
+        "any": {
+          "cost_regret": 0.003174697778,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 471.855863126823,
+          "mean_chosen_cost": 0.003727885833,
+          "n_cases": 36,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.055555555556
+        },
+        "escalated": {
+          "cost_regret": 0.006382888889,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 11.592462102676,
+          "mean_chosen_cost": 0.007391666667,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "no_retention": {
+          "cost_regret": 0.006130111111,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.007171111111,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "onprem_only": {
+          "cost_regret": 0.006105833333,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.583940166204,
+          "mean_chosen_cost": 0.007176666667,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "us_only": {
+          "cost_regret": 0.006124,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 9.81932144431,
+          "mean_chosen_cost": 0.007192777778,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      },
+      "protection": {
+        "enforced": {
+          "cost_regret": 0.004984712444,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 193.141489993367,
+          "mean_chosen_cost": 0.005839265444,
+          "n_cases": 90,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.022222222222
+        },
+        "passthrough": {
+          "cost_regret": 0.006168666667,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.007191666667,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      },
+      "workload": {
+        "arithmetic": {
+          "cost_regret": 0.004789555556,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 46.473634778522,
+          "mean_chosen_cost": 0.005649542222,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.055555555556
+        },
+        "classification": {
+          "cost_regret": 0.005149337778,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 210.121263381249,
+          "mean_chosen_cost": 0.005911996111,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "code": {
+          "cost_regret": 0.005169038333,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 107.747765109202,
+          "mean_chosen_cost": 0.005957969444,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "extraction": {
+          "cost_regret": 0.005634668889,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 172.629856433357,
+          "mean_chosen_cost": 0.006504862778,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "json": {
+          "cost_regret": 0.005100222222,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 84.052725662736,
+          "mean_chosen_cost": 0.006203458333,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.055555555556
+        },
+        "reading": {
+          "cost_regret": 0.005249406111,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 344.682204601769,
+          "mean_chosen_cost": 0.006160165,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      }
+    },
+    "router_online": {
+      "placement": {
+        "any": {
+          "cost_regret": 0.003118128611,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 712.546626018593,
+          "mean_chosen_cost": 0.003671316667,
+          "n_cases": 36,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.083333333333
+        },
+        "escalated": {
+          "cost_regret": 0.006382888889,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 11.592462102676,
+          "mean_chosen_cost": 0.007391666667,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "no_retention": {
+          "cost_regret": 0.005885611111,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 225.544428653342,
+          "mean_chosen_cost": 0.006926611111,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "onprem_only": {
+          "cost_regret": 0.005833777778,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 278.904796371029,
+          "mean_chosen_cost": 0.006904611111,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "us_only": {
+          "cost_regret": 0.005914277778,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 296.457086948471,
+          "mean_chosen_cost": 0.006983055556,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      },
+      "protection": {
+        "enforced": {
+          "cost_regret": 0.004860829222,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 382.806204120991,
+          "mean_chosen_cost": 0.005715382222,
+          "n_cases": 90,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.033333333333
+        },
+        "passthrough": {
+          "cost_regret": 0.005948666667,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 323.561005507751,
+          "mean_chosen_cost": 0.006971666667,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      },
+      "workload": {
+        "arithmetic": {
+          "cost_regret": 0.004777372222,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 328.978098443865,
+          "mean_chosen_cost": 0.005637358889,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.055555555556
+        },
+        "classification": {
+          "cost_regret": 0.005039115556,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 316.069403993121,
+          "mean_chosen_cost": 0.005801773889,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.055555555556
+        },
+        "code": {
+          "cost_regret": 0.005000616111,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 259.424616983678,
+          "mean_chosen_cost": 0.005789547222,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "extraction": {
+          "cost_regret": 0.005376541667,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 376.293435544034,
+          "mean_chosen_cost": 0.006246735556,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "json": {
+          "cost_regret": 0.004983375,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 494.456010553727,
+          "mean_chosen_cost": 0.006086611111,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.055555555556
+        },
+        "reading": {
+          "cost_regret": 0.005075792222,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 462.37046059428,
+          "mean_chosen_cost": 0.005986551111,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      }
+    },
+    "router_online:breaker_off": {
+      "placement": {
+        "any": {
+          "cost_regret": 0.003118128611,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 712.546626018593,
+          "mean_chosen_cost": 0.003671316667,
+          "n_cases": 36,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.083333333333
+        },
+        "escalated": {
+          "cost_regret": 0.006382888889,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 11.592462102676,
+          "mean_chosen_cost": 0.007391666667,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "no_retention": {
+          "cost_regret": 0.005885611111,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 225.544428653342,
+          "mean_chosen_cost": 0.006926611111,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "onprem_only": {
+          "cost_regret": 0.005833777778,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 278.904796371029,
+          "mean_chosen_cost": 0.006904611111,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "us_only": {
+          "cost_regret": 0.005914277778,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 296.457086948471,
+          "mean_chosen_cost": 0.006983055556,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      },
+      "protection": {
+        "enforced": {
+          "cost_regret": 0.004860829222,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 382.806204120991,
+          "mean_chosen_cost": 0.005715382222,
+          "n_cases": 90,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.033333333333
+        },
+        "passthrough": {
+          "cost_regret": 0.005948666667,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 323.561005507751,
+          "mean_chosen_cost": 0.006971666667,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      },
+      "workload": {
+        "arithmetic": {
+          "cost_regret": 0.004777372222,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 328.978098443865,
+          "mean_chosen_cost": 0.005637358889,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.055555555556
+        },
+        "classification": {
+          "cost_regret": 0.005039115556,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 316.069403993121,
+          "mean_chosen_cost": 0.005801773889,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.055555555556
+        },
+        "code": {
+          "cost_regret": 0.005000616111,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 259.424616983678,
+          "mean_chosen_cost": 0.005789547222,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "extraction": {
+          "cost_regret": 0.005376541667,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 376.293435544034,
+          "mean_chosen_cost": 0.006246735556,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "json": {
+          "cost_regret": 0.004983375,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 494.456010553727,
+          "mean_chosen_cost": 0.006086611111,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.055555555556
+        },
+        "reading": {
+          "cost_regret": 0.005075792222,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 462.37046059428,
+          "mean_chosen_cost": 0.005986551111,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      }
+    },
+    "router_online:candidate": {
+      "placement": {
+        "any": {
+          "cost_regret": 0.003174697778,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 471.855863126823,
+          "mean_chosen_cost": 0.003727885833,
+          "n_cases": 36,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.055555555556
+        },
+        "escalated": {
+          "cost_regret": 0.006382888889,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 11.592462102676,
+          "mean_chosen_cost": 0.007391666667,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "no_retention": {
+          "cost_regret": 0.006130111111,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.007171111111,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "onprem_only": {
+          "cost_regret": 0.006105833333,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.583940166204,
+          "mean_chosen_cost": 0.007176666667,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "us_only": {
+          "cost_regret": 0.006124,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 9.81932144431,
+          "mean_chosen_cost": 0.007192777778,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      },
+      "protection": {
+        "enforced": {
+          "cost_regret": 0.004984712444,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 193.141489993367,
+          "mean_chosen_cost": 0.005839265444,
+          "n_cases": 90,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.022222222222
+        },
+        "passthrough": {
+          "cost_regret": 0.006168666667,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.007191666667,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      },
+      "workload": {
+        "arithmetic": {
+          "cost_regret": 0.004789555556,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 46.473634778522,
+          "mean_chosen_cost": 0.005649542222,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.055555555556
+        },
+        "classification": {
+          "cost_regret": 0.005149337778,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 210.121263381249,
+          "mean_chosen_cost": 0.005911996111,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "code": {
+          "cost_regret": 0.005169038333,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 107.747765109202,
+          "mean_chosen_cost": 0.005957969444,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "extraction": {
+          "cost_regret": 0.005634668889,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 172.629856433357,
+          "mean_chosen_cost": 0.006504862778,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "json": {
+          "cost_regret": 0.005100222222,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 84.052725662736,
+          "mean_chosen_cost": 0.006203458333,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.055555555556
+        },
+        "reading": {
+          "cost_regret": 0.005249406111,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 344.682204601769,
+          "mean_chosen_cost": 0.006160165,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      }
+    },
+    "router_warm_prior": {
+      "placement": {
+        "any": {
+          "cost_regret": 0.003118128611,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 712.546626018593,
+          "mean_chosen_cost": 0.003671316667,
+          "n_cases": 36,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.083333333333
+        },
+        "escalated": {
+          "cost_regret": 0.006382888889,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 11.592462102676,
+          "mean_chosen_cost": 0.007391666667,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "no_retention": {
+          "cost_regret": 0.005885611111,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 225.544428653342,
+          "mean_chosen_cost": 0.006926611111,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "onprem_only": {
+          "cost_regret": 0.005833777778,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 278.904796371029,
+          "mean_chosen_cost": 0.006904611111,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "us_only": {
+          "cost_regret": 0.005914277778,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 296.457086948471,
+          "mean_chosen_cost": 0.006983055556,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      },
+      "protection": {
+        "enforced": {
+          "cost_regret": 0.004860829222,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 382.806204120991,
+          "mean_chosen_cost": 0.005715382222,
+          "n_cases": 90,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.033333333333
+        },
+        "passthrough": {
+          "cost_regret": 0.005948666667,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 323.561005507751,
+          "mean_chosen_cost": 0.006971666667,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      },
+      "workload": {
+        "arithmetic": {
+          "cost_regret": 0.004777372222,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 328.978098443865,
+          "mean_chosen_cost": 0.005637358889,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.055555555556
+        },
+        "classification": {
+          "cost_regret": 0.005039115556,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 316.069403993121,
+          "mean_chosen_cost": 0.005801773889,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.055555555556
+        },
+        "code": {
+          "cost_regret": 0.005000616111,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 259.424616983678,
+          "mean_chosen_cost": 0.005789547222,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "extraction": {
+          "cost_regret": 0.005376541667,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 376.293435544034,
+          "mean_chosen_cost": 0.006246735556,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "json": {
+          "cost_regret": 0.004983375,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 494.456010553727,
+          "mean_chosen_cost": 0.006086611111,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.055555555556
+        },
+        "reading": {
+          "cost_regret": 0.005075792222,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 462.37046059428,
+          "mean_chosen_cost": 0.005986551111,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      }
+    },
+    "router_warm_prior:candidate": {
+      "placement": {
+        "any": {
+          "cost_regret": 0.003174697778,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 471.855863126823,
+          "mean_chosen_cost": 0.003727885833,
+          "n_cases": 36,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.055555555556
+        },
+        "escalated": {
+          "cost_regret": 0.006382888889,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 11.592462102676,
+          "mean_chosen_cost": 0.007391666667,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "no_retention": {
+          "cost_regret": 0.006130111111,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.007171111111,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "onprem_only": {
+          "cost_regret": 0.006105833333,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.583940166204,
+          "mean_chosen_cost": 0.007176666667,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "us_only": {
+          "cost_regret": 0.006124,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 9.81932144431,
+          "mean_chosen_cost": 0.007192777778,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      },
+      "protection": {
+        "enforced": {
+          "cost_regret": 0.004984712444,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 193.141489993367,
+          "mean_chosen_cost": 0.005839265444,
+          "n_cases": 90,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.022222222222
+        },
+        "passthrough": {
+          "cost_regret": 0.006168666667,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 0.0,
+          "mean_chosen_cost": 0.007191666667,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      },
+      "workload": {
+        "arithmetic": {
+          "cost_regret": 0.004789555556,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 46.473634778522,
+          "mean_chosen_cost": 0.005649542222,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.055555555556
+        },
+        "classification": {
+          "cost_regret": 0.005149337778,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 210.121263381249,
+          "mean_chosen_cost": 0.005911996111,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "code": {
+          "cost_regret": 0.005169038333,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 107.747765109202,
+          "mean_chosen_cost": 0.005957969444,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "extraction": {
+          "cost_regret": 0.005634668889,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 172.629856433357,
+          "mean_chosen_cost": 0.006504862778,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        },
+        "json": {
+          "cost_regret": 0.005100222222,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 84.052725662736,
+          "mean_chosen_cost": 0.006203458333,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.055555555556
+        },
+        "reading": {
+          "cost_regret": 0.005249406111,
+          "empty_set_mismatches": 0,
+          "exhausted_rate": 0.0,
+          "floor_miss_rate": 0.0,
+          "infeasible_at_floor": 0,
+          "latency_regret": 344.682204601769,
+          "mean_chosen_cost": 0.006160165,
+          "n_cases": 18,
+          "pass_rate": 1.0,
+          "quality_regret": 0.0,
+          "violation_rate": 0.0,
+          "wasted_attempts": 0.0
+        }
+      }
+    }
+  },
+  "headline": {
+    "comparable": true,
+    "parity_tol": 0.02,
+    "reference": "best_published_quality",
+    "reference_pass_rate": 1.0,
+    "router": "router_online",
+    "router_pass_rate": 1.0,
+    "saving_pct": 2.79127510525
+  },
+  "policy": {
+    "empty_set_mismatches": 0,
+    "pinned_mismatches": 0,
+    "post_gate_widened": 0,
+    "sweep_generate_mismatches": 0,
+    "sweep_violations": 0,
+    "violations_total": 0
+  },
+  "strategies": {
+    "best_published_quality": {
+      "cost_regret": 0.005212260556,
+      "empty_set_mismatches": 0,
+      "exhausted_rate": 0.0,
+      "floor_miss_rate": 0.0,
+      "infeasible_at_floor": 0,
+      "latency_regret": 415.183189040464,
+      "mean_chosen_cost": 0.006094888056,
+      "n_cases": 108,
+      "pass_rate": 1.0,
+      "quality_regret": 0.0,
+      "violation_rate": 0.0,
+      "wasted_attempts": 0.046296296296
+    },
+    "cheapest": {
+      "cost_regret": 0.0,
+      "empty_set_mismatches": 0,
+      "exhausted_rate": 0.0,
+      "floor_miss_rate": 0.0,
+      "infeasible_at_floor": 0,
+      "latency_regret": 751.294477941917,
+      "mean_chosen_cost": 0.0008826275,
+      "n_cases": 108,
+      "pass_rate": 1.0,
+      "quality_regret": 0.0,
+      "violation_rate": 0.0,
+      "wasted_attempts": 0.0
+    },
+    "router_cold": {
+      "cost_regret": 0.005042135463,
+      "empty_set_mismatches": 0,
+      "exhausted_rate": 0.0,
+      "floor_miss_rate": 0.0,
+      "infeasible_at_floor": 0,
+      "latency_regret": 372.932004352117,
+      "mean_chosen_cost": 0.005924762963,
+      "n_cases": 108,
+      "pass_rate": 1.0,
+      "quality_regret": 0.0,
+      "violation_rate": 0.0,
+      "wasted_attempts": 0.027777777778
+    },
+    "router_cold:candidate": {
+      "cost_regret": 0.005182038148,
+      "empty_set_mismatches": 0,
+      "exhausted_rate": 0.0,
+      "floor_miss_rate": 0.0,
+      "infeasible_at_floor": 0,
+      "latency_regret": 160.951241661139,
+      "mean_chosen_cost": 0.006064665648,
+      "n_cases": 108,
+      "pass_rate": 1.0,
+      "quality_regret": 0.0,
+      "violation_rate": 0.0,
+      "wasted_attempts": 0.018518518519
+    },
+    "router_online": {
+      "cost_regret": 0.005042135463,
+      "empty_set_mismatches": 0,
+      "exhausted_rate": 0.0,
+      "floor_miss_rate": 0.0,
+      "infeasible_at_floor": 0,
+      "latency_regret": 372.932004352117,
+      "mean_chosen_cost": 0.005924762963,
+      "n_cases": 108,
+      "pass_rate": 1.0,
+      "quality_regret": 0.0,
+      "violation_rate": 0.0,
+      "wasted_attempts": 0.027777777778
+    },
+    "router_online:breaker_off": {
+      "cost_regret": 0.005042135463,
+      "empty_set_mismatches": 0,
+      "exhausted_rate": 0.0,
+      "floor_miss_rate": 0.0,
+      "infeasible_at_floor": 0,
+      "latency_regret": 372.932004352117,
+      "mean_chosen_cost": 0.005924762963,
+      "n_cases": 108,
+      "pass_rate": 1.0,
+      "quality_regret": 0.0,
+      "violation_rate": 0.0,
+      "wasted_attempts": 0.027777777778
+    },
+    "router_online:candidate": {
+      "cost_regret": 0.005182038148,
+      "empty_set_mismatches": 0,
+      "exhausted_rate": 0.0,
+      "floor_miss_rate": 0.0,
+      "infeasible_at_floor": 0,
+      "latency_regret": 160.951241661139,
+      "mean_chosen_cost": 0.006064665648,
+      "n_cases": 108,
+      "pass_rate": 1.0,
+      "quality_regret": 0.0,
+      "violation_rate": 0.0,
+      "wasted_attempts": 0.018518518519
+    },
+    "router_warm_prior": {
+      "cost_regret": 0.005042135463,
+      "empty_set_mismatches": 0,
+      "exhausted_rate": 0.0,
+      "floor_miss_rate": 0.0,
+      "infeasible_at_floor": 0,
+      "latency_regret": 372.932004352117,
+      "mean_chosen_cost": 0.005924762963,
+      "n_cases": 108,
+      "pass_rate": 1.0,
+      "quality_regret": 0.0,
+      "violation_rate": 0.0,
+      "wasted_attempts": 0.027777777778
+    },
+    "router_warm_prior:candidate": {
+      "cost_regret": 0.005182038148,
+      "empty_set_mismatches": 0,
+      "exhausted_rate": 0.0,
+      "floor_miss_rate": 0.0,
+      "infeasible_at_floor": 0,
+      "latency_regret": 160.951241661139,
+      "mean_chosen_cost": 0.006064665648,
+      "n_cases": 108,
+      "pass_rate": 1.0,
+      "quality_regret": 0.0,
+      "violation_rate": 0.0,
+      "wasted_attempts": 0.018518518519
+    }
+  },
+  "worst_groups": {
+    "best_published_quality": {
+      "cost_regret": [
+        "placement",
+        "escalated",
+        0.006382888889
+      ],
+      "floor_miss_rate": [
+        "workload",
+        "arithmetic",
+        0.0
+      ],
+      "latency_regret": [
+        "placement",
+        "any",
+        1234.551705264797
+      ],
+      "pass_rate": [
+        "workload",
+        "arithmetic",
+        1.0
+      ],
+      "quality_regret": [
+        "workload",
+        "arithmetic",
+        0.0
+      ]
+    },
+    "cheapest": {
+      "cost_regret": [
+        "workload",
+        "arithmetic",
+        0.0
+      ],
+      "floor_miss_rate": [
+        "workload",
+        "arithmetic",
+        0.0
+      ],
+      "latency_regret": [
+        "workload",
+        "json",
+        1316.367034780948
+      ],
+      "pass_rate": [
+        "workload",
+        "arithmetic",
+        1.0
+      ],
+      "quality_regret": [
+        "workload",
+        "arithmetic",
+        0.0
+      ]
+    },
+    "router_cold": {
+      "cost_regret": [
+        "placement",
+        "escalated",
+        0.006382888889
+      ],
+      "floor_miss_rate": [
+        "workload",
+        "arithmetic",
+        0.0
+      ],
+      "latency_regret": [
+        "placement",
+        "any",
+        712.546626018593
+      ],
+      "pass_rate": [
+        "workload",
+        "arithmetic",
+        1.0
+      ],
+      "quality_regret": [
+        "workload",
+        "arithmetic",
+        0.0
+      ]
+    },
+    "router_cold:candidate": {
+      "cost_regret": [
+        "placement",
+        "escalated",
+        0.006382888889
+      ],
+      "floor_miss_rate": [
+        "workload",
+        "arithmetic",
+        0.0
+      ],
+      "latency_regret": [
+        "placement",
+        "any",
+        471.855863126823
+      ],
+      "pass_rate": [
+        "workload",
+        "arithmetic",
+        1.0
+      ],
+      "quality_regret": [
+        "workload",
+        "arithmetic",
+        0.0
+      ]
+    },
+    "router_online": {
+      "cost_regret": [
+        "placement",
+        "escalated",
+        0.006382888889
+      ],
+      "floor_miss_rate": [
+        "workload",
+        "arithmetic",
+        0.0
+      ],
+      "latency_regret": [
+        "placement",
+        "any",
+        712.546626018593
+      ],
+      "pass_rate": [
+        "workload",
+        "arithmetic",
+        1.0
+      ],
+      "quality_regret": [
+        "workload",
+        "arithmetic",
+        0.0
+      ]
+    },
+    "router_online:breaker_off": {
+      "cost_regret": [
+        "placement",
+        "escalated",
+        0.006382888889
+      ],
+      "floor_miss_rate": [
+        "workload",
+        "arithmetic",
+        0.0
+      ],
+      "latency_regret": [
+        "placement",
+        "any",
+        712.546626018593
+      ],
+      "pass_rate": [
+        "workload",
+        "arithmetic",
+        1.0
+      ],
+      "quality_regret": [
+        "workload",
+        "arithmetic",
+        0.0
+      ]
+    },
+    "router_online:candidate": {
+      "cost_regret": [
+        "placement",
+        "escalated",
+        0.006382888889
+      ],
+      "floor_miss_rate": [
+        "workload",
+        "arithmetic",
+        0.0
+      ],
+      "latency_regret": [
+        "placement",
+        "any",
+        471.855863126823
+      ],
+      "pass_rate": [
+        "workload",
+        "arithmetic",
+        1.0
+      ],
+      "quality_regret": [
+        "workload",
+        "arithmetic",
+        0.0
+      ]
+    },
+    "router_warm_prior": {
+      "cost_regret": [
+        "placement",
+        "escalated",
+        0.006382888889
+      ],
+      "floor_miss_rate": [
+        "workload",
+        "arithmetic",
+        0.0
+      ],
+      "latency_regret": [
+        "placement",
+        "any",
+        712.546626018593
+      ],
+      "pass_rate": [
+        "workload",
+        "arithmetic",
+        1.0
+      ],
+      "quality_regret": [
+        "workload",
+        "arithmetic",
+        0.0
+      ]
+    },
+    "router_warm_prior:candidate": {
+      "cost_regret": [
+        "placement",
+        "escalated",
+        0.006382888889
+      ],
+      "floor_miss_rate": [
+        "workload",
+        "arithmetic",
+        0.0
+      ],
+      "latency_regret": [
+        "placement",
+        "any",
+        471.855863126823
+      ],
+      "pass_rate": [
+        "workload",
+        "arithmetic",
+        1.0
+      ],
+      "quality_regret": [
+        "workload",
+        "arithmetic",
+        0.0
+      ]
+    }
+  }
+}

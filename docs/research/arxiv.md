@@ -766,7 +766,7 @@ router-version check. **Designed, not built:** churn robustness and confidence c
 | E11a | Group report on the simulated starter suite: figures with denominators, groups below the minimum | §4.6, FB §22.5.1 | done (simulated, seed 0) |
 | E11b | Router-version check: negative control, a cost-regressing candidate, a tier-threshold candidate; verdicts at seeds 0–9 | §4.6, FB §22.5.2–§22.5.3 | done (simulated) |
 | E11c | The check's detectors under single-rule mutation | §4.6, FB §22.5.4 | done (15 of 15 caught) |
-| E11d | Group report and check on live endpoints, ≥ 5 cases per placement and protection group, two placements | §4.6, FB §22.5.5 | **partly done** (FB §24.8): 22 cases, three endpoint names, 66 live calls — check PASS, 16 figures within tolerance, but the candidate changed 0 of 22 attempt chains, so it shows the tool runs live, not that it detects a regression; `escalated` (n = 2) and `onprem_only` (n = 4) below the minimum. A suite where weights change a route, ≥ 5 per group, **TO MEASURE** **Run 3 (FB §25.9), different models:** on-prem cheap passed 18 of 22 cases, on-prem mid 16 of 22; `cheapest` 0.818 pass rate against the router's 0.682 (quality regret 0.227) — the tier default (mid 0.75, cheap 0.5) is the wrong way round for this pair. 0 violations. The candidate again changed 0 of 22 chains; the cloud endpoints were not measured (all 16 calls refused, daily allowance spent). **Run 4 (FB §26.7), all four endpoints answering:** cheap on-prem 19 of 22, mid on-prem 16 of 22, cloud mid 8 of 8, cloud frontier 3 of 8 (5 refused); `cheapest` 0.864 against the router's 0.727; 0 violations. **A candidate that removes the cheap tier changed 12 of 22 chains; verdict INCONCLUSIVE (exit 4):** cost worsened 0.00062 [0.00003, 0.00154] against a tolerance of 0.0005 — a real worsening the check neither passed nor called a regression on 22 cases. A `regressed` verdict on live endpoints is still **TO MEASURE** (larger suite). |
+| E11d | Group report and check on live endpoints, ≥ 5 cases per placement and protection group, two placements | §4.6, FB §22.5.5 | **partly done** (FB §24.8): 22 cases, three endpoint names, 66 live calls — check PASS, 16 figures within tolerance, but the candidate changed 0 of 22 attempt chains, so it shows the tool runs live, not that it detects a regression; `escalated` (n = 2) and `onprem_only` (n = 4) below the minimum. A suite where weights change a route, ≥ 5 per group, **TO MEASURE** **Run 3 (FB §25.9), different models:** on-prem cheap passed 18 of 22 cases, on-prem mid 16 of 22; `cheapest` 0.818 pass rate against the router's 0.682 (quality regret 0.227) — the tier default (mid 0.75, cheap 0.5) is the wrong way round for this pair. 0 violations. The candidate again changed 0 of 22 chains; the cloud endpoints were not measured (all 16 calls refused, daily allowance spent). **Run 4 (FB §26.7), all four endpoints answering:** cheap on-prem 19 of 22, mid on-prem 16 of 22, cloud mid 8 of 8, cloud frontier 3 of 8 (5 refused); `cheapest` 0.864 against the router's 0.727; 0 violations. **A candidate that removes the cheap tier changed 12 of 22 chains; verdict INCONCLUSIVE (exit 4):** cost worsened 0.00062 [0.00003, 0.00154] against a tolerance of 0.0005 — a real worsening the check neither passed nor called a regression on 22 cases. A `regressed` verdict on live endpoints is still **TO MEASURE** (larger suite). **Extended suite (FB §27), 108 well-posed cases, three samples, 756 calls:** every answered call passed (738 of 738; 18 refused), so the suite is at ceiling and **the earlier "cheap model beat mid" reading is withdrawn** — it came from unanswerable starter cases. At equal quality the router paid 6.7× the cheapest eligible price (0.0059 vs 0.0009, cost regret 0.0050, all three samples). Candidate without a cheap tier changed 30 of 108 routes; cost worse by 0.00014 [0.000085, 0.00020], range excludes zero, inside the pre-set tolerance of 0.0005 → PASS; 38 figures judged, no group below the minimum. A `regressed` verdict live and a suite that separates models on quality are **TO MEASURE**. |
 | E11e | Coverage of the paired case bootstrap on split halves of a larger suite | §4.6, FB §22.5.5 | **TO MEASURE** |
 | E11f | Churn robustness and confidence calibration | §4.6 | not built (second P2 plan) |
 | E12+ | fidelity, R2/R3/R4 | §4–§5 | specs pending |
@@ -812,9 +812,9 @@ needs a second endpoint — plan it before writing the evaluation section.
 - The cloud path in run 3 worked for 6 of 30 minutes. Scenario figures come from replay,
   which assumes every endpoint answers; they describe the healthy deployment, and replay's
   baseline cost was 26% below the recorded cost (FB §25.5).
-- Endpoint quality is a tier default unless measured. On 22 cases the cheap on-prem model
-  passed more than the mid one (FB §25.9); any claim that tier order tracks quality is
-  unsupported.
+- Endpoint quality is a tier default unless measured. A 22-case suite suggested the cheap
+  on-prem model was better than the mid one; a 108-case well-posed suite removed the gap
+  (FB §27.3). Neither suite ranks the models: the larger one is at ceiling.
 - Both on-prem models reason before answering; 16% to 46% of answers in run 3 were empty at
   the token limits used, and the outcome record does not show it (FB §25.7).
 - Replay is first-decision only (until §4.4), with frozen signals; cached tokens not recorded.
@@ -874,24 +874,32 @@ What the measurements to date support. "Live" means recorded traffic on the DGX 
 | Relaxing a requirement can newly reject a request | constructed example only (FB §17.3); 0 occurrences in 2,699 live rows across three runs (E6) |
 | Failover and the breaker keep requests served through an outage | live: 0 failed of 899 through a 24-minute provider outage (FB §25.4) and 0 of 900 with a third of one endpoint's calls refused (FB §26.3); 2 failed of 900 where the budget left no second candidate (FB §24.3) |
 | Capacity can be read beside a scenario | arithmetic verified (E10a, E10d); against real behaviour, one observation and it is negative: the stated limit was not the binding one (E10b, FB §25.8) |
-| The router chooses well among eligible endpoints | **not supported.** Tier is chosen by request length; with one endpoint per on-prem tier the scorer had no choice in any live benchmark case; the tier default misordered the one pair measured, twice, and "always the cheapest" beat the router on pass rate both times (FB §25.9, §26.7). Where two endpoints shared a tier the cost term decided: 84 of 84 (FB §26.2) |
+| The router chooses well among eligible endpoints | **not supported.** Tier is chosen by request length; with one endpoint per on-prem tier the scorer had no choice in any live benchmark case; on a 108-case suite at ceiling it paid 6.7× the cheapest eligible price for the same answers (FB §27.4). The earlier reading that the tier default misordered two models is withdrawn (FB §27.3). Where two endpoints shared a tier the cost term decided: 84 of 84 (FB §26.2) |
 | RouteForge saves money against an all-frontier baseline | **not measured.** No paid prices on the lab |
-| The version check detects a regression on live endpoints | **not shown.** Detects planted regressions in simulation (E11b, E11c); two live candidates changed 0 of 22 routes; a third changed 12 of 22 and got INCONCLUSIVE — a real cost worsening it neither passed nor called a regression on 22 cases (FB §26.7) |
+| The version check detects a regression on live endpoints | **not shown.** Detects planted regressions in simulation (E11b, E11c); two live candidates changed 0 of 22 routes; a third changed 12 of 22 (INCONCLUSIVE) and, on 108 cases, 30 of 108 with a measured worsening whose range excludes zero but sits inside the pre-set tolerance (PASS) (FB §26.7, §27.5). No `regressed` verdict live |
 | Uncertainty ranges have their stated coverage | split-half behaviour consistent with it (E9b); not measured directly, and not under dependence (E9c) |
 
 The paper's supportable contribution is the first six rows: eligibility before scoring,
 and offline prediction of a policy change from content-free records, with its limits
 stated. The three "not" rows should be written as limitations, not softened.
 
-## 8. Related work — ALL TO VERIFY
+## 8. Related work — checked 2026-10-09
 
-- Routing: RouteLLM, RouterBench, RouterEval, UniRoute, WISERouter; Agentic Routing
-  `2607.11399`, ACRouter `2606.22902`, TRACE-Router `2607.22465`, Agora `2607.09600`,
-  OCELOT `2606.12341` (per-hop checking misses accumulating risk — supports R3).
-- Privacy/redaction: SlotGuard `2607.17147`, MathEd-PII `2602.16571`.
-- Policy/governance: Traccia `2607.14309`, Policy-as-Prompt `2509.23994`, Strategic Auditee
-  Gaming `2605.06340`; XACML, OPA/Rego, AWS Zelkova; configuration-error literature.
-- Information flow: Sabelfeld & Myers 2003, Jif/FlowCaml, declassification.
-- Testing: QuickCheck/Hypothesis, mutation testing.
-- Load balancing/health: EWMA, P2C (Envoy, Finagle), outlier detection, circuit breakers.
-- Evaluation: off-policy / IPS, constrained and safe bandits, cold start.
+The leads that used to be listed here were checked by an automated pass that fetched each
+page (three spot-checked by hand). All exist. The verified list, with what each does and
+how it relates, is the paper draft's §9 and its 36 references
+([`paper-draft.md`](paper-draft.md)). Corrections to the old leads:
+
+- **OCELOT** (arXiv 2606.12341) is not a routing paper: it budgets inference leakage across
+  an agent trajectory. It is cited with the trajectory envelope, not with routers.
+- **ACRouter** is the system name; the paper is "Agent-as-a-Router" (arXiv 2606.22902).
+- **TRACE-Router** was the v1–v2 title of arXiv 2607.22465, now titled "ORACLE".
+- **WISERouter** is arXiv 2607.23765 (a workload-budget constraint in a bandit).
+- Closest prior work: UniRoute (a pool that changes because new models appear, not because
+  of policy); CaMeL and OCELOT (labels carried across an agent's calls, for a different
+  decision); Bottou et al. 2013 (predicting a system change from logs).
+- A limited search found no router that treats residency, retention or tenant policy as a
+  per-request eligibility constraint with an evaluation that respects it. **This is not a
+  claim that none exists**; a dedicated search is still worth doing.
+- Not read in full by anyone. Reiter 1987 and Goguen & Meseguer 1982 were confirmed from
+  secondary sources only.

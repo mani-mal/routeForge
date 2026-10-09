@@ -304,7 +304,12 @@ def test_schema_is_content_free():
     # `prompt_tokens_bucket` are the brief's explicit exceptions;
     # `completion_tokens` is the same class of column (a count) and the
     # brief's own RoutingOutcome model defines it, so it must be exempt too.
-    allowed = {"prompt_tokens", "prompt_tokens_bucket", "completion_tokens"}
+    # `finish_reason` (B71 item 6) is a closed enum -- an unknown backend
+    # string is stored as "other", never verbatim (`_finish_reason`,
+    # tests/test_reply_shape.py) -- and `reasoning_tokens` is a count. Both
+    # trip the "reason" substring below and neither can carry text.
+    allowed = {"prompt_tokens", "prompt_tokens_bucket", "completion_tokens",
+               "finish_reason", "reasoning_tokens"}
     for model in (RoutingOutcome, OutcomeFeedback):
         for col in model.__table__.columns:
             name = col.name
