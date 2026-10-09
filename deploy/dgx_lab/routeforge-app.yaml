@@ -109,6 +109,9 @@ items:
           # Same pattern for GLM 5.3 Flash (secret `glm-flash-key`, created out of band).
           - name: GLM_FLASH_API_KEY
             valueFrom: {secretKeyRef: {name: glm-flash-key, key: GLM_FLASH_API_KEY, optional: true}}
+          # Same pattern for Qwen3.6-35B (secret `qwen36-key`, created out of band).
+          - name: QWEN36_API_KEY
+            valueFrom: {secretKeyRef: {name: qwen36-key, key: QWEN36_API_KEY, optional: true}}
           # Cloud path for the paper's placement experiments: OpenRouter free
           # models (secret `openrouter-key`, created out of band; synthetic
           # prompts only). The provider, its two pool entries and their prices

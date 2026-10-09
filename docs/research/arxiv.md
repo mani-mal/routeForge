@@ -757,19 +757,19 @@ router-version check. **Designed, not built:** churn robustness and confidence c
 | E1 | Noninterference harness: mutants caught, examples, time | PC §4.2, §7 | done (15/18) |
 | E2 | FeasibleRouteBench multi-seed table, simulated | FB §5.6 | done |
 | E3 | Dead-endpoint rule: simulated vs closed form vs live | FB §9.5, §11.2 | done |
-| E4 | Breaker wasted attempts | FB §12.4 | done (simulated, FB §12.4) and **observed live once** (FB §24.3): one 181.5 s outage of one endpoint name; 3 consecutive failures opened the breaker, 8 of 58 routed mid-tier rows in the window touched the dead endpoint, 65 rows diverted, breaker open ~38 s past recovery, 2 requests failed 502 with no affordable failover candidate (B70). One outage: a mechanism observation, not a rate. Caveat: three names, one model behind a test proxy. |
+| E4 | Breaker wasted attempts | FB §12.4 | done (simulated, FB §12.4) and **observed live once** (FB §24.3): one 181.5 s outage of one endpoint name; 3 consecutive failures opened the breaker, 8 of 58 routed mid-tier rows in the window touched the dead endpoint, 65 rows diverted, breaker open ~38 s past recovery, 2 requests failed 502 with no affordable failover candidate (B70). One outage: a mechanism observation, not a rate. Caveat: three names, one model behind a test proxy. **Run 3 (FB §25.4), a real provider outage:** a cloud provider's daily allowance ran out 6 minutes into a 30-minute run; 86 served requests needed a failover, 102 attempts were wasted, **0 requests failed**. Where the failing endpoint shared its tier, the breaker diverted 71 of 89 rows with no wasted call; where it was alone in its tier, 63 requests bypassed the open breaker and 79 calls were wasted (B71). |
 | E5 | Replay agreement before/after B55 | FB §15.4 | done |
-| E6 | Shadow-price non-monotonicity counterexample, live | FB §17.3 | **not exercised live** (FB §24.6): 900 rows, three endpoint names, newly rejected = 0 on every relaxation. Remains a constructed counterexample; a purpose-built fixture **TO MEASURE** |
-| E7 | Context-window replay effect on agreement | P3c-2, FB §18.4.1 | overflow: first run done (no overflow in the export: agreement 1.0, 0 hops), real overflow failovers **TO MEASURE**. Breaker: measured (FB §24.4) — model agreement 0.926 over 880 served rows, outcome agreement 1.0 over 900; all 65 disagreements are breaker-diverted rows replay sent to the down endpoint (replay has no breaker state, B70). Caveat: three names, one model behind a test proxy. |
+| E6 | Shadow-price non-monotonicity counterexample, live | FB §17.3 | **not exercised live** (FB §24.6): 900 rows, three endpoint names, newly rejected = 0 on every relaxation. Remains a constructed counterexample; a purpose-built fixture **TO MEASURE** Run 3 (FB §25.6), four different models with a cloud path: again 0 newly rejected on every relaxation. |
+| E7 | Context-window replay effect on agreement | P3c-2, FB §18.4.1 | overflow: first run done (no overflow in the export: agreement 1.0, 0 hops), real overflow failovers **TO MEASURE**. Breaker: measured (FB §24.4) — model agreement 0.926 over 880 served rows, outcome agreement 1.0 over 900; all 65 disagreements are breaker-diverted rows replay sent to the down endpoint (replay has no breaker state, B70). Caveat: three names, one model behind a test proxy. **Run 3 (FB §25.5), real failures:** model agreement 0.919 over 878, outcome agreement 1.0 over 899; replay sent 180 rows to a provider that answered 31, and its baseline cost ($7.26) is 26% below the recorded cost ($9.76). Replay describes a healthy deployment. |
 | E7b | Rejected rows replay as routed (B60) | FB §18.4.1, §19.4.1 | done: defect observed (7 of 7 rejections replayed as routed), fixed, re-run on post-upgrade rows — 7 of 7 rejected in replay, outcome agreement 1.0 over 24, raise-budget newly serves 7 |
 | E7c | Token-estimate gap and over-rejection (B64) | FB §19.4.1, §23.4 | measured on synthetic text, 645 served rows (GLM tokenizer): routing/backend median 1.72 on prose, 0.79 on code, 0.70 on JSON, 0.52 on log lines; summed ratio 0.955 hides it. The estimate over-counts prose and under-counts logs. Real documents **TO MEASURE** First real agent-loop rows (FB §24.9): 21 served calls from one coding-agent session, 13,962–27,480 backend prompt tokens — summed ratio 0.976, per row 0.960–1.022. One session, dependent rows: a data point, not a distribution. |
-| E8 | Healthcare scenario triad, traffic-weighted vs static | P3c-2 | analogue done on declarations only (FB §24.5): four scenarios over 900 rows with 90% ranges; two tightenings a static check would call free rejected 4 [1, 7] and 5 [2, 9] requests on budget. Caveat: three names, one model behind a test proxy. Healthcare triad on different models and a cloud provider **TO MEASURE** |
+| E8 | Healthcare scenario triad, traffic-weighted vs static | P3c-2 | analogue done on declarations only (FB §24.5): four scenarios over 900 rows with 90% ranges; two tightenings a static check would call free rejected 4 [1, 7] and 5 [2, 9] requests on budget. Caveat: three names, one model behind a test proxy. Healthcare triad on different models and a cloud provider **TO MEASURE** **Run 3 (FB §25.6), a real off-premises provider, different models:** keeping two applications on-prem moves 180 [163, 199] of 899 requests, +$3.12 [2.69, 3.54] (43% of the replayed baseline) at stated prices, 0 newly rejected; `require_no_retention` gives the same 180 moves by a different requirement; letting the on-prem-only application use the cloud moves 59 [48, 70], −$0.76 [−0.95, −0.59]. Placement held live: 325 on-prem-only rows and 173 detection-raised rows were never attempted on the cloud. Figures are for the healthy deployment (the provider was down for 24 of 30 minutes live); stated prices, synthetic text. |
 | E9a | Range width against sample size | §4.2, FB §20.6.2–§20.6.3, §23.7 | done at n = 50–800 on 912 independent lab rows: width × √n / n flat from n = 200 (1/√n), narrower than that below it (rare events squeezed against 0). 5,000 / 50,000 rows **TO MEASURE** |
 | E9b | Split halves of a real export | §4.2, FB §23.7 | done (100 splits of 912 rows): half-A 90% range contains the half-B point 66–76% of the time (mean 71.5%); the reference for a calibrated range is 75.5%, not 90% — the planned test was mis-specified. Direct coverage against a larger export **TO MEASURE** |
 | E9c | Coverage under dependence (agent-loop traffic) | §4.2, FB §20.6.3 | **TO MEASURE** |
 | E9d | Quality range with and without calibration posteriors | §4.2, FB §20.6.3 | **TO MEASURE** |
 | E10a | Healthcare scenario pair with stated on-prem capacity: peak and time-average utilisation per arm, with bucket length and window | §4.3, FB §21.5.4 | analogue done (FB §24.7): illustrative stated limits, 60 s buckets — no-change peak 77.5% / average 48.4%; three of four scenarios put one endpoint name over its limit (peak 115.0%, 127.5%, 132.5%; over in 17.6%, 47.1%, 52.9% of 17 buckets). Limits are assumptions and all names are one server; with real stated capacity **TO MEASURE** |
-| E10b | Stated capacity against observed endpoint behaviour at 50% / 100% / 150% average | §4.3, FB §21.5.4 | **TO MEASURE** |
+| E10b | Stated capacity against observed endpoint behaviour at 50% / 100% / 150% average | §4.3, FB §21.5.4 | **first observation** (FB §25.8): the cloud provider's published 20 requests a minute was 30% used at peak in replay while the provider refused every call — the binding limit was a 50-a-day allowance the capacity file cannot express (B71). A controlled test at 50% / 100% / 150% of a real engine limit **TO MEASURE** |
 | E10c | Recorded latency against wall-clock and backend time | §4.3, FB §21.5.4, §23.5 | first half done: recorded = 0.75 × client wall-clock (median), short by a near-constant ~160 ms, 876 rows. Wall-clock against backend time in service **TO MEASURE** |
 | E10d | Peak and time-average utilisation against bucket length (10 / 60 / 300 / 3600 s) | §4.3, FB §23.6 | done on recorded traffic (illustrative stated limits): peak 212% / 88% / 64% / 16%, average 27% / 57% / 49% / 16%; the binding limit changes from concurrency to requests per minute |
 | E10e | Arrival estimate | §4.3, FB §23.5 | done: bucket changes for 4.2% of rows at 10 s, 0.9% at 60 s, 0 at 300 s; `ts − latency` is ~0.2 s after the client start (includes an unmeasured clock offset) |
@@ -777,10 +777,17 @@ router-version check. **Designed, not built:** churn robustness and confidence c
 | E11a | Group report on the simulated starter suite: figures with denominators, groups below the minimum | §4.6, FB §22.5.1 | done (simulated, seed 0) |
 | E11b | Router-version check: negative control, a cost-regressing candidate, a tier-threshold candidate; verdicts at seeds 0–9 | §4.6, FB §22.5.2–§22.5.3 | done (simulated) |
 | E11c | The check's detectors under single-rule mutation | §4.6, FB §22.5.4 | done (15 of 15 caught) |
-| E11d | Group report and check on live endpoints, ≥ 5 cases per placement and protection group, two placements | §4.6, FB §22.5.5 | **partly done** (FB §24.8): 22 cases, three endpoint names, 66 live calls — check PASS, 16 figures within tolerance, but the candidate changed 0 of 22 attempt chains, so it shows the tool runs live, not that it detects a regression; `escalated` (n = 2) and `onprem_only` (n = 4) below the minimum. A suite where weights change a route, ≥ 5 per group, **TO MEASURE** |
+| E11d | Group report and check on live endpoints, ≥ 5 cases per placement and protection group, two placements | §4.6, FB §22.5.5 | **partly done** (FB §24.8): 22 cases, three endpoint names, 66 live calls — check PASS, 16 figures within tolerance, but the candidate changed 0 of 22 attempt chains, so it shows the tool runs live, not that it detects a regression; `escalated` (n = 2) and `onprem_only` (n = 4) below the minimum. A suite where weights change a route, ≥ 5 per group, **TO MEASURE** **Run 3 (FB §25.9), different models:** on-prem cheap passed 18 of 22 cases, on-prem mid 16 of 22; `cheapest` 0.818 pass rate against the router's 0.682 (quality regret 0.227) — the tier default (mid 0.75, cheap 0.5) is the wrong way round for this pair. 0 violations. The candidate again changed 0 of 22 chains; the cloud endpoints were not measured (all 16 calls refused, daily allowance spent). |
 | E11e | Coverage of the paired case bootstrap on split halves of a larger suite | §4.6, FB §22.5.5 | **TO MEASURE** |
 | E11f | Churn robustness and confidence calibration | §4.6 | not built (second P2 plan) |
 | E12+ | fidelity, R2/R3/R4 | §4–§5 | specs pending |
+
+**Update 2026-10-09 (FB §25).** The lab now has four different models: two on-prem
+(`qwen3.6-35b` cheap, `glm-5.3-flash` mid) and two reached through a cloud provider
+(OpenRouter free variants, mid and frontier). Run 3 is the first with a request that had
+endpoints of different placement to choose from. Its cloud path worked for 6 of 30
+minutes (a 50-request daily allowance), prices are stated rather than paid, and the text
+is synthetic. The paragraph below describes the state before that run.
 
 **Data caveat for every live number:** the Spark serves one app (`kit-gtm`, Qwen Code), all
 models priced $0 (FB §17.4). The DGX lab has **one** priced on-prem endpoint at a time
@@ -806,6 +813,17 @@ needs a second endpoint — plan it before writing the evaluation section.
   rest on labels the case author wrote, and five of twelve groups are below the five-case
   minimum. No multiplicity correction is made.
 - Single tenant, single seed live runs; $0 prices on the Spark.
+- Live runs 2 and 3 (FB §24, §25): synthetic text; stated prices (illustrative on-prem,
+  list prices for free cloud variants), so no absolute cost or saving is a real one; each
+  outage is a single event; in run 2 the three endpoint names were one model.
+- The cloud path in run 3 worked for 6 of 30 minutes. Scenario figures come from replay,
+  which assumes every endpoint answers; they describe the healthy deployment, and replay's
+  baseline cost was 26% below the recorded cost (FB §25.5).
+- Endpoint quality is a tier default unless measured. On 22 cases the cheap on-prem model
+  passed more than the mid one (FB §25.9); any claim that tier order tracks quality is
+  unsupported.
+- Both on-prem models reason before answering; 16% to 46% of answers in run 3 were empty at
+  the token limits used, and the outcome record does not show it (FB §25.7).
 - Replay is first-decision only (until §4.4), with frozen signals; cached tokens not recorded.
 - Uncertainty ranges (§4.2) are sampling variability under an independence assumption that
   agent traffic violates; they exclude replay bias by construction. Coverage on real records
@@ -849,6 +867,28 @@ needs a second endpoint — plan it before writing the evaluation section.
 - Patent/prior-art scan incomplete; arXiv leads unverified.
 
 ---
+
+## 7a. State of the evidence (2026-10-09)
+
+What the measurements to date support. "Live" means recorded traffic on the DGX lab.
+
+| claim | support |
+|---|---|
+| Eligibility is decided before scoring; an ineligible endpoint is never attempted | property harness (E1); 0 violations in every benchmark run, simulated and live (E2, FB §24.8, §25.9); live: 325 on-prem-only and 173 detection-raised rows never attempted on the cloud provider (FB §25.3) |
+| A policy change's effect can be predicted from recorded, content-free rows | outcome agreement 1.0 on 912, 900 and 899 live rows; model agreement 1.0 with healthy endpoints, 0.926 and 0.919 when endpoints failed, every disagreement explained by breaker or failover state (E5, E7, FB §23–§25) |
+| A tightening that a static check calls free can reject real requests | live: 4 [1, 7] and 5 [2, 9] of 900 on budget (FB §24.5); with a second on-prem tier present, 0 of 899 (FB §25.6) — the effect depends on what else is eligible, which is the point of replay |
+| The price of a protection can be stated with a range | live: on-prem placement for two applications, +$3.12 [2.69, 3.54] over 899 requests at stated prices (FB §25.6); ranges behave as 1/√n from n = 200 (E9a) |
+| Relaxing a requirement can newly reject a request | constructed example only (FB §17.3); 0 occurrences in 1,799 live rows across two runs (E6) |
+| Failover and the breaker keep requests served through an outage | live: 0 failed of 899 through a 24-minute provider outage (FB §25.4); 2 failed of 900 where the budget left no second candidate (FB §24.3) |
+| Capacity can be read beside a scenario | arithmetic verified (E10a, E10d); against real behaviour, one observation and it is negative: the stated limit was not the binding one (E10b, FB §25.8) |
+| The router chooses well among eligible endpoints | **not supported.** Tier is chosen by request length; with one endpoint per on-prem tier the scorer had no choice in any live benchmark case; the tier default misordered the one pair measured (FB §25.9) |
+| RouteForge saves money against an all-frontier baseline | **not measured.** No paid prices on the lab |
+| The version check detects a regression on live endpoints | **not shown.** Detects planted regressions in simulation (E11b, E11c); live candidates changed 0 of 22 routes twice |
+| Uncertainty ranges have their stated coverage | split-half behaviour consistent with it (E9b); not measured directly, and not under dependence (E9c) |
+
+The paper's supportable contribution is the first six rows: eligibility before scoring,
+and offline prediction of a policy change from content-free records, with its limits
+stated. The three "not" rows should be written as limitations, not softened.
 
 ## 8. Related work — ALL TO VERIFY
 

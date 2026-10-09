@@ -4535,3 +4535,234 @@ first look at agent-loop traffic for E9c, far too few to measure coverage under 
 | token-estimate ratio as a distribution on real text (E7c) | many sessions and clients |
 | coverage under dependence; width at 5,000 and 50,000 rows (E9a–c) | a long agent-loop export |
 | stated capacity against observed behaviour (E10b, E10c) | the engine's configured limits and metrics |
+
+## 25. Live run 3 on the DGX lab: four different models, a cloud path, and a provider that ran out (2026-10-09)
+
+Artifacts, all content-free: `docs/research/data/live-dgx-lab-2026-10-09-run3/` (outcome
+export, config snapshot, client log, scenario and capacity files, every output quoted
+below, the bench output, the generator).
+
+This is the first run where the endpoints are **different models** and where one provider
+is **off the customer's infrastructure**.
+
+> **Read this first.** The cloud provider is OpenRouter's free model variants. The account
+> used allows **50 free requests a day**. That allowance ran out 6 minutes into the
+> 30-minute run; every cloud call after that was refused (HTTP 429,
+> `free-models-per-day`). So this run measures two things, in sequence: routing across
+> four working endpoints (6 minutes, 31 cloud answers), and a provider that is unavailable
+> for 24 minutes. It does **not** measure steady-state cloud share, cloud quality, or a
+> saving against a frontier baseline. The request text is synthetic. Prices are stated
+> (§25.1), not bills.
+
+### 25.1 Setup
+
+| endpoint | provider | tier | stated price in/out, $ per 1M | region | prompt retention | accepts raw sensitive |
+|---|---|---|---|---|---|---|
+| `qwen3.6-35b` (Qwen3.6-35B-A3B, FP8, one H200) | onprem | cheap | 1 / 1 | us-lab | none | true |
+| `glm-5.3-flash` | onprem | mid | 10 / 10 | us-lab | none | true |
+| `openrouter-mid` (Nemotron 3 Super 120B, free variant) | openrouter | mid | 0.08 / 0.45 | undeclared | retained | false |
+| `openrouter-frontier` (Nemotron 3 Ultra 550B, free variant) | openrouter | frontier | 0.50 / 2.20 | undeclared | retained | false |
+
+The on-prem prices are illustrative. The cloud prices are the same models' paid list
+prices, used so that a $0 endpoint does not win every cost comparison. With these numbers
+the cloud is cheaper than the on-prem mid tier, so **no saving against a frontier
+baseline can be read from this run**; that needs prices an operator actually pays.
+
+The cloud provider is declared through a deployment config overlay
+(`deploy/dgx_lab/config-overlay/`, PR #98). Applications as before: `paper-claims` (cap
+$0.05 a request), `paper-dev`, `paper-clinic` (`onprem_only`, `allowed_regions: [us-lab]`,
+`require_no_retention`), all `pii_detection: regex`. 900 requests at one every two seconds,
+seed 4, `max_tokens` 768 to 1,536 (see §25.7 for why). 899 outcome rows were recorded; one
+request timed out at the client before RouteForge answered and has no row.
+
+### 25.2 Outcomes
+
+878 served, 21 `no_eligible` (budget). **No request failed**, although one provider was
+down for most of the run.
+
+| served by | rows | share of served |
+|---|---|---|
+| `glm-5.3-flash` | 543 | 61.8% |
+| `qwen3.6-35b` | 304 | 34.6% |
+| `openrouter-mid` | 19 | 2.2% |
+| `openrouter-frontier` | 12 | 1.4% |
+
+Recorded latency, median / 90th percentile, ms: Qwen 2,225 / 3,813; GLM 2,627 / 5,059;
+cloud mid 4,971 / 11,252 (n = 19); cloud frontier 18,965 / 25,028 (n = 12).
+
+### 25.3 Placement held (rule 3, live)
+
+- `paper-clinic` (325 rows) was never offered a cloud endpoint. A pinned request for
+  `openrouter-mid` from it returns 422, "provider 'openrouter' is excluded by residency".
+- **173 rows from the two unrestricted applications were moved on-prem by detection**: the
+  request carried a detected entity, the sensitivity rule raised placement to
+  `onprem_only`, and the row records it. None of them was attempted on a cloud endpoint.
+- Of those 173, 84 were the planted SSN and e-mail. **63 were `CREDIT_CARD` +
+  `US_BANK_NUMBER` matches on random numbers** in synthetic logs and JSON, which carried no
+  planted PII. A false positive here costs money, not privacy: the request stays on-prem
+  at the on-prem price. It is a real cost of a pattern detector and should be reported as
+  one.
+
+### 25.4 A provider that ran out: failover, the breaker, and the bypass (E4)
+
+Cloud calls were answered from 13:41:42 to 13:47:41 UTC (31 answers, with 7 upstream
+"service overloaded" errors among them). From 13:47:42 every cloud call returned 429 for
+the daily allowance; the retained API log has 94 such errors.
+
+| endpoint | attempts | served | failed |
+|---|---|---|---|
+| `openrouter-frontier` | 91 | 12 | 79 |
+| `openrouter-mid` | 41 | 19 | 22 |
+| `qwen3.6-35b` | 305 | 304 | 1 |
+| `glm-5.3-flash` | 543 | 543 | 0 |
+
+86 served requests needed a failover, 102 attempts were wasted, and every one of the 86
+was served.
+
+- **Mid tier: the breaker worked.** `openrouter-mid` shares the mid tier with
+  `glm-5.3-flash`. Its breaker opened and 71 of the 89 unrestricted mid-tier rows record
+  it as `circuit_open`; they went straight to GLM with no wasted call.
+- **Frontier tier: the breaker could not help.** `openrouter-frontier` is the only
+  frontier endpoint. With its breaker open there is no other endpoint at the target tier,
+  so the request **bypasses** the breaker (63 rows carry `circuit_bypass`), calls the dead
+  endpoint, fails, and only then fails over. 79 of the 102 wasted attempts are these. The
+  bypass exists so a request is never refused only because a breaker is open; with a
+  lower-tier endpoint available it buys nothing and costs one failed call per request.
+- **Where the frontier requests ended up:** `glm-5.3-flash` 59, `qwen3.6-35b` 13,
+  `openrouter-mid` 7. Thirteen frontier-target requests were served by the **cheap**
+  endpoint, because `openrouter-mid` was tried next and Qwen after it. This is the
+  failover-down-a-tier behaviour of B70, now at larger scale.
+
+### 25.5 Replay agreement when endpoints fail (E7)
+
+| | value |
+|---|---|
+| outcome agreement, 899 rows | 1.0 |
+| model agreement, 878 served rows | 0.919 |
+| by application: claims / dev / clinic | 0.878 / 0.870 / 1.0 |
+| cost of the served rows, recorded | $9.76 |
+| cost of the same rows in replay's current arm | $7.26 |
+
+Replay assumes every eligible endpoint answers. It sends 180 rows to the cloud; live, 31
+were answered there. So replay's "current" arm is a healthy deployment that did not exist
+for 24 of the 30 minutes, and its baseline cost is $2.50 (26%) below what was recorded.
+`paper-clinic` agrees fully because it has no cloud candidate. **Every scenario figure in
+§25.6 is a statement about the healthy deployment**, not about the half hour that
+happened. Replaying recorded endpoint failures is B70 item 5, extended in B71.
+
+### 25.6 The placement scenarios (E8), with 90% ranges
+
+Baseline: replay's current arm, $7.26 over 899 rows, on-prem share of served rows 0.795.
+
+| scenario | route changed | newly rejected | newly served | Δ cost, $ | on-prem share after |
+|---|---|---|---|---|---|
+| `all-apps-onprem-only` | 180 [163, 199] | 0 | 0 | +3.12 [2.69, 3.54] | 1.0 |
+| `all-apps-no-retention` | 180 [163, 199] | 0 | 0 | +3.12 [2.69, 3.54] | 1.0 |
+| `clinic-may-use-cloud` | 59 [48, 70] | 0 | 0 | −0.76 [−0.95, −0.59] | 0.728 |
+| `raise-request-budget` | 6 [2, 10] | 0 | 21 [14, 28] | +0.22 [0.07, 0.38] | 0.800 |
+
+- Keeping the two unrestricted applications on-prem moves 180 requests and adds $3.12
+  (43% of the baseline) at the stated prices, and rejects nothing, because an on-prem
+  endpoint exists at every tier those requests can fall to.
+- `require_no_retention` produces the **same** 180 moves by a different requirement: the
+  cloud endpoints are declared `retained`. Two different policies, one effect, and the
+  report shows each under its own name.
+- Letting the clinic application use the cloud moves 59 of its 325 requests. The other
+  266 stay on-prem in the replay; the cheap tier has only an on-prem endpoint, and
+  detection still raises placement for requests that carry an entity. The report does
+  not split the 266 between those two reasons.
+- The replay also reports a p95 latency change of −15.2 s for the on-prem arms: it is the
+  slow free cloud frontier endpoint leaving the mix, measured on 12 recorded calls.
+
+Shadow prices (`shadow-prices/report.md`): relaxing `residency` for `paper-claims` changes
+96 [83, 110] routes and saves $1.53 [1.26, 1.84]; for `paper-dev`, 68 [56, 79] and $1.19
+[0.92, 1.48]; each labelled "price of a protection — not a recommendation". **Newly
+rejected is 0 on every relaxation**, so the counterexample of §17.3 (E6) is again not
+exercised by ordinary traffic.
+
+### 25.7 Thinking models and the token limit
+
+Both on-prem models reason before they answer, and the reasoning is billed as completion
+tokens. Qwen spent 137 of 142 completion tokens on reasoning for a one-word answer. With
+the 32 to 128 token limits of runs 1 and 2 the answer would have been empty, so this run
+used 768 to 1,536.
+
+| served by | answers with no text | median completion tokens |
+|---|---|---|
+| `qwen3.6-35b` | 141 of 304 (46%) | 768 |
+| `glm-5.3-flash` | 87 of 543 (16%) | 441 |
+| `openrouter-mid` | 5 of 19 | 356 |
+| `openrouter-frontier` | 0 of 12 | 220 |
+
+An empty answer is an HTTP 200 with a full bill. RouteForge records it as served; nothing
+on the outcome row distinguishes it. The prompts are synthetic word salad, which invites
+long reasoning, so the rates are specific to this traffic; the mechanism is not.
+
+### 25.8 Stated capacity against what the provider did (E10b)
+
+Stated limits: on-prem endpoints 2 concurrent, 40 requests and 80,000 tokens a minute
+(illustrative); cloud endpoints **20 requests a minute, the provider's published limit
+for free models**. 60 s buckets, 31 buckets.
+
+| arm | busiest stated limit | peak | time-average | buckets over |
+|---|---|---|---|---|
+| no change | `glm-5.3-flash`, concurrency | 63.1% | 33.2% | 0 |
+| `all-apps-onprem-only` | `glm-5.3-flash`, concurrency | 82.6% | 45.9% | 0 |
+| `clinic-may-use-cloud` | `qwen3.6-35b`, concurrency | 58.8% | 17.6% | 0 |
+
+Replayed cloud demand peaked at 6 requests a minute, **30% of the stated 20**. The model
+says the cloud endpoints had ample room. They were refusing every call. The limit that
+bound was a **daily** allowance of 50, which the capacity file has no field for. This is
+the caveat of §21 observed: the comparison is only as good as the limits someone states,
+and a stated per-minute limit says nothing about a quota on another time scale.
+
+### 25.9 The benchmark on different models (E11d)
+
+`feasible_bench --live`, 22-case starter suite, four endpoints, one call per case and
+endpoint, seed 0, group report, candidate overlay `weights: {cost: 3.0, latency: 0}`. It
+ran after the daily allowance was spent, so **all 16 cloud calls failed and the cloud
+endpoints are not measured**.
+
+| endpoint | tier | cases it was eligible for | passed |
+|---|---|---|---|
+| `qwen3.6-35b` | cheap | 22 | 18 |
+| `glm-5.3-flash` | mid | 22 | 16 |
+
+| strategy | pass rate | quality regret | mean chosen cost, $ |
+|---|---|---|---|
+| `cheapest` | 0.818 | 0.091 | 0.0005 |
+| `best_published_quality` | 0.727 | 0.182 | 0.0064 |
+| `router_online` | 0.682 | 0.227 | 0.0057 |
+
+- **The cheap model passed more cases than the mid model**, and "always the cheapest"
+  beat the router on pass rate at roughly a tenth of the cost. The router's quality term for an
+  endpoint with no published score is its tier's default (mid 0.75, cheap 0.5), and for
+  this pair the tier order is the wrong way round. 22 cases, one sample each, a
+  deterministic grader and no published quality for either model: it is one observation
+  that a tier is not a quality measurement, not a ranking of the two models.
+- Violations: 0 of 22 for every strategy. No strategy attempted an endpoint outside a
+  case's eligible set.
+- **Version check: PASS, and the candidate again changed 0 of 22 attempt chains.** On
+  this suite the target tier comes from request length and each on-prem tier has one
+  endpoint, so no weight has a choice to change. The check still has not been shown a
+  difference to detect on live endpoints.
+
+### 25.10 What this run adds, and what it does not
+
+Adds: placement enforced against a real off-premises provider; detection moving requests
+on-prem; a real provider outage absorbed with no failed request; the breaker's limit when
+a tier has one endpoint; replay's blind spot for failures, with its size in dollars; a
+stated capacity limit that was not the binding one; a tier default contradicted by
+measurement.
+
+Does not add: steady-state cloud share; cloud quality; a saving against a frontier
+baseline; a live shadow-price counterexample; a version check that detects something.
+
+| still to measure | needs |
+|---|---|
+| steady-state routing with a working cloud path; cloud rows in the benchmark | the provider's 1,000-a-day allowance (bought credits), then a re-run |
+| saving against an all-frontier baseline | prices an operator pays, not stated ones |
+| a check that detects a real difference | two endpoints in one tier, or a suite with longer cases |
+| quality per endpoint as more than a tier default | a larger graded suite; several samples per case |
+| shadow-price counterexample, live (E6) | a fixture built to produce it |
+| coverage under dependence; width at 5,000 and 50,000 rows (E9a–c) | a long agent-loop export |
