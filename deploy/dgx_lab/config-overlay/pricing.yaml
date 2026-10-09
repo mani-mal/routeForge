@@ -1,0 +1,7 @@
+# DGX lab overlay. The pooled ids are FREE variants (billed $0). These are the same
+# models' paid list prices on OpenRouter, USD per 1M tokens, read 2026-10-09, so a $0
+# endpoint does not distort cost scoring or the savings figures. Stated prices, not
+# what a free call costs.
+models:
+  openrouter-mid:      {input: 0.08, output: 0.45, tier: mid,      provider: openrouter}
+  openrouter-frontier: {input: 0.50, output: 2.20, tier: frontier, provider: openrouter}

@@ -271,3 +271,33 @@ still available if `providers.azure`/`providers.bedrock` are enabled, but
 on-prem candidates only exist once an operator onboards one. Onboarding
 takes effect immediately — the `ModelRegistry` refreshes on every admin
 write, no restart required.
+
+## Cloud providers are config, not onboarding
+
+Everything above is about **on-prem** endpoints. A cloud path is declared in config, and
+is off until an operator turns it on:
+
+- `serving.yaml` `providers.<name>` — transport, the key's env-var name, and the
+  provider's data-handling declarations;
+- `routing.yaml` `model_pool` — which models, in which tier;
+- `pricing.yaml` — a price for each pooled model (the config lint requires one).
+
+`azure` and `bedrock` are shipped, both off. Two switches let a deployment change this
+without carrying its own copy of the shipped files:
+
+- **`SP_PROVIDER_<NAME>_ENABLED=true|false`** turns one provider on or off.
+- **`SP_CONFIG_OVERLAY_DIR=<dir>`** names a directory whose `serving.yaml`, `routing.yaml`,
+  `policy.yaml` or `pricing.yaml` (any subset) is merged over the shipped file: mappings
+  merge key by key, `model_pool` merges by `name`, anything else is replaced. The
+  cross-file lint runs on the merged result and the routing policy version is hashed from
+  it. `deploy/dgx_lab/config-overlay/` is a worked example that adds an `openrouter`
+  provider with two pool entries and their prices.
+
+Turning a cloud provider on changes placement for **every application that is not
+`onprem_only`**: those applications may now be routed off the customer's infrastructure.
+Before enabling one, set `allowed_providers: [onprem]` on each application that must stay
+where it is. `onprem_only` applications are unaffected by construction.
+
+Declare a third-party provider's data handling cautiously. RouteForge enforces policy
+against the declaration and cannot verify what the provider keeps; the lab's `openrouter`
+entry declares `prompt_retention: retained` and `accepts_raw_sensitive: "false"`.

@@ -53,7 +53,7 @@ items:
         - name: ghcr-pull
         containers:
         - name: api
-          image: ghcr.io/mani-mal/serving-plane-api:0.30.1
+          image: ghcr.io/mani-mal/serving-plane-api:0.31.0
           ports: [{name: http, containerPort: 8080}]
           env:
           - {name: SP_SERVER_PORT, value: "8080"}
@@ -109,6 +109,17 @@ items:
           # Same pattern for GLM 5.3 Flash (secret `glm-flash-key`, created out of band).
           - name: GLM_FLASH_API_KEY
             valueFrom: {secretKeyRef: {name: glm-flash-key, key: GLM_FLASH_API_KEY, optional: true}}
+          # Cloud path for the paper's placement experiments: OpenRouter free
+          # models (secret `openrouter-key`, created out of band; synthetic
+          # prompts only). The provider, its two pool entries and their prices
+          # come from the `routeforge-config-overlay` ConfigMap below (kept in
+          # step with deploy/dgx_lab/config-overlay/). Set
+          # SP_PROVIDER_OPENROUTER_ENABLED to "false" to turn the cloud path off.
+          - {name: SP_CONFIG_OVERLAY_DIR, value: /etc/routeforge/config-overlay}
+          - name: OPENROUTER_API_KEY
+            valueFrom: {secretKeyRef: {name: openrouter-key, key: OPENROUTER_API_KEY, optional: true}}
+          - name: SP_PROVIDER_OPENROUTER_ENABLED
+            value: "true"
           # Optional: to auto-provision a Langfuse PROJECT per application on
           # onboard (POST /admin/applications), set the in-cluster Langfuse host
           # plus an organization-scoped API key pair (Langfuse org settings ->
@@ -139,6 +150,43 @@ items:
           livenessProbe:
             httpGet: {path: /health, port: 8080}
             periodSeconds: 30
+          volumeMounts:
+            - {name: config-overlay, mountPath: /etc/routeforge/config-overlay, readOnly: true}
+        volumes:
+          - name: config-overlay
+            configMap: {name: routeforge-config-overlay}
+
+# Deployment-specific config, merged over the image's config/*.yaml by the
+# loader (SP_CONFIG_OVERLAY_DIR). Same content as deploy/dgx_lab/config-overlay/.
+- apiVersion: v1
+  kind: ConfigMap
+  metadata:
+    name: routeforge-config-overlay
+    namespace: runai-routeforge
+  data:
+    serving.yaml: |
+      # DGX lab overlay (SP_CONFIG_OVERLAY_DIR): merged over the shipped config/serving.yaml.
+      # OpenRouter is a public model aggregator, used here as the cloud path for the paper's
+      # placement experiments, with synthetic prompts only. The declarations are the cautious
+      # ones: RouteForge cannot verify what an upstream provider keeps.
+      providers:
+        openrouter: {enabled: false, litellm_prefix: openrouter, api_key_env: OPENROUTER_API_KEY,
+                     prompt_retention: retained, accepts_raw_sensitive: "false"}
+    routing.yaml: |
+      # DGX lab overlay: appended to the shipped model_pool by name.
+      # Free variants are rate-limited and are withdrawn without notice; these two answered
+      # 3 of 3 probe calls from the lab on 2026-10-09.
+      model_pool:
+        - {name: openrouter-mid,      provider: openrouter, tier: mid,      display_name: "Nemotron 3 Super 120B (OpenRouter, free)", litellm_model: "openrouter/nvidia/nemotron-3-super-120b-a12b:free"}
+        - {name: openrouter-frontier, provider: openrouter, tier: frontier, display_name: "Nemotron 3 Ultra 550B (OpenRouter, free)", litellm_model: "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"}
+    pricing.yaml: |
+      # DGX lab overlay. The pooled ids are FREE variants (billed $0). These are the same
+      # models' paid list prices on OpenRouter, USD per 1M tokens, read 2026-10-09, so a $0
+      # endpoint does not distort cost scoring or the savings figures. Stated prices, not
+      # what a free call costs.
+      models:
+        openrouter-mid:      {input: 0.08, output: 0.45, tier: mid,      provider: openrouter}
+        openrouter-frontier: {input: 0.50, output: 2.20, tier: frontier, provider: openrouter}
 
 # Service named `api` so the UI's nginx.conf (proxy_pass http://api:8080)
 # resolves it unmodified.
@@ -231,7 +279,7 @@ items:
         - name: ghcr-pull
         containers:
         - name: ui
-          image: ghcr.io/mani-mal/serving-plane-ui:0.30.1
+          image: ghcr.io/mani-mal/serving-plane-ui:0.31.0
           ports: [{name: http, containerPort: 80}]
           resources:
             requests: {cpu: "50m", memory: 64Mi}
