@@ -127,6 +127,40 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
+## B71 — Findings from live run 3 (four models, a cloud provider that ran out of quota)  🔴 OPEN
+
+**Severity:** medium (no request failed; these are wasted calls, a wrong prior and blind
+spots in what is recorded).
+**Found:** 2026-10-09, DGX lab (research notes
+[`feasible-route-bench.md`](../research/feasible-route-bench.md) §25).
+
+1. **Circuit bypass calls a dead endpoint on every request when it is alone in its tier.**
+   `openrouter-frontier` was the only frontier endpoint and was refusing every call. 63
+   requests bypassed its open breaker, failed, and then failed over to a lower tier; 79 of
+   the run's 102 wasted attempts are these. *To decide:* when lower-tier endpoints are
+   eligible, skip the open endpoint and record the downgrade, instead of bypassing.
+2. **Failover goes down a tier** (B70 item 3, again): 13 frontier-target requests were
+   served by the cheap endpoint. Recorded only by comparing `tier_target` with `chosen`.
+3. **Replay assumes every endpoint answers.** Its current arm sent 180 rows to a provider
+   that answered 31, and its baseline cost was 26% below the recorded cost. *Wanted:* replay
+   the recorded attempt chain's failures (extends B70 item 5), and print the recorded cost
+   beside the replayed one.
+4. **A quota on another time scale is invisible to the capacity model.** The provider's
+   stated 20 requests a minute was 30% used when its 50-a-day allowance ran out. *Wanted:* a
+   per-day limit in the capacity file.
+5. **The tier default misordered two real models.** The cheap endpoint passed 18 of 22
+   benchmark cases, the mid endpoint 16. With no published quality the router uses 0.75
+   for mid and 0.5 for cheap. *Wanted:* surface "quality is a tier default" on the endpoint
+   in the console, and make the benchmark the documented way to replace it.
+6. **An answer with no text is recorded as served.** With thinking models and a token limit
+   sized for the answer, 46% of the cheap endpoint's answers and 16% of the mid endpoint's
+   were empty, at full cost. *Wanted:* record on the outcome row that the completion had no
+   text (a boolean; content-free).
+7. **A pattern detector's false positives move requests on-prem.** 63 requests with no
+   planted PII matched `CREDIT_CARD` + `US_BANK_NUMBER` on random numbers and were raised to
+   `onprem_only`. Correct fail-safe direction; the cost is not shown anywhere. *Wanted:*
+   count detection-raised placements per entity type in the usage view.
+
 ## B70 — Failover and breaker findings from live run 2 (three endpoint names, one outage)  🔴 OPEN
 
 **Severity:** medium (two requests failed that a different ordering could have served; the

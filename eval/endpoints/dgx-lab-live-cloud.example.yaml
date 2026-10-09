@@ -1,0 +1,60 @@
+# EXAMPLE --live endpoint file for the DGX lab run of 2026-10-09
+# (docs/research/feasible-route-bench.md §25). NEVER run live by the test suite.
+#
+# Four DIFFERENT models: two on-prem (one H200 server each) and two cloud models
+# reached through OpenRouter's free variants. Tiers, prices and declarations
+# mirror what the lab had that day; the on-prem regions are written `us` (the
+# registry had `us-lab`) so the starter suite's `allowed_regions: [us]` cases
+# apply. The cloud prices are the paid list prices of the same models, stated;
+# the free variants bill $0. Free variants are rate-limited (20 calls a minute)
+# and are withdrawn without notice.
+#
+# The cloud rows need the lab's config overlay, which declares the provider:
+#   export SP_CONFIG_OVERLAY_DIR=deploy/dgx_lab/config-overlay
+#   export SP_PROVIDER_OPENROUTER_ENABLED=true
+#   export GLM_FLASH_API_KEY=... QWEN36_API_KEY=... OPENROUTER_API_KEY=...   # never in this file
+#   SP_PII_DETECTION=regex uv run python scripts/feasible_bench.py \
+#     --suite eval/suites/starter.jsonl \
+#     --endpoints eval/endpoints/dgx-lab-live-cloud.example.yaml --live --out <dir>
+endpoints:
+  - slug: qwen3.6-35b
+    provider: onprem
+    tier: cheap
+    price: {input: 1, output: 1}
+    region: us
+    prompt_retention: none
+    accepts_raw_sensitive: true
+    live:
+      endpoint: "http://10.89.195.201:30857/v1"
+      api_key_env: QWEN36_API_KEY
+
+  - slug: glm-5.3-flash
+    provider: onprem
+    tier: mid
+    price: {input: 10, output: 10}
+    region: us
+    prompt_retention: none
+    accepts_raw_sensitive: true
+    live:
+      endpoint: "http://10.89.195.201:30856/v1"
+      api_key_env: GLM_FLASH_API_KEY
+
+  - slug: "nvidia/nemotron-3-super-120b-a12b:free"
+    provider: openrouter
+    tier: mid
+    price: {input: 0.08, output: 0.45}
+    prompt_retention: retained
+    accepts_raw_sensitive: false
+    live:
+      endpoint: "https://openrouter.ai/api/v1"
+      api_key_env: OPENROUTER_API_KEY
+
+  - slug: "nvidia/nemotron-3-ultra-550b-a55b:free"
+    provider: openrouter
+    tier: frontier
+    price: {input: 0.50, output: 2.20}
+    prompt_retention: retained
+    accepts_raw_sensitive: false
+    live:
+      endpoint: "https://openrouter.ai/api/v1"
+      api_key_env: OPENROUTER_API_KEY

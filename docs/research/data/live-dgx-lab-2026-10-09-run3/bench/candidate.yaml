@@ -1,0 +1,4 @@
+schema: routeforge.router-candidate/v1
+name: cost-only
+routing:
+  weights: {cost: 3.0, latency: 0}
