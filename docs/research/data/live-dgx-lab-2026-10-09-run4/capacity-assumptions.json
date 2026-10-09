@@ -1,0 +1,5 @@
+{"schema": "routeforge.capacity-assumptions/v1", "title": "DGX lab 2026-10-09 run 3: stated limits. On-prem figures are illustrative; the cloud figure is the provider's published free-tier limit of 20 requests a minute",
+ "endpoints": {"glm-5.3-flash": {"max_concurrency": 2, "requests_per_minute": 40, "tokens_per_minute": 80000},
+               "qwen3.6-35b": {"max_concurrency": 2, "requests_per_minute": 40, "tokens_per_minute": 80000},
+               "openrouter-mid": {"requests_per_minute": 20},
+               "openrouter-frontier": {"requests_per_minute": 20}}}
