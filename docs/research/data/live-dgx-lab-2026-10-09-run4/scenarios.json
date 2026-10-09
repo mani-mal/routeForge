@@ -1,0 +1,8 @@
+{"schema":"routeforge.policy-scenarios/v1","title":"DGX lab live run 4, 2026-10-09 (three paper apps; two on-prem models, two cloud models, cloud path working)",
+ "scenarios":[
+  {"name":"no-change","proposal":{}},
+  {"name":"all-apps-onprem-only","proposal":{"apps":{"paper-claims":{"residency":"onprem_only"},"paper-dev":{"residency":"onprem_only"}}}},
+  {"name":"all-apps-no-retention","proposal":{"apps":{"paper-claims":{"require_no_retention":true},"paper-dev":{"require_no_retention":true}}}},
+  {"name":"clinic-may-use-cloud","proposal":{"apps":{"paper-clinic":{"residency":"any","allowed_regions":null,"require_no_retention":false}}}},
+  {"name":"raise-request-budget","proposal":{"apps":{"paper-claims":{"max_cost_usd_per_request":0.5},"paper-dev":{"max_cost_usd_per_request":0.5},"paper-clinic":{"max_cost_usd_per_request":0.5}}}}
+ ]}

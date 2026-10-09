@@ -4766,3 +4766,158 @@ baseline; a live shadow-price counterexample; a version check that detects somet
 | quality per endpoint as more than a tier default | a larger graded suite; several samples per case |
 | shadow-price counterexample, live (E6) | a fixture built to produce it |
 | coverage under dependence; width at 5,000 and 50,000 rows (E9a–c) | a long agent-loop export |
+
+## 26. Live run 4: the same four models with the cloud path working (2026-10-09)
+
+Artifacts, all content-free: `docs/research/data/live-dgx-lab-2026-10-09-run4/`.
+
+Run 3 (§25) lost its cloud provider after 6 minutes. This is the same setup (§25.1), same
+generator, seed 5, after the provider account's allowance was raised to 1,000 free
+requests a day. 900 requests, one every two seconds, 900 outcome rows. Synthetic text;
+stated prices; one run.
+
+### 26.1 Outcomes
+
+878 served, 22 `no_eligible` (budget), 0 failed.
+
+| served by | rows | share of served | recorded latency, median / 90th pct, ms | answers with no text |
+|---|---|---|---|---|
+| `glm-5.3-flash` (on-prem, mid) | 376 | 42.8% | 2,692 / 4,576 | 74 (20%) |
+| `qwen3.6-35b` (on-prem, cheap) | 324 | 36.9% | 2,256 / 3,753 | 139 (43%) |
+| `openrouter-mid` (cloud) | 119 | 13.6% | 4,184 / 10,907 | 25 (21%) |
+| `openrouter-frontier` (cloud) | 59 | 6.7% | 12,076 / 45,685 | 0 |
+
+Cloud share of served requests: **20.3%** (178 of 878). Recorded cost $6.93, of which
+on-prem mid $6.30, on-prem cheap $0.43, cloud $0.20 at stated prices.
+
+### 26.2 Placement and scoring
+
+- Of 411 requests free to go anywhere, the 84 that targeted the mid tier had both mid
+  endpoints eligible and **all 84 went to the cloud one**: the scorer's cost term decides
+  when two endpoints share a tier and a quality default.
+- 316 `paper-clinic` rows and **173 detection-raised rows** from the other two
+  applications were never attempted on a cloud endpoint. 75 of the 173 carried the planted
+  SSN and e-mail; 83 matched `CREDIT_CARD` or `US_BANK_NUMBER` on random numbers with no
+  planted PII (§25.3's false-positive cost, repeated).
+- 15 mid-target on-prem requests were served by the cheap endpoint with a single attempt:
+  consistent with the per-request budget leaving only the cheap endpoint affordable (not
+checked row by row).
+
+### 26.3 Failures
+
+The cloud frontier endpoint returned "service temporarily overloaded" on 35 of 94
+attempts. All 35 failed over to `openrouter-mid` and were served: 35 frontier-target
+requests answered one tier down, 35 wasted attempts, no failed request. 7 rows carry
+`circuit_bypass`, so the frontier endpoint's breaker was open at times and, being alone in
+its tier, was bypassed (B71 item 1). No row records a `circuit_open` exclusion.
+
+### 26.4 Replay agreement
+
+| | value |
+|---|---|
+| outcome agreement, 900 rows | 1.0 |
+| model agreement (first decision), 878 served rows | 1.0 |
+| recorded cost / replayed current-arm cost | $6.93 / $7.02 |
+
+With endpoints mostly answering, replay reproduces every first decision and its cost is
+within 1.2% of the recorded cost. Run 3's 0.919 and 26% gap were the outage, not the
+method. The 35 failover rows agree because agreement compares the first decision.
+
+### 26.5 The placement scenarios (E8), with 90% ranges
+
+Baseline: replay's current arm, $7.02 over 900 rows, on-prem share of served rows 0.797.
+
+| scenario | route changed | newly rejected | newly served | Δ cost, $ | on-prem share after |
+|---|---|---|---|---|---|
+| `all-apps-onprem-only` | 178 [160, 197] | 0 | 0 | +3.74 [3.20, 4.30] | 1.0 |
+| `all-apps-no-retention` | 178 [160, 197] | 0 | 0 | +3.74 [3.20, 4.30] | 1.0 |
+| `clinic-may-use-cloud` | 63 [52, 75] | 0 | 0 | −0.89 [−1.19, −0.65] | 0.726 |
+| `raise-request-budget` | 15 [9, 22] | 0 | 22 [15, 30] | +0.76 [0.46, 1.15] | 0.802 |
+
+- **The replay predicted the cloud share before it was observed.** Run 3's replay, made
+  while the provider was down, put 180 [163, 199] requests on the cloud. Run 4, a separate
+  draw of the same traffic with the provider up, recorded 178. That is one agreement
+  between a prediction and a later measurement, on a different sample of the same
+  generator.
+- Keeping the two unrestricted applications on-prem costs +$3.74 [3.20, 4.30], 53% of the
+  baseline, at stated prices. Run 3's figure for the same proposal was +$3.12 [2.69, 3.54];
+  the two ranges overlap. Nothing is rejected in either.
+- Shadow prices: relaxing `residency` for `paper-dev` changes 84 [71, 96] routes and saves
+  $1.47 [1.20, 1.77]; for `paper-claims`, 76 [64, 88] and $1.26 [0.99, 1.51]. Newly
+  rejected is 0 on every relaxation (E6 not exercised, a third time).
+
+### 26.6 Capacity (E10a, E10b)
+
+Stated limits as in §25.8. 60 s buckets, 31 buckets.
+
+| arm | busiest stated limit | peak | time-average | buckets over |
+|---|---|---|---|---|
+| no change | `glm-5.3-flash`, requests a minute | 50.0% | 30.3% | 0 |
+| `all-apps-onprem-only` | `glm-5.3-flash`, tokens a minute | 90.9% | 41.1% | 0 |
+| `clinic-may-use-cloud` | `openrouter-frontier`, requests a minute | 55.0% | 21.9% | 0 |
+| `raise-request-budget` | `glm-5.3-flash`, tokens a minute | 77.4% | 36.7% | 0 |
+
+Moving everything on-prem takes the on-prem mid endpoint from 50% to 91% of its stated
+limit at peak. That is the figure the cost table does not show. Against observed
+behaviour: neither cloud endpoint went above 45% of its stated 20 requests a minute in
+replay, and the frontier one refused 35 of 94 calls (37%) as overloaded. A stated limit
+was again not what bound.
+
+### 26.7 The benchmark and the version check with all four endpoints (E11d)
+
+22-case starter suite, one call per case and eligible endpoint, seed 0.
+
+| endpoint | tier | cases | passed |
+|---|---|---|---|
+| `qwen3.6-35b` | cheap | 22 | 19 |
+| `glm-5.3-flash` | mid | 22 | 16 |
+| cloud mid | mid | 8 | 8 |
+| cloud frontier | frontier | 8 | 3 (5 calls refused as overloaded) |
+
+| strategy | pass rate | quality regret | mean chosen cost, $ |
+|---|---|---|---|
+| `cheapest` | 0.864 | 0.000 | 0.0005 |
+| `best_published_quality` | 0.727 | 0.136 | 0.0059 |
+| `router_online` | 0.727 | 0.136 | 0.0053 |
+
+Violations: 0 of 22 for every strategy. The cheap on-prem model again passed more cases
+than the mid one (19 against 16; 18 against 16 in §25.9), and `cheapest` again beat the
+router. Two runs of 22 cases agree in direction; it is still a small suite with one
+sample per case.
+
+**Version check with a candidate that changes routes.** Candidate
+`complexity_thresholds: {cheap_max: 0.0}` removes the cheap tier, so every case targets
+mid or above. It changed the attempt chain on **12 of 22 cases**.
+
+| metric | baseline | candidate | worsening | 90% range | tolerance | state |
+|---|---|---|---|---|---|---|
+| `pass_rate` | 0.727 | 0.727 | 0 | [0, 0] | 0.05 | within tolerance |
+| `mean_chosen_cost` | 0.00526 | 0.00589 | 0.00062 | [0.00003, 0.00154] | 0.0005 | **inconclusive** (point beyond tolerance) |
+| `latency_regret`, ms (shown, not judged) | 1,276 | 2,165 | 889 | [204, 1,732] | — | worse |
+
+**Verdict: INCONCLUSIVE, exit 4.** The candidate costs more on these cases and the range
+of the difference excludes zero, but the range also reaches below the tolerance, so the
+check will not call it a regression on 22 cases. It did not pass it either. This is the
+whole-range rule of §22.8 doing what it was changed to do: on a suite this small it
+refuses to turn a point estimate into a verdict. It is the first live run in which the
+check had a real difference in front of it. A verdict of `regressed` on live endpoints
+has still not been observed and needs a larger suite.
+
+### 26.8 What runs 3 and 4 establish together
+
+| | run 3 (provider down 24 of 30 min) | run 4 (provider up) |
+|---|---|---|
+| requests failed | 0 of 899 | 0 of 900 |
+| cloud share of served | 3.5% | 20.3% |
+| wasted attempts | 102 | 35 |
+| model agreement in replay | 0.919 | 1.0 |
+| recorded cost against replayed baseline | $9.76 / $7.26 | $6.93 / $7.02 |
+| requests replay puts on the cloud | 180 [163, 199] | 178 [160, 197] (recorded: 178) |
+| cost of on-prem only for two apps | +$3.12 [2.69, 3.54] | +$3.74 [3.20, 4.30] |
+| on-prem-only or detection-raised rows attempted on cloud | 0 of 498 | 0 of 489 |
+
+Still to measure: a `regressed` verdict on live endpoints (larger suite); quality per
+endpoint beyond a tier default (larger graded suite, several samples); a saving against a
+frontier baseline (paid prices); the shadow-price counterexample on live traffic (a built
+fixture); coverage under dependence and width at 5,000 and 50,000 rows (a long agent-loop
+export); real text.
