@@ -13,30 +13,9 @@ draft of the article, written from this file on 2026-10-09, is
   2026 arXiv ids in the roadmap were leads that may not exist.
 - Sources: PC = `docs/research/policy-compiler-noninterference.md`, SP =
   `docs/research/routing-signal-provenance.md`, FB = `docs/research/feasible-route-bench.md`,
+  TR = `docs/research/trajectory-feasible-routing.md`,
   RM = `docs/roadmap/ip-and-research-opportunities.md`, HO = the Priorities 1–3 handoff
   (`docs/new/RouteForge-Priorities-1-3-LLM-Handoff.md`, main checkout only, untracked).
-
----
-
-## 0. Before anything is posted — IP
-
-- **File before you publish** (PC §0, SP §0, FB §0, RM §4). An arXiv posting is a public
-  disclosure: it starts clocks and, outside the US, destroys novelty. The filing decision for
-  each candidate precedes the publication decision and belongs to counsel.
-- Overlaps with this article: P1a ↔ IP-1 (meet/ratchet), IP-4 (decisions bound to policy
-  hashes), IP-9 (derived reject on empty set) (PC §0); P2a ↔ R1, IP-4/R7, IP-8/R8 (SP §0);
-  FeasibleRouteBench = "the evaluation half of R1" (FB §0). IP-11 is a naming trap
-  (`app/routing/signals.py` now holds a different mechanism) (SP §0).
-- **Already public:** Tier-3 mechanisms IP-9..IP-12 are in a public repo (PC §0, RM §4).
-- **Foreclosed** (RM §1) — do not frame the novelty around: proxy output PII redaction
-  (HiddenLayer US 12,105,844 B1); cheapest-model-above-quality-bar (Cast AI US 12,236,193);
-  semantic caching (Inventus US 12,259,913 B1); router+cache+compression (Infobip
-  US 2025/0165752 A1); field-level LLM data gating (SAP US 12,541,616 B2); agent action
-  verification (Citibank US 12,450,494 B1). Adjacent: Netskope US 12,068,944 B2 (post-hoc,
-  not LLM-specific). **What survives: eligibility as a derived, per-request,
-  pre-optimization quantity.**
-- The patent scan is a floor, not a ceiling — no assignee-scoped search of Microsoft, Google,
-  NVIDIA, Salesforce, Adobe, ServiceNow (RM header, §5).
 
 ---
 
@@ -76,8 +55,14 @@ literature doesn't model".
 5. Negative results: the router is **not** monotone in the eligible set (§3.9); an inert
    scoring term for the product's whole history (§3.2); replay is only as good as its
    recorded inputs (§3.7).
-6. (Optional, separate papers) R2 cost of redaction, R4 streaming verification, R3
-   per-conversation privacy ratchet — §5.
+6. A statement of **trajectory-level feasible routing** with a live counterexample to the
+   request-level model: a placement restriction raised by a tool result did not survive a
+   compacted history (3 of 3), and 94.5% of one agent session's input tokens had been sent
+   before. Problem formulation only; nothing built
+   ([`trajectory-feasible-routing.md`](trajectory-feasible-routing.md), draft §8). The
+   follow-on paper is "FeasibleRouteBench-Agent".
+7. (Optional, separate papers) R2 cost of redaction, R4 streaming verification, R3
+   per-conversation privacy ratchet — §5. R3 is the envelope of item 6 for one axis.
 
 ---
 
@@ -783,6 +768,9 @@ router-version check. **Designed, not built:** churn robustness and confidence c
 | E11e | Coverage of the paired case bootstrap on split halves of a larger suite | §4.6, FB §22.5.5 | **TO MEASURE** |
 | E11f | Churn robustness and confidence calibration | §4.6 | not built (second P2 plan) |
 | E12+ | fidelity, R2/R3/R4 | §4–§5 | specs pending |
+| E13a | Trajectory probe: does a detection-raised placement survive a compacted history? | TR §2.1 | done live 2026-10-09: no, 3 of 3 runs (T2 and T3a on-prem, T3b cloud). Synthetic conversation, hand-written summary |
+| E13b | Token profile of a real agent session | TR §2.2 | done on one session: 21 calls, 496,422 prompt / 1,310 completion tokens; ≥ 94.5% of prompt tokens re-sent if each call extends the last (inferred from sizes) |
+| E13c | The probe and its variants with a trajectory envelope; per-call against prefix-aware task cost; switch-aware routing; trajectory-oracle regret | TR §5 | **TO MEASURE** — needs the envelope and trajectory id (B72) |
 
 **Update 2026-10-09 (FB §25).** The lab now has four different models: two on-prem
 (`qwen3.6-35b` cheap, `glm-5.3-flash` mid) and two reached through a cloud provider
@@ -866,7 +854,7 @@ needs a second endpoint — plan it before writing the evaluation section.
     operator's, and is to be reported as such.
 - Endpoint declarations (region, retention) are operator-declared; RouteForge enforces the
   declaration and cannot verify a provider's contractual claim (CLAUDE.md).
-- Patent/prior-art scan incomplete; arXiv leads unverified.
+- Related-work leads are unverified.
 
 ---
 

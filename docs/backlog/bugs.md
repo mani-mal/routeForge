@@ -127,6 +127,35 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
+## B72 — FEATURE: trajectory identity and a trajectory-scoped policy envelope (then task-level cost and switch-aware routing)  🔴 OPEN
+
+**Severity:** feature. **Filed:** 2026-10-09, from the owner's agentic-trajectory design
+note; problem statement and measurements in
+[`docs/research/trajectory-feasible-routing.md`](../research/trajectory-feasible-routing.md).
+
+**Why.** RouteForge keeps no state between an agent's calls. Measured live: a placement
+restriction raised by a tool result held while the client re-sent the full history and was
+gone when the client sent a summary without the identifier (3 of 3, request routed to a
+cloud endpoint). And one real agent session re-sent at least 94.5% of its input tokens,
+which a per-call router prices as new.
+
+**Build order** (each step usable alone):
+1. Trajectory id on the request (validated header; absent = today's behaviour) and on the
+   outcome row. Content-free.
+2. A per-trajectory envelope store inside the deployment boundary, with a TTL: the gate
+   reads it and tightens it; it never loosens without a named, recorded operation. Decide
+   first how the id is bound so a client cannot reset its envelope by choosing a new id.
+3. Sequence properties in the harness (monotone accumulation, derived-data and
+   child inheritance, retry/failover/resume preservation, unknown fails closed), failure
+   artifact = the shortest violating event sequence.
+4. Task-level reporting: cost, calls, switches and re-sent tokens per trajectory.
+5. Cached-token counts on the outcome row where the endpoint reports them.
+6. A switch-cost term in scoring and replay; a feasible trajectory oracle in the benchmark.
+
+**Boundaries.** Prefix caches, queues and GPU placement stay with the serving systems;
+RouteForge reads what they report. Client hints are validated inputs, never policy. This
+subsumes roadmap item R3 (per-conversation privacy ratchet).
+
 ## B71 — Findings from live run 3 (four models, a cloud provider that ran out of quota)  🔴 OPEN
 
 **Severity:** medium (no request failed; these are wasted calls, a wrong prior and blind
