@@ -127,6 +127,58 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
+## B73 — FEATURE: finish the Artificial Analysis model metrics on the console (published quality snapshot, time to first token, output speed)  🔴 OPEN
+
+**Found 2026-10-13** by an audit of what was built from the owner's original request to use
+[Artificial Analysis](https://artificialanalysis.ai/) metrics for the model/agent metrics on
+the UI. The request was only partly delivered. Design reference:
+[`docs/superpowers/specs/2026-08-01-model-quality-scoring-design.md`](../superpowers/specs/2026-08-01-model-quality-scoring-design.md)
+§8–§9. The metric catalog that spec drew from, `docs/dashboard-metrics.txt`, is no longer in
+the repo, so the remaining items on it could not be checked one by one.
+
+**What is built today:**
+
+| Metric | State | Where |
+|---|---|---|
+| Token Intelligence Density (Σquality ÷ Σtokens × 1000) | on the UI | `ui/src/console/sections/CostSection.tsx`; `app/api/history.py`, `app/apps/store.py` |
+| Cost Intelligence Density (Σquality ÷ Σcost) | on the UI | same tile row; `ui/src/admin/CrossAppReport.tsx` |
+| Artificial Analysis Intelligence Index as the per-model quality score | plumbing only, no data | `quality` field on `model_pool` entries (`app/config/schema.py`); no entry sets it — `config/routing.yaml` has only a commented-out example |
+| Time to first token | measured and stored, never displayed | `app/gateway/gateway.py` (streamed calls); `endpoint_observations.ttft_ms`; no API or UI reads it |
+| Output speed (tokens per second) | not built | — |
+| Agent-level metrics (AA-AgentPerf) | not built | cited in `docs/research/paper-draft.md` only |
+
+**Consequence:** the two density tiles run on the tier default (`tier_quality`: cheap 0.5,
+mid 0.75, frontier 1.0) unless a model has a customer-declared or calibrated score. The UI's
+provenance note says so, but the numbers are not Artificial Analysis numbers.
+
+**Work, smallest first:**
+
+1. **Published quality snapshot.** Put a dated `quality:` (Intelligence Index ÷ 100) on each
+   cloud `model_pool` entry in `config/routing.yaml`, taken by hand from
+   <https://artificialanalysis.ai/> — the spec records that there is no public API, so this
+   is a periodic manual snapshot with the snapshot date in a comment. It is a seed, not the
+   system of record; customer-declared and calibrated scores still outrank it. Onboarded
+   on-prem models need the same value offered at onboarding. **This changes routing, not
+   only the dashboard** — `quality` carries weight 1.0 in step-6 scoring — so replay it
+   through `scripts/policy_simulate.py` before applying.
+2. **Time to first token on the UI.** Expose `ttft_ms` per model (p50/p95) from
+   `endpoint_observations` through an admin read and show it beside the existing end-to-end
+   p50/p95 latency. Display only: time to first token stays out of routing scores, as
+   `app/routing/signals.py` already states. It exists only for streamed calls that reached
+   the backend live, so tool turns and `verified_then_stream` have none (see B58).
+3. **Output speed.** Completion tokens ÷ (backend latency − time to first token), per model.
+   Needs the completion-token count alongside the observation; decide whether that belongs
+   on `endpoint_observations` (endpoint health only, no tenant or content — a token count
+   fits) or is derived from `routing_outcomes`.
+4. **Cross-check, not replacement.** The spec keeps Artificial Analysis USD/1M and
+   tokens-per-second as a manual check on `pricing.yaml`; pricing stays our owned value.
+5. **Agent-level metrics** — decide whether any AA-AgentPerf measure belongs on the console
+   now that B72 gives requests a trajectory identity. Not designed.
+
+**Scope guard:** nothing here fetches from Artificial Analysis at runtime — deployments are
+often air-gapped, and routing on a live third-party leaderboard is already declined in
+[`docs/comparisons/external-router-feature-analysis.md`](../comparisons/external-router-feature-analysis.md).
+
 ## B72 — FEATURE: trajectory identity and a trajectory-scoped policy envelope (then task-level cost and switch-aware routing)  🟡 STEPS 1–3 BUILT
 
 **Severity:** feature. **Filed:** 2026-10-09, from the owner's agentic-trajectory design
