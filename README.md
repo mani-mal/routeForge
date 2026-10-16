@@ -58,6 +58,177 @@ exercising every branch —
 python -m tests.traffic --requests 500 --rps 10 --seed 42
 ```
 
+## Onboarding a model and an application (step by step)
+
+Worked example: the DGX lab deployment (namespace `runai-routeforge`, API at
+`http://10.89.195.201:30808`) and a vLLM model `qwen3.8-27b` served at
+`http://10.89.195.201:30859/v1` that needs a bearer key. Substitute your own names; the
+steps are the same for any OpenAI-compatible endpoint. Field reference:
+[`docs/guides/onboarding-models.md`](docs/guides/onboarding-models.md).
+
+### 1. Log in as admin
+
+```bash
+RF=http://10.89.195.201:30808          # your RouteForge API
+curl -s -c cookies.txt -H "Content-Type: application/json" \
+  -d '{"email":"<ADMIN_EMAIL>","password":"<ADMIN_PASSWORD>"}' "$RF/admin/login"
+```
+
+On Kubernetes the login is in Secret `routeforge-admin`:
+`kubectl -n runai-routeforge get secret routeforge-admin -o jsonpath='{.data.ADMIN_PASSWORD}' | base64 -d`
+(same for `ADMIN_EMAIL`). Steps 3–6 send `-b cookies.txt`.
+
+### 2. Put the model's key in an environment variable on the RouteForge API
+
+Skip this if the endpoint needs no key. RouteForge never stores a model key: at
+onboarding you give it the **name** of an environment variable (`api_key_env`), and the
+API reads the key from its own environment on every call. So the variable must exist in
+the **API container**, not in your shell.
+
+**Kubernetes** — when you have the key in hand:
+
+```bash
+read -rsp "qwen3.8-27b key: " QWEN38_API_KEY; echo     # typed, not echoed or saved in history
+
+kubectl -n runai-routeforge create secret generic qwen38-key \
+  --from-literal=QWEN38_API_KEY="$QWEN38_API_KEY"
+unset QWEN38_API_KEY
+
+kubectl -n runai-routeforge set env deploy/routeforge-api --from=secret/qwen38-key
+kubectl -n runai-routeforge rollout status deploy/routeforge-api      # set env restarts the pod
+```
+
+If the key already lives in a Secret in the model's namespace (for example
+`qwen38-secrets` / `vllm-api-key` in `runai-glm-coding`), copy it across without
+printing it:
+
+```bash
+kubectl -n runai-routeforge create secret generic qwen38-key \
+  --from-literal=QWEN38_API_KEY="$(kubectl -n runai-glm-coding get secret qwen38-secrets \
+      -o jsonpath='{.data.vllm-api-key}' | base64 -d)"
+```
+
+Check the variable is set, by name only:
+`kubectl -n runai-routeforge exec deploy/routeforge-api -- printenv QWEN38_API_KEY >/dev/null && echo set`
+
+`kubectl set env` changes the live Deployment only. Also add the variable to the
+manifest you deploy from, or the next `kubectl apply` removes it — on the DGX lab that is
+`deploy/dgx_lab/routeforge-app.yaml`, next to `GLM_FLASH_API_KEY`:
+
+```yaml
+          - name: QWEN38_API_KEY
+            valueFrom: {secretKeyRef: {name: qwen38-key, key: QWEN38_API_KEY, optional: true}}
+```
+
+With the Helm chart, put the same entry under `extraEnv` in your values file.
+
+**Docker Compose** — add the key to `deploy/compose/.env` (never committed):
+
+```bash
+read -rsp "qwen3.8-27b key: " K; echo; printf 'QWEN38_API_KEY=%s\n' "$K" >> deploy/compose/.env; unset K
+```
+
+then pass it through to the container under `services.api.environment` in
+`deploy/compose/docker-compose.yml`:
+
+```yaml
+      QWEN38_API_KEY: ${QWEN38_API_KEY}
+```
+
+and recreate the API: `docker compose -f deploy/compose/docker-compose.yml up -d api`.
+
+### 3. Onboard the model
+
+```bash
+curl -s -b cookies.txt -X POST -H "Content-Type: application/json" \
+  -d '{
+        "slug": "qwen3.8-27b",
+        "display_name": "Qwen3.8 27B",
+        "tier": "mid",
+        "endpoint": "http://qwen38.runai-glm-coding:8000/v1",
+        "api_key_env": "QWEN38_API_KEY",
+        "price_input": 10,
+        "price_output": 10,
+        "context_window": 262144,
+        "region": "us-lab",
+        "prompt_retention": "none",
+        "accepts_raw_sensitive": true
+      }' \
+  "$RF/admin/infra/models"
+```
+
+- `slug` must equal the id the server reports (vLLM's `--served-model-name`; check with
+  `curl -H "Authorization: Bearer <key>" <endpoint>/models`). It cannot be renamed —
+  delete and onboard again.
+- `api_key_env` is the variable's **name**. Pasting the key itself sends no auth header,
+  the probe gets a 401 and the model shows as unreachable.
+- `endpoint` must be reachable from the API pod. In-cluster, use the short
+  `<service>.<namespace>` form — on the DGX lab, full `.svc.cluster.local` names resolve
+  to a corporate wildcard. A NodePort URL (`http://10.89.195.201:30859/v1`) also works.
+- `tier` is `cheap | mid | frontier`. Prices are USD per 1M tokens; for on-prem models
+  they are nominal and turn an app's `max_spend_usd_per_day` into a token budget.
+- Onboarding is probe-gated and needs no restart. The console route is Infrastructure →
+  Onboard a model.
+
+Verify: `curl -s -b cookies.txt "$RF/admin/infra/models"` shows the model enabled and
+healthy, and `curl -s "$RF/health"` lists it. Edit with `PUT $RF/admin/infra/models/<slug>`
+(full replace, re-probes); remove with `DELETE` on the same path.
+
+### 4. Create an application
+
+```bash
+curl -s -b cookies.txt -X POST -H "Content-Type: application/json" \
+  -d '{"id":"my-app","name":"My app","default_residency":"onprem_only"}' \
+  "$RF/admin/applications"
+```
+
+The response contains the application's first `rf_live_…` token. **It is shown once** —
+RouteForge stores only a hash. Use one application per consumer: limits, usage and the
+Langfuse project belong to the application, and all its tokens share them.
+
+### 5. Restrict the application to specific models
+
+```bash
+curl -s -b cookies.txt -X PUT -H "Content-Type: application/json" \
+  -d '{
+        "allowed_providers": ["onprem"],
+        "allowed_models": ["qwen3.8-27b"],
+        "residency": "onprem_only",
+        "max_rpm": 30,
+        "max_spend_usd_per_day": 20.0
+      }' \
+  "$RF/admin/applications/my-app/policy"
+```
+
+The policy `PUT` merges — omitted fields keep their stored values — but `allowed_models`
+is replaced as a whole, so list every model the application should keep. To add a model
+to an existing application: `-d '{"allowed_models": ["glm-5.3-flash", "qwen3.8-27b"]}'`.
+
+### 6. Tokens
+
+```bash
+curl -s -b cookies.txt -X POST -H "Content-Type: application/json" \
+  -d '{"name":"laptop"}' "$RF/admin/applications/my-app/tokens"     # new token, shown once
+curl -s -b cookies.txt -X POST "$RF/admin/tokens/<token_id>/revoke"
+```
+
+### 7. Call the model as the application
+
+```bash
+export ROUTEFORGE_BASE_URL="$RF/v1"
+export ROUTEFORGE_API_KEY="rf_live_..."
+
+curl -s "$ROUTEFORGE_BASE_URL/models" -H "Authorization: Bearer $ROUTEFORGE_API_KEY"
+curl -s "$ROUTEFORGE_BASE_URL/chat/completions" \
+  -H "Authorization: Bearer $ROUTEFORGE_API_KEY" -H "Content-Type: application/json" \
+  -d '{"model":"qwen3.8-27b","messages":[{"role":"user","content":"Say hello"}]}'
+```
+
+Any OpenAI SDK works with `base_url=$ROUTEFORGE_BASE_URL` and `api_key=$ROUTEFORGE_API_KEY`.
+`"model": "auto"` lets RouteForge choose among the models the application may use. A 422
+naming the model means the application's policy does not allow it (step 5). Requests that
+carry `tools` come back buffered rather than streamed token by token (backlog B58).
+
 ## Two auth domains (read this first)
 
 RouteForge has **two completely separate credentials**; mixing them up is the most common
