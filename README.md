@@ -89,14 +89,22 @@ the **API container**, not in your shell.
 
 ```bash
 read -rsp "qwen3.8-27b key: " QWEN38_API_KEY; echo     # typed, not echoed or saved in history
+echo "${#QWEN38_API_KEY} characters"                     # must be non-zero; prints only the length
 
+# create-or-replace: safe to re-run (plain `create` fails with "already exists")
 kubectl -n runai-routeforge create secret generic qwen38-key \
-  --from-literal=QWEN38_API_KEY="$QWEN38_API_KEY"
+  --from-literal=QWEN38_API_KEY="$QWEN38_API_KEY" \
+  --dry-run=client -o yaml | kubectl apply -f -
 unset QWEN38_API_KEY
 
+# first time only: wire the secret into the API as an env var (restarts the pod)
 kubectl -n runai-routeforge set env deploy/routeforge-api --from=secret/qwen38-key
-kubectl -n runai-routeforge rollout status deploy/routeforge-api      # set env restarts the pod
+kubectl -n runai-routeforge rollout status deploy/routeforge-api
 ```
+
+When you **replace** the key later, skip `set env` (the variable is already wired) and
+restart instead — a pod reads Secret-backed variables only when it starts:
+`kubectl -n runai-routeforge rollout restart deploy/routeforge-api`.
 
 If the key already lives in a Secret in the model's namespace (for example
 `qwen38-secrets` / `vllm-api-key` in `runai-glm-coding`), copy it across without
@@ -105,11 +113,13 @@ printing it:
 ```bash
 kubectl -n runai-routeforge create secret generic qwen38-key \
   --from-literal=QWEN38_API_KEY="$(kubectl -n runai-glm-coding get secret qwen38-secrets \
-      -o jsonpath='{.data.vllm-api-key}' | base64 -d)"
+      -o jsonpath='{.data.vllm-api-key}' | base64 -d)" \
+  --dry-run=client -o yaml | kubectl apply -f -
 ```
 
-Check the variable is set, by name only:
-`kubectl -n runai-routeforge exec deploy/routeforge-api -- printenv QWEN38_API_KEY >/dev/null && echo set`
+Check the variable is set and non-empty (prints only its length; `0` means an empty
+key, and the onboarding probe will fail with a 401):
+`kubectl -n runai-routeforge exec deploy/routeforge-api -- sh -c 'echo ${#QWEN38_API_KEY}'`
 
 `kubectl set env` changes the live Deployment only. Also add the variable to the
 manifest you deploy from, or the next `kubectl apply` removes it — on the DGX lab that is
