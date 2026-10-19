@@ -19,6 +19,11 @@ def new_token(env: str = "live") -> str:
     return f"rf_{env}_{secrets.token_urlsafe(_TOKEN_ENTROPY_BYTES)}"
 
 
+def new_service_credential() -> str:
+    """A fresh service credential, e.g. `rf_svc_x7Kp…`. A distinct prefix so
+    one is never mistaken for (or pasted as) an app token."""
+    return f"rf_svc_{secrets.token_urlsafe(_TOKEN_ENTROPY_BYTES)}"
+
 def hash_token(raw: str) -> str:
     """sha256 hex of the raw token — the value stored and looked up."""
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()

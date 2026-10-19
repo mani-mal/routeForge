@@ -146,12 +146,14 @@ def _derive_session_id(body: ChatRequest, tenant: str) -> str | None:
 async def _authenticate(request: Request
                         ) -> tuple[str, AppPolicyView, object | None] | None:
     """Resolve the bearer token to (application id, policy view, per-app Langfuse
-    or None), or None (fail closed). Unknown/missing/revoked token or a disabled
+    or None), or None (fail closed). Unknown/missing/revoked/expired token, a
+    token bound to a different `x-routeforge-session`, or a disabled
     application -> None -> 401. The application id equals the tenant slug, so
     downstream policy (policy.yaml tenants) is unchanged."""
     raw = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
     async with request.app.state.db.session() as session:
-        app = await store.resolve_application(session, raw)
+        app = await store.resolve_application(session, raw,
+                                              session_id=_read_session_id(request))
         if app is None:
             return None
         app_id = app.id

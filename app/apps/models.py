@@ -84,8 +84,40 @@ class AppToken(Base):
         DateTime(timezone=True), nullable=True)
     revoked_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
+    # Attempt-scoped tokens (all optional; null = the old behaviour).
+    # `expires_at`: refused after this instant, exactly like a revoked token.
+    # `session_binding`: refused unless the call's `x-routeforge-session`
+    # equals it. `issued_by`: the ServiceCredential that created the token
+    # (null = an administrator); a service credential may revoke only its own.
+    expires_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    session_binding: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    issued_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     application: Mapped[Application] = relationship(back_populates="tokens")
+
+
+class ServiceCredential(Base):
+    """A machine credential scoped to ONE application: it may create tokens
+    for that application and revoke the tokens it created -- nothing else. It
+    is not an app token (it cannot call /v1/*) and not an admin session (every
+    other /admin/* route still refuses it). Only the sha256 hash is stored."""
+
+    __tablename__ = "service_credentials"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    application_id: Mapped[str] = mapped_column(
+        ForeignKey("applications.id", ondelete="CASCADE"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    prefix: Mapped[str] = mapped_column(String(32))  # display only
+    name: Mapped[str] = mapped_column(String(100), default="default")
+    status: Mapped[str] = mapped_column(String(16), default="active")  # active|revoked
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow)
+    last_used_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
 
 
 class AppPolicy(Base):
