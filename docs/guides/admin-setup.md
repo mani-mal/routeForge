@@ -158,7 +158,7 @@ An application can hold several tokens (rotate without downtime).
 
 | Method | Path | Body | Response |
 |---|---|---|---|
-| POST | `/admin/applications/{id}/tokens` | `{"name":"ci"}` (name optional, default `"default"`) | `{token, id, prefix}` — plaintext token shown **once** |
+| POST | `/admin/applications/{id}/tokens` | `{"name":"ci", "expires_in_s":3600, "session":"attempt-42"}` (all optional) | `{token, id, prefix, expires_at, session}` — plaintext token shown **once** |
 | POST | `/admin/tokens/{token_id}/revoke` | — | `{ok: true, id}` |
 
 ```bash
@@ -170,6 +170,68 @@ curl -b cookies.txt http://<host>:<port>/admin/applications/acme-support/tokens 
 - Rotation: mint a new token, hand it over, then revoke the old one. No config
   change — the developer just swaps the string.
 - A revoked token → `401` on the next request.
+- `expires_in_s` (optional, 1 to 2 592 000 = 30 days): the token is refused with
+  `401` from that many seconds after creation, exactly like a revoked token, and
+  is listed with `status: "expired"`. Omitted = never expires.
+- `session` (optional, 1–128 chars of `[A-Za-z0-9._:-]`): the token is refused
+  with `401` on any call whose `x-routeforge-session` header is missing or
+  different. Omitted = the header is not checked (it still groups requests).
+
+**Upgrading an existing database.** These three `app_tokens` columns are new and
+RouteForge does not migrate (`create_all` adds the new `service_credentials` table
+but never alters an existing one). **Run these before rolling the image**: the ORM
+names every column when it looks a token up, so against an unmigrated table every
+`/v1/*` request fails authentication.
+
+```sql
+ALTER TABLE app_tokens ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE app_tokens ADD COLUMN IF NOT EXISTS session_binding VARCHAR(128);
+ALTER TABLE app_tokens ADD COLUMN IF NOT EXISTS issued_by VARCHAR(64);
+```
+
+Existing tokens keep all three null: no expiry, no session binding, admin-issued.
+
+### Service credentials (machine-issued, short-lived tokens)
+
+A **service credential** lets a system — for example a CI runner or an agent
+platform that starts one sandbox per task — create and revoke tokens for **one**
+application without an admin session. It can do exactly two things:
+
+- `POST /admin/applications/{id}/tokens` for its own application (`403` for any
+  other application), with the same optional `expires_in_s` and `session`;
+- `POST /admin/tokens/{token_id}/revoke` for tokens **it created** (`404` for
+  any other token, including the admin's).
+
+Every other `/admin/*` route answers it with `401`, and it is not an app token:
+`/v1/*` refuses it. Send it as `Authorization: Bearer rf_svc_…`.
+
+| Method | Path (admin cookie) | Body | Response |
+|---|---|---|---|
+| POST | `/admin/applications/{id}/service-credentials` | `{"name":"ci"}` (optional) | `{credential, id, prefix, application_id}` — plaintext shown **once** |
+| GET | `/admin/applications/{id}/service-credentials` | — | list, without the secret |
+| POST | `/admin/service-credentials/{cred_id}/revoke` | — | `{ok: true, id}` — also revokes every token it issued |
+
+Expiry and session binding are checked when a request authenticates; a request
+already in flight (for example a long stream) finishes.
+
+```bash
+# admin: issue a service credential for one app
+curl -b cookies.txt http://<host>:<port>/admin/applications/acme-support/service-credentials \
+  -H "Content-Type: application/json" -d '{"name":"agent-platform"}'
+
+# the service: one token per task, bound to the task id, expiring with it
+curl http://<host>:<port>/admin/applications/acme-support/tokens \
+  -H "Authorization: Bearer $RF_SERVICE_CREDENTIAL" -H "Content-Type: application/json" \
+  -d '{"name":"task-42","expires_in_s":5400,"session":"task-42"}'
+
+# the task's calls carry the session header
+curl http://<host>:<port>/v1/chat/completions -H "Authorization: Bearer $TOKEN" \
+  -H "x-routeforge-session: task-42" -H "Content-Type: application/json" -d '{...}'
+
+# the service: revoke when the task's workspace is gone
+curl -X POST http://<host>:<port>/admin/tokens/$TOKEN_ID/revoke \
+  -H "Authorization: Bearer $RF_SERVICE_CREDENTIAL"
+```
 
 ---
 

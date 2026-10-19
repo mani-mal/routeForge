@@ -20,12 +20,13 @@ from app.apps import store
 from app.apps.admin_auth import SESSION_COOKIE, require_admin
 from app.apps.calibration_sets import CalibrationError, validate_recommendation
 from app.apps.langfuse_provision import LangfuseProvisioner, encrypt_secret
-from app.apps.models import OutcomeFeedback, RoutingOutcome
+from app.apps.models import AppToken, OutcomeFeedback, RoutingOutcome
 from app.apps.policy_lint import price_warnings
 from app.apps.probe import probe_endpoint
 from app.apps.policy import AppPolicyView, policy_view_from
 from app.apps.snapshot import build_config_snapshot
-from app.apps.tokens import new_token
+from app.apps.tokens import new_service_credential, new_token
+from app.api.routes import _sanitize_session_id
 from app.policy.compile import (PolicyViolation, check_invariants, compile_policy,
                                 validate_effective)
 from app.policy.effective import PROTECTED_ENTITIES
@@ -51,9 +52,19 @@ def _iso(v: dt.datetime | None) -> str | None:
 
 
 def _token_dict(t) -> dict:
-    return {"id": t.id, "prefix": t.prefix, "name": t.name, "status": t.status,
+    # An active token past its `expires_at` is reported as "expired": it is
+    # refused exactly like a revoked one, so it must not count as active.
+    status = "expired" if t.status == "active" and store.token_expired(t) else t.status
+    return {"id": t.id, "prefix": t.prefix, "name": t.name, "status": status,
             "created_at": _iso(t.created_at), "last_used_at": _iso(t.last_used_at),
-            "revoked_at": _iso(t.revoked_at)}
+            "revoked_at": _iso(t.revoked_at), "expires_at": _iso(t.expires_at and store._to_utc(t.expires_at)),
+            "session": t.session_binding, "issued_by": t.issued_by}
+
+
+def _service_credential_dict(c) -> dict:
+    return {"id": c.id, "application_id": c.application_id, "prefix": c.prefix,
+            "name": c.name, "status": c.status, "created_at": _iso(c.created_at),
+            "last_used_at": _iso(c.last_used_at), "revoked_at": _iso(c.revoked_at)}
 
 
 def _policy_dict(p) -> dict | None:
@@ -270,7 +281,30 @@ class LangfuseCredsIn(BaseModel):
         return v
 
 
+# Longest lifetime a caller may ask for with `expires_in_s` (30 days). An
+# attempt-scoped token lives for one attempt; anything longer-lived is an
+# administrator's ordinary, non-expiring token.
+MAX_TOKEN_EXPIRES_IN_S = 30 * 24 * 3600
+
+
 class TokenIn(BaseModel):
+    name: str = "default"
+    # Optional: refused (like a revoked token) this many seconds after creation.
+    expires_in_s: int | None = Field(default=None, ge=1, le=MAX_TOKEN_EXPIRES_IN_S)
+    # Optional: refused unless the call's `x-routeforge-session` equals this.
+    session: str | None = None
+
+    @field_validator("session")
+    @classmethod
+    def _session_is_a_valid_header_value(cls, v: str | None) -> str | None:
+        # Must be a value `x-routeforge-session` can actually carry, or the
+        # token could never authenticate.
+        if v is not None and _sanitize_session_id(v) != v:
+            raise ValueError("session must be 1-128 chars of [A-Za-z0-9._:-]")
+        return v
+
+
+class ServiceCredentialIn(BaseModel):
     name: str = "default"
 
 
@@ -745,29 +779,110 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
 
 # --- tokens -----------------------------------------------------------------
 
+class _Caller(BaseModel):
+    """Who called a token route: an administrator, or a service credential
+    scoped to one application."""
+    admin_id: str | None = None
+    service_id: str | None = None
+    service_app_id: str | None = None
+
+
+async def require_admin_or_service(request: Request) -> _Caller:
+    """Admin session cookie, else a `Bearer rf_svc_…` service credential.
+    Used ONLY by the token create/revoke routes; every other /admin/* route
+    keeps `require_admin`, so a service credential reaches nothing else."""
+    try:
+        return _Caller(admin_id=await require_admin(request))
+    except HTTPException:
+        pass
+    raw = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+    async with request.app.state.db.session() as session:
+        cred = await store.resolve_service_credential(session, raw)
+        if cred is None:
+            raise HTTPException(401, "admin login or service credential required")
+        caller = _Caller(service_id=cred.id, service_app_id=cred.application_id)
+        await session.commit()  # persist last_used_at
+        return caller
+
+
 @admin_router.post("/applications/{app_id}/tokens")
 async def create_token(app_id: str, body: TokenIn, request: Request,
-                       _: str = Depends(require_admin)) -> dict:
+                       caller: _Caller = Depends(require_admin_or_service)) -> dict:
+    if caller.service_id is not None and caller.service_app_id != app_id:
+        raise HTTPException(403, "service credential is scoped to another application")
+    expires_at = None
+    if body.expires_in_s is not None:
+        expires_at = dt.datetime.now(dt.timezone.utc) + dt.timedelta(
+            seconds=body.expires_in_s)
     async with request.app.state.db.session() as session:
         if await store.get_application(session, app_id) is None:
             raise HTTPException(404, "application not found")
         raw = new_token()
         token = await store.add_token(session, application_id=app_id,
-                                      raw_token=raw, name=body.name)
+                                      raw_token=raw, name=body.name,
+                                      expires_at=expires_at,
+                                      session_binding=body.session,
+                                      issued_by=caller.service_id)
         await session.commit()
         # Plaintext returned ONCE — never retrievable again.
-        return {"token": raw, "id": token.id, "prefix": token.prefix}
+        return {"token": raw, "id": token.id, "prefix": token.prefix,
+                "expires_at": _iso(expires_at), "session": body.session}
 
 
 @admin_router.post("/tokens/{token_id}/revoke")
 async def revoke_token(token_id: str, request: Request,
-                       _: str = Depends(require_admin)) -> dict:
+                       caller: _Caller = Depends(require_admin_or_service)) -> dict:
     async with request.app.state.db.session() as session:
+        if caller.service_id is not None:
+            # A service credential revokes only tokens it created; any other
+            # token is answered exactly like one that does not exist.
+            existing = await session.get(AppToken, token_id)
+            if existing is None or existing.issued_by != caller.service_id:
+                raise HTTPException(404, "token not found")
         token = await store.revoke_token(session, token_id)
         if token is None:
             raise HTTPException(404, "token not found")
         await session.commit()
         return {"ok": True, "id": token_id}
+
+
+# --- service credentials (admin-only) ---------------------------------------
+
+@admin_router.post("/applications/{app_id}/service-credentials")
+async def create_service_credential(app_id: str, body: ServiceCredentialIn,
+                                    request: Request,
+                                    _: str = Depends(require_admin)) -> dict:
+    async with request.app.state.db.session() as session:
+        if await store.get_application(session, app_id) is None:
+            raise HTTPException(404, "application not found")
+        raw = new_service_credential()
+        cred = await store.add_service_credential(
+            session, application_id=app_id, raw=raw, name=body.name)
+        await session.commit()
+        # Plaintext returned ONCE — never retrievable again.
+        return {"credential": raw, "id": cred.id, "prefix": cred.prefix,
+                "application_id": app_id}
+
+
+@admin_router.get("/applications/{app_id}/service-credentials")
+async def list_service_credentials(app_id: str, request: Request,
+                                   _: str = Depends(require_admin)) -> list[dict]:
+    async with request.app.state.db.session() as session:
+        if await store.get_application(session, app_id) is None:
+            raise HTTPException(404, "application not found")
+        creds = await store.list_service_credentials(session, app_id)
+        return [_service_credential_dict(c) for c in creds]
+
+
+@admin_router.post("/service-credentials/{cred_id}/revoke")
+async def revoke_service_credential(cred_id: str, request: Request,
+                                    _: str = Depends(require_admin)) -> dict:
+    async with request.app.state.db.session() as session:
+        cred = await store.revoke_service_credential(session, cred_id)
+        if cred is None:
+            raise HTTPException(404, "service credential not found")
+        await session.commit()
+        return {"ok": True, "id": cred_id}
 
 
 # --- usage ------------------------------------------------------------------

@@ -16,7 +16,7 @@ from sqlalchemy.orm import selectinload
 from app.apps.models import (
     Application, AppPolicy, AppRecognizer, AppSensitivityRule, AppToken,
     EndpointObservation, ModelQuality, OnboardedModel, OutcomeFeedback,
-    RequestSnapshot, RoutingOutcome, UsageRecord, utcnow,
+    RequestSnapshot, RoutingOutcome, ServiceCredential, UsageRecord, utcnow,
 )
 from app.apps.privacy import AppPrivacyProfile, SensitivityRuleView
 from app.apps.tokens import hash_token, token_prefix
@@ -24,11 +24,15 @@ from app.policy.recognizers import CustomRecognizer
 from app.routing.observations import Observation
 
 
-async def resolve_application(session: AsyncSession, raw_token: str | None
+async def resolve_application(session: AsyncSession, raw_token: str | None,
+                              session_id: str | None = None
                               ) -> Application | None:
     """Resolve a bearer token to its application, or None. **Fail closed:**
-    returns None for an empty/unknown/revoked token or a disabled application —
-    the caller rejects with 401. Never falls back to a default tenant.
+    returns None for an empty/unknown/revoked/expired token, a token bound to a
+    session other than `session_id` (the call's sanitized
+    `x-routeforge-session`; a missing header never matches a binding), or a
+    disabled application — the caller rejects with 401. Never falls back to a
+    default tenant.
 
     Side effect: stamps the token's `last_used_at` (caller commits)."""
     if not raw_token:
@@ -44,10 +48,79 @@ async def resolve_application(session: AsyncSession, raw_token: str | None
     token = (await session.execute(stmt)).scalar_one_or_none()
     if token is None or token.application is None:
         return None
+    if token_expired(token):
+        return None
+    if token.session_binding is not None and session_id != token.session_binding:
+        return None
     if token.application.status != "active":
         return None
     token.last_used_at = utcnow()
     return token.application
+
+
+def token_expired(token: AppToken, now: dt.datetime | None = None) -> bool:
+    """True once a token with an `expires_at` has reached it."""
+    if token.expires_at is None:
+        return False
+    return (now or utcnow()) >= _to_utc(token.expires_at)
+
+
+async def resolve_service_credential(session: AsyncSession, raw: str | None
+                                     ) -> ServiceCredential | None:
+    """Resolve a bearer service credential, or None (fail closed): empty,
+    unknown or revoked credential, or one whose application is not active.
+    Stamps `last_used_at` (caller commits)."""
+    if not raw:
+        return None
+    stmt = select(ServiceCredential).where(
+        ServiceCredential.token_hash == hash_token(raw),
+        ServiceCredential.status == "active")
+    cred = (await session.execute(stmt)).scalar_one_or_none()
+    if cred is None:
+        return None
+    app = await session.get(Application, cred.application_id)
+    if app is None or app.status != "active":
+        return None
+    cred.last_used_at = utcnow()
+    return cred
+
+
+async def add_service_credential(session: AsyncSession, *, application_id: str,
+                                 raw: str, name: str = "default"
+                                 ) -> ServiceCredential:
+    """Store the hash of a new service credential (caller commits)."""
+    cred = ServiceCredential(
+        id=uuid.uuid4().hex, application_id=application_id,
+        token_hash=hash_token(raw), prefix=token_prefix(raw), name=name,
+        status="active")
+    session.add(cred)
+    return cred
+
+
+async def list_service_credentials(session: AsyncSession, application_id: str
+                                   ) -> list[ServiceCredential]:
+    stmt = (select(ServiceCredential)
+            .where(ServiceCredential.application_id == application_id)
+            .order_by(ServiceCredential.created_at))
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def revoke_service_credential(session: AsyncSession, cred_id: str
+                                    ) -> ServiceCredential | None:
+    cred = await session.get(ServiceCredential, cred_id)
+    if cred is None:
+        return None
+    cred.status = "revoked"
+    cred.revoked_at = utcnow()
+    # Revoking the credential also revokes every token it issued: a leaked
+    # credential's tokens must not outlive it.
+    issued = await session.execute(
+        select(AppToken).where(AppToken.issued_by == cred_id,
+                               AppToken.status == "active"))
+    for token in issued.scalars():
+        token.status = "revoked"
+        token.revoked_at = cred.revoked_at
+    return cred
 
 
 async def record_usage(
@@ -360,9 +433,13 @@ async def create_application(
 
 
 async def add_token(session: AsyncSession, *, application_id: str, raw_token: str,
-                    name: str = "default") -> AppToken:
+                    name: str = "default", expires_at: dt.datetime | None = None,
+                    session_binding: str | None = None,
+                    issued_by: str | None = None) -> AppToken:
     """Store the hash of `raw_token` for an application (caller commits).
-    The plaintext is the caller's to hand to the app owner — never persisted."""
+    The plaintext is the caller's to hand to the app owner — never persisted.
+    `expires_at` / `session_binding` are optional limits (see
+    `resolve_application`); `issued_by` names the creating service credential."""
     token = AppToken(
         id=uuid.uuid4().hex,
         application_id=application_id,
@@ -370,6 +447,9 @@ async def add_token(session: AsyncSession, *, application_id: str, raw_token: st
         prefix=token_prefix(raw_token),
         name=name,
         status="active",
+        expires_at=expires_at,
+        session_binding=session_binding,
+        issued_by=issued_by,
     )
     session.add(token)
     return token
