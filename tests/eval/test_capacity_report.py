@@ -57,13 +57,11 @@ def test_c12_the_caveat_is_the_spec_text():                                     
                             "moved_request_latency", "overload_behaviour")
 
 
-def test_c12_the_spec_and_the_reference_quote_the_caveat_word_for_word():               # C12
-    """The constant, spec §9.1 and reference §11.7 change together or not
-    at all."""
+def test_c12_the_reference_quotes_the_caveat_word_for_word():                          # C12
+    """The constant and reference §11.7 change together or not at all."""
     quoted = "\n".join(caveat_lines())
-    for path in ("docs/superpowers/specs/2026-10-07-p3c4-capacity-design.md",
-                 "docs/reference/policy-simulator.md"):
-        assert quoted in (ROOT / path).read_text(encoding="utf-8"), path
+    path = "docs/reference/policy-simulator.md"
+    assert quoted in (ROOT / path).read_text(encoding="utf-8"), path
 
 
 def test_c12_the_section_opens_with_the_caveat_and_the_no_remedy_sentence():           # C12

@@ -6,7 +6,7 @@ Covers the five baselines/constructors from spec §5 step 3: `cheapest`,
 scratch, in-memory registry -- never a deployment database) and every ctx
 comes from the real `Gate.evaluate`, so eligibility is never re-derived by
 hand. See
-docs/superpowers/specs/2026-09-21-feasible-route-bench-design.md §5 step 3.
+the FeasibleRouteBench design spec §5 step 3.
 """
 from __future__ import annotations
 

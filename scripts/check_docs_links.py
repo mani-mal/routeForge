@@ -8,7 +8,7 @@ Three checks:
                   repo root, not the file's own directory).
   2. inbound    — every `docs/...` path mentioned elsewhere in the repo resolves.
   3. vocabulary — vocabulary purged by the 2026-08-03 pure-router pivot does not
-                  appear outside docs/archive/ and docs/superpowers/.
+                  appear outside the untracked internal directories (see INTERNAL_DIRS).
 
 A line that needs to *name* a purged identifier in order to explain that it no
 longer exists (e.g. "There is no `inference_backend` axis") is legitimate,

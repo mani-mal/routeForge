@@ -939,7 +939,7 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
     # string it has already scanned; the regex egress pass still runs.
     redacted_prompt = internals.get("redacted_prompt")
     try:
-        # Eval-capture (docs/archive/eval-logging-backlog.md; current capture_io
+        # Eval-capture (current capture_io
         # contract in docs/reference/per-app-config.md): when capture_io is
         # redacted|full, attach the request prompt + response completion to the
         # trace. `off` (demo default) passes empty strings and sets nothing.

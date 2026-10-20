@@ -14,10 +14,10 @@ database, and touches nothing on the running deployment. The review artifact is 
 human still makes the change through the normal admin path (`PUT`ing app policy, onboarding or
 removing an endpoint, editing prices).
 
-- Design: `docs/superpowers/specs/2026-09-24-policy-simulator-design.md`. Shadow prices (§8)
-  are `docs/superpowers/specs/2026-09-26-shadow-prices-design.md` (P3c-1). Uncertainty ranges
-  (§10) are `docs/superpowers/specs/2026-10-06-p3c3-uncertainty-design.md` (P3c-3). Capacity
-  (§11) is `docs/superpowers/specs/2026-10-07-p3c4-capacity-design.md` (P3c-4).
+- Design: the policy-simulator design spec. Shadow prices (§8)
+  are the shadow-prices design spec (P3c-1). Uncertainty ranges
+  (§10) are the p3c3-uncertainty design spec (P3c-3). Capacity
+  (§11) is the p3c4-capacity design spec (P3c-4).
 - Research notes (the model, the two-arm design, the invariants):
   `docs/research/feasible-route-bench.md` §15; shadow prices §17.
 - Prerequisite datasets: `docs/reference/routing-outcomes.md` (P2b-2, the export this reads)
@@ -536,7 +536,7 @@ them.
 
 ## 8. Shadow prices (P3c-1)
 
-Design: `docs/superpowers/specs/2026-09-26-shadow-prices-design.md`. Research notes (the
+Design: the shadow-prices design spec. Research notes (the
 model, scoped attribution, the eligible-superset invariant and its counterexample): `docs/research/feasible-route-bench.md`
 §17. Code: `app/eval/shadow.py` (`Relaxation`, `enumerate_relaxations`, `shadow_prices`,
 `render_shadow_section`), wired into `scripts/policy_simulate.py` by `--shadow-prices`.
@@ -746,7 +746,7 @@ From spec §2, deliberate non-goals for this sub-project:
 
 ## 9. Scenario comparison (P3c-2)
 
-Design: `docs/superpowers/specs/2026-10-05-p3c2-scenarios-design.md`. Research notes:
+Design: the p3c2-scenarios design spec. Research notes:
 `docs/research/feasible-route-bench.md` §18. Code: `app/eval/scenarios.py`
 (`load_scenarios`, `apply_scenarios`, `compare`, `comparison_doc`, `render_comparison`),
 wired into `scripts/policy_simulate.py` by `--scenarios`.
@@ -845,7 +845,7 @@ excluded rows.
 
 ## 10. Uncertainty ranges (P3c-3)
 
-Design: `docs/superpowers/specs/2026-10-06-p3c3-uncertainty-design.md`. Research notes:
+Design: the p3c3-uncertainty design spec. Research notes:
 `docs/research/feasible-route-bench.md` §20. Code: `app/eval/uncertainty.py`
 (`UncertaintyPlan`, `run_bootstrap`, `results_block`, `load_posteriors`,
 `render_uncertainty_section`), wired into `app/eval/scenarios.py`, `app/eval/shadow.py` and
@@ -1167,7 +1167,7 @@ per pass on this machine; nothing has been timed on a real export (**TO MEASURE*
 
 ## 11. Capacity: stated limits against replayed demand (P3c-4)
 
-Design: `docs/superpowers/specs/2026-10-07-p3c4-capacity-design.md` (as built: its
+Design: the p3c4-capacity design spec (as built: its
 "Amendments" section). Research notes: `docs/research/feasible-route-bench.md` §21. Code:
 `app/eval/capacity.py` (`CapacityPlan`, `load_capacity`, `build_plan`, `service_time`,
 `arm_load`, `capacity_block`, `render_capacity_section`), wired into `app/eval/scenarios.py`

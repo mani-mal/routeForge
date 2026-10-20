@@ -34,7 +34,7 @@ neither touches the Improvement Plane, neither weakens a privacy invariant.
 > it can only reorder an eligible set, never bias a tier.
 
 This is what shipped and is verified live — code, not intent. The design record
-is `docs/superpowers/specs/2026-08-15-routing-observability-and-signals-design.md`;
+is the routing-observability-and-signals design spec;
 where the two disagree, this page is right.
 
 ---
@@ -124,7 +124,7 @@ The full eligible/rejected candidate set for that routing decision:
 
 The chosen candidate is `eligible: true`; each rejected candidate is
 `eligible: false` with its rejection reason. This is the RLHF/eval substrate
-(see `docs/roadmap/rlhf-readiness.md`) — it records *what else could have been chosen and
+(see the RLHF-readiness note) — it records *what else could have been chosen and
 why it wasn't*, without building any feedback API (that stays out of scope).
 
 **`code` — the three endpoint data-handling exclusions.** A rejection caused by an
@@ -506,7 +506,7 @@ endpoint that is cheaper than its peer keeps winning, and every request pays a w
 attempt plus the failure latency before failover serves it. B45 measured this (research doc
 §9, §11). The breaker takes such an endpoint out of rotation instead. Source of truth:
 `app/gateway/breaker.py`; design:
-`docs/superpowers/specs/2026-09-23-endpoint-circuit-breaker-design.md`.
+the endpoint-circuit-breaker design spec.
 
 ### States
 
@@ -662,7 +662,7 @@ print(d["model"], s["name"], s["latency"]["src"], s["availability"]["src"])'
 ## Related
 
 - `docs/guides/onboarding-models.md` — the model pool `sp.candidates` is drawn from.
-- `docs/roadmap/rlhf-readiness.md` — what the candidate snapshot + policy version feed.
+- the RLHF-readiness note — what the candidate snapshot + policy version feed.
 - `docs/architecture/routing-tier-selection.md` — the `cheap|mid|frontier` ladder
   (length-based complexity, no modality/capability axis).
-- Design record: `docs/superpowers/specs/2026-08-15-routing-observability-and-signals-design.md`.
+- Design record: the routing-observability-and-signals design spec.

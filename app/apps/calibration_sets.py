@@ -1,5 +1,5 @@
 """Serving-side validator for a quality-calibration recommendation (P2b-3
-Task 5, `docs/superpowers/specs/2026-09-24-offline-quality-calibration-design.md`
+Task 5, the P2b-3 offline quality-calibration design
 §6).
 
 Deliberately independent of `app/eval` -- `app/eval/calibration.py` is

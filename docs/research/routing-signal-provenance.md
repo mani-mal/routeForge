@@ -2,7 +2,7 @@
 
 **Status:** research notes, written as the code landed. 2026-09-19.
 **Branch:** `feat/p2a-routing-signal-measurement` (merge base `5a61a0a`). Design:
-`docs/superpowers/specs/2026-09-19-routing-signal-measurement-p2a-design.md`.
+the routing-signal-measurement-p2a design spec.
 **Predecessors:** P1a (`docs/research/policy-compiler-noninterference.md`), P1b.
 **Successor:** P2b — the evaluation plane. Not built.
 **Audience:** whoever writes the paper.
@@ -323,7 +323,7 @@ and an ordering comparison silently tolerates any monotone perturbation of the s
 
 ## 3A. Seeding by replay (signal hardening, 2026-09-21)
 
-A follow-up slice (`docs/superpowers/specs/2026-09-21-signal-hardening-design.md`)
+A follow-up slice (the signal-hardening design spec)
 replaced boot seeding's source entirely: instead of aggregating `usage_records` — a
 table that records a *different* quantity than the live signal observes — seeding now
 replays a new per-attempt log, `endpoint_observations`, written by the same sink the live
@@ -916,13 +916,12 @@ per-task reports.
 
 | | |
 |---|---|
-| Design | `docs/superpowers/specs/2026-09-19-routing-signal-measurement-p2a-design.md` |
+| Design | the routing-signal-measurement-p2a design spec |
 | Per-task briefs, reports, and every ruling | `.superpowers/sdd/2026-09-19-routing-signal-measurement-p2a/` |
 | Operator-facing contract | [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §3 |
 | Endpoint pricing declaration | [`docs/guides/onboarding-models.md`](../guides/onboarding-models.md) §(b2) |
 | Limitations, as backlog items | [`docs/backlog/bugs.md`](../backlog/bugs.md) B38–B46; B30 resolved |
 | Predecessor evidence file | [`docs/research/policy-compiler-noninterference.md`](policy-compiler-noninterference.md) |
-| IP / research menu, and its verification caveat | [`docs/roadmap/ip-and-research-opportunities.md`](../roadmap/ip-and-research-opportunities.md) |
 
 Commits, oldest first: `02122ee` (spec) · `67d4900` (plan) · `570494c` (one `price_call`
 with an optional cached-input rate) · `6c8776b` (capture and persist provider cached

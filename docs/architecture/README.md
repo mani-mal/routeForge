@@ -30,17 +30,6 @@ Three subdirectories, three different kinds of trust:
 | [`api-load-balancing.md`](api-load-balancing.md) | How the `api` deployment scales horizontally — L4/L7 balancing layers and why per-pod in-memory state was a bug. |
 | [`multidimensional-policy-model.md`](multidimensional-policy-model.md) | The conceptual policy model: why one strict/private/cheap switch is not enough, the placement and protection axes, worked policy profiles, and compile → feasible set → optimise → enforce. Status note at the top says which axes are built (tool access `G` is not). |
 
-## Files in `architecture/decisions/`
-
-| Doc | Summary |
-|---|---|
-| [`inference-layer-boundary.md`](decisions/inference-layer-boundary.md) | Where RouteForge stops and the serving layer begins — the recurring "does RouteForge do llm-d / DRA / Gateway API / prefill-decode?" question, and why RouteForge doesn't deploy Dynamo. |
-| [`compression-in-scope.md`](decisions/compression-in-scope.md) | Why context compression (Headroom, step 5) stays inside RouteForge rather than moving to the calling application — in contrast to hosting training or inference compute, which is out of scope. |
-| [`app-vs-routeforge-boundary.md`](decisions/app-vs-routeforge-boundary.md) | The general placement test for what belongs in the calling application vs. RouteForge, worked through client-side compressors, the semantic cache, and the two families of "prompt caching". |
-| [`per-app-config-flexibility.md`](decisions/per-app-config-flexibility.md) | Which Serving-Plane settings can safely become per-application overrides, and the rule for classifying any new per-app knob. |
-| [`system-one-model-selection-analysis.md`](decisions/system-one-model-selection-analysis.md) | 2026-10-16 analysis of selecting among models with a small "System One" classifier: no stochastic routing; any classifier is advisory-only, applied after switch-cost scoring and in shadow mode first. |
-| [`self-improving-agent-feature-fit.md`](decisions/self-improving-agent-feature-fit.md) | The 2026-08-17 control-plane-vs-compute boundary decision: where self-improving-agent research (memory, prompt-opt, distillation) lands vs. RouteForge's scope — orchestrated, not hosted. |
-
 ## Files in `architecture/specs/`
 
 | Doc | Summary |
@@ -56,27 +45,10 @@ regenerate them from their JSON specs.
 
 `llm orchestration loop.drawio` (this directory) is the original diagram,
 superseded by the three above. **Historical; contains removed concepts (NAT agent
-runtime, multi-step branch, `strong` tier) — do not use as a reference.** It is retained only because
-[`decisions/self-improving-agent-feature-fit.md`](decisions/self-improving-agent-feature-fit.md)
-cites its "Prompt / Instructions — DSPy / NAT optimizer" node as evidence that
+runtime, multi-step branch, `strong` tier) — do not use as a reference.** It is retained only for its "Prompt / Instructions — DSPy / NAT optimizer" node as evidence that
 prompt optimization was in the design from day one; that node has no
 counterpart in any of the three current diagrams, so it is the one thing the
 old file still shows that the new ones don't.
-
-## Related docs in other buckets
-
-- **NeMo Switchyard vs. our step-6 router** — what to borrow, what to refuse,
-  and the (deferred, not rejected) "should we replace our router with it?"
-  question: [`../comparisons/nemo-switchyard-comparison.md`](../comparisons/nemo-switchyard-comparison.md),
-  with the action-oriented incorporation plan in
-  [`../comparisons/switchyard-features-to-incorporate.md`](../comparisons/switchyard-features-to-incorporate.md).
-- **The cost gap left by provider-side prompt caching** (the lossy half of the
-  `app-vs-routeforge-boundary.md` decision above):
-  [`../comparisons/caching-cost-feature-fit.md`](../comparisons/caching-cost-feature-fit.md).
-- **Which features are IP-worthy, and what prior art forecloses**:
-  [`../roadmap/ip-and-research-opportunities.md`](../roadmap/ip-and-research-opportunities.md),
-  with the reviewer hand-off brief at
-  [`../roadmap/ip-review-handoff.md`](../roadmap/ip-review-handoff.md).
 
 ## Canonical step count: 1–10
 
@@ -100,8 +72,6 @@ are **onboarded at runtime** (each with its own OpenAI-compatible `endpoint`) an
 the `ModelRegistry`; see `docs/guides/onboarding-models.md`. The on-prem pool boots empty. The
 managed-cloud path's availability is still `providers.{azure,bedrock}.enabled`, and there
 is **no** separate `serving_paths` config axis. <!-- purged-ok -->
-See [architecture-review.md](../archive/2026-07-25-architecture-review.md) for the pre-pivot config shape
-this replaced.
 
 So the honest "what's real vs simulated?" answer is: onboarded vLLM/Dynamo endpoints =
 real on-prem paths; `managed_cloud` = real cloud path; **nothing here is a demo-safe

@@ -1,6 +1,6 @@
 """Per-app privacy profile: the resolved recognizers + classification rules the
 gate uses for one application. Empty rules => fall back to the global policy.yaml
-sensitivity_rules. See docs/superpowers/specs/2026-07-30-per-app-privacy-rules-design.md."""
+sensitivity_rules. See docs/reference/per-app-config.md."""
 from __future__ import annotations
 
 from dataclasses import dataclass

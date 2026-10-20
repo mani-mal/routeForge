@@ -12,7 +12,7 @@ promotion path. An admin runs a script, reads a report, and calls an API. See
 `docs/research/feasible-route-bench.md` §14 for the model, its invariants and what a later
 online-learning slice would still need.
 
-- Design: `docs/superpowers/specs/2026-09-24-offline-quality-calibration-design.md`
+- Design: the offline-quality-calibration design spec
   (§12 records where the build departed from the design).
 - Prerequisite dataset: `docs/reference/routing-outcomes.md` (P2b-2) — this feature reads
   its export and nothing else.

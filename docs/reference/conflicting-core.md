@@ -8,7 +8,7 @@ failure on this request) is kept separate from policy, and every requirement car
 remediation hint. A security requirement's hint never suggests relaxing it, and nothing is
 ever applied automatically — an admin or operator still has to act.
 
-Design: `docs/superpowers/specs/2026-09-25-conflicting-core-design.md`. Code:
+Design: the conflicting-core design spec. Code:
 `app/policy/core.py` (pure computation), `app/policy/feasible.py`
 (`candidate_violations`/`violation_matrix`, shared with the first-fail seam),
 `app/routing/router.py` (the two raise sites). Prior slices: P1b's `FeasibleSet`

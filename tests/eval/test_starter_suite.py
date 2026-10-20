@@ -2,7 +2,7 @@
 suite, the §14 healthcare simulation profile, the cloud-only + empty-set
 pair, the Spark live example, and the B45 weight variants.
 
-See docs/superpowers/specs/2026-09-21-feasible-route-bench-design.md §9 and
+See the FeasibleRouteBench design spec §9 and
 the task-7-brief (`.superpowers/sdd/2026-09-21-feasible-route-bench/`).
 
 Every run here is SIMULATED. Nothing calls the Spark's placeholder host --

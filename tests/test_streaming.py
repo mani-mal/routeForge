@@ -1,5 +1,5 @@
 """Task 4: streaming scaffolding + `verified_then_stream` mode (per-app
-`stream_mode`, see docs/architecture/decisions/per-app-config-flexibility.md).
+`stream_mode`, see docs/reference/per-app-config.md).
 
 `verified_then_stream` runs the full verified pipeline (identical to the
 non-stream path -- step 9 verification is NOT skipped) and only chunks the

@@ -32,8 +32,7 @@ because the seams are the product's value. RouteForge delivers three guarantees:
   result** — but it runs no training loop, hosts no training or inference compute, and has no
   in-process promotion path. Onboarding stays the only path a model enters. If asked to make
   RouteForge **host** training or inference compute (not just orchestrate it), say it is out of
-  scope and stop. (See `docs/architecture/decisions/self-improving-agent-feature-fit.md` for the full
-  scope decision, 2026-08-17.)
+  scope and stop. (Scope decision of 2026-08-17.)
 
 ## Definition of done
 

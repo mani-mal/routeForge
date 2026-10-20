@@ -8,7 +8,7 @@ guards, default OFF). **Task 2 has since shipped** (commit `e778c97`): read/writ
 into the serving pipeline (`app/main.py` constructs `DeterministicMemoryStore`; `app/pipeline.py`
 recalls and writes on the direct and streaming paths), satisfying every guarantee below. The
 feature **remains default OFF** (`config/serving.yaml`, `memory.enabled`). Sibling reads:
-`docs/architecture/decisions/self-improving-agent-feature-fit.md` (§ persistent memory is one of the four
+the self-improving-agent scope decision (persistent memory is one of the four
 cost-reduction levers), `.claude/skills/headroom-compression/` (CCR is the precedent this spec
 mirrors).
 

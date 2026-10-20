@@ -5,8 +5,7 @@ and feedback scores into a training or evaluation dataset — typically a custom
 engineer running Hugging Face TRL, OpenRLHF, or an equivalent offline pipeline.
 
 routeForge does not run this pipeline itself. Per the project's control-plane
-boundary (`CLAUDE.md` rule #4; see `docs/architecture/decisions/self-improving-agent-feature-fit.md`
-§1), routeForge **produces the substrate** — traces and feedback scores in Langfuse — and
+boundary (`CLAUDE.md` rule #4), routeForge **produces the substrate** — traces and feedback scores in Langfuse — and
 may **trigger** an external training job later, but it hosts no training compute and has
 no in-process promotion path. Everything below runs in a **separate project**, against
 Langfuse's own API, outside routeForge's process.
@@ -71,7 +70,7 @@ sent as the fourth argument to `post_score(app_langfuse, trace_id, "corrected_ou
 ## 3. Capture-mode prerequisite
 
 Which trace fields exist at all depends on the app's `capture_io` setting and which
-Langfuse project the trace landed in — see `docs/roadmap/rlhf-readiness.md` §2 and §5 for the
+Langfuse project the trace landed in — see the RLHF-readiness note (§2 and §5) for the
 full Target A / Target B split. Summary for dataset export:
 
 | `capture_io` | Project | `input.value` / `output.value` | Usable for |
@@ -193,5 +192,5 @@ dataset built from a shared-project export is redacted-only by construction: it 
 for Target A (router) training but cannot be used for Target B (LLM fine-tuning), which
 needs the real text. If you need a `{prompt, chosen, rejected}` dataset with real text,
 confirm with the routeForge admin that the source app is provisioned with `capture_io:
-full` and its own residency-local Langfuse project (`docs/roadmap/rlhf-readiness.md` §5)
+full` and its own residency-local Langfuse project (RLHF-readiness note §5)
 before you export.

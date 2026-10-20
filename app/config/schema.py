@@ -257,7 +257,7 @@ class LangfuseCfg(BaseModel):
     host: str  # in-cluster URL for OTLP export (e.g. http://langfuse-web:3000)
     redact_on_export: bool
     # Eval-capture switch for request/response I/O attached to the serving.request
-    # root span (docs/archive/eval-logging-backlog.md; current contract in
+    # root span (current contract in
     # docs/reference/per-app-config.md). `off` = today's behaviour (no I/O
     # captured — the demo default, keeps rule 2 intact). `redacted` = attach
     # redact()'d prompt/completion (entity VALUES masked to <TYPE>; structure kept,

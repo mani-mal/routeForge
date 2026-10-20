@@ -2,7 +2,7 @@
 
 **Status:** research notes, written as the code landed. 2026-09-18.
 **Branch:** `feat/policy-compiler-p1a` (merge base `a7db4f5`). Design:
-`docs/superpowers/specs/2026-09-18-policy-compiler-p1a-design.md`.
+the policy-compiler-p1a design spec.
 **Audience:** whoever writes the paper.
 
 This is the evidence file, not the paper. Its job is to record exactly what was built,
@@ -549,8 +549,8 @@ Read this section before writing any claim sentence.
 ## 9. Related work — TO VERIFY BEFORE CITING
 
 ⚠️ **Nothing in this section has been verified.** The arXiv identifiers in
-[`docs/roadmap/ip-and-research-opportunities.md`](../roadmap/ip-and-research-opportunities.md)
-came from automated search and **are leads, not citations**; that document's own caveat
+the internal research-opportunities notes
+came from automated search and **are leads, not citations**; that note's own caveat
 says a meaningful share of the 2026-dated IDs (`26xx.xxxxx`) could not be independently
 confirmed, and that some may not exist. **Every identifier must be checked against
 arxiv.org before it appears in a draft.** The same applies to the "nobody does X" claims:
@@ -615,10 +615,9 @@ another's view" becomes a checked property rather than a reviewed one.
 
 | | |
 |---|---|
-| Design | `docs/superpowers/specs/2026-09-18-policy-compiler-p1a-design.md` |
+| Design | the policy-compiler-p1a design spec |
 | Per-task reports (incl. every mutation verdict) | `.superpowers/sdd/2026-09-18-policy-compiler-p1a/` |
 | Operator-facing contract | [`docs/reference/per-app-config.md`](../reference/per-app-config.md) |
-| IP / research menu, and the verification caveat | [`docs/roadmap/ip-and-research-opportunities.md`](../roadmap/ip-and-research-opportunities.md) |
 
 Commits, oldest first: `5410fc6` (the pure compiler) · `1030019` (deny value for every
 axis, keep what was rejected) · `82e3d00` (the four columns) · `e8514d0` (validate through

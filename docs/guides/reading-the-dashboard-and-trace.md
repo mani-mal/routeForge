@@ -282,8 +282,8 @@ that used to leak them has already been closed.** Details, because it's a fair w
   the trace view the demo relies on.
 - **Full raw I/O capture is a deliberate, gated opt-in** (`capture_io: off | redacted |
   full`, default effectively off/redacted) intended only for a residency-local eval
-  store — never on by default. See [`../archive/eval-logging-backlog.md`](../archive/eval-logging-backlog.md)
-  for the full design and guardrails.
+  store — never on by default. See `docs/reference/per-app-config.md`
+  for the guardrails.
 
 So: for this demo, Langfuse is **already** free of raw prompts; the redacted trace is
 what you're seeing, and it's the intended state.

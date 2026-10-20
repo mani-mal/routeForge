@@ -34,3 +34,14 @@ scratch-nat-spike/
 
 # FeasibleRouteBench output (scripts/feasible_bench.py)
 results/
+
+# Internal working docs (reviews, decisions, plans, roadmap, marketing) — kept locally, not published
+docs/roadmap/
+docs/comparisons/
+docs/archive/
+docs/marketing/
+docs/superpowers/
+docs/architecture/decisions/
+BUILD_PLAN.md
+docs/research/arxiv.md
+docs/research/paper-draft.md

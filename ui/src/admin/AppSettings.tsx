@@ -1,8 +1,8 @@
 // The per-application Settings tab, as six numbered collapsible steps.
 //
 // It used to be eight flat regions in one ~1800px scroll, every field expanded
-// at the same visual weight with permanently-visible explanatory prose (see
-// docs/superpowers/plans/2026-09-05-settings-ux-plan.md). Same controls, same
+// at the same visual weight with permanently-visible explanatory prose (the
+// settings-UX plan). Same controls, same
 // endpoints, same server clamps — reorganised so an operator can answer "what
 // is this app set to?" without reading the page, and configure one concern at
 // a time:
