@@ -4,7 +4,7 @@
 Spark runs `4bfb0b3` (through PR #79). The DGX lab (Run:ai) cluster was rebuilt and
 redeployed by PR #83, and is the deployment target for P3c-2 onward (api/ui `0.33.0`).
 
-This is the status of the program set out in `docs/new/RouteForge-Priorities-1-3-LLM-Handoff.md`
+This is the status of the program set out in `docs/archive/design-handoffs/RouteForge-Priorities-1-3-LLM-Handoff.md`
 (the "handoff"). Each shipped slice went through the same pipeline: design spec
 (`docs/superpowers/specs/`), plan (`docs/superpowers/plans/`), subagent-driven build with
 per-task and whole-branch review, merge, deploy to the Spark, and a live run recorded in the

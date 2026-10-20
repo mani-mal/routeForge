@@ -15,7 +15,7 @@ draft of the article, written from this file on 2026-10-09, is
   `docs/research/routing-signal-provenance.md`, FB = `docs/research/feasible-route-bench.md`,
   TR = `docs/research/trajectory-feasible-routing.md`,
   RM = `docs/roadmap/ip-and-research-opportunities.md`, HO = the Priorities 1–3 handoff
-  (`docs/new/RouteForge-Priorities-1-3-LLM-Handoff.md`, main checkout only, untracked).
+  (`docs/archive/design-handoffs/RouteForge-Priorities-1-3-LLM-Handoff.md`, main checkout only, untracked).
 
 ---
 

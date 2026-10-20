@@ -28,6 +28,7 @@ Three subdirectories, three different kinds of trust:
 | [`sample-request-flows.md`](sample-request-flows.md) | Worked examples: real requests walked through the ten steps, branch by branch. |
 | [`routing-tier-selection.md`](routing-tier-selection.md) | How the step-6 router actually picks a tier and model (length-based complexity, not semantic difficulty) and what it can't key on (no modality/capability axis). |
 | [`api-load-balancing.md`](api-load-balancing.md) | How the `api` deployment scales horizontally — L4/L7 balancing layers and why per-pod in-memory state was a bug. |
+| [`multidimensional-policy-model.md`](multidimensional-policy-model.md) | The conceptual policy model: why one strict/private/cheap switch is not enough, the placement and protection axes, worked policy profiles, and compile → feasible set → optimise → enforce. Status note at the top says which axes are built (tool access `G` is not). |
 
 ## Files in `architecture/decisions/`
 

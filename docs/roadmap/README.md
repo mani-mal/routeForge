@@ -11,6 +11,7 @@ RouteForge does today.
 | [`observability-metrics-target-state.md`](observability-metrics-target-state.md) | Genuinely target-state, with one correction: `cache_saved_usd` is **already** aggregated in `app/api/history.py` and returned by `GET /api/stats` and `GET /api/fleet` today — only a console dashboard tile is missing, not the underlying data. |
 | [`ip-and-research-opportunities.md`](ip-and-research-opportunities.md) | Not a commitment — a ranked menu (IP-1…12, R1…R9) of IP-worthy features and research directions, with prior-art caveats. |
 | [`ip-review-handoff.md`](ip-review-handoff.md) | Not a proposal itself — the reading-order brief for a reviewer evaluating `ip-and-research-opportunities.md`. |
+| [`system-one-jev-model.md`](system-one-jev-model.md) | Decision memo (2026-09-24): whether and where RouteForge should use a "System One" decision model (Jev / AutoJev). Answer: first as a sampled quality-label source for P2b-3, never as the gate for eligibility, residency or PII; nothing is built. Appendix A keeps the owner's original notes. Follow-up analysis: [`../architecture/decisions/system-one-model-selection-analysis.md`](../architecture/decisions/system-one-model-selection-analysis.md). |
 
 See [`../backlog/bugs.md`](../backlog/bugs.md) for known defects (not future
 work) and [`../comparisons/README.md`](../comparisons/README.md) for the

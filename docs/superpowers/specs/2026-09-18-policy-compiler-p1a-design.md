@@ -1,10 +1,10 @@
 # P1a — Constraint-isolated policy compiler and noninterference harness
 
 **Status:** Approved design, 2026-09-18. Not yet implemented.
-**Supersedes, in part:** `docs/new/policy-protection-redesign-handoff.md` §§4–6, 8, 9, 13
+**Supersedes, in part:** `docs/archive/design-handoffs/policy-protection-redesign-handoff.md` §§4–6, 8, 9, 13
 (the independent-axis redesign). Tokenization (§7), authorized rehydration, and the
 per-tool axes remain deferred — see §9 below.
-**Implements:** Priority 1, slice A of `docs/new/RouteForge-Priorities-1-3-LLM-Handoff.md`.
+**Implements:** Priority 1, slice A of `docs/archive/design-handoffs/RouteForge-Priorities-1-3-LLM-Handoff.md`.
 **Depends on:** the 2026-09-17 removal of the internal NeMo agent (merged, PR #51) —
 there is one request path per model call, so the compiler has one seam to own.
 

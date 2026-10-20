@@ -2,7 +2,7 @@
 
 **Goal:** Close three verified privacy gaps where OpenAI `tool_calls` arguments bypass the
 policy gate and step-9 egress verification, loosen one over-strict validator rule, and fix the
-doc contradictions found while reviewing `docs/new/policy-protection-redesign-handoff.md`.
+doc contradictions found while reviewing `docs/archive/design-handoffs/policy-protection-redesign-handoff.md`.
 
 **Spec:** none separate — the binding authority is `CLAUDE.md` non-negotiable rules 1, 2, 3, 5
 and 8, plus the verified findings below. This is a bug-fix plan, NOT the policy redesign in the

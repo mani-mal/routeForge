@@ -1,7 +1,7 @@
 # FeasibleRouteBench — the feasible-oracle evaluation harness (P2b-1)
 
 **Status:** approved design, 2026-09-21.
-**Source:** Priority 2, §12–21 of `docs/new/RouteForge-Priorities-1-3-LLM-Handoff.md`.
+**Source:** Priority 2, §12–21 of `docs/archive/design-handoffs/RouteForge-Priorities-1-3-LLM-Handoff.md`.
 **Builds on:** P1a (`compile_policy`, decision certificate), P1b (`app/policy/feasible.py`
 `FeasibleSet` with exclusion reasons), P2a (scoring record, `RoutingStrategy`), signal
 hardening (`SignalStore.replay`, `Observation`).
