@@ -20,7 +20,130 @@ Plane** — and delivers three guarantees:
 **RouteForge is a pure router.** It points at OpenAI-compatible endpoints and deploys,
 scales, or load-balances **no** inference itself — operators stand up their own serving
 (vLLM/Dynamo/NIM/any OpenAI-compatible server) and onboard it at runtime. The Improvement
-Plane (training, evaluation, promotion) is **out of scope** and stays external.
+Plane (training, evaluation, promotion) is **orchestrated, not hosted**: RouteForge can
+capture training substrate, trigger an external job and onboard the result, but runs no
+training or inference compute itself.
+
+**Paper and artifact:** *Eligibility-Constrained LLM Routing: When the Candidate Pool Is a
+Per-Request Variable* — source, PDF and data in
+[`docs/research/paper/`](docs/research/paper/); the version that accompanies it is tag
+[`arxiv-v1`](https://github.com/mani-mal/routeForge/tree/arxiv-v1). Code is Apache-2.0
+([`LICENSE`](LICENSE)); see [`CITATION.cff`](CITATION.cff) to cite it.
+
+## Architecture
+
+Every call an application makes — including each call of a client-side agent loop —
+passes through the same ten steps. The policy gate runs first; the **eligible set** of
+endpoints is derived from the compiled application policy and the operator's endpoint
+declarations *before* any scoring, and an empty set rejects the request instead of
+falling through to the nearest alternative.
+
+```mermaid
+flowchart TB
+    APP["Application<br/>(any OpenAI SDK,<br/>rf_live_ token)"] --> S1
+
+    subgraph RF["RouteForge (self-hosted)"]
+        direction TB
+        S1["1 · API<br/>/v1/chat/completions"] --> S2["2 · Policy gate<br/>identity · PII/PHI detect<br/>compile policy"]
+        S2 --> S3["3 · Execution context<br/>immutable, per request"]
+        S3 --> S4["4 · Task mode<br/>(always direct)"]
+        S4 --> S5["5 · Context optimisation<br/>Headroom + local CCR<br/>(opt-in)"]
+        S5 --> E{"Eligible set E(r)<br/>residency · regions · retention<br/>allowlists · cost cap"}
+        E -- "non-empty" --> S6["6 · Router<br/>score only inside E(r)"]
+        S6 --> S7["7 · Gateway<br/>quotas · breakers · failover<br/>(re-checks E on every attempt)"]
+        S7 --> S9["9 · Output controls<br/>leakage check · verification"]
+        S9 --> S10["10 · Governed response<br/>+ decision trace"]
+    end
+
+    S2 -- "gate error" --> REJ["Reject (fail closed)"]
+    E -- "empty" --> CORE["422 + minimal<br/>conflicting core"]
+    S7 --> ONP["8 · On-prem endpoints<br/>vLLM · Dynamo · NIM<br/>(onboarded at runtime)"]
+    S7 -. "only if policy allows" .-> CLD["8 · Cloud providers<br/>Azure · Bedrock · aggregators"]
+    S10 --> APP
+
+    REG[("Model registry<br/>endpoint declarations")] --> E
+    S10 -. "content-free record" .-> DB[("Routing outcomes<br/>→ replay simulator")]
+    S10 -. "redacted on export" .-> LF[("Langfuse / OTel")]
+```
+
+| Step | What it decides | Module |
+|---|---|---|
+| 1 / 10 | OpenAI-compatible request in; response plus a per-step decision trace out | `app/api/routes.py` |
+| 2 | Who is calling, what sensitive entities the request carries, the app's compiled policy — **runs first, fails closed** | `app/policy/gate.py`, `app/policy/compile.py` |
+| 3 | An immutable execution context that travels with the request | `app/policy/context.py` |
+| 4 | Task mode — always `direct`; agent loops belong to the calling application | `app/routing/task_mode.py` |
+| 5 | Whether to compress tool outputs/history (after the gate, never before) | `app/compression/` |
+| 6 | Which eligible endpoint serves the call (scored on post-compression cost) | `app/routing/router.py`, `app/policy/feasible.py` |
+| 7 / 8 | Quotas, circuit breakers, failover; calls to onboarded on-prem or enabled cloud endpoints | `app/gateway/` |
+| 9 | Output leakage checks and verification, client-output redaction | `app/output/verify.py` |
+
+More detail: [`docs/architecture/`](docs/architecture/) (logical and request-flow notes,
+tier selection, sample request flows) and the draw.io sources in
+[`docs/architecture/diagrams/`](docs/architecture/diagrams/).
+
+## How RouteForge differs from other LLM routers
+
+There are many good routers and gateways. Most answer **"which model is best (or
+cheapest) for this request?"** over a pool they treat as fixed. RouteForge answers a prior
+question first — **"which endpoints may see this request at all?"** — and only then
+optimises. It is a policy-and-eligibility layer for regulated, self-hosted deployments,
+not a better model-quality predictor.
+
+| Category | Examples | Primary job |
+|---|---|---|
+| Gateways / proxies | [LiteLLM](https://github.com/BerriAI/litellm), [Portkey](https://github.com/Portkey-AI/gateway), [Kong AI Gateway](https://developer.konghq.com/ai-gateway/), [Envoy AI Gateway](https://github.com/envoyproxy/ai-gateway), [Bifrost](https://github.com/maximhq/bifrost), [Helicone](https://github.com/Helicone/helicone) | One API over many providers: keys, budgets, rate limits, load balancing, fallback, guardrails, logging |
+| Hosted routing services | [OpenRouter](https://openrouter.ai/docs/features/provider-routing), [Cloudflare AI Gateway](https://developers.cloudflare.com/ai-gateway/), [Not Diamond](https://www.notdiamond.ai/), [Azure Foundry model router](https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-router), [Bedrock Intelligent Prompt Routing](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-routing.html) | Managed provider/model selection, often price- or quality-driven |
+| Learned / semantic routers | [RouteLLM](https://github.com/lm-sys/RouteLLM), [LLMRouter](https://github.com/ulab-uiuc/LLMRouter), [NVIDIA NeMo Switchyard](https://github.com/NVIDIA-NeMo/Switchyard), [vLLM Semantic Router](https://github.com/vllm-project/semantic-router), [NVIDIA LLM Router blueprint](https://github.com/NVIDIA-AI-Blueprints/llm-router) | Predict which model will answer well enough, from the prompt, embeddings, classifiers or execution signals |
+
+**Already common — RouteForge does not claim these as unique:** an OpenAI-compatible API;
+self-hosting; retries, fallback and circuit breakers; per-key/team budgets and rate
+limits; PII masking before the provider (e.g. LiteLLM + Presidio, Kong AI Sanitizer);
+region filtering (LiteLLM pre-call checks, Azure data zones); zero-data-retention
+filtering (OpenRouter); OpenTelemetry/Langfuse export. RouteForge itself uses LiteLLM as its
+provider-call library behind the gate.
+
+**What RouteForge adds** (we found no equivalent documented in the products above as of
+October 2026; that is a statement about their documentation, not a proof of absence):
+
+1. **Eligibility before scoring, as one fail-closed seam.** Each request's eligible set is
+   computed from the application's *compiled* policy (placement, allowed regions,
+   no-retention, tier/provider/model allowlists, cost cap) **and** the operator's
+   per-endpoint declarations (region, prompt retention, acceptance of raw sensitive
+   text). Every scorer, retry and failover stays inside it; if it is empty the request is
+   rejected, never sent to "the closest" endpoint.
+2. **Detection changes *where* a request may run, not just what it says.** A detected
+   SSN or PHI entity can raise placement to `onprem_only` for that request (declared,
+   raise-only sensitivity rules), in addition to redaction. `onprem_only` removes cloud
+   endpoints from the candidate pool before anything is scored.
+3. **Placement and protection are separate, property-tested axes.** Residency (where
+   compute runs) is independent of what the model sees, what the client receives, what
+   telemetry stores and which detector runs; one compiler resolves them, and a Hypothesis
+   harness checks that neither axis can move the other (it found two fail-open defects).
+4. **Rejections explain themselves.** An empty eligible set returns a 422 naming the
+   *minimal conflicting set* of requirements, with endpoint state kept separate and hints
+   that never suggest relaxing a security requirement.
+5. **Policy changes can be tested before they are applied.** Every request writes a
+   content-free outcome record (no prompt or completion text); an offline simulator
+   replays recorded traffic through the production router under a proposed policy and
+   reports routes changed, requests newly rejected, cost and capacity effects, with
+   bootstrap ranges.
+6. **Evaluation that respects policy.** FeasibleRouteBench scores routers against an
+   oracle that never credits an endpoint the request was not allowed to use.
+7. **Restrictions that follow an agent.** An opt-in trajectory envelope carries detected
+   entity types across an agent's calls, so a compacted summary of restricted context
+   does not drift to a cloud endpoint; attempt-scoped and service tokens bound what a
+   single agent run can do.
+8. **Recomputable decisions.** Each routing hop records every eligible candidate's
+   scoring terms with the source of each value (measured, peer prior, tier default), so
+   a ranking can be recomputed offline.
+
+**Where others are stronger:** learned routers (RouteLLM, LLMRouter, Switchyard, Not
+Diamond, Azure model router) predict answer quality far better than RouteForge's
+length-based tier rule, and full gateways (LiteLLM, Portkey, Kong) cover far more providers
+and enterprise features. RouteForge is designed to compose with them: its eligible set is
+the boundary inside which any scoring strategy may run. The trade-offs, measured, are in
+the paper ([`docs/research/paper/`](docs/research/paper/)) and in
+[`docs/architecture/decisions/`](docs/architecture/decisions/).
 
 ## Quick start (local, single node)
 

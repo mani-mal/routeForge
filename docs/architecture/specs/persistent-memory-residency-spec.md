@@ -6,8 +6,8 @@
 **Status:** design-gate doc, 2026-08-22. Authored as part of Task 1 (substrate + config + lint
 guards, default OFF). **Task 2 has since shipped** (commit `e778c97`): read/write is now wired
 into the serving pipeline (`app/main.py` constructs `DeterministicMemoryStore`; `app/pipeline.py`
-recalls and writes on the direct and multi-step paths), satisfying every guarantee below. The
-feature **remains default OFF** (`config/serving.yaml:41`). Sibling reads:
+recalls and writes on the direct and streaming paths), satisfying every guarantee below. The
+feature **remains default OFF** (`config/serving.yaml`, `memory.enabled`). Sibling reads:
 `docs/architecture/decisions/self-improving-agent-feature-fit.md` (§ persistent memory is one of the four
 cost-reduction levers), `.claude/skills/headroom-compression/` (CCR is the precedent this spec
 mirrors).
@@ -145,7 +145,7 @@ case) forces it on; anything else forces it off.
 **Task 2 has shipped the pipeline wiring.** `app/main.py` constructs one shared
 `DeterministicMemoryStore` unconditionally (mirroring `CCRStore`) and passes it to the pipeline;
 `app/pipeline.py` imports `recall_memory`/`write_memory` and calls them on the direct path (recall
-before routing, write on the success path) and recalls on the multi-step path. The store is
+before routing, write on the success path) and recalls on the streaming path (`Pipeline.run_stream`). The store is
 constructed regardless of `memory.enabled`, but the pipeline only reads/writes it when the flag is
 on — so with the shipped default (`enabled: false`) the flag gates *use*, not *existence*, and
 serving behavior is byte-for-byte unchanged from before this feature.

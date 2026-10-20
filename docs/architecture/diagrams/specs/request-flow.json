@@ -15,7 +15,7 @@
       {"id": "taskmode", "label": "Task-mode router\nalways direct — an app's\nagent loop sends each call\nas its own request", "color": "blue"}
     ]},
     {"title": "Step 5 · Context Optimization  (per call)", "nodes": [
-      {"id": "opt", "label": "Semantic cache ·\nHeadroom compression", "color": "purple"}
+      {"id": "opt", "label": "Memory recall · Semantic cache ·\nHeadroom compression", "color": "purple"}
     ]},
     {"title": "Step 6 / 7 / 8 · Router + Gateway", "nodes": [
       {"id": "router", "label": "Adaptive router\nscore post-compression\n(residency clamp)", "color": "orange"},
@@ -38,7 +38,7 @@
     {"from": "app", "to": "api", "label": "1 · POST /v1/chat"},
     {"from": "api", "to": "gate", "label": "2 · authN + PII scan", "color": "#B85450"},
     {"from": "gate", "to": "ctx", "label": "3 · build context", "color": "#B85450"},
-    {"from": "ctx", "to": "taskmode", "label": "4 · classify mode", "color": "#9673A6"},
+    {"from": "ctx", "to": "taskmode", "label": "4 · task mode (direct)", "color": "#9673A6"},
     {"from": "taskmode", "to": "opt", "label": "5 · direct", "color": "#6C8EBF"},
     {"from": "opt", "to": "router", "label": "6 · optimized ctx", "color": "#9673A6"},
     {"from": "router", "to": "gw", "label": "7 · select model", "color": "#D79B00"},

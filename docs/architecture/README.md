@@ -1,8 +1,9 @@
 # Architecture
 
-How RouteForge works today. **Every claim in this directory is checkable
-against HEAD** — it was verified during the 2026-09-10 docs reclassification
-sweep.
+How RouteForge works today. Claims in this directory are meant to be checkable
+against the code; last reviewed 2026-10-20 against `main` (component tables in
+`logical-and-request-flow.md` re-checked, line numbers replaced with symbols). Doc
+status stamps that name an `api:` version describe what was verified at that version.
 
 ## `architecture/` vs `decisions/` vs `specs/`
 
@@ -33,9 +34,10 @@ Three subdirectories, three different kinds of trust:
 | Doc | Summary |
 |---|---|
 | [`inference-layer-boundary.md`](decisions/inference-layer-boundary.md) | Where RouteForge stops and the serving layer begins — the recurring "does RouteForge do llm-d / DRA / Gateway API / prefill-decode?" question, and why RouteForge doesn't deploy Dynamo. |
-| [`compression-in-scope.md`](decisions/compression-in-scope.md) | Why context compression (Headroom, step 5) stays inside RouteForge rather than moving to the calling application, unlike agent-harness self-improvement and RLHF. |
+| [`compression-in-scope.md`](decisions/compression-in-scope.md) | Why context compression (Headroom, step 5) stays inside RouteForge rather than moving to the calling application — in contrast to hosting training or inference compute, which is out of scope. |
 | [`app-vs-routeforge-boundary.md`](decisions/app-vs-routeforge-boundary.md) | The general placement test for what belongs in the calling application vs. RouteForge, worked through client-side compressors, the semantic cache, and the two families of "prompt caching". |
 | [`per-app-config-flexibility.md`](decisions/per-app-config-flexibility.md) | Which Serving-Plane settings can safely become per-application overrides, and the rule for classifying any new per-app knob. |
+| [`system-one-model-selection-analysis.md`](decisions/system-one-model-selection-analysis.md) | 2026-10-16 analysis of selecting among models with a small "System One" classifier: no stochastic routing; any classifier is advisory-only, applied after switch-cost scoring and in shadow mode first. |
 | [`self-improving-agent-feature-fit.md`](decisions/self-improving-agent-feature-fit.md) | The 2026-08-17 control-plane-vs-compute boundary decision: where self-improving-agent research (memory, prompt-opt, distillation) lands vs. RouteForge's scope — orchestrated, not hosted. |
 
 ## Files in `architecture/specs/`
@@ -52,7 +54,8 @@ See [`diagrams/README.md`](diagrams/README.md) for the three draw.io diagrams
 regenerate them from their JSON specs.
 
 `llm orchestration loop.drawio` (this directory) is the original diagram,
-superseded by the three above — retained only because
+superseded by the three above. **Historical; contains removed concepts (NAT agent
+runtime, multi-step branch, `strong` tier) — do not use as a reference.** It is retained only because
 [`decisions/self-improving-agent-feature-fit.md`](decisions/self-improving-agent-feature-fit.md)
 cites its "Prompt / Instructions — DSPy / NAT optimizer" node as evidence that
 prompt optimization was in the design from day one; that node has no
@@ -78,12 +81,13 @@ old file still shows that the new ones don't.
 
 The Serving Plane is **steps 1–10** (1 Incoming Request → 10 Governed Response). All
 prose uses this count — not "1–8" or "1–9". The Improvement Plane (training,
-evaluation, promotion, registry) is out of scope and not in this diagram.
+evaluation, promotion, registry) runs on external compute; RouteForge only captures
+substrate, triggers jobs and onboards results (CLAUDE.md rule 4). It is not in this diagram.
 
 ## Serving paths: on-prem models are onboarded at runtime
 
-Step 8 shows three serving paths — **Dynamo + TensorRT-LLM**, **vLLM + Semantic
-Router**, and **managed cloud** (Azure/Bedrock). There is no deterministic
+Step 8 shows two kinds of serving path — operator-run **on-prem endpoints**
+(vLLM / Dynamo / NIM, any OpenAI-compatible server) and **managed cloud** (Azure/Bedrock). There is no deterministic
 canned-response backend: the old `mock` backend was **removed** in the LiteLLM gateway
 swap (2026-07-30), when LiteLLM became the single egress path for every provider. Tests
 that need determinism fake the LiteLLM SDK call itself (`tests/_litellm_fake.py`), not a

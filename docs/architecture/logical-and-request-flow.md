@@ -9,12 +9,12 @@ Companion notes for the draw.io diagrams in
 - `diagrams/routeforge-physical-architecture.drawio` — the Kubernetes pods (covered in
   [`api-load-balancing.md`](api-load-balancing.md) / the Helm chart, not repeated here).
 
-> **This file is verified against the code at api:0.24.0 (2026-09-10 re-verification; every
-> row below was re-checked against HEAD).** Every component below carries a
-> status marker. **Read the [status legend](#status-legend) first.** Application-scope
-> concerns that live outside RouteForge — prompt-optimization (DSPy) and NeMo Guardrails —
-> are **not** part of the router and are intentionally absent from the diagrams and the
-> tables below. Persistent memory (mem0-style) is **not** one of these — see the Step 5
+> **Last reviewed 2026-10-20 against `main`; component tables re-checked, line numbers
+> replaced with symbols.** Every component below carries a
+> status marker. **Read the [status legend](#status-legend) first.** NeMo Guardrails is
+> **not** part of the router and is intentionally absent from the diagrams and the tables
+> below; DSPy prompt optimization is an offline operator tool (`tools/prompt_opt/`), not part
+> of the serving path — see the Scope note. Persistent memory (mem0-style) is **not** one of these — see the Step 5
 > table and the Scope note below: it shipped as an in-house step-5 extension, inside the
 > router.
 
@@ -43,7 +43,7 @@ Companion notes for the draw.io diagrams in
 |-----------|---------|--------|-------|
 | PII/PHI detection | **Presidio** (+ spaCy NER) | 🔶 Optional | `uv sync --extra presidio`, lazy-imported in `detectors.py::PresidioDetector`. **The configured default is `presidio`** (`config/serving.yaml` `policy.pii_detection`; `make_detector` takes no default and raises on an unknown mode). The bundled Compose and Spark deploys override this to `regex` (offline-safe — no spaCy model download); per-app `pii_detection` = `off \| regex \| presidio`. |
 | Custom recognizers | **`regex`** (ReDoS-safe) | ✅ Used | Core dep; powers the per-app custom recognizers. |
-| Auth + API tokens | **argon2-cffi** | ✅ Used | Admin password + API-token hashing. |
+| Auth + API tokens | **argon2-cffi** | ✅ Used | Admin password + API-token hashing. Per-app service credentials (`rf_svc_…`) and attempt-scoped tokens with `expires_in_s` and session binding are minted in `app/apps/tokens.py`. |
 | App / usage store | **SQLAlchemy** (async) | ✅ Used | `aiosqlite` (dev) core; `asyncpg` (prod Postgres) via `--extra postgres`. |
 
 ### Step 4 · Task-mode router — `app/routing/task_mode.py`
@@ -69,7 +69,10 @@ Companion notes for the draw.io diagrams in
 ### Step 6 / 7 / 8 · Adaptive router + model gateway — `app/routing/`, `app/gateway/`
 | Component | Library | Status | Notes |
 |-----------|---------|--------|-------|
-| Adaptive router | in-house `RoutingStrategy` | ✅ Used | Scores candidates post-compression; residency clamp; pluggable strategy seam. |
+| Eligibility seam | in-house `FeasibleSet` (`app/policy/feasible.py::feasible_set`) | ✅ Used | The ONE place that decides which candidates are eligible (residency, regions, retention, allow-lists, context window, open circuit), computed **before** the router scores anything; its rejected set is surfaced as `sp.candidates`. |
+| Adaptive router | in-house `RoutingStrategy` | ✅ Used | Scores candidates post-compression; residency clamp; pluggable strategy seam. Each hop emits `sp.scoring` (every eligible candidate's four scoring terms and where each came from); the response certificate carries the chosen candidate's terms only. |
+| Circuit breaker | in-house (`app/gateway/breaker.py`) | ✅ Used | Step-7 breaker, on by default. Open circuits are excluded from the feasible set but **never change the target tier** (`Router.select`). |
+| Trajectory envelope | in-house (`app/policy/trajectory.py`) | 🔶 Optional | `trajectory_mode` = `off \| header \| sticky` per app; append-only `TrajectoryStore` lets entities detected earlier in a client-driven trajectory carry into later requests' gate. |
 | Model gateway | **LiteLLM** | ✅ Used | **Core dep** (not optional). Single multi-provider egress path behind the gate (`gateway/backends/litellm_backend.py`). |
 
 ### Step 8 · Approved inference backends (external — operator-run, **not** a RouteForge library)
@@ -115,7 +118,7 @@ spine; 13–14 are the telemetry tap.
 | 8 | gateway → backend | Dispatch to an on-prem endpoint, **or** managed cloud *only if allowed* (never for `onprem_only`). |
 | 9 | backend → verify | Completion returns to step-9 output controls. |
 | 10 | verify → governed response | Leakage checks; assemble the response + full `DecisionRecord`. |
-| 11–12 | response → API → app | Return `200` (or `422`/`502`/`503` on reject — see `dev-references/api-reference.md`). |
+| 11–12 | response → API → app | Return `200` (or `422`/`502`/`503` on reject — see [`../reference/api-reference.md`](../reference/api-reference.md)). |
 | 13 | (response) → OTel exporter | Emit the trace, **redacted on egress**. |
 | 14 | OTel → Langfuse | Store trace, cost, latency (no raw PII, no CCR/cache contents). |
 
@@ -127,7 +130,10 @@ RouteForge is the **router / policy gateway**. Two things that belong to the *ap
 built on top of it — not to the router — are intentionally excluded from these diagrams and
 tables:
 
-- **Prompt-optimization (DSPy)** — an offline concern of the application, not the serving path.
+- **Prompt-optimization (DSPy)** — in scope as an *offline, operator-run* tool
+  (`tools/prompt_opt/`, behind the opt-in `dspy` extra; versioned prompt artifacts via
+  `app/prompts/store.py`). It is never imported on the request-serving path, and no managed
+  prompt ships today (the step-4 classifier that was the first was removed 2026-09-17).
 - **NeMo Guardrails** — not a RouteForge dependency; the gate is Presidio/regex + rules only.
 
 **Persistent memory (mem0-style) is NOT one of these** — it is an in-house **step-5

@@ -66,19 +66,25 @@ done) and it round-robins new connections across all matching pods automatically
 So: **no one installs or wires a load balancer for the API.** Setting
 `replicaCount.api: 2` is the operator's entire action; kube-proxy does the rest.
 
-## What horizontal scaling changes — and why B3 is required
+## What horizontal scaling changes — and what B3 did about it
 
 With `replicaCount.api: 2`, the L4 Service immediately balances connections across both
-pods. But the API app currently keeps two things **in each pod's memory**:
+pods. The API app used to keep two things **in each pod's memory**:
 
 - `HistoryStore` (ring buffer) → `/api/requests`, `/stats`, `/fleet`
 - `DecisionBus` (asyncio pub/sub) → `/api/stream` (SSE)
 
-So a two-pod deploy would fragment the console: each pod only knows the ~half of
-traffic it served, and a browser's SSE stream (a long-lived connection pinned to one
-pod) never sees the other pod's requests. **B3** moves that state into the shared
-Postgres (`request_snapshots` table + `LISTEN/NOTIFY` bridge) so the console stays
+Left alone, a two-pod deploy would have fragmented the console: each pod only knows the
+~half of traffic it served, and a browser's SSE stream (a long-lived connection pinned to
+one pod) never sees the other pod's requests. **B3 (shipped)** moved that state into the
+shared Postgres: the console's list/detail/stats views read the durable `request_snapshots`
+table (`app/apps/models.py`), and a `LISTEN/NOTIFY` bridge (`app/api/pg_bridge.py`) fans
+each published decision out to the other pods' SSE subscribers, so the console stays
 coherent under the balancing Kubernetes already provides.
+
+Not everything is shared yet: the per-app `max_rpm` limit is still enforced by a
+**per-process** rate limiter, so with N pods the effective ceiling is up to N times the
+configured value (backlog B59 covers real admission control).
 
 Sticky sessions (Service `sessionAffinity: ClientIP`, or Istio consistent-hash) are
 **not** a fix: requests are still spread across pods, so any one pod's view of *all*

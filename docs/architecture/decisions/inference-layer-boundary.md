@@ -25,7 +25,7 @@ this doc is now the only source to read.)
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  routeForge  (the control plane — steps 1–10)                │
-│  • Is this coding / RAG / reasoning / a simple question?     │
+│  • How long is the prompt? (tier = length, no classifier)    │
 │  • Does the request contain PII/PHI? must it stay on-prem?   │
 │  • Which model gives the needed quality at the lowest cost?  │
 │  • Fall back? verify the output? record cost + a trace?      │
@@ -106,8 +106,9 @@ nothing** from them (CLAUDE.md hard rule 4; infra-management design §10).
 > **Status check 2026-09-10.** The 2026-08-03 pure-router pivot replaced this
 > declared-facts model with the leaner onboarding flow in `docs/guides/onboarding-models.md`:
 > `OnboardIn` carries `slug`, `display_name`, `tier`, `endpoint`, `api_key_env`,
-> `price_input`/`price_output`, `quality`, `context_window`, `allowed_app_ids`, `notes`,
-> `enabled` — no `engine`, `tensor_parallel`, `min_replicas`/`max_replicas`, `gpu_type`,
+> `price_input`/`price_output`/`price_cached_input`, `quality`, `context_window`,
+> `allowed_app_ids`, `notes`, `enabled`, and the data-handling declarations `region`,
+> `prompt_retention`, `accepts_raw_sensitive` — no `engine`, `tensor_parallel`, `min_replicas`/`max_replicas`, `gpu_type`,
 > `runai_scheduled`, or `runai_licensed` field exists in the current schema
 > (`app/apps/registry.py::_OnboardedRow`, `app/api/admin_routes.py`). **The decision
 > this section argues for is unaffected**: routeForge still only declares/consumes and

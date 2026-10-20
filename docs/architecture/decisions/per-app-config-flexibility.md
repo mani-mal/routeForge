@@ -287,10 +287,11 @@ the guarantee, not the app's own choice:
   Neither buffers the whole answer first — `stream_unverified` forwards deltas as they
   arrive (verification recorded as waived); `incremental_verify` pipes every delta
   through `StreamingVerifier.feed()` before emitting.
-- **The fail-closed floor lives in one place:** `app/pipeline.py:run_stream` raises
-  `StreamFallback` — caught by `app/api/routes.py` — whenever the request routes
-  `multi_step`, or `ctx.onprem_only`/`ctx.require_verification` is set. A floored request
-  always falls back to `verified_then_stream`; it is never streamed unverified or
+- **The fail-closed floor lives in one place:** `app/pipeline.py::Pipeline.run_stream` raises
+  `StreamFallback` — caught by `app/api/routes.py` — whenever the request is a client-driven
+  tools conversation, or `ctx.onprem_only`/`ctx.require_verification` is set (plus, a
+  further clamp: `stream_unverified` with an explicit app `client_output=redact` also falls
+  back). A floored request always falls back to `verified_then_stream`; it is never streamed unverified or
   incrementally. `stream_unverified` additionally gets an admin write-time 422 for
   `onprem_only` apps (`app/api/admin_routes.py:set_policy`), so the unsafe combination is
   rejected before it can even be configured, not just caught at runtime.

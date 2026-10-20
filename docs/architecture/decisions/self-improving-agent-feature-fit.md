@@ -76,7 +76,7 @@ refused.
 |---|---|
 | **Runtime self-editing** (agent rewrites its own routing/policy code mid-run, Guardian rebuild-and-soak) | ❌ **CAN'T / SHOULD NOT** — un-auditable; breaks the config-lint boot guarantee, deterministic routing, fail-closed (#5). Not contested by the owner. |
 | **Offline, human-gated policy improvement** (mine traces → *recommend* routing-rule / threshold / prompt changes; version + A/B via `routing_policy_version`) | ✅ **CAN** — the safe projection of "harness engineering." Operator applies the change through config; the lint gates it. |
-| **Executive / Harness / Sandbox split** (secrets + state out of the LLM's context) | ✅ borrow as a design principle for the step-4 agent runtime — consistent with rules we already hold. |
+| **Executive / Harness / Sandbox split** (secrets + state out of the LLM's context) | ✅ borrow as a design principle for the client-side agent harness (the app's) — consistent with rules we already hold. |
 
 ### C. Agent memory — mem0ai/mem0 (vector + entity + SQLite triple store)
 
@@ -104,7 +104,7 @@ landed (`app/memory/`).
 
 | | |
 |---|---|
-| Optimize RouteForge's **own** prompts (step-4 classifier, verify/judge, any templated internal prompt) via DSPy over exported datasets, human-gated | ✅ **CAN** — managed feature; the optimizer runs offline, the operator promotes the winning prompt version (tracked like `routing_policy_version`). |
+| Optimize RouteForge's **own** prompts (verify/judge, any templated internal prompt) via DSPy over exported datasets, human-gated | ✅ **CAN** — managed feature; the optimizer runs offline, the operator promotes the winning prompt version (tracked like `routing_policy_version`). **Built status:** the offline optimizer (`tools/prompt_opt/`, opt-in `dspy` extra) and the versioned-prompt substrate (`app/prompts/store.py`) are shipped, but no managed prompt ships today (the step-4 classifier that was the first was removed 2026-09-17). |
 | Rewrite **customer** prompts arriving inside a request | ❌ the one carve-out — those aren't ours to mutate; they pass through. |
 
 ### E. Trace mining / continual-learning loop / Judge Agents / distillation datasets

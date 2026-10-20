@@ -10,6 +10,8 @@
 - `docs/new/RouteForge-Priorities-1-3-LLM-Handoff.md` (§12–21, Priority 2)
 - `docs/new/multidimensional-policy-concept.md` (§4, §10–11)
 - `docs/new/policy-protection-redesign-handoff.md` (skimmed for scope statements)
+- *Note:* the `docs/new/*` files above are local working drafts that are not in the
+  repository; they cannot be followed from a checkout.
 - The code, for how routing works today. Facts below come from the code, not from CLAUDE.md.
 
 **Questions:**

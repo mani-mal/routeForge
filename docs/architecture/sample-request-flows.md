@@ -23,7 +23,7 @@ questions the box diagrams don't:
 
 ---
 
-## 0. The mental model — one spine, two branch points
+## 0. The mental model — one spine, one branch point
 
 Every request runs the same spine (steps 1→10) and answers with **one** model call.
 There is only **one** place it branches:
@@ -346,7 +346,7 @@ integration shape.
 | Verify | basic | basic | **`require_verification`** | per turn |
 | Langfuse capture | off (no I/O) | off (no I/O) | **off (no I/O)** | redacted, one trace per turn |
 
-Every row of every flow emits a `DecisionRecord`. The "why" in those records — which
+Every decision step emits a `DecisionRecord` (step 4 emits none). The "why" in those records — which
 candidates were rejected and why — is the product.
 
 ---
