@@ -4,8 +4,10 @@
 > removed; agent loops are client-driven.
 
 **Date:** 2026-09-06
-**Status:** Framing / decision doc. No code changes. Describes shipped behaviour as of
-`api:0.24.0`, with the gaps named as backlog.
+**Status:** Framing / decision doc. No code changes. Written against shipped behaviour at
+`api:0.24.0` (the §6b/§6c code claims were verified at that version, not re-verified
+since, except where a note below says so). The NAT / multi-step argument in §4 is
+historical: that runtime was removed 2026-09-17.
 **Answers the recurring question:** *"If an application wants to cut its own token cost —
 a client-side compressor like [rtk](https://github.com/rtk-ai/rtk), its own answer cache,
 a prompt-caching library — can it? Does that affect RouteForge? Isn't RouteForge just a
@@ -54,7 +56,7 @@ feature that happens to live at one?*
 | Bucket | What's in it | Sell it? |
 |---|---|---|
 | **Chokepoint — only RouteForge can do it** | Policy gate (step 2), residency-by-construction (rule 3), per-app policy, metering, `DecisionRecord`, step-9 verification | **Yes. This is the product.** |
-| **In-boundary levers — in RouteForge *because of* the boundary and the agent loop** | Headroom compression (step 5), `DeterministicSemanticCache` | Demo them. Both default-OFF. Never the pitch. |
+| **In-boundary levers — in RouteForge *because of* the boundary** | Headroom compression (step 5), `DeterministicSemanticCache` | Demo them. Both default-OFF. Never the pitch. |
 | **The app's own business** | rtk-style client compressors, the app's own agent harness, the app's own answer cache | **Never absorb.** |
 
 ## 3. Client-side token reduction (rtk and friends) — the app's business
@@ -76,12 +78,13 @@ Two consequences worth stating plainly:
 Full argument in [`compression-in-scope.md`](./compression-in-scope.md). Short form: CCR
 caches *originals* under a residency boundary and a TTL (rule 6) and must only see
 post-gate content (rule 7) — you cannot move that outside the boundary that enforces it;
-on the **multi-step path there is no app-owned harness to hand it to**, because the tool
-outputs and history are produced by RouteForge's own NAT runtime; and the router must
-price **post-compression** tokens or the two-levers cost story is unmeasurable.
+the agent harness is the app's (loops are client-driven since 2026-09-17), but every
+model call it makes re-enters steps 2–9 as its own request, so Headroom stays inside
+because CCR cannot leave the residency boundary and must only see post-gate content
+(rules 6/7); and the router must price **post-compression** tokens or the two-levers cost story is unmeasurable.
 
-Where the "it could live in the app" instinct is right: on the **direct single-shot path**,
-an app that pre-summarises its own history is doing the same job. That overlap is fine
+Where the "it could live in the app" instinct is right: an app that pre-summarises its
+own history before calling RouteForge is doing the same job. That overlap is fine
 precisely because Headroom is default-OFF and conditional.
 
 ## 5. `DeterministicSemanticCache` — in RouteForge, but a lever, not infrastructure
@@ -95,7 +98,7 @@ none of that. Binding contract: [`semantic-cache-residency-spec.md`](../specs/se
 
 **Why it is *not* a selling point** — and the honest, concrete reason:
 
-- It is a **per-process in-memory dict** (`app/cache/store.py:101`), TTL-bounded,
+- It is a **per-process in-memory dict** (`app/cache/store.py::DeterministicSemanticCache`), TTL-bounded,
   **exact normalized-query match** (not embedding similarity — that seam is deferred),
   **off by default**, and consulted on the **direct path only**.
 - With `replicaCount.api = N` behind the Service, hit rate degrades toward **1/N**. See
@@ -129,30 +132,32 @@ verdict, no step-9 verification.** If the customer's reason for deploying RouteF
 
 ### 6b. Family B — the app can set it, and RouteForge currently drops it
 
-Verified against `api:0.24.0`:
+Verified against `api:0.24.0` (historical; the `model_extra` and cost-math points are
+updated inline below):
 
 1. **The markers are stripped, for two different reasons.** A per-message `cache_control`
    block never survives request parsing at all: `Message` (`app/models.py`) declares no
    such field and silently drops unknown ones, so `_to_wire()`
-   (`app/gateway/backends/litellm_backend.py:34`, used at `:97` and `:149`) — which
+   (`app/gateway/backends/litellm_backend.py::_to_wire`, used by `LiteLLMBackend.generate`
+   and `generate_stream`) — which
    serialises each message to `{role, content}` plus tool-calling fields only — never sees
    it either way. A top-level `prompt_cache_key` survives one step further: `ChatRequest`
-   allows extra fields, so it lands in `request.model_extra` — but nothing downstream
-   (`Pipeline.run`, the gateway call construction) ever reads `model_extra`, so it is never
-   added to the `call` dict passed to `acompletion()`. `drop_params: True`
-   (`litellm_backend.py:100`, `:153`) never gets the chance to act on it — the param is
-   simply never forwarded, not dropped by that flag. Verified 2026-09-10:
-   `Message(role=..., cache_control=...).model_dump()` omits the field, and
-   `ChatRequest(..., prompt_cache_key=...).model_extra == {"prompt_cache_key": ...}` while
-   grep confirms `model_extra` is read nowhere in `app/`. The app sets them; the provider
-   never sees them.
+   allows extra fields, so it lands in `request.model_extra`. `ChatRequest.generation_params`
+   (`app/models.py`) reads `model_extra`, but forwards only the `FORWARDED_PARAMS`
+   allow-list (sampling and length knobs such as `temperature`, `max_tokens`, `seed`,
+   `response_format`). `prompt_cache_key` is not on that list, so it is never added to the
+   `acompletion()` call, and `drop_params: True` in `LiteLLMBackend` never gets the chance
+   to act on it. `Message(role=..., cache_control=...).model_dump()` omits the field. The
+   app sets them; the provider never sees them.
 2. **Even if they survived, nothing keeps a session on one route.** RouteForge re-selects a
    model from scratch on every call and every agent hop, so turn 2 can land elsewhere and
    cold-miss the prefix the app just paid to warm (`caching-cost-feature-fit.md` §2b).
 3. **The cost math would still lie.** `PriceCfg` has no cached-input rate and the backend
    never reads `cache_read_input_tokens` / `cached_tokens`, so a real provider cache hit is
    still billed at 100% of input price — the invoice comes in under RouteForge's dashboard
-   (§2a; backlog F1).
+   (§2a; backlog F1). *Update:* cached-token accounting has since shipped (P2a: the
+   backend reads `cached_tokens`, `Usage` carries it, `price_cached_input` is an onboarding
+   field), so this point is no longer current; points 1 and 2 still are.
 
 ### 6c. `policy_mode` × byte-stable prefixes *(new since `caching-cost-feature-fit.md`; `policy_mode` shipped 2026-09-05)*
 
@@ -160,7 +165,7 @@ Provider prompt caching needs a **byte-stable prefix**. Whether RouteForge prese
 depends on the app's **protection** posture — not its placement:
 
 - **`policy_mode: passthrough`** → the gate composes the **null detector**
-  (`app/pipeline.py:190-214`): nothing is detected, so nothing is redacted at intake and
+  (`app/pipeline.py::Pipeline._gate_inputs`): nothing is detected, so nothing is redacted at intake and
   nothing on egress. The payload is passed through unmodified and a stable prefix holds.
 - **`policy_mode: enforced`** → redaction rewrites message text whenever entities are
   found, and Headroom (if enabled) rewrites it again. A stable prefix is **not

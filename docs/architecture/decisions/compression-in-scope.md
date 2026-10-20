@@ -15,9 +15,10 @@ CLAUDE.md rules #6/#7.
 
 ## The question, stated fairly
 
-RLHF and agent self-improvement are out of scope. The reasoning is real: they change
-model weights or rewrite the harness's own logic — that's *compute* and a *different
-plane* — and the app that calls RouteForge owns its own agent loop, produces its own
+**Hosting** training or inference compute is out of scope (CLAUDE.md rule 4); capturing
+training substrate, triggering external jobs, and onboarding the results is in. The
+reasoning is real: training changes model weights or rewrites the harness's own logic —
+that's *compute* and a *different plane* — and the app that calls RouteForge owns its own agent loop, produces its own
 history, and could manage its own context. So the instinct is: compression reduces the
 tokens the app sends; the app could do that itself; move Headroom out.
 
@@ -70,20 +71,21 @@ demonstrability *is* a feature; it does not exist if compression happens off-pla
 
 ## Where the instinct is right — and why it is still fine
 
-On the **direct / pass-through path**, the calling app owns its own conversation history,
-and a cost-conscious app *could* pre-summarize before calling RouteForge. RouteForge does
+The calling app owns its own agent harness and conversation history, and a cost-conscious
+app *could* pre-summarize before calling RouteForge. RouteForge does
 not *need* compression to route — routing works on whatever tokens arrive. That overlap is
 real. It stays fine because Headroom is **default-OFF and conditional** (opt-in per
 operator), so it is never forced on an app that manages its own context.
 
-On the **multi-step path it is unambiguous**: RouteForge's own NAT agent runtime produces
-the tool outputs and history, and every hop re-enters compression (5) and the router (6).
-There is no app-owned harness there to hand the job to — the harness *is* RouteForge.
+What keeps the job inside is not who owns the loop: the harness is the app's, but every
+model call it makes arrives as its own request and re-enters compression (5) and the
+router (6). Headroom stays in RouteForge because CCR caches originals and cannot leave
+the residency boundary, and it must only see post-gate content (rules 6/7).
 
 ## Net
 
-RLHF and self-improvement are out because they are the Improvement Plane changing a model
-(or rewriting the harness) on external compute. Compression is a per-call, in-boundary,
+Hosting the Improvement Plane is out because it changes a model (or rewrites the harness)
+on compute RouteForge does not run; RouteForge only orchestrates it. Compression is a per-call, in-boundary,
 Serving-Plane seam that (1) hosts no compute, (2) can only be enforced inside the
 residency boundary RouteForge owns, (3) must be measured where the router prices tokens,
 and (4) is one of the ten seams the product exists to show. Keep it in RouteForge.
