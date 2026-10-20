@@ -4,8 +4,8 @@
 with B48 (failure injection, failover-aware scoring, the online router arm) and the first
 non-null B45 answer: §9. Branch `feat/b48-failure-injection`, code at `8344b21`.
 **Branch:** `feat/feasible-route-bench` (base `0f9e823`). Design:
-`docs/superpowers/specs/2026-09-21-feasible-route-bench-design.md` (binding; §6 amended in
-`aa50dc2`). Plan: `docs/superpowers/plans/2026-09-21-feasible-route-bench.md`.
+the feasible-route-bench design spec (binding; §6 amended in
+`aa50dc2`). Plan: the feasible-route-bench plan.
 **Predecessors:** P1a ([`policy-compiler-noninterference.md`](policy-compiler-noninterference.md)),
 P1b (`app/policy/feasible.py`), P2a ([`routing-signal-provenance.md`](routing-signal-provenance.md)),
 signal hardening (`SignalStore.replay`).
@@ -563,7 +563,7 @@ for a run. Noninterference is P1a's harness. All three are named as deferred in 
 - **Churn robustness is designed, not built**: one declared change to the policy or the
   registry at a time, the suite re-run, violations required to stay 0.
 
-Both designs are in `docs/superpowers/specs/2026-10-07-p2-eval-metrics-design.md` §6 and §9.
+Both designs are in the p2-eval-metrics design spec §6 and §9.
 
 ### 6.6 No live result
 
@@ -635,12 +635,12 @@ that is the point of the stamp.
 
 | | |
 |---|---|
-| Design (binding) | `docs/superpowers/specs/2026-09-21-feasible-route-bench-design.md` |
-| Plan | `docs/superpowers/plans/2026-09-21-feasible-route-bench.md` |
+| Design (binding) | the feasible-route-bench design spec |
+| Plan | the feasible-route-bench plan |
 | Per-task briefs, reports, rulings | `.superpowers/sdd/2026-09-21-feasible-route-bench/` (local working files, not in the repository) |
 | Operator guide | [`docs/guides/feasible-route-bench.md`](../guides/feasible-route-bench.md) |
 | The question B45 asks | [`docs/backlog/bugs.md`](../backlog/bugs.md) B45; [`routing-signal-provenance.md`](routing-signal-provenance.md) §2.5 |
-| Source of the §14 example | `docs/archive/design-handoffs/RouteForge-Priorities-1-3-LLM-Handoff.md` §12–21 (not tracked in this branch) |
+| Source of the §14 example | the Priorities 1–3 design handoff, §12–21 (not tracked) |
 
 Commits, oldest first: `c213763` (spec) · `bfeb8ab` (plan) · `f8e41a5` (graders and
 case-suite loader) · `55e3990` (endpoint files, harness settings, scratch registry) ·
@@ -667,8 +667,8 @@ exception, one hop) · `a543abb` (failover-aware strategy scoring) · `1a6712b` 
 orders, online arm, prior-only warm arm) · `153a0d4` (spec §6 amended: the case clock and
 `seconds_per_case`) · `8344b21` (runner wiring, failover scoring of every arm,
 `router_warm` removed, outage scenario). Design:
-`docs/superpowers/specs/2026-09-22-feasible-bench-failure-injection-design.md`; plan:
-`docs/superpowers/plans/2026-09-22-feasible-bench-failure-injection.md`; per-task reports
+the feasible-bench-failure-injection design spec; plan:
+the feasible-bench-failure-injection plan; per-task reports
 and review rulings: `.superpowers/sdd/2026-09-22-feasible-bench-failure-injection/` (local
 working files, not in the repository). The score probe that §9.5 quotes is committed:
 `scripts/b45_score_probe.py`.
@@ -691,7 +691,7 @@ working files, not in the repository). The score probe that §9.5 quotes is comm
 
 ## 9. B48: failure injection, failover-aware scoring, and the first B45 answer (2026-09-22)
 
-**Design (binding):** `docs/superpowers/specs/2026-09-22-feasible-bench-failure-injection-design.md`,
+**Design (binding):** the feasible-bench-failure-injection design spec,
 §6 amended in `153a0d4`. **Code:** `290b555` … `8344b21` (commits in §8). **Backlog:**
 B48 (resolved by this work) and B45 (answered for the simulation, still open) in
 [`docs/backlog/bugs.md`](../backlog/bugs.md).
@@ -1393,7 +1393,7 @@ preference, and no weight tried kept a dead endpoint out of rotation without als
 overriding real cost differences. Both recommended a step-7 circuit breaker instead. This
 section records the breaker as built on `feat/endpoint-circuit-breaker` (code at `ef9315f`)
 and its simulated measurement on the §9 outage scenario. Design:
-`docs/superpowers/specs/2026-09-23-endpoint-circuit-breaker-design.md`, amended on
+the endpoint-circuit-breaker design spec, amended on
 2026-09-23 where the build departed from it (§12.1). **Every number here is simulated.**
 There is no live breaker run.
 
@@ -1681,7 +1681,7 @@ worse; it did not add a quality signal.
 P2b-2 is the first half of the durable fix. RouteForge now **records what happened on
 each production request**, per workload, so that a later slice can learn from it. This
 section records the dataset as built on `feat/routing-outcome-records` (code at
-`e14f8e5`, plus the final-review fixes of 2026-09-23). Design: `docs/superpowers/specs/2026-09-23-routing-outcome-records-design.md`,
+`e14f8e5`, plus the final-review fixes of 2026-09-23). Design: the routing-outcome-records design spec,
 amended on 2026-09-23 where the build departed from it. Field-level reference:
 [`docs/reference/routing-outcomes.md`](../reference/routing-outcomes.md). **This section
 contains no results.** Nothing has been deployed, so no production record exists yet.
@@ -1855,7 +1855,7 @@ online items (propensity logging, the full feasible set on the record, a denser 
 still missing. P2b-3, as actually built, is narrower and deliberately does not attempt
 those: it is a **recommend-then-human-applies** loop over the served-arm dataset §13
 already describes, with no exploration and no change to eligibility. Design:
-`docs/superpowers/specs/2026-09-24-offline-quality-calibration-design.md` (§12 records
+the offline-quality-calibration design spec (§12 records
 where the build departed from it). Field-level reference:
 [`docs/reference/quality-calibration.md`](../reference/quality-calibration.md). Code:
 `app/eval/calibration.py` (estimator + replay), `app/apps/calibration_sets.py` (serving-side
@@ -1986,7 +1986,7 @@ narrow correction (a quality score) from that dataset. Neither answers the opera
 day-to-day question: "if I tighten this app's residency, or drop this endpoint, or reprice
 that model, what changes for the traffic I already have?" P3a is that offline answer. This
 section records the simulator as built on `feat/policy-simulator`. Design:
-`docs/superpowers/specs/2026-09-24-policy-simulator-design.md`. Field-level reference:
+the policy-simulator design spec. Field-level reference:
 [`docs/reference/policy-simulator.md`](../reference/policy-simulator.md). Code:
 `app/apps/snapshot.py`, `app/api/admin_routes.py` (`GET /admin/config-snapshot`),
 `app/eval/scenario.py`, `app/eval/proposal.py`, `app/eval/simulate.py`,
@@ -2100,7 +2100,7 @@ something new.
 about a request that is rejected today: an empty feasible set's 422 used to name only the
 first-failed stage of each candidate, leaving an operator to work out by hand which
 requirements actually conflict. P3b names that set directly. Design:
-`docs/superpowers/specs/2026-09-25-conflicting-core-design.md`. Field-level reference:
+the conflicting-core design spec. Field-level reference:
 [`docs/reference/conflicting-core.md`](../reference/conflicting-core.md). Code:
 `app/policy/core.py` (pure computation), `app/policy/feasible.py`
 (`candidate_violations`/`violation_matrix`), `app/routing/router.py` (the two raise sites).
@@ -2188,7 +2188,7 @@ models in the cheap and mid tiers, with no region declared; cloud providers were
 core answers "why is this one request rejected today?" Neither answers a question an operator
 routinely has *before* writing any proposal: of everything an app's policy currently
 constrains, **which constraint is actually expensive, and which is cheap?** Design:
-`docs/superpowers/specs/2026-09-26-shadow-prices-design.md`. Field-level reference:
+the shadow-prices design spec. Field-level reference:
 [`docs/reference/policy-simulator.md`](../reference/policy-simulator.md) §8. Code:
 `app/eval/shadow.py` (`Relaxation`, `enumerate_relaxations`, `shadow_prices`,
 `render_shadow_section`), wired into `scripts/policy_simulate.py` by `--shadow-prices`.
@@ -2405,7 +2405,7 @@ the same change as these results (`_round6` now normalises `-0.0`).
 
 §15 replays one proposal. §17 prices one constraint at a time. Neither lets an administrator
 put several joint changes next to each other. P3c-2 does. Design:
-`docs/superpowers/specs/2026-10-05-p3c2-scenarios-design.md`. Reference:
+the p3c2-scenarios design spec. Reference:
 [`docs/reference/policy-simulator.md`](../reference/policy-simulator.md) §9. Code:
 `app/eval/scenarios.py`, with the new replay behaviour in `app/eval/simulate.py`,
 `app/eval/proposal.py` and `app/eval/scenario.py`. **Not deployed**; this section reports
@@ -2561,7 +2561,7 @@ today.
 
 §18.4.1 found that the simulator replays a live-rejected request as routed, and that the
 baseline check did not notice. This section records the fix. Design:
-`docs/superpowers/specs/2026-10-06-replayable-rejections-design.md`. Reference:
+the replayable-rejections design spec. Reference:
 [`docs/reference/routing-outcomes.md`](../reference/routing-outcomes.md) §3.2 and
 [`docs/reference/policy-simulator.md`](../reference/policy-simulator.md) §5, §6. Code:
 `app/pipeline.py` and `app/apps/outcomes.py` (the record), `app/eval/simulate.py` (replay and
@@ -2721,7 +2721,7 @@ classes are exercised only by the test suite.
 Every figure in §15–§19 is a point estimate from one replay of one export. §19.4.1 reports
 "cost −39.0%" from 24 rows; nothing on the page distinguishes that from the same number on
 two million. This section records the range that now goes beside each figure, and what it
-does and does not mean. Design: `docs/superpowers/specs/2026-10-06-p3c3-uncertainty-design.md`.
+does and does not mean. Design: the p3c3-uncertainty design spec.
 Reference: [`docs/reference/policy-simulator.md`](../reference/policy-simulator.md) §10. Code:
 `app/eval/uncertainty.py`. **Not deployed anywhere and not run on real records**: the only
 numbers below are synthetic, and every measurement on recorded traffic is to be made (§20.6).
@@ -3096,7 +3096,7 @@ that names them.
   it; it would break the pairing with per-application shadow prices and is not built.
 - **Rows are assumed independent within a stratum.** LLM traffic does not satisfy it. A
   cluster bootstrap over client sessions or agent tasks would be the right unit; the record
-  has no session identifier (the same gap R3 in `arxiv.md` §5 needs closed).
+  has no session identifier (the same gap R3 in the paper's experiment plan needs closed).
 - **Pooling treats the small applications' rows as exchangeable.** Where those applications
   differ in mean the pooled totals range is wider than the fixed-mix truth, by up to 14% in
   §20.6.1 (synthetic).
@@ -3127,7 +3127,7 @@ the on-prem endpoint at 230% of what it can serve (§25, §31). This section rec
 that now reports the last of those, **and the first model that was built and withdrawn
 before any figure was quoted** (§21.5.2): its numbers were arithmetically what its
 specification said and were still unsafe to cite. Design:
-`docs/superpowers/specs/2026-10-07-p3c4-capacity-design.md` (the body is the model as built;
+the p3c4-capacity design spec (the body is the model as built;
 §15 lists the changes). Reference:
 [`docs/reference/policy-simulator.md`](../reference/policy-simulator.md) §11. Code:
 `app/eval/capacity.py`. **Not deployed anywhere and not run on real records**: §21.5 holds
@@ -3511,7 +3511,7 @@ not because a test here tells the two apart.
 
 None of the following has been run. Each is listed with what it needs.
 
-- **The healthcare scenario pair on the DGX lab** (`docs/research/arxiv.md` E10a): persona
+- **The healthcare scenario pair on the DGX lab** (experiment-plan item E10a): persona
   traffic at a known arrival rate through two endpoints of different placement, the
   "all on-prem" and "raw PII on-prem only" scenarios, and a capacity file for the on-prem
   endpoint. Reports: peak, window average and active average utilisation per arm per
@@ -3780,8 +3780,8 @@ Figures in this list are synthetic; the method for each is in §21.5.5.
 ## 22. Group report and the offline router-version check (P2 evaluation metrics, 2026-10-07)
 
 **Status:** built, offline, opt-in. Spec
-`docs/superpowers/specs/2026-10-07-p2-eval-metrics-design.md` (§4, §5, §7, §8); plan
-`docs/superpowers/plans/2026-10-07-p2-eval-metrics.md`. Branch `feat/p2-eval-metrics`.
+the p2-eval-metrics design spec (§4, §5, §7, §8); plan
+the p2-eval-metrics plan. Branch `feat/p2-eval-metrics`.
 Operator guide: `docs/guides/feasible-route-bench.md` §6.2–§6.3. **Every number in §22.5 is
 from a simulated run.** Read §22.6 before writing a sentence that claims a result.
 
@@ -4050,7 +4050,7 @@ floor, and the first three cases did not notice M14; at seed 1 some are, and the
 
 #### 22.5.5 Live
 
-**TO MEASURE.** No `--live` run has been made with either flag. Wanted (arxiv.md E11):
+**TO MEASURE.** No `--live` run has been made with either flag. Wanted (experiment-plan item E11):
 
 - the group report on a live suite with at least five cases in every placement and
   protection group, and at least two endpoints of different placement;
@@ -4123,7 +4123,7 @@ rate; it is a backlog item (a family-wise correction, B67 follow-up 4).
 Written against the code as it stands (commit `afa03d2`), after §22's text above was
 drafted against an earlier revision of the module. Where the two differ, this section is
 the correct one; §7.4 of
-`docs/superpowers/specs/2026-10-07-p2-eval-metrics-design.md` and its §16 deviation 8
+the p2-eval-metrics design spec and its §16 deviation 8
 describe the superseded first rule.
 
 - **A. The decision rule** (§22.2, §22.7). Superseded: any sentence reading "the point

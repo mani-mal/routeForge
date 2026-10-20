@@ -1,7 +1,7 @@
 """Tests for `app.eval.endpoints` (Task 2, FeasibleRouteBench).
 
 Covers the §4.2 endpoint-file loader, `harness_settings`, and the scratch
-`build_registry`. See docs/superpowers/specs/2026-09-21-feasible-route-bench-design.md
+`build_registry`. See the FeasibleRouteBench design spec
 §3/§4.2.
 """
 from __future__ import annotations

@@ -3,7 +3,7 @@
 Covers `SimulatedBackend`'s determinism, quality/latency draws, token/cost
 accounting, and the `(case.id, model)` message capture used by the
 redaction test. See
-docs/superpowers/specs/2026-09-21-feasible-route-bench-design.md §5.1.
+the FeasibleRouteBench design spec §5.1.
 """
 from __future__ import annotations
 

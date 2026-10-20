@@ -9,7 +9,7 @@ These records are a dataset for later analysis (P2b-3: learning bounded by the f
 set). **Nothing reads them back into routing.** The router's decisions are the same with
 the feature on or off.
 
-- Design: `docs/superpowers/specs/2026-09-23-routing-outcome-records-design.md` (amended
+- Design: the routing-outcome-records design spec (amended
   2026-09-23 where the build differs).
 - Research notes (the dataset's model, invariants and limits):
   [`docs/research/feasible-route-bench.md`](../research/feasible-route-bench.md) §13.

@@ -1,6 +1,6 @@
 """P1b Task 4 — the three endpoint data-handling exclusion rules.
 
-Design: docs/superpowers/specs/2026-09-19-endpoint-data-handling-p1b-design.md §4.
+Design: P1b endpoint-data-handling design §4.
 
 | rule          | condition                                                   | code                          | unknown |
 |---------------|-------------------------------------------------------------|-------------------------------|---------|

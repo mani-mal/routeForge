@@ -5,7 +5,7 @@ Every run here is SIMULATED (spec §5.1) -- a tiny inline suite and endpoint
 file written to `tmp_path`, driven through the REAL gate, `feasible_set`,
 pipeline, and `Router.select`. Nothing makes a network call. Every async run
 is bounded by `asyncio.wait_for` so a regression cannot hang the suite.
-See docs/superpowers/specs/2026-09-21-feasible-route-bench-design.md §5-§8.
+See the FeasibleRouteBench design spec §5-§8.
 """
 from __future__ import annotations
 

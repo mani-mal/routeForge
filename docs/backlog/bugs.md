@@ -1,9 +1,7 @@
 # Bugs backlog — work later
 
 Running list of known defects/observations to pick up later. Newest first.
-**This is now the single backlog.** [`archive/ui-open-items.md`](../archive/ui-open-items.md) and
-[`archive/eval-logging-backlog.md`](../archive/eval-logging-backlog.md) have been folded in and archived to
-`docs/archive/` — every item in both was verified against the code (not
+**This is now the single backlog.** The earlier UI open-items and eval-logging backlogs have been folded in and archived — every item in both was verified against the code (not
 assumed from its status heading) during the 2026-09-10 docs sweep, and every
 one was confirmed closed; nothing was migrated because nothing was live. See
 the audit trail in that sweep's task report.
@@ -62,8 +60,8 @@ the audit trail in that sweep's task report.
 > turned up while verifying the `docs/` tree against the code for the docs
 > reclassification project (not while adding a feature) — recorded below as
 > **B26**–**B30**. None are fixed here; this sweep only writes backlog entries.
-> The same sweep also folded [`archive/ui-open-items.md`](../archive/ui-open-items.md) and
-> [`archive/eval-logging-backlog.md`](../archive/eval-logging-backlog.md) into this file (see the note at the top) —
+> The same sweep also folded the earlier UI open-items and
+> eval-logging backlogs into this file (see the note at the top) —
 > every item in both verified closed, nothing migrated.
 
 ---
@@ -131,9 +129,8 @@ the audit trail in that sweep's task report.
 
 **Found 2026-10-13** by an audit of what was built from the owner's original request to use
 [Artificial Analysis](https://artificialanalysis.ai/) metrics for the model/agent metrics on
-the UI. The request was only partly delivered. Design reference:
-[`docs/superpowers/specs/2026-08-01-model-quality-scoring-design.md`](../superpowers/specs/2026-08-01-model-quality-scoring-design.md)
-§8–§9. The metric catalog that spec drew from, `docs/dashboard-metrics.txt`, is no longer in
+the UI. The request was only partly delivered. Design reference: the
+model-quality-scoring design spec §8–§9. The metric catalog that spec drew from, `docs/dashboard-metrics.txt`, is no longer in
 the repo, so the remaining items on it could not be checked one by one.
 
 **What is built today:**
@@ -145,7 +142,7 @@ the repo, so the remaining items on it could not be checked one by one.
 | Artificial Analysis Intelligence Index as the per-model quality score | plumbing only, no data | `quality` field on `model_pool` entries (`app/config/schema.py`); no entry sets it — `config/routing.yaml` has only a commented-out example |
 | Time to first token | measured and stored, never displayed | `app/gateway/gateway.py` (streamed calls); `endpoint_observations.ttft_ms`; no API or UI reads it |
 | Output speed (tokens per second) | not built | — |
-| Agent-level metrics (AA-AgentPerf) | not built | cited in `docs/research/paper-draft.md` only |
+| Agent-level metrics (AA-AgentPerf) | not built | cited in the paper draft only |
 
 **Consequence:** the two density tiles run on the tier default (`tier_quality`: cheap 0.5,
 mid 0.75, frontier 1.0) unless a model has a customer-declared or calibrated score. The UI's
@@ -176,8 +173,7 @@ provenance note says so, but the numbers are not Artificial Analysis numbers.
    now that B72 gives requests a trajectory identity. Not designed.
 
 **Scope guard:** nothing here fetches from Artificial Analysis at runtime — deployments are
-often air-gapped, and routing on a live third-party leaderboard is already declined in
-[`docs/comparisons/external-router-feature-analysis.md`](../comparisons/external-router-feature-analysis.md).
+often air-gapped, and routing on a live third-party leaderboard is already declined in the external-router feature analysis.
 
 ## B72 — FEATURE: trajectory identity and a trajectory-scoped policy envelope (then task-level cost and switch-aware routing)  🟡 STEPS 1–3 BUILT
 
@@ -380,7 +376,7 @@ once.
 **Severity:** low (the group report and the router-version check work as designed; these
 are what they do not yet cover).
 **Found:** 2026-10-07, the P2 evaluation-metrics design
-(`docs/superpowers/specs/2026-10-07-p2-eval-metrics-design.md` §14).
+(the p2-eval-metrics design spec §14).
 
 1. **The answer confidence is recorded nowhere.** `GenerationResult.confidence` — the
    backend's figure, `min(1, exp(mean token logprob / T))`, or `DEFAULT_CONFIDENCE = 0.9`
@@ -427,7 +423,7 @@ CI — still not wired into anything).
 **Severity:** low (the capacity section works from a hand-written file; these make it less
 manual and less coarse).
 **Found:** 2026-10-07, the P3c-4 design
-(`docs/superpowers/specs/2026-10-07-p3c4-capacity-design.md` §13, as amended in §15).
+(the p3c4-capacity design spec §13, as amended in §15).
 
 1. **Capacity declared on the onboarded endpoint.** Today the limits live in a
    `--capacity` file the operator writes by hand, keyed by slug. An optional declaration on
@@ -630,7 +626,7 @@ run first; api `0.27.0`). Verified live there: the 7 budget-rejected requests ar
 replay, outcome agreement is 1.0 over 24 rows, and `raise-request-budget` newly serves 7
 (`docs/research/feasible-route-bench.md` §19.4.1). **Not on the Spark** — it still needs the
 `ALTER` (`docs/reference/routing-outcomes.md` §1) and the image. Design:
-`docs/superpowers/specs/2026-10-06-replayable-rejections-design.md`.
+the replayable-rejections design spec.
 
 - **Serving.** `RoutingOutcome` has `routing_tokens` (`INTEGER`, nullable): the `tokens_after`
   the router was given. `Pipeline.run` and `run_stream` put it on the outcome context on the
@@ -1052,7 +1048,7 @@ onboarded model).
 **Severity:** low (improvement, not a defect)
 **Found:** 2026-09-22, reported from a Qwen Code session on the Spark.
 **Resolved 2026-09-22** on `fix/b49-b50-openai-client-compat` (design
-`docs/superpowers/specs/2026-09-22-openai-client-compat-design.md` §4; code `4f87a1a` …
+the openai-client-compat design spec §4; code `4f87a1a` …
 `76b2206`). The onboarding probe now captures the endpoint's own `max_model_len` on
 onboard and on edit, storing it on `context_window` with a new `context_window_source`
 column (`"operator"` \| `"probed"` \| `null`, provenance decided by the stored value, not
@@ -1088,7 +1084,7 @@ and the onboarding probe already calls that endpoint.
 **Severity:** low–medium (improvement; every client loses the actionable message)
 **Found:** 2026-09-22, reported from a Qwen Code session on the Spark.
 **Resolved 2026-09-22** on `fix/b49-b50-openai-client-compat` (design
-`docs/superpowers/specs/2026-09-22-openai-client-compat-design.md` §3; code `de3824b` …
+the openai-client-compat design spec §3; code `de3824b` …
 `7faeeb3`). Every `/v1/*` failure — both the plain HTTP path and the SSE error frame —
 now renders `{"error": {"message", "type", "param", "code"}}` from one shared mapping
 (`app/api/openai_errors.py`), so the two paths can't drift and an OpenAI SDK client's
@@ -2745,7 +2741,7 @@ map (the same masking the model received), not `body.messages[-1].content`; then
 card, drive the actual request+response *display* from the per-app setting
 (symmetric: both bodies shown redacted/raw, or metadata-only when `off`). Short-term
 demo mitigation: set `SP_CAPTURE_IO=off` on the DGX deploy to restore blank Input.
-Cross-ref [`docs/archive/eval-logging-backlog.md`](../archive/eval-logging-backlog.md) and B14. Own SDD task.
+Cross-ref B14. Own SDD task.
 
 ## B14 — FEATURE: per-application capture_io (off | redacted | full) in app settings  ✅ SHIPPED (F1 Phase B :0.12.0; + pii_detection/stream_mode in PR #17 :0.14.0)
 
@@ -2761,7 +2757,7 @@ too coarse for a multi-tenant product).
 **Severity:** medium (unblocks per-app eval/audit without breaking the privacy
 story; requested by owner 2026-08-04).
 **Depends on:** B13 (redaction gap) — per-app `redacted` is only trustworthy once
-`redacted` actually redacts. Cross-ref [`docs/archive/eval-logging-backlog.md`](../archive/eval-logging-backlog.md).
+`redacted` actually redacts.
 
 **What:** move `capture_io` from a single global switch
 (`serving.observability.langfuse.capture_io` + `SP_CAPTURE_IO`) to a
@@ -2794,7 +2790,7 @@ no sensitive data. Per-app capture removes that false coupling.
   it to send raw PHI to a shared project (Rules #2/#6/#8; residency beats eval).
 - **Fail closed:** missing/invalid/unknown → most-restrictive (`off`/`redacted`),
   never raw.
-- **RLHF amendment (see B16 / `docs/roadmap/rlhf-readiness.md`):** `capture_io` gates only
+- **RLHF amendment (see B16 / the RLHF-readiness note):** `capture_io` gates only
   the raw prompt/completion **I/O**. Router-diagnostic metadata (eligible/rejected
   candidate snapshot, selection reason, routing-policy version) is **not PII** and
   must be emitted **always-on**, independent of the tri-state — even an `off` app must
@@ -2885,7 +2881,7 @@ back to `off`/shared-redacted, **never raw-to-shared**. The per-app residency li
 (B14) binds the export target. Admin cross-app reporting served from routeForge's
 admin console (1), with the redacted rollup project (2) optional.
 
-**RLHF amendment (see B16 / `docs/roadmap/rlhf-readiness.md`):** feedback scores must be
+**RLHF amendment (see B16 / the RLHF-readiness note):** feedback scores must be
 written to the **same Langfuse project as the trace** they annotate (scores are
 trace-linked within a project), using that app's `app_langfuse` creds. The redacted
 rollup project suffices for cross-app router eval; LLM fine-tuning reads the app's own
@@ -2916,7 +2912,7 @@ records deliberately hold no text, so they cannot serve it.
 
 **Prior status 2026-08-16 (historical):** gaps 1 & 2 shipped; gap 3 still open.
 
-**Type:** feature (future; design in `docs/roadmap/rlhf-readiness.md`).
+**Type:** feature (future; design in the RLHF-readiness note).
 **Severity:** low-now / high-later (unlocks feedback-driven router + model
 improvement; owner flagged 2026-08-05 as a future build).
 **Scope boundary:** routeForge builds only the **capture/feedback/export substrate**.
@@ -2931,7 +2927,7 @@ corrected outputs, datasets, experiments, export) — not the trainer. Two impro
 targets: **(A) the routeForge router** (highest value; trains a small classifier/
 reranker/bandit or better rules from feedback — works on **redacted** data), and
 **(B) an underlying LLM** (SFT/DPO from corrected outputs — needs **`full`,
-residency-local** capture). See `docs/roadmap/rlhf-readiness.md` §2/§5.
+residency-local** capture). See the RLHF-readiness note §2/§5.
 
 **Three gaps to close (grounded in code):**
 1. **Eligible/rejected snapshot never reaches Langfuse.** `app/routing/router.py`
@@ -2949,7 +2945,7 @@ residency-local** capture). See `docs/roadmap/rlhf-readiness.md` §2/§5.
 **Also:** routing-specific score configs (`route_correct`, `preferred_model`,
 `failure_type`); dataset-export readiness (traces + corrected outputs → Langfuse
 datasets → external TRL prompt/chosen/rejected transform). Full field list, matrix,
-and pipeline progression in `docs/roadmap/rlhf-readiness.md`. Own SDD task; plan first
+and pipeline progression in the RLHF-readiness note. Own SDD task; plan first
 (after/with B13–B15).
 
 ## B17 — FEATURE: group a client-driven workflow's requests under one parent row (correlation id)
@@ -2962,7 +2958,7 @@ stamps `langfuse.session.id` on the trace root span so the run's N traces group 
 Langfuse Session. In-memory only — no DB column; durable/cross-replica grouping stays B3.
 The reference integration (sample sends the header, one id per investigation run) was
 applied to the local **untracked** `test_app` sample and is NOT part of this PR. Spec:
-`docs/superpowers/specs/2026-08-06-b17-request-grouping-design.md`.
+the b17-request-grouping design spec.
 
 **Type:** feature (observability/UX).
 **Severity:** low-now / medium-later (real-integration ergonomics; most customers

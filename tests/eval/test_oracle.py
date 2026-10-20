@@ -2,7 +2,7 @@
 
 Every scenario is a hand-computed matrix -- no dependency on the pipeline,
 registry, or any other app/eval module. See
-docs/superpowers/specs/2026-09-21-feasible-route-bench-design.md §6 for the
+the FeasibleRouteBench design spec §6 for the
 binding definitions this module implements, and §14 for the worked example
 `TestSpec14Fixture` reproduces.
 """

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """FeasibleRouteBench CLI -- score routing strategies against the feasible
-oracle (docs/superpowers/specs/2026-09-21-feasible-route-bench-design.md).
+oracle (FeasibleRouteBench design spec).
 
     uv run python scripts/feasible_bench.py \\
         --suite eval/suites/starter.jsonl \\

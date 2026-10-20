@@ -142,8 +142,7 @@ Diamond, Azure model router) predict answer quality far better than RouteForge's
 length-based tier rule, and full gateways (LiteLLM, Portkey, Kong) cover far more providers
 and enterprise features. RouteForge is designed to compose with them: its eligible set is
 the boundary inside which any scoring strategy may run. The trade-offs, measured, are in
-the paper ([`docs/research/paper/`](docs/research/paper/)) and in
-[`docs/architecture/decisions/`](docs/architecture/decisions/).
+the paper ([`docs/research/paper/`](docs/research/paper/)).
 
 ## Quick start (local, single node)
 

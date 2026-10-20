@@ -503,8 +503,8 @@ class OnboardedModel(Base):
     context_window_source: Mapped[str | None] = mapped_column(String(16), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     allowed_app_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
-    # P1b endpoint data-handling declarations (docs/superpowers/specs/
-    # 2026-09-19-endpoint-data-handling-p1b-design.md §2). These are
+    # P1b endpoint data-handling declarations (P1b endpoint-data-handling
+    # design §2). These are
     # DECLARATIONS an operator records about this endpoint -- RouteForge
     # cannot verify a provider's contractual claim, only record what was
     # declared and enforce policy against that record. null on every field

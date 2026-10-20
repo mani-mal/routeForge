@@ -1,7 +1,7 @@
 """Eval-capture feature: observability.langfuse.capture_io = off | redacted | full.
 
 Attaches request/response I/O to the `serving.request` trace so Langfuse traces
-are usable as an eval dataset (docs/archive/eval-logging-backlog.md; current
+are usable as an eval dataset (current
 capture_io contract in docs/reference/per-app-config.md). Gated so it cannot
 break CLAUDE.md rule 2 (redact on egress) / rule 6 (residency):
 

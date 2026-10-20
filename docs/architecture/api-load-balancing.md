@@ -1,7 +1,7 @@
 # API load balancing & horizontal scaling
 
 **Status:** reference (2026-08-20)
-**Related:** B3 spec — `docs/superpowers/specs/2026-08-20-b3-shared-dashboard-state-design.md`
+**Related:** B3 (shared dashboard state), tracked in `docs/backlog/bugs.md`
 
 This note answers: *when we run more than one API pod, what load-balances across
 them, who installs it, and is it an "application load balancer"?*

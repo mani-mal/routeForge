@@ -301,7 +301,7 @@ trace.
 
 `PlainSummary` in `RequestDrilldown.tsx`. No jargon, no step numbers — **labelled outcome
 cards**, each answering one question an owner actually asks (the run-on arrow-chain
-sentence this replaced was retired in `:0.5.0`, `docs/archive/ui-open-items.md` #1):
+sentence this replaced was retired in `:0.5.0`, UI open item #1):
 
 | Card | Verdict | The *why* line beneath it |
 |---|---|---|
@@ -585,7 +585,7 @@ Plane step 2) and output verification (Serving Plane step 9) consult for this ap
 No custom recognizers or rules means the app classifies with the global defaults only —
 the panel says so under each empty list. This is the mechanism that closed the historical
 tier-selection bug tracked in the archived
-[`architecture-review.md` §4.1](../archive/2026-07-25-architecture-review.md): the seeded
+architecture review (§4.1): the seeded
 RAG/Support Agent profiles demote `LOCATION`/`DATE_TIME` to `internal`/`low` so a casual
 place-name mention (e.g. "capital of France") no longer trips the medium risk floor and
 stays on the cheap tier.
@@ -768,7 +768,7 @@ renders raw input**. The **answer** is shown at the Response step; the prompts l
 
 ---
 
-**Known gaps & deferred UI work:** see `docs/archive/ui-open-items.md` — **all seven items are now
+**Known gaps & deferred UI work:** see the archived UI open-items list — **all seven items are now
 closed.** The "What happened" redesign, the Headroom toggle, the 0 ms multi-hop latency
 bug, per-request `$0.0000` precision, the two-blues recolour, the over-eager fleet ⚠, and
 the labelled/copyable Application ID (#7, shipped `ui:0.17.0`) have all shipped.

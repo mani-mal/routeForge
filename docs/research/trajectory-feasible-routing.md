@@ -7,8 +7,7 @@ Written 2026-10-09 from the owner's design note on agentic trajectories. It reco
 RouteForge did before the envelope, two measurements that show where the request-level
 model stops, a formulation of the trajectory-level problem, what was then built and
 measured, and the experiments that remain. For
-the paper, it is the source of the "trajectory" section in
-[`paper-draft.md`](paper-draft.md); for the product, the build order is backlog B72.
+the paper, it is the source of the "trajectory" section; for the product, the build order is backlog B72.
 
 Artifacts: `docs/research/data/trajectory-probe-2026-10-09/` (the probe script, its
 request ids, and the content-free outcome rows of one coding-agent session).

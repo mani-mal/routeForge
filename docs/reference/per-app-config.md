@@ -4,7 +4,7 @@ Operator-facing reference for the per-app override knobs — `residency`, `polic
 `model_input`, `client_output`, `capture_io`, `pii_detection`, `content_integrity`,
 `escalate_residency_on_detection`, `pii_entity_denylist`, `pii_score_threshold`,
 `pii_exempt_patterns` and `stream_mode`. For the *why* (which knobs are safe to expose
-per-app and which aren't), read `docs/architecture/decisions/per-app-config-flexibility.md`
+per-app and which aren't), read the per-app-config flexibility design note
 first — this page is the how-to. If the question is *"I have a new app, what should I
 set?"* rather than *"what does this field do?"*, start with
 [`choosing-app-settings.md`](../guides/choosing-app-settings.md) — the decision guide and

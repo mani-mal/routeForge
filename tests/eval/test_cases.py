@@ -1,7 +1,7 @@
 """Tests for `app.eval.graders` and `app.eval.cases` (Task 1, FeasibleRouteBench).
 
 Covers both the grader kinds and the JSONL case-suite loader's §4.1 load-time
-validation. See docs/superpowers/specs/2026-09-21-feasible-route-bench-design.md §4.1.
+validation. See the FeasibleRouteBench design spec §4.1.
 """
 from __future__ import annotations
 
