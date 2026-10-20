@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-19
 **Status:** design approved, not implemented
-**Priority source:** `docs/new/RouteForge-Priorities-1-3-LLM-Handoff.md` — Priority 2, slice A
+**Priority source:** `docs/archive/design-handoffs/RouteForge-Priorities-1-3-LLM-Handoff.md` — Priority 2, slice A
 **Predecessors:** P1a (`2026-09-18-policy-compiler-p1a-design.md`), P1b (`2026-09-19-endpoint-data-handling-p1b-design.md`)
 **Successor:** P2b — the evaluation plane (feasible-oracle benchmark / regret analysis). Not this spec.
 

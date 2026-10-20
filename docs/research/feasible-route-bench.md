@@ -640,7 +640,7 @@ that is the point of the stamp.
 | Per-task briefs, reports, rulings | `.superpowers/sdd/2026-09-21-feasible-route-bench/` (local working files, not in the repository) |
 | Operator guide | [`docs/guides/feasible-route-bench.md`](../guides/feasible-route-bench.md) |
 | The question B45 asks | [`docs/backlog/bugs.md`](../backlog/bugs.md) B45; [`routing-signal-provenance.md`](routing-signal-provenance.md) §2.5 |
-| Source of the §14 example | `docs/new/RouteForge-Priorities-1-3-LLM-Handoff.md` §12–21 (not tracked in this branch) |
+| Source of the §14 example | `docs/archive/design-handoffs/RouteForge-Priorities-1-3-LLM-Handoff.md` §12–21 (not tracked in this branch) |
 
 Commits, oldest first: `c213763` (spec) · `bfeb8ab` (plan) · `f8e41a5` (graders and
 case-suite loader) · `55e3990` (endpoint files, harness settings, scratch registry) ·

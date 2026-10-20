@@ -1,7 +1,7 @@
 # P1b — Endpoint data-handling metadata and contractual eligibility
 
 **Status:** Approved design, 2026-09-19. Not yet implemented.
-**Implements:** Priority 1, slice B of `docs/new/RouteForge-Priorities-1-3-LLM-Handoff.md`
+**Implements:** Priority 1, slice B of `docs/archive/design-handoffs/RouteForge-Priorities-1-3-LLM-Handoff.md`
 (§6's eligible-set table, §10's endpoint-registry validation, invariants 4 and 6).
 **Builds on:** P1a (merged, PR #52) — the compiler, the axes, and the certificate.
 

@@ -1,7 +1,7 @@
 # P3a — Policy counterfactual simulator (core)
 
 **Date:** 2026-09-24 · **Status:** approved design, not built
-**Priority:** 3a (handoff doc `docs/new/RouteForge-Priorities-1-3-LLM-Handoff.md`)
+**Priority:** 3a (handoff doc `docs/archive/design-handoffs/RouteForge-Priorities-1-3-LLM-Handoff.md`)
 **Follows:** P2b-2 outcome records (`docs/reference/routing-outcomes.md`), P2b-3 quality
 calibration (`docs/reference/quality-calibration.md`), FeasibleRouteBench (`app/eval/`).
 **Next:** P3b (minimal conflicting core), P3c (shadow prices, scenarios, capacity, ranges).

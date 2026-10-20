@@ -5,13 +5,11 @@
 - *Jev Engineering for Coding Agents* (independent synthesis of TypeSafe founder Diogo
   Almeida's design notes, Sept 2026, 12 pp.):
   <https://github.com/yibie/jev-engineering-zh/blob/main/assets/original.pdf>
-- `docs/new/jev-model.md`, `docs/new/jev-model.txt`
-- `docs/new/RouteForge-Agentic-Trajectory-ArXiv-Extension.md`
-- `docs/new/RouteForge-Priorities-1-3-LLM-Handoff.md` (§12–21, Priority 2)
-- `docs/new/multidimensional-policy-concept.md` (§4, §10–11)
-- `docs/new/policy-protection-redesign-handoff.md` (skimmed for scope statements)
-- *Note:* the `docs/new/*` files above are local working drafts that are not in the
-  repository; they cannot be followed from a checkout.
+- `docs/roadmap/system-one-jev-model.md` (including Appendix A, the owner's original notes)
+- `docs/archive/design-handoffs/RouteForge-Agentic-Trajectory-ArXiv-Extension.md`
+- `docs/archive/design-handoffs/RouteForge-Priorities-1-3-LLM-Handoff.md` (§12–21, Priority 2)
+- `docs/architecture/multidimensional-policy-model.md` (§4, §10–11)
+- `docs/archive/design-handoffs/policy-protection-redesign-handoff.md` (skimmed for scope statements)
 - The code, for how routing works today. Facts below come from the code, not from CLAUDE.md.
 
 **Questions:**
@@ -100,7 +98,7 @@ purpose-built context and the return trip does not make the frontier model rerea
 - No harness was built or measured in the PDF. "None of this requires a better model" is a
   hypothesis. It assumes a System-One model is accurate on harness states it was never trained
   on, and nobody has tested that.
-- `docs/new/jev-model.md` §5 already notes the gaps in evidence for the open candidate,
+- `docs/roadmap/system-one-jev-model.md` §5 already notes the gaps in evidence for the open candidate,
   AutoJev-27B:
   - the accuracy and calibration figures come from the author's own test set;
   - two sources give different accuracy (84.6% vs 91.9%);
@@ -436,12 +434,12 @@ Checked in `app/obs/export.py` and `app/api/routes.py`.
 
 - *Jev Engineering for Coding Agents* (PDF linked above). Independent synthesis, not affiliated
   with TypeSafe. Its own figures are illustrative; fastcontext figures are as it reports them.
-- `docs/new/jev-model.md`: the System-One decision memo (2026-09-24).
-- `docs/new/RouteForge-Agentic-Trajectory-ArXiv-Extension.md` §2, §9–12: switch cost and
+- `docs/roadmap/system-one-jev-model.md`: the System-One decision memo (2026-09-24).
+- `docs/archive/design-handoffs/RouteForge-Agentic-Trajectory-ArXiv-Extension.md` §2, §9–12: switch cost and
   trajectory objective; agent hints are inputs, not trusted declarations.
-- `docs/new/RouteForge-Priorities-1-3-LLM-Handoff.md` §12–18: feasible-set masking before
+- `docs/archive/design-handoffs/RouteForge-Priorities-1-3-LLM-Handoff.md` §12–18: feasible-set masking before
   normalisation; exploration only inside the feasible set.
-- `docs/new/multidimensional-policy-concept.md` §4.2, §10–11: complexity is separate from
+- `docs/architecture/multidimensional-policy-model.md` §4.2, §10–11: complexity is separate from
   sensitivity; hard constraints vs optimisation preferences.
 - Code: `app/pipeline.py:933`, `config/routing.yaml:61`, `app/routing/strategy.py`,
   `app/policy/trajectory.py`.
