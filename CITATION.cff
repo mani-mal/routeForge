@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use RouteForge or its research artifact, please cite it as below."
+title: "RouteForge: Research Artifact for Eligibility-Constrained LLM Routing"
+type: software
+authors:
+  - family-names: Malarvannan
+    given-names: Mani
+    email: mani.malarvannan@cdw.com
+repository-code: "https://github.com/mani-mal/routeForge"
+version: arxiv-v1
+commit: 93bf327ed50cc54faf3da0b1d7595b8080ba4e12
+date-released: 2026-10-20
+keywords:
+  - LLM routing
+  - data residency
+  - policy compilation
+  - replay
+  - property-based testing
+preferred-citation:
+  type: article
+  title: "Eligibility-Constrained LLM Routing: When the Candidate Pool Is a Per-Request Variable"
+  authors:
+    - family-names: Malarvannan
+      given-names: Mani
+  year: 2026
+  notes: "Preprint; arXiv identifier to be added after announcement."
