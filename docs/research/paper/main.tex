@@ -21,7 +21,7 @@
 \newcommand{\repourl}{\url{https://github.com/mani-mal/routeForge}}
 
 \title{Eligibility-Constrained LLM Routing:\\When the Candidate Pool Is a Per-Request Variable}
-\author{Mani Malarvannan\\\texttt{mani.malarvannan@cdw.com}}
+\author{Mani Malarvannan\\CDW\\\texttt{mani.malarvannan@cdw.com}}
 \date{}
 
 \begin{document}
@@ -1120,15 +1120,15 @@ inspected establishes it; these are documented features, not tested equivalences
 \begin{table}[t]
 \centering
 \small
-\caption{Capabilities as established from inspected material (documentation and abstracts read
+\caption{Capabilities as established from inspected material (documentation and papers read
 2026-10-20). ``Doc.'' = documented; ``n.e.'' = not established from inspected material; ``---'' = not applicable.}
 \label{tab:compare}
 \begin{tabular}{@{}p{4.6cm}cccc@{}}
 \toprule
 capability & LiteLLM & OpenRouter & OPA & ComplianceGate \\
 \midrule
-filter before selection (region / retention) & doc. & doc. & doc.\ (generic) & doc.\ (classifier) \\
-self-hosted, on-premises endpoints & doc. & n.e. & --- & n.e. \\
+filter before selection (region / retention) & doc. & doc. & doc.\ (generic) & doc.\ (learned label) \\
+self-hosted, on-premises endpoints & doc. & n.e. & --- & doc. \\
 tested placement/protection separation & n.e. & n.e. & --- & n.e. \\
 minimum conflicting core on rejection & n.e. & n.e. & n.e. & n.e. \\
 eligibility-aware evaluation oracle & n.e. & n.e. & --- & n.e. \\
@@ -1138,18 +1138,24 @@ replay of policy changes over records & n.e. & n.e. & n.e. & n.e. \\
 \end{table}
 
 \paragraph{Routing for regulated and constrained settings.} ComplianceGate~\cite{compliancegate}
-places a trained encoder classifier before any decoder inference, scores each query for
-complexity and data sensitivity, and routes queries containing PII to local endpoints and others
-by geography; it reports high classifier accuracy and cost savings on 600 queries. It is close
-to our setting. The difference is in where the restriction comes from: in RouteForge,
-eligibility is a deterministic function of operator-declared policy and endpoint declarations,
-with a detector able only to raise placement, whereas a learned gate's restrictions inherit its
-classification errors. We compared at the level of its abstract only. Nguyen et
-al.~\cite{maxsat} cast routing as reasoning with hard feasibility constraints and soft
-preferences over model attributes in a MaxSAT formulation; their constraints are derived from
-the request's language and the selection is partly observable, whereas ours come from an
-operator-declared enforcement boundary and are applied before scoring. We could not
-retrieve the full text and rely on its published description. PPRoute~\cite{pproute} protects the
+is the closest research system we found. A trained encoder classifier runs before any decoder
+inference and assigns each query one of six labels, the product of three complexity levels and
+two sensitivity levels; the sensitivity label restricts PII-containing queries to local
+infrastructure, and the complexity label picks a model tier. When the classifier's confidence
+falls below a configurable threshold (80\% by default), the query takes the most restrictive
+label, and the paper notes that a confidently misclassified PII query could still cause a
+residency violation. It reports 99.2\% classifier accuracy and 33--52\% cost savings on 600
+queries. The two systems differ in where a restriction comes from: in ComplianceGate placement
+follows a learned label with a confidence fallback, while in RouteForge eligibility is a
+deterministic function of operator-declared application policy and per-endpoint declarations
+(region, retention, acceptance of raw sensitive text), with a detector that can only raise
+placement. RouteForge also adds conflicting-core explanations, an eligibility-aware oracle and
+replay, which ComplianceGate does not describe; ComplianceGate's learned complexity signal is a
+better tier estimate than our length rule. Nguyen et al.~\cite{maxsat} formulate
+language-conditioned routing as weighted MaxSAT/MaxSMT, in which a user's natural-language
+feedback induces hard and soft constraints over partially observable model attributes. Their
+hard constraints come from a user's stated preferences; ours come from an operator-declared
+enforcement boundary and are applied as a filter before any scoring. PPRoute~\cite{pproute} protects the
 \emph{routing computation} with secure multi-party computation; that is privacy of the routing
 layer, a different problem from which destinations may receive a request.
 
@@ -1219,11 +1225,12 @@ not claim an information-flow guarantee about model outputs.
 \label{sec:artifact}
 
 RouteForge's source code and the research artifact are public at \repourl. The version that
-accompanies this paper is tagged \code{arxiv-v1}; apart from the paper source and a citation file, it is
-identical to commit \code{93bf327ed50cc54faf3da0b1d7595b8080ba4e12}. The live experiments ran on
+accompanies this paper is tagged \code{arxiv-v1}; apart from the paper source, citation and license files, it is
+identical to commit \nolinkurl{93bf327ed50cc54faf3da0b1d7595b8080ba4e12}. The live experiments ran on
 earlier builds (API versions 0.30.0 to 0.32.1); the research notes in \code{docs/research/}
 identify the build or pull request behind each run, and the code has changed since. No archival
-DOI has been minted.
+DOI has been minted. The code is released under the Apache License 2.0; this paper is
+distributed under arXiv's license, which is separate from the code license.
 
 The repository contains: the policy compiler, eligibility function, router and gateway; the
 property-based harness (\code{tests/policy\_compiler/}), its counterexample fixtures for the two
@@ -1302,7 +1309,7 @@ filters. \url{https://openrouter.ai/docs/guides/routing/provider-selection}, acc
 Inference in Regulated Industries. arXiv:2606.31163v2, 2026.
 
 \bibitem{maxsat} S.~Nguyen, X.~Liu, R.~Senanayake. LLM Routing as Reasoning: A MaxSAT View.
-OpenReview, \url{https://openreview.net/forum?id=Qmr9VbwRaB}.
+arXiv:2603.13612, 2026.
 
 \bibitem{pproute} X.~Wu, Y.~Zhang, Y.~Ji, R.~Shirkavand, Q.~Lou, S.~Gao. Privacy-Preserving LLMs
 Routing. arXiv:2604.15728, 2026.

@@ -14,8 +14,7 @@ in main.tex too so the PDF and metadata agree.)
 
 Mani Malarvannan
 
-(The PDF byline reads "Mani Malarvannan", mani.malarvannan@cdw.com. No affiliation line is
-set; add one in `\author{...}` and here if the paper should carry it.)
+(The PDF byline reads "Mani Malarvannan", CDW, mani.malarvannan@cdw.com.)
 
 ## Abstract
 
@@ -30,7 +29,7 @@ LLM gateways in mixed on-premises and cloud deployments must restrict which endp
 
 ## Comments
 
-23 pages, 1 figure, 12 tables. Code and data: https://github.com/mani-mal/routeForge (tag arxiv-v1)
+24 pages, 1 figure, 12 tables. Code and data: https://github.com/mani-mal/routeForge (tag arxiv-v1)
 
 ## Optional fields — leave blank
 
