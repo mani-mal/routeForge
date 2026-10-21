@@ -308,9 +308,12 @@ carried the attempted models. Test: `tests/test_open_minors_2026_10_21.py`.
 Two smaller items closed in the same change: the Overview's `/api/fleet` cache is capped at
 16 distinct `hours` windows (it was unbounded in arbitrary `?hours=` values), and Langfuse
 secrets stored in cleartext by images that predate `cryptography` are now encrypted in place
-on boot (`encrypt_plaintext_secrets`, `app/apps/langfuse_provision.py`). That closes the
-at-rest gap for `kit-gtm` on the Spark; rotating that key in Langfuse is still advised,
-because database backups taken before the fix hold the cleartext value.
+on boot (`encrypt_plaintext_secrets`, `app/apps/langfuse_provision.py`). The deploy showed
+the original diagnosis was wrong: the Spark's compose file (and `deploy/compose/`) never passed
+`ENCRYPTION_KEY` to the api at all, so every per-app secret there was stored in cleartext
+whatever the image. Both compose files now pass it through from `.env`, and the boot pass logs
+a warning when secrets exist but no key is set. Rotating the `kit-gtm` key in Langfuse is still
+advised, because database backups taken before the fix hold the cleartext value.
 
 
 ## B73 — FEATURE: finish the Artificial Analysis model metrics on the console (published quality snapshot, time to first token, output speed)  🔴 OPEN

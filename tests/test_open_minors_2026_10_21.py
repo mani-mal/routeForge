@@ -104,3 +104,30 @@ def test_needs_encryption_leaves_foreign_fernet_tokens_alone(monkeypatch):
     assert lp.needs_encryption(b"sk-lf-plain") is True
     monkeypatch.delenv("ENCRYPTION_KEY")
     assert lp.needs_encryption(b"sk-lf-plain") is False   # nothing to encrypt with
+
+
+def test_boot_warns_when_secrets_exist_but_no_key(monkeypatch, caplog):
+    monkeypatch.delenv("ENCRYPTION_KEY", raising=False)
+    from app.apps.langfuse_provision import encrypt_plaintext_secrets
+    from app.apps.db import Database
+
+    async def go():
+        db = Database("sqlite+aiosqlite:///:memory:")
+        async with db.session() as s:
+            s.add(_app_row("plain", b"sk-lf-cleartext"))
+            await s.commit()
+        async with db.session() as s:
+            n = await encrypt_plaintext_secrets(s)
+        await db.engine.dispose()
+        return n
+    with caplog.at_level("WARNING", logger="serving.obs"):
+        assert asyncio.run(go()) == 0
+    assert "ENCRYPTION_KEY is unset" in caplog.text
+    assert "sk-lf-cleartext" not in caplog.text
+
+
+def test_compose_files_pass_encryption_key_to_the_api():
+    import yaml
+    for path in ("deploy/spark/docker-compose.yml", "deploy/compose/docker-compose.yml"):
+        env = yaml.safe_load(open(path))["services"]["api"]["environment"]
+        assert "ENCRYPTION_KEY" in env, path
