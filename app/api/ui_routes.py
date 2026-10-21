@@ -214,6 +214,7 @@ async def get_stats(request: Request) -> dict:
 # Overview polls /fleet every few seconds; a short per-window cache keeps the
 # aggregate queries off the serving path. TTL 0 disables it (tests).
 _FLEET_CACHE_TTL_S = 10.0
+_FLEET_CACHE_MAX = 16   # distinct windows kept; the UI offers a handful
 _fleet_cache: dict[int | None, tuple[float, list]] = {}
 
 
@@ -230,6 +231,9 @@ async def fleet(request: Request, hours: int | None = Query(None, ge=1)) -> list
     async with request.app.state.db.session() as s:
         rows = await store.fleet_from_usage(s, since=since)
     if _FLEET_CACHE_TTL_S > 0:
+        if len(_fleet_cache) >= _FLEET_CACHE_MAX and hours not in _fleet_cache:
+            # Arbitrary ?hours= values must not grow this without bound.
+            _fleet_cache.clear()
         _fleet_cache[hours] = (now, rows)
     return rows
 

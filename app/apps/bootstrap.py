@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.apps import store
 from app.apps.admin_auth import seed_admin
+from app.apps.langfuse_provision import encrypt_plaintext_secrets
 from app.apps.store import (
     add_token, create_application, get_application, replace_privacy_profile,
 )
@@ -103,3 +104,6 @@ async def seed_all(session: AsyncSession) -> None:
     await seed_admin(session)
     await seed_privacy_profiles(session)
     await seed_test_models(session)
+    # Not seeding, but the same once-per-boot DB pass: close the at-rest gap
+    # left by images that stored Langfuse secrets unencrypted.
+    await encrypt_plaintext_secrets(session)

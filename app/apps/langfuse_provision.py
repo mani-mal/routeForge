@@ -56,6 +56,49 @@ def decrypt_secret(blob: bytes) -> str:
         return bytes(blob).decode()
 
 
+def needs_encryption(blob: bytes | None) -> bool:
+    """True when `blob` is a secret stored in cleartext although encryption is
+    now configured -- written by an image that predates `cryptography`, or
+    while ENCRYPTION_KEY was unset. A Fernet token always starts with
+    `gAAAAA`; one that fails to decrypt (key changed) is left alone rather than
+    wrapped a second time."""
+    f = _fernet()
+    if f is None or not blob:
+        return False
+    raw = bytes(blob)
+    if raw.startswith(b"gAAAAA"):
+        return False
+    try:
+        raw.decode()
+    except UnicodeDecodeError:
+        return False
+    return True
+
+
+async def encrypt_plaintext_secrets(session) -> int:
+    """Encrypt, in place, every application's Langfuse secret still stored in
+    cleartext. Idempotent; returns how many rows it changed. The values are
+    never logged. Rotating the key in Langfuse is still the owner's call: the
+    cleartext copy may survive in earlier database backups."""
+    from sqlalchemy import select
+
+    from app.apps.models import Application
+
+    changed = 0
+    rows = (await session.execute(
+        select(Application).where(Application.langfuse_secret_key_enc.is_not(None))
+    )).scalars().all()
+    for app in rows:
+        if needs_encryption(app.langfuse_secret_key_enc):
+            app.langfuse_secret_key_enc = encrypt_secret(
+                bytes(app.langfuse_secret_key_enc).decode())
+            changed += 1
+    if changed:
+        log.warning("encrypted %d Langfuse secret(s) that were stored in cleartext; "
+                    "rotate them in Langfuse if older backups exist", changed)
+    return changed
+
+
 # --- the per-app Langfuse identity ------------------------------------------
 
 @dataclass(frozen=True)
