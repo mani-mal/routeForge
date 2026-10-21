@@ -8,6 +8,7 @@
 # either, but they are per-model DB rows, not a config file concern.
 models:
   azure-gpt-mid:    {input: 0.15, output: 0.60,  tier: mid,      provider: azure}
-  bedrock-frontier: {input: 3.00, output: 15.00, tier: frontier, provider: bedrock}
+  # cached_input is what the all-frontier baseline charges for prompt tokens the serving engine reported as cached.
+  bedrock-frontier: {input: 3.00, output: 15.00, cached_input: 0.30, tier: frontier, provider: bedrock}
 
 baseline_model: bedrock-frontier

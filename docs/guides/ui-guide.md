@@ -191,6 +191,8 @@ The **all-frontier baseline** is **not a flat per-request number** — it is com
 **each request's own input/output token counts**, re-priced at the frontier model's
 rates, then summed across every request in the app.
 
+Cached prompt tokens are priced at the baseline model's cached-input rate when the serving engine reports them; when it does not, the baseline assumes no caching.
+
 Prices are USD per 1M tokens; the frontier baseline model is `bedrock-frontier`. Cloud
 prices come from `config/pricing.yaml`; **on-prem prices do not** — an onboarded model
 carries its own `price_input` / `price_output`, set at onboarding time and stored on its

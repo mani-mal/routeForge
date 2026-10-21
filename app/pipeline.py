@@ -23,6 +23,7 @@ from app.policy.feasible import feasible_set
 from app.policy.detectors import Detector, detection_ran, make_detector
 from app.policy.effective import EffectiveDetector, FilteredDetector
 from app.policy.gate import Gate, Representations, redact_tool_calls_with_entities
+from app.routing.pricing import price_call
 from app.routing.router import client_output_cap
 from app.apps.privacy import AppPrivacyProfile, effective_rules
 from app.compression import CompressionResult, compress
@@ -529,12 +530,19 @@ class Pipeline:
         internals["redacted_prompt"] = reps.text_redacted
         internals["detector"] = reps.detector
 
-    def _baseline(self, in_tokens: int, out_tokens: int) -> float:
+    def _baseline(self, in_tokens: int, out_tokens: int,
+                  cached_tokens: int | None = None) -> float:
         """All-frontier baseline: input and output priced at the baseline
         (most-expensive frontier) model's respective rates — the SAME token
-        basis `total` uses, so routing_saved compares like with like (B12)."""
+        basis `total` uses, so routing_saved compares like with like (B12).
+
+        `cached_tokens` (B75) is the prompt-token count the serving engine
+        reported as cached. When an int, that share is billed at the baseline
+        model's `cached_input` rate (via `price_call`, the one pricing rule);
+        `None` means not reported, so the baseline assumes no caching."""
         p = self._s.pricing.models[self._s.pricing.baseline_model]
-        return (in_tokens * p.input + out_tokens * p.output) / 1_000_000
+        return price_call(p, prompt_tokens=in_tokens, completion_tokens=out_tokens,
+                          cached_prompt_tokens=cached_tokens)
 
     def _display_name(self, model_slug: str) -> str:
         """Resolve a routing-pool slug (e.g. `local-8b`) to its human-facing
@@ -1053,8 +1061,10 @@ class Pipeline:
         # and show fake positive net savings. compression_saved IS clamped,
         # but harmlessly so — tokens_after <= tokens_before always holds, so
         # it is >= 0 anyway.
-        baseline_usd = self._baseline(comp.tokens_before, result.tokens_out)
-        baseline_after = self._baseline(comp.tokens_after, result.tokens_out)
+        baseline_usd = self._baseline(comp.tokens_before, result.tokens_out,
+                                      result.cached_prompt_tokens)
+        baseline_after = self._baseline(comp.tokens_after, result.tokens_out,
+                                           result.cached_prompt_tokens)
         compression_saved = max(0.0, baseline_usd - baseline_after)
         routing_saved = baseline_after - total
         trace = [r.model_dump() for r in records] + [vrec.model_dump()]
@@ -1362,8 +1372,10 @@ class Pipeline:
         # (pre-both-levers), compression_saved is the tokens_before->tokens_after
         # drop at baseline price, routing_saved is the remaining drop to actual
         # total. routing_saved is intentionally NOT clamped (see run()).
-        baseline_usd = self._baseline(comp.tokens_before, result.tokens_out)
-        baseline_after = self._baseline(comp.tokens_after, result.tokens_out)
+        baseline_usd = self._baseline(comp.tokens_before, result.tokens_out,
+                                      result.cached_prompt_tokens)
+        baseline_after = self._baseline(comp.tokens_after, result.tokens_out,
+                                           result.cached_prompt_tokens)
         compression_saved = max(0.0, baseline_usd - baseline_after)
         routing_saved = baseline_after - total
 
