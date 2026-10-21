@@ -125,6 +125,137 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
+> **Update 2026-10-21 (one month of production traffic on the Spark).** A review of
+> `kit-gtm` (go-to-market-app, Qwen Code through RouteForge) from 2026-09-15 to 2026-10-21
+> filed **B74**–**B78**. The review covered 6,416 `usage_records` rows, 4,347
+> `routing_outcomes` rows, 6,143 Langfuse traces and vLLM's own `/metrics`. The Spark runs
+> `4bfb0b3` (PR #79). Reliability was good: 99.7% of requests were served, all on-prem.
+> The defects are in what RouteForge *records* about that traffic.
+
+## B74 — Egress redactor corrupts `sp.scoring` in Langfuse (floats read as card and bank numbers)  🔴 OPEN
+
+**Severity:** high for research and audit use. Routing itself is unaffected.
+**Found:** 2026-10-21, Spark, `kit-gtm` Langfuse project.
+
+`app/obs/export.py:439` passes `json.dumps(rec["scoring"])` through `redact_value`. The
+regex detector (`app/policy/detectors.py:11,14`) has `CREDIT_CARD` =
+`\b(?:\d[ -]*?){13,16}\b` and `US_BANK_NUMBER` = `\b\d{8,17}\b`. Both match the fractional
+digits of an unrounded Python float. So `"score": -0.1234567890123456` reaches Langfuse as
+`"score": -0.<CREDIT_CARD>`, and a latency mean becomes `"ms": 55646.<US_BANK_NUMBER>`.
+
+- **Measured:** 4,971 of 6,143 `serving.router` observations carry a placeholder in their
+  attributes. That is every hop recorded since P2a added `sp.scoring`; the remaining 1,172
+  predate it. No raw PII was involved: the app is `passthrough` with `detection_mode: off`.
+- **Consequence:** the trace no longer supports the P2a claim that *"the record is
+  sufficient to recompute that hop's ranking offline"* (`docs/reference/routing-observability.md`).
+  The JSON still parses, but the numbers are gone. The database copy is intact:
+  `routing_outcomes.scoring` has 0 placeholders in 4,347 rows.
+- **The same exposure exists on every numeric attribute that goes through `redact_value`**:
+  `sp.candidates` (export.py:437) and the generic pass in `app/obs/otel.py:247`. `sp.latency_ms`
+  survived only because it is not passed through the redactor.
+
+**Fix direction:** round floats in the scoring and candidate records before they are
+serialised (for example 6 significant digits; the recompute test then compares with
+tolerance). Keep the redactor on: model names come from the operator and reason strings
+can carry text. Do **not** exempt `sp.*` keys from redaction wholesale — rule 2 depends
+on the redactor seeing everything. Add a regression test: a scoring record with
+16-digit floats exports with no `<…>` placeholder. Optionally re-export or ignore the
+corrupted history, since the database copy is clean.
+
+## B75 — `cached_prompt_tokens` is 0 on every request although vLLM served 94.5% of prompt tokens from cache  🔴 OPEN
+
+**Severity:** medium (cost and savings figures, P2a cached-token pricing, the paper's
+cost claims). Mostly a deployment and documentation defect.
+**Found:** 2026-10-21, Spark.
+
+- **Measured:** `usage_records.cached_prompt_tokens` is 0 (or null) on all 6,416 `kit-gtm`
+  rows. vLLM's `/metrics` for `qwen3.8-27b` over the same period (since its 2026-09-25 start)
+  reports `prompt_tokens_total` 388.7M, of which `local_cache_hit` is **367.5M (94.5%)** and
+  `local_compute` is 21.2M.
+- **Cause:** RouteForge already reads `usage.prompt_tokens_details.cached_tokens`
+  (`app/gateway/backends/litellm_backend.py:64` `_cached_tokens`). vLLM leaves that field out
+  unless it is started with `--enable-prompt-tokens-details`. The Spark's vLLM has
+  `--enable-prefix-caching` but not that flag.
+- **Consequence:** P2a's cached-token pricing never applies to on-prem traffic, and the
+  "all-frontier baseline" prices every one of these tokens at full rate. A frontier provider
+  with prompt caching would bill this workload far less, so the reported savings
+  ($1,892 baseline for the month) are overstated by an amount RouteForge cannot see.
+
+**Fix direction:**
+1. Ops: restart `vllm-qwen38` with `--enable-prompt-tokens-details`. This is the owner's
+   call because it interrupts Qwen Code.
+2. Docs: add the flag to `docs/guides/onboarding-models.md` and the `inference-backends`
+   skill's vLLM command lines.
+3. Product: at onboarding, or from the first N responses, warn when an endpoint never
+   reports `prompt_tokens_details`. "Cached = 0" and "cached unknown" are different facts,
+   and the cost record should say which one it is (compare the `measured`/`tier_default`
+   provenance pattern in `sp.scoring`).
+4. Baseline: decide whether the all-frontier baseline should assume the frontier
+   provider's cached-input rate for the cached share. Without it the savings headline
+   flatters routing.
+
+## B76 — Console Overview totals cover only the last 500 requests  🔴 OPEN
+
+**Severity:** medium (the headline numbers an operator sees are wrong by an order of magnitude).
+**Found:** 2026-10-21, Spark console (`/` Overview).
+
+The Overview showed `go-to-market-app` with **500** requests and **$116.05** saved. The durable
+`usage_records` table holds **6,416** requests for that app and **$1,891.95** of baseline
+over the same period. `GET /ui/fleet` and `GET /ui/stats` (`app/api/ui_routes.py:205-216`)
+aggregate `store.all_snapshot_summaries(limit=store.SNAPSHOT_CAPACITY)`. That is the
+`request_snapshots` ring, sized by `SP_SNAPSHOT_CAPACITY` (default 500,
+`app/apps/store.py:350`), which was built for the drill-down, not for totals. Every tile and
+column on the Overview (requests, spend, saved, PII, on-prem, P50, tier bar) is therefore
+"last 500 requests across all apps" without saying so. One busy app pushes the others to 0.
+
+**Fix direction:** compute the Overview from `usage_records`. The aggregation already
+exists for `/admin/usage/by-application` (`app/api/admin_routes.py:901`) and
+`app/apps/store.py:575`. Give it a visible time window (24 h / 7 d / 30 d / all). Keep
+the snapshot ring for drill-down. If a capped view is kept anywhere, label it
+"last N requests".
+
+## B77 — "Kept on-prem" counts `onprem_only` requests, not requests served on-prem  🔴 OPEN
+
+**Severity:** low (a misleading label, no wrong routing).
+**Found:** 2026-10-21, Spark console.
+
+The Overview tile "KEPT ON-PREM" and the per-app "ON-PREM" column read `onprem_count`.
+That counts rows whose **policy forced** placement (`r.onprem_only`; `app/apps/store.py:585`,
+`app/api/history.py:147,176`). `kit-gtm` is `placement: any` (passthrough). It shows **0**,
+although 100% of its traffic was served by an on-prem endpoint. This is the placement
+and protection split (rule 2a) leaking into a UI label. "Required on-prem" and "served
+on-prem" are different facts.
+
+**Fix direction:** show both: *served on-prem* (chosen endpoint's provider is `onprem`)
+and *required on-prem* (`onprem_only`). The second is the privacy figure, the first the
+cost and residency figure. Rename the tile to match whichever it shows.
+
+## B78 — Cancelled and failed requests leave no Langfuse trace; cancelled ones leave no `routing_outcomes` row  🔴 OPEN
+
+**Severity:** medium (breaks "every request emits a DecisionRecord"; skews outcome-based
+research toward successful requests).
+**Found:** 2026-10-21, Spark.
+
+- **Measured:** `usage_records` has 6,416 `kit-gtm` rows. Langfuse has 6,143 traces. The
+  gap of 273 is roughly the 247 `cancelled` rows plus the 17 `error` rows.
+  `routing_outcomes` holds `ok` and `backend_failed` (14) rows but **no `cancelled` row**.
+  Since 2026-09-24 there were 226 cancellations; `_record_cancelled`
+  (`app/api/routes.py:362`) writes only a usage row with `model="-"`.
+- **Pattern worth recording:** cancellations cluster at about 5 s, 30 s, 305 s and 450 s
+  (client timeouts; 73 at ~305 s on 2026-10-10). The 17 errors sit at the 600 s backend
+  timeout. Which endpoint a cancelled request was waiting on, and how long the backend had
+  run, is not recorded anywhere.
+- **Open question:** vLLM reports `finished_reason="abort"` = 0 over the same period. Either
+  vLLM does not count aborts in that metric, or a client disconnect does **not** cancel the
+  upstream generation, and the GPU keeps decoding for nobody. **TO VERIFY** with one
+  deliberate disconnect against `vllm-qwen38`.
+
+**Fix direction:** on cancel and on failure, still finalise a minimal trace (status,
+chosen endpoint if one was chosen, elapsed, attempts) with `level=ERROR` or `WARNING`.
+Langfuse currently shows **0** ERROR-level observations for this app. Also write a
+`routing_outcomes` row with `status="cancelled"`, so outcome exports and replay see
+the denominator. If the upstream call keeps running after a disconnect, cancel it.
+
 ## B73 — FEATURE: finish the Artificial Analysis model metrics on the console (published quality snapshot, time to first token, output speed)  🔴 OPEN
 
 **Found 2026-10-13** by an audit of what was built from the owner's original request to use
