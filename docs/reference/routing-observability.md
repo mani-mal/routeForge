@@ -666,3 +666,16 @@ print(d["model"], s["name"], s["latency"]["src"], s["availability"]["src"])'
 - `docs/architecture/routing-tier-selection.md` — the `cheap|mid|frontier` ladder
   (length-based complexity, no modality/capability axis).
 - Design record: the routing-observability-and-signals design spec.
+
+## Failure and cancel traces (B78)
+
+A request that ends `error` (502 after every attempt failed) or `cancelled` (499, the
+client disconnected) never reaches the normal trace export, so it also gets one minimal
+root span, `serving.request`, from `app/obs/export.py::export_failure_trace`. It is
+content-free by construction: `sp.request_id`, `sp.application_id`, `sp.status`,
+`sp.latency_ms`, `sp.attempts` (model names only, redacted) and `langfuse.session.id` when
+the call had one. It takes no prompt or completion, and stamps `sp.capture_io=off`, so it is
+safe in every capture mode. Levels: `error` is a span ERROR and Langfuse level `ERROR`;
+`cancelled` is Langfuse level `WARNING` (the client left, nothing broke). It goes to the same
+Langfuse project the request's normal trace would use: the app's own project when it has one,
+else the shared project. Export is best effort and never changes the HTTP response.

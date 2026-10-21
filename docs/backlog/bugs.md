@@ -132,7 +132,7 @@ the audit trail in that sweep's task report.
 > `4bfb0b3` (PR #79). Reliability was good: 99.7% of requests were served, all on-prem.
 > The defects are in what RouteForge *records* about that traffic.
 
-## B74 — Egress redactor corrupts `sp.scoring` in Langfuse (floats read as card and bank numbers)  🔴 OPEN ✅ RESOLVED (2026-10-21)
+## B74 — Egress redactor corrupts `sp.scoring` in Langfuse (floats read as card and bank numbers)  ✅ RESOLVED (2026-10-21)
 
 **Severity:** high for research and audit use. Routing itself is unaffected.
 **Found:** 2026-10-21, Spark, `kit-gtm` Langfuse project.
@@ -164,7 +164,7 @@ corrupted history, since the database copy is clean.
 
 **Resolved:** 2026-10-21. Added `redact_tree` (`app/obs/redact.py`): redacts every str leaf and str key of a structure, leaving numbers untouched. `sp.scoring` and `sp.candidates` (`app/obs/export.py`) now serialise `redact_tree(obj)` instead of regex-redacting the dumped JSON; no rounding, no key exemption. `otel.py`'s generic pass only touches plain-string keys, so it was left alone. Tests: `tests/test_obs_redact_tree.py`.
 
-## B75 — `cached_prompt_tokens` is 0 on every request although vLLM served 94.5% of prompt tokens from cache  🔴 OPEN ✅ RESOLVED (2026-10-21)
+## B75 — `cached_prompt_tokens` is 0 on every request although vLLM served 94.5% of prompt tokens from cache  🟡 PARTIAL (2026-10-21)
 
 **Severity:** medium (cost and savings figures, P2a cached-token pricing, the paper's
 cost claims). Mostly a deployment and documentation defect.
@@ -196,13 +196,15 @@ cost claims). Mostly a deployment and documentation defect.
    provider's cached-input rate for the cached share. Without it the savings headline
    flatters routing.
 
-**Resolved:** items 1 (the flag, in the docs/deploy manifests; restarting the Spark vLLM
-stays the owner's call), 2 and 3 are resolved; item 4 (all-frontier baseline) stays OPEN as an
-owner decision and the baseline is unchanged. `_cached_tokens`
-(`app/gateway/backends/litellm_backend.py`) now returns `None` when the provider omits
-`prompt_tokens_details` / `cached_tokens` and the int (including 0) when reported; `None` flows
-through `GenerationResult`, the response `usage.cached_prompt_tokens` and into
-`usage_records.cached_prompt_tokens` (NULL = not reported). `price_call` treats `None` as 0.
+**Resolved (partial):** items 1 (the flag, in the docs/deploy manifests; restarting the Spark
+vLLM stays the owner's call) and 2 are resolved. Item 3 is only half done: the NULL-versus-0
+record distinction shipped, but the onboarding / first-N-responses **warning is NOT built and
+stays OPEN**. Item 4 (all-frontier baseline) stays OPEN as an owner decision; the baseline is
+unchanged. `_cached_tokens` (`app/gateway/backends/litellm_backend.py`) now returns `None`
+when the provider omits `prompt_tokens_details` / `cached_tokens` and the int (including 0)
+when reported. Internal records carry `None` (`GenerationResult`, and NULL in
+`usage_records.cached_prompt_tokens`); the client-facing response `usage.cached_prompt_tokens`
+still carries `0` when the count is unknown (the old wire value). `price_call` treats `None` as 0.
 `--enable-prompt-tokens-details` added to `docs/guides/onboarding-models.md`, the
 `inference-backends` skill, `deploy/spark/README.md` and `deploy/dgx_lab/vllm-local-8b.yaml`.
 Tests: `tests/routing/test_cached_tokens.py`, `test_cached_tokens_persistence.py`,
@@ -251,7 +253,7 @@ cost and residency figure. Rename the tile to match whichever it shows.
 **Resolved:** The fleet rows carry `served_onprem_count` (provider is local) and `required_onprem_count` (`onprem_only`; `onprem_count` kept equal to it). The tile is now "Served on-prem" with "N required by policy" as its sub text; the per-app On-prem column shows served. Test: `tests/test_fleet_from_usage.py::test_fleet_from_usage_counts_served_required_and_status`.
 
 
-## B78 — Cancelled and failed requests leave no Langfuse trace; cancelled ones leave no `routing_outcomes` row  🔴 OPEN ✅ RESOLVED (2026-10-21)
+## B78 — Cancelled and failed requests leave no Langfuse trace; cancelled ones leave no `routing_outcomes` row  ✅ RESOLVED (2026-10-21)
 
 **Severity:** medium (breaks "every request emits a DecisionRecord"; skews outcome-based
 research toward successful requests).

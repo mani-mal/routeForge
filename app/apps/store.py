@@ -9,7 +9,7 @@ import datetime as dt
 import os
 import uuid
 
-from sqlalchemy import and_, delete, or_, select
+from sqlalchemy import String, and_, case, cast, delete, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -23,6 +23,12 @@ from app.apps.privacy import AppPrivacyProfile, SensitivityRuleView
 from app.apps.tokens import hash_token, token_prefix
 from app.policy.recognizers import CustomRecognizer
 from app.routing.observations import Observation
+
+
+# Providers whose OK rows count as "served on-prem" (a positive claim): the
+# real on-prem provider and the in-process mock. Unknown markers ("?", "-", "")
+# are deliberately excluded, unlike the violation check's _LOCAL_PROVIDERS.
+_SERVED_ONPREM_PROVIDERS = ("onprem", "mock")
 
 
 async def resolve_application(session: AsyncSession, raw_token: str | None,
@@ -665,54 +671,84 @@ async def fleet_from_usage(session: AsyncSession, *,
     `pii_count` joins `routing_outcomes` on request_id; outcome rows exist
     only since P2b-2, so older rows count as no PII. Routing/compression
     savings are not durable columns and are deliberately absent."""
-    stmt = select(UsageRecord)
-    if since is not None:
-        stmt = stmt.where(UsageRecord.ts >= since)
-    rows = list((await session.execute(stmt)).scalars().all())
+    U = UsageRecord
 
-    pii_ids: set[str] = set()
-    ok_ids = [r.request_id for r in rows if r.status == "ok"]
-    for i in range(0, len(ok_ids), 500):
-        chunk = ok_ids[i:i + 500]
-        out = await session.execute(
-            select(RoutingOutcome.request_id, RoutingOutcome.detected_entity_types)
-            .where(RoutingOutcome.request_id.in_(chunk)))
-        pii_ids.update(rid for rid, ents in out.all() if ents)
+    def _w(stmt):
+        return stmt.where(U.ts >= since) if since is not None else stmt
+
+    def _sum(cond, val=1):
+        return func.coalesce(func.sum(case((cond, val), else_=0)), 0)
 
     agg: dict[str, dict] = {}
-    lats: dict[str, list[float]] = {}
-    quality: dict[str, float] = {}
-    tokens: dict[str, int] = {}
-    for r in rows:
-        a = agg.setdefault(r.application_id, {
-            "app": r.application_id, "count": 0, "total_usd": 0.0,
+
+    def _row(app_id: str) -> dict:
+        return agg.setdefault(app_id, {
+            "app": app_id, "count": 0, "total_usd": 0.0,
             "baseline_usd": 0.0, "onprem_count": 0, "required_onprem_count": 0,
             "served_onprem_count": 0, "pii_count": 0, "onprem_violations": 0,
             "error_count": 0, "cancelled_count": 0, "rejected_count": 0,
             "tier_distribution": {},
         })
-        if r.status != "ok":
-            key = f"{r.status}_count"
-            if key in ("error_count", "cancelled_count", "rejected_count"):
-                a[key] += 1
-            continue
-        a["count"] += 1
-        a["total_usd"] += float(r.cost_usd or 0.0)
-        a["baseline_usd"] += float(r.baseline_usd or 0.0)
-        local = r.provider in _LOCAL_PROVIDERS
-        if local:
-            a["served_onprem_count"] += 1
-        if r.onprem_only:
-            a["required_onprem_count"] += 1
-            a["onprem_count"] += 1
-            if not local:
-                a["onprem_violations"] += 1
-        if r.request_id in pii_ids:
-            a["pii_count"] += 1
-        a["tier_distribution"][r.tier] = a["tier_distribution"].get(r.tier, 0) + 1
-        lats.setdefault(r.application_id, []).append(float(r.latency_ms or 0.0))
-        quality[r.application_id] = quality.get(r.application_id, 0.0) + float(r.quality or 0.0)
-        tokens[r.application_id] = tokens.get(r.application_id, 0) + int(r.total_tokens or 0)
+
+    # Status counts (every status) -- SQL GROUP BY, no ORM rows.
+    for app_id, status, n in (await session.execute(_w(
+            select(U.application_id, U.status, func.count())
+            .group_by(U.application_id, U.status)))).all():
+        a = _row(app_id)
+        if status == "ok":
+            a["count"] = int(n)
+        elif f"{status}_count" in ("error_count", "cancelled_count", "rejected_count"):
+            a[f"{status}_count"] += int(n)
+
+    # ok-row sums and on-prem counters.
+    local = U.provider.in_(_LOCAL_PROVIDERS)
+    served = U.provider.in_(_SERVED_ONPREM_PROVIDERS)
+    ok_sums = _w(select(
+        U.application_id,
+        func.coalesce(func.sum(U.cost_usd), 0.0),
+        func.coalesce(func.sum(U.baseline_usd), 0.0),
+        func.coalesce(func.sum(U.total_tokens), 0),
+        func.coalesce(func.sum(U.quality), 0.0),
+        _sum(served),
+        _sum(U.onprem_only.is_(True)),
+        _sum(and_(U.onprem_only.is_(True), ~local)),
+    ).where(U.status == "ok").group_by(U.application_id))
+    quality: dict[str, float] = {}
+    tokens: dict[str, int] = {}
+    for app_id, usd, base, tok, q, srv, req, viol in (
+            await session.execute(ok_sums)).all():
+        a = _row(app_id)
+        a["total_usd"] = float(usd or 0.0)
+        a["baseline_usd"] = float(base or 0.0)
+        a["served_onprem_count"] = int(srv)
+        a["required_onprem_count"] = a["onprem_count"] = int(req)
+        a["onprem_violations"] = int(viol)
+        quality[app_id], tokens[app_id] = float(q or 0.0), int(tok or 0)
+
+    for app_id, tier, n in (await session.execute(_w(
+            select(U.application_id, U.tier, func.count())
+            .where(U.status == "ok").group_by(U.application_id, U.tier)))).all():
+        _row(app_id)["tier_distribution"][tier] = int(n)
+
+    # PII: ok usage rows whose routing_outcome has a non-empty entity list.
+    # JSON emptiness is tested on its text form ('[]' / 'null') -- portable
+    # across SQLite and Postgres.
+    O = RoutingOutcome
+    has_pii = exists().where(
+        O.request_id == U.request_id,
+        cast(O.detected_entity_types, String).notin_(("[]", "null", "")),
+        O.detected_entity_types.is_not(None))
+    for app_id, n in (await session.execute(_w(
+            select(U.application_id, func.count())
+            .where(U.status == "ok", has_pii)
+            .group_by(U.application_id)))).all():
+        _row(app_id)["pii_count"] = int(n)
+
+    # p50 latency: a latency-only select, never whole rows.
+    lats: dict[str, list[float]] = {}
+    for app_id, lat in (await session.execute(_w(
+            select(U.application_id, U.latency_ms).where(U.status == "ok")))).all():
+        lats.setdefault(app_id, []).append(float(lat or 0.0))
 
     for app_id, a in agg.items():
         a["latency_p50_ms"] = _pctile(sorted(lats.get(app_id, [])), 0.50)

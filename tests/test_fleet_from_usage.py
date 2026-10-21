@@ -89,3 +89,44 @@ def test_fleet_route_accepts_hours(client):
         assert r.status_code == 200
         row = next(x for x in r.json() if x["app"] == "acme")
         assert row["count"] >= 1 and "served_onprem_count" in row
+
+
+def test_served_onprem_excludes_unknown_providers_keeps_mock():
+    async def go():
+        db = Database(url="sqlite+aiosqlite://")
+        await db.ensure_ready()
+        async with db.session() as s:
+            await _usage(s, "s1", provider="onprem")
+            await _usage(s, "s2", provider="mock")
+            for i, prov in enumerate(("?", "-", "")):
+                await _usage(s, f"u{i}", provider=prov)
+            await _usage(s, "c1", provider="azure")
+            await s.commit()
+            return await store.fleet_from_usage(s, since=None)
+    a = _run(go())[0]
+    assert a["count"] == 6
+    assert a["served_onprem_count"] == 2
+
+
+def test_fleet_route_caches_per_window_and_can_be_bypassed(client, monkeypatch):
+    from app.api import ui_routes
+    from tests.test_ui_routes import _login
+    _login(client)
+    calls = []
+    real = ui_routes.store.fleet_from_usage
+
+    async def spy(s, **kw):
+        calls.append(kw)
+        return await real(s, **kw)
+    monkeypatch.setattr(ui_routes.store, "fleet_from_usage", spy)
+    monkeypatch.setattr(ui_routes, "_fleet_cache", {})
+    monkeypatch.setattr(ui_routes, "_FLEET_CACHE_TTL_S", 10.0)
+    client.get("/api/fleet?hours=24")
+    client.get("/api/fleet?hours=24")
+    assert len(calls) == 1
+    client.get("/api/fleet?hours=720")
+    assert len(calls) == 2
+    monkeypatch.setattr(ui_routes, "_FLEET_CACHE_TTL_S", 0)
+    client.get("/api/fleet?hours=24")
+    client.get("/api/fleet?hours=24")
+    assert len(calls) == 4

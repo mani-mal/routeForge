@@ -59,8 +59,8 @@ the **served** model (`chosen`). A row is excluded — contributes no evidence a
 
 - `cache_hit` is true (no model produced the cached answer);
 - `chosen` is null;
-- `status` is `no_eligible`, `backend_failed` or `context_overflow` (none of these say
-  anything about answer quality).
+- `status` is `no_eligible`, `backend_failed`, `context_overflow` or `cancelled` (none of
+  these say anything about answer quality; a `cancelled` row has no `chosen` anyway).
 
 ### 2.3 Evidence per included row
 

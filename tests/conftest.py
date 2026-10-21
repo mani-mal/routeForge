@@ -170,3 +170,11 @@ def live_internal_server():
         server.should_exit = True
         thread.join(timeout=5)
         os.environ.pop("SP_SERVER_PORT", None)
+
+
+@pytest.fixture(autouse=True)
+def _no_fleet_cache(monkeypatch):
+    """The /api/fleet response cache would leak state between tests."""
+    from app.api import ui_routes
+    monkeypatch.setattr(ui_routes, "_FLEET_CACHE_TTL_S", 0)
+    monkeypatch.setattr(ui_routes, "_fleet_cache", {})

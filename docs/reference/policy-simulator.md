@@ -377,6 +377,7 @@ with the class of the recorded status:
 | `backend_failed` | routed | a model was chosen; every attempt failed upstream |
 | `no_eligible` | rejected | the router found no candidate at the first decision |
 | `context_overflow` | rejected | every attempt was refused for size; replay models that as a `context_window` rejection |
+| `cancelled` | (excluded) | the client left before an answer. The simulator does not replay it: it is counted under `excluded.unknown_status`, which therefore includes `cancelled` rows (kept so existing reports stay byte-identical) |
 
 `outcome_agreement` is the share that match. Two counts say which way it went wrong:
 `recorded_rejected_but_routed` (out of `recorded_rejected`) and
