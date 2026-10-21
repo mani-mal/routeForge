@@ -100,16 +100,16 @@ observability:
     #   full     — attach RAW prompt/completion for eval; the config lint REJECTS
     #              this whenever any tenant is onprem_only (residency beats eval —
     #              rule 6), and it must target a residency-local Langfuse only.
-    # Env override: SP_CAPTURE_IO (see loader). See docs/archive/eval-logging-backlog.md
-    # (archived; current contract in docs/reference/per-app-config.md).
+    # Env override: SP_CAPTURE_IO (see loader). See docs/reference/per-app-config.md
+    # for the current contract.
     # Quoted: bare `off` is a YAML boolean, but this is a string enum.
     capture_io: "off"   # off | redacted | full
 
 # Provider *availability* (infra on/off) only. Tier membership is defined by the
 # pool in routing.yaml — the single source of truth for which model is which tier.
 # Each provider block may also declare the three P1b endpoint data-handling
-# defaults (design docs/superpowers/specs/2026-09-19-endpoint-data-handling-p1b-design.md
-# §2) — DECLARATIONS an operator records, never verified facts, and the
+# defaults (see docs/guides/onboarding-models.md §(e2)
+# and docs/reference/per-app-config.md) — DECLARATIONS an operator records, never verified facts, and the
 # fallback for any onboarded row / model_pool entry that leaves the field
 # unset. All three are optional; a block naming none of them (every entry
 # below today) resolves to "unknown" at every level, exactly as before this

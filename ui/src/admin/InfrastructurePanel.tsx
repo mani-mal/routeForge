@@ -68,6 +68,22 @@ function CircuitBadge({ circuit }: { circuit: OnboardedModel["circuit"] }) {
   );
 }
 
+// B75: amber badge when served traffic shows the endpoint never reports
+// prompt_tokens_details (so cached tokens are billed at full price). Silent
+// for "reported" and "unknown" (too little traffic to say).
+function CacheBadge({ status }: { status: OnboardedModel["cache_reporting"] }) {
+  if (status !== "not_reported") return null;
+  return (
+    <span
+      className="inline-flex items-center gap-1 whitespace-nowrap font-mono text-xs text-frontier"
+      title="This endpoint returns no prompt_tokens_details, so RouteForge can't see prefix-cache hits and bills every prompt token at full price. On vLLM, start the server with --enable-prompt-tokens-details."
+    >
+      <span aria-hidden="true">●</span>
+      No cache data
+    </span>
+  );
+}
+
 // The onboard/edit field set, held as strings (what the inputs actually carry)
 // so one control block serves both forms. Onboard (POST) and edit (PUT) take
 // the same full `OnboardIn` body server-side, so they take the same fields.
@@ -482,6 +498,7 @@ function ModelRow({
           <div className="flex flex-col gap-1">
             <HealthBadge status={model.probe_status} error={model.probe_error} />
             <CircuitBadge circuit={model.circuit} />
+            <CacheBadge status={model.cache_reporting} />
           </div>
         </td>
         <td className="py-2 align-top">

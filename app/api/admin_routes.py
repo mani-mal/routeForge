@@ -1265,8 +1265,11 @@ async def list_onboarded_models(request: Request,
     now = time.monotonic()
     async with request.app.state.db.session() as session:
         rows = []
-        for m in await store.list_onboarded(session):
+        onboarded = await store.list_onboarded(session)
+        cache = await store.cache_reporting_status(session, [m.slug for m in onboarded])
+        for m in onboarded:
             d = _onboarded_dict(m)
+            d["cache_reporting"] = cache.get(m.slug, "unknown")
             d["circuit"] = (_circuit_dict(br.state(m.slug, now=now), now) if br is not None
                             else {"state": "closed", "consecutive_failures": 0,
                                   "open_until_s": None})

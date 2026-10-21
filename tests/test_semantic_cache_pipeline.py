@@ -114,6 +114,9 @@ def test_hit_skips_the_model_and_reports_real_saving():
     assert len(rec.models_called) == 1  # only the first (miss) call reached the backend
     assert out2["cost"]["total_usd"] == 0.0
     assert out2["cost"]["cache_saved_usd"] > 0.0
+    # No provider call => nothing reported: NULL in usage_records (final-review
+    # I2), never 0, so a hit cannot make a non-reporting endpoint look "reported".
+    assert out2["usage"]["cached_prompt_tokens"] is None
     assert out2["choices"][0]["message"]["content"] == out1["choices"][0]["message"]["content"]
     hit_recs = _cache_trace_records(out2)
     assert hit_recs and hit_recs[0]["hit"] is True

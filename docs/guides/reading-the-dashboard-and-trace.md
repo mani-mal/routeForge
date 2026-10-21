@@ -198,6 +198,7 @@ why" — the part that makes the demo credible.
 - **tokens** `1124 total` — `152 in + 972 out`.
 - **actual spend** `$0.0105`.
 - **all-frontier baseline** `$0.0023` — what the same tokens would cost at frontier price.
+  Cached prompt tokens are priced at the baseline model's cached-input rate when the serving engine reports them; when it does not, the baseline assumes no caching.
 - **routing saved** `$-0.0082` — actual **minus** baseline. It's **negative** here: the
   mid model was *more* expensive per token than the frontier baseline for this token mix,
   so routing *cost* money on this call rather than saving it. See §6 — this is a pricing

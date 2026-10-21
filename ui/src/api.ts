@@ -497,6 +497,9 @@ export type OnboardedModel = {
   // declarations above are: rows returned before this shipped had no field
   // on the wire; the server always sends it now.
   circuit?: { state: string; consecutive_failures: number; open_until_s: number | null };
+  // B75: derived from served traffic -- "not_reported" means the endpoint
+  // returns no prompt_tokens_details. Listing (GET) only; optional elsewhere.
+  cache_reporting?: "reported" | "not_reported" | "unknown";
 };
 export type OnboardIn = {
   slug: string; display_name: string; tier: string; endpoint: string;

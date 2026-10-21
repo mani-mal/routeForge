@@ -103,7 +103,7 @@ Sortable (click any column header; ▲/▼ shows the active sort). Columns:
 | **On-prem** | Requests this app kept on-prem (`onprem_only`). |
 | **p50** | Median request latency (ms) for this app. |
 | **Tiers** | A mini stacked bar of the app's tier mix (cheap green / mid blue / frontier red). Hover for exact counts. |
-| **⚠** | Fires only on a **genuine residency breach** — an `onprem_only` request that was served off-prem (`fleet()['onprem_violations'] > 0`, `FleetOverview.tsx:51`). Because `onprem_only` requests can't reach cloud by construction (rule 3) this is normally `0`; if the glyph ever shows, it means a real leak. *(It used to fire on the much looser `pii_count > 0 && onprem_count < pii_count`, which flagged compliant `private_cloud_ok` traffic as a problem — see `docs/archive/ui-open-items.md` #6.)* |
+| **⚠** | Fires only on a **genuine residency breach** — an `onprem_only` request that was served off-prem (`fleet()['onprem_violations'] > 0`, `FleetOverview.tsx:51`). Because `onprem_only` requests can't reach cloud by construction (rule 3) this is normally `0`; if the glyph ever shows, it means a real leak. *(It used to fire on the much looser `pii_count > 0 && onprem_count < pii_count`, which flagged compliant `private_cloud_ok` traffic as a problem — a closed console-UI item.)* |
 
 A tier legend (cheap / mid / frontier dots) sits top-right of the table.
 
@@ -190,6 +190,8 @@ densities are a tier-quality proxy and need a per-model quality score.
 The **all-frontier baseline** is **not a flat per-request number** — it is computed from
 **each request's own input/output token counts**, re-priced at the frontier model's
 rates, then summed across every request in the app.
+
+Cached prompt tokens are priced at the baseline model's cached-input rate when the serving engine reports them; when it does not, the baseline assumes no caching.
 
 Prices are USD per 1M tokens; the frontier baseline model is `bedrock-frontier`. Cloud
 prices come from `config/pricing.yaml`; **on-prem prices do not** — an onboarded model

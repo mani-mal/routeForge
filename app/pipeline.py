@@ -23,6 +23,7 @@ from app.policy.feasible import feasible_set
 from app.policy.detectors import Detector, detection_ran, make_detector
 from app.policy.effective import EffectiveDetector, FilteredDetector
 from app.policy.gate import Gate, Representations, redact_tool_calls_with_entities
+from app.routing.pricing import price_call
 from app.routing.router import client_output_cap
 from app.apps.privacy import AppPrivacyProfile, effective_rules
 from app.compression import CompressionResult, compress
@@ -529,12 +530,45 @@ class Pipeline:
         internals["redacted_prompt"] = reps.text_redacted
         internals["detector"] = reps.detector
 
-    def _baseline(self, in_tokens: int, out_tokens: int) -> float:
+    def _baseline(self, in_tokens: int, out_tokens: int,
+                  cached_tokens: int | None = None) -> float:
         """All-frontier baseline: input and output priced at the baseline
         (most-expensive frontier) model's respective rates — the SAME token
-        basis `total` uses, so routing_saved compares like with like (B12)."""
+        basis `total` uses, so routing_saved compares like with like (B12).
+
+        `cached_tokens` (B75) is the prompt-token count the serving engine
+        reported as cached. When an int, that share is billed at the baseline
+        model's `cached_input` rate (via `price_call`, the one pricing rule);
+        `None` means not reported, so the baseline assumes no caching."""
         p = self._s.pricing.models[self._s.pricing.baseline_model]
-        return (in_tokens * p.input + out_tokens * p.output) / 1_000_000
+        return price_call(p, prompt_tokens=in_tokens, completion_tokens=out_tokens,
+                          cached_prompt_tokens=cached_tokens)
+
+    @staticmethod
+    def _baseline_cached_count(cached: int | None, tokens_in: int,
+                               tokens_after: int) -> int | None:
+        """B75: the cached count to price BOTH baseline calls with.
+
+        The backend reports cached tokens against ITS prompt (`tokens_in`,
+        which includes template/tool schemas), while the baseline is priced on
+        RouteForge's own content estimate. So turn the report into a share,
+        clamp it to [0, 1], and scale it onto the post-compression basis once:
+        the cached prefix then survives compression and `compression_saved` is
+        the full-rate drop, independent of caching. None / no prompt tokens =
+        no discount."""
+        if cached is None or tokens_in <= 0:
+            return None
+        share = min(1.0, max(0.0, cached / tokens_in))
+        return round(share * tokens_after)
+
+    def _two_lever_baseline(self, comp, result) -> tuple[float, float, float]:
+        """(baseline_usd, baseline_after, compression_saved) -- the one place
+        both run() and the streaming finaliser price the two levers."""
+        eff = self._baseline_cached_count(
+            result.cached_prompt_tokens, result.tokens_in, comp.tokens_after)
+        baseline_usd = self._baseline(comp.tokens_before, result.tokens_out, eff)
+        baseline_after = self._baseline(comp.tokens_after, result.tokens_out, eff)
+        return baseline_usd, baseline_after, max(0.0, baseline_usd - baseline_after)
 
     def _display_name(self, model_slug: str) -> str:
         """Resolve a routing-pool slug (e.g. `local-8b`) to its human-facing
@@ -656,11 +690,13 @@ class Pipeline:
             "choices": [Choice(index=0,
                                message=Message(role="assistant", content=text)
                                ).model_dump()],
-            # cached_prompt_tokens left at its default 0: a semantic-cache hit
-            # makes no provider call, so there is no cache-usage figure to
-            # report -- 0 is the truth here, not a missing value.
+            # cached_prompt_tokens=None: a semantic-cache hit makes no provider
+            # call, so no endpoint reported anything. usage_records stores NULL
+            # (so it cannot make a non-reporting endpoint look "reported");
+            # the client wire value stays 0 via routes._wire_usage.
             "usage": Usage(prompt_tokens=tokens_in, completion_tokens=tokens_out,
-                           total_tokens=tokens_in + tokens_out).model_dump(),
+                           total_tokens=tokens_in + tokens_out,
+                           cached_prompt_tokens=None).model_dump(),
             "trace": trace,
             "cost": {"total_usd": 0.0, "baseline_usd": baseline,
                      "routing_saved_usd": 0.0, "compression_saved_usd": 0.0,
@@ -1053,9 +1089,8 @@ class Pipeline:
         # and show fake positive net savings. compression_saved IS clamped,
         # but harmlessly so — tokens_after <= tokens_before always holds, so
         # it is >= 0 anyway.
-        baseline_usd = self._baseline(comp.tokens_before, result.tokens_out)
-        baseline_after = self._baseline(comp.tokens_after, result.tokens_out)
-        compression_saved = max(0.0, baseline_usd - baseline_after)
+        baseline_usd, baseline_after, compression_saved = self._two_lever_baseline(
+            comp, result)
         routing_saved = baseline_after - total
         trace = [r.model_dump() for r in records] + [vrec.model_dump()]
         trace.append(comp.record.model_dump())
@@ -1362,9 +1397,8 @@ class Pipeline:
         # (pre-both-levers), compression_saved is the tokens_before->tokens_after
         # drop at baseline price, routing_saved is the remaining drop to actual
         # total. routing_saved is intentionally NOT clamped (see run()).
-        baseline_usd = self._baseline(comp.tokens_before, result.tokens_out)
-        baseline_after = self._baseline(comp.tokens_after, result.tokens_out)
-        compression_saved = max(0.0, baseline_usd - baseline_after)
+        baseline_usd, baseline_after, compression_saved = self._two_lever_baseline(
+            comp, result)
         routing_saved = baseline_after - total
 
         vrec = VerificationRecord(
