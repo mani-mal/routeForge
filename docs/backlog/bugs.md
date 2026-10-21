@@ -206,7 +206,7 @@ when reported. Internal records carry `None` (`GenerationResult`, and NULL in
 `usage_records.cached_prompt_tokens`); the client-facing response `usage.cached_prompt_tokens`
 still carries `0` when the count is unknown (the old wire value). `price_call` treats `None` as 0.
 `--enable-prompt-tokens-details` added to `docs/guides/onboarding-models.md`, the
-`inference-backends` skill, `deploy/spark/README.md` and `deploy/dgx_lab/vllm-local-8b.yaml`.
+`inference-backends` skill, `deploy/spark/README.md` and the DGX lab vLLM manifest in `deploy/dgx_lab/`.
 Tests: `tests/routing/test_cached_tokens.py`, `test_cached_tokens_persistence.py`,
 `test_pricing.py::test_unknown_cached_count_prices_like_zero`.
 
