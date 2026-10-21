@@ -62,6 +62,12 @@ class StreamFallback(Exception):
     pass
 
 
+def _attempt_log(internals: dict | None) -> list[str] | None:
+    """The route's record of which candidates the gateway started calling, read
+    back if the client disconnects mid-call (B78). Names only, never content."""
+    return None if internals is None else internals.setdefault("attempted", [])
+
+
 def _is_tool_conversation(request: ChatRequest) -> bool:
     """True when the client is driving its own tool loop: it offered `tools`,
     or replays assistant tool_calls / role:"tool" results."""
@@ -979,7 +985,8 @@ class Pipeline:
                 if hasattr(request, k)}
         result, records = await self._gateway.run(
             ctx, comp.messages, comp.tokens_after, complexity, hint,
-            tools=tools, tool_choice=tool_choice, params=request.generation_params())
+            tools=tools, tool_choice=tool_choice, params=request.generation_params(),
+            attempt_log=_attempt_log(internals))
         if internals is not None:
             internals["outcome_ctx"].update(reply_shape(result))
 
@@ -1330,7 +1337,7 @@ class Pipeline:
                 if hasattr(request, k)}
         stream, records = await self._gateway.run_stream(
             ctx, comp.messages, comp.tokens_after, complexity, hint,
-            params=request.generation_params())
+            params=request.generation_params(), attempt_log=_attempt_log(internals))
 
         meta: dict = {}
 

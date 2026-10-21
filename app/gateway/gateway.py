@@ -157,8 +157,12 @@ class Gateway:
                   tokens_after: int, complexity: float, hint: dict,
                   tools: list[dict] | None = None,
                   tool_choice: str | dict | None = None,
-                  params: dict | None = None
+                  params: dict | None = None,
+                  attempt_log: list[str] | None = None
                   ) -> tuple[GenerationResult, list[DecisionRecord]]:
+        """`attempt_log`, when given, receives each candidate's name as its call
+        starts, so a caller whose task is cancelled mid-call (a client
+        disconnect, B78) can still say which endpoint was in flight."""
         records: list[DecisionRecord] = []
         threshold = self._s.routing.confidence_escalation_threshold
         max_esc = self._s.routing.max_escalations
@@ -205,6 +209,8 @@ class Gateway:
                 raise
             cand = decision.chosen
             attempted.append(cand.name)
+            if attempt_log is not None:
+                attempt_log.append(cand.name)
             price = (self._reg.price_for(cand.name) if self._reg
                      else self._s.pricing.models[cand.name])
             try:
@@ -288,7 +294,8 @@ class Gateway:
                          tokens_after: int, complexity: float, hint: dict,
                          tools: list[dict] | None = None,
                          tool_choice: str | dict | None = None,
-                         params: dict | None = None
+                         params: dict | None = None,
+                         attempt_log: list[str] | None = None
                          ) -> tuple[AsyncIterator[StreamChunk], list[DecisionRecord]]:
         """Real streaming counterpart of `run()` for the direct (single-shot)
         path. Performs the SAME residency-clamped router selection and emits the
@@ -317,6 +324,8 @@ class Gateway:
                 output_tokens=expected_output_tokens(self._s, params),
                 open_circuits=self._open_circuits())
         cand = decision.chosen
+        if attempt_log is not None:   # see run()
+            attempt_log.append(cand.name)
         price = (self._reg.price_for(cand.name) if self._reg
                  else self._s.pricing.models[cand.name])
         record = DecisionRecord(

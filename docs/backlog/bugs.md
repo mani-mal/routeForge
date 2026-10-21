@@ -300,7 +300,17 @@ ERROR) or WARNING (cancel), to the same project `export_trace` resolves (shared 
 `unknown_status`), quality calibration excludes it, the outcomes report counts it in the
 denominator only, the NDJSON export passes it through. Tests: `tests/test_b78_failure_trace.py`.
 The open question is answered above: a disconnect does cancel the upstream generation. The
-empty `attempts` on a cancelled outcome row (a call was in flight) remains a minor open item.
+empty `attempts` on a cancelled outcome row (a call was in flight) was fixed afterwards: the
+gateway appends each candidate to an optional `attempt_log` as its call starts (the pipeline
+passes `internals["attempted"]`), and `_record_cancelled` falls back to it when no exception
+carried the attempted models. Test: `tests/test_open_minors_2026_10_21.py`.
+
+Two smaller items closed in the same change: the Overview's `/api/fleet` cache is capped at
+16 distinct `hours` windows (it was unbounded in arbitrary `?hours=` values), and Langfuse
+secrets stored in cleartext by images that predate `cryptography` are now encrypted in place
+on boot (`encrypt_plaintext_secrets`, `app/apps/langfuse_provision.py`). That closes the
+at-rest gap for `kit-gtm` on the Spark; rotating that key in Langfuse is still advised,
+because database backups taken before the fix hold the cleartext value.
 
 
 ## B73 — FEATURE: finish the Artificial Analysis model metrics on the console (published quality snapshot, time to first token, output speed)  🔴 OPEN

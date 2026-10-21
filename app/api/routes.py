@@ -389,6 +389,10 @@ async def _record_cancelled(request: Request, *, tenant: str, request_id: str,
     request's `cancelled` routing outcome and a minimal failure trace (B78), so
     outcome exports and Langfuse see the denominator."""
     metrics.observe_request("-", "cancelled")
+    if not attempts and internals:
+        # The gateway call was in flight when the client left, so no exception
+        # carried the attempted models; the pipeline's attempt log did.
+        attempts = tuple(internals.get("attempted") or ())
     logging.getLogger("serving.api").info(
         "client disconnected; cancelled %s after %.1fs", request_id,
         time.monotonic() - started)
