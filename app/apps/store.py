@@ -9,7 +9,7 @@ import datetime as dt
 import os
 import uuid
 
-from sqlalchemy import and_, delete, or_, select
+from sqlalchemy import String, and_, case, cast, delete, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -18,10 +18,17 @@ from app.apps.models import (
     EndpointObservation, ModelQuality, OnboardedModel, OutcomeFeedback,
     RequestSnapshot, RoutingOutcome, ServiceCredential, UsageRecord, utcnow,
 )
+from app.api.history import _LOCAL_PROVIDERS
 from app.apps.privacy import AppPrivacyProfile, SensitivityRuleView
 from app.apps.tokens import hash_token, token_prefix
 from app.policy.recognizers import CustomRecognizer
 from app.routing.observations import Observation
+
+
+# Providers whose OK rows count as "served on-prem" (a positive claim): the
+# real on-prem provider and the in-process mock. Unknown markers ("?", "-", "")
+# are deliberately excluded, unlike the violation check's _LOCAL_PROVIDERS.
+_SERVED_ONPREM_PROVIDERS = ("onprem", "mock")
 
 
 async def resolve_application(session: AsyncSession, raw_token: str | None,
@@ -134,7 +141,7 @@ async def record_usage(
     prompt_tokens: int,
     completion_tokens: int,
     total_tokens: int,
-    cached_prompt_tokens: int = 0,
+    cached_prompt_tokens: int | None = 0,
     cost_usd: float,
     baseline_usd: float,
     latency_ms: float,
@@ -648,6 +655,107 @@ async def usage_by_application(session: AsyncSession, *,
             quality_sum / usd_sum) if usd_sum > 0 else 0.0
 
     return sorted(agg.values(), key=lambda d: d["total_usd"], reverse=True)
+
+
+async def fleet_from_usage(session: AsyncSession, *,
+                           since: dt.datetime | None = None) -> list[dict]:
+    """Console Overview rows, one per application, from the durable
+    `usage_records` table over an optional window (B76). Replaces the
+    500-row snapshot ring for the Overview.
+
+    Spend, tokens, latency and tiers are over `ok` rows only (same rule as
+    `usage_summary`); error/cancelled/rejected are counted beside them.
+    `served_onprem_count` (the chosen endpoint's provider is local) and
+    `required_onprem_count` (policy forced `onprem_only`) are different facts
+    (B77); `onprem_count` is kept equal to the latter for compatibility.
+    `pii_count` joins `routing_outcomes` on request_id; outcome rows exist
+    only since P2b-2, so older rows count as no PII. Routing/compression
+    savings are not durable columns and are deliberately absent."""
+    U = UsageRecord
+
+    def _w(stmt):
+        return stmt.where(U.ts >= since) if since is not None else stmt
+
+    def _sum(cond, val=1):
+        return func.coalesce(func.sum(case((cond, val), else_=0)), 0)
+
+    agg: dict[str, dict] = {}
+
+    def _row(app_id: str) -> dict:
+        return agg.setdefault(app_id, {
+            "app": app_id, "count": 0, "total_usd": 0.0,
+            "baseline_usd": 0.0, "onprem_count": 0, "required_onprem_count": 0,
+            "served_onprem_count": 0, "pii_count": 0, "onprem_violations": 0,
+            "error_count": 0, "cancelled_count": 0, "rejected_count": 0,
+            "tier_distribution": {},
+        })
+
+    # Status counts (every status) -- SQL GROUP BY, no ORM rows.
+    for app_id, status, n in (await session.execute(_w(
+            select(U.application_id, U.status, func.count())
+            .group_by(U.application_id, U.status)))).all():
+        a = _row(app_id)
+        if status == "ok":
+            a["count"] = int(n)
+        elif f"{status}_count" in ("error_count", "cancelled_count", "rejected_count"):
+            a[f"{status}_count"] += int(n)
+
+    # ok-row sums and on-prem counters.
+    local = U.provider.in_(_LOCAL_PROVIDERS)
+    served = U.provider.in_(_SERVED_ONPREM_PROVIDERS)
+    ok_sums = _w(select(
+        U.application_id,
+        func.coalesce(func.sum(U.cost_usd), 0.0),
+        func.coalesce(func.sum(U.baseline_usd), 0.0),
+        func.coalesce(func.sum(U.total_tokens), 0),
+        func.coalesce(func.sum(U.quality), 0.0),
+        _sum(served),
+        _sum(U.onprem_only.is_(True)),
+        _sum(and_(U.onprem_only.is_(True), ~local)),
+    ).where(U.status == "ok").group_by(U.application_id))
+    quality: dict[str, float] = {}
+    tokens: dict[str, int] = {}
+    for app_id, usd, base, tok, q, srv, req, viol in (
+            await session.execute(ok_sums)).all():
+        a = _row(app_id)
+        a["total_usd"] = float(usd or 0.0)
+        a["baseline_usd"] = float(base or 0.0)
+        a["served_onprem_count"] = int(srv)
+        a["required_onprem_count"] = a["onprem_count"] = int(req)
+        a["onprem_violations"] = int(viol)
+        quality[app_id], tokens[app_id] = float(q or 0.0), int(tok or 0)
+
+    for app_id, tier, n in (await session.execute(_w(
+            select(U.application_id, U.tier, func.count())
+            .where(U.status == "ok").group_by(U.application_id, U.tier)))).all():
+        _row(app_id)["tier_distribution"][tier] = int(n)
+
+    # PII: ok usage rows whose routing_outcome has a non-empty entity list.
+    # JSON emptiness is tested on its text form ('[]' / 'null') -- portable
+    # across SQLite and Postgres.
+    O = RoutingOutcome
+    has_pii = exists().where(
+        O.request_id == U.request_id,
+        cast(O.detected_entity_types, String).notin_(("[]", "null", "")),
+        O.detected_entity_types.is_not(None))
+    for app_id, n in (await session.execute(_w(
+            select(U.application_id, func.count())
+            .where(U.status == "ok", has_pii)
+            .group_by(U.application_id)))).all():
+        _row(app_id)["pii_count"] = int(n)
+
+    # p50 latency: a latency-only select, never whole rows.
+    lats: dict[str, list[float]] = {}
+    for app_id, lat in (await session.execute(_w(
+            select(U.application_id, U.latency_ms).where(U.status == "ok")))).all():
+        lats.setdefault(app_id, []).append(float(lat or 0.0))
+
+    for app_id, a in agg.items():
+        a["latency_p50_ms"] = _pctile(sorted(lats.get(app_id, [])), 0.50)
+        q, tok, usd = quality.get(app_id, 0.0), tokens.get(app_id, 0), a["total_usd"]
+        a["token_intelligence_density"] = q / tok * 1000.0 if tok > 0 else 0.0
+        a["cost_intelligence_density"] = q / usd if usd > 0 else 0.0
+    return sorted(agg.values(), key=lambda d: d["count"], reverse=True)
 
 
 # --- per-app privacy profile (recognizers + sensitivity rules) ---

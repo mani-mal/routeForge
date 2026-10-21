@@ -51,6 +51,12 @@ from app.routing.router import expected_output_tokens
 SIMULATED_STATUSES = frozenset({"ok", "backend_failed", "verify_failed",
                                 "no_eligible", "context_overflow"})
 
+#: Statuses serving writes that replay deliberately skips (B78). A `cancelled`
+#: row has no routing decision to compare (the client left mid-request), so it
+#: is counted under `unknown_status` and never simulated: replay agreement and
+#: every arm's figures keep their meaning.
+NOT_REPLAYED_STATUSES = frozenset({"cancelled"})
+
 #: The outcome each status's FIRST routing decision had (B60), which is what an
 #: arm's `outcome` is compared with. `verify_failed` and `backend_failed` were
 #: routed -- a model was chosen, and step 9 or the backend failed afterwards.

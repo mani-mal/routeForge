@@ -55,3 +55,11 @@ def test_negative_cached_is_treated_as_zero():
     price = _p(cached_input=0.0)
     assert price_call(price, prompt_tokens=100, completion_tokens=0,
                       cached_prompt_tokens=-5) == pytest.approx(_legacy(price, 100, 0))
+
+
+def test_unknown_cached_count_prices_like_zero():
+    """B75: None (provider did not report) bills at full input -- no discount."""
+    p = _p(cached_input=0.3)
+    assert price_call(p, prompt_tokens=1000, completion_tokens=100,
+                      cached_prompt_tokens=None) == price_call(
+        p, prompt_tokens=1000, completion_tokens=100, cached_prompt_tokens=0)

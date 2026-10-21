@@ -8,7 +8,7 @@ import time
 from collections import namedtuple
 
 from app.obs.otel import app_trace_url, get_app_tracer, get_tracer, trace_url
-from app.obs.redact import redact_value, redacted_copy
+from app.obs.redact import redact_tree, redact_value, redacted_copy
 
 log = logging.getLogger("serving.obs")
 
@@ -48,7 +48,8 @@ def _candidates_json(rec: dict) -> str | None:
         items.append({"model": r.get("name"), "tier": r.get("tier"),
                       "provider": r.get("provider"), "eligible": False,
                       "reason": r.get("reason", ""), "code": r.get("code")})
-    return json.dumps(items)
+    # Structural redaction: regex over the dumped JSON would corrupt floats (B74).
+    return json.dumps(redact_tree(items))
 
 
 def resolve_capture_io(capture_io: str, *, has_own_project: bool,
@@ -180,6 +181,56 @@ def _hop_usage(rec: dict, request_usage: dict | None, *, is_served: bool) -> dic
     return request_usage if is_served else None
 
 
+def _app_tracer(app_langfuse, *, full: bool):
+    """The app's own Langfuse project tracer, or None when it cannot be built.
+    The ONE place a per-app tracer is resolved, shared by `export_trace` and
+    `export_failure_trace` so a failure trace can never route to a different
+    project than the request's normal trace would."""
+    return get_app_tracer(app_langfuse.host, app_langfuse.public_key,
+                          app_langfuse.secret_key, capture_io_full=full)
+
+
+def export_failure_trace(*, request_id: str, application_id: str, status: str,
+                         latency_ms: float, attempts: tuple[str, ...] = (),
+                         app_langfuse=None, session_id: str | None = None,
+                         started_ns: int | None = None) -> None:
+    """Export one minimal root span for a request that ended `cancelled` or
+    `error` (B78) -- neither reaches `export_trace`, so without this Langfuse
+    shows no trace for them and no ERROR-level observation at all.
+
+    Content-free by construction: ids, the status enum, elapsed time and the
+    model names attempted. It takes no prompt or completion, so it is safe in
+    every capture mode (rule 2). It goes to the same project `export_trace`
+    would use: the app's own project when it has one, else the shared one --
+    including when the per-app tracer fails to build (non-`full` capture falls
+    to the shared tracer there too). `error` is a span ERROR / Langfuse ERROR
+    level; `cancelled` is a Langfuse WARNING (the client left, nothing broke).
+    Best effort: never raises."""
+    try:
+        per_app = _app_tracer(app_langfuse, full=False) if app_langfuse is not None else None
+        tracer = per_app if per_app is not None else get_tracer()
+        kwargs = {"start_time": started_ns} if started_ns else {}
+        is_error = status != "cancelled"
+        with tracer.start_as_current_span("serving.request", **kwargs) as root:
+            root.set_attribute("sp.request_id", request_id)
+            root.set_attribute("sp.application_id", application_id)
+            root.set_attribute("sp.status", status)
+            root.set_attribute("sp.latency_ms", float(latency_ms))
+            root.set_attribute("sp.attempts", json.dumps(redact_tree(list(attempts))))
+            root.set_attribute("sp.capture_io", "off")
+            if session_id:
+                root.set_attribute("langfuse.session.id", session_id)
+            root.set_attribute("langfuse.observation.level",
+                               "ERROR" if is_error else "WARNING")
+            root.set_attribute("langfuse.observation.status_message", status)
+            set_status = getattr(root, "set_status", None)
+            if is_error and set_status is not None:
+                from opentelemetry.trace import Status, StatusCode
+                set_status(Status(StatusCode.ERROR, status))
+    except Exception:  # telemetry must never break serving
+        log.exception("failure trace export failed for %s (swallowed)", request_id)
+
+
 def export_trace(*, request_id: str, tenant_id: str, model: str,
                  cost: dict, policy: dict, trace: list[dict],
                  application_id: str = "", app_langfuse=None,
@@ -247,9 +298,7 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                         app_langfuse is not None, detector is not None)
         per_app = None
         if app_langfuse is not None:
-            per_app = get_app_tracer(app_langfuse.host, app_langfuse.public_key,
-                                     app_langfuse.secret_key,
-                                     capture_io_full=(resolved == "full"))
+            per_app = _app_tracer(app_langfuse, full=(resolved == "full"))
             if resolved == "full" and per_app is None:
                 # The app has its own Langfuse project, but building its
                 # tracer failed (e.g. SDK build failure) -- we cannot isolate
@@ -434,10 +483,10 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                             sp.set_attribute("sp.reason", redact_value(str(rec["reason"])))
                         cands = _candidates_json(rec)
                         if cands is not None:
-                            sp.set_attribute("sp.candidates", redact_value(cands))
+                            sp.set_attribute("sp.candidates", cands)
                         if rec.get("scoring"):
                             sp.set_attribute("sp.scoring",
-                                             redact_value(json.dumps(rec["scoring"])))
+                                             json.dumps(redact_tree(rec["scoring"])))
                         for k in ("hop_index", "actual_cost_usd", "est_cost_usd", "latency_ms"):
                             if rec.get(k) is not None:
                                 sp.set_attribute(f"sp.{k}", float(rec[k]))

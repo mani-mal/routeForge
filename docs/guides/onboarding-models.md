@@ -12,7 +12,10 @@ or UI.
 Stand up your own OpenAI-compatible inference server. How you serve it is
 entirely out of scope for routeForge — any of these work:
 
-- vLLM (`vllm serve <model> --served-model-name <slug>`)
+- vLLM (`vllm serve <model> --served-model-name <slug> --enable-prompt-tokens-details`).
+  Add `--enable-prompt-tokens-details`: without it vLLM leaves
+  `usage.prompt_tokens_details` out, so routeForge cannot see prefix-cache hits
+  and cached-token pricing never applies (the cost record shows "not reported").
 - NVIDIA Dynamo (fronting TensorRT-LLM or vLLM workers)
 - NVIDIA NIM
 - Any other server that speaks the OpenAI `/v1/chat/completions` and

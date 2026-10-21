@@ -155,6 +155,9 @@ class SimulatedBackend:
             # confidence from, and the gateway's confidence-based escalation
             # loop (step 7) must never fire on a simulated call.
             confidence=1.0,
+            # The simulator reports a definite zero (keeps the golden matrices
+            # byte-identical); it is not an unreported provider.
+            cached_prompt_tokens=0,
         )
 
     def generate_stream(self, model: str, messages: list[Message], price: PriceCfg,

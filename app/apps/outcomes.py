@@ -24,7 +24,8 @@ import re
 
 # --- constants --------------------------------------------------------
 
-STATUSES = ("ok", "backend_failed", "verify_failed", "no_eligible", "context_overflow")
+STATUSES = ("ok", "backend_failed", "verify_failed", "no_eligible", "context_overflow",
+            "cancelled")
 VERIFY_MODES = ("not_required", "verified", "failed", "waived_stream", "incremental")
 BUCKETS = ("<1k", "1k-4k", "4k-16k", "16k-64k", ">64k")
 

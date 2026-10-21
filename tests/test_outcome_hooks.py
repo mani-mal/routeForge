@@ -349,9 +349,9 @@ def test_pinned_model_rejection_writes_no_row():
 
 
 # --------------------------------------------------------------------------- #
-# 7. cancelled, 401 and 429 write no row
+# 7. cancelled writes a `cancelled` row (B78); 401 and 429 write none
 # --------------------------------------------------------------------------- #
-def test_cancelled_request_writes_no_row(monkeypatch):
+def test_cancelled_request_writes_cancelled_row(monkeypatch):
     async def _gone(task, is_disconnected, poll_s):
         task.cancel()
         raise routes.ClientDisconnected()
@@ -361,7 +361,10 @@ def test_cancelled_request_writes_no_row(monkeypatch):
         r = c.post("/v1/chat/completions", headers=DEMO, json=HELLO)
         assert r.status_code == 499
         assert [u.status for u in _usage(c)] == ["cancelled"]
-        assert _outcomes(c) == []
+        # B78: the denominator -- a cancelled request has an outcome row.
+        rows = _outcomes(c)
+        assert [o.status for o in rows] == ["cancelled"]
+        assert rows[0].chosen is None and rows[0].cost_usd == 0.0
 
 
 def test_unauthorized_writes_no_row():

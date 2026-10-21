@@ -38,6 +38,23 @@ def redact_value(v):
     return redact(v) if isinstance(v, str) else v
 
 
+def redact_tree(obj, recognizers: list[CustomRecognizer] | None = None):
+    """Deep copy of a JSON-shaped structure with every str leaf AND every str
+    dict key passed through `redact()`.
+
+    Redacting the serialised JSON string instead lets the regex detector read
+    the fractional digits of an unrounded float as a card/bank number (B74).
+    Numbers, bools and None pass through unchanged; no key is exempt; tuples
+    become lists."""
+    if isinstance(obj, str):
+        return redact(obj, recognizers)
+    if isinstance(obj, dict):
+        return {(redact(k, recognizers) if isinstance(k, str) else k):
+                redact_tree(v, recognizers) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [redact_tree(v, recognizers) for v in obj]
+    return obj
+
 def redacted_copy(text: str, detector, recognizers=None, *,
                   prepared: str | None = None) -> str:
     """A redacted copy of a RAW value, built here and not borrowed (design

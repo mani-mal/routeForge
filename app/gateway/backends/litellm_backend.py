@@ -61,20 +61,25 @@ def _reasoning_tokens(u) -> int | None:
     return n if isinstance(n, int) and not isinstance(n, bool) else None
 
 
-def _cached_tokens(u) -> int:
+def _cached_tokens(u) -> int | None:
     """`usage.prompt_tokens_details.cached_tokens`, across the dict, pydantic
-    and SimpleNamespace shapes litellm hands back. A provider that does not
-    report the field yields 0 -- indistinguishable from a real cache miss, which
-    is a documented limitation, not an inference."""
+    and SimpleNamespace shapes litellm hands back.
+
+    B75: None means the provider did NOT report it (details block absent, or
+    present without `cached_tokens`) -- a different fact from a reported 0, a
+    genuine miss. vLLM omits the block unless started with
+    `--enable-prompt-tokens-details`."""
     det = (u.get("prompt_tokens_details") if isinstance(u, dict)
            else getattr(u, "prompt_tokens_details", None))
     if det is None:
-        return 0
-    raw = det.get("cached_tokens") if isinstance(det, dict) else getattr(det, "cached_tokens", 0)
+        return None
+    raw = det.get("cached_tokens") if isinstance(det, dict) else getattr(det, "cached_tokens", None)
+    if raw is None:
+        return None
     try:
-        return max(0, int(raw or 0))
+        return max(0, int(raw))
     except (TypeError, ValueError):
-        return 0
+        return None
 
 
 def _usage_dict(u) -> dict:
@@ -254,7 +259,7 @@ class LiteLLMBackend:
         text = "".join(parts)
         tokens_in = usage.get("prompt_tokens", 0)
         tokens_out = usage.get("completion_tokens", 0)
-        cached_in = usage.get("cached_tokens", 0)
+        cached_in = usage.get("cached_tokens")
         cost_usd = price_call(price, prompt_tokens=tokens_in,
                               completion_tokens=tokens_out,
                               cached_prompt_tokens=cached_in)

@@ -185,6 +185,7 @@ Source: `app/apps/models.py::RoutingOutcome`, built by `app/apps/outcomes.py`
 | `verify_failed` | 422 | Step 9 failed closed (`response failed verification`). A model **was** served before step 9 refused it, so the row is attributed like an `ok` row (§3.5). |
 | `no_eligible` | 422 | The candidate set was empty: after the eligibility filters, or after the router's per-request budget filter (`no_eligible_model`). |
 | `context_overflow` | 400 | Every attempt refused on context length (`context_length_exceeded`). |
+| `cancelled` | 499 | The client disconnected before an answer (non-stream, and the keepalive stream). No model is attributed (`chosen` is null, `attempts` empty). A usage row with `status="cancelled"` is written beside it. Consumers must treat the status set as open: parse unknown values rather than rejecting them. |
 
 **No row is written** for requests that never reached a routing decision, or whose failure
 says nothing about one:
@@ -194,8 +195,6 @@ says nothing about one:
 - `400` `streaming_not_supported`, `422` body validation errors;
 - `422` pinned-model rejection (`model_not_found`: the client pinned a model the app may not
   use);
-- `499` client cancellation (non-stream, and the keepalive stream). A cancellation is not an
-  outcome of the routing decision;
 - `500` unhandled errors;
 - a real-token stream whose backend finished but produced no final result ("stream ended
   without a final result"). This is rare, fits no status, and writes no usage row either.

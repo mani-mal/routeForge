@@ -43,7 +43,7 @@ from app.errors import (
 )
 from app.models import ChatRequest, ExecutionPolicyContext
 from app.obs import metrics
-from app.obs.export import export_trace, resolve_capture_io
+from app.obs.export import export_failure_trace, export_trace, resolve_capture_io
 from app.obs.redact import redacted_copy
 from app.obs.scores import SCORE_NAMES, ensure_score_config, post_score
 from app.output.streaming_verify import StreamingVerifier
@@ -359,10 +359,35 @@ async def _await_unless_disconnected(task: "asyncio.Task", is_disconnected,
             raise ClientDisconnected()
 
 
+def _export_failure_trace(*, status: str, tenant: str, request_id: str,
+                          started: float, attempts: tuple[str, ...],
+                          app_langfuse: object | None, session_id: str | None,
+                          started_ns: int | None) -> None:
+    """The minimal, content-free Langfuse trace for a `cancelled` or `error`
+    request (B78). Best effort: swallowed, never changes the response."""
+    try:
+        export_failure_trace(
+            request_id=request_id, application_id=tenant, status=status,
+            latency_ms=(time.monotonic() - started) * 1000,
+            attempts=tuple(attempts), app_langfuse=app_langfuse,
+            session_id=session_id, started_ns=started_ns)
+    except Exception:
+        logging.getLogger("serving.obs").warning(
+            "failure trace failed request=%s", request_id, exc_info=True)
+
+
 async def _record_cancelled(request: Request, *, tenant: str, request_id: str,
-                            started: float) -> None:
+                            started: float, s=None, internals: dict | None = None,
+                            attempts: tuple[str, ...] = (),
+                            workload: str | None = None,
+                            workload_source: str = "none",
+                            app_langfuse: object | None = None,
+                            session_id: str | None = None,
+                            started_ns: int | None = None) -> None:
     """Meter a request the client abandoned. Distinct from `ok` so dashboards
-    and budgets don't count work nobody received as served."""
+    and budgets don't count work nobody received as served. Also writes the
+    request's `cancelled` routing outcome and a minimal failure trace (B78), so
+    outcome exports and Langfuse see the denominator."""
     metrics.observe_request("-", "cancelled")
     logging.getLogger("serving.api").info(
         "client disconnected; cancelled %s after %.1fs", request_id,
@@ -380,6 +405,14 @@ async def _record_cancelled(request: Request, *, tenant: str, request_id: str,
     except Exception:
         logging.getLogger("serving.obs").exception(
             "cancelled-usage record failed (swallowed)")
+    await _record_failure_outcome(
+        request, "cancelled", tenant=tenant, request_id=request_id,
+        started=started, s=s, internals=internals, attempts=attempts,
+        workload=workload, workload_source=workload_source)
+    _export_failure_trace(
+        status="cancelled", tenant=tenant, request_id=request_id, started=started,
+        attempts=attempts, app_langfuse=app_langfuse, session_id=session_id,
+        started_ns=started_ns)
 
 
 async def _record_failed(request: Request, *, tenant: str, request_id: str,
@@ -388,7 +421,10 @@ async def _record_failed(request: Request, *, tenant: str, request_id: str,
                          s=None, internals: dict | None = None,
                          attempts: tuple[str, ...] = (),
                          workload: str | None = None,
-                         workload_source: str = "none") -> None:
+                         workload_source: str = "none",
+                         app_langfuse: object | None = None,
+                         session_id: str | None = None,
+                         started_ns: int | None = None) -> None:
     """Meter a request that failed on the BACKEND (spec §4, B38): one usage row
     with `status="error"`, so an outage shows up in the console instead of
     vanishing from every usage figure.
@@ -431,6 +467,10 @@ async def _record_failed(request: Request, *, tenant: str, request_id: str,
         request, "backend_failed", tenant=tenant, request_id=request_id,
         started=started, s=s, internals=internals, attempts=attempts,
         workload=workload, workload_source=workload_source)
+    _export_failure_trace(
+        status="error", tenant=tenant, request_id=request_id, started=started,
+        attempts=attempts, app_langfuse=app_langfuse, session_id=session_id,
+        started_ns=started_ns)
 
 
 def _failed_model(exc: BaseException) -> str:
@@ -525,7 +565,10 @@ async def _record_exception_outcome(request: Request, exc: BaseException, *,
                                     tenant: str, request_id: str, started: float,
                                     s, internals: dict | None,
                                     workload: str | None,
-                                    workload_source: str) -> None:
+                                    workload_source: str,
+                                    app_langfuse: object | None = None,
+                                    session_id: str | None = None,
+                                    started_ns: int | None = None) -> None:
     """The outcome row for a mapped serving exception, shared by the plain
     HTTP path and the keepalive stream's error frame. A `BackendUnavailable`
     goes through `_record_failed` (usage row + outcome); the three routing
@@ -536,7 +579,9 @@ async def _record_exception_outcome(request: Request, exc: BaseException, *,
                              started=started, model=_failed_model(exc), s=s,
                              internals=internals,
                              attempts=tuple(getattr(exc, "attempted_models", ())),
-                             workload=workload, workload_source=workload_source)
+                             workload=workload, workload_source=workload_source,
+                             app_langfuse=app_langfuse, session_id=session_id,
+                             started_ns=started_ns)
         return
     status = _outcome_failure_status(exc)
     if status is None:
@@ -557,6 +602,20 @@ async def _record_exception_outcome(request: Request, exc: BaseException, *,
         workload=workload, workload_source=workload_source)
 
 
+def _opt_int(v: object) -> int | None:
+    """An optional metered count: None stays None (B75: unreported)."""
+    return None if v is None else int(v)
+
+
+def _wire_usage(usage):
+    """B75: the client-facing usage keeps its pre-B75 wire value. An unreported
+    cached count (None, kept internally and in usage_records) goes out as 0 --
+    strict clients may reject null on a number field."""
+    if isinstance(usage, dict) and usage.get("cached_prompt_tokens", 0) is None:
+        return {**usage, "cached_prompt_tokens": 0}
+    return usage
+
+
 def _stream_usage(body: ChatRequest, usage: object) -> dict | None:
     """The usage object for the OpenAI terminal usage frame (B53), or None
     when the client did not ask for one.
@@ -574,7 +633,7 @@ def _stream_usage(body: ChatRequest, usage: object) -> dict | None:
         return None
     if usage is None:
         return None
-    return jsonable_encoder(usage)
+    return jsonable_encoder(_wire_usage(usage))
 
 
 @router.post("/v1/chat/completions", response_model=None)
@@ -761,7 +820,9 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
         raise
     except ClientDisconnected:
         await _record_cancelled(request, tenant=tenant, request_id=request_id,
-                                started=started)
+                                started=started, s=s, internals=internals,
+                                app_langfuse=app_langfuse, session_id=session_id,
+                                started_ns=started_ns, **outcome_kw)
         return Response(status_code=499)
     except Exception as e:
         mapped = _error_status_detail(e)
@@ -777,13 +838,15 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
         _log_no_eligible(e, request_id)
         await _record_exception_outcome(
             request, e, tenant=tenant, request_id=request_id, started=started,
-            s=s, internals=internals, **outcome_kw)
+            s=s, internals=internals, app_langfuse=app_langfuse,
+            session_id=session_id, started_ns=started_ns, **outcome_kw)
         raise ApiError(mapped[0], mapped[1], code=mapped[2], extra=_error_extra(e))
     await _finalize(request, resp, body=body, tenant=tenant, app_policy=app_policy,
                     app_langfuse=app_langfuse, profile=profile,
                     session_id=session_id, s=s, request_id=request_id,
                     internals=internals, started_ns=started_ns, **outcome_kw)
     if stream_mode is None:
+        resp["usage"] = _wire_usage(resp.get("usage"))
         return resp
     # verified_then_stream: the pipeline already ran the FULL request above
     # and step 9 already verified it (same `pipeline.run` call as the
@@ -1114,7 +1177,7 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
                 prompt_tokens=int(usage.get("prompt_tokens", 0)),
                 completion_tokens=int(usage.get("completion_tokens", 0)),
                 total_tokens=int(usage.get("total_tokens", 0)),
-                cached_prompt_tokens=int(usage.get("cached_prompt_tokens", 0)),
+                cached_prompt_tokens=_opt_int(usage.get("cached_prompt_tokens", 0)),
                 cost_usd=float(cost.get("total_usd", 0.0)),
                 baseline_usd=float(cost.get("baseline_usd", 0.0)),
                 latency_ms=latency_ms,
@@ -1223,8 +1286,12 @@ async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
                 # wait happens here.
                 with anyio.CancelScope(shield=True):
                     await asyncio.gather(task, return_exceptions=True)
-                    await _record_cancelled(request, tenant=tenant, request_id=request_id,
-                                            started=started)
+                    await _record_cancelled(
+                        request, tenant=tenant, request_id=request_id,
+                        started=started, s=s, internals=internals,
+                        workload=workload, workload_source=workload_source,
+                        app_langfuse=app_langfuse, session_id=session_id,
+                        started_ns=started_ns)
                 cancelled_recorded = True
                 return  # client is gone -- no keepalive/answer/error frame follows
             yield SSE_KEEPALIVE
@@ -1251,7 +1318,9 @@ async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
                 await _record_exception_outcome(
                     request, e, tenant=tenant, request_id=request_id,
                     started=started, s=s, internals=internals,
-                    workload=workload, workload_source=workload_source)
+                    workload=workload, workload_source=workload_source,
+                    app_langfuse=app_langfuse, session_id=session_id,
+                    started_ns=started_ns)
             yield sse_error_frame(*mapped, extra=_error_extra(e))
             yield SSE_DONE
             return
@@ -1298,8 +1367,12 @@ async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
             # asyncio logs "Task exception was never retrieved".
             await asyncio.gather(task, return_exceptions=True)
             if not was_done and not cancelled_recorded:
-                await _record_cancelled(request, tenant=tenant, request_id=request_id,
-                                        started=started)
+                await _record_cancelled(
+                    request, tenant=tenant, request_id=request_id,
+                    started=started, s=s, internals=internals,
+                    workload=workload, workload_source=workload_source,
+                    app_langfuse=app_langfuse, session_id=session_id,
+                    started_ns=started_ns)
 
 
 class _WatchedDeltas:
@@ -1343,7 +1416,10 @@ async def _record_failed_stream(request: Request, *, tenant: str, request_id: st
                                 started: float, get_meta: Callable[[], dict],
                                 s=None, internals: dict | None = None,
                                 workload: str | None = None,
-                                workload_source: str = "none") -> None:
+                                workload_source: str = "none",
+                                app_langfuse: object | None = None,
+                                session_id: str | None = None,
+                                started_ns: int | None = None) -> None:
     """The `error` row for a real-token stream whose backend failed: named for
     the router's chosen model and the gate's ctx, both known eagerly on
     `get_meta` (`Pipeline.run_stream`). A real-token stream makes exactly one
@@ -1358,7 +1434,9 @@ async def _record_failed_stream(request: Request, *, tenant: str, request_id: st
                              ctx=getattr(get_meta, "ctx", None), s=s,
                              internals=internals,
                              attempts=(chosen,) if chosen else (),
-                             workload=workload, workload_source=workload_source)
+                             workload=workload, workload_source=workload_source,
+                             app_langfuse=app_langfuse, session_id=session_id,
+                             started_ns=started_ns)
 
 
 def _stream_unverified_response(
@@ -1415,7 +1493,10 @@ def _stream_unverified_response(
                                             request_id=request_id, started=started,
                                             get_meta=get_meta, s=s,
                                             internals=internals, workload=workload,
-                                            workload_source=workload_source)
+                                            workload_source=workload_source,
+                                            app_langfuse=app_langfuse,
+                                            session_id=session_id,
+                                            started_ns=started_ns)
             else:
                 await _finalize_stream(
                     request, request_id=request_id, deltas=deltas,
@@ -1494,7 +1575,10 @@ def _incremental_verify_response(
                                             request_id=request_id, started=started,
                                             get_meta=get_meta, s=s,
                                             internals=internals, workload=workload,
-                                            workload_source=workload_source)
+                                            workload_source=workload_source,
+                                            app_langfuse=app_langfuse,
+                                            session_id=session_id,
+                                            started_ns=started_ns)
             else:
                 await _finalize_stream(
                     request, request_id=request_id, deltas=deltas,

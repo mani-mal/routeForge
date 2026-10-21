@@ -82,14 +82,14 @@ def test_served_request_persists_provider_reported_cached_tokens(tmp_path, monke
     assert row.cached_prompt_tokens == 7
 
 
-def test_provider_reporting_no_details_persists_zero(tmp_path, monkeypatch):
+def test_provider_reporting_no_details_persists_null(tmp_path, monkeypatch):
     """No local acompletion override -- the autouse `_fake_acompletion`
     fixture's canned response carries no `prompt_tokens_details` at all,
-    exactly the "provider doesn't report it" case, indistinguishable from a
-    genuine cache miss by design."""
+    the "provider doesn't report it" case. B75: stored as NULL (unknown),
+    not 0 (a genuine miss)."""
     row = _served_row(tmp_path, monkeypatch)
     assert row.status == "ok"
-    assert row.cached_prompt_tokens == 0
+    assert row.cached_prompt_tokens is None
 
 
 def test_semantic_cache_hit_records_zero_cached_prompt_tokens():
@@ -108,3 +108,15 @@ def test_semantic_cache_hit_records_zero_cached_prompt_tokens():
     hit_recs = [r for r in out2["trace"] if r.get("step") == "cache"]
     assert hit_recs and hit_recs[0]["hit"] is True
     assert out2["usage"]["cached_prompt_tokens"] == 0
+
+
+def test_wire_usage_cached_is_zero_never_null_when_unreported(tmp_path, monkeypatch):
+    """B75 ruling: internal records keep NULL for "unreported", but the HTTP
+    response stays 0 -- strict clients may reject null on a number field."""
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/rf2.db"
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    with TestClient(create_app()) as c:
+        r = c.post("/v1/chat/completions",
+                   headers={"Authorization": "Bearer acme-key"}, json=_CLEAN)
+    assert r.status_code == 200
+    assert r.json()["usage"]["cached_prompt_tokens"] == 0

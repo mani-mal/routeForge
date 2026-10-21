@@ -15,15 +15,17 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import datetime as dt
 import json
 import logging
 import math
+import time
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.api.history import RequestSummary, fleet_over, stats_over
+from app.api.history import RequestSummary, stats_over
 from app.apps import store
 from app.apps.admin_auth import require_admin
 from app.apps.langfuse_provision import load_app_langfuse
@@ -209,11 +211,27 @@ async def get_stats(request: Request) -> dict:
     return stats_over([RequestSummary(**r) for r in rows])
 
 
+# Overview polls /fleet every few seconds; a short per-window cache keeps the
+# aggregate queries off the serving path. TTL 0 disables it (tests).
+_FLEET_CACHE_TTL_S = 10.0
+_fleet_cache: dict[int | None, tuple[float, list]] = {}
+
+
 @router.get("/fleet")
-async def fleet(request: Request) -> list:
+async def fleet(request: Request, hours: int | None = Query(None, ge=1)) -> list:
+    """Overview rows from the durable usage table (B76), over the last `hours`
+    (omitted = all time). Not the snapshot ring, which is capped at 500."""
+    now = time.monotonic()
+    hit = _fleet_cache.get(hours)
+    if _FLEET_CACHE_TTL_S > 0 and hit is not None and now - hit[0] < _FLEET_CACHE_TTL_S:
+        return hit[1]
+    since = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=hours)
+             if hours is not None else None)
     async with request.app.state.db.session() as s:
-        rows = await store.all_snapshot_summaries(s, limit=store.SNAPSHOT_CAPACITY)
-    return fleet_over([RequestSummary(**r) for r in rows])
+        rows = await store.fleet_from_usage(s, since=since)
+    if _FLEET_CACHE_TTL_S > 0:
+        _fleet_cache[hours] = (now, rows)
+    return rows
 
 
 @router.get("/controls")

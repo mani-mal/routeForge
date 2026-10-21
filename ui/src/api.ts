@@ -160,9 +160,12 @@ export interface FleetRow {
   count: number;
   total_usd: number;
   baseline_usd: number;
-  routing_saved_usd: number;
-  compression_saved_usd: number;
-  onprem_count: number;
+  onprem_count: number; // = required_onprem_count, kept for compatibility
+  served_onprem_count: number; // ok rows served by a local provider
+  required_onprem_count: number; // ok rows policy forced onprem_only
+  error_count: number;
+  cancelled_count: number;
+  rejected_count: number;
   pii_count: number;
   onprem_violations: number; // onprem_only requests served off-prem — a real Rule-3 breach
   latency_p50_ms: number;
@@ -225,7 +228,8 @@ export const api = {
     fetch(`/api/requests?limit=${limit}${app ? `&app=${encodeURIComponent(app)}` : ""}`,
       { credentials: CRED })
       .then(j<RequestSummary[]>),
-  fleet: () => fetch(`/api/fleet`, { credentials: CRED }).then(j<FleetRow[]>),
+  fleet: (hours?: number) =>
+    fetch(hours ? `/api/fleet?hours=${hours}` : `/api/fleet`, { credentials: CRED }).then(j<FleetRow[]>),
   request: (id: string) => fetch(`/api/requests/${id}`, { credentials: CRED }).then(j<ChatResponse>),
   stats: () => fetch(`/api/stats`, { credentials: CRED }).then(j<Stats>),
   controls: () => fetch(`/api/controls`, { credentials: CRED }).then(j<Controls>),

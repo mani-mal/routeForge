@@ -111,7 +111,7 @@ def test_keepalive_stream_closed_by_client_cancels_work_and_records_cancelled(mo
 
     recorded = []
 
-    async def fake_record_cancelled(request, *, tenant, request_id, started):
+    async def fake_record_cancelled(request, *, tenant, request_id, started, **_kw):
         recorded.append((tenant, request_id))
 
     monkeypatch.setattr(routes, "_record_cancelled", fake_record_cancelled)
@@ -173,7 +173,7 @@ def test_keepalive_stream_polls_is_disconnected_and_records_cancelled_once(monke
 
     recorded = []
 
-    async def fake_record_cancelled(request, *, tenant, request_id, started):
+    async def fake_record_cancelled(request, *, tenant, request_id, started, **_kw):
         recorded.append((tenant, request_id))
 
     monkeypatch.setattr(routes, "_record_cancelled", fake_record_cancelled)
@@ -251,7 +251,7 @@ def test_keepalive_stream_real_asgi_disconnect_still_records_cancelled(monkeypat
 
     recorded = []
 
-    async def fake_record_cancelled(request, *, tenant, request_id, started):
+    async def fake_record_cancelled(request, *, tenant, request_id, started, **_kw):
         recorded.append((tenant, request_id))
 
     monkeypatch.setattr(routes, "_record_cancelled", fake_record_cancelled)

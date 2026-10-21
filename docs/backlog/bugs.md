@@ -132,7 +132,7 @@ the audit trail in that sweep's task report.
 > `4bfb0b3` (PR #79). Reliability was good: 99.7% of requests were served, all on-prem.
 > The defects are in what RouteForge *records* about that traffic.
 
-## B74 — Egress redactor corrupts `sp.scoring` in Langfuse (floats read as card and bank numbers)  🔴 OPEN
+## B74 — Egress redactor corrupts `sp.scoring` in Langfuse (floats read as card and bank numbers)  ✅ RESOLVED (2026-10-21)
 
 **Severity:** high for research and audit use. Routing itself is unaffected.
 **Found:** 2026-10-21, Spark, `kit-gtm` Langfuse project.
@@ -162,7 +162,9 @@ on the redactor seeing everything. Add a regression test: a scoring record with
 16-digit floats exports with no `<…>` placeholder. Optionally re-export or ignore the
 corrupted history, since the database copy is clean.
 
-## B75 — `cached_prompt_tokens` is 0 on every request although vLLM served 94.5% of prompt tokens from cache  🔴 OPEN
+**Resolved:** 2026-10-21. Added `redact_tree` (`app/obs/redact.py`): redacts every str leaf and str key of a structure, leaving numbers untouched. `sp.scoring` and `sp.candidates` (`app/obs/export.py`) now serialise `redact_tree(obj)` instead of regex-redacting the dumped JSON; no rounding, no key exemption. `otel.py`'s generic pass only touches plain-string keys, so it was left alone. Tests: `tests/test_obs_redact_tree.py`.
+
+## B75 — `cached_prompt_tokens` is 0 on every request although vLLM served 94.5% of prompt tokens from cache  🟡 PARTIAL (2026-10-21)
 
 **Severity:** medium (cost and savings figures, P2a cached-token pricing, the paper's
 cost claims). Mostly a deployment and documentation defect.
@@ -194,7 +196,22 @@ cost claims). Mostly a deployment and documentation defect.
    provider's cached-input rate for the cached share. Without it the savings headline
    flatters routing.
 
-## B76 — Console Overview totals cover only the last 500 requests  🔴 OPEN
+**Resolved (partial):** items 1 (the flag, in the docs/deploy manifests; restarting the Spark
+vLLM stays the owner's call) and 2 are resolved. Item 3 is only half done: the NULL-versus-0
+record distinction shipped, but the onboarding / first-N-responses **warning is NOT built and
+stays OPEN**. Item 4 (all-frontier baseline) stays OPEN as an owner decision; the baseline is
+unchanged. `_cached_tokens` (`app/gateway/backends/litellm_backend.py`) now returns `None`
+when the provider omits `prompt_tokens_details` / `cached_tokens` and the int (including 0)
+when reported. Internal records carry `None` (`GenerationResult`, and NULL in
+`usage_records.cached_prompt_tokens`); the client-facing response `usage.cached_prompt_tokens`
+still carries `0` when the count is unknown (the old wire value). `price_call` treats `None` as 0.
+`--enable-prompt-tokens-details` added to `docs/guides/onboarding-models.md`, the
+`inference-backends` skill, `deploy/spark/README.md` and the DGX lab vLLM manifest in `deploy/dgx_lab/`.
+Tests: `tests/routing/test_cached_tokens.py`, `test_cached_tokens_persistence.py`,
+`test_pricing.py::test_unknown_cached_count_prices_like_zero`.
+
+
+## B76 — Console Overview totals cover only the last 500 requests  ✅ RESOLVED (2026-10-21)
 
 **Severity:** medium (the headline numbers an operator sees are wrong by an order of magnitude).
 **Found:** 2026-10-21, Spark console (`/` Overview).
@@ -214,7 +231,10 @@ exists for `/admin/usage/by-application` (`app/api/admin_routes.py:901`) and
 the snapshot ring for drill-down. If a capped view is kept anywhere, label it
 "last N requests".
 
-## B77 — "Kept on-prem" counts `onprem_only` requests, not requests served on-prem  🔴 OPEN
+**Resolved:** `GET /api/fleet` now aggregates the durable `usage_records` table (`store.fleet_from_usage`, `app/apps/store.py`) over an optional `hours` window (omitted = all time); the Overview has a 24 h / 7 d / 30 d / All picker, default 30 d (`ui/src/console/FleetOverview.tsx`). The snapshot ring still feeds `/api/stats` and the drill-down. Routing/compression savings are not durable columns and are dropped from the fleet response. Tests: `tests/test_fleet_from_usage.py`.
+
+
+## B77 — "Kept on-prem" counts `onprem_only` requests, not requests served on-prem  ✅ RESOLVED (2026-10-21)
 
 **Severity:** low (a misleading label, no wrong routing).
 **Found:** 2026-10-21, Spark console.
@@ -230,7 +250,10 @@ on-prem" are different facts.
 and *required on-prem* (`onprem_only`). The second is the privacy figure, the first the
 cost and residency figure. Rename the tile to match whichever it shows.
 
-## B78 — Cancelled and failed requests leave no Langfuse trace; cancelled ones leave no `routing_outcomes` row  🔴 OPEN
+**Resolved:** The fleet rows carry `served_onprem_count` (provider is local) and `required_onprem_count` (`onprem_only`; `onprem_count` kept equal to it). The tile is now "Served on-prem" with "N required by policy" as its sub text; the per-app On-prem column shows served. Test: `tests/test_fleet_from_usage.py::test_fleet_from_usage_counts_served_required_and_status`.
+
+
+## B78 — Cancelled and failed requests leave no Langfuse trace; cancelled ones leave no `routing_outcomes` row  ✅ RESOLVED (2026-10-21)
 
 **Severity:** medium (breaks "every request emits a DecisionRecord"; skews outcome-based
 research toward successful requests).
@@ -255,6 +278,21 @@ chosen endpoint if one was chosen, elapsed, attempts) with `level=ERROR` or `WAR
 Langfuse currently shows **0** ERROR-level observations for this app. Also write a
 `routing_outcomes` row with `status="cancelled"`, so outcome exports and replay see
 the denominator. If the upstream call keeps running after a disconnect, cancel it.
+
+**Resolved:** 2026-10-21. `_record_cancelled` (`app/api/routes.py`) now also writes a
+`routing_outcomes` row with `status="cancelled"` (new member of `STATUSES`, built by
+`build_failure_outcome`; no schema change, the column is `String(20)`), at all three call
+sites. `export_failure_trace` (`app/obs/export.py`) emits one content-free `serving.request`
+span (`sp.request_id`, `sp.application_id`, `sp.status`, `sp.latency_ms`, `sp.attempts`,
+session id) with `langfuse.observation.level` ERROR (backend failure, plus OTel span status
+ERROR) or WARNING (cancel), to the same project `export_trace` resolves (shared helper
+`_app_tracer`). Called from `_record_cancelled` and `_record_failed`, best effort. Readers of
+`routing_outcomes.status`: the policy simulator skips `cancelled` (counted under
+`unknown_status`), quality calibration excludes it, the outcomes report counts it in the
+denominator only, the NDJSON export passes it through. Tests: `tests/test_b78_failure_trace.py`.
+The open question (does a disconnect cancel the upstream generation, vLLM `abort` = 0) is
+NOT changed and stays TO VERIFY.
+
 
 ## B73 — FEATURE: finish the Artificial Analysis model metrics on the console (published quality snapshot, time to first token, output speed)  🔴 OPEN
 
