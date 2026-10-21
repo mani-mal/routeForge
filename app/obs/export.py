@@ -8,7 +8,7 @@ import time
 from collections import namedtuple
 
 from app.obs.otel import app_trace_url, get_app_tracer, get_tracer, trace_url
-from app.obs.redact import redact_value, redacted_copy
+from app.obs.redact import redact_tree, redact_value, redacted_copy
 
 log = logging.getLogger("serving.obs")
 
@@ -48,7 +48,8 @@ def _candidates_json(rec: dict) -> str | None:
         items.append({"model": r.get("name"), "tier": r.get("tier"),
                       "provider": r.get("provider"), "eligible": False,
                       "reason": r.get("reason", ""), "code": r.get("code")})
-    return json.dumps(items)
+    # Structural redaction: regex over the dumped JSON would corrupt floats (B74).
+    return json.dumps(redact_tree(items))
 
 
 def resolve_capture_io(capture_io: str, *, has_own_project: bool,
@@ -434,10 +435,10 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                             sp.set_attribute("sp.reason", redact_value(str(rec["reason"])))
                         cands = _candidates_json(rec)
                         if cands is not None:
-                            sp.set_attribute("sp.candidates", redact_value(cands))
+                            sp.set_attribute("sp.candidates", cands)
                         if rec.get("scoring"):
                             sp.set_attribute("sp.scoring",
-                                             redact_value(json.dumps(rec["scoring"])))
+                                             json.dumps(redact_tree(rec["scoring"])))
                         for k in ("hop_index", "actual_cost_usd", "est_cost_usd", "latency_ms"):
                             if rec.get(k) is not None:
                                 sp.set_attribute(f"sp.{k}", float(rec[k]))

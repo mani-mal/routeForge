@@ -132,7 +132,7 @@ the audit trail in that sweep's task report.
 > `4bfb0b3` (PR #79). Reliability was good: 99.7% of requests were served, all on-prem.
 > The defects are in what RouteForge *records* about that traffic.
 
-## B74 — Egress redactor corrupts `sp.scoring` in Langfuse (floats read as card and bank numbers)  🔴 OPEN
+## B74 — Egress redactor corrupts `sp.scoring` in Langfuse (floats read as card and bank numbers)  🔴 OPEN ✅ RESOLVED (2026-10-21)
 
 **Severity:** high for research and audit use. Routing itself is unaffected.
 **Found:** 2026-10-21, Spark, `kit-gtm` Langfuse project.
@@ -161,6 +161,8 @@ can carry text. Do **not** exempt `sp.*` keys from redaction wholesale — rule 
 on the redactor seeing everything. Add a regression test: a scoring record with
 16-digit floats exports with no `<…>` placeholder. Optionally re-export or ignore the
 corrupted history, since the database copy is clean.
+
+**Resolved:** 2026-10-21. Added `redact_tree` (`app/obs/redact.py`): redacts every str leaf and str key of a structure, leaving numbers untouched. `sp.scoring` and `sp.candidates` (`app/obs/export.py`) now serialise `redact_tree(obj)` instead of regex-redacting the dumped JSON; no rounding, no key exemption. `otel.py`'s generic pass only touches plain-string keys, so it was left alone. Tests: `tests/test_obs_redact_tree.py`.
 
 ## B75 — `cached_prompt_tokens` is 0 on every request although vLLM served 94.5% of prompt tokens from cache  🔴 OPEN
 
