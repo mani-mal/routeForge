@@ -209,7 +209,7 @@ Tests: `tests/routing/test_cached_tokens.py`, `test_cached_tokens_persistence.py
 `test_pricing.py::test_unknown_cached_count_prices_like_zero`.
 
 
-## B76 — Console Overview totals cover only the last 500 requests  🔴 OPEN
+## B76 — Console Overview totals cover only the last 500 requests  ✅ RESOLVED (2026-10-21)
 
 **Severity:** medium (the headline numbers an operator sees are wrong by an order of magnitude).
 **Found:** 2026-10-21, Spark console (`/` Overview).
@@ -229,7 +229,10 @@ exists for `/admin/usage/by-application` (`app/api/admin_routes.py:901`) and
 the snapshot ring for drill-down. If a capped view is kept anywhere, label it
 "last N requests".
 
-## B77 — "Kept on-prem" counts `onprem_only` requests, not requests served on-prem  🔴 OPEN
+**Resolved:** `GET /api/fleet` now aggregates the durable `usage_records` table (`store.fleet_from_usage`, `app/apps/store.py`) over an optional `hours` window (omitted = all time); the Overview has a 24 h / 7 d / 30 d / All picker, default 30 d (`ui/src/console/FleetOverview.tsx`). The snapshot ring still feeds `/api/stats` and the drill-down. Routing/compression savings are not durable columns and are dropped from the fleet response. Tests: `tests/test_fleet_from_usage.py`.
+
+
+## B77 — "Kept on-prem" counts `onprem_only` requests, not requests served on-prem  ✅ RESOLVED (2026-10-21)
 
 **Severity:** low (a misleading label, no wrong routing).
 **Found:** 2026-10-21, Spark console.
@@ -244,6 +247,9 @@ on-prem" are different facts.
 **Fix direction:** show both: *served on-prem* (chosen endpoint's provider is `onprem`)
 and *required on-prem* (`onprem_only`). The second is the privacy figure, the first the
 cost and residency figure. Rename the tile to match whichever it shows.
+
+**Resolved:** The fleet rows carry `served_onprem_count` (provider is local) and `required_onprem_count` (`onprem_only`; `onprem_count` kept equal to it). The tile is now "Served on-prem" with "N required by policy" as its sub text; the per-app On-prem column shows served. Test: `tests/test_fleet_from_usage.py::test_fleet_from_usage_counts_served_required_and_status`.
+
 
 ## B78 — Cancelled and failed requests leave no Langfuse trace; cancelled ones leave no `routing_outcomes` row  🔴 OPEN
 

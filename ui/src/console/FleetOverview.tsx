@@ -9,6 +9,13 @@ import { Panel, StatTile, TierDot, formatUsd, formatMs } from "../components/com
 const POLL_MS = 3000;
 const TIER_ORDER = ["cheap", "mid", "frontier", "?"];
 
+const WINDOWS: { label: string; hours: number | undefined }[] = [
+  { label: "24 h", hours: 24 },
+  { label: "7 d", hours: 24 * 7 },
+  { label: "30 d", hours: 24 * 30 },
+  { label: "All", hours: undefined },
+];
+
 type SortKey = "name" | "requests" | "spend" | "saved" | "pii" | "onprem" | "latency";
 
 interface JoinedRow {
@@ -18,7 +25,7 @@ interface JoinedRow {
   saved_usd: number;
   saved_pct: number;
   pii_count: number;
-  onprem_count: number;
+  served_onprem_count: number;
   latency_p50_ms: number;
   tier_distribution: Record<string, number>;
   warn: boolean;
@@ -33,7 +40,7 @@ function joinRows(apps: AdminApp[], fleet: FleetRow[]): JoinedRow[] {
     const saved_usd = baseline_usd - total_usd;
     const saved_pct = baseline_usd > 0 ? (saved_usd / baseline_usd) * 100 : 0;
     const pii_count = f?.pii_count ?? 0;
-    const onprem_count = f?.onprem_count ?? 0;
+    const served_onprem_count = f?.served_onprem_count ?? 0;
     return {
       app,
       count: f?.count ?? 0,
@@ -41,7 +48,7 @@ function joinRows(apps: AdminApp[], fleet: FleetRow[]): JoinedRow[] {
       saved_usd,
       saved_pct,
       pii_count,
-      onprem_count,
+      served_onprem_count,
       latency_p50_ms: f?.latency_p50_ms ?? 0,
       tier_distribution: f?.tier_distribution ?? {},
       // Warn ONLY on a genuine residency breach — a request that had to stay
@@ -68,7 +75,7 @@ function sortRows(rows: JoinedRow[], key: SortKey, dir: "asc" | "desc"): JoinedR
       case "pii":
         return sign * (a.pii_count - b.pii_count);
       case "onprem":
-        return sign * (a.onprem_count - b.onprem_count);
+        return sign * (a.served_onprem_count - b.served_onprem_count);
       case "latency":
         return sign * (a.latency_p50_ms - b.latency_p50_ms);
       default:
@@ -135,13 +142,14 @@ export function FleetOverview({ onOpenApp }: { onOpenApp: (appId: string) => voi
   const [apps, setApps] = useState<AdminApp[]>([]);
   const [fleet, setFleet] = useState<FleetRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [windowHours, setWindowHours] = useState<number | undefined>(24 * 30);
   const [sortKey, setSortKey] = useState<SortKey>("requests");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
   useEffect(() => {
     let cancelled = false;
 
-    Promise.all([adminApi.apps(), api.fleet()])
+    Promise.all([adminApi.apps(), api.fleet(windowHours)])
       .then(([a, f]) => {
         if (cancelled) return;
         setApps(a);
@@ -156,7 +164,7 @@ export function FleetOverview({ onOpenApp }: { onOpenApp: (appId: string) => voi
     // to be re-fetched on the same cadence.
     const t = setInterval(() => {
       api
-        .fleet()
+        .fleet(windowHours)
         .then((f) => !cancelled && setFleet(f))
         .catch(() => {});
     }, POLL_MS);
@@ -165,7 +173,7 @@ export function FleetOverview({ onOpenApp }: { onOpenApp: (appId: string) => voi
       cancelled = true;
       clearInterval(t);
     };
-  }, []);
+  }, [windowHours]);
 
   function toggleSort(key: SortKey) {
     if (key === sortKey) {
@@ -181,7 +189,8 @@ export function FleetOverview({ onOpenApp }: { onOpenApp: (appId: string) => voi
   const totalBaseline = fleet.reduce((a, r) => a + r.baseline_usd, 0);
   const totalSaved = totalBaseline - totalSpend;
   const savedPct = totalBaseline > 0 ? (totalSaved / totalBaseline) * 100 : 0;
-  const totalOnprem = fleet.reduce((a, r) => a + r.onprem_count, 0);
+  const totalServedOnprem = fleet.reduce((a, r) => a + r.served_onprem_count, 0);
+  const totalRequiredOnprem = fleet.reduce((a, r) => a + r.required_onprem_count, 0);
 
   const rows = sortRows(joinRows(apps, fleet), sortKey, sortDir);
 
@@ -196,8 +205,29 @@ export function FleetOverview({ onOpenApp }: { onOpenApp: (appId: string) => voi
     </div>
   );
 
+  const windowPicker = (
+    <div className="flex items-center gap-2 text-xs text-gray-500">
+      <span>Window</span>
+      <div role="group" aria-label="Time window" className="flex overflow-hidden rounded-md border border-edge">
+        {WINDOWS.map((w) => (
+          <button
+            key={w.label}
+            onClick={() => setWindowHours(w.hours)}
+            aria-pressed={windowHours === w.hours}
+            className={`px-2.5 py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+              windowHours === w.hours ? "bg-ink/80 text-gray-100" : "hover:text-gray-300"
+            }`}
+          >
+            {w.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
   return (
     <div className="flex flex-col gap-4">
+      <div className="flex justify-end">{windowPicker}</div>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <StatTile label="Requests" value={totalRequests.toLocaleString()} />
         <StatTile label="Spend" value={formatUsd(totalSpend)} />
@@ -206,7 +236,11 @@ export function FleetOverview({ onOpenApp }: { onOpenApp: (appId: string) => voi
           value={formatUsd(totalSaved)}
           sub={totalBaseline > 0 ? `${savedPct.toFixed(1)}% vs. all-frontier` : undefined}
         />
-        <StatTile label="Kept on-prem" value={totalOnprem.toLocaleString()} />
+        <StatTile
+          label="Served on-prem"
+          value={totalServedOnprem.toLocaleString()}
+          sub={`${totalRequiredOnprem.toLocaleString()} required by policy`}
+        />
       </div>
 
       <Panel title="Applications" right={tierLegend}>
@@ -247,7 +281,7 @@ export function FleetOverview({ onOpenApp }: { onOpenApp: (appId: string) => voi
                   <span className="ml-1 text-xs text-gray-500">({row.saved_pct.toFixed(0)}%)</span>
                 </span>
                 <span className="text-sm font-mono text-gray-300">{row.pii_count}</span>
-                <span className="text-sm font-mono text-gray-300">{row.onprem_count}</span>
+                <span className="text-sm font-mono text-gray-300">{row.served_onprem_count}</span>
                 <span className="text-sm font-mono text-gray-300">{formatMs(row.latency_p50_ms)}</span>
                 <TierMiniBar dist={row.tier_distribution} />
                 {row.warn ? (

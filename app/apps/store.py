@@ -18,6 +18,7 @@ from app.apps.models import (
     EndpointObservation, ModelQuality, OnboardedModel, OutcomeFeedback,
     RequestSnapshot, RoutingOutcome, ServiceCredential, UsageRecord, utcnow,
 )
+from app.api.history import _LOCAL_PROVIDERS
 from app.apps.privacy import AppPrivacyProfile, SensitivityRuleView
 from app.apps.tokens import hash_token, token_prefix
 from app.policy.recognizers import CustomRecognizer
@@ -648,6 +649,77 @@ async def usage_by_application(session: AsyncSession, *,
             quality_sum / usd_sum) if usd_sum > 0 else 0.0
 
     return sorted(agg.values(), key=lambda d: d["total_usd"], reverse=True)
+
+
+async def fleet_from_usage(session: AsyncSession, *,
+                           since: dt.datetime | None = None) -> list[dict]:
+    """Console Overview rows, one per application, from the durable
+    `usage_records` table over an optional window (B76). Replaces the
+    500-row snapshot ring for the Overview.
+
+    Spend, tokens, latency and tiers are over `ok` rows only (same rule as
+    `usage_summary`); error/cancelled/rejected are counted beside them.
+    `served_onprem_count` (the chosen endpoint's provider is local) and
+    `required_onprem_count` (policy forced `onprem_only`) are different facts
+    (B77); `onprem_count` is kept equal to the latter for compatibility.
+    `pii_count` joins `routing_outcomes` on request_id; outcome rows exist
+    only since P2b-2, so older rows count as no PII. Routing/compression
+    savings are not durable columns and are deliberately absent."""
+    stmt = select(UsageRecord)
+    if since is not None:
+        stmt = stmt.where(UsageRecord.ts >= since)
+    rows = list((await session.execute(stmt)).scalars().all())
+
+    pii_ids: set[str] = set()
+    ok_ids = [r.request_id for r in rows if r.status == "ok"]
+    for i in range(0, len(ok_ids), 500):
+        chunk = ok_ids[i:i + 500]
+        out = await session.execute(
+            select(RoutingOutcome.request_id, RoutingOutcome.detected_entity_types)
+            .where(RoutingOutcome.request_id.in_(chunk)))
+        pii_ids.update(rid for rid, ents in out.all() if ents)
+
+    agg: dict[str, dict] = {}
+    lats: dict[str, list[float]] = {}
+    quality: dict[str, float] = {}
+    tokens: dict[str, int] = {}
+    for r in rows:
+        a = agg.setdefault(r.application_id, {
+            "app": r.application_id, "count": 0, "total_usd": 0.0,
+            "baseline_usd": 0.0, "onprem_count": 0, "required_onprem_count": 0,
+            "served_onprem_count": 0, "pii_count": 0, "onprem_violations": 0,
+            "error_count": 0, "cancelled_count": 0, "rejected_count": 0,
+            "tier_distribution": {},
+        })
+        if r.status != "ok":
+            key = f"{r.status}_count"
+            if key in ("error_count", "cancelled_count", "rejected_count"):
+                a[key] += 1
+            continue
+        a["count"] += 1
+        a["total_usd"] += float(r.cost_usd or 0.0)
+        a["baseline_usd"] += float(r.baseline_usd or 0.0)
+        local = r.provider in _LOCAL_PROVIDERS
+        if local:
+            a["served_onprem_count"] += 1
+        if r.onprem_only:
+            a["required_onprem_count"] += 1
+            a["onprem_count"] += 1
+            if not local:
+                a["onprem_violations"] += 1
+        if r.request_id in pii_ids:
+            a["pii_count"] += 1
+        a["tier_distribution"][r.tier] = a["tier_distribution"].get(r.tier, 0) + 1
+        lats.setdefault(r.application_id, []).append(float(r.latency_ms or 0.0))
+        quality[r.application_id] = quality.get(r.application_id, 0.0) + float(r.quality or 0.0)
+        tokens[r.application_id] = tokens.get(r.application_id, 0) + int(r.total_tokens or 0)
+
+    for app_id, a in agg.items():
+        a["latency_p50_ms"] = _pctile(sorted(lats.get(app_id, [])), 0.50)
+        q, tok, usd = quality.get(app_id, 0.0), tokens.get(app_id, 0), a["total_usd"]
+        a["token_intelligence_density"] = q / tok * 1000.0 if tok > 0 else 0.0
+        a["cost_intelligence_density"] = q / usd if usd > 0 else 0.0
+    return sorted(agg.values(), key=lambda d: d["count"], reverse=True)
 
 
 # --- per-app privacy profile (recognizers + sensitivity rules) ---
