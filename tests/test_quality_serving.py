@@ -278,7 +278,9 @@ _GOLDEN = {
             "quality": {"v": 1.0, "src": "tier_default"},
             "latency": {"ms": 1000.0, "src": "tier_default", "n": 0},
             "availability": {"v": 1.0, "src": "neutral", "n": 0},
-            "cost": {"est_usd": 0.00828, "norm": 1.0, "cached": "unpriced"}}]}),
+            # "priced": config/pricing.yaml gives bedrock-frontier a cached_input
+            # rate since B75 item 4; score and est_usd are unchanged.
+            "cost": {"est_usd": 0.00828, "norm": 1.0, "cached": "priced"}}]}),
 }
 
 
