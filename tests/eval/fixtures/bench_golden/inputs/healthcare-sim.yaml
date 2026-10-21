@@ -2,7 +2,7 @@
 # handoff (RouteForge-Priorities-1-3-LLM-Handoff.md, not tracked in the repo;
 # four illustrative healthcare endpoints), for use with
 # eval/suites/starter.jsonl. See
-# docs/superpowers/specs/2026-09-21-feasible-route-bench-design.md §9.
+# docs/research/feasible-route-bench.md.
 #
 # §14 table (illustrative):
 #   Local Llama    quality 92   $0.08/req   900 ms   raw patient data OK

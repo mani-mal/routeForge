@@ -164,7 +164,7 @@ corrupted history, since the database copy is clean.
 
 **Resolved:** 2026-10-21. Added `redact_tree` (`app/obs/redact.py`): redacts every str leaf and str key of a structure, leaving numbers untouched. `sp.scoring` and `sp.candidates` (`app/obs/export.py`) now serialise `redact_tree(obj)` instead of regex-redacting the dumped JSON; no rounding, no key exemption. `otel.py`'s generic pass only touches plain-string keys, so it was left alone. Tests: `tests/test_obs_redact_tree.py`.
 
-## B75 — `cached_prompt_tokens` is 0 on every request although vLLM served 94.5% of prompt tokens from cache  🟡 PARTIAL (2026-10-21)
+## B75 — `cached_prompt_tokens` is 0 on every request although vLLM served 94.5% of prompt tokens from cache  ✅ RESOLVED (2026-10-21)
 
 **Severity:** medium (cost and savings figures, P2a cached-token pricing, the paper's
 cost claims). Mostly a deployment and documentation defect.
@@ -196,11 +196,17 @@ cost claims). Mostly a deployment and documentation defect.
    provider's cached-input rate for the cached share. Without it the savings headline
    flatters routing.
 
-**Resolved (partial):** items 1 (the flag, in the docs/deploy manifests; restarting the Spark
-vLLM stays the owner's call) and 2 are resolved. Item 3 is only half done: the NULL-versus-0
-record distinction shipped, but the onboarding / first-N-responses **warning is NOT built and
-stays OPEN**. Item 4 (all-frontier baseline) stays OPEN as an owner decision; the baseline is
-unchanged. `_cached_tokens` (`app/gateway/backends/litellm_backend.py`) now returns `None`
+**Resolved:** items 1 (the flag, in the docs/deploy manifests; restarting the Spark
+vLLM stays the owner's call), 2, 3 and 4 are resolved. Item 3: the NULL-versus-0 record
+distinction shipped, and `GET /admin/infra/models` now returns a
+`cache_reporting` field per model (`reported`, `not_reported`, `unknown`), computed from the
+last 200 ok usage rows; a model needs at least 20 rows before it can be `not_reported`. The
+Infrastructure UI shows an amber "No cache data" badge with a tooltip for `not_reported`
+(dd174d9; `tests/test_cache_reporting_status.py`). Item 4: `bedrock-frontier` now has
+`cached_input: 0.30`, and `Pipeline._baseline` prices min(cached, prompt) tokens at the
+baseline model's cached rate when the cached count is reported (an int) and every prompt
+token at full input rate when it is None (aa7bfc5; `tests/routing/test_baseline_cached.py`,
+`docs/guides/ui-guide.md`). `_cached_tokens` (`app/gateway/backends/litellm_backend.py`) now returns `None`
 when the provider omits `prompt_tokens_details` / `cached_tokens` and the int (including 0)
 when reported. Internal records carry `None` (`GenerationResult`, and NULL in
 `usage_records.cached_prompt_tokens`); the client-facing response `usage.cached_prompt_tokens`
@@ -268,10 +274,13 @@ research toward successful requests).
   (client timeouts; 73 at ~305 s on 2026-10-10). The 17 errors sit at the 600 s backend
   timeout. Which endpoint a cancelled request was waiting on, and how long the backend had
   run, is not recorded anywhere.
-- **Open question:** vLLM reports `finished_reason="abort"` = 0 over the same period. Either
-  vLLM does not count aborts in that metric, or a client disconnect does **not** cancel the
-  upstream generation, and the GPU keeps decoding for nobody. **TO VERIFY** with one
-  deliberate disconnect against `vllm-qwen38`.
+- **Measured answer (2026-10-21, Spark, throwaway app):** a client that hung up after 6 s on
+  a ~6,000-token generation was recorded `cancelled` at 10.0 s. vLLM's running-request gauge
+  dropped to 0 within ~15 s of the start and its `finished_reason="length"` counter did not
+  move, so **the disconnect does cancel the upstream generation**, with about 4 s detection
+  lag. vLLM's `finished_reason="abort"` counter stayed 0: it does not count client aborts, so
+  it cannot be used as evidence either way. New minor: the cancelled outcome row's `attempts`
+  was `[]` although a call to `qwen3.8-27b` was in flight.
 
 **Fix direction:** on cancel and on failure, still finalise a minimal trace (status,
 chosen endpoint if one was chosen, elapsed, attempts) with `level=ERROR` or `WARNING`.
@@ -290,8 +299,8 @@ ERROR) or WARNING (cancel), to the same project `export_trace` resolves (shared 
 `routing_outcomes.status`: the policy simulator skips `cancelled` (counted under
 `unknown_status`), quality calibration excludes it, the outcomes report counts it in the
 denominator only, the NDJSON export passes it through. Tests: `tests/test_b78_failure_trace.py`.
-The open question (does a disconnect cancel the upstream generation, vLLM `abort` = 0) is
-NOT changed and stays TO VERIFY.
+The open question is answered above: a disconnect does cancel the upstream generation. The
+empty `attempts` on a cancelled outcome row (a call was in flight) remains a minor open item.
 
 
 ## B73 — FEATURE: finish the Artificial Analysis model metrics on the console (published quality snapshot, time to first token, output speed)  🔴 OPEN
