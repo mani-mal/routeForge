@@ -331,7 +331,9 @@ def test_r11_every_status_has_a_recorded_outcome_class():                  # R11
     sixth status fails here until someone decides what its first routing
     decision was."""
     from app.apps.outcomes import STATUSES
-    assert set(RECORDED_OUTCOME) == set(STATUSES) == set(SIMULATED_STATUSES)
+    from app.eval.simulate import NOT_REPLAYED_STATUSES
+    assert set(RECORDED_OUTCOME) == set(SIMULATED_STATUSES)
+    assert set(RECORDED_OUTCOME) | NOT_REPLAYED_STATUSES == set(STATUSES)
     assert set(RECORDED_OUTCOME.values()) == {"routed", "rejected"}
     assert {s for s, c in RECORDED_OUTCOME.items() if c == "rejected"} == \
         {"no_eligible", "context_overflow"}

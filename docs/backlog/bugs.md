@@ -251,7 +251,7 @@ cost and residency figure. Rename the tile to match whichever it shows.
 **Resolved:** The fleet rows carry `served_onprem_count` (provider is local) and `required_onprem_count` (`onprem_only`; `onprem_count` kept equal to it). The tile is now "Served on-prem" with "N required by policy" as its sub text; the per-app On-prem column shows served. Test: `tests/test_fleet_from_usage.py::test_fleet_from_usage_counts_served_required_and_status`.
 
 
-## B78 — Cancelled and failed requests leave no Langfuse trace; cancelled ones leave no `routing_outcomes` row  🔴 OPEN
+## B78 — Cancelled and failed requests leave no Langfuse trace; cancelled ones leave no `routing_outcomes` row  🔴 OPEN ✅ RESOLVED (2026-10-21)
 
 **Severity:** medium (breaks "every request emits a DecisionRecord"; skews outcome-based
 research toward successful requests).
@@ -276,6 +276,21 @@ chosen endpoint if one was chosen, elapsed, attempts) with `level=ERROR` or `WAR
 Langfuse currently shows **0** ERROR-level observations for this app. Also write a
 `routing_outcomes` row with `status="cancelled"`, so outcome exports and replay see
 the denominator. If the upstream call keeps running after a disconnect, cancel it.
+
+**Resolved:** 2026-10-21. `_record_cancelled` (`app/api/routes.py`) now also writes a
+`routing_outcomes` row with `status="cancelled"` (new member of `STATUSES`, built by
+`build_failure_outcome`; no schema change, the column is `String(20)`), at all three call
+sites. `export_failure_trace` (`app/obs/export.py`) emits one content-free `serving.request`
+span (`sp.request_id`, `sp.application_id`, `sp.status`, `sp.latency_ms`, `sp.attempts`,
+session id) with `langfuse.observation.level` ERROR (backend failure, plus OTel span status
+ERROR) or WARNING (cancel), to the same project `export_trace` resolves (shared helper
+`_app_tracer`). Called from `_record_cancelled` and `_record_failed`, best effort. Readers of
+`routing_outcomes.status`: the policy simulator skips `cancelled` (counted under
+`unknown_status`), quality calibration excludes it, the outcomes report counts it in the
+denominator only, the NDJSON export passes it through. Tests: `tests/test_b78_failure_trace.py`.
+The open question (does a disconnect cancel the upstream generation, vLLM `abort` = 0) is
+NOT changed and stays TO VERIFY.
+
 
 ## B73 — FEATURE: finish the Artificial Analysis model metrics on the console (published quality snapshot, time to first token, output speed)  🔴 OPEN
 

@@ -690,4 +690,5 @@ def test_feedback_values_refuses_non_finite_numbers():
 
 def test_statuses_constant():
     assert set(STATUSES) == {
-        "ok", "backend_failed", "verify_failed", "no_eligible", "context_overflow"}
+        "ok", "backend_failed", "verify_failed", "no_eligible", "context_overflow",
+        "cancelled"}

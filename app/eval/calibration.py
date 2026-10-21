@@ -78,7 +78,8 @@ CI_LEVEL = 0.90
 _CI_LOW_P = (1.0 - CI_LEVEL) / 2
 _CI_HIGH_P = 1.0 - _CI_LOW_P
 
-EXCLUDED_STATUSES = ("no_eligible", "backend_failed", "context_overflow")
+# `cancelled` (B78): the client left before any answer -- no model output to judge.
+EXCLUDED_STATUSES = ("no_eligible", "backend_failed", "context_overflow", "cancelled")
 PRIOR_SOURCES = ("published", "tier_default")
 OVERRIDE_SOURCES = ("calibrated", "customer")
 

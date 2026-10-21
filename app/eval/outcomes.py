@@ -163,6 +163,8 @@ def _is_number(v: object) -> bool:
 
 def _summarize_bucket(records: list[dict]) -> dict:
     n = len(records)
+    # B78: `cancelled` rows are counted in `n` (the denominator: requests that
+    # arrived) but are never served, so they lower served_ok_rate by design.
     served_ok = sum(1 for r in records if r.get("status") == "ok")
     verify_rows = [r for r in records if r.get("verify_performed") is True]
     verify_passed = sum(1 for r in verify_rows if r.get("verify_passed") is True)
