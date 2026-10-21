@@ -15,7 +15,9 @@ entirely out of scope for routeForge — any of these work:
 - vLLM (`vllm serve <model> --served-model-name <slug> --enable-prompt-tokens-details`).
   Add `--enable-prompt-tokens-details`: without it vLLM leaves
   `usage.prompt_tokens_details` out, so routeForge cannot see prefix-cache hits
-  and cached-token pricing never applies (the cost record shows "not reported").
+  and cached-token pricing never applies (the cost record shows "not reported"). The Infrastructure page flags an
+  endpoint that never reports it with an amber "No cache data" badge, once it
+  has served 20 requests.
 - NVIDIA Dynamo (fronting TensorRT-LLM or vLLM workers)
 - NVIDIA NIM
 - Any other server that speaks the OpenAI `/v1/chat/completions` and
