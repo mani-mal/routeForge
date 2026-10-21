@@ -124,6 +124,10 @@ server and `--served-model-name <slug>` at the `slug` you onboard with — see
 `docs/guides/onboarding-models.md`. `LiteLLMBackend` addresses any onboarded on-prem endpoint
 through LiteLLM's `openai/` prefix; there is no separate `AsyncOpenAI`-based adapter.
 
+Start vLLM with `--enable-prompt-tokens-details` (alongside `--enable-prefix-caching`).
+Without it vLLM omits `usage.prompt_tokens_details`, so RouteForge cannot see
+prefix-cache hits and cached-token pricing never applies.
+
 ## dynamo
 
 NVIDIA Dynamo (`ai-dynamo/dynamo`) handles load distribution across TensorRT-LLM

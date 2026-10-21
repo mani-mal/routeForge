@@ -346,7 +346,7 @@ async def _sweep_one(pipeline: Pipeline, backend: _CountingBackend, case: Case,
         text = resp["choices"][0]["message"].get("content") or ""
         usage = resp.get("usage", {})
         prompt_tokens = usage.get("prompt_tokens")
-        cached_tokens = usage.get("cached_prompt_tokens", 0)
+        cached_tokens = usage.get("cached_prompt_tokens")
         comp = _trace_step(resp, "compression")
         tokens_after = comp[-1]["tokens_after"] if comp else None
         if served != endpoint:

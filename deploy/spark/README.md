@@ -237,11 +237,14 @@ docker run -d --name vllm-nemotron --gpus all --ipc host --restart unless-stoppe
   nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4 --host 0.0.0.0 --port 8000 \
   --served-model-name nemotron-3.5-lightning \
   --gpu-memory-utilization 0.25 --max-model-len 131072 --max-num-seqs 8 \
-  --moe-backend marlin --kv-cache-dtype fp8 --enable-prefix-caching \
+  --moe-backend marlin --kv-cache-dtype fp8 --enable-prefix-caching --enable-prompt-tokens-details \
   --mamba-backend flashinfer --mamba-cache-mode align \
   --reasoning-parser nemotron_v3 --tool-call-parser qwen3_coder --enable-auto-tool-choice
 ```
 
+- `--enable-prompt-tokens-details`: without it vLLM omits
+  `usage.prompt_tokens_details`, so RouteForge cannot see prefix-cache hits and
+  cached-token pricing never applies.
 - `-p 0.0.0.0:…` rather than `-p 8001:8000`: naming `0.0.0.0` stops Docker from
   also binding `[::]` on the public IPv6 address (see *Exposure notes*).
 - **Memory on GB10 is unified and shared by everything.** vLLM's

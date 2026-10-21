@@ -82,14 +82,14 @@ def test_served_request_persists_provider_reported_cached_tokens(tmp_path, monke
     assert row.cached_prompt_tokens == 7
 
 
-def test_provider_reporting_no_details_persists_zero(tmp_path, monkeypatch):
+def test_provider_reporting_no_details_persists_null(tmp_path, monkeypatch):
     """No local acompletion override -- the autouse `_fake_acompletion`
     fixture's canned response carries no `prompt_tokens_details` at all,
-    exactly the "provider doesn't report it" case, indistinguishable from a
-    genuine cache miss by design."""
+    the "provider doesn't report it" case. B75: stored as NULL (unknown),
+    not 0 (a genuine miss)."""
     row = _served_row(tmp_path, monkeypatch)
     assert row.status == "ok"
-    assert row.cached_prompt_tokens == 0
+    assert row.cached_prompt_tokens is None
 
 
 def test_semantic_cache_hit_records_zero_cached_prompt_tokens():

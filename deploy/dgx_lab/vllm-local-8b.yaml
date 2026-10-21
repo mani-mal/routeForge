@@ -85,6 +85,9 @@ items:
             - "32768"
             - --gpu-memory-utilization
             - "0.90"
+            # Report prefix-cache hits in usage.prompt_tokens_details so
+            # RouteForge's cached-token pricing can see them (B75).
+            - --enable-prompt-tokens-details
           ports:
           - name: http
             containerPort: 8000

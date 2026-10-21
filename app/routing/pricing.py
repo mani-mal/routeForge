@@ -11,7 +11,7 @@ from app.config.schema import PriceCfg
 
 
 def price_call(price: PriceCfg, *, prompt_tokens: int, completion_tokens: int,
-               cached_prompt_tokens: int = 0) -> float:
+               cached_prompt_tokens: int | None = 0) -> float:
     """USD for one call.
 
     `cached_prompt_tokens` are billed at `price.cached_input` when the operator
@@ -20,7 +20,7 @@ def price_call(price: PriceCfg, *, prompt_tokens: int, completion_tokens: int,
     and an unclamped value would produce negative uncached tokens and a cost
     below zero.
     """
-    cached = max(0, min(int(cached_prompt_tokens), int(prompt_tokens)))
+    cached = max(0, min(int(cached_prompt_tokens or 0), int(prompt_tokens)))
     uncached = int(prompt_tokens) - cached
     cached_rate = price.input if price.cached_input is None else price.cached_input
     return (uncached * price.input

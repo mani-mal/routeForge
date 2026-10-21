@@ -557,6 +557,11 @@ async def _record_exception_outcome(request: Request, exc: BaseException, *,
         workload=workload, workload_source=workload_source)
 
 
+def _opt_int(v: object) -> int | None:
+    """An optional metered count: None stays None (B75: unreported)."""
+    return None if v is None else int(v)
+
+
 def _stream_usage(body: ChatRequest, usage: object) -> dict | None:
     """The usage object for the OpenAI terminal usage frame (B53), or None
     when the client did not ask for one.
@@ -1114,7 +1119,7 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
                 prompt_tokens=int(usage.get("prompt_tokens", 0)),
                 completion_tokens=int(usage.get("completion_tokens", 0)),
                 total_tokens=int(usage.get("total_tokens", 0)),
-                cached_prompt_tokens=int(usage.get("cached_prompt_tokens", 0)),
+                cached_prompt_tokens=_opt_int(usage.get("cached_prompt_tokens", 0)),
                 cost_usd=float(cost.get("total_usd", 0.0)),
                 baseline_usd=float(cost.get("baseline_usd", 0.0)),
                 latency_ms=latency_ms,

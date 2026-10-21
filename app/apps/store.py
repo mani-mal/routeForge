@@ -134,7 +134,7 @@ async def record_usage(
     prompt_tokens: int,
     completion_tokens: int,
     total_tokens: int,
-    cached_prompt_tokens: int = 0,
+    cached_prompt_tokens: int | None = 0,
     cost_usd: float,
     baseline_usd: float,
     latency_ms: float,

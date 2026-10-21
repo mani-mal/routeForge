@@ -164,7 +164,7 @@ corrupted history, since the database copy is clean.
 
 **Resolved:** 2026-10-21. Added `redact_tree` (`app/obs/redact.py`): redacts every str leaf and str key of a structure, leaving numbers untouched. `sp.scoring` and `sp.candidates` (`app/obs/export.py`) now serialise `redact_tree(obj)` instead of regex-redacting the dumped JSON; no rounding, no key exemption. `otel.py`'s generic pass only touches plain-string keys, so it was left alone. Tests: `tests/test_obs_redact_tree.py`.
 
-## B75 — `cached_prompt_tokens` is 0 on every request although vLLM served 94.5% of prompt tokens from cache  🔴 OPEN
+## B75 — `cached_prompt_tokens` is 0 on every request although vLLM served 94.5% of prompt tokens from cache  🔴 OPEN ✅ RESOLVED (2026-10-21)
 
 **Severity:** medium (cost and savings figures, P2a cached-token pricing, the paper's
 cost claims). Mostly a deployment and documentation defect.
@@ -195,6 +195,19 @@ cost claims). Mostly a deployment and documentation defect.
 4. Baseline: decide whether the all-frontier baseline should assume the frontier
    provider's cached-input rate for the cached share. Without it the savings headline
    flatters routing.
+
+**Resolved:** items 1 (the flag, in the docs/deploy manifests; restarting the Spark vLLM
+stays the owner's call), 2 and 3 are resolved; item 4 (all-frontier baseline) stays OPEN as an
+owner decision and the baseline is unchanged. `_cached_tokens`
+(`app/gateway/backends/litellm_backend.py`) now returns `None` when the provider omits
+`prompt_tokens_details` / `cached_tokens` and the int (including 0) when reported; `None` flows
+through `GenerationResult`, the response `usage.cached_prompt_tokens` and into
+`usage_records.cached_prompt_tokens` (NULL = not reported). `price_call` treats `None` as 0.
+`--enable-prompt-tokens-details` added to `docs/guides/onboarding-models.md`, the
+`inference-backends` skill, `deploy/spark/README.md` and `deploy/dgx_lab/vllm-local-8b.yaml`.
+Tests: `tests/routing/test_cached_tokens.py`, `test_cached_tokens_persistence.py`,
+`test_pricing.py::test_unknown_cached_count_prices_like_zero`.
+
 
 ## B76 — Console Overview totals cover only the last 500 requests  🔴 OPEN
 

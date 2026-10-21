@@ -84,7 +84,8 @@ class Usage(BaseModel):
     # provider does not report the field, or when no provider call happened
     # (a semantic-cache hit). Carried here so the meter in app/api/routes.py
     # can persist it: routes.py reads resp["usage"], never a GenerationResult.
-    cached_prompt_tokens: int = 0
+    # B75: None = the provider did not report it (unknown), which is not 0.
+    cached_prompt_tokens: int | None = 0
 
 
 class Choice(BaseModel):
@@ -348,8 +349,8 @@ class GenerationResult(BaseModel):
     tool_calls: list[dict] | None = None
     # Prompt tokens the PROVIDER served from its own prompt cache
     # (`usage.prompt_tokens_details.cached_tokens`). 0 when the provider does
-    # not report the field, which is indistinguishable from a genuine miss.
-    cached_prompt_tokens: int = 0
+    # not report the field (B75: None = unreported, distinct from a real 0).
+    cached_prompt_tokens: int | None = None
     # B71 item 6: the BACKEND's own finish reason (an enum value; None when it
     # reported none) and its reasoning-token count, for the content-free
     # outcome row. Distinct from the `finish_reason` RouteForge sends the
