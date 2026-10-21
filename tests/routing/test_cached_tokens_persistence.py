@@ -108,3 +108,15 @@ def test_semantic_cache_hit_records_zero_cached_prompt_tokens():
     hit_recs = [r for r in out2["trace"] if r.get("step") == "cache"]
     assert hit_recs and hit_recs[0]["hit"] is True
     assert out2["usage"]["cached_prompt_tokens"] == 0
+
+
+def test_wire_usage_cached_is_zero_never_null_when_unreported(tmp_path, monkeypatch):
+    """B75 ruling: internal records keep NULL for "unreported", but the HTTP
+    response stays 0 -- strict clients may reject null on a number field."""
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/rf2.db"
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    with TestClient(create_app()) as c:
+        r = c.post("/v1/chat/completions",
+                   headers={"Authorization": "Bearer acme-key"}, json=_CLEAN)
+    assert r.status_code == 200
+    assert r.json()["usage"]["cached_prompt_tokens"] == 0

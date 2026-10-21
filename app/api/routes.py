@@ -562,6 +562,15 @@ def _opt_int(v: object) -> int | None:
     return None if v is None else int(v)
 
 
+def _wire_usage(usage):
+    """B75: the client-facing usage keeps its pre-B75 wire value. An unreported
+    cached count (None, kept internally and in usage_records) goes out as 0 --
+    strict clients may reject null on a number field."""
+    if isinstance(usage, dict) and usage.get("cached_prompt_tokens", 0) is None:
+        return {**usage, "cached_prompt_tokens": 0}
+    return usage
+
+
 def _stream_usage(body: ChatRequest, usage: object) -> dict | None:
     """The usage object for the OpenAI terminal usage frame (B53), or None
     when the client did not ask for one.
@@ -579,7 +588,7 @@ def _stream_usage(body: ChatRequest, usage: object) -> dict | None:
         return None
     if usage is None:
         return None
-    return jsonable_encoder(usage)
+    return jsonable_encoder(_wire_usage(usage))
 
 
 @router.post("/v1/chat/completions", response_model=None)
@@ -789,6 +798,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
                     session_id=session_id, s=s, request_id=request_id,
                     internals=internals, started_ns=started_ns, **outcome_kw)
     if stream_mode is None:
+        resp["usage"] = _wire_usage(resp.get("usage"))
         return resp
     # verified_then_stream: the pipeline already ran the FULL request above
     # and step 9 already verified it (same `pipeline.run` call as the
