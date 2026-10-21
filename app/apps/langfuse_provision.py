@@ -88,6 +88,11 @@ async def encrypt_plaintext_secrets(session) -> int:
     rows = (await session.execute(
         select(Application).where(Application.langfuse_secret_key_enc.is_not(None))
     )).scalars().all()
+    if rows and _fernet() is None:
+        log.warning("ENCRYPTION_KEY is unset: %d app Langfuse secret(s) are stored "
+                    "in cleartext; set ENCRYPTION_KEY to encrypt them on next boot",
+                    len(rows))
+        return 0
     for app in rows:
         if needs_encryption(app.langfuse_secret_key_enc):
             app.langfuse_secret_key_enc = encrypt_secret(

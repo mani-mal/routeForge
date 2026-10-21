@@ -40,6 +40,9 @@ services:
       # via .env for anything but a local demo. (Prod Helm uses K8s Secrets.)
       LANGFUSE_PUBLIC_KEY: pk-lf-local
       LANGFUSE_SECRET_KEY: sk-lf-local
+      # Encrypts per-app Langfuse secret keys at rest; unset -> cleartext, with
+      # a boot warning. Set it in .env (see .env.example) for anything but a demo.
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
       # Multi-tenant store: defaults to an in-container SQLite file (offline,
       # no extra service). To reuse this stack's Postgres instead, set:
       #   DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/postgres

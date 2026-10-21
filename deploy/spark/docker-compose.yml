@@ -75,6 +75,10 @@ services:
       # across replicas). Set the SAME value in deploy/spark/.env on every replica
       # for stable session grouping.
       SP_SESSION_ID_KEY: ${SP_SESSION_ID_KEY:-}
+      # Encrypts each app's per-app Langfuse secret key at rest (Fernet). Unset ->
+      # stored in cleartext, with a warning at boot. Set it in deploy/spark/.env;
+      # never change it once apps have keys, or their stored keys stop decrypting.
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
       # Level of the serving.* log lines on stderr (B57): DEBUG|INFO|WARNING|ERROR.
       SP_LOG_LEVEL: ${SP_LOG_LEVEL:-INFO}
       # Admin console login. No default password on purpose — .env must set it.
