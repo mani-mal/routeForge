@@ -76,7 +76,7 @@ function CacheBadge({ status }: { status: OnboardedModel["cache_reporting"] }) {
   return (
     <span
       className="inline-flex items-center gap-1 whitespace-nowrap font-mono text-xs text-frontier"
-      title="This endpoint returns no `prompt_tokens_details`, so RouteForge can't see prefix-cache hits and bills every prompt token at full price. On vLLM, start the server with `--enable-prompt-tokens-details`."
+      title="This endpoint returns no prompt_tokens_details, so RouteForge can't see prefix-cache hits and bills every prompt token at full price. On vLLM, start the server with --enable-prompt-tokens-details."
     >
       <span aria-hidden="true">●</span>
       No cache data

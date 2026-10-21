@@ -21,6 +21,7 @@ def _rows(model, cached_list, status="ok", start=0):
 
 
 def _status(rows, models, **kw):
+    kw.setdefault("now", _T0 + dt.timedelta(days=1))
     db = Database(url="sqlite+aiosqlite://", seed=seed_demo_apps)
 
     async def go():
@@ -72,3 +73,19 @@ def test_admin_listing_includes_field(client, monkeypatch):
     assert r.status_code == 200
     row = next(m for m in client.get("/admin/infra/models").json() if m["slug"] == "cr-mid")
     assert row["cache_reporting"] == "unknown"
+
+
+def test_semantic_cache_hit_row_does_not_make_endpoint_reported():
+    # I2: a semantic-cache hit records cached_prompt_tokens NULL, like any
+    # non-reporting call, so 25 NULL rows + one hit stay not_reported.
+    rows = _rows("m", [None] * 25) + _rows("m", [None], start=100)
+    assert _status(rows, ["m"]) == {"m": "not_reported"}
+
+
+def test_rows_older_than_the_lookback_are_ignored():
+    # M1: the query is time-bounded (default 30 days).
+    rows = _rows("m", [3] + [None] * 20)
+    out = _status(rows, ["m"], now=_T0 + dt.timedelta(days=45))
+    assert out == {"m": "unknown"}
+    assert _status(_rows("m", [3] + [None] * 20), ["m"],
+                   now=_T0 + dt.timedelta(days=10)) == {"m": "reported"}

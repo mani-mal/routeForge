@@ -92,9 +92,10 @@ def test_provider_reporting_no_details_persists_null(tmp_path, monkeypatch):
     assert row.cached_prompt_tokens is None
 
 
-def test_semantic_cache_hit_records_zero_cached_prompt_tokens():
-    """A cache hit makes no provider call at all, so cached_prompt_tokens
-    must be the honest 0 (not a missing/omitted value) -- covers the
+def test_semantic_cache_hit_records_null_cached_prompt_tokens():
+    """A cache hit makes no provider call at all, so no endpoint reported a
+    cached count: it is NULL (final-review I2; 0 made a non-reporting endpoint
+    look "reported"). The client wire value stays 0 (routes._wire_usage). Covers the
     app/pipeline.py ~605 semantic-cache-hit `Usage(...)` construction, which
     deliberately never reads a GenerationResult.cached_prompt_tokens because
     there is no GenerationResult on a hit."""
@@ -107,7 +108,7 @@ def test_semantic_cache_hit_records_zero_cached_prompt_tokens():
 
     hit_recs = [r for r in out2["trace"] if r.get("step") == "cache"]
     assert hit_recs and hit_recs[0]["hit"] is True
-    assert out2["usage"]["cached_prompt_tokens"] == 0
+    assert out2["usage"]["cached_prompt_tokens"] is None
 
 
 def test_wire_usage_cached_is_zero_never_null_when_unreported(tmp_path, monkeypatch):

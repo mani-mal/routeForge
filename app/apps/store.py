@@ -186,23 +186,29 @@ async def list_usage(session: AsyncSession, *, application_id: str | None = None
 
 
 async def cache_reporting_status(session: AsyncSession, models: list[str], *,
-                                 window: int = 200,
-                                 min_rows: int = 20) -> dict[str, str]:
+                                 window: int = 200, min_rows: int = 20,
+                                 lookback_days: int = 30,
+                                 now: dt.datetime | None = None) -> dict[str, str]:
     """Per model: does its endpoint report cached tokens? (B75 item 3)
 
     Derived from served traffic (the onboarding probe is GET /models and sees
     no usage). Looks at each model's most recent `window` status="ok" rows:
     "reported" if any has non-null cached_prompt_tokens, "not_reported" if at
-    least `min_rows` rows exist and all are NULL, else "unknown". One query.
+    least `min_rows` rows exist and all are NULL, else "unknown". One query,
+    bounded to the last `lookback_days` (uses the `ts` index) so it never scans
+    the whole history. Semantic-cache hits record NULL, like any call whose
+    provider reported nothing.
     """
     out = {m: "unknown" for m in models}
     if not models:
         return out
+    since = (now or dt.datetime.now(dt.timezone.utc)) - dt.timedelta(days=lookback_days)
     rn = func.row_number().over(partition_by=UsageRecord.model,
                                 order_by=UsageRecord.ts.desc()).label("rn")
     ranked = (select(UsageRecord.model.label("model"),
                      UsageRecord.cached_prompt_tokens.label("cached"), rn)
-              .where(UsageRecord.status == "ok", UsageRecord.model.in_(models))
+              .where(UsageRecord.status == "ok", UsageRecord.model.in_(models),
+                     UsageRecord.ts >= since)
               .subquery())
     stmt = (select(ranked.c.model, func.count().label("n"),
                    func.count(ranked.c.cached).label("n_reported"))

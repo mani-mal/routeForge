@@ -1,5 +1,4 @@
-# Outage scenario for B48/B45 (docs/superpowers/specs/2026-09-22-feasible-bench-
-# failure-injection-design.md §7). Use with eval/suites/outage.jsonl (30 public
+# Outage scenario for B48/B45 (docs/research/feasible-route-bench.md). Use with eval/suites/outage.jsonl (30 public
 # FAQ cases, residency any) and eval/variants/b45.yaml:
 #
 #   uv run python scripts/feasible_bench.py --suite eval/suites/outage.jsonl \
