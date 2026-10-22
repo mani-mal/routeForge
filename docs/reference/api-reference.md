@@ -489,12 +489,14 @@ Returns `{"stored": <bool>, "recorded": <bool>}`, always HTTP `200`:
 
 ---
 
-## `GET /admin/outcomes/export` (admin-only)
+## `GET /admin/outcomes/export` (admin or service credential)
 
-Not for applications: it needs the admin session cookie, not an app token (`401`
-without it). It streams RouteForge's routing outcome records, with their feedback, as
+Not for applications: it needs the admin session cookie or a service credential
+(`Bearer rf_svc_…`), not an app token (`401` without either). A service credential is
+scoped to its own application: `application_id` omitted means its own application, any
+other value is `403` (`service credential is scoped to another application`). It streams RouteForge's routing outcome records, with their feedback, as
 NDJSON (`application/x-ndjson`), one `routeforge.outcome/v1` record per line, across all
-applications.
+applications (admin) or its own application (service credential).
 
 | Parameter | Default | Notes |
 |---|---|---|

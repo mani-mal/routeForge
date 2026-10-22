@@ -789,8 +789,9 @@ class _Caller(BaseModel):
 
 async def require_admin_or_service(request: Request) -> _Caller:
     """Admin session cookie, else a `Bearer rf_svc_…` service credential.
-    Used ONLY by the token create/revoke routes; every other /admin/* route
-    keeps `require_admin`, so a service credential reaches nothing else."""
+    Used ONLY by the token create/revoke routes and the outcome export (where
+    the credential is forced to its own application); every other /admin/*
+    route keeps `require_admin`, so a service credential reaches nothing else."""
     try:
         return _Caller(admin_id=await require_admin(request))
     except HTTPException:
@@ -1281,11 +1282,12 @@ async def list_onboarded_models(request: Request,
 #
 # GET /admin/outcomes/export streams the routing_outcomes table (+ its joined
 # outcome_feedback) as NDJSON for offline analysis -- the eval/RLHF substrate
-# CLAUDE.md's RLHF-readiness note has in mind. Admin-only, like every other
-# route in this file; the data is content-free by construction (see
-# app/apps/store.py's P2b-2 section docstring), so this adds no new exposure
-# beyond "an admin can see routing metadata across every tenant", which the
-# rest of /admin/* already grants.
+# CLAUDE.md's RLHF-readiness note has in mind. Admin session: all
+# applications. A service credential (`rf_svc_`) may also call it, but is
+# forced to its own application (403 for another). The data is content-free by
+# construction (see app/apps/store.py's P2b-2 section docstring), so an admin
+# sees only routing metadata across every tenant, and a service credential
+# only its own application's.
 
 _EXPORT_DEFAULT_LIMIT = 100_000
 _EXPORT_MAX_LIMIT = 100_000
@@ -1381,7 +1383,15 @@ async def _export_lines(db, *, since: dt.datetime, until: dt.datetime,
 async def export_outcomes(
         request: Request, since: str | None = None, until: str | None = None,
         application_id: str | None = None, limit: int = _EXPORT_DEFAULT_LIMIT,
-        _: str = Depends(require_admin)) -> StreamingResponse:
+        caller: _Caller = Depends(require_admin_or_service)) -> StreamingResponse:
+    if caller.service_id is not None:
+        # A service credential reads only its own application's outcomes (and
+        # feedback, which is joined per application). Omitted -> its own app.
+        if application_id is None:
+            application_id = caller.service_app_id
+        elif application_id != caller.service_app_id:
+            raise HTTPException(
+                403, "service credential is scoped to another application")
     if limit < 1:
         raise HTTPException(422, "limit must be >= 1")
     limit = min(limit, _EXPORT_MAX_LIMIT)

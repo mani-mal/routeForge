@@ -413,7 +413,9 @@ cache (404 otherwise), and that cache keeps only the most recent requests.
 
 ## 7. Export: `GET /admin/outcomes/export`
 
-Admin-only (the admin session cookie; `401` without it). Returns `application/x-ndjson`,
+The admin session cookie (all applications) or a service credential `rf_svc_…` (its own
+application only: `application_id` omitted defaults to it, any other value is `403`);
+`401` without either, and an app token is refused. Returns `application/x-ndjson`,
 streamed.
 
 | Parameter | Default | Notes |
