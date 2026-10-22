@@ -92,6 +92,16 @@ CREATE INDEX IF NOT EXISTS ix_routing_outcomes_session ON routing_outcomes (sess
 
 No backfill; rows written before the ALTER keep it null.
 
+**Upgrade: `requested_alias` (2026-10-21).** `routing_outcomes` gained one more nullable
+column: the per-application model alias the client sent as `model` (see `model_aliases` in
+`docs/reference/per-app-config.md`), null when it sent none. `requested_model` stays the
+slug the alias resolved to. Same failure mode as above if the ALTER is missed; run it before
+rolling the image.
+
+```sql
+ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS requested_alias VARCHAR(64);
+```
+
 Rows written before the ALTER keep the column null, same as any `no_eligible` row the
 router's core computation itself failed to explain (`app/routing/router.py::_safe_core`).
 

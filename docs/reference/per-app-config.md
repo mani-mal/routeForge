@@ -904,6 +904,39 @@ sensitivity, risk class, verification — is inherited.
 Only type names and a hash are stored (table `trajectory_envelopes`, in the deployment's
 own database). No request text is kept.
 
+## `model_aliases` -- stable names for pinned models
+
+`model_aliases` is a per-application map `{alias -> model slug}`. A client sends the alias
+as `model`; RouteForge swaps in the slug before the gate runs, so from there it is an
+ordinary slug pin through the same gate, residency, policy and feasibility checks. An alias
+to a slug the request may not use fails exactly as pinning that slug directly would.
+
+- **Shape.** Alias names match `^[a-z0-9][a-z0-9._-]{0,63}$` (for example `role.planner`).
+  Targets must be a slug in the YAML pool or onboarded (enabled or not).
+- **Validation (422, named message).** A name that does not match the pattern, the name
+  `auto`, a name equal to a known slug, a target that is not a known slug, a non-string
+  target, or an empty map (clear it with `reset: ["model_aliases"]`).
+- **Replace, not merge.** A PUT carrying `model_aliases` replaces the whole map. Omit the
+  field to leave it alone.
+- **Resolution.** `auto` is never an alias. A name that is an alias resolves to its slug.
+  A name that is not an alias but is a known slug is a plain slug pin. Any other name, for
+  an app that has aliases, is `400` with `error.code == "unknown_model_alias"` and no model
+  call; it never falls back to `auto`. An app with no aliases is unchanged by this feature,
+  so an unknown name still gets the existing `422 model_not_found`.
+- **Version.** Folded into `app_policy_version` only when set, so repointing an alias
+  changes the version and an app without aliases keeps its hash.
+- **Collision.** Aliases are checked against slugs at write time. If a later onboarding
+  reuses an alias name as a slug, the alias wins for that app.
+- **Outcome rows.** `routing_outcomes.requested_alias` records the alias sent;
+  `requested_model` and `chosen` are the slug.
+
+**Deploy.** Run before rolling the image (the ORM names the column in every policy
+`SELECT`):
+
+```sql
+ALTER TABLE app_policies ADD COLUMN IF NOT EXISTS model_aliases JSON;
+```
+
 ## Model eligibility is two-sided
 
 Worth restating here because it is asked as a policy question and answered in two places:

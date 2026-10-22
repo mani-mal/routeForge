@@ -241,7 +241,8 @@ def _verify_mode(entry: dict | None) -> str | None:
 def build_ok_outcome(resp: dict, *, request_id: str, application_id: str,
                       outcome_ctx: dict, routing_policy_version: str,
                       workload: str | None, workload_source: str,
-                      outcome_session: str | None = None) -> dict:
+                      outcome_session: str | None = None,
+                      requested_alias: str | None = None) -> dict:
     """A `routing_outcomes` row for a request that was served (`status ==
     "ok"`), built entirely from `resp` (a finished `Pipeline.run` response
     dict) and the caller-supplied ids/versions/workload tag. Reads only the
@@ -280,6 +281,7 @@ def build_ok_outcome(resp: dict, *, request_id: str, application_id: str,
         "workload": workload,
         "workload_source": workload_source,
         "session": outcome_session,
+        "requested_alias": requested_alias,
         "complexity": outcome_ctx.get("complexity"),
         "prompt_tokens_bucket": prompt_bucket(prompt_tokens),
         **_policy_features(outcome_ctx),
@@ -378,6 +380,7 @@ def build_failure_outcome(*, status: str, request_id: str, application_id: str,
                            endpoint_registry_version: str | None,
                            workload: str | None, workload_source: str,
                            outcome_session: str | None = None,
+                           requested_alias: str | None = None,
                            attempts: tuple[str, ...] = (),
                            rejected: tuple = (),
                            latency_ms: float = 0.0,
@@ -424,6 +427,7 @@ def build_failure_outcome(*, status: str, request_id: str, application_id: str,
         "workload": workload,
         "workload_source": workload_source,
         "session": outcome_session,
+        "requested_alias": requested_alias,
         "tier_target": None,
         "complexity": outcome_ctx.get("complexity"),
         "prompt_tokens_bucket": None,

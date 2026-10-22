@@ -56,6 +56,16 @@ class AppPolicyView:
     require_no_retention: bool | None = None            # None = inherit (false)
     # B72: off | header | sticky; None = off. app/policy/trajectory.py.
     trajectory_mode: str | None = None
+    # Pinned model aliases as sorted (alias, slug) pairs: a tuple keeps the
+    # frozen view hashable. None = no aliases.
+    model_aliases: tuple[tuple[str, str], ...] | None = None
+
+    def alias_target(self, name: str) -> str | None:
+        """The slug this app's alias `name` points at, or None if it has none."""
+        for alias, slug in self.model_aliases or ():
+            if alias == name:
+                return slug
+        return None
 
     def version(self) -> str:
         """First 12 hex of sha256 over this app policy's decision-relevant
@@ -119,12 +129,19 @@ class AppPolicyView:
             fields["allowed_regions"] = sorted(self.allowed_regions)
         if self.require_no_retention is not None:
             fields["require_no_retention"] = self.require_no_retention
+        # Aliases change which model a request name means: same rule.
+        if self.model_aliases is not None:
+            fields["model_aliases"] = dict(self.model_aliases)
         blob = json.dumps(fields, sort_keys=True, default=str)
         return hashlib.sha256(blob.encode()).hexdigest()[:12]
 
 
 def _fs(v) -> frozenset[str] | None:
     return frozenset(v) if v else None
+
+
+def alias_pairs(v) -> tuple[tuple[str, str], ...] | None:
+    return tuple(sorted(v.items())) if v else None
 
 
 def policy_view_from(app: Application) -> AppPolicyView:
@@ -157,6 +174,7 @@ def policy_view_from(app: Application) -> AppPolicyView:
         allowed_regions=_fs(p.allowed_regions),
         require_no_retention=p.require_no_retention,
         trajectory_mode=p.trajectory_mode,
+        model_aliases=alias_pairs(p.model_aliases),
     )
 
 
