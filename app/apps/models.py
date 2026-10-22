@@ -318,6 +318,11 @@ class RoutingOutcome(Base):
     routing_policy_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     workload: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     workload_source: Mapped[str] = mapped_column(String(8), default="none")
+    # The client's own `x-routeforge-session` label (validated; null when
+    # absent or invalid) -- never the server-derived session id. Content-free
+    # by contract. Deployed DBs need the ALTER + index in
+    # docs/reference/routing-outcomes.md.
+    session: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     tier_target: Mapped[str | None] = mapped_column(String(16), nullable=True)
     complexity: Mapped[float | None] = mapped_column(Float, nullable=True)
     prompt_tokens_bucket: Mapped[str | None] = mapped_column(String(8), nullable=True)
