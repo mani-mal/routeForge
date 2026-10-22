@@ -60,6 +60,11 @@ class ModelRegistry:
     def generation(self) -> int:
         return self._generation
 
+    @property
+    def loaded(self) -> bool:
+        """True once a refresh has succeeded at least once (read-only)."""
+        return self._rows is not None
+
     async def ensure_loaded(self, db) -> None:
         if self._rows is None:
             await self.refresh(db)
@@ -226,6 +231,13 @@ class ModelRegistry:
         can report them as `disabled` state. Never an eligibility input."""
         return tuple(sorted(slug for slug, r in self._onboarded().items()
                             if not r.enabled))
+
+    def known_slugs(self) -> frozenset[str]:
+        """Every slug the deployment has heard of: the YAML pool plus every
+        onboarded row, enabled or not. A pure name read -- no eligibility
+        meaning, so it never widens or narrows a candidate set."""
+        return (frozenset(c.name for c in self._s.routing.model_pool)
+                | frozenset(self._onboarded()))
 
     def is_enabled(self, slug: str) -> bool:
         r = self._onboarded().get(slug)

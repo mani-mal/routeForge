@@ -215,6 +215,12 @@ class AppPolicy(Base):
     # stores, resolves and validates the shape.
     allowed_regions: Mapped[list | None] = mapped_column(JSON, nullable=True)
     require_no_retention: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # Per-app pinned model aliases: {alias name -> model slug}. A client sends
+    # the alias as `model`; the request path swaps in the slug before anything
+    # else sees it, so it is an ordinary slug pin from there on. Null = none.
+    # Added after the table shipped: a deployed DB needs the ALTER in
+    # docs/reference/per-app-config.md.
+    model_aliases: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     application: Mapped[Application] = relationship(back_populates="policy")
 
@@ -318,6 +324,11 @@ class RoutingOutcome(Base):
     routing_policy_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     workload: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     workload_source: Mapped[str] = mapped_column(String(8), default="none")
+    # The client's own `x-routeforge-session` label (validated; null when
+    # absent or invalid) -- never the server-derived session id. Content-free
+    # by contract. Deployed DBs need the ALTER + index in
+    # docs/reference/routing-outcomes.md.
+    session: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     tier_target: Mapped[str | None] = mapped_column(String(16), nullable=True)
     complexity: Mapped[float | None] = mapped_column(Float, nullable=True)
     prompt_tokens_bucket: Mapped[str | None] = mapped_column(String(8), nullable=True)
@@ -348,6 +359,11 @@ class RoutingOutcome(Base):
     # it at the client's own cap. Added after the table shipped: a deployed DB
     # needs the ALTERs in docs/reference/routing-outcomes.md.
     requested_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # The per-app alias the client sent as `model` (null = it sent no alias);
+    # `requested_model` above is then the slug it resolved to. Content-free
+    # label by contract. Added after the table shipped: a deployed DB needs the
+    # ALTER in docs/reference/routing-outcomes.md.
+    requested_alias: Mapped[str | None] = mapped_column(String(64), nullable=True)
     max_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # P3b: the minimal conflicting core of a `no_eligible` row
     # (`ConflictingCore.to_record()`: requirement ids/security/source/detail,

@@ -42,6 +42,7 @@ CODE_BACKEND_UNAVAILABLE = "backend_unavailable"
 CODE_POLICY_UNAVAILABLE = "policy_unavailable"
 CODE_INTERNAL_ERROR = "internal_error"
 CODE_INVALID_REQUEST = "invalid_request"
+CODE_UNKNOWN_MODEL_ALIAS = "unknown_model_alias"
 
 
 def error_type_for_status(status: int) -> str:

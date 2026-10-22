@@ -22,7 +22,7 @@ online-learning slice would still need.
 ## 1. Workflow
 
 ```
-GET /admin/outcomes/export                          (P2b-2; admin-only)
+GET /admin/outcomes/export                          (P2b-2; admin, or own-app service credential)
   -> outcomes.ndjson
 scripts/quality_recommend.py --export outcomes.ndjson --out results/quality
   -> results/quality/recommendation.json, results/quality/report.md

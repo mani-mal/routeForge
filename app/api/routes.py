@@ -23,7 +23,7 @@ from app.api.openai_errors import (
     CODE_BACKEND_UNAVAILABLE, CODE_CONTEXT_LENGTH_EXCEEDED, CODE_INSUFFICIENT_QUOTA,
     CODE_INTERNAL_ERROR, CODE_INVALID_API_KEY, CODE_INVALID_VALUE, CODE_MODEL_NOT_FOUND,
     CODE_NO_ELIGIBLE_MODEL, CODE_POLICY_UNAVAILABLE, CODE_RATE_LIMIT_EXCEEDED,
-    CODE_RESPONSE_FAILED_VERIFICATION, CODE_STREAMING_NOT_SUPPORTED, TYPE_INSUFFICIENT_QUOTA,
+    CODE_RESPONSE_FAILED_VERIFICATION, CODE_STREAMING_NOT_SUPPORTED, CODE_UNKNOWN_MODEL_ALIAS, TYPE_INSUFFICIENT_QUOTA,
     ApiError,
 )
 from app.api.streaming import (
@@ -381,6 +381,8 @@ async def _record_cancelled(request: Request, *, tenant: str, request_id: str,
                             attempts: tuple[str, ...] = (),
                             workload: str | None = None,
                             workload_source: str = "none",
+                            outcome_session: str | None = None,
+                            requested_alias: str | None = None,
                             app_langfuse: object | None = None,
                             session_id: str | None = None,
                             started_ns: int | None = None) -> None:
@@ -412,7 +414,9 @@ async def _record_cancelled(request: Request, *, tenant: str, request_id: str,
     await _record_failure_outcome(
         request, "cancelled", tenant=tenant, request_id=request_id,
         started=started, s=s, internals=internals, attempts=attempts,
-        workload=workload, workload_source=workload_source)
+        workload=workload, workload_source=workload_source,
+        outcome_session=outcome_session,
+        requested_alias=requested_alias)
     _export_failure_trace(
         status="cancelled", tenant=tenant, request_id=request_id, started=started,
         attempts=attempts, app_langfuse=app_langfuse, session_id=session_id,
@@ -426,6 +430,8 @@ async def _record_failed(request: Request, *, tenant: str, request_id: str,
                          attempts: tuple[str, ...] = (),
                          workload: str | None = None,
                          workload_source: str = "none",
+                         outcome_session: str | None = None,
+                         requested_alias: str | None = None,
                          app_langfuse: object | None = None,
                          session_id: str | None = None,
                          started_ns: int | None = None) -> None:
@@ -470,7 +476,9 @@ async def _record_failed(request: Request, *, tenant: str, request_id: str,
     await _record_failure_outcome(
         request, "backend_failed", tenant=tenant, request_id=request_id,
         started=started, s=s, internals=internals, attempts=attempts,
-        workload=workload, workload_source=workload_source)
+        workload=workload, workload_source=workload_source,
+        outcome_session=outcome_session,
+        requested_alias=requested_alias)
     _export_failure_trace(
         status="error", tenant=tenant, request_id=request_id, started=started,
         attempts=attempts, app_langfuse=app_langfuse, session_id=session_id,
@@ -533,7 +541,9 @@ async def _record_failure_outcome(request: Request, status: str, *, tenant: str,
                                   rejected: tuple = (),
                                   core=None,
                                   workload: str | None = None,
-                                  workload_source: str = "none") -> None:
+                                  workload_source: str = "none",
+                                  outcome_session: str | None = None,
+                                  requested_alias: str | None = None) -> None:
     """Build and write a failed request's outcome row. Content-free: the
     gate's `outcome_ctx` (ids, enums, entity TYPES), the candidate names
     tried, and the `{name, code}` of each policy rejection -- never the
@@ -555,6 +565,8 @@ async def _record_failure_outcome(request: Request, status: str, *, tenant: str,
             routing_policy_version=s.routing_policy_version,
             endpoint_registry_version=_registry_version(request),
             workload=workload, workload_source=workload_source,
+            outcome_session=outcome_session,
+            requested_alias=requested_alias,
             attempts=tuple(attempts), rejected=tuple(rejected),
             latency_ms=(time.monotonic() - started) * 1000,
             conflicting_core=_core_record(core), **served)
@@ -570,6 +582,8 @@ async def _record_exception_outcome(request: Request, exc: BaseException, *,
                                     s, internals: dict | None,
                                     workload: str | None,
                                     workload_source: str,
+                                    outcome_session: str | None = None,
+                                    requested_alias: str | None = None,
                                     app_langfuse: object | None = None,
                                     session_id: str | None = None,
                                     started_ns: int | None = None) -> None:
@@ -584,6 +598,8 @@ async def _record_exception_outcome(request: Request, exc: BaseException, *,
                              internals=internals,
                              attempts=tuple(getattr(exc, "attempted_models", ())),
                              workload=workload, workload_source=workload_source,
+                             outcome_session=outcome_session,
+                             requested_alias=requested_alias,
                              app_langfuse=app_langfuse, session_id=session_id,
                              started_ns=started_ns)
         return
@@ -603,7 +619,9 @@ async def _record_exception_outcome(request: Request, exc: BaseException, *,
         # P3b: a `NoEligibleCandidate`'s minimal conflicting core (None for
         # every other exception, and for a router whose core failed).
         core=getattr(exc, "core", None) if isinstance(exc, NoEligibleCandidate) else None,
-        workload=workload, workload_source=workload_source)
+        workload=workload, workload_source=workload_source,
+        outcome_session=outcome_session,
+        requested_alias=requested_alias)
 
 
 def _opt_int(v: object) -> int | None:
@@ -710,6 +728,34 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
             raise ApiError(429, "daily budget exceeded for this application",
                            code=CODE_INSUFFICIENT_QUOTA, type=TYPE_INSUFFICIENT_QUOTA)
 
+    # Per-app pinned model aliases: swap the alias for its slug (after the
+    # quota checks, so it is metered like any request) before anything else
+    # reads `body.model`, so the rest of the request is an ordinary slug
+    # pin through the same gate/residency/policy path. An app with no aliases
+    # skips all of this. Never falls back to `auto`.
+    if app_policy.model_aliases and body.model != "auto":
+        target = app_policy.alias_target(body.model)
+        if target is not None:
+            outcome_kw["requested_alias"] = body.model
+            body = body.model_copy(update={"model": target})
+        else:
+            registry = request.app.state.registry
+            try:
+                await registry.ensure_loaded(request.app.state.db)
+            except Exception:
+                pass  # `loaded` below decides; ensure_loaded normally swallows
+            if not registry.loaded:
+                # Never judge a name against a YAML-only slug set: same 503
+                # the setup block gives (PolicyGateError's mapping).
+                metrics.observe_request("-", "error")
+                raise ApiError(503, "policy evaluation unavailable",
+                               code=CODE_POLICY_UNAVAILABLE)
+            if body.model not in registry.known_slugs():
+                metrics.observe_request("-", "unknown_model_alias")
+                raise ApiError(
+                    400, f"model {body.model!r} is neither an alias of this "
+                    "application nor a known model", code=CODE_UNKNOWN_MODEL_ALIAS)
+
     # Read the opaque workflow-correlation id once, up front: the streaming
     # branch below returns before the old (post-pipeline) read site, and every
     # response shape's _finalize needs it. `client_session_id` is the raw
@@ -723,6 +769,9 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
     # conversation with no header still groups into one session there as its
     # history grows -- without touching what memory partition it reads/writes.
     client_session_id = _read_session_id(request)
+    # The routing outcome row carries the CLIENT-supplied id only, never the
+    # server-derived one below: a content-free label, null when absent/invalid.
+    outcome_kw["outcome_session"] = client_session_id
     session_id = client_session_id
     if session_id is None and s.serving.derive_session_id:
         session_id = _derive_session_id(body, tenant)
@@ -935,7 +984,9 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
                     internals: dict | None = None,
                     started_ns: int | None = None,
                     workload: str | None = None,
-                    workload_source: str = "none") -> None:
+                    workload_source: str = "none",
+                    outcome_session: str | None = None,
+                    requested_alias: str | None = None) -> None:
     """Post-model-call processing shared by every response shape (non-stream
     and every streaming mode): telemetry export, the first-party console
     snapshot, the durable per-app usage row, and the live decision-stream
@@ -1204,7 +1255,9 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
             resp, request_id=request_id, application_id=tenant,
             outcome_ctx=internals.get("outcome_ctx") or {},
             routing_policy_version=s.routing_policy_version,
-            workload=workload, workload_source=workload_source)
+            workload=workload, workload_source=workload_source,
+            outcome_session=outcome_session,
+            requested_alias=requested_alias)
     except Exception:
         logging.getLogger("serving.obs").warning(
             "outcome record failed request=%s", request_id, exc_info=True)
@@ -1239,7 +1292,9 @@ async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
                             internals: dict | None = None,
                             started_ns: int | None = None,
                             workload: str | None = None,
-                            workload_source: str = "none") -> AsyncIterator[str]:
+                            workload_source: str = "none",
+                            outcome_session: str | None = None,
+                            requested_alias: str | None = None) -> AsyncIterator[str]:
     """SSE for a streamed request whose complete, verified answer is not ready
     within one keepalive interval. Sends a keepalive comment each interval until
     the pipeline task finishes, then the same frames `verified_then_stream`
@@ -1294,6 +1349,8 @@ async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
                         request, tenant=tenant, request_id=request_id,
                         started=started, s=s, internals=internals,
                         workload=workload, workload_source=workload_source,
+                        outcome_session=outcome_session,
+                        requested_alias=requested_alias,
                         app_langfuse=app_langfuse, session_id=session_id,
                         started_ns=started_ns)
                 cancelled_recorded = True
@@ -1323,6 +1380,8 @@ async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
                     request, e, tenant=tenant, request_id=request_id,
                     started=started, s=s, internals=internals,
                     workload=workload, workload_source=workload_source,
+                    outcome_session=outcome_session,
+                    requested_alias=requested_alias,
                     app_langfuse=app_langfuse, session_id=session_id,
                     started_ns=started_ns)
             yield sse_error_frame(*mapped, extra=_error_extra(e))
@@ -1339,7 +1398,9 @@ async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
                             app_langfuse=app_langfuse, profile=profile,
                             session_id=session_id, s=s, request_id=request_id,
                             internals=internals, started_ns=started_ns,
-                            workload=workload, workload_source=workload_source)
+                            workload=workload, workload_source=workload_source,
+                            outcome_session=outcome_session,
+                            requested_alias=requested_alias)
         message = resp["choices"][0]["message"]
         async for frame in chunk_text(request_id, resp["model"], message["content"] or "",
                                       tool_calls=message.get("tool_calls"),
@@ -1375,6 +1436,8 @@ async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
                     request, tenant=tenant, request_id=request_id,
                     started=started, s=s, internals=internals,
                     workload=workload, workload_source=workload_source,
+                    outcome_session=outcome_session,
+                    requested_alias=requested_alias,
                     app_langfuse=app_langfuse, session_id=session_id,
                     started_ns=started_ns)
 
@@ -1421,6 +1484,8 @@ async def _record_failed_stream(request: Request, *, tenant: str, request_id: st
                                 s=None, internals: dict | None = None,
                                 workload: str | None = None,
                                 workload_source: str = "none",
+                                outcome_session: str | None = None,
+                                requested_alias: str | None = None,
                                 app_langfuse: object | None = None,
                                 session_id: str | None = None,
                                 started_ns: int | None = None) -> None:
@@ -1439,6 +1504,8 @@ async def _record_failed_stream(request: Request, *, tenant: str, request_id: st
                              internals=internals,
                              attempts=(chosen,) if chosen else (),
                              workload=workload, workload_source=workload_source,
+                             outcome_session=outcome_session,
+                             requested_alias=requested_alias,
                              app_langfuse=app_langfuse, session_id=session_id,
                              started_ns=started_ns)
 
@@ -1452,7 +1519,9 @@ def _stream_unverified_response(
         started: float,
         started_ns: int | None = None,
         workload: str | None = None,
-        workload_source: str = "none") -> StreamingResponse:
+        workload_source: str = "none",
+        outcome_session: str | None = None,
+        requested_alias: str | None = None) -> StreamingResponse:
     """Live token-forwarding SSE for `stream_unverified` (real backend
     streaming). Emits an OpenAI-style role frame, forwards each `deltas` token
     as a `content` frame, then (after the stream drains) a `finish_reason`
@@ -1498,6 +1567,8 @@ def _stream_unverified_response(
                                             get_meta=get_meta, s=s,
                                             internals=internals, workload=workload,
                                             workload_source=workload_source,
+                                            outcome_session=outcome_session,
+                                            requested_alias=requested_alias,
                                             app_langfuse=app_langfuse,
                                             session_id=session_id,
                                             started_ns=started_ns)
@@ -1508,7 +1579,9 @@ def _stream_unverified_response(
                     app_policy=app_policy, app_langfuse=app_langfuse,
                     profile=profile, session_id=session_id, s=s,
                     internals=internals, started_ns=started_ns,
-                    workload=workload, workload_source=workload_source)
+                    workload=workload, workload_source=workload_source,
+                    outcome_session=outcome_session,
+                    requested_alias=requested_alias)
 
     return sse_response(_gen())
 
@@ -1522,7 +1595,9 @@ def _incremental_verify_response(
         started: float,
         started_ns: int | None = None,
         workload: str | None = None,
-        workload_source: str = "none") -> StreamingResponse:
+        workload_source: str = "none",
+        outcome_session: str | None = None,
+        requested_alias: str | None = None) -> StreamingResponse:
     """Live token streaming for `incremental_verify` (Task 7). Real backend
     deltas are piped through a hold-back `StreamingVerifier` before egress, so
     an entity split across chunk boundaries never leaks its raw prefix; the
@@ -1580,6 +1655,8 @@ def _incremental_verify_response(
                                             get_meta=get_meta, s=s,
                                             internals=internals, workload=workload,
                                             workload_source=workload_source,
+                                            outcome_session=outcome_session,
+                                            requested_alias=requested_alias,
                                             app_langfuse=app_langfuse,
                                             session_id=session_id,
                                             started_ns=started_ns)
@@ -1593,7 +1670,9 @@ def _incremental_verify_response(
                     verify_performed=True, verify_reason="incremental",
                     client_text="".join(released),
                     started_ns=started_ns,
-                    workload=workload, workload_source=workload_source)
+                    workload=workload, workload_source=workload_source,
+                    outcome_session=outcome_session,
+                    requested_alias=requested_alias)
 
     return sse_response(_gen())
 
@@ -1609,7 +1688,9 @@ async def _finalize_stream(
         client_text: str | None = None,
         started_ns: int | None = None,
         workload: str | None = None,
-        workload_source: str = "none") -> None:
+        workload_source: str = "none",
+        outcome_session: str | None = None,
+        requested_alias: str | None = None) -> None:
     """Assemble the `resp` dict from the pipeline's final streaming metadata and
     run the shared `_finalize`. Guarded end to end: a failure here must never
     surface to the (already-streaming) client. Shared by both real-streaming
@@ -1664,7 +1745,9 @@ async def _finalize_stream(
                         profile=profile, session_id=session_id, s=s,
                         internals=internals, request_id=request_id,
                         started_ns=started_ns,
-                        workload=workload, workload_source=workload_source)
+                        workload=workload, workload_source=workload_source,
+                        outcome_session=outcome_session,
+                        requested_alias=requested_alias)
     except Exception:  # finalize must never break the (already sent) stream
         log.exception("streaming finalize failed (swallowed)")
 

@@ -78,6 +78,30 @@ lookup, the admin export, the report -- errors until the ALTER runs.
 ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS conflicting_core JSON;
 ```
 
+**Upgrade: `session` (2026-10-21).** `routing_outcomes` gained one nullable indexed column
+(§3.2). `create_all` never adds a column to a table that already exists, so a database that
+already has `routing_outcomes` needs it added by hand. **Run this before rolling the image**:
+the ORM names the column in every `INSERT` and `SELECT` on the table, so against an
+unmigrated table every outcome write fails (swallowed, so serving continues, but no rows are
+recorded) and every read of it errors until the ALTER runs.
+
+```sql
+ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS session VARCHAR(128);
+CREATE INDEX IF NOT EXISTS ix_routing_outcomes_session ON routing_outcomes (session);
+```
+
+No backfill; rows written before the ALTER keep it null.
+
+**Upgrade: `requested_alias` (2026-10-21).** `routing_outcomes` gained one more nullable
+column: the per-application model alias the client sent as `model` (see `model_aliases` in
+`docs/reference/per-app-config.md`), null when it sent none. `requested_model` stays the
+slug the alias resolved to. Same failure mode as above if the ALTER is missed; run it before
+rolling the image.
+
+```sql
+ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS requested_alias VARCHAR(64);
+```
+
 Rows written before the ALTER keep the column null, same as any `no_eligible` row the
 router's core computation itself failed to explain (`app/routing/router.py::_safe_core`).
 
@@ -223,6 +247,8 @@ filled on it exactly as on an `ok` row.
 | `routing_policy_version` | str | The routing+pricing content hash (`sp.routing_policy_version`). |
 | `workload` | str, nullable | The validated client tag (§4). |
 | `workload_source` | enum | `client` (a valid tag was supplied), `none` (nothing supplied) or `invalid` (supplied but rejected; `workload` is then null). |
+| `session` | str, nullable, indexed | The client's own `x-routeforge-session` label, at most 128 characters, validated. Null when the header is absent or invalid. Never the server-derived session id (`server.derive_session_id`), which only groups traces. A label the client chose, content-free by contract (§2). Written on every status. |
+| `requested_alias` | str, nullable | The per-app model alias the client sent as `model` (see `docs/reference/per-app-config.md`, `model_aliases`). `requested_model` and `chosen` hold the resolved slug. Null for a plain slug pin or `auto`. |
 | `tier_target` | str, nullable | The **first routing decision's** own target tier (§3.5). A failed gateway hop records it too, so after a failover it is the failed attempt's target; it is never borrowed from a later hop (a trace from before 2026-09-23 whose failed hop lacks it reads null). The target is the tier after the complexity rule, risk floor, escalation and the clamp to the best residency-allowed tier, and **before** the budget fallback. The served tier can be lower when the budget fallback stepped down. Null on failure rows other than `verify_failed`. |
 | `complexity` | float, nullable | The router's complexity input, `tokens_after / 2000` (post-compression tokens). Written on failure rows too when compression ran before the failure. Null on a semantic-cache hit. |
 | `routing_tokens` | int, nullable | The token count the router was given: `tokens_after`, RouteForge's **own** count of the model-facing messages (and, on a tool conversation, the replayed tool-call arguments and the tool schemas) after the gate and after step-5 compression. It is the number `complexity` is derived from, the per-request budget is checked against and the cost term of the score is computed from. **Not the backend's count**: that is `prompt_tokens`, and the two differ on almost every request. Written on **every** status, rejected rows included, so the policy simulator can replay a rejected request at its real size. Null on a semantic-cache hit (no router ran) and on rows written before the column existed. A count, never text (§2). Added 2026-10-06 (B60). |
@@ -398,7 +424,9 @@ cache (404 otherwise), and that cache keeps only the most recent requests.
 
 ## 7. Export: `GET /admin/outcomes/export`
 
-Admin-only (the admin session cookie; `401` without it). Returns `application/x-ndjson`,
+The admin session cookie (all applications) or a service credential `rf_svc_…` (its own
+application only: `application_id` omitted defaults to it, any other value is `403`);
+`401` without either, and an app token is refused. Returns `application/x-ndjson`,
 streamed.
 
 | Parameter | Default | Notes |

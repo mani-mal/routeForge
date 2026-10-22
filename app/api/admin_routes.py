@@ -23,7 +23,7 @@ from app.apps.langfuse_provision import LangfuseProvisioner, encrypt_secret
 from app.apps.models import AppToken, OutcomeFeedback, RoutingOutcome
 from app.apps.policy_lint import price_warnings
 from app.apps.probe import probe_endpoint
-from app.apps.policy import AppPolicyView, policy_view_from
+from app.apps.policy import AppPolicyView, alias_pairs, policy_view_from
 from app.apps.snapshot import build_config_snapshot
 from app.apps.tokens import new_service_credential, new_token
 from app.api.routes import _sanitize_session_id
@@ -80,7 +80,8 @@ def _policy_dict(p) -> dict | None:
             "policy_mode": p.policy_mode,
             "pii_entity_denylist": p.pii_entity_denylist,
             "pii_score_threshold": p.pii_score_threshold,
-            "pii_exempt_patterns": p.pii_exempt_patterns}
+            "pii_exempt_patterns": p.pii_exempt_patterns,
+            "model_aliases": p.model_aliases}
 
 
 def _onboarded_dict(m) -> dict:
@@ -239,6 +240,10 @@ class PolicyIn(BaseModel):
     # enforcement yet (Tasks 3-5 own narrowing the candidate set).
     allowed_regions: list[str] | None = None
     require_no_retention: bool | None = None
+    # Pinned model aliases {name -> model slug}. A PUT carrying this REPLACES
+    # the whole map (not a per-key merge); clear it with `reset`. Validated
+    # against the registry in `_validate_model_aliases`.
+    model_aliases: dict[str, str] | None = None
     # --- the one escape from the merge -------------------------------------
     # This PUT is a MERGE: `null` means "leave the stored value alone", which
     # plenty of callers depend on. That left no way to put a field BACK to NULL
@@ -701,6 +706,7 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
             allowed_regions=_merged("allowed_regions"),
             require_no_retention=_merged("require_no_retention"),
             trajectory_mode=_merged("trajectory_mode"),
+            model_aliases=alias_pairs(_merged("model_aliases")),
         )
         # An app's own provisioned Langfuse project is the one condition the
         # compiler cannot see: it is DB state, not policy. Raw capture requires
@@ -789,8 +795,9 @@ class _Caller(BaseModel):
 
 async def require_admin_or_service(request: Request) -> _Caller:
     """Admin session cookie, else a `Bearer rf_svc_…` service credential.
-    Used ONLY by the token create/revoke routes; every other /admin/* route
-    keeps `require_admin`, so a service credential reaches nothing else."""
+    Used ONLY by the token create/revoke routes and the outcome export (where
+    the credential is forced to its own application); every other /admin/*
+    route keeps `require_admin`, so a service credential reaches nothing else."""
     try:
         return _Caller(admin_id=await require_admin(request))
     except HTTPException:
@@ -959,6 +966,34 @@ async def put_privacy(app_id: str, body: PrivacyProfileIn, request: Request,
 # routing. `provider` is always forced to "onprem" — never taken from the
 # request body.
 
+_ALIAS_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+
+
+def _validate_model_aliases(aliases: dict[str, str], known: set[str]) -> None:
+    """422 for any alias map that could shadow a real name or point nowhere.
+    An alias is checked against slugs HERE, at write time; a slug onboarded
+    later that reuses an alias name is shadowed by the alias for that app."""
+    if not aliases:
+        raise HTTPException(
+            422, "model_aliases is an empty map. Omit the field to leave it "
+            "unchanged, or name it in `reset` to clear it.")
+    for name, target in aliases.items():
+        if not _ALIAS_NAME.match(name):
+            raise HTTPException(
+                422, f"model_aliases name {name!r} must match "
+                f"{_ALIAS_NAME.pattern}")
+        if name == "auto":
+            raise HTTPException(422, "model_aliases name 'auto' is reserved")
+        if name in known:
+            raise HTTPException(
+                422, f"model_aliases name {name!r} is already a model slug; "
+                "an alias must not shadow one")
+        if not isinstance(target, str) or target not in known:
+            raise HTTPException(
+                422, f"model_aliases target {target!r} for {name!r} is not in "
+                "the YAML pool and not onboarded")
+
+
 async def _validate_policy_values(body: "PolicyIn", settings, session,
                                   stored=None) -> None:
     """Refuse values that can never route. Empty allowlists are refused because
@@ -998,6 +1033,13 @@ async def _validate_policy_values(body: "PolicyIn", settings, session,
         if bad:
             raise HTTPException(
                 422, f"unknown model(s) {bad}: not in the YAML pool and not onboarded")
+    if body.model_aliases is not None:
+        # Always validated, not only when changed: the map is replaced whole.
+        # Slugs come from the open session (as for allowed_models above), not
+        # the registry, whose ensure_loaded would nest a second session.
+        known = ({c.name for c in settings.routing.model_pool}
+                 | {m.slug for m in await store.list_onboarded(session)})
+        _validate_model_aliases(body.model_aliases, known)
     if changed("max_rpm") and body.max_rpm < 1:
         raise HTTPException(
             422, "max_rpm must be >= 1 (0 rejects every request). Omit it, or reset it, "
@@ -1281,11 +1323,12 @@ async def list_onboarded_models(request: Request,
 #
 # GET /admin/outcomes/export streams the routing_outcomes table (+ its joined
 # outcome_feedback) as NDJSON for offline analysis -- the eval/RLHF substrate
-# CLAUDE.md's RLHF-readiness note has in mind. Admin-only, like every other
-# route in this file; the data is content-free by construction (see
-# app/apps/store.py's P2b-2 section docstring), so this adds no new exposure
-# beyond "an admin can see routing metadata across every tenant", which the
-# rest of /admin/* already grants.
+# CLAUDE.md's RLHF-readiness note has in mind. Admin session: all
+# applications. A service credential (`rf_svc_`) may also call it, but is
+# forced to its own application (403 for another). The data is content-free by
+# construction (see app/apps/store.py's P2b-2 section docstring), so an admin
+# sees only routing metadata across every tenant, and a service credential
+# only its own application's.
 
 _EXPORT_DEFAULT_LIMIT = 100_000
 _EXPORT_MAX_LIMIT = 100_000
@@ -1381,7 +1424,15 @@ async def _export_lines(db, *, since: dt.datetime, until: dt.datetime,
 async def export_outcomes(
         request: Request, since: str | None = None, until: str | None = None,
         application_id: str | None = None, limit: int = _EXPORT_DEFAULT_LIMIT,
-        _: str = Depends(require_admin)) -> StreamingResponse:
+        caller: _Caller = Depends(require_admin_or_service)) -> StreamingResponse:
+    if caller.service_id is not None:
+        # A service credential reads only its own application's outcomes (and
+        # feedback, which is joined per application). Omitted -> its own app.
+        if application_id is None:
+            application_id = caller.service_app_id
+        elif application_id != caller.service_app_id:
+            raise HTTPException(
+                403, "service credential is scoped to another application")
     if limit < 1:
         raise HTTPException(422, "limit must be >= 1")
     limit = min(limit, _EXPORT_MAX_LIMIT)

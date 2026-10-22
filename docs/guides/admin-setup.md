@@ -195,12 +195,15 @@ Existing tokens keep all three null: no expiry, no session binding, admin-issued
 
 A **service credential** lets a system — for example a CI runner or an agent
 platform that starts one sandbox per task — create and revoke tokens for **one**
-application without an admin session. It can do exactly two things:
+application without an admin session. It can do exactly three things:
 
 - `POST /admin/applications/{id}/tokens` for its own application (`403` for any
   other application), with the same optional `expires_in_s` and `session`;
 - `POST /admin/tokens/{token_id}/revoke` for tokens **it created** (`404` for
-  any other token, including the admin's).
+  any other token, including the admin's);
+- `GET /admin/outcomes/export` for its own application only (`application_id`
+  omitted means its own; any other value is `403`) — it returns that
+  application's outcome rows and feedback, nothing else.
 
 Every other `/admin/*` route answers it with `401`, and it is not an app token:
 `/v1/*` refuses it. Send it as `Authorization: Bearer rf_svc_…`.
