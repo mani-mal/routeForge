@@ -688,23 +688,6 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
         request.headers.get("x-routeforge-workload"),
         (body.model_extra or {}).get("metadata"))
     outcome_kw = {"workload": workload, "workload_source": workload_source}
-    # Per-app pinned model aliases: swap the alias for its slug before anything
-    # else reads `body.model`, so the rest of the request is an ordinary slug
-    # pin through the same gate/residency/policy path. An app with no aliases
-    # skips all of this. Never falls back to `auto`.
-    if app_policy.model_aliases and body.model != "auto":
-        target = app_policy.alias_target(body.model)
-        if target is not None:
-            outcome_kw["requested_alias"] = body.model
-            body = body.model_copy(update={"model": target})
-        else:
-            registry = request.app.state.registry
-            await registry.ensure_loaded(request.app.state.db)
-            if body.model not in registry.known_slugs():
-                metrics.observe_request("-", "unknown_model_alias")
-                raise ApiError(
-                    400, f"model {body.model!r} is neither an alias of this "
-                    "application nor a known model", code=CODE_UNKNOWN_MODEL_ALIAS)
     # B72: the client's optional trajectory id. Only a handle is built here;
     # whether an envelope applies is the app's compiled `trajectory_mode`,
     # decided in the pipeline. An invalid id is dropped, never guessed at.
@@ -744,6 +727,34 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
             metrics.observe_request("-", "budget_exceeded")
             raise ApiError(429, "daily budget exceeded for this application",
                            code=CODE_INSUFFICIENT_QUOTA, type=TYPE_INSUFFICIENT_QUOTA)
+
+    # Per-app pinned model aliases: swap the alias for its slug (after the
+    # quota checks, so it is metered like any request) before anything else
+    # reads `body.model`, so the rest of the request is an ordinary slug
+    # pin through the same gate/residency/policy path. An app with no aliases
+    # skips all of this. Never falls back to `auto`.
+    if app_policy.model_aliases and body.model != "auto":
+        target = app_policy.alias_target(body.model)
+        if target is not None:
+            outcome_kw["requested_alias"] = body.model
+            body = body.model_copy(update={"model": target})
+        else:
+            registry = request.app.state.registry
+            try:
+                await registry.ensure_loaded(request.app.state.db)
+            except Exception:
+                pass  # `loaded` below decides; ensure_loaded normally swallows
+            if not registry.loaded:
+                # Never judge a name against a YAML-only slug set: same 503
+                # the setup block gives (PolicyGateError's mapping).
+                metrics.observe_request("-", "error")
+                raise ApiError(503, "policy evaluation unavailable",
+                               code=CODE_POLICY_UNAVAILABLE)
+            if body.model not in registry.known_slugs():
+                metrics.observe_request("-", "unknown_model_alias")
+                raise ApiError(
+                    400, f"model {body.model!r} is neither an alias of this "
+                    "application nor a known model", code=CODE_UNKNOWN_MODEL_ALIAS)
 
     # Read the opaque workflow-correlation id once, up front: the streaming
     # branch below returns before the old (post-pipeline) read site, and every

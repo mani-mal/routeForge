@@ -71,7 +71,7 @@ Source of truth: `app/obs/metrics.py`.
 | `routeforge_breaker_transitions_total` | Counter | `to_state` (`open`\|`half_open`\|`closed`) |
 
 - `status` values you'll see: `ok`, `unauthorized`, `rate_limited`,
-  `budget_exceeded`, `rejected`, `error`. For pre-routing rejects `model` is `-`.
+  `budget_exceeded`, `unknown_model_alias`, `rejected`, `error`. For pre-routing rejects `model` is `-`.
 - `escalated="true"` marks a routing decision that was a second (or later)
   attempt — i.e. a fallback/escalation, not the first-choice candidate.
 - `routeforge_routing_overhead_seconds` times `Router.select()` only — router

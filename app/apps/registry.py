@@ -60,6 +60,11 @@ class ModelRegistry:
     def generation(self) -> int:
         return self._generation
 
+    @property
+    def loaded(self) -> bool:
+        """True once a refresh has succeeded at least once (read-only)."""
+        return self._rows is not None
+
     async def ensure_loaded(self, db) -> None:
         if self._rows is None:
             await self.refresh(db)

@@ -134,7 +134,8 @@ def test_alias_to_an_ineligible_slug_fails_like_pinning_it_directly(monkeypatch)
         add_model(c, "slug-a")
         app = onboard(c, "alias-onprem", residency="onprem_only")
         assert _put_policy(c, "alias-onprem",
-                           {"model_aliases": {PLANNER: "azure-gpt-mid"}}
+                           {"model_aliases": {PLANNER: "azure-gpt-mid",
+                                              WORKER: "slug-a"}}
                            ).status_code == 200
         direct = app.chat({**HELLO, "model": "azure-gpt-mid"})
         via = app.chat({**HELLO, "model": PLANNER})
@@ -142,11 +143,25 @@ def test_alias_to_an_ineligible_slug_fails_like_pinning_it_directly(monkeypatch)
         assert direct.status_code >= 400
         assert v1_error(direct)["code"] == v1_error(via)["code"]
         assert CALLS == []
+        # Control: in the same app an alias to an eligible slug resolves, and
+        # the outcome row proves resolution ran (fails if the alias block is
+        # removed, since the bare alias would then be an unknown pin).
+        ok = app.chat({**HELLO, "model": WORKER})
+        assert ok.status_code == 200, ok.text
+        assert CALLS[-1]["model"].endswith("slug-a")
+        assert any(r.requested_alias == WORKER and r.requested_model == "slug-a"
+                   for r in _outcomes(c))
+
+
+# Computed on main (before model_aliases existed) for this exact view.
+_MAIN_VERSION = "51e5c36285e9"
 
 
 def test_aliases_do_not_change_the_version_of_apps_without_them():
-    assert AppPolicyView(residency="any").version() == \
-        AppPolicyView(residency="any", model_aliases=None).version()
+    view = dict(residency="onprem_only", allowed_models=("slug-b", "slug-a"),
+                policy_mode="passthrough")
+    assert AppPolicyView(**view).version() == _MAIN_VERSION
+    assert AppPolicyView(**view, model_aliases=None).version() == _MAIN_VERSION
     with_a = AppPolicyView(residency="any", model_aliases=((PLANNER, "slug-a"),))
     assert with_a.version() != AppPolicyView(residency="any").version()
     assert with_a.alias_target(PLANNER) == "slug-a"
@@ -185,3 +200,20 @@ def test_put_replaces_the_whole_map_and_reset_clears_it():
         r = _put_policy(c, "alias-admin", {"reset": ["model_aliases"]})
         assert r.status_code == 200, r.text
         assert r.json()["policy"]["model_aliases"] is None
+
+
+def test_aliased_app_fails_closed_when_the_registry_never_loaded(monkeypatch):
+    """An unknown name must not be judged against a YAML-only slug set: if the
+    registry has never loaded, answer the honest 503, not 400."""
+    install_dual_fake(monkeypatch)
+    with _client() as c:
+        app = _with_aliases(c)
+
+        async def _never(self, db):
+            return None
+        monkeypatch.setattr(type(c.app.state.registry), "ensure_loaded", _never)
+        monkeypatch.setattr(type(c.app.state.registry), "loaded", property(lambda s: False))
+        r = app.chat({**HELLO, "model": "role.typo"})
+        assert r.status_code == 503, r.text
+        assert v1_error(r)["code"] == "policy_unavailable"
+        assert CALLS == []

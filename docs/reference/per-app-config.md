@@ -930,8 +930,9 @@ to a slug the request may not use fails exactly as pinning that slug directly wo
 - **Outcome rows.** `routing_outcomes.requested_alias` records the alias sent;
   `requested_model` and `chosen` are the slug.
 
-**Deploy.** Run before rolling the image (the ORM names the column in every policy
-`SELECT`):
+**Deploy.** Run before rolling the image. The ORM names the column in every policy
+`SELECT`, so without `app_policies.model_aliases` every policy read fails -- effectively
+a full outage for all applications, not just aliased ones:
 
 ```sql
 ALTER TABLE app_policies ADD COLUMN IF NOT EXISTS model_aliases JSON;
