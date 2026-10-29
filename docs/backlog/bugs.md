@@ -125,6 +125,43 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
+## B79 — Voice models can't be routed: no `/v1/audio/*` endpoints  (FEATURE — open)
+
+**Severity:** feature gap; nothing broken.
+**Found:** 2026-10-28. The owner wanted to onboard a voice model on the DGX Spark and use it
+from a video editor application through RouteForge.
+
+RouteForge serves only `/v1/chat/completions`, `/v1/models` and `/v1/feedback`
+(`app/api/routes.py`). Voice models use other endpoints: `/v1/audio/transcriptions`
+(speech-to-text) and `/v1/audio/speech` (text-to-speech). The router also has no modality
+axis; it is text and chat only (`docs/architecture/routing-tier-selection.md`).
+
+- **Onboarding looks like it worked, but the model can't be used.** The probe only checks
+  `GET {endpoint}/models`, so a Whisper or TTS server onboards as `healthy`. A client still has
+  no RouteForge endpoint to call it through.
+- **Workaround today:** the video editor calls the voice model directly, not through
+  RouteForge. Only its text and LLM calls (summaries, captions) go through RouteForge.
+- **Not checked:** whether an audio part inside a chat request (`input_audio` in
+  `/v1/chat/completions`) survives the gate, which is built around text.
+
+**Design questions before building:**
+1. **Gate (rule 1).** Audio can't be checked for personal data without transcribing it first.
+   Either transcribe on-prem inside the gate and classify the transcript, or reject or force
+   `onprem_only` for audio. The gate must fail closed (rule 5).
+2. **Placement.** Endpoints need a modality or capability declaration so an audio request
+   only reaches audio-capable endpoints. This is a feasible-set filter
+   (`app/policy/feasible.py`), applied before the router scores anything.
+3. **Pricing and metering.** Audio is billed per second or per character, not per token.
+   `usage_records`, the router's cost scoring and the savings baseline would all need a new
+   unit.
+4. **Output controls (step 9) and telemetry.** Decide how a text-to-speech response is
+   verified, and what a redacted trace of audio input and output looks like.
+5. **Onboarding probe.** `/models` doesn't show what a model can do. Decide whether to ask
+   the operator to declare it, run a modality-specific probe, or both.
+
+Out of scope as always: RouteForge hosts no voice inference. The operator runs the server
+and onboards it.
+
 > **Update 2026-10-21 (one month of production traffic on the Spark).** A review of
 > `kit-gtm` (go-to-market-app, Qwen Code through RouteForge) from 2026-09-15 to 2026-10-21
 > filed **B74**–**B78**. The review covered 6,416 `usage_records` rows, 4,347
