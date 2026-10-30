@@ -125,7 +125,7 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
-## B79 — Voice models can't be routed: no `/v1/audio/*` endpoints  (FEATURE — open)
+## B79 — Voice models can't be routed: no `/v1/audio/*` endpoints  (FEATURE — open, needs owner discussion before build)
 
 **Severity:** feature gap; nothing broken.
 **Found:** 2026-10-28. The owner wanted to onboard a voice model on the DGX Spark and use it
@@ -144,7 +144,9 @@ axis; it is text and chat only (`docs/architecture/routing-tier-selection.md`).
 - **Not checked:** whether an audio part inside a chat request (`input_audio` in
   `/v1/chat/completions`) survives the gate, which is built around text.
 
-**Design questions before building:**
+**Design questions — unanswered (2026-10-30).** The owner agrees these are the right
+questions and has no answers yet. **Do not start building B79** until they have been
+discussed with the owner and each one has a recorded decision.
 1. **Gate (rule 1).** Audio can't be checked for personal data without transcribing it first.
    Either transcribe on-prem inside the gate and classify the transcript, or reject or force
    `onprem_only` for audio. The gate must fail closed (rule 5).
