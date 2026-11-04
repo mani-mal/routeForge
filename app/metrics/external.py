@@ -145,3 +145,48 @@ async def set_map(session, model: str, slug: str | None, *, by: str | None) -> N
         else:
             row.ext_model_slug, row.mapped_by, row.mapped_at = slug, by, now
     await session.commit()
+
+
+# --------------------------------------------------------------------------
+# Comparability (server-side label per metric; display-only)
+# --------------------------------------------------------------------------
+
+COMPARABLE, PARTIAL = "comparable", "partially_comparable"
+NOT_COMPARABLE, INSUFFICIENT = "not_comparable", "insufficient_local_data"
+_SEVERITY = (COMPARABLE, PARTIAL, INSUFFICIENT, NOT_COMPARABLE)  # least -> most severe
+
+PROMPT_MIN, PROMPT_MAX = 500, 2000
+
+def comparability(*, mapped: bool, in_snapshot: bool, placement: str, provider: str | None,
+                  speed_n: int, ttft_n: int, median_prompt_tokens: float | None) -> dict:
+    from app.metrics.compute import MIN_N_SPEED, MIN_N_TTFT  # lazy: compute imports this module
+
+    reasons: list[str] = []
+    if not mapped:
+        label = {"speed": NOT_COMPARABLE, "ttft": NOT_COMPARABLE, "price": NOT_COMPARABLE}
+        reasons.append("not mapped to an Artificial Analysis model")
+    elif not in_snapshot:
+        label = {"speed": NOT_COMPARABLE, "ttft": NOT_COMPARABLE, "price": NOT_COMPARABLE}
+        reasons.append("not in latest snapshot")
+    elif placement == "onprem":
+        label = {"speed": NOT_COMPARABLE, "ttft": NOT_COMPARABLE, "price": NOT_COMPARABLE}
+        reasons.append("AA measures hosted APIs; this is your own deployment")
+    elif placement != "cloud":
+        label = {"speed": NOT_COMPARABLE, "ttft": NOT_COMPARABLE, "price": NOT_COMPARABLE}
+        reasons.append("placement of this model is unknown")
+    else:
+        label = {"speed": COMPARABLE, "ttft": COMPARABLE, "price": COMPARABLE}
+        off_size = median_prompt_tokens is not None and not (
+            PROMPT_MIN <= median_prompt_tokens <= PROMPT_MAX)
+        if off_size:
+            reasons.append(f"AA measures ~1k-token prompts; your median is "
+                           f"{median_prompt_tokens:.0f}")
+        for key, n, need in (("speed", speed_n, MIN_N_SPEED), ("ttft", ttft_n, MIN_N_TTFT)):
+            if n < need:
+                label[key] = INSUFFICIENT
+                reasons.append(f"only {n} local {key} samples (minimum {need})")
+            elif off_size:
+                label[key] = PARTIAL
+    reasons.append(f"AA measures its own chosen provider; this endpoint is {provider or 'unknown'}")
+    overall = max(label.values(), key=_SEVERITY.index)
+    return {"overall": overall, **label, "reasons": reasons}

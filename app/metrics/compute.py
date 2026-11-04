@@ -5,14 +5,15 @@ Every sample-size gate and status is decided here, server-side.
 """
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from functools import cached_property
 from math import floor, log10
 from typing import Callable
 
-from app.config.schema import PricingCfg
+from app.config.schema import PriceCfg, PricingCfg
+from app.metrics.external import AAModel, comparability
 
 MIN_N_REQUESTS = 30
 MIN_N_TASKS = 20
@@ -307,7 +308,10 @@ class ObservationRow:
 
 
 STATUS_ORDER = ("cost_anomaly", "performance_degradation", "cache_regression",
-                "insufficient_data", "healthy")
+                "price_drift", "insufficient_data", "healthy")
+_PRICE_DRIFT = 0.10
+_UNSET: object = object()  # page_alerts(snapshot=...) not supplied: skip AA alerts
+AA_STALE_DAYS = 30
 
 _COST_FACTOR = 2.0
 _LATENCY_FACTOR = 1.5
@@ -347,8 +351,11 @@ def _ttft(obs: list[ObservationRow]) -> dict:
 
 
 def _status(requests: int, spend: float, p95: float | None, cache: float | None,
-            prev_usage: list[UsageRow], prev_outcomes: list[OutcomeRow]) -> tuple[str, list[str]]:
+            prev_usage: list[UsageRow], prev_outcomes: list[OutcomeRow],
+            drift: str | None = None) -> tuple[str, list[str]]:
     reasons: dict[str, str] = {}
+    if drift:
+        reasons["price_drift"] = drift
     n_prev = len(prev_usage)
     if requests >= MIN_N_REQUESTS and n_prev >= MIN_N_REQUESTS:
         prev_spend = sum(u.cost_usd for u in prev_usage)
@@ -401,10 +408,40 @@ def _chart_point(cost_succ: dict, cost_task: dict, reported: dict, completed: di
     return {"x": x, "x_kind": x_kind, "y": y, "y_kind": y_kind}
 
 
+def _price_drift(model: str, aa: AAModel, price: PriceCfg) -> str | None:
+    """Cloud list price in pricing.yaml vs AA's, either side off by more than 10%."""
+    parts = []
+    for label, ours, theirs in (("input", price.input, aa.price_in),
+                                ("output", price.output, aa.price_out)):
+        if theirs is None or theirs <= 0:
+            continue
+        if abs(ours - theirs) / theirs > _PRICE_DRIFT:
+            parts.append(f"{label} ${ours:g}/1M in pricing.yaml vs ${theirs:g}/1M at AA")
+    return "; ".join(parts) if parts else None
+
+def _median(vals: list[float]) -> float | None:
+    if not vals:
+        return None
+    v = sorted(vals)
+    mid = len(v) // 2
+    return float(v[mid]) if len(v) % 2 else (v[mid - 1] + v[mid]) / 2
+
+def _published_json(aa: AAModel, snapshot) -> dict:
+    d = {f: getattr(aa, f) for f in aa.__dataclass_fields__}
+    d["snapshot_id"] = snapshot.id if snapshot is not None else None
+    d["retrieved_at"] = snapshot.retrieved_at.isoformat() if snapshot is not None else None
+    d["index_version"] = snapshot.index_version if snapshot is not None else None
+    return d
+
 def model_rows(cur_usage: list[UsageRow], cur_outcomes: list[OutcomeRow],
                cur_feedback: list[FeedbackRow], prev_usage: list[UsageRow],
                prev_outcomes: list[OutcomeRow], observations: list[ObservationRow],
-               *, placement_of: Callable[[str], str]) -> list[dict]:
+               *, placement_of: Callable[[str], str],
+               published: dict[str, AAModel] | None = None,
+               model_map: dict[str, str] | None = None,
+               prices: dict[str, PriceCfg] | None = None,
+               snapshot=None) -> list[dict]:
+    published, model_map, prices = published or {}, model_map or {}, prices or {}
     real = [u for u in cur_usage if is_real_model(u.model)]
     usage_by = _group(real, lambda u: u.model)
     outs_by = _group(cur_outcomes, attributed_model)
@@ -426,10 +463,21 @@ def model_rows(cur_usage: list[UsageRow], cur_outcomes: list[OutcomeRow],
         spend = float(sum(u.cost_usd for u in usage))
         p95 = _p95_latency(outs)
         cache = _cache_rate(usage)
+        placement = placement_of(m)
+        slug = model_map.get(m)
+        aa = published.get(slug) if slug else None
+        drift = (_price_drift(m, aa, prices[m])
+                 if aa is not None and placement == "cloud" and m in prices else None)
         status, reasons = _status(
             len(usage), spend, p95, cache,
-            prev_usage_by.get(m, []), prev_outs_by.get(m, []))
+            prev_usage_by.get(m, []), prev_outs_by.get(m, []), drift)
         mobs = obs_by.get(m, [])
+        provs = Counter(u.provider for u in usage if u.provider not in _NO_MODEL)
+        comp = comparability(
+            mapped=slug is not None, in_snapshot=aa is not None, placement=placement,
+            provider=provs.most_common(1)[0][0] if provs else None,
+            speed_n=_speed(mobs)["n"], ttft_n=_ttft(mobs)["n"],
+            median_prompt_tokens=_median([u.prompt_tokens for u in usage if u.status == "ok"]))
         completed = _completed(outs)
         cost_succ = {
             "value": None if insufficient or not successes
@@ -441,7 +489,7 @@ def model_rows(cur_usage: list[UsageRow], cur_outcomes: list[OutcomeRow],
         cost_task = _cost_per_task(mtasks, unit)
         rows.append({
             "model": m,
-            "placement": placement_of(m),
+            "placement": placement,
             "requests": len(usage),
             "spend": spend,
             "completed": completed,
@@ -458,13 +506,15 @@ def model_rows(cur_usage: list[UsageRow], cur_outcomes: list[OutcomeRow],
             "status": status,
             "status_rank": STATUS_ORDER.index(status),
             "status_reasons": reasons,
+            "published": _published_json(aa, snapshot) if aa is not None else None,
+            "comparability": comp,
         })
     rows.sort(key=lambda r: (-r["spend"], r["model"]))
     return rows
 
 
 def page_alerts(pricing: PricingCfg, *, today: date, excluded_rows: int,
-                models: list[dict]) -> list[dict]:
+                models: list[dict], snapshot=_UNSET) -> list[dict]:
     alerts: list[dict] = []
     dated: list[tuple[str, date | None]] = [(n, p.as_of) for n, p in pricing.models.items()]
     dated.append((f"baseline ({pricing.baseline_model})", pricing.baseline_as_of))
@@ -482,6 +532,18 @@ def page_alerts(pricing: PricingCfg, *, today: date, excluded_rows: int,
         alerts.append({"kind": "savings_partial", "severity": "info", "model": None,
                        "message": (f"{excluded_rows} requests predate savings tracking and "
                                    "are left out of the savings figures")})
+    if snapshot is not _UNSET:
+        if snapshot is None:
+            alerts.append({"kind": "aa_snapshot_missing", "severity": "info", "model": None,
+                           "message": "No Artificial Analysis snapshot imported yet"})
+        else:
+            got = snapshot.retrieved_at
+            age = (today - got.date()).days
+            if age > AA_STALE_DAYS:
+                alerts.append({"kind": "aa_snapshot_stale", "severity": "warning",
+                               "model": None,
+                               "message": (f"Artificial Analysis snapshot is {age} days old "
+                                           f"(retrieved {got.date().isoformat()})")})
     flagged = [m for m in models if m["status"] not in ("healthy", "insufficient_data")]
     flagged.sort(key=lambda m: STATUS_ORDER.index(m["status"]))
     for m in flagged:

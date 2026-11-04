@@ -2,7 +2,8 @@ import pytest
 from datetime import date, datetime, timedelta, timezone
 
 from app.config.schema import PricingCfg, PriceCfg
-from app.metrics.compute import (FeedbackRow, ObservationRow, OutcomeRow, UsageRow,
+from app.metrics.external import AAModel
+from app.metrics.compute import (STATUS_ORDER, FeedbackRow, ObservationRow, OutcomeRow, UsageRow,
                                  model_rows, page_alerts)
 
 T0 = datetime(2026, 11, 1, tzinfo=timezone.utc)
@@ -211,7 +212,7 @@ def test_per_model_successful_reported_and_chart_point():
     assert r["successful_reported"] == {"value": 0.8, "n": 30, "insufficient": False}
     assert r["chart"] == {"x": pytest.approx(30 * 0.1 / 24), "x_kind": "per_successful_task",
                           "y": 0.8, "y_kind": "reported"}
-    assert r["status_rank"] == 4  # healthy
+    assert r["status_rank"] == 5  # healthy
 
 
 def test_chart_falls_back_to_per_task_and_completed_then_null():
@@ -242,3 +243,45 @@ def test_label_values_and_tie_break_m4():
     for order in (fb, fb[::-1]):  # equal ts: higher id wins regardless of order
         t, _ = c._build_tasks(us, outs, order)
         assert t[0].label[1] is False
+
+
+# ---- price_drift ------------------------------------------------------------
+
+def _aa(price_in=1.0, price_out=2.0, slug="aa-m"):
+    return AAModel(slug=slug, name="AA M", creator=None, intelligence_index=50.0,
+                   coding_index=None, math_index=None, price_in=price_in, price_out=price_out,
+                   price_blended=None, output_tps=100.0, ttft_s=0.5, ttfat_s=None)
+
+
+def _drift_rows(placement, aa, in_price=1.0, out_price=2.0, mapped=True):
+    us, outs = batch("c", "m", 40)
+    prices = {"m": PriceCfg(input=in_price, output=out_price, tier="cheap", provider="azure")}
+    return model_rows(us, outs, [], [], [], [], placement_of=lambda m: placement,
+                      published={"aa-m": aa} if aa else {},
+                      model_map={"m": "aa-m"} if mapped else {}, prices=prices)
+
+
+def test_price_drift_cloud_over_10pct():
+    r = one(_drift_rows("cloud", _aa(price_in=1.0, price_out=2.0), in_price=1.2))
+    assert r["status"] == "price_drift"
+    assert "1.2" in r["status_reasons"][0] and "AA" in r["status_reasons"][0]
+    assert r["status_rank"] == STATUS_ORDER.index("price_drift")
+    assert r["published"]["slug"] == "aa-m" and r["comparability"]["price"] == "comparable"
+    # within 10% -> healthy
+    assert one(_drift_rows("cloud", _aa(), in_price=1.05))["status"] == "healthy"
+
+
+def test_no_price_drift_onprem():
+    r = one(_drift_rows("onprem", _aa(), in_price=5.0))
+    assert r["status"] == "healthy"
+    assert r["comparability"]["overall"] == "not_comparable"
+
+
+def test_no_price_drift_when_aa_price_null():
+    r = one(_drift_rows("cloud", _aa(price_in=None, price_out=None), in_price=9.0))
+    assert r["status"] == "healthy"
+
+
+def test_status_order_includes_price_drift():
+    assert STATUS_ORDER == ("cost_anomaly", "performance_degradation", "cache_regression",
+                            "price_drift", "insufficient_data", "healthy")

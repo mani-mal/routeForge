@@ -188,3 +188,66 @@ def test_window_of_only_policy_rejections_is_not_empty(monkeypatch, tmp_path):
 def test_usage_row_without_outcome_through_route(seeded):
     body = seeded.get("/admin/metrics/summary?workload=w1").json()
     assert body["current"]["spend"]["n"] == 10  # the outcome-less budget row is dropped
+
+
+# ---- published metrics (slice 3) --------------------------------------------
+
+def _aa_payload():
+    return [{"slug": "aa-x", "name": "AA X", "model_creator": {"name": "Acme"},
+             "evaluations": {"artificial_analysis_intelligence_index": 61.5},
+             "pricing": {"price_1m_input_tokens": 1.0, "price_1m_output_tokens": 2.0},
+             "median_output_tokens_per_second": 120.0,
+             "median_time_to_first_token_seconds": 0.4}]
+
+
+def test_models_include_published_after_import_and_map(seeded):
+    base = "/admin/external-metrics"
+    r = seeded.post(f"{base}/import?index_version=v4", content=json.dumps(_aa_payload()))
+    assert r.status_code == 200
+    rows = seeded.get("/admin/metrics/models").json()["models"]
+    assert all(x["published"] is None for x in rows)
+    assert all(x["comparability"]["overall"] == "not_comparable" for x in rows)
+    # map directly so the test does not depend on the pool
+    from app.metrics import external as ext
+
+    async def _go():
+        async with seeded.app.state.db.session() as s:
+            await ext.set_map(s, "xm-cloud", "aa-x", by="t")
+            await ext.set_map(s, "xm-gone", "no-such", by="t")
+    asyncio.run(_go())
+    body = seeded.get("/admin/metrics/models").json()
+    row = next(x for x in body["models"] if x["model"] == "xm-cloud")
+    assert row["published"]["slug"] == "aa-x"
+    assert row["published"]["intelligence_index"] == 61.5
+    assert row["published"]["index_version"] == "v4" and row["published"]["snapshot_id"]
+    assert row["published"]["retrieved_at"]
+    assert set(row["comparability"]) == {"overall", "speed", "ttft", "price", "reasons"}
+    s = seeded.get("/admin/metrics/summary").json()
+    assert s["published"]["index_version"] == "v4"
+    assert {"snapshot_id", "retrieved_at", "source", "origin"} <= set(s["published"])
+    assert not any(a["kind"].startswith("aa_") for a in s["alerts"])
+
+
+def test_summary_alert_when_no_snapshot(seeded):
+    s = seeded.get("/admin/metrics/summary").json()
+    assert s["published"] is None
+    (a,) = [a for a in s["alerts"] if a["kind"] == "aa_snapshot_missing"]
+    assert a["severity"] == "info"
+
+
+def test_summary_alert_when_snapshot_stale(seeded):
+    import datetime as dt
+    from app.metrics import external as ext
+    from app.metrics.external import AAModel
+
+    async def _go():
+        async with seeded.app.state.db.session() as s:
+            m = AAModel("a", "A", None, None, None, None, None, None, None, None, None, None)
+            await ext.store_snapshot(
+                s, [m], origin="import", index_version=None, api_tier=None,
+                retrieved_at=dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=31))
+    asyncio.run(_go())
+    s = seeded.get("/admin/metrics/summary").json()
+    (a,) = [a for a in s["alerts"] if a["kind"] == "aa_snapshot_stale"]
+    assert a["severity"] == "warning"
+    assert not any(a["kind"] == "aa_snapshot_missing" for a in s["alerts"])

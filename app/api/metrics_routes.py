@@ -8,6 +8,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Query, Request
 
 from app.apps.admin_auth import require_admin
+from app.metrics import external as ext
 from app.metrics.compute import (apply_placement, filter_workload, make_placement_of,
                                  model_rows, page_alerts, summarize)
 from app.metrics.load import load_observations, load_window
@@ -65,8 +66,16 @@ async def _load_all(request: Request, hours, application_id, workload, placement
     if workload is not None:
         cur_f = filter_workload(*cur, workload)
         prev_f = filter_workload(*prev, workload)
-    rows = model_rows(*cur_f, prev_f[0], prev_f[1], obs, placement_of=placement_of)
-    return cur, prev, rows, since, until
+    # AA data is cheap and read per request, outside the shared window scan.
+    async with request.app.state.db.session() as session:
+        snapshot = await ext.latest_snapshot(session)
+        published = await ext.snapshot_models(session, snapshot.id) if snapshot else {}
+        model_map = await ext.get_map(session)
+    prices = request.app.state.settings.pricing.models
+    rows = model_rows(*cur_f, prev_f[0], prev_f[1], obs, placement_of=placement_of,
+                      published=published, model_map=model_map, prices=prices,
+                      snapshot=snapshot)
+    return cur, prev, rows, since, until, snapshot
 
 
 @metrics_router.get("/summary")
@@ -74,16 +83,21 @@ async def metrics_summary(
         request: Request, hours: int = Query(720, ge=1, le=8760),
         application_id: str | None = None, workload: str | None = None,
         placement: Placement | None = None, _: str = Depends(require_admin)) -> dict:
-    cur, prev, rows, since, until = await _load_all(
+    cur, prev, rows, since, until, snapshot = await _load_all(
         request, hours, application_id, workload, placement)
     kw = {"workload": workload, "placement_filtered": placement is not None}
     current, previous = summarize(*cur, **kw), summarize(*prev, **kw)
     pricing = request.app.state.settings.pricing
     now = dt.datetime.now(dt.timezone.utc)
     alerts = page_alerts(pricing, today=now.date(),
-                         excluded_rows=current["savings"]["excluded_rows"], models=rows)
+                         excluded_rows=current["savings"]["excluded_rows"], models=rows,
+                         snapshot=snapshot)
     return {"window": _window_json(hours, since, until), "current": current,
             "previous": previous, "alerts": alerts,
+            "published": None if snapshot is None else {
+                "snapshot_id": snapshot.id, "retrieved_at": snapshot.retrieved_at.isoformat(),
+                "index_version": snapshot.index_version, "source": snapshot.source,
+                "origin": snapshot.origin},
             "baseline": {"model": pricing.baseline_model,
                          "as_of": pricing.baseline_as_of.isoformat()
                          if pricing.baseline_as_of else None},
@@ -95,7 +109,7 @@ async def metrics_models(
         request: Request, hours: int = Query(720, ge=1, le=8760),
         application_id: str | None = None, workload: str | None = None,
         placement: Placement | None = None, _: str = Depends(require_admin)) -> dict:
-    _cur, _prev, rows, since, until = await _load_all(
+    _cur, _prev, rows, since, until, _snap = await _load_all(
         request, hours, application_id, workload, placement)
     return {"window": _window_json(hours, since, until), "models": rows,
             "generated_at": dt.datetime.now(dt.timezone.utc).isoformat()}
