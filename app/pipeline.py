@@ -25,7 +25,7 @@ from app.policy.effective import EffectiveDetector, FilteredDetector
 from app.policy.gate import Gate, Representations, redact_tool_calls_with_entities
 from app.config.schema import PriceCfg
 from app.routing.pricing import Savings, price_call, split_savings
-from app.routing.router import client_output_cap
+from app.routing.router import client_output_cap, complexity_tier
 from app.apps.privacy import AppPrivacyProfile, effective_rules
 from app.compression import CompressionResult, compress
 from app.compression.ccr import CCRStore
@@ -966,6 +966,8 @@ class Pipeline:
         complexity = min(1.0, comp.tokens_after / 2000)
         if internals is not None:
             internals["outcome_ctx"]["complexity"] = complexity
+            internals["outcome_ctx"]["complexity_tier"] = complexity_tier(
+                complexity, self._s.routing.complexity_thresholds)
             # B60: the count the router is about to be given, recorded on
             # every outcome row -- a rejected one included -- so the policy
             # simulator replays the request at its real size. A count, never
@@ -1314,6 +1316,8 @@ class Pipeline:
         complexity = min(1.0, comp.tokens_after / 2000)
         if internals is not None:
             internals["outcome_ctx"]["complexity"] = complexity
+            internals["outcome_ctx"]["complexity_tier"] = complexity_tier(
+                complexity, self._s.routing.complexity_thresholds)
             # B60: the count the router is about to be given, recorded on
             # every outcome row -- a rejected one included -- so the policy
             # simulator replays the request at its real size. A count, never

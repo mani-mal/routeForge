@@ -171,6 +171,47 @@ def outcome_trace(records, vrec) -> list[dict]:
             + [vrec.model_dump(exclude={"reason"})])
 
 
+ROUTE_REASONS = ("failover", "placement", "risk_floor", "length_tier",
+                 "only_eligible", "other")
+
+_TIER_RANK = {"cheap": 0, "mid": 1, "frontier": 2}
+
+
+def _rank(tier: str | None) -> int | None:
+    return _TIER_RANK.get(tier) if isinstance(tier, str) else None
+
+
+def derive_route_reason(*, cache_hit: bool, attempts: list[str],
+                        chosen_tier: str | None, tier_target: str | None,
+                        complexity_tier: str | None, rejected: list[dict],
+                        n_eligible: int) -> str | None:
+    """Why the served model is in the tier it is. Content-free enum; first
+    match wins. Unknown tier strings compare as not-below / not-above."""
+    from app.policy.feasible import (PROMPT_RETENTION_NOT_ALLOWED,
+                                     RAW_SENSITIVE_NOT_ACCEPTED, REGION_NOT_ALLOWED,
+                                     RESIDENCY)
+    if cache_hit or not attempts:
+        return None
+    if len(attempts) > 1:
+        return "failover"
+    placement = {RESIDENCY, REGION_NOT_ALLOWED, PROMPT_RETENTION_NOT_ALLOWED,
+                 RAW_SENSITIVE_NOT_ACCEPTED}
+    chosen_r = _rank(chosen_tier)
+    if chosen_r is not None:
+        for r in rejected:
+            rr = _rank(r.get("tier"))
+            if r.get("code") in placement and rr is not None and rr < chosen_r:
+                return "placement"
+    tt, ct = _rank(tier_target), _rank(complexity_tier)
+    if tt is not None and ct is not None and tt > ct:
+        return "risk_floor"
+    if chosen_tier is not None and chosen_tier == complexity_tier:
+        return "length_tier"
+    if n_eligible == 1:
+        return "only_eligible"
+    return "other"
+
+
 def _router_hops(trace: list[dict]) -> list[dict]:
     return [e for e in trace if e.get("step") == "router"]
 
@@ -292,7 +333,7 @@ def build_ok_outcome(resp: dict, *, request_id: str, application_id: str,
         # P3b: only a `no_eligible` row has a conflicting core.
         "conflicting_core": None,
     }
-    row.update(trace_features(trace))
+    row.update(trace_features(trace, outcome_ctx.get("complexity_tier")))
     return row
 
 
@@ -319,7 +360,7 @@ def _policy_features(outcome_ctx: dict) -> dict:
     }
 
 
-def trace_features(trace: list[dict]) -> dict:
+def trace_features(trace: list[dict], complexity_tier: str | None = None) -> dict:
     """The routing and verification columns of an outcome row, read from a
     content-free trace (a list of DecisionRecord / VerificationRecord /
     CacheRecord dumps). The ONE place a trace is read -- `build_ok_outcome`
@@ -359,15 +400,23 @@ def trace_features(trace: list[dict]) -> dict:
     decision_hops = [e for e in trace
                      if e.get("step") == "router" or _is_failed_decision_hop(e)]
     verify_entry = next((e for e in trace if e.get("step") == "verify"), None)
+    attempts = _attempts(trace)
+    cache_hit = any(e.get("step") == "cache" and e.get("hit") for e in trace)
+    full_rejected = (first.get("rejected") or []) if first else []
+    chosen_tier = chosen_hops[-1].get("chosen_tier") if chosen_hops else None
     return {
         "tier_target": tier_target,
         "eligible": eligible,
-        "rejected": _rejected_rows(first.get("rejected") or []) if first else [],
-        "attempts": _attempts(trace),
+        "rejected": _rejected_rows(full_rejected),
+        "route_reason": derive_route_reason(
+            cache_hit=cache_hit, attempts=attempts, chosen_tier=chosen_tier,
+            tier_target=tier_target, complexity_tier=complexity_tier,
+            rejected=full_rejected, n_eligible=len(eligible)),
+        "attempts": attempts,
         "chosen": chosen,
         "scoring": scoring,
         "circuit_bypass": any(h.get("circuit_bypass") for h in decision_hops),
-        "cache_hit": any(e.get("step") == "cache" and e.get("hit") for e in trace),
+        "cache_hit": cache_hit,
         "verify_required": verify_entry.get("required") if verify_entry else None,
         "verify_performed": verify_entry.get("performed") if verify_entry else None,
         "verify_passed": verify_entry.get("passed") if verify_entry else None,
@@ -429,6 +478,7 @@ def build_failure_outcome(*, status: str, request_id: str, application_id: str,
         "session": outcome_session,
         "requested_alias": requested_alias,
         "tier_target": None,
+        "route_reason": None,
         "complexity": outcome_ctx.get("complexity"),
         "prompt_tokens_bucket": None,
         **_policy_features(outcome_ctx),
@@ -450,7 +500,7 @@ def build_failure_outcome(*, status: str, request_id: str, application_id: str,
         "conflicting_core": conflicting_core,
     }
     if trace is not None:
-        row.update(trace_features(trace))
+        row.update(trace_features(trace, outcome_ctx.get("complexity_tier")))
         row.update({
             "cost_usd": cost_usd,
             "prompt_tokens": prompt_tokens,

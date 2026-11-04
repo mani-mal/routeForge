@@ -120,6 +120,14 @@ OBSERVATIONS_COLUMNS: list[tuple[str, str, str]] = [
     ("completion_tokens", "INTEGER", "INTEGER"),
 ]
 
+OUTCOMES_TABLE = "routing_outcomes"
+
+OUTCOMES_COLUMNS: list[tuple[str, str, str]] = [
+    # 2026-11-04 model metrics slice 1: why the served model's tier. Nullable.
+    ("route_reason", "VARCHAR(16)", "VARCHAR(16)"),
+]
+
+
 async def _run() -> int:
     url = os.environ.get("DATABASE_URL") or DEFAULT_SQLITE_URL
     # Never print credentials; show only the scheme/host shape.
@@ -142,7 +150,8 @@ async def _run() -> int:
         for table, columns in ((TABLE, COLUMNS),
                                (MODELS_TABLE, MODEL_COLUMNS),
                                (USAGE_TABLE, USAGE_COLUMNS),
-                               (OBSERVATIONS_TABLE, OBSERVATIONS_COLUMNS)):
+                               (OBSERVATIONS_TABLE, OBSERVATIONS_COLUMNS),
+                               (OUTCOMES_TABLE, OUTCOMES_COLUMNS)):
             print(f"  {table}:")
             async with engine.begin() as conn:
                 try:

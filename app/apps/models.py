@@ -339,6 +339,9 @@ class RoutingOutcome(Base):
     # docs/reference/routing-outcomes.md.
     session: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     tier_target: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # Why the served model sits in its tier (content-free enum; see
+    # app/apps/outcomes.py ROUTE_REASONS). Deployed DBs need the ALTER.
+    route_reason: Mapped[str | None] = mapped_column(String(16), nullable=True)
     complexity: Mapped[float | None] = mapped_column(Float, nullable=True)
     prompt_tokens_bucket: Mapped[str | None] = mapped_column(String(8), nullable=True)
     sensitivity: Mapped[str | None] = mapped_column(String(20), nullable=True)

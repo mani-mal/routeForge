@@ -41,6 +41,15 @@ log = logging.getLogger("serving.routing")
 
 _ORDER = {"cheap": 0, "mid": 1, "frontier": 2}
 
+
+def complexity_tier(complexity: float, thresholds: dict) -> str:
+    """The tier the length/complexity rule alone selects."""
+    if complexity <= thresholds["cheap_max"]:
+        return "cheap"
+    if complexity <= thresholds["mid_max"]:
+        return "mid"
+    return "frontier"
+
 # What an operator changes for each per-candidate rejection reason.
 _FIX_HINTS = {
     "excluded · residency": "request or application is onprem_only: onboard and enable an on-prem model",
@@ -190,12 +199,7 @@ class Router:
         self._signals = signals or SignalStore(settings.routing.signals)
 
     def _complexity_tier(self, complexity: float) -> str:
-        t = self._s.routing.complexity_thresholds
-        if complexity <= t["cheap_max"]:
-            return "cheap"
-        if complexity <= t["mid_max"]:
-            return "mid"
-        return "frontier"
+        return complexity_tier(complexity, self._s.routing.complexity_thresholds)
 
     def _est_cost(self, cand: PoolCandidate, tokens_after: int, output_tokens: int) -> float:
         """Pre-call estimate. Deliberately assumes ZERO cached prompt tokens:
