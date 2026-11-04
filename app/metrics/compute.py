@@ -145,14 +145,20 @@ def _cost_per_task(tasks: list[_Task], task_unit: str) -> dict:
     }
 
 
+def filter_workload(usage: list[UsageRow], outcomes: list[OutcomeRow],
+                    feedback: list[FeedbackRow], workload: str):
+    """Keep only requests whose outcome row carries `workload`. A usage row with
+    no outcome row (e.g. a daily-budget 429) is dropped."""
+    keep = {o.request_id for o in outcomes if o.workload == workload}
+    return ([u for u in usage if u.request_id in keep],
+            [o for o in outcomes if o.request_id in keep],
+            [f for f in feedback if f.request_id in keep])
+
 def summarize(usage: list[UsageRow], outcomes: list[OutcomeRow],
               feedback: list[FeedbackRow], *, workload: str | None = None) -> dict:
     workloads = sorted({o.workload for o in outcomes if o.workload})
     if workload is not None:
-        keep = {o.request_id for o in outcomes if o.workload == workload}
-        usage = [u for u in usage if u.request_id in keep]
-        outcomes = [o for o in outcomes if o.request_id in keep]
-        feedback = [f for f in feedback if f.request_id in keep]
+        usage, outcomes, feedback = filter_workload(usage, outcomes, feedback, workload)
 
     tasks, any_key = _build_tasks(usage, outcomes, feedback)
     unit = "task" if any_key else "request"
