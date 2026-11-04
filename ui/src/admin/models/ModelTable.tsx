@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import type { ReactNode } from "react";
 import type { ModelMetricsRow } from "../../api";
 import { ModelSidePanel } from "./ModelSidePanel";
@@ -31,8 +31,8 @@ const COLS: Col[] = [
   {
     key: "status",
     label: "Status",
-    tip: "Worst first: cost anomaly, performance degradation, cache regression, insufficient data, healthy. Hover a status for the reasons.",
-    sort: (r) => r.status,
+    tip: "Sorted by severity, worst first: cost anomaly, performance degradation, cache regression, insufficient data, healthy. Hover a status for the reasons.",
+    sort: (r) => -r.status_rank, // server-ranked; descending puts the worst first
     render: (r) => {
       const s = statusLabel(r.status);
       return (
@@ -58,6 +58,17 @@ const COLS: Col[] = [
     render: (r) => (
       <span className={r.completed.value === null ? "text-xs text-gray-300" : "font-mono"}>
         {field(r.completed, (v) => percent(v))}
+      </span>
+    ),
+  },
+  {
+    key: "reported",
+    label: "Successful (reported)",
+    tip: "Share of this model's labelled tasks reported successful (a task is credited to the model that carried most of its cost). Minimum 20 labelled tasks.",
+    sort: (r) => r.successful_reported.value,
+    render: (r) => (
+      <span className={r.successful_reported.value === null ? "text-xs text-gray-300" : "font-mono"}>
+        {field(r.successful_reported, (v) => percent(v))}
       </span>
     ),
   },
@@ -120,7 +131,7 @@ const COLS: Col[] = [
     key: "errors",
     label: "Errors",
     optional: true,
-    tip: "Requests that failed on the backend.",
+    tip: "Requests that failed (backend failure, verification failure or context overflow), attributed to the last model tried.",
     sort: (r) => r.errors,
     render: (r) => <span className="font-mono">{r.errors.toLocaleString()}</span>,
   },
@@ -166,6 +177,7 @@ export function ModelTable({ rows }: { rows: ModelMetricsRow[] }) {
     return desc ? -r : r;
   });
   const grid = { gridTemplateColumns: `minmax(150px,2fr) repeat(${cols.length - 1}, minmax(110px,1fr))` };
+  const close = useCallback(() => setSelected(null), []);
   const selectedRow = rows.find((r) => r.model === selected) ?? null;
 
   function toggleSort(k: string) {
@@ -236,7 +248,7 @@ export function ModelTable({ rows }: { rows: ModelMetricsRow[] }) {
           ))}
         </div>
       </div>
-      {selectedRow && <ModelSidePanel row={selectedRow} onClose={() => setSelected(null)} />}
+      {selectedRow && <ModelSidePanel row={selectedRow} onClose={close} />}
     </div>
   );
 }

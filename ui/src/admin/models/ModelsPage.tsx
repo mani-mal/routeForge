@@ -54,7 +54,7 @@ export function ModelsPage() {
         setModels(m);
         // Keep the workload choices stable while a workload filter is active
         // (the server computes the list before filtering, but be defensive).
-        if (s.current.workloads.length > 0 || !workload) setWorkloads(s.current.workloads);
+        setWorkloads(s.current.workloads); // computed by the server before the workload filter
       })
       .catch((e: unknown) => {
         if (!cancelled) setError(e instanceof Error ? e.message : "Could not load metrics");
@@ -67,7 +67,9 @@ export function ModelsPage() {
     };
   }, [hours, applicationId, workload, placement]);
 
-  const empty = summary !== null && summary.current.spend.n === 0;
+  // Empty only when the window has no usage AND no outcome rows (the server decides):
+  // a window of nothing but policy rejections still has something to show.
+  const empty = summary !== null && summary.current.empty;
 
   return (
     <div className="flex flex-col gap-4">
@@ -134,6 +136,7 @@ export function ModelsPage() {
 
       {summary && models && !error && (
         <>
+          <AlertsList alerts={summary.alerts} />
           {empty ? (
             <Panel title="No data">
               <p className="text-sm text-gray-300">
@@ -143,7 +146,6 @@ export function ModelsPage() {
           ) : (
             <>
               <OutcomeCards data={summary} />
-              <AlertsList alerts={summary.alerts} />
               <Panel title="Models">
                 <ModelTable rows={models.models} />
               </Panel>

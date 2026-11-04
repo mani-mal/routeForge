@@ -52,7 +52,11 @@ export function OutcomeCards({ data }: { data: MetricsSummary }) {
         value={c.completed.value === null ? insufficientText(c.completed.n) : percent(c.completed.value)}
         insufficient={c.completed.value === null}
         sub="not a quality measure"
-        sub2={`${c.completed.failures ?? 0} failures · ${c.completed.policy_rejections ?? 0} policy rejections`}
+        sub2={`${c.completed.failures ?? 0} failures · ${
+          c.completed.policy_rejections === null || c.completed.policy_rejections === undefined
+            ? "policy rejections not attributable to a placement"
+            : `${c.completed.policy_rejections} policy rejections`
+        }`}
         delta={change(c.completed.value, p.completed.value)}
       />
       <Card
@@ -72,11 +76,15 @@ export function OutcomeCards({ data }: { data: MetricsSummary }) {
       <Card
         title="Cost per successful task"
         tip="Cost of labelled tasks divided by the number of successful labelled tasks. A task is a trajectory_key group; a request without one is its own task."
-        value={costSucc === null ? insufficientText(c.cost_per_task.n_labelled) : money(costSucc)}
+        value={
+          costSucc !== null
+            ? money(costSucc)
+            : c.cost_per_task.successful_insufficient
+              ? insufficientText(c.cost_per_task.n_labelled)
+              : "no successful tasks reported"
+        }
         insufficient={costSucc === null}
-        sub={`attempted: ${money(c.cost_per_task.attempted)} per ${unitWord}${
-          c.cost_per_task.task_unit === "request" ? " (per request)" : ""
-        }`}
+        sub={`attempted: ${money(c.cost_per_task.attempted)} per ${unitWord}`}
         delta={change(costSucc, p.cost_per_task.successful)}
       />
       <Card

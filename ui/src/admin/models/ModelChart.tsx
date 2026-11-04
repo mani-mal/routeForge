@@ -1,18 +1,22 @@
 import { CartesianGrid, Legend, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis, ZAxis } from "recharts";
-import type { ModelMetricsRow } from "../../api";
+import type { ChartPoint, ModelMetricsRow } from "../../api";
 import { SIGNAL_HEX, TIER_HEX } from "../../tokens";
 import { money, percent } from "./format";
 
-interface Pt {
+interface Pt extends ChartPoint {
   model: string;
   placement: string;
-  x: number;
-  y: number;
   spend: number;
 }
 
 const PLACEMENT_COLOR: Record<string, string> = { onprem: SIGNAL_HEX.privacy, cloud: TIER_HEX.frontier };
-const PLACEMENT_NAME: Record<string, string> = { onprem: "On-prem (circle)", cloud: "Cloud (diamond)" };
+const PLACEMENT_NAME: Record<string, string> = {
+  onprem: "On-prem (circle)",
+  cloud: "Cloud (diamond)",
+  unknown: "Placement unknown (circle)",
+};
+const X_NAME = { per_successful_task: "cost per successful task", per_task: "cost per request" } as const;
+const Y_NAME = { reported: "reported success", completed: "completed without failure" } as const;
 
 function Dot(props: { cx?: number; cy?: number; fill?: string; payload?: Pt; size?: number }) {
   const { cx = 0, cy = 0, fill, payload } = props;
@@ -23,28 +27,33 @@ function Dot(props: { cx?: number; cy?: number; fill?: string; payload?: Pt; siz
   return <circle cx={cx} cy={cy} r={r} fill={fill} fillOpacity={0.8} />;
 }
 
+/** Name an axis from the kinds the server chose; "mixed" when models differ. */
+function axisName<K extends string>(kinds: K[], names: Record<K, string>, mixed: string): string {
+  const set = Array.from(new Set(kinds));
+  return set.length === 1 ? names[set[0]] : mixed;
+}
+
 export function ModelChart({ rows }: { rows: ModelMetricsRow[] }) {
-  // x: cost per successful task, falling back to cost per task when nothing is
-  // labelled; y: reported success is not available per model, so completed.
-  const useSuccessCost = rows.some((r) => r.cost_per_successful_task.value !== null);
+  // The server decides each model's point (and its kinds); this only plots it.
   const pts: Pt[] = [];
   let omitted = 0;
   for (const r of rows) {
-    const x = useSuccessCost ? r.cost_per_successful_task.value : r.cost_per_task.attempted;
-    const y = r.completed.value;
-    if (x === null || y === null || x === undefined) {
+    if (!r.chart) {
       omitted += 1;
       continue;
     }
-    pts.push({ model: r.model, placement: r.placement, x, y, spend: r.spend });
+    pts.push({ ...r.chart, model: r.model, placement: r.placement, spend: r.spend });
   }
   const placements = Array.from(new Set(pts.map((p) => p.placement)));
+  const xName = axisName(pts.map((p) => p.x_kind), X_NAME, "cost per successful task or per request (see tooltip)");
+  const yName = axisName(pts.map((p) => p.y_kind), Y_NAME, "reported success or completed (see tooltip)");
 
   return (
     <div className="flex flex-col gap-2">
       <p className="text-xs text-gray-300">
-        X: {useSuccessCost ? "cost per successful task" : "cost per request (no success reports yet)"} · Y: completed
-        without failure (not a quality measure) · size: spend
+        X: {xName} · Y: {yName}
+        {pts.some((p) => p.y_kind === "completed") ? " (completed without failure is not a quality measure)" : ""} ·
+        size: spend
       </p>
       {pts.length === 0 ? (
         <p className="text-sm text-gray-300">Not enough data to chart yet.</p>
@@ -59,16 +68,9 @@ export function ModelChart({ rows }: { rows: ModelMetricsRow[] }) {
                 name="Cost"
                 tickFormatter={(v: number) => money(v)}
                 stroke="#9ca3af"
-                label={{ value: useSuccessCost ? "Cost per successful task" : "Cost per request", position: "bottom", fill: "#d1d5db", fontSize: 12 }}
+                label={{ value: xName, position: "bottom", fill: "#d1d5db", fontSize: 12 }}
               />
-              <YAxis
-                type="number"
-                dataKey="y"
-                name="Completed"
-                domain={[0, 1]}
-                tickFormatter={(v: number) => percent(v, 0)}
-                stroke="#9ca3af"
-              />
+              <YAxis type="number" dataKey="y" name="Success" domain={[0, 1]} tickFormatter={(v: number) => percent(v, 0)} stroke="#9ca3af" />
               <ZAxis type="number" dataKey="spend" range={[80, 900]} name="Spend" />
               <Tooltip
                 cursor={{ strokeDasharray: "3 3" }}
@@ -79,8 +81,12 @@ export function ModelChart({ rows }: { rows: ModelMetricsRow[] }) {
                     <div className="rounded-md border border-edge bg-panel px-3 py-2 text-xs text-gray-100">
                       <div className="font-semibold">{p.model}</div>
                       <div>{PLACEMENT_NAME[p.placement] ?? p.placement}</div>
-                      <div>cost: {money(p.x)}</div>
-                      <div>completed: {percent(p.y)}</div>
+                      <div>
+                        {X_NAME[p.x_kind]}: {money(p.x)}
+                      </div>
+                      <div>
+                        {Y_NAME[p.y_kind]}: {percent(p.y)}
+                      </div>
                       <div>spend: {money(p.spend)}</div>
                     </div>
                   );
@@ -102,7 +108,8 @@ export function ModelChart({ rows }: { rows: ModelMetricsRow[] }) {
       )}
       {omitted > 0 && (
         <p className="text-xs text-gray-300">
-          {omitted} model{omitted === 1 ? "" : "s"} omitted: insufficient data for one of the axes.
+          {omitted} model{omitted === 1 ? "" : "s"} omitted: not enough data for a point (needs a cost figure and at
+          least 30 requests or 20 labelled tasks).
         </p>
       )}
     </div>

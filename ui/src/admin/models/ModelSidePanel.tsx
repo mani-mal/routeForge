@@ -58,9 +58,15 @@ export function ModelSidePanel({ row, onClose }: { row: ModelMetricsRow; onClose
         <Item label="Completed without failure">
           {field(c, (v) => percent(v))}
           <span className="block text-xs text-gray-300">
-            n={c.n} · {c.failures ?? 0} failures · {c.policy_rejections ?? 0} policy rejections · {c.excluded ?? 0}{" "}
-            excluded
+            n={c.n} · {c.failures ?? 0} failures
           </span>
+          <span className="block text-xs text-gray-300">
+            Policy rejections and cancels have no model, so they are not shown per model.
+          </span>
+        </Item>
+        <Item label="Successful (reported)">
+          {field(row.successful_reported, (v) => percent(v))}
+          <span className="block text-xs text-gray-300">n={row.successful_reported.n} labelled tasks</span>
         </Item>
         <Item label="Cost per successful task">
           {row.cost_per_successful_task.value === null

@@ -480,8 +480,9 @@ export interface MetricField {
   scope?: string;
   // `completed` extras
   failures?: number;
-  policy_rejections?: number;
-  excluded?: number;
+  // null when a placement filter is on: rejections and cancels have no model
+  policy_rejections?: number | null;
+  excluded?: number | null;
   // `successful_reported` extra
   apps_reporting?: number;
 }
@@ -503,12 +504,15 @@ export interface MetricsSavings {
 }
 
 export interface MetricsWindowSummary {
+  /** No usage and no outcome rows at all in this window (server-decided). */
+  empty: boolean;
   spend: { value: number; n: number };
   completed: MetricField;
   successful_reported: MetricField | null;
   cost_per_task: {
     attempted: number | null;
     successful: number | null;
+    successful_insufficient: boolean;
     n_tasks: number;
     n_labelled: number;
     task_unit: "task" | "request" | string;
@@ -527,12 +531,22 @@ export interface MetricsSummary {
   generated_at: string;
 }
 
+/** The one point a model contributes to the cost chart, chosen by the server. */
+export interface ChartPoint {
+  x: number;
+  x_kind: "per_successful_task" | "per_task";
+  y: number;
+  y_kind: "reported" | "completed";
+}
+
 export interface ModelMetricsRow {
   model: string;
-  placement: "onprem" | "cloud" | string;
+  placement: "onprem" | "cloud" | "unknown" | string;
   requests: number;
   spend: number;
   completed: MetricField;
+  successful_reported: MetricField;
+  chart: ChartPoint | null;
   cost_per_successful_task: MetricField;
   cost_per_task: MetricsWindowSummary["cost_per_task"];
   p95_latency_ms: number | null;
@@ -542,6 +556,8 @@ export interface ModelMetricsRow {
   speed_tps: MetricField;
   ttft_ms: { p50: number | null; p95: number | null; n: number; insufficient?: boolean; scope?: string };
   status: string;
+  /** 0 = worst (cost anomaly) .. 4 = healthy; the server owns the order. */
+  status_rank: number;
   status_reasons: string[];
 }
 
