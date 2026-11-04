@@ -629,11 +629,17 @@ and ⓘ notes (requests that predate savings tracking). Hidden when empty.
 status reasons; Esc or Close dismisses). The Columns picker adds TTFT p50/p95, Errors,
 Failovers and Cache hit. **Speed** and **TTFT** are model-level over all applications and
 ignore the application and workload filters. Statuses, worst first: Cost anomaly,
-Performance degradation, Cache regression, Insufficient data, Healthy.
+Performance degradation, Cache regression, Insufficient data, Healthy; sorting the Status
+column follows that order. **Errors** include backend failures, verification failures and
+context overflows, attributed to the last model tried. A **Successful (reported)** column
+shows each model's labelled-task success.
 
-**Cost vs success chart**: cost per successful task (or per request when nothing is
-labelled) against completed without failure; dot size is spend; circle is on-prem, diamond
-is cloud. Models without both figures are omitted and counted in a note.
+**Cost vs success chart**: one point per model, chosen by the server. X is cost per
+successful task, or cost per request when the model has no success cost; Y is reported
+success, or completed without failure when the model has too few labelled tasks (the axis
+names say which; the tooltip names each point's kinds). Dot size is spend; circle is
+on-prem, diamond is cloud. Models without a point are omitted and counted in a note.
+Alerts always show, even when the window has only policy rejections.
 
 **Diagnostics** (collapsed): routing reasons from the window, and cache hit and failovers
 per model. Definitions: `docs/reference/metrics-api.md`.

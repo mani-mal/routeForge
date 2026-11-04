@@ -15,7 +15,24 @@ Query parameters (both): `hours` (default 720, 1-8760, else 422), `application_i
 - Task: a `trajectory_key` group; a request without one is its own task (`task_unit`).
 - Reported success: latest `task_success` feedback per task. Cost per successful task = cost of labelled tasks / successful labelled tasks.
 - Savings: sum of the four `*_saved_usd` columns over rows with `routing_saved_usd` not NULL; `excluded_rows` counts the rest.
-- Placement: `onprem` when the provider is `onprem`, else `cloud`.
+- Attribution: a failure outcome (`backend_failed`, `context_overflow`) is stored with `chosen = null` and the failed model in `attempts`; it belongs to `chosen` else the last attempt. Per-model `completed`, `errors`, `failovers` and every placement filter use this. `no_eligible` and `cancelled` have no model.
+- Placement: from the registry's effective pool (provider `onprem` is `onprem`, anything else `cloud`), else from the provider on the model's usage rows (ignoring `-` and `?`), else `unknown`. With `placement=` set, outcomes without a model are dropped and `completed.policy_rejections` and `completed.excluded` are `null` (not attributable), never 0.
+- Usage rows whose model is `-` or `?` (cancelled, daily-budget 429, unrecognised name) are in `spend` but are not model rows.
+- Labels: a `task_success` value of exactly 1 is success, exactly 0 is failure, anything else is ignored; for equal timestamps the higher feedback id wins.
+- A task is credited to the model with the most spend; ties go to a model that served (`ok`), then the name.
+- `empty` (per window summary): true only when the window has no usage rows and no outcome rows.
+- Workload filter: `current.workloads` is the list before the workload filter is applied.
+
+## Per-model row additions
+
+- `successful_reported`: `{value, n, insufficient}`, the model's labelled tasks, minimum 20.
+- `chart`: the server-chosen point `{x, x_kind, y, y_kind}` or `null`. `x` is cost per successful task (`per_successful_task`) when that has a value, else cost per task (`per_task`); `y` is `successful_reported` (`reported`) when it has a value, else `completed` (`completed`). `null` when either has no value.
+- `status_rank`: 0 (`cost_anomaly`) to 4 (`healthy`), the sort key for severity.
+- `cost_per_task.successful` (summary and per model) is `null` below 20 labelled tasks; `successful_insufficient` says so.
+
+## Cost of a request
+
+Each call scans every usage, outcome and feedback row of the current and previous window (selected columns only, no row cap, because a cap would bias the figures). Large windows (90 days on a busy deployment) are slow; concurrent identical calls (the page fires both endpoints) share one scan. Status reasons print money with 2 decimals from one cent up, else 4 significant digits.
 
 ## Minimum n
 
