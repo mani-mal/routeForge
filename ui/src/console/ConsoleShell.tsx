@@ -14,8 +14,9 @@ import { AppPage } from "./AppPage";
 import { ApplicationsPanel } from "../admin/ApplicationsPanel";
 import { InfrastructurePanel } from "../admin/InfrastructurePanel";
 import { CrossAppReport } from "../admin/CrossAppReport";
+import { ModelsPage } from "../admin/models/ModelsPage";
 
-type View = "fleet" | "manage" | "app" | "infra" | "usage";
+type View = "fleet" | "manage" | "app" | "infra" | "models" | "usage";
 
 type StationKey = Exclude<View, "app">;
 
@@ -23,6 +24,7 @@ const STATIONS: { key: StationKey; label: string }[] = [
   { key: "fleet", label: "Overview" },
   { key: "manage", label: "Applications" },
   { key: "infra", label: "Infrastructure" },
+  { key: "models", label: "Models" },
   { key: "usage", label: "Cross-app usage" },
 ];
 
@@ -77,6 +79,7 @@ export function ConsoleShell() {
       <div className="flex-1 min-w-0 overflow-auto p-4">
         {view === "manage" && <ApplicationsPanel />}
         {view === "infra" && <InfrastructurePanel />}
+        {view === "models" && <ModelsPage />}
         {view === "usage" && <CrossAppReport />}
         {view === "fleet" && <FleetOverview onOpenApp={openApp} />}
       </div>

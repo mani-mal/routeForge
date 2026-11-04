@@ -600,6 +600,52 @@ stays on the cheap tier.
 
 ---
 
+## 8a. Models station
+
+The **Models** station (left rail, after Infrastructure) answers "which models are earning
+their cost". Filters: application, workload, placement (on-prem / cloud) and window (24 h,
+7 d, 30 d, 90 d). The stamp "RouteForge data: generated ..." says when the server computed
+the figures. Every figure is text plus a number: an arrow (▲/▼) for change, an icon plus a
+word for status, never colour alone. Figures below their minimum sample show
+"insufficient data (n=...)" instead of a number.
+
+**Cards** (each shows the change versus the previous period of the same length):
+
+- **Spend**: total cost of requests in the window.
+- **Completed without failure**: share of requests that ended `ok`. It is not a quality
+  measure. Policy rejections are counted separately and are not failures.
+- **Successful (reported)**: share of tasks whose latest `task_success` feedback was
+  positive. Needs 20 labelled tasks; send `task_success` to `/v1/feedback`.
+- **Cost per successful task**: cost of labelled tasks over successful labelled tasks. When
+  requests carry no `trajectory_key`, each request is its own task ("per request").
+- **Savings**: routing, prompt cache, compression and semantic cache, against a baseline
+  where every request is priced at the baseline model (prices as of the stated date, or
+  "undated").
+
+**Needs attention**: ⚠ warnings (undated or stale prices, a model with a non-healthy status)
+and ⓘ notes (requests that predate savings tracking). Hidden when empty.
+
+**Model table**: click a header to sort, click a row for the side panel (every field plus the
+status reasons; Esc or Close dismisses). The Columns picker adds TTFT p50/p95, Errors,
+Failovers and Cache hit. **Speed** and **TTFT** are model-level over all applications and
+ignore the application and workload filters. Statuses, worst first: Cost anomaly,
+Performance degradation, Cache regression, Insufficient data, Healthy; sorting the Status
+column follows that order. **Errors** include backend failures, verification failures and
+context overflows, attributed to the last model tried. A **Successful (reported)** column
+shows each model's labelled-task success.
+
+**Cost vs success chart**: one point per model, chosen by the server. X is cost per
+successful task, or cost per request when the model has no success cost; Y is reported
+success, or completed without failure when the model has too few labelled tasks (the axis
+names say which; the tooltip names each point's kinds). Dot size is spend; circle is
+on-prem, diamond is cloud. Models without a point are omitted and counted in a note.
+Alerts always show, even when the window has only policy rejections.
+
+**Diagnostics** (collapsed): routing reasons from the window, and cache hit and failovers
+per model. Definitions: `docs/reference/metrics-api.md`.
+
+---
+
 ## 9. Colour & label legend
 
 **Colour carries meaning here — the same hue means the same thing everywhere.** The
