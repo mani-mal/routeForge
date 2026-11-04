@@ -90,6 +90,11 @@ A standard `ChatCompletion` **plus routeForge-specific fields**:
               // Three levers telescope in pipeline order (compression -> routing -> prompt cache):
               //   compression + routing + prompt_cache == baseline_usd - total_usd.
               // routing_saved_usd is not clamped and may be negative (a dearer model was served).
+              // Basis caveats: B0/B1 are priced on RouteForge's token estimate while the actual cost uses
+              // backend-reported tokens, so any tokenizer/template difference lands in routing. After a
+              // confidence escalation only the FINAL hop's prompt-cache discount is counted as the cache
+              // lever (earlier hops' discounts sit inside routing). Routing equals B1 - C0 because
+              // compression is never clamped in practice (tokens_after <= tokens_before).
               // "cache_saved_usd" (semantic cache) is also present when that feature is enabled
   "quality":{ "sum": 0.5, "chosen": 0.5, "source": "tier_default" },
   "policy": { "sensitivity": "public", "onprem_only": false,

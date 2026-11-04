@@ -53,6 +53,15 @@ def split_savings(*, baseline: PriceCfg, served: PriceCfg | None,
     clamped: a dearer served model yields a negative figure. Compression is
     clamped at 0. Prompt-cache saving is 0 when the served price is unknown or
     the provider reported no cached count.
+
+    Basis caveats: B0/B1 are priced on RouteForge's token estimate
+    (`tokens_before`/`tokens_after`) while `total_usd` uses backend-reported
+    tokens, so any tokenizer/template difference lands in routing. After an
+    escalation only the final hop's prompt-cache discount is the cache lever;
+    earlier hops' discounts sit inside `total_usd` and so inside routing.
+    Routing is computed as (B0 - C0) - compression, which equals B1 - C0
+    because compression is never clamped in practice (tokens_after <=
+    tokens_before).
     """
     b0 = price_call(baseline, prompt_tokens=tokens_before,
                     completion_tokens=completion_tokens, cached_prompt_tokens=0)
