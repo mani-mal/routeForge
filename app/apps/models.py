@@ -550,3 +550,53 @@ class OnboardedModel(Base):
         DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+
+
+class ExternalSnapshot(Base):
+    """Header of one dated import/fetch of published (Artificial Analysis)
+    metrics. Display-only: nothing in routing/policy/gateway reads it."""
+
+    __tablename__ = "external_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source: Mapped[str] = mapped_column(String(32))          # "artificial_analysis"
+    origin: Mapped[str] = mapped_column(String(8))           # fetch | import
+    retrieved_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    index_version: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    api_tier: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    row_count: Mapped[int] = mapped_column(Integer)
+
+
+class ExternalModelMetric(Base):
+    """One published model's metrics inside a snapshot. Null = not published."""
+
+    __tablename__ = "external_model_metrics"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    snapshot_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("external_snapshots.id"), index=True)
+    ext_model_slug: Mapped[str] = mapped_column(String(128), index=True)
+    ext_model_name: Mapped[str] = mapped_column(String(200))
+    ext_creator: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    intelligence_index: Mapped[float | None] = mapped_column(Float, nullable=True)
+    coding_index: Mapped[float | None] = mapped_column(Float, nullable=True)
+    math_index: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_in: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_out: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_blended: Mapped[float | None] = mapped_column(Float, nullable=True)
+    output_tps: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ttft_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ttfat_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    prompt_length: Mapped[str] = mapped_column(String(16), default="medium")
+    measurement_window: Mapped[str] = mapped_column(String(16), default="5d")
+
+
+class ExternalModelMap(Base):
+    """Operator mapping: RouteForge model name -> published model slug."""
+
+    __tablename__ = "external_model_map"
+
+    model: Mapped[str] = mapped_column(String(100), primary_key=True)
+    ext_model_slug: Mapped[str] = mapped_column(String(128))
+    mapped_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    mapped_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
