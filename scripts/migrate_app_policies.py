@@ -104,6 +104,27 @@ USAGE_TABLE = "usage_records"
 
 USAGE_COLUMNS: list[tuple[str, str, str]] = [
     ("cached_prompt_tokens", "INTEGER", "INTEGER"),
+    # 2026-11-04 model metrics slice 1: per-lever savings. Nullable, no default;
+    # NULL routing_saved_usd marks a pre-change row (baseline_usd there is the
+    # old, cache-adjusted figure).
+    ("compression_saved_usd", "DOUBLE PRECISION", "FLOAT"),
+    ("routing_saved_usd", "DOUBLE PRECISION", "FLOAT"),
+    ("prompt_cache_saved_usd", "DOUBLE PRECISION", "FLOAT"),
+    ("semantic_cache_saved_usd", "DOUBLE PRECISION", "FLOAT"),
+]
+
+
+OBSERVATIONS_TABLE = "endpoint_observations"
+
+OBSERVATIONS_COLUMNS: list[tuple[str, str, str]] = [
+    ("completion_tokens", "INTEGER", "INTEGER"),
+]
+
+OUTCOMES_TABLE = "routing_outcomes"
+
+OUTCOMES_COLUMNS: list[tuple[str, str, str]] = [
+    # 2026-11-04 model metrics slice 1: why the served model's tier. Nullable.
+    ("route_reason", "VARCHAR(16)", "VARCHAR(16)"),
 ]
 
 
@@ -128,7 +149,9 @@ async def _run() -> int:
         # migration still commits.
         for table, columns in ((TABLE, COLUMNS),
                                (MODELS_TABLE, MODEL_COLUMNS),
-                               (USAGE_TABLE, USAGE_COLUMNS)):
+                               (USAGE_TABLE, USAGE_COLUMNS),
+                               (OBSERVATIONS_TABLE, OBSERVATIONS_COLUMNS),
+                               (OUTCOMES_TABLE, OUTCOMES_COLUMNS)):
             print(f"  {table}:")
             async with engine.begin() as conn:
                 try:

@@ -72,10 +72,11 @@ class SignalStore:
         return time.monotonic() if now is None else now
 
     def _log(self, t: float, model: str, outcome: str, *, latency_ms=None,
-             streamed=False, ttft_ms=None) -> None:
+             streamed=False, ttft_ms=None, completion_tokens=None) -> None:
         if self._sink is not None:
             self._sink.put(Observation(t + self._wall_offset, model, outcome,
-                                       latency_ms, streamed, ttft_ms))
+                                       latency_ms, streamed, ttft_ms,
+                                       completion_tokens))
 
     def _alpha(self, n: int) -> float:
         """Running mean while samples are few, fixed-width EWMA thereafter."""
@@ -106,6 +107,7 @@ class SignalStore:
             availability_n=st.availability_n + 1, availability_ts=t)
 
     def observe_success(self, model: str, latency_ms: float, *,
+                        completion_tokens: int | None = None,
                         now: float | None = None) -> None:
         t = self._now(now)
         st = self._state.get(model, _ModelState())
@@ -115,7 +117,8 @@ class SignalStore:
         st = self._apply_available(st, t)
         self._state[model] = replace(
             st, latency_ms=new_lat, latency_n=st.latency_n + 1, latency_ts=t)
-        self._log(t, model, "ok", latency_ms=latency_ms)
+        self._log(t, model, "ok", latency_ms=latency_ms,
+                  completion_tokens=completion_tokens)
 
     def observe_stream_success(self, model: str, ttft_ms: float | None, *,
                                now: float | None = None) -> None:

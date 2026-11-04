@@ -31,7 +31,11 @@ boot-time config lint fails otherwise):
 - `config/policy.yaml` — sensitivity enum, residency, budgets, the `tenants:` map.
 - `config/routing.yaml` — the canonical `tiers` (`cheap | mid | frontier`), the
   `model_pool` (each model's `name` slug, `provider`, `tier`), scoring, risk floors.
-- `config/pricing.yaml` — per-model USD and the savings baseline.
+- `config/pricing.yaml` — per-model USD and the savings baseline. Each price may carry an
+  optional `as_of: YYYY-MM-DD` (the date you last checked it against the provider's list),
+  and the file an optional `baseline_as_of` and `pricing_stale_days` (default 30, must be
+  >= 1). The dates are operator-maintained; RouteForge does not verify them. They are part
+  of the routing+pricing content hash, so editing a date changes `routing_policy_version`.
 - `config/serving.yaml` — infra switches (`pii_detection`, provider on/off, Langfuse
   on/off, `reject_stream_requests`). On-prem models are **onboarded at runtime**, not set
   here — see [`onboarding-models.md`](./onboarding-models.md).

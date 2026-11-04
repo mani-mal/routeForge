@@ -282,6 +282,13 @@ class UsageRecord(Base):
     cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     baseline_usd: Mapped[float] = mapped_column(Float, default=0.0)
     latency_ms: Mapped[float] = mapped_column(Float, default=0.0)
+    # Per-lever savings against the uncached baseline (`baseline_usd` is B0).
+    # Nullable with no default (added by scripts/migrate_app_policies.py): NULL
+    # `routing_saved_usd` marks a pre-change row. New rows write 0.0, never NULL.
+    compression_saved_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    routing_saved_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    prompt_cache_saved_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    semantic_cache_saved_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     sensitivity: Mapped[str] = mapped_column(String(20), default="?")
     onprem_only: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -302,6 +309,8 @@ class EndpointObservation(Base):
     latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
     streamed: Mapped[bool] = mapped_column(Boolean, default=False)
     ttft_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Non-streamed ok only; NULL for streams/errors and pre-change rows.
+    completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class RoutingOutcome(Base):
@@ -330,6 +339,9 @@ class RoutingOutcome(Base):
     # docs/reference/routing-outcomes.md.
     session: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     tier_target: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # Why the served model sits in its tier (content-free enum; see
+    # app/apps/outcomes.py ROUTE_REASONS). Deployed DBs need the ALTER.
+    route_reason: Mapped[str | None] = mapped_column(String(16), nullable=True)
     complexity: Mapped[float | None] = mapped_column(Float, nullable=True)
     prompt_tokens_bucket: Mapped[str | None] = mapped_column(String(8), nullable=True)
     sensitivity: Mapped[str | None] = mapped_column(String(20), nullable=True)

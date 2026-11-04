@@ -350,3 +350,32 @@ def test_pii_detection_and_stream_mode_null_round_trip_as_none():
             assert view.stream_mode is None
 
     _run(go())
+
+
+def test_record_usage_persists_savings_levers():
+    db = _fresh_db()
+
+    async def go():
+        async with db.session() as s:
+            await store.record_usage(
+                s, application_id="acme", request_id="lv-1", model="m",
+                provider="onprem", tier="cheap", prompt_tokens=1,
+                completion_tokens=1, total_tokens=2, cost_usd=0.0,
+                baseline_usd=0.1, latency_ms=1.0, sensitivity="public",
+                onprem_only=False, compression_saved_usd=0.01,
+                routing_saved_usd=0.02, prompt_cache_saved_usd=0.03,
+                semantic_cache_saved_usd=0.04)
+            await store.record_usage(
+                s, application_id="acme", request_id="lv-2", model="m",
+                provider="onprem", tier="cheap", prompt_tokens=1,
+                completion_tokens=1, total_tokens=2, cost_usd=0.0,
+                baseline_usd=0.1, latency_ms=1.0, sensitivity="public",
+                onprem_only=False)
+            await s.commit()
+            rows = {r.request_id: r for r in await store.list_usage(s)}
+        assert (rows["lv-1"].compression_saved_usd, rows["lv-1"].routing_saved_usd,
+                rows["lv-1"].prompt_cache_saved_usd,
+                rows["lv-1"].semantic_cache_saved_usd) == (0.01, 0.02, 0.03, 0.04)
+        assert rows["lv-2"].routing_saved_usd is None
+
+    asyncio.run(go())

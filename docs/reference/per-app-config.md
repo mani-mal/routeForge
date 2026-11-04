@@ -1282,6 +1282,12 @@ B50 (published context limits) adds one more column to `onboarded_models`:
 ```sql
 -- 2026-09-22 (B50): where an onboarded model's context window came from
 ALTER TABLE onboarded_models ADD COLUMN context_window_source VARCHAR(16);
+-- 2026-11-04 (model metrics slice 1): per-lever savings on usage_records.
+-- Run before rolling the image; NULL routing_saved_usd marks a pre-change row.
+ALTER TABLE usage_records    ADD COLUMN compression_saved_usd DOUBLE PRECISION;
+ALTER TABLE usage_records    ADD COLUMN routing_saved_usd DOUBLE PRECISION;
+ALTER TABLE usage_records    ADD COLUMN prompt_cache_saved_usd DOUBLE PRECISION;
+ALTER TABLE usage_records    ADD COLUMN semantic_cache_saved_usd DOUBLE PRECISION;
 -- 2026-10-09 (B72, trajectory envelope). The `trajectory_envelopes` table is new and
 -- is created at boot; these three columns are on existing tables.
 ALTER TABLE app_policies     ADD COLUMN trajectory_mode VARCHAR(16);
@@ -1310,6 +1316,20 @@ ALTER TABLE routing_outcomes ADD COLUMN inherited_entity_types JSON;
   are unaffected. So on-prem serving does stop, but by refusing requests,
   not by 500ing them; the visible error is on the admin API. Same trap the
   last two deploys hit.
+
+> **Deploy note -- model metrics slice 1 (2026-11-04).** Run
+> `scripts/migrate_app_policies.py` (or these statements) **BEFORE rolling the
+> image**. On an unmigrated DB usage metering, observation flushes, boot seeding
+> and the admin usage/outcome reads fail.
+>
+> ```sql
+> ALTER TABLE usage_records         ADD COLUMN compression_saved_usd DOUBLE PRECISION;
+> ALTER TABLE usage_records         ADD COLUMN routing_saved_usd DOUBLE PRECISION;
+> ALTER TABLE usage_records         ADD COLUMN prompt_cache_saved_usd DOUBLE PRECISION;
+> ALTER TABLE usage_records         ADD COLUMN semantic_cache_saved_usd DOUBLE PRECISION;
+> ALTER TABLE endpoint_observations ADD COLUMN completion_tokens INTEGER;
+> ALTER TABLE routing_outcomes      ADD COLUMN route_reason VARCHAR(16);
+> ```
 
 > **A deployment still on pre-P1a code now needs twelve `ALTER`s before the image
 > is rolled:** P1a's 4 on `app_policies`, P1b's 5 (2 on `app_policies`, 3 on

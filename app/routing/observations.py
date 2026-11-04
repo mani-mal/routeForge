@@ -23,6 +23,7 @@ class Observation:
     latency_ms: float | None   # non-streamed ok only
     streamed: bool
     ttft_ms: float | None      # streamed ok only; logged, never scored
+    completion_tokens: int | None = None  # non-streamed ok only; logged, never scored
 
 
 class ObservationSink:

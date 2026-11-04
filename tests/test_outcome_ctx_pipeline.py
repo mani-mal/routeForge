@@ -67,7 +67,7 @@ def test_outcome_ctx_populated_on_success():
     assert oc.keys() == {
         "sensitivity", "risk_class", "onprem_only",
         "detected_entity_types", "app_policy_version", "complexity",
-        "requested_model", "max_tokens", "routing_tokens",
+        "complexity_tier", "requested_model", "max_tokens", "routing_tokens",
         "trajectory_key", "inherited_entity_types",
         "finish_reason", "reply_has_text", "reply_tool_calls", "reasoning_tokens"}
     assert isinstance(oc["complexity"], float)

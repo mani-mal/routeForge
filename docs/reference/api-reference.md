@@ -84,8 +84,18 @@ A standard `ChatCompletion` **plus routeForge-specific fields**:
   // ---- routeForge extensions ----
   "trace":  [ /* DecisionRecord, VerificationRecord, CompressionRecord, MemoryRecord, CacheRecord */ ],
   "cost":   { "total_usd": 0.00012, "baseline_usd": 0.0009,
-              "routing_saved_usd": 0.00078, "compression_saved_usd": 0.0 },
-              // "cache_saved_usd" is also present when the semantic cache is enabled
+              "routing_saved_usd": 0.00078, "compression_saved_usd": 0.0,
+              "prompt_cache_saved_usd": 0.0 },
+              // baseline_usd is B0: the UNCACHED all-frontier price of the pre-compression tokens.
+              // Three levers telescope in pipeline order (compression -> routing -> prompt cache):
+              //   compression + routing + prompt_cache == baseline_usd - total_usd.
+              // routing_saved_usd is not clamped and may be negative (a dearer model was served).
+              // Basis caveats: B0/B1 are priced on RouteForge's token estimate while the actual cost uses
+              // backend-reported tokens, so any tokenizer/template difference lands in routing. After a
+              // confidence escalation only the FINAL hop's prompt-cache discount is counted as the cache
+              // lever (earlier hops' discounts sit inside routing). Routing equals B1 - C0 because
+              // compression is never clamped in practice (tokens_after <= tokens_before).
+              // "cache_saved_usd" (semantic cache) is also present when that feature is enabled
   "quality":{ "sum": 0.5, "chosen": 0.5, "source": "tier_default" },
   "policy": { "sensitivity": "public", "onprem_only": false,
               "allowed_providers": ["azure","bedrock","onprem"],

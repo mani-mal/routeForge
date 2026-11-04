@@ -309,7 +309,8 @@ def test_schema_is_content_free():
     # tests/test_reply_shape.py) -- and `reasoning_tokens` is a count. Both
     # trip the "reason" substring below and neither can carry text.
     allowed = {"prompt_tokens", "prompt_tokens_bucket", "completion_tokens",
-               "finish_reason", "reasoning_tokens"}
+               "finish_reason", "reasoning_tokens", "route_reason"}
+    # `route_reason` is a closed enum (app/apps/outcomes.py ROUTE_REASONS).
     for model in (RoutingOutcome, OutcomeFeedback):
         for col in model.__table__.columns:
             name = col.name

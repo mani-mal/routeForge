@@ -417,6 +417,7 @@ replays, replacing the old `usage_records`-aggregation seed. Source of truth:
 | `latency_ms` | float, nullable | backend-only latency; set only for a **non-streamed** `ok` |
 | `streamed` | bool | whether the attempt was a stream |
 | `ttft_ms` | float, nullable | time to first token; set only for a **streamed** `ok`; logged, never scored |
+| `completion_tokens` | int, nullable | completion tokens of the attempt; set only for a **non-streamed** `ok` (streams stay NULL); logged, never scored, ignored by replay |
 
 ### What it never holds
 
