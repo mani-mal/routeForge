@@ -309,6 +309,8 @@ class EndpointObservation(Base):
     latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
     streamed: Mapped[bool] = mapped_column(Boolean, default=False)
     ttft_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Non-streamed ok only; NULL for streams/errors and pre-change rows.
+    completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class RoutingOutcome(Base):

@@ -258,7 +258,9 @@ class Gateway:
                 continue
 
             if self._signals is not None:
-                self._signals.observe_success(cand.name, result.latency_ms)
+                self._signals.observe_success(
+                    cand.name, result.latency_ms,
+                    completion_tokens=result.tokens_out)
             if self._breaker is not None:
                 self._breaker.record_success(cand.name)
 

@@ -238,7 +238,8 @@ def _to_utc(ts: dt.datetime) -> dt.datetime:
 
 def _to_observation(row: EndpointObservation) -> Observation:
     return Observation(_to_utc(row.ts).timestamp(), row.model, row.outcome,
-                       row.latency_ms, row.streamed, row.ttft_ms)
+                       row.latency_ms, row.streamed, row.ttft_ms,
+                       row.completion_tokens)
 
 
 async def write_observations(session: AsyncSession,
@@ -248,7 +249,8 @@ async def write_observations(session: AsyncSession,
         session.add(EndpointObservation(
             ts=dt.datetime.fromtimestamp(o.ts, dt.timezone.utc),
             model=o.model, outcome=o.outcome, latency_ms=o.latency_ms,
-            streamed=o.streamed, ttft_ms=o.ttft_ms))
+            streamed=o.streamed, ttft_ms=o.ttft_ms,
+            completion_tokens=o.completion_tokens))
 
 
 async def load_seed_observations(session: AsyncSession, *, since_hours: float,

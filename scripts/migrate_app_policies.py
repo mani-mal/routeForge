@@ -114,6 +114,12 @@ USAGE_COLUMNS: list[tuple[str, str, str]] = [
 ]
 
 
+OBSERVATIONS_TABLE = "endpoint_observations"
+
+OBSERVATIONS_COLUMNS: list[tuple[str, str, str]] = [
+    ("completion_tokens", "INTEGER", "INTEGER"),
+]
+
 async def _run() -> int:
     url = os.environ.get("DATABASE_URL") or DEFAULT_SQLITE_URL
     # Never print credentials; show only the scheme/host shape.
@@ -135,7 +141,8 @@ async def _run() -> int:
         # migration still commits.
         for table, columns in ((TABLE, COLUMNS),
                                (MODELS_TABLE, MODEL_COLUMNS),
-                               (USAGE_TABLE, USAGE_COLUMNS)):
+                               (USAGE_TABLE, USAGE_COLUMNS),
+                               (OBSERVATIONS_TABLE, OBSERVATIONS_COLUMNS)):
             print(f"  {table}:")
             async with engine.begin() as conn:
                 try:
