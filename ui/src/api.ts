@@ -466,7 +466,106 @@ export const adminApi = {
       j<{ apps: UsageByApp[]; window_hours: number | null }>,
     );
   },
+  metricsSummary: (p: MetricsParams) =>
+    fetch(`/admin/metrics/summary?${metricsQuery(p)}`, { credentials: "same-origin" }).then(j<MetricsSummary>),
+  metricsModels: (p: MetricsParams) =>
+    fetch(`/admin/metrics/models?${metricsQuery(p)}`, { credentials: "same-origin" }).then(j<MetricsModels>),
 };
+
+// --- Models-page metrics (GET /admin/metrics/*; docs/reference/metrics-api.md) ---
+export interface MetricField {
+  value: number | null;
+  n: number;
+  insufficient?: boolean;
+  scope?: string;
+  // `completed` extras
+  failures?: number;
+  policy_rejections?: number;
+  excluded?: number;
+  // `successful_reported` extra
+  apps_reporting?: number;
+}
+
+export interface MetricsAlert {
+  kind: string;
+  severity: "warning" | "info" | string;
+  model: string | null;
+  message: string;
+}
+
+export interface MetricsSavings {
+  routing: number;
+  prompt_cache: number;
+  compression: number;
+  semantic_cache: number;
+  total: number;
+  excluded_rows: number;
+}
+
+export interface MetricsWindowSummary {
+  spend: { value: number; n: number };
+  completed: MetricField;
+  successful_reported: MetricField | null;
+  cost_per_task: {
+    attempted: number | null;
+    successful: number | null;
+    n_tasks: number;
+    n_labelled: number;
+    task_unit: "task" | "request" | string;
+  };
+  savings: MetricsSavings;
+  route_reasons: Record<string, number>;
+  workloads: string[];
+}
+
+export interface MetricsSummary {
+  window: { hours: number; since: string; until: string };
+  current: MetricsWindowSummary;
+  previous: MetricsWindowSummary;
+  alerts: MetricsAlert[];
+  baseline: { model: string; as_of: string | null };
+  generated_at: string;
+}
+
+export interface ModelMetricsRow {
+  model: string;
+  placement: "onprem" | "cloud" | string;
+  requests: number;
+  spend: number;
+  completed: MetricField;
+  cost_per_successful_task: MetricField;
+  cost_per_task: MetricsWindowSummary["cost_per_task"];
+  p95_latency_ms: number | null;
+  cache_hit_rate: number | null;
+  errors: number;
+  failovers: number;
+  speed_tps: MetricField;
+  ttft_ms: { p50: number | null; p95: number | null; n: number; insufficient?: boolean; scope?: string };
+  status: string;
+  status_reasons: string[];
+}
+
+export interface MetricsModels {
+  window: { hours: number; since: string; until: string };
+  models: ModelMetricsRow[];
+  generated_at: string;
+}
+
+export interface MetricsParams {
+  hours: number;
+  applicationId?: string;
+  workload?: string;
+  placement?: string;
+}
+
+function metricsQuery(p: MetricsParams): string {
+  const q = new URLSearchParams();
+  q.set("hours", String(p.hours));
+  if (p.applicationId) q.set("application_id", p.applicationId);
+  if (p.workload) q.set("workload", p.workload);
+  if (p.placement) q.set("placement", p.placement);
+  return q.toString();
+}
 
 // --- Model onboarding (pure router; Task 5/7) -------------------------------
 // routeForge deploys nothing — operators stand up an OpenAI-compatible
