@@ -7,6 +7,9 @@ import { Panel } from "../../components/common";
 import { OutcomeCards } from "./OutcomeCards";
 import { AlertsList } from "./AlertsList";
 import { stamp } from "./format";
+import { ModelTable } from "./ModelTable";
+import { ModelChart } from "./ModelChart";
+import { Diagnostics } from "./Diagnostics";
 
 const WINDOWS: { hours: number; label: string }[] = [
   { hours: 24, label: "24 h" },
@@ -141,6 +144,13 @@ export function ModelsPage() {
             <>
               <OutcomeCards data={summary} />
               <AlertsList alerts={summary.alerts} />
+              <Panel title="Models">
+                <ModelTable rows={models.models} />
+              </Panel>
+              <Panel title="Cost vs success">
+                <ModelChart rows={models.models} />
+              </Panel>
+              <Diagnostics routeReasons={summary.current.route_reasons} rows={models.models} />
             </>
           )}
         </>
