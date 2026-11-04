@@ -7,8 +7,13 @@
 # a GPU has an amortized cost, so those onboarding-time prices are never $0
 # either, but they are per-model DB rows, not a config file concern.
 models:
-  azure-gpt-mid:    {input: 0.15, output: 0.60,  tier: mid,      provider: azure}
+  # as_of: date these prices were last checked (operator-maintained, optional).
+  azure-gpt-mid:    {input: 0.15, output: 0.60,  tier: mid,      provider: azure, as_of: 2026-11-04}
   # cached_input is the cache-read rate: used for served bedrock-frontier calls that report cached tokens, and for the all-frontier baseline.
-  bedrock-frontier: {input: 3.00, output: 15.00, cached_input: 0.30, tier: frontier, provider: bedrock}
+  bedrock-frontier: {input: 3.00, output: 15.00, cached_input: 0.30, tier: frontier, provider: bedrock, as_of: 2026-11-04}
 
 baseline_model: bedrock-frontier
+# Date the baseline's price was last checked (operator-maintained, optional).
+baseline_as_of: 2026-11-04
+# Days after which an as_of / baseline_as_of date counts as stale.
+pricing_stale_days: 30

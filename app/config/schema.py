@@ -1,3 +1,4 @@
+import datetime
 import logging
 
 from pydantic import BaseModel, Field, model_validator
@@ -224,11 +225,18 @@ class PriceCfg(BaseModel):
     # endpoints normally declare this EQUAL to `input`: a vLLM prefix-cache hit
     # saves latency, not GPU amortization.
     cached_input: float | None = None
+    # Operator-maintained: the date this price was last checked against the
+    # provider's price list. Optional; RouteForge never fetches or verifies it.
+    as_of: datetime.date | None = None
 
 
 class PricingCfg(BaseModel):
     models: dict[str, PriceCfg]
     baseline_model: str
+    # Date the savings baseline's price was last checked (operator-maintained).
+    baseline_as_of: datetime.date | None = None
+    # Age in days after which a dated price counts as stale (read by alerts).
+    pricing_stale_days: int = Field(30, ge=1)
 
 
 class ProviderCfg(BaseModel):
