@@ -125,6 +125,89 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
+> **Filed 2026-11-04 (B80–B84)** from a review of Artificial Analysis's talk on the cost
+> of agentic workloads. The same review revised **B73**. Ranked: B80 and B81 first, then
+> B82, B73, B83, B84. None is designed yet; each needs a spec before code.
+
+## B80 — FEATURE: quality floor as a hard routing limit (cheapest eligible model whose lower quality bound clears it)  🔴 OPEN
+
+**Why.** Quality is one weighted term in step-6 scoring, so the router trades it against
+cost and never guarantees it. Measured (arXiv v1 §7): on a benchmark at ceiling the router
+paid 6.7× the cheapest eligible price for the same answers. Artificial Analysis makes the
+same point for "limited-intelligence" tasks: past a ceiling, a smarter model adds nothing,
+so the right choice is the cheapest model above the floor.
+
+**Shape.** A workload (the existing content-free workload slug) may declare
+`minimum_success_rate` and a confidence level. Among the **eligible** candidates, the router
+keeps those whose *lower* quality bound (the P2b-3 Beta posterior per model and workload)
+clears the floor, then ranks those by the usual score. If none clears it: escalate within the
+eligible set, or reject with a named reason in the P3b conflicting core. Never by leaving
+the eligible set. Unknown quality does not clear a floor.
+
+**Builds on:** `app/routing/quality.py` (quality per workload), `app/eval/calibration.py`,
+`app/eval/uncertainty.py`, the policy simulator for replay before enabling.
+**Open questions:** where the floor is declared (per app, per workload, or both); whether
+the live router reads the posterior or only applied, human-approved scores (today it reads
+only applied ones); what a floor means for a workload with no labels.
+
+## B81 — FEATURE: reasoning effort as a routing choice  🔴 OPEN
+
+**Why.** Artificial Analysis reports one model (Opus 5.5) at about $1 per agentic task at
+low reasoning effort and about $21 at max. That is the largest single cost lever in their
+data. RouteForge records `reasoning_tokens` but never chooses the effort level. Nothing
+in `app/` reads `reasoning_effort`; whether a client's value reaches the backend has not been
+checked. Related measurement (arXiv v1): 43% of cheap-tier answers
+were cut off because reasoning used up the token limit.
+
+**Shape.** A candidate becomes (endpoint, model, effort). Effort levels are declared per
+model at onboarding (not every backend supports them). Scoring, replay and calibration treat
+each pair as its own candidate. A client-set effort is a requirement, not overridden,
+unless the app allows it.
+**Open questions:** how effort is passed per provider (OpenAI `reasoning_effort`, vLLM
+chat-template flags, others); whether quality calibration is per pair from the start.
+
+## B82 — FEATURE: budget per trajectory and a cause for each prompt-cache miss  🔴 OPEN
+
+**Why.** Agent tasks run tens to hundreds of calls, and cost per task is what a customer
+pays. Artificial Analysis shows one task at $21 with prompt caching and over $200 without.
+Extends B72 steps 4–5.
+
+**Shape.**
+1. Optional per-app or per-trajectory limits on the envelope: maximum cost, maximum
+   time, maximum retries. When a limit is reached: reject, or move down to a cheaper
+   eligible candidate, as the app configures. Eligibility is never relaxed.
+2. Per trajectory, report: input, cached and re-sent tokens; realised cache saving vs.
+   estimated uncached cost; misses classified by cause. The causes are an endpoint switch
+   (separating policy-forced from score-driven switches), a changed prefix, TTL expiry,
+   and a provider or config change. Alert when the hit rate falls or an endpoint stops
+   reporting cache counts.
+
+Keep three kinds of caching apart in names and reports: provider prompt caching,
+self-hosted KV or prefix caching, and RouteForge's semantic response cache.
+
+## B83 — FEATURE: date the prices and the savings baseline  🔴 OPEN
+
+**Why.** Prices for a fixed intelligence level fall roughly 10× a year (Artificial Analysis
+trend, not a forecast). The cost dashboard's savings figure is computed against an
+"all-frontier" baseline from `config/pricing.yaml`. If those prices are a year old, the
+saving shown can be overstated by about that much, with nothing on screen to say so.
+
+**Shape.** An `as_of` date on each `pricing.yaml` entry and on the baseline; the date shown
+beside the savings figure; a boot-time and console warning past a configurable age.
+Prices stay operator-owned. Nothing is fetched at runtime.
+
+## B84 — FEATURE: model roster advisor (recommendations only)  🔴 OPEN
+
+**Why.** New models arrive monthly and open-weights models trail the leaders by 3–9 months
+(Artificial Analysis). Recent work finds larger rosters give diminishing returns. Choosing
+*what to onboard* matters as much as routing among what is onboarded.
+
+**Shape.** An offline report from the outcome export, the endpoint observations and an
+optional B73 snapshot. It flags endpoints that another eligible endpoint beats on every
+measure (for the same workload), price or latency drift, and external models worth a
+shadow trial. It never onboards, disables or promotes anything. Onboarding stays the only
+way a model enters.
+
 ## B79 — Voice models can't be routed: no `/v1/audio/*` endpoints  (FEATURE — open, needs owner discussion before build)
 
 **Severity:** feature gap; nothing broken.
@@ -380,14 +463,29 @@ provenance note says so, but the numbers are not Artificial Analysis numbers.
 
 **Work, smallest first:**
 
-1. **Published quality snapshot.** Put a dated `quality:` (Intelligence Index ÷ 100) on each
-   cloud `model_pool` entry in `config/routing.yaml`, taken by hand from
-   <https://artificialanalysis.ai/> — the spec records that there is no public API, so this
-   is a periodic manual snapshot with the snapshot date in a comment. It is a seed, not the
-   system of record; customer-declared and calibrated scores still outrank it. Onboarded
-   on-prem models need the same value offered at onboarding. **This changes routing, not
-   only the dashboard** — `quality` carries weight 1.0 in step-6 scoring — so replay it
-   through `scripts/policy_simulate.py` before applying.
+1. **Published quality snapshot.** Put a dated `quality:` on each cloud `model_pool` entry
+   in `config/routing.yaml`. It is a seed, not the system of record; customer-declared and
+   calibrated scores still outrank it. Onboarded on-prem models need the same value offered
+   at onboarding. **This changes routing, not only the dashboard** — `quality` carries
+   weight 1.0 in step-6 scoring — so replay it through `scripts/policy_simulate.py` before
+   applying.
+
+   **Revised 2026-11-04** (Artificial Analysis talk review; see also B80–B84):
+   - *There is now an API.* Artificial Analysis offers a free API key (headline indices,
+     median performance, basic prices; reportedly ~1,000 requests/day) and requires visible
+     attribution where its data is shown. The "no public API" note in the spec is out of
+     date. Read the current terms at <https://artificialanalysis.ai/api-reference> before
+     building. Use the API from an **offline fetch script** that writes a dated snapshot
+     file. Air-gapped sites import the file. Never call it from the request path.
+   - *Map domain scores to workloads, not one index per model.* AA's domain benchmarks
+     (coding, analyst/spreadsheet work and others) rank models differently from the general
+     Intelligence Index. Store the score that matches each workload slug, falling back to
+     the general index.
+   - *Keep provenance on every value:* source, retrieval date, index version, benchmark
+     name, reasoning-effort setting. The index composition changes between versions
+     (v5.0.1 has nine evaluations), so scores compare only within one version. A version
+     change is replayed through the simulator before it is applied. Missing values are
+     unknown, never zero.
 2. **Time to first token on the UI.** Expose `ttft_ms` per model (p50/p95) from
    `endpoint_observations` through an admin read and show it beside the existing end-to-end
    p50/p95 latency. Display only: time to first token stays out of routing scores, as
