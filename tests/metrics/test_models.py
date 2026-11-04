@@ -1,3 +1,4 @@
+import pytest
 from datetime import date, datetime, timedelta, timezone
 
 from app.config.schema import PricingCfg, PriceCfg
@@ -91,7 +92,9 @@ def test_ttft_from_streamed_only():
     assert t["insufficient"] is True and t["p50"] is None
 
 
-def test_task_credited_to_primary_model():
+def test_task_credited_to_primary_model(monkeypatch):
+    import app.metrics.compute as c
+    monkeypatch.setattr(c, "MIN_N_TASKS", 1)  # one labelled task, so the gate is open
     # one task (trajectory t) with two requests: cheap model $1, big model $5
     cheap = UsageRow("r1", "a", T0, "cheap", "onprem", "ok", 1.0, 10, 0, None, 0.0, 0.0, 0.0)
     big = UsageRow("r2", "a", T0, "big", "cloud", "ok", 5.0, 10, 0, None, 0.0, 0.0, 0.0)
@@ -109,7 +112,8 @@ def test_task_credited_to_primary_model():
 
 def test_cache_hit_rate_and_failovers():
     us, outs = batch("c", "m", 4, cached=50, prompt=100)
-    outs[0] = OutcomeRow("c0", "a", T0, "backend_failed", "m", None, None, 1.0, "failover", [])
+    # as the real writer stores it: chosen=None, the failed model in attempts
+    outs[0] = OutcomeRow("c0", "a", T0, "backend_failed", None, None, None, 1.0, "failover", ["m"])
     r = one(rows((us, outs)))
     assert r["cache_hit_rate"] == 0.5 and r["failovers"] == 1 and r["errors"] == 1
 
@@ -157,3 +161,84 @@ def test_alert_order_page_first_then_worst_model():
     kinds = [(a["kind"], a["model"]) for a in al]
     assert kinds == [("prices_undated", None), ("savings_partial", None),
                      ("cost_anomaly", "y"), ("cache_regression", "x")]
+
+
+def test_backend_failures_show_on_the_failing_model_c1():
+    us, outs = batch("c", "m", 50)
+    for i in range(10):  # backend_failed / context_overflow: chosen=None, attempts=[model]
+        outs[i] = OutcomeRow(f"c{i}", "a", T0, "backend_failed" if i < 7 else "context_overflow",
+                             None, None, None, 1.0, None, ["m"])
+    r = one(rows((us, outs)))
+    assert r["errors"] == 10 and r["completed"]["failures"] == 10
+    assert r["completed"]["value"] == 0.8
+
+
+def test_placeholder_models_are_not_rows_i1():
+    us, outs = batch("c", "m", 3)
+    us.append(UsageRow("x", "a", T0, "-", "-", "rejected", 1.0, 0, None, None, None, None, None))
+    us.append(UsageRow("y", "a", T0, "?", "?", "ok", 1.0, 0, None, None, None, None, None))
+    assert [r["model"] for r in rows((us, outs))] == ["m"]
+
+
+def test_placement_registry_then_usage_then_unknown_i1():
+    from app.metrics.compute import make_placement_of
+    us = [UsageRow("1", "a", T0, "ghost", "onprem", "ok", 0, 0, None, None, None, None, None),
+          UsageRow("2", "a", T0, "ghost", "-", "ok", 0, 0, None, None, None, None, None),
+          UsageRow("3", "a", T0, "cl", "azure", "ok", 0, 0, None, None, None, None, None)]
+    p = make_placement_of({"reg": "onprem"}, us)
+    assert (p("reg"), p("ghost"), p("cl"), p("nobody")) == ("onprem", "onprem", "cloud", "unknown")
+
+
+def test_status_reason_shows_fractions_of_a_cent_i4():
+    from app.metrics.compute import money_text
+    assert money_text(0.21) == "$0.21" and money_text(0.0) == "$0.00"
+    assert money_text(2.25e-06) == "$0.00000225"
+    r = one(rows(batch("c", "m", 40, cost=0.00021), batch("p", "m", 40, cost=0.0001)))
+    assert r["status"] == "cost_anomaly"
+    assert "$0.00021 vs $0.0001" in r["status_reasons"][0]
+
+
+def _task_batch(n, n_ok, model="m", prefix="t"):
+    us, outs = batch(prefix, model, n)
+    fb = [FeedbackRow(f"{prefix}{i}", T0, "task_success", 1.0 if i < n_ok else 0.0)
+          for i in range(n)]
+    return us, outs, fb
+
+
+def test_per_model_successful_reported_and_chart_point():
+    us, outs, fb = _task_batch(30, 24)
+    r = one(rows((us, outs), fb=fb))
+    assert r["successful_reported"] == {"value": 0.8, "n": 30, "insufficient": False}
+    assert r["chart"] == {"x": pytest.approx(30 * 0.1 / 24), "x_kind": "per_successful_task",
+                          "y": 0.8, "y_kind": "reported"}
+    assert r["status_rank"] == 4  # healthy
+
+
+def test_chart_falls_back_to_per_task_and_completed_then_null():
+    r = one(rows(batch("c", "m", 40)))
+    assert r["successful_reported"]["insufficient"] is True
+    assert r["chart"]["x_kind"] == "per_task" and r["chart"]["y_kind"] == "completed"
+    r = one(rows(batch("c", "m", 5)))
+    assert r["chart"] is None  # completed is insufficient -> no point
+
+
+def test_primary_model_tie_prefers_served_model_m3():
+    a = UsageRow("r1", "a", T0, "a-failed", "onprem", "error", 0.0, 1, 0, None, 0.0, 0.0, 0.0)
+    z = UsageRow("r1", "a", T0, "z-served", "onprem", "ok", 0.0, 1, 0, None, 0.0, 0.0, 0.0)
+    outs = [OutcomeRow("r1", "a", T0, "ok", "z-served", None, None, 1.0, None, [])]
+    res = rows(([a, z], outs))
+    assert one(res, "z-served")["cost_per_task"]["n_tasks"] == 1
+    assert one(res, "a-failed")["cost_per_task"]["n_tasks"] == 0
+
+
+def test_label_values_and_tie_break_m4():
+    from app.metrics.compute import summarize
+    us, outs = [UsageRow("a", "a", T0, "m", "onprem", "ok", 1.0, 1, 0, None, 0.0, 0.0, 0.0)], \
+        [OutcomeRow("a", "a", T0, "ok", "m", None, None, 1.0, None, [])]
+    fb = [FeedbackRow("a", T0, "task_success", 0.7, id=9)]  # not a label
+    assert summarize(us, outs, fb)["cost_per_task"]["n_labelled"] == 0
+    fb = [FeedbackRow("a", T0, "task_success", 1.0, id=2), FeedbackRow("a", T0, "task_success", 0.0, id=5)]
+    import app.metrics.compute as c
+    for order in (fb, fb[::-1]):  # equal ts: higher id wins regardless of order
+        t, _ = c._build_tasks(us, outs, order)
+        assert t[0].label[1] is False

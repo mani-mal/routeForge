@@ -1,14 +1,16 @@
 """Models-page metrics endpoints (admin only, content-free)."""
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Query, Request
 
 from app.apps.admin_auth import require_admin
-from app.metrics.compute import (filter_workload, model_rows, page_alerts, summarize)
-from app.metrics.load import load_observations, load_window, placement_for_provider
+from app.metrics.compute import (apply_placement, filter_workload, make_placement_of,
+                                 model_rows, page_alerts, summarize)
+from app.metrics.load import load_observations, load_window
 
 metrics_router = APIRouter(prefix="/admin/metrics", tags=["admin"])
 
@@ -25,20 +27,45 @@ def _window_json(hours: int, since: dt.datetime, until: dt.datetime) -> dict:
     return {"hours": hours, "since": since.isoformat(), "until": until.isoformat()}
 
 
-async def _load_all(request: Request, hours, application_id, workload, placement):
+async def _load_raw(request: Request, hours: int, application_id: str | None):
     prev_since, since, until = _window(hours)
     async with request.app.state.db.session() as session:
         cur = await load_window(session, since=since, until=until,
-                                application_id=application_id, placement=placement)
+                                application_id=application_id)
         prev = await load_window(session, since=prev_since, until=since,
-                                 application_id=application_id, placement=placement)
+                                 application_id=application_id)
         obs = await load_observations(session, since=since, until=until)
+    return cur, prev, obs, since, until
+
+
+async def _load_shared(request: Request, hours: int, application_id: str | None):
+    """The page fires /summary and /models together: concurrent identical loads
+    share one scan. Nothing is kept once the scan finishes, so data never goes stale."""
+    inflight = getattr(request.app.state, "metrics_inflight", None)
+    if inflight is None:
+        inflight = request.app.state.metrics_inflight = {}
+    key = (hours, application_id)
+    task = inflight.get(key)
+    if task is None:
+        task = asyncio.ensure_future(_load_raw(request, hours, application_id))
+        inflight[key] = task
+        task.add_done_callback(lambda _t: inflight.pop(key, None))
+    return await asyncio.shield(task)
+
+
+async def _load_all(request: Request, hours, application_id, workload, placement):
+    cur, prev, obs, since, until = await _load_shared(request, hours, application_id)
+    pool = getattr(request.app.state, "registry", None)
+    pool_providers = {c.name: c.provider for c in pool.effective_pool()} if pool else {}
+    placement_of = make_placement_of(pool_providers, [*cur[0], *prev[0]])
+    if placement:
+        cur = apply_placement(*cur, placement, placement_of)
+        prev = apply_placement(*prev, placement, placement_of)
+    cur_f, prev_f = cur, prev
     if workload is not None:
-        cur = filter_workload(*cur, workload)
-        prev = filter_workload(*prev, workload)
-    provider_of = {u.model: u.provider for u in [*cur[0], *prev[0]]}
-    rows = model_rows(*cur, prev[0], prev[1], obs,
-                      placement_of=lambda m: placement_for_provider(provider_of.get(m)))
+        cur_f = filter_workload(*cur, workload)
+        prev_f = filter_workload(*prev, workload)
+    rows = model_rows(*cur_f, prev_f[0], prev_f[1], obs, placement_of=placement_of)
     return cur, prev, rows, since, until
 
 
@@ -49,7 +76,8 @@ async def metrics_summary(
         placement: Placement | None = None, _: str = Depends(require_admin)) -> dict:
     cur, prev, rows, since, until = await _load_all(
         request, hours, application_id, workload, placement)
-    current, previous = summarize(*cur), summarize(*prev)
+    kw = {"workload": workload, "placement_filtered": placement is not None}
+    current, previous = summarize(*cur, **kw), summarize(*prev, **kw)
     pricing = request.app.state.settings.pricing
     now = dt.datetime.now(dt.timezone.utc)
     alerts = page_alerts(pricing, today=now.date(),

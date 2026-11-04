@@ -8,6 +8,8 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from functools import cached_property
+from math import floor, log10
 from typing import Callable
 
 from app.config.schema import PricingCfg
@@ -58,6 +60,73 @@ class FeedbackRow:
     ts: datetime
     score_name: str
     value_num: float | None
+    id: int = 0  # tie-break for equal timestamps: the higher id is the later label
+
+
+_NO_MODEL = ("", "-", "?")  # usage-row placeholders: cancelled / budget 429 / unknown name
+
+
+def is_real_model(model: str | None) -> bool:
+    return bool(model) and model not in _NO_MODEL
+
+
+def attributed_model(o: OutcomeRow) -> str | None:
+    """The model an outcome belongs to. The writer stores chosen=None for
+    backend_failed / context_overflow / no_eligible / cancelled; for the first
+    two the last attempted candidate is the model that failed."""
+    return o.chosen or (o.attempts[-1] if o.attempts else None)
+
+
+def placement_for_provider(provider: str | None) -> str:
+    if provider == "onprem":
+        return "onprem"
+    if provider in (None, "", "-", "?"):
+        return "unknown"
+    return "cloud"
+
+
+def make_placement_of(pool_providers: dict[str, str],
+                      usage: list[UsageRow]) -> Callable[[str], str]:
+    """Placement of a model: the registry's provider first, else the providers
+    seen on its usage rows (ignoring "-" / "?"), else "unknown"."""
+    seen: dict[str, set[str]] = defaultdict(set)
+    for u in usage:
+        if u.provider not in ("-", "?", ""):
+            seen[u.model].add(u.provider)
+
+    def placement_of(model: str) -> str:
+        if model in pool_providers:
+            return placement_for_provider(pool_providers[model])
+        provs = seen.get(model)
+        if not provs:
+            return "unknown"
+        return "onprem" if "onprem" in provs else "cloud"
+    return placement_of
+
+
+def apply_placement(usage: list[UsageRow], outcomes: list[OutcomeRow],
+                    feedback: list[FeedbackRow], placement: str,
+                    placement_of: Callable[[str], str]):
+    """Keep rows of one placement. Outcomes are attributed to a model first;
+    unattributable ones (no_eligible, cancelled, overflow with no attempt) are
+    dropped from a placement view."""
+    def u_place(u: UsageRow) -> str:
+        return placement_of(u.model) if is_real_model(u.model) \
+            else placement_for_provider(u.provider)
+    usage = [u for u in usage if u_place(u) == placement]
+    outcomes = [o for o in outcomes
+                if (m := attributed_model(o)) is not None and placement_of(m) == placement]
+    keep = {o.request_id for o in outcomes}
+    return usage, outcomes, [f for f in feedback if f.request_id in keep]
+
+
+def money_text(v: float) -> str:
+    """Dollars for status reasons: 2 dp from a cent up, else 4 significant digits."""
+    if v == 0:
+        return "$0.00"
+    if abs(v) >= 0.01:
+        return f"${v:.2f}"
+    return f"${v:.{3 - floor(log10(abs(v)))}f}".rstrip("0")
 
 
 def _pctile(sorted_vals: list[float], pct: float) -> float:
@@ -68,7 +137,7 @@ def _pctile(sorted_vals: list[float], pct: float) -> float:
     return sorted_vals[idx]
 
 
-def _completed(outcomes: list[OutcomeRow]) -> dict:
+def _completed(outcomes: list[OutcomeRow], *, attributable: bool = True) -> dict:
     n = sum(1 for o in outcomes if o.status in _DENOMINATOR)
     ok = sum(1 for o in outcomes if o.status == "ok")
     insufficient = n < MIN_N_REQUESTS
@@ -77,9 +146,13 @@ def _completed(outcomes: list[OutcomeRow]) -> dict:
         "n": n,
         "insufficient": insufficient,
         "failures": sum(1 for o in outcomes if o.status in _FAILURES),
-        "policy_rejections": sum(1 for o in outcomes if o.status == "no_eligible"),
-        "excluded": sum(1 for o in outcomes
-                        if o.status not in _DENOMINATOR and o.status != "no_eligible"),
+        # Rejections and cancels carry no model, so a placement-filtered view
+        # cannot attribute them: null, not a misleading 0.
+        "policy_rejections": (sum(1 for o in outcomes if o.status == "no_eligible")
+                              if attributable else None),
+        "excluded": (sum(1 for o in outcomes
+                         if o.status not in _DENOMINATOR and o.status != "no_eligible")
+                     if attributable else None),
     }
 
 
@@ -89,13 +162,16 @@ class _Task:
     apps: set
     cost: float
     cost_by_model: dict
-    label: tuple | None = None  # (ts, success)
+    ok_by_model: dict
+    label: tuple | None = None  # (ts, success, feedback id)
 
-    @property
+    @cached_property
     def primary_model(self) -> str | None:
+        """Largest spend; ties go to a model that actually served, then name."""
         if not self.cost_by_model:
             return None
-        return max(sorted(self.cost_by_model), key=lambda m: self.cost_by_model[m])
+        return max(sorted(self.cost_by_model),
+                   key=lambda m: (self.cost_by_model[m], self.ok_by_model.get(m, 0)))
 
 
 def _build_tasks(usage: list[UsageRow], outcomes: list[OutcomeRow],
@@ -103,8 +179,11 @@ def _build_tasks(usage: list[UsageRow], outcomes: list[OutcomeRow],
     """Group counted outcomes into tasks. A request without a trajectory key is
     its own task. Returns (tasks, any_trajectory_key)."""
     cost_by_req: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    ok_by_req: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     for u in usage:
         cost_by_req[u.request_id][u.model] += u.cost_usd
+        if u.status == "ok":
+            ok_by_req[u.request_id][u.model] += 1
     tasks: dict[str, _Task] = {}
     req_task: dict[str, str] = {}
     any_key = False
@@ -114,21 +193,24 @@ def _build_tasks(usage: list[UsageRow], outcomes: list[OutcomeRow],
         if o.status not in _DENOMINATOR:
             continue
         key = f"t:{o.trajectory_key}" if o.trajectory_key else f"r:{o.request_id}"
-        t = tasks.setdefault(key, _Task(key, set(), 0.0, defaultdict(float)))
+        t = tasks.setdefault(key, _Task(key, set(), 0.0, defaultdict(float), defaultdict(int)))
         t.apps.add(o.application_id)
         req_task[o.request_id] = key
         for m, c in cost_by_req.get(o.request_id, {}).items():
             t.cost += c
             t.cost_by_model[m] += c
+        for m, n in ok_by_req.get(o.request_id, {}).items():
+            t.ok_by_model[m] += n
     for f in feedback:
-        if f.score_name != "task_success" or f.value_num is None:
+        # 1 = success, 0 = failure; any other value is not a label.
+        if f.score_name != "task_success" or f.value_num not in (0, 1):
             continue
         key = req_task.get(f.request_id)
         if key is None:
             continue
         t = tasks[key]
-        if t.label is None or f.ts >= t.label[0]:
-            t.label = (f.ts, f.value_num >= 0.5)
+        if t.label is None or (f.ts, f.id) >= (t.label[0], t.label[2]):
+            t.label = (f.ts, f.value_num == 1, f.id)
     return list(tasks.values()), any_key
 
 
@@ -136,9 +218,12 @@ def _cost_per_task(tasks: list[_Task], task_unit: str) -> dict:
     labelled = [t for t in tasks if t.label is not None]
     successes = [t for t in labelled if t.label[1]]
     total = sum(t.cost for t in tasks)
+    insufficient = len(labelled) < MIN_N_TASKS
     return {
         "attempted": total / len(tasks) if tasks else None,
-        "successful": (sum(t.cost for t in labelled) / len(successes)) if successes else None,
+        "successful": (None if insufficient or not successes
+                       else sum(t.cost for t in labelled) / len(successes)),
+        "successful_insufficient": insufficient,
         "n_tasks": len(tasks),
         "n_labelled": len(labelled),
         "task_unit": task_unit,
@@ -154,8 +239,10 @@ def filter_workload(usage: list[UsageRow], outcomes: list[OutcomeRow],
             [o for o in outcomes if o.request_id in keep],
             [f for f in feedback if f.request_id in keep])
 
+
 def summarize(usage: list[UsageRow], outcomes: list[OutcomeRow],
-              feedback: list[FeedbackRow], *, workload: str | None = None) -> dict:
+              feedback: list[FeedbackRow], *, workload: str | None = None,
+              placement_filtered: bool = False) -> dict:
     workloads = sorted({o.workload for o in outcomes if o.workload})
     if workload is not None:
         usage, outcomes, feedback = filter_workload(usage, outcomes, feedback, workload)
@@ -194,7 +281,8 @@ def summarize(usage: list[UsageRow], outcomes: list[OutcomeRow],
 
     return {
         "spend": {"value": float(sum(u.cost_usd for u in usage)), "n": len(usage)},
-        "completed": _completed(outcomes),
+        "completed": _completed(outcomes, attributable=not placement_filtered),
+        "empty": not usage and not outcomes,
         "successful_reported": reported,
         "cost_per_task": _cost_per_task(tasks, unit),
         "savings": sv,
@@ -267,7 +355,7 @@ def _status(requests: int, spend: float, p95: float | None, cache: float | None,
         cur_pr, prev_pr = spend / requests, prev_spend / n_prev
         if prev_pr > 0 and cur_pr > _COST_FACTOR * prev_pr:
             reasons["cost_anomaly"] = (
-                f"spend per request ${cur_pr:.2f} vs ${prev_pr:.2f} previous")
+                f"spend per request {money_text(cur_pr)} vs {money_text(prev_pr)} previous")
         prev_p95 = _p95_latency(prev_outcomes)
         if p95 is not None and prev_p95 and p95 > _LATENCY_FACTOR * prev_p95:
             reasons["performance_degradation"] = (
@@ -286,18 +374,52 @@ def _status(requests: int, spend: float, p95: float | None, cache: float | None,
     return status, listed
 
 
+def _group(rows, key) -> dict:
+    out: dict = defaultdict(list)
+    for r in rows:
+        k = key(r)
+        if k is not None:
+            out[k].append(r)
+    return out
+
+
+def _chart_point(cost_succ: dict, cost_task: dict, reported: dict, completed: dict) -> dict | None:
+    """The one point this model contributes to the cost-vs-success chart, chosen
+    here so the UI plots it as given. Null when either axis lacks data."""
+    if cost_succ["value"] is not None:
+        x, x_kind = cost_succ["value"], "per_successful_task"
+    elif cost_task["attempted"] is not None:
+        x, x_kind = cost_task["attempted"], "per_task"
+    else:
+        return None
+    if reported["value"] is not None:
+        y, y_kind = reported["value"], "reported"
+    elif completed["value"] is not None:
+        y, y_kind = completed["value"], "completed"
+    else:
+        return None
+    return {"x": x, "x_kind": x_kind, "y": y, "y_kind": y_kind}
+
+
 def model_rows(cur_usage: list[UsageRow], cur_outcomes: list[OutcomeRow],
                cur_feedback: list[FeedbackRow], prev_usage: list[UsageRow],
                prev_outcomes: list[OutcomeRow], observations: list[ObservationRow],
                *, placement_of: Callable[[str], str]) -> list[dict]:
-    models = {u.model for u in cur_usage} | {o.chosen for o in cur_outcomes if o.chosen}
+    real = [u for u in cur_usage if is_real_model(u.model)]
+    usage_by = _group(real, lambda u: u.model)
+    outs_by = _group(cur_outcomes, attributed_model)
+    prev_usage_by = _group(prev_usage, lambda u: u.model)
+    prev_outs_by = _group(prev_outcomes, attributed_model)
+    obs_by = _group(observations, lambda o: o.model)
+    models = {m for m in {*usage_by, *outs_by} if is_real_model(m)}
     tasks, any_key = _build_tasks(cur_usage, cur_outcomes, cur_feedback)
     unit = "task" if any_key else "request"
+    tasks_by = _group(tasks, lambda t: t.primary_model)
     rows: list[dict] = []
     for m in models:
-        usage = [u for u in cur_usage if u.model == m]
-        outs = [o for o in cur_outcomes if o.chosen == m]
-        mtasks = [t for t in tasks if t.primary_model == m]
+        usage = usage_by.get(m, [])
+        outs = outs_by.get(m, [])
+        mtasks = tasks_by.get(m, [])
         labelled = [t for t in mtasks if t.label is not None]
         successes = [t for t in labelled if t.label[1]]
         insufficient = len(labelled) < MIN_N_TASKS
@@ -306,20 +428,27 @@ def model_rows(cur_usage: list[UsageRow], cur_outcomes: list[OutcomeRow],
         cache = _cache_rate(usage)
         status, reasons = _status(
             len(usage), spend, p95, cache,
-            [u for u in prev_usage if u.model == m],
-            [o for o in prev_outcomes if o.chosen == m])
-        mobs = [o for o in observations if o.model == m]
+            prev_usage_by.get(m, []), prev_outs_by.get(m, []))
+        mobs = obs_by.get(m, [])
+        completed = _completed(outs)
+        cost_succ = {
+            "value": None if insufficient or not successes
+            else sum(t.cost for t in labelled) / len(successes),
+            "n": len(labelled), "insufficient": insufficient}
+        reported = {
+            "value": None if insufficient else len(successes) / len(labelled),
+            "n": len(labelled), "insufficient": insufficient}
+        cost_task = _cost_per_task(mtasks, unit)
         rows.append({
             "model": m,
             "placement": placement_of(m),
             "requests": len(usage),
             "spend": spend,
-            "completed": _completed(outs),
-            "cost_per_successful_task": {
-                "value": None if insufficient or not successes
-                else sum(t.cost for t in labelled) / len(successes),
-                "n": len(labelled), "insufficient": insufficient},
-            "cost_per_task": _cost_per_task(mtasks, unit),
+            "completed": completed,
+            "successful_reported": reported,
+            "cost_per_successful_task": cost_succ,
+            "cost_per_task": cost_task,
+            "chart": _chart_point(cost_succ, cost_task, reported, completed),
             "p95_latency_ms": p95,
             "cache_hit_rate": cache,
             "errors": sum(1 for o in outs if o.status in _FAILURES),
@@ -327,6 +456,7 @@ def model_rows(cur_usage: list[UsageRow], cur_outcomes: list[OutcomeRow],
             "speed_tps": _speed(mobs),
             "ttft_ms": _ttft(mobs),
             "status": status,
+            "status_rank": STATUS_ORDER.index(status),
             "status_reasons": reasons,
         })
     rows.sort(key=lambda r: (-r["spend"], r["model"]))

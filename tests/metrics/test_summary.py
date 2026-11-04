@@ -53,7 +53,9 @@ def test_task_grouping_and_unit():
     assert cp["task_unit"] == "request" and cp["n_tasks"] == 2
 
 
-def test_latest_label_wins():
+def test_latest_label_wins(monkeypatch):
+    import app.metrics.compute as c
+    monkeypatch.setattr(c, "MIN_N_TASKS", 1)  # gate tested separately below
     s = summarize([usage("a")], [outcome("a")], [label("a", 0, 0), label("a", 1, 5)])
     assert s["cost_per_task"]["n_labelled"] == 1
     assert s["cost_per_task"]["successful"] == 1.0
@@ -96,3 +98,18 @@ def test_route_reason_counts():
     outs = [outcome("a", reason="failover"), outcome("b", reason="failover"),
             outcome("c", reason="placement"), outcome("d")]
     assert summarize([], outs, [])["route_reasons"] == {"failover": 2, "placement": 1}
+
+
+def test_summary_cost_per_successful_task_is_gated_i2():
+    cp = summarize(*_many(19, 10, 0))["cost_per_task"]
+    assert cp["successful"] is None and cp["successful_insufficient"] is True
+    cp = summarize(*_many(20, 10, 0))["cost_per_task"]
+    assert cp["successful"] == 2.0 and cp["successful_insufficient"] is False
+
+
+def test_empty_flag_and_placement_filtered_nulls():
+    assert summarize([], [], [])["empty"] is True
+    s = summarize([], [outcome("r", "no_eligible", chosen=None)], [])
+    assert s["empty"] is False and s["completed"]["policy_rejections"] == 1
+    s = summarize([], [outcome("r", "no_eligible", chosen=None)], [], placement_filtered=True)
+    assert s["completed"]["policy_rejections"] is None and s["completed"]["excluded"] is None
