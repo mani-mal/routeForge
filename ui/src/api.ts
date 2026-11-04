@@ -18,6 +18,7 @@ export interface RequestSummary {
   baseline_usd: number;
   routing_saved_usd: number;
   compression_saved_usd: number;
+  prompt_cache_saved_usd: number;
   latency_ms: number;
   hops: number;
   detected_entities: string[]; // TYPES only, never raw values
@@ -91,6 +92,7 @@ export interface ChatResponse {
     baseline_usd: number;
     routing_saved_usd: number;
     compression_saved_usd: number;
+    prompt_cache_saved_usd: number;
   };
   policy: {
     sensitivity: string;
@@ -145,6 +147,7 @@ export interface Stats {
   baseline_usd: number;
   routing_saved_usd: number;
   compression_saved_usd: number;
+  prompt_cache_saved_usd: number;
   onprem_count: number;
   tier_distribution: Record<string, number>;
   latency_p50_ms: number;

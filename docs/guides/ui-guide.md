@@ -164,8 +164,9 @@ A horizontal bar split into **two independent levers, never merged**:
   before pricing. Reads **"off / not run"** whenever `compression_saved == 0` (Headroom
   disabled or it never fired).
 
-A third lever, **prompt cache** (`prompt_cache_saved_usd`), is the served model's own
-cached-input discount as reported by the provider. The baseline is always the *uncached*
+A third lever, **prompt cache** (green `#35D6A0`; the third bar and a "Prompt cache saved"
+tile in the Cost tab, and a row in the request drilldown), is the served model's own
+cached-input discount as reported by the provider (`prompt_cache_saved_usd`). The baseline is always the *uncached*
 all-frontier price, and the levers telescope in pipeline order (compression, then routing,
 then prompt cache), so they satisfy the identity
 `compression_saved + routing_saved + prompt_cache_saved == baseline − actual`. Routing is

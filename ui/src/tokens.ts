@@ -29,6 +29,7 @@ export const SIGNAL_HEX = {
 export const LEVER_HEX = {
   routing: TIER_HEX.mid,
   compression: TIER_HEX.frontier,
+  promptCache: TIER_HEX.cheap,
 } as const;
 
 export type Tier = keyof typeof TIER_HEX;

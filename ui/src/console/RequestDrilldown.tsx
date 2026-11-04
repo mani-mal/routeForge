@@ -388,6 +388,7 @@ function StepBody({ stepKey, detail }: { stepKey: string; detail: ChatResponse }
           <Row label="all-frontier baseline">{formatUsd(detail.cost.baseline_usd)}</Row>
           <Row label="routing saved">{formatUsd(detail.cost.routing_saved_usd)}</Row>
           <Row label="compression saved">{formatUsd(detail.cost.compression_saved_usd)}</Row>
+          <Row label="Prompt cache saved">{formatUsd(detail.cost.prompt_cache_saved_usd ?? 0)}</Row>
           {detail.display?.mode === "off" && (
             <p className="text-xs text-gray-500 pt-2">Response body not stored (capture off).</p>
           )}

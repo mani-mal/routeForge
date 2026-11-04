@@ -17,6 +17,7 @@ import { LEVER_HEX, SIGNAL_HEX, TIER_HEX } from "../../tokens";
 // keeps it unambiguously distinct from privacy violet on a projector.
 const ROUTING_COLOR = LEVER_HEX.routing;
 const COMPRESSION_COLOR = LEVER_HEX.compression;
+const PROMPT_CACHE_COLOR = LEVER_HEX.promptCache;
 const QUALITY_COLOR = SIGNAL_HEX.quality;
 
 export function CostSection({ requests }: { requests: RequestSummary[] }) {
@@ -31,12 +32,12 @@ export function CostSection({ requests }: { requests: RequestSummary[] }) {
     fontSize: 12,
   };
 
-  const { total, baseline, routingSaved, compressionSaved, savedPct } = costAgg(requests);
+  const { total, baseline, routingSaved, compressionSaved, promptCacheSaved, savedPct } = costAgg(requests);
   const { tokenIntelligenceDensity, costIntelligenceDensity } = densityAgg(requests);
   const qualityProvenance = provenanceNote(qualitySourceAgg(requests));
   const compressionRan = compressionSaved > 0;
 
-  const savingsData = [{ name: "saved", routing: routingSaved, compression: compressionSaved }];
+  const savingsData = [{ name: "saved", routing: routingSaved, compression: compressionSaved, promptCache: promptCacheSaved }];
 
   const sorted = [...requests].sort((a, b) => (a.ts ?? "").localeCompare(b.ts ?? ""));
   let cumTotal = 0;
@@ -88,6 +89,13 @@ export function CostSection({ requests }: { requests: RequestSummary[] }) {
                   radius={[3, 3, 3, 3]}
                   barSize={16}
                 />
+                <Bar
+                  dataKey="promptCache"
+                  name="prompt cache saved"
+                  fill={PROMPT_CACHE_COLOR}
+                  radius={[3, 3, 3, 3]}
+                  barSize={16}
+                />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -99,6 +107,10 @@ export function CostSection({ requests }: { requests: RequestSummary[] }) {
             <span className="flex items-center gap-1">
               <span className="h-2 w-2 rounded-full" style={{ backgroundColor: COMPRESSION_COLOR }} /> compression{" "}
               {compressionRan ? formatUsd(compressionSaved) : "off / not run"}
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: PROMPT_CACHE_COLOR }} /> prompt cache{" "}
+              {formatUsd(promptCacheSaved)}
             </span>
           </div>
         </div>
@@ -167,6 +179,7 @@ export function CostSection({ requests }: { requests: RequestSummary[] }) {
         <StatTile label="All-frontier baseline" value={formatUsd(baseline)} />
         <StatTile label="Routing saved" value={formatUsd(routingSaved)} />
         <StatTile label="Compression saved" value={compressionRan ? formatUsd(compressionSaved) : "off / not run"} />
+        <StatTile label="Prompt cache saved" value={formatUsd(promptCacheSaved)} />
         <StatTile
           label="Token Intelligence Density"
           value={formatDensity(tokenIntelligenceDensity)}
