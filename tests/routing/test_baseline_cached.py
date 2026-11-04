@@ -164,3 +164,74 @@ def test_semantic_cache_hit_saving_is_whole_uncached_baseline():
     assert hit["routing_saved_usd"] == 0.0
     assert hit["compression_saved_usd"] == 0.0
     assert hit["prompt_cache_saved_usd"] == 0.0
+
+
+# --- the real served-price lookup (no monkeypatching of _served_price) ---
+
+def _pipe_with_cached_onprem_row():
+    """A pipeline whose registry also holds an onboarded on-prem row that
+    declares its own cached-input rate."""
+    from app.apps.bootstrap import seed_test_models
+    from app.apps.db import Database
+    from app.apps import store
+    from app.apps.registry import ModelRegistry
+
+    s = load_settings()
+
+    async def _build():
+        db = Database(url="sqlite+aiosqlite://")
+        await db.ensure_ready()
+        async with db.session() as session:
+            await seed_test_models(session)
+            await store.upsert_onboarded(
+                session, "onprem-cached", display_name="Cached", provider="onprem",
+                tier="cheap", endpoint="http://test-local/v1", api_key_env=None,
+                price_input=0.40, price_output=0.80, price_cached_input=0.10,
+                enabled=True, probe_status="healthy", allowed_app_ids=None, notes="t")
+            await session.commit()
+        reg = ModelRegistry(s)
+        await reg.refresh(db)
+        return reg
+
+    registry = asyncio.run(_build())
+    det = make_detector("regex")
+    co = s.serving.context_optimization
+    return s, Pipeline(s, Gate(s, det, registry=registry), det,
+                       Gateway(s, _DeterministicLiteLLM(s), Router(s, registry=registry), registry),
+                       co_cfg_provider=lambda: co, ccr=CCRStore(3600), registry=registry)
+
+
+def _savings_for(pipe, model, cached):
+    from types import SimpleNamespace
+    from app.gateway.gateway import GenerationResult
+    comp = SimpleNamespace(tokens_before=1000, tokens_after=1000)
+    res = GenerationResult(model=model, text="t", tokens_in=1000, tokens_out=100,
+                           latency_ms=1.0, cost_usd=0.0, cached_prompt_tokens=cached)
+    from app.routing.pricing import price_call
+    p = pipe._served_price(model)
+    total = price_call(p, prompt_tokens=1000, completion_tokens=100,
+                       cached_prompt_tokens=cached) if p is not None else 0.0
+    return pipe._savings(comp, res, total)
+
+
+def test_served_price_uses_onboarded_registry_row():
+    s, pipe = _pipe_with_cached_onprem_row()
+    p = pipe._served_price("onprem-cached")
+    assert (p.input, p.output, p.cached_input) == (0.40, 0.80, 0.10)
+    sv = _savings_for(pipe, "onprem-cached", cached=600)
+    # The saving uses THIS model's rates, not the baseline's.
+    assert sv.prompt_cache_saved_usd == pytest.approx(600 * (0.40 - 0.10) / 1e6)
+
+
+def test_served_price_uses_yaml_row_for_cloud_model():
+    s, pipe = _pipe()
+    assert pipe._served_price("bedrock-frontier") is s.pricing.models["bedrock-frontier"]
+    p = s.pricing.models["bedrock-frontier"]
+    sv = _savings_for(pipe, "bedrock-frontier", cached=600)
+    assert sv.prompt_cache_saved_usd == pytest.approx(600 * (p.input - p.cached_input) / 1e6)
+
+
+def test_served_price_unknown_model_is_none_and_cache_saving_zero():
+    s, pipe = _pipe()
+    assert pipe._served_price("no-such-model") is None
+    assert _savings_for(pipe, "no-such-model", cached=600).prompt_cache_saved_usd == 0.0
