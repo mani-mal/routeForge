@@ -12,13 +12,16 @@ async def _run(pipeline, content):
                               ChatRequest(messages=[Message(role="user", content=content)]))
 
 
-def test_cost_dict_has_two_levers(compression_on_pipeline):
+def test_cost_dict_has_three_levers(compression_on_pipeline):
     import asyncio
     out = asyncio.run(_run(compression_on_pipeline, "INFO log line\n" * 800))
     cost = out["cost"]
-    assert "compression_saved_usd" in cost and "routing_saved_usd" in cost
+    for k in ("total_usd", "baseline_usd", "compression_saved_usd",
+              "routing_saved_usd", "prompt_cache_saved_usd"):
+        assert k in cost
     total_saved = cost["baseline_usd"] - cost["total_usd"]
-    assert abs((cost["compression_saved_usd"] + cost["routing_saved_usd"]) - total_saved) < 1e-9
+    assert abs((cost["compression_saved_usd"] + cost["routing_saved_usd"]
+                + cost["prompt_cache_saved_usd"]) - total_saved) < 1e-9
     assert cost["compression_saved_usd"] > 0  # compression actually reduced tokens
 
 
@@ -54,7 +57,8 @@ def test_escalation_to_baseline_model_yields_zero_routing_saved_identity_holds()
     assert out["model"] == "bedrock-frontier"          # escalated onto the frontier tier
     assert abs(c["routing_saved_usd"]) < 1e-9          # chosen == baseline model => 0, not negative
     total_saved = c["baseline_usd"] - c["total_usd"]
-    assert abs((c["compression_saved_usd"] + c["routing_saved_usd"]) - total_saved) < 1e-12
+    assert abs((c["compression_saved_usd"] + c["routing_saved_usd"]
+                + c["prompt_cache_saved_usd"]) - total_saved) < 1e-12
 
 
 def test_cheaper_tier_request_has_positive_routing_saved():

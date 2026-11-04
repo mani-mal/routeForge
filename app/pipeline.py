@@ -23,7 +23,8 @@ from app.policy.feasible import feasible_set
 from app.policy.detectors import Detector, detection_ran, make_detector
 from app.policy.effective import EffectiveDetector, FilteredDetector
 from app.policy.gate import Gate, Representations, redact_tool_calls_with_entities
-from app.routing.pricing import price_call
+from app.config.schema import PriceCfg
+from app.routing.pricing import Savings, price_call, split_savings
 from app.routing.router import client_output_cap
 from app.apps.privacy import AppPrivacyProfile, effective_rules
 from app.compression import CompressionResult, compress
@@ -536,45 +537,34 @@ class Pipeline:
         internals["redacted_prompt"] = reps.text_redacted
         internals["detector"] = reps.detector
 
-    def _baseline(self, in_tokens: int, out_tokens: int,
-                  cached_tokens: int | None = None) -> float:
-        """All-frontier baseline: input and output priced at the baseline
-        (most-expensive frontier) model's respective rates — the SAME token
-        basis `total` uses, so routing_saved compares like with like (B12).
-
-        `cached_tokens` (B75) is the prompt-token count the serving engine
-        reported as cached. When an int, that share is billed at the baseline
-        model's `cached_input` rate (via `price_call`, the one pricing rule);
-        `None` means not reported, so the baseline assumes no caching."""
+    def _baseline(self, in_tokens: int, out_tokens: int) -> float:
+        """All-frontier, UNCACHED baseline: input and output priced at the
+        baseline (most-expensive frontier) model's rates on the same token
+        basis `total` uses (B12). Prompt caching is never assumed here; it is
+        its own savings lever (see `_savings`)."""
         p = self._s.pricing.models[self._s.pricing.baseline_model]
         return price_call(p, prompt_tokens=in_tokens, completion_tokens=out_tokens,
-                          cached_prompt_tokens=cached_tokens)
+                          cached_prompt_tokens=0)
 
-    @staticmethod
-    def _baseline_cached_count(cached: int | None, tokens_in: int,
-                               tokens_after: int) -> int | None:
-        """B75: the cached count to price BOTH baseline calls with.
-
-        The backend reports cached tokens against ITS prompt (`tokens_in`,
-        which includes template/tool schemas), while the baseline is priced on
-        RouteForge's own content estimate. So turn the report into a share,
-        clamp it to [0, 1], and scale it onto the post-compression basis once:
-        the cached prefix then survives compression and `compression_saved` is
-        the full-rate drop, independent of caching. None / no prompt tokens =
-        no discount."""
-        if cached is None or tokens_in <= 0:
+    def _served_price(self, model: str) -> PriceCfg | None:
+        """The PriceCfg the backend billed `model` with, or None if unknown."""
+        try:
+            if self._reg is not None:
+                return self._reg.price_for(model)
+            return self._s.pricing.models.get(model)
+        except KeyError:
             return None
-        share = min(1.0, max(0.0, cached / tokens_in))
-        return round(share * tokens_after)
 
-    def _two_lever_baseline(self, comp, result) -> tuple[float, float, float]:
-        """(baseline_usd, baseline_after, compression_saved) -- the one place
-        both run() and the streaming finaliser price the two levers."""
-        eff = self._baseline_cached_count(
-            result.cached_prompt_tokens, result.tokens_in, comp.tokens_after)
-        baseline_usd = self._baseline(comp.tokens_before, result.tokens_out, eff)
-        baseline_after = self._baseline(comp.tokens_after, result.tokens_out, eff)
-        return baseline_usd, baseline_after, max(0.0, baseline_usd - baseline_after)
+    def _savings(self, comp, result, total: float) -> Savings:
+        """The one place run() and the streaming finaliser split savings into
+        compression / routing / prompt-cache against the uncached baseline."""
+        return split_savings(
+            baseline=self._s.pricing.models[self._s.pricing.baseline_model],
+            served=self._served_price(result.model),
+            tokens_before=comp.tokens_before, tokens_after=comp.tokens_after,
+            served_prompt_tokens=result.tokens_in,
+            completion_tokens=result.tokens_out,
+            cached_prompt_tokens=result.cached_prompt_tokens, total_usd=total)
 
     def _display_name(self, model_slug: str) -> str:
         """Resolve a routing-pool slug (e.g. `local-8b`) to its human-facing
@@ -706,6 +696,7 @@ class Pipeline:
             "trace": trace,
             "cost": {"total_usd": 0.0, "baseline_usd": baseline,
                      "routing_saved_usd": 0.0, "compression_saved_usd": 0.0,
+                     "prompt_cache_saved_usd": 0.0,
                      "cache_saved_usd": baseline},
             "quality": {"sum": 0.0, "chosen": None, "source": None},
             "policy": {"sensitivity": ctx.sensitivity, "onprem_only": ctx.onprem_only,
@@ -1080,25 +1071,19 @@ class Pipeline:
                 log.exception("semantic cache store failed (swallowed)")
 
         total = sum(r.actual_cost_usd or 0.0 for r in records)
-        # Two-lever accounting (CLAUDE.md: "don't attribute all savings to
-        # routing"): baseline_usd prices tokens_before (true all-frontier
-        # baseline before either lever runs); compression_saved is the drop
-        # from tokens_before->tokens_after at that baseline price;
-        # routing_saved is the remaining drop from baseline_after->actual
-        # total. With compression off, tokens_before == tokens_after, so
-        # baseline_usd is unchanged from before and compression_saved == 0.
-        #
-        # routing_saved is intentionally NOT clamped to 0: under escalation
-        # `total` can exceed `baseline_after` (a costlier tier was chosen on
-        # purpose, e.g. a high-risk re-route), and clamping routing_saved to
-        # 0 while compression_saved stays positive would break the additive
-        # identity compression_saved + routing_saved == baseline_usd - total
-        # and show fake positive net savings. compression_saved IS clamped,
-        # but harmlessly so — tokens_after <= tokens_before always holds, so
-        # it is >= 0 anyway.
-        baseline_usd, baseline_after, compression_saved = self._two_lever_baseline(
-            comp, result)
-        routing_saved = baseline_after - total
+        # Three-lever accounting (CLAUDE.md: "don't attribute all savings to
+        # routing"). baseline_usd is B0: the UNCACHED all-frontier price of
+        # tokens_before. The levers telescope in pipeline order:
+        #   compression  = B0 - B1   (tokens_before -> tokens_after, >= 0)
+        #   routing      = B1 - C0   (baseline model -> served model)
+        #   prompt_cache = C0 - total (served model's cached-input discount)
+        # so compression + routing + prompt_cache == baseline_usd - total, and
+        # with the semantic-cache lever (a hit only) the four sum to
+        # baseline_usd - total. routing is intentionally NOT clamped: under
+        # escalation the served model can cost more than the baseline basis
+        # and clamping would break the identity and show fake net savings.
+        sv = self._savings(comp, result, total)
+        baseline_usd = sv.uncached_baseline_usd
         trace = [r.model_dump() for r in records] + [vrec.model_dump()]
         trace.append(comp.record.model_dump())
         if recall.record is not None:
@@ -1120,8 +1105,9 @@ class Pipeline:
         quality_sum = chosen_q.quality_score if chosen_q else 0.0
 
         cost = {"total_usd": total, "baseline_usd": baseline_usd,
-               "routing_saved_usd": routing_saved,
-               "compression_saved_usd": compression_saved}
+               "routing_saved_usd": sv.routing_saved_usd,
+               "compression_saved_usd": sv.compression_saved_usd,
+               "prompt_cache_saved_usd": sv.prompt_cache_saved_usd}
         if cache_active:
             # Honest third lever, present whenever the feature is on (even a
             # bypassed/miss request reports 0.0 rather than omitting the key)
@@ -1400,13 +1386,11 @@ class Pipeline:
         top-level `verification` marker is "waived" (Tasks 6/7 refine it)."""
         policy_mode = self._policy_mode_stamp(eff)
         total = sum(r.actual_cost_usd or 0.0 for r in records)
-        # Same two-lever accounting as run(): baseline prices tokens_before
-        # (pre-both-levers), compression_saved is the tokens_before->tokens_after
-        # drop at baseline price, routing_saved is the remaining drop to actual
-        # total. routing_saved is intentionally NOT clamped (see run()).
-        baseline_usd, baseline_after, compression_saved = self._two_lever_baseline(
-            comp, result)
-        routing_saved = baseline_after - total
+        # Same three-lever accounting as run() (see the identity there):
+        # compression + routing + prompt_cache == baseline_usd - total, with
+        # routing intentionally NOT clamped.
+        sv = self._savings(comp, result, total)
+        baseline_usd = sv.uncached_baseline_usd
 
         vrec = VerificationRecord(
             required=ctx.require_verification, performed=False, passed=True,
@@ -1431,8 +1415,9 @@ class Pipeline:
                            ).model_dump(),
             "trace": trace,
             "cost": {"total_usd": total, "baseline_usd": baseline_usd,
-                     "routing_saved_usd": routing_saved,
-                     "compression_saved_usd": compression_saved},
+                     "routing_saved_usd": sv.routing_saved_usd,
+                     "compression_saved_usd": sv.compression_saved_usd,
+                     "prompt_cache_saved_usd": sv.prompt_cache_saved_usd},
             "quality": {"sum": quality_sum,
                         "chosen": chosen_q.quality_score if chosen_q else None,
                         "source": chosen_q.quality_source if chosen_q else None},

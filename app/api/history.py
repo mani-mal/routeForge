@@ -40,6 +40,7 @@ class RequestSummary(BaseModel):
     baseline_usd: float
     routing_saved_usd: float
     compression_saved_usd: float
+    prompt_cache_saved_usd: float = 0.0  # provider prompt-cache discount on the served model
     cache_saved_usd: float = 0.0        # feature #6: the third savings lever (skipped model)
     latency_ms: float
     hops: int
@@ -90,6 +91,7 @@ def summarize(resp: dict, tenant_id: str, tier: str, provider: str = "?") -> Req
         baseline_usd=float(cost.get("baseline_usd", 0.0)),
         routing_saved_usd=float(cost.get("routing_saved_usd", 0.0)),
         compression_saved_usd=float(cost.get("compression_saved_usd", 0.0)),
+        prompt_cache_saved_usd=float(cost.get("prompt_cache_saved_usd", 0.0)),
         cache_saved_usd=float(cost.get("cache_saved_usd", 0.0)),
         latency_ms=latency_ms,
         hops=hops,
@@ -112,6 +114,7 @@ def stats_over(summaries: list[RequestSummary]) -> dict:
             "baseline_usd": 0.0,
             "routing_saved_usd": 0.0,
             "compression_saved_usd": 0.0,
+            "prompt_cache_saved_usd": 0.0,
             "cache_saved_usd": 0.0,
             "onprem_count": 0,
             "tier_distribution": {},
@@ -143,6 +146,7 @@ def stats_over(summaries: list[RequestSummary]) -> dict:
         "baseline_usd": sum(s.baseline_usd for s in summaries),
         "routing_saved_usd": sum(s.routing_saved_usd for s in summaries),
         "compression_saved_usd": sum(s.compression_saved_usd for s in summaries),
+        "prompt_cache_saved_usd": sum(s.prompt_cache_saved_usd for s in summaries),
         "cache_saved_usd": sum(s.cache_saved_usd for s in summaries),
         "onprem_count": sum(1 for s in summaries if s.onprem_only),
         "tier_distribution": tier_distribution,
@@ -172,6 +176,7 @@ def fleet_over(summaries: list[RequestSummary]) -> list[dict]:
             "baseline_usd": sum(s.baseline_usd for s in items),
             "routing_saved_usd": sum(s.routing_saved_usd for s in items),
             "compression_saved_usd": sum(s.compression_saved_usd for s in items),
+            "prompt_cache_saved_usd": sum(s.prompt_cache_saved_usd for s in items),
             "cache_saved_usd": sum(s.cache_saved_usd for s in items),
             "onprem_count": sum(1 for s in items if s.onprem_only),
             "pii_count": sum(1 for s in items if s.detected_entities),
