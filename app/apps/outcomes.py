@@ -171,7 +171,7 @@ def outcome_trace(records, vrec) -> list[dict]:
             + [vrec.model_dump(exclude={"reason"})])
 
 
-ROUTE_REASONS = ("failover", "placement", "risk_floor", "length_tier",
+ROUTE_REASONS = ("failover", "escalation", "placement", "risk_floor", "length_tier",
                  "only_eligible", "other")
 
 _TIER_RANK = {"cheap": 0, "mid": 1, "frontier": 2}
@@ -184,25 +184,37 @@ def _rank(tier: str | None) -> int | None:
 def derive_route_reason(*, cache_hit: bool, attempts: list[str],
                         chosen_tier: str | None, tier_target: str | None,
                         complexity_tier: str | None, rejected: list[dict],
-                        n_eligible: int) -> str | None:
+                        n_eligible: int | None, served_hops: int = 1) -> str | None:
     """Why the served model is in the tier it is. Content-free enum; first
-    match wins. Unknown tier strings compare as not-below / not-above."""
+    match wins. Unknown tier strings compare as not-below / not-above.
+
+    `served_hops` is the number of router hops that served a model;
+    `n_eligible` is None when the first hop carries no `scoring` record (that
+    is "unknown", never evidence of a single eligible candidate).
+
+    - `failover`: some attempted model was not served (attempts > served hops).
+    - `escalation`: more than one served hop (confidence escalation), no failure.
+    - `placement`: a placement-rejected candidate sat at or above the length
+      tier but below the served tier -- placement, not length, forced the tier up.
+    """
     from app.policy.feasible import (PROMPT_RETENTION_NOT_ALLOWED,
                                      RAW_SENSITIVE_NOT_ACCEPTED, REGION_NOT_ALLOWED,
                                      RESIDENCY)
     if cache_hit or not attempts:
         return None
-    if len(attempts) > 1:
+    if len(attempts) > served_hops:
         return "failover"
+    if served_hops > 1:
+        return "escalation"
     placement = {RESIDENCY, REGION_NOT_ALLOWED, PROMPT_RETENTION_NOT_ALLOWED,
                  RAW_SENSITIVE_NOT_ACCEPTED}
-    chosen_r = _rank(chosen_tier)
+    chosen_r, tt, ct = _rank(chosen_tier), _rank(tier_target), _rank(complexity_tier)
     if chosen_r is not None:
         for r in rejected:
             rr = _rank(r.get("tier"))
-            if r.get("code") in placement and rr is not None and rr < chosen_r:
+            if (r.get("code") in placement and rr is not None and rr < chosen_r
+                    and (ct is None or rr >= ct)):
                 return "placement"
-    tt, ct = _rank(tier_target), _rank(complexity_tier)
     if tt is not None and ct is not None and tt > ct:
         return "risk_floor"
     if chosen_tier is not None and chosen_tier == complexity_tier:
@@ -392,7 +404,7 @@ def trace_features(trace: list[dict], complexity_tier: str | None = None) -> dic
     if scoring:
         eligible = [c["name"] for c in scoring.get("candidates", [])]
     else:
-        eligible = [chosen] if chosen is not None else []
+        eligible = [chosen] if chosen is not None else []  # display only
     # The first decision's OWN tier target -- a failed gateway hop records it
     # too. Never borrowed from a later router hop, whose target may differ
     # after an escalation; an older trace without it reads null.
@@ -411,7 +423,9 @@ def trace_features(trace: list[dict], complexity_tier: str | None = None) -> dic
         "route_reason": derive_route_reason(
             cache_hit=cache_hit, attempts=attempts, chosen_tier=chosen_tier,
             tier_target=tier_target, complexity_tier=complexity_tier,
-            rejected=full_rejected, n_eligible=len(eligible)),
+            rejected=full_rejected,
+            n_eligible=len(eligible) if scoring else None,
+            served_hops=len(chosen_hops)),
         "attempts": attempts,
         "chosen": chosen,
         "scoring": scoring,

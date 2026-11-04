@@ -16,7 +16,7 @@ def _d(**kw):
 
 
 def test_vocabulary():
-    assert ROUTE_REASONS == ("failover", "placement", "risk_floor", "length_tier",
+    assert ROUTE_REASONS == ("failover", "escalation", "placement", "risk_floor", "length_tier",
                              "only_eligible", "other")
 
 
@@ -100,3 +100,23 @@ def test_migration_lists_route_reason():
     spec.loader.exec_module(mod)
     assert mod.OUTCOMES_TABLE == "routing_outcomes"
     assert "route_reason" in {c[0] for c in mod.OUTCOMES_COLUMNS}
+
+
+def test_onprem_long_prompt_is_length_tier_not_placement():
+    rej = [{"name": "azure-gpt-cheap", "tier": "cheap", "code": RESIDENCY}]
+    assert _d(rejected=rej, chosen_tier="frontier", tier_target="frontier",
+              complexity_tier="frontier") == "length_tier"
+
+def test_placement_when_length_tier_candidate_rejected():
+    rej = [{"name": "x", "tier": "cheap", "code": RESIDENCY}]
+    assert _d(rejected=rej, chosen_tier="mid", tier_target="cheap",
+              complexity_tier="cheap") == "placement"
+
+def test_escalation_distinct_from_failover():
+    assert _d(attempts=["a", "b"], served_hops=2) == "escalation"
+
+def test_failover_beats_escalation():
+    assert _d(attempts=["a", "b", "c"], served_hops=2) == "failover"
+
+def test_missing_scoring_is_not_only_eligible():
+    assert _d(n_eligible=None, tier_target="mid", complexity_tier="frontier") == "other"
