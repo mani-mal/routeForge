@@ -104,6 +104,13 @@ USAGE_TABLE = "usage_records"
 
 USAGE_COLUMNS: list[tuple[str, str, str]] = [
     ("cached_prompt_tokens", "INTEGER", "INTEGER"),
+    # 2026-11-04 model metrics slice 1: per-lever savings. Nullable, no default;
+    # NULL routing_saved_usd marks a pre-change row (baseline_usd there is the
+    # old, cache-adjusted figure).
+    ("compression_saved_usd", "DOUBLE PRECISION", "FLOAT"),
+    ("routing_saved_usd", "DOUBLE PRECISION", "FLOAT"),
+    ("prompt_cache_saved_usd", "DOUBLE PRECISION", "FLOAT"),
+    ("semantic_cache_saved_usd", "DOUBLE PRECISION", "FLOAT"),
 ]
 
 

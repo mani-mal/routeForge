@@ -150,6 +150,10 @@ async def record_usage(
     status: str = "ok",
     quality: float = 0.0,
     quality_source: str = "?",
+    compression_saved_usd: float | None = None,
+    routing_saved_usd: float | None = None,
+    prompt_cache_saved_usd: float | None = None,
+    semantic_cache_saved_usd: float | None = None,
 ) -> UsageRecord:
     """Persist one usage row (caller commits)."""
     row = UsageRecord(
@@ -171,6 +175,10 @@ async def record_usage(
         status=status,
         quality=quality,
         quality_source=quality_source,
+        compression_saved_usd=compression_saved_usd,
+        routing_saved_usd=routing_saved_usd,
+        prompt_cache_saved_usd=prompt_cache_saved_usd,
+        semantic_cache_saved_usd=semantic_cache_saved_usd,
     )
     session.add(row)
     return row

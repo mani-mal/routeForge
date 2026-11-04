@@ -1282,6 +1282,12 @@ B50 (published context limits) adds one more column to `onboarded_models`:
 ```sql
 -- 2026-09-22 (B50): where an onboarded model's context window came from
 ALTER TABLE onboarded_models ADD COLUMN context_window_source VARCHAR(16);
+-- 2026-11-04 (model metrics slice 1): per-lever savings on usage_records.
+-- Run before rolling the image; NULL routing_saved_usd marks a pre-change row.
+ALTER TABLE usage_records    ADD COLUMN compression_saved_usd DOUBLE PRECISION;
+ALTER TABLE usage_records    ADD COLUMN routing_saved_usd DOUBLE PRECISION;
+ALTER TABLE usage_records    ADD COLUMN prompt_cache_saved_usd DOUBLE PRECISION;
+ALTER TABLE usage_records    ADD COLUMN semantic_cache_saved_usd DOUBLE PRECISION;
 -- 2026-10-09 (B72, trajectory envelope). The `trajectory_envelopes` table is new and
 -- is created at boot; these three columns are on existing tables.
 ALTER TABLE app_policies     ADD COLUMN trajectory_mode VARCHAR(16);
