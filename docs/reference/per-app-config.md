@@ -1140,6 +1140,17 @@ an `onprem_only` app, with the reason on the option.
 A row that already exists in an incompatible shape is *visibly* floored at runtime to
 `verified_then_stream` (the three `StreamFallback` reasons below), never served unverified.
 
+**Tool-calling turns (`tools` offered, or tool results replayed).** Only one shape
+streams live: `stream_mode: stream_unverified` **and** compiled `client_output: raw` **and**
+not `onprem_only` **and** not `require_verification` (a `passthrough` app is the usual
+case). Then the structured conversation (assistant `tool_calls`, `role: "tool"` results)
+and `tools` / `tool_choice` go to the backend exactly as on the non-streamed tool path,
+text deltas and `tool_calls` fragments are forwarded as they arrive (OpenAI streaming
+shape, `finish_reason: "tool_calls"`), and tool-call arguments are never redacted. Every
+other tool turn — `client_output: redact`, `incremental_verify`, `verified_then_stream`,
+or either floor — stays buffered: served as one complete verified completion, then
+emitted as SSE. The step-9 floor is unchanged.
+
 An unrecognized `stream_mode` value is a **422** (`bad stream_mode '<value>'`), never a
 silent fallback to `off` — the same guarantee `pii_detection` gives
 (`app/api/admin_routes.py:set_policy`).

@@ -210,6 +210,19 @@ measure (for the same workload), price or latency drift, and external models wor
 shadow trial. It never onboards, disables or promotes anything. Onboarding stays the only
 way a model enters.
 
+## B85 — Stream path records fewer token details than the non-stream path (reasoning and cached tokens)  🔴 OPEN
+
+**Severity:** low (records only; no effect on what a client receives).
+**Found:** 2026-11-05, review of B58 (live tool streaming), which made it matter for tool turns too.
+
+The live stream's final `GenerationResult` (`app/gateway/backends/litellm_backend.py`
+`generate_stream`) omits `reasoning_tokens`, which the non-stream path reads with
+`_reasoning_tokens(usage)`, and reads cached tokens differently from `_cached_tokens(usage)`.
+So for the same request, a streamed response's outcome row can show no reasoning tokens and a
+different cached count than a non-streamed one. **Wanted:** read both from the final usage chunk
+with the same helpers, and add a parity test (same request streamed vs. not → equal outcome-row
+token fields).
+
 ## B79 — Voice models can't be routed: no `/v1/audio/*` endpoints  (FEATURE — open, needs owner discussion before build)
 
 **Severity:** feature gap; nothing broken.

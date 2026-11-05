@@ -352,7 +352,8 @@ class Gateway:
                 async for chunk in self._backend.generate_stream(
                         cand.name, messages, price, cand.tier, hint,
                         tools=tools, tool_choice=tool_choice, params=params):
-                    if ttft_ms is None and chunk.delta is not None:
+                    if ttft_ms is None and (chunk.delta is not None
+                                            or chunk.tool_calls_delta is not None):
                         ttft_ms = (time.perf_counter() - t0) * 1000.0
                     if chunk.final is not None:
                         record.actual_cost_usd = chunk.final.cost_usd
