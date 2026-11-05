@@ -642,7 +642,7 @@ on-prem, diamond is cloud. Models without a point are omitted and counted in a n
 Alerts always show, even when the window has only policy rejections.
 
 **Published data (Artificial Analysis)**: a "Published data" panel shows the freshness stamp
-"Artificial Analysis snapshot: <date> (index <version> | index version not recorded)" and
+"Artificial Analysis snapshot: <date> (index <version> | index version not recorded)" (with "date of upload, not of fetch" added when an imported file carried no fetch date) and
 three controls. **Refresh** fetches a new snapshot (admin-triggered only; it is disabled, with
 the reason shown as text, when `AA_API_KEY` is unset or `SP_EXTERNAL_FETCH=off`, and the server
 allows one refresh per 10 minutes). **Import file** uploads a JSON file produced by
