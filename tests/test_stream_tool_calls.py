@@ -148,3 +148,60 @@ def test_streamed_tool_result_turn_keeps_structure(client, monkeypatch, stream_m
     wire = _litellm_fake.CALLS[-1]["messages"]
     assert [m["role"] for m in wire] == ["user", "assistant", "tool"]
     assert wire[-1]["tool_call_id"] == "call-1"
+
+
+# --- backend-level: streamed fragments assemble to the non-streamed shape ----
+
+def _backend():
+    from app.config.loader import load_settings
+    from app.gateway.backends.litellm_backend import LiteLLMBackend
+    from tests._litellm_fake import make_test_registry
+    settings = load_settings()
+    return LiteLLMBackend(settings, registry=make_test_registry(settings))
+
+
+async def _drain(backend, model="local-8b"):
+    from app.config.schema import PriceCfg
+    out = []
+    async for c in backend.generate_stream(
+            model, [], PriceCfg(input=0.1, output=0.2, tier="cheap", provider="onprem"), "cheap", {}, tools=_TOOLS):
+        out.append(c)
+    return out
+
+
+def test_backend_assembles_streamed_tool_calls(monkeypatch):
+    import asyncio
+    from tests._litellm_fake import make_streaming_tool_acompletion
+    items = [
+        [{"index": 0, "id": "call-a", "type": "function",
+          "function": {"name": "get_weather", "arguments": ""}}],
+        [{"index": 1, "id": "call-b", "type": "function",
+          "function": {"name": "get_time", "arguments": ""}}],
+        [{"index": 0, "function": {"arguments": '{"city": '}}],
+        [{"index": 1, "function": {"arguments": '{"tz": "UTC"}'}}],
+        [{"index": 0, "function": {"arguments": '"Paris"}'}}],
+    ]
+    monkeypatch.setattr(litellm_backend, "acompletion", make_streaming_tool_acompletion(items))
+    chunks = asyncio.run(_drain(_backend()))
+    assert [c.tool_calls_delta is not None for c in chunks[:-1]] == [True] * 5
+    final = chunks[-1].final
+    assert final is not None and chunks[-1].delta is None
+    assert final.finish_reason == "tool_calls"
+    assert final.tool_calls == [
+        {"id": "call-a", "type": "function",
+         "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'}},
+        {"id": "call-b", "type": "function",
+         "function": {"name": "get_time", "arguments": '{"tz": "UTC"}'}},
+    ]
+
+
+def test_text_only_stream_unchanged(monkeypatch):
+    import asyncio
+    from tests._litellm_fake import make_streaming_acompletion
+    monkeypatch.setattr(litellm_backend, "acompletion",
+                        make_streaming_acompletion(["he", "llo"]))
+    chunks = asyncio.run(_drain(_backend()))
+    assert [c.delta for c in chunks[:-1]] == ["he", "llo"]
+    assert all(c.tool_calls_delta is None for c in chunks)
+    assert chunks[-1].final.text == "hello"
+    assert chunks[-1].final.tool_calls == []

@@ -116,6 +116,40 @@ def _to_wire(m) -> dict:
     return d
 
 
+def _fragment_dict(c) -> dict:
+    """One streamed tool-call fragment (pydantic object or dict) as a plain
+    dict, keeping only the keys that were actually set."""
+    if c is None:
+        return {}
+    if not isinstance(c, dict):
+        c = c.model_dump() if hasattr(c, "model_dump") else {
+            "index": getattr(c, "index", None), "id": getattr(c, "id", None),
+            "type": getattr(c, "type", None),
+            "function": {"name": getattr(getattr(c, "function", None), "name", None),
+                         "arguments": getattr(getattr(c, "function", None), "arguments", None)}}
+    out: dict = {"index": c.get("index") or 0}
+    for k in ("id", "type"):
+        if c.get(k):
+            out[k] = c[k]
+    fn = {k: v for k, v in (c.get("function") or {}).items() if v}
+    if fn:
+        out["function"] = fn
+    return out
+
+
+def _merge_fragments(acc: dict[int, dict], fragments: list[dict]) -> None:
+    """Assemble fragments by index: concatenate `arguments`, keep the first
+    non-null id/type/name. Result matches the non-streamed `tool_calls` shape."""
+    for f in fragments:
+        cur = acc.setdefault(f["index"], {"id": None, "type": "function",
+                                          "function": {"name": None, "arguments": ""}})
+        cur["id"] = cur["id"] or f.get("id")
+        cur["type"] = f.get("type") or cur["type"]
+        fn = f.get("function") or {}
+        cur["function"]["name"] = cur["function"]["name"] or fn.get("name")
+        cur["function"]["arguments"] += fn.get("arguments") or ""
+
+
 class LiteLLMBackend:
     name = "litellm"
 
@@ -242,6 +276,7 @@ class LiteLLMBackend:
         parts: list[str] = []
         usage: dict = {}
         finish = None
+        assembled: dict[int, dict] = {}
         async for chunk in await _acompletion(model, call):
             choices = getattr(chunk, "choices", None)
             content = None
@@ -249,6 +284,11 @@ class LiteLLMBackend:
                 finish = getattr(choices[0], "finish_reason", None) or finish
                 delta = getattr(choices[0], "delta", None)
                 content = getattr(delta, "content", None) if delta is not None else None
+                raw_calls = getattr(delta, "tool_calls", None) if delta is not None else None
+                fragments = [f for f in (_fragment_dict(c) for c in raw_calls or []) if f]
+                if fragments:
+                    _merge_fragments(assembled, fragments)
+                    yield StreamChunk(tool_calls_delta=fragments)
             u = getattr(chunk, "usage", None)
             if u is not None:
                 usage = _usage_dict(u)
@@ -266,7 +306,8 @@ class LiteLLMBackend:
         yield StreamChunk(final=GenerationResult(
             model=model, text=text, tokens_in=tokens_in, tokens_out=tokens_out,
             latency_ms=latency_ms, cost_usd=cost_usd, confidence=None,
-            tool_calls=[], cached_prompt_tokens=cached_in,
+            tool_calls=[assembled[i] for i in sorted(assembled)],
+            cached_prompt_tokens=cached_in,
             finish_reason=_finish_reason(finish)))
 
     async def health(self) -> BackendHealth:

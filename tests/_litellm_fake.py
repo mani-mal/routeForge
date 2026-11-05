@@ -137,12 +137,20 @@ class _FakeStreamChunk:
     these attributes."""
 
     def __init__(self, *, content: str | None = None, usage: dict | None = None,
-                 empty_choices: bool = False) -> None:
+                 empty_choices: bool = False, tool_calls: list[dict] | None = None,
+                 finish_reason: str | None = None) -> None:
         if empty_choices:
             self.choices = []
         else:
-            delta = SimpleNamespace(content=content)
-            self.choices = [SimpleNamespace(delta=delta)]
+            tcs = None
+            if tool_calls is not None:
+                tcs = [SimpleNamespace(
+                    index=t.get("index"), id=t.get("id"), type=t.get("type"),
+                    function=SimpleNamespace(name=(t.get("function") or {}).get("name"),
+                                             arguments=(t.get("function") or {}).get("arguments")))
+                    for t in tool_calls]
+            delta = SimpleNamespace(content=content, tool_calls=tcs)
+            self.choices = [SimpleNamespace(delta=delta, finish_reason=finish_reason)]
         self.usage = usage
 
 
@@ -163,6 +171,39 @@ def make_streaming_acompletion(deltas: list[str], *, prompt_tokens: int = 12,
         async def _gen():
             for d in deltas:
                 yield _FakeStreamChunk(content=d)
+            yield _FakeStreamChunk(
+                empty_choices=True,
+                usage={"prompt_tokens": prompt_tokens,
+                       "completion_tokens": completion_tokens})
+
+        return _gen()
+
+    return _call
+
+
+def make_streaming_tool_acompletion(items: list, *, prompt_tokens: int = 12,
+                                    completion_tokens: int = 7):
+    """Like `make_streaming_acompletion` but each item is a text delta (str),
+    a list of tool-call fragment dicts (``{index, id?, type?, function:
+    {name?, arguments?}}``), a float (seconds to sleep), or an
+    `asyncio.Event`-free callable invoked for its side effect. Emits a final
+    finish_reason chunk ("tool_calls" if any fragment was sent) then usage."""
+    async def _call(**kwargs):
+        CALLS.append(kwargs)
+
+        async def _gen():
+            sent_tools = False
+            for it in items:
+                if isinstance(it, str):
+                    yield _FakeStreamChunk(content=it)
+                elif isinstance(it, list):
+                    sent_tools = True
+                    yield _FakeStreamChunk(tool_calls=it)
+                elif isinstance(it, float):
+                    await asyncio.sleep(it)
+                elif callable(it):
+                    it()
+            yield _FakeStreamChunk(finish_reason="tool_calls" if sent_tools else "stop")
             yield _FakeStreamChunk(
                 empty_choices=True,
                 usage={"prompt_tokens": prompt_tokens,
