@@ -165,11 +165,27 @@ async def _authenticate(request: Request
 
 @router.get("/health")
 def health(request: Request) -> dict:
+    """`status` is the API process's own liveness (compose healthchecks key on
+    it) and stays "ok". `models` lists only models not known to be down; the
+    excluded ones are named, with a reason, under `unavailable` (B37)."""
     s = request.app.state.settings
     registry = getattr(request.app.state, "registry", None)
     pool = registry.effective_pool() if registry else s.routing.model_pool
+    breaker = getattr(request.app.state, "breaker", None)
+    open_circuits = breaker.open_set() if breaker is not None else frozenset()
+    bad_probe = registry.probe_not_healthy() if registry else {}
+    models: list[str] = []
+    unavailable: list[dict[str, str]] = []
+    for c in pool:
+        if c.name in open_circuits:
+            unavailable.append({"model": c.name, "reason": "circuit open"})
+        elif c.name in bad_probe:
+            unavailable.append({"model": c.name,
+                                "reason": f"probe: {bad_probe[c.name]}"})
+        else:
+            models.append(c.name)
     return {"status": "ok", "backend": "litellm",
-            "models": [c.name for c in pool],
+            "models": models, "unavailable": unavailable,
             "schema_missing": list(getattr(request.app.state, "schema_missing", []))}
 
 
