@@ -607,6 +607,45 @@ def test_unsolicited_tool_calls_on_a_plain_stream_are_dropped(client, monkeypatc
     assert frames[-2]["choices"][0]["finish_reason"] == "stop"
 
 
+def test_unsolicited_tool_calls_never_recorded_on_incremental_verify(client, monkeypatch):
+    """incremental_verify + client_output redact, no tools in the request: a
+    model that emits an unsolicited tool call with an SSN in its arguments gets
+    it dropped from the wire AND from the recorded snapshot/history."""
+    _login(client)
+    r = client.post("/admin/applications", json={"id": "live-unsol-iv", "name": "u"})
+    token = r.json()["token"]
+    assert client.put("/admin/applications/live-unsol-iv/policy",
+                      json={"stream_mode": "incremental_verify",
+                            "pii_detection": "regex"}).status_code == 200
+    monkeypatch.setattr(litellm_backend, "acompletion", make_streaming_tool_acompletion([
+        "hello", _frag_first(0, "call-1", "get_weather"),
+        _frag_args(0, json.dumps({"city": _SSN}))]))
+    resp = client.post("/v1/chat/completions", headers={"Authorization": f"Bearer {token}"},
+                       json={"model": "auto", "stream": True,
+                             "messages": [{"role": "user", "content": "hi"}]})
+    assert resp.status_code == 200, resp.text
+    frames = _parse_sse(resp.text)
+    assert not _streamed_calls(frames)
+    assert _SSN not in resp.text
+    snap = _snapshot(client, frames[0]["id"])
+    choice = snap["choices"][0]
+    assert "tool_calls" not in choice["message"]
+    assert choice["finish_reason"] != "tool_calls"
+    assert _SSN not in json.dumps(snap)
+
+
+def test_prime_stream_reraises_pipeline_rejected():
+    import asyncio
+    from app.api.routes import _prime_stream
+    from app.pipeline import PipelineRejected
+
+    async def deltas():
+        raise PipelineRejected("stream ended without a final result")
+        yield ""   # pragma: no cover
+    with pytest.raises(PipelineRejected):
+        asyncio.run(_prime_stream(deltas()))
+
+
 def test_truncated_tool_call_reports_length(client, monkeypatch):
     from tests._litellm_fake import _FakeStreamChunk
 

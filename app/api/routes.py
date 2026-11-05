@@ -1558,6 +1558,9 @@ async def _prime_stream(deltas: AsyncIterator) -> AsyncIterator:
         first = await deltas.__anext__()
     except StopAsyncIteration:
         first = done
+    except PipelineRejected:
+        await deltas.aclose()
+        raise
     except Exception as e:
         await deltas.aclose()
         logging.getLogger("serving.api").warning(

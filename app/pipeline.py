@@ -1392,7 +1392,7 @@ class Pipeline:
                 raise PipelineRejected("stream ended without a final result")
             meta.update(self._assemble_stream_meta(
                 request_id, ctx, sanitized, comp, records, result, eff,
-                det, recall.record))
+                det, recall.record, tool_mode=tool_mode))
 
         def get_meta() -> dict:
             if not meta:
@@ -1427,7 +1427,8 @@ class Pipeline:
     def _assemble_stream_meta(self, request_id: str, ctx: ExecutionPolicyContext,
                               sanitized: str, comp, records, result: GenerationResult,
                               eff: EffectivePolicy, det: Detector,
-                              mem_record: MemoryRecord | None = None) -> dict:
+                              mem_record: MemoryRecord | None = None,
+                              tool_mode: bool = False) -> dict:
         """Assemble the final streaming metadata dict, mirroring run()'s record,
         two-lever cost, and quality assembly. Step-9 verification is WAIVED on
         this path: a VerificationRecord(performed=False, passed=True) is recorded
@@ -1495,7 +1496,10 @@ class Pipeline:
             "raw_completion": result.text,
             # Internal-only (popped in routes.py): the assembled tool_calls of
             # a live tool turn, so the recorded response matches run()'s.
-            "raw_tool_calls": result.tool_calls or None,
+            # Only when the request was eligible for live tool streaming:
+            # otherwise the wire dropped any (unsolicited) tool calls, so the
+            # record must not hold raw, unredacted arguments the client never got.
+            "raw_tool_calls": (result.tool_calls or None) if tool_mode else None,
             # Step-9 verification marker: "waived" this task. Tasks 6/7 refine to
             # "waived" (stream_unverified) / "incremental" (incremental_verify).
             "verification": "waived",
