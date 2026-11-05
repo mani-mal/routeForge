@@ -308,3 +308,21 @@ def test_summary_alert_when_snapshot_stale(seeded):
     (a,) = [a for a in s["alerts"] if a["kind"] == "aa_snapshot_stale"]
     assert a["severity"] == "warning"
     assert not any(a["kind"] == "aa_snapshot_missing" for a in s["alerts"])
+
+
+def test_task_success_feedback_over_http_reaches_app_metrics(client):
+    """The reporting guide's exact call: chat, then POST /v1/feedback with
+    score_name task_success and the chat response id, then the team-lead view
+    counts it. Slice 2 missed a 422 here because its tests fed FeedbackRow."""
+    app_id, tok = _seed(client, "mx-fb", "fb")
+    chat = _chat(client, tok)
+    assert chat.status_code == 200, chat.text
+    request_id = chat.json()["id"]
+    fb = client.post("/v1/feedback", headers={"Authorization": f"Bearer {tok}"},
+                     json={"request_id": request_id, "score_name": "task_success", "value": 1})
+    assert fb.status_code == 200, fb.text
+    assert fb.json()["recorded"] is True
+    _login(client)
+    cur = client.get(f"/admin/metrics/app/{app_id}").json()["current"]
+    assert cur["cost_per_task"]["n_labelled"] >= 1
+    assert cur["successful_reported"]["n"] >= 1
