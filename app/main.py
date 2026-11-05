@@ -414,6 +414,7 @@ def create_app() -> FastAPI:
                     "docs/reference/per-app-config.md)",
                     len(missing), ", ".join(missing))
         except Exception:
+            app.state.schema_missing = None  # check did not run
             slog.warning("schema check failed; continuing to boot", exc_info=True)
 
     @app.on_event("startup")

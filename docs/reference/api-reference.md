@@ -567,8 +567,12 @@ isn't installed). Bounded labels only — no tenant or PII. See
 
 ## `GET /health`
 
-No auth. `{ "status": "...", "backend": "...", "models": [...] }`. Use it for
-readiness checks.
+No auth. `{ "status", "backend", "models": [...], "unavailable": [{"model", "reason"}], "schema_missing": [...] | null }`.
+`status` is API liveness; `models` excludes known-down models (open circuit or
+non-healthy probe), which appear under `unavailable`. `schema_missing` lists DB
+columns the code expects but the live DB lacks; `null` means the boot-time
+check did not run (it errored). The call has no side effects on breaker state.
+Use it for readiness checks.
 
 ---
 

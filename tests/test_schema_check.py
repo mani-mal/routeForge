@@ -51,6 +51,7 @@ def test_check_error_warns_and_does_not_block_boot(monkeypatch, caplog):
     monkeypatch.setattr("app.main.missing_schema_columns", boom)
     caplog.set_level(logging.WARNING, logger="serving.schema")
     with TestClient(create_app()) as c:
-        assert c.get("/health").json()["schema_missing"] == []
+        assert c.get("/health").json()["schema_missing"] is None  # did not run
     assert any(r.levelno == logging.WARNING for r in caplog.records
                if r.name == "serving.schema")
+

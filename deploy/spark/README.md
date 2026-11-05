@@ -436,9 +436,12 @@ WantedBy=multi-user.target
 vllm-qwen38`, and `docker stop` alone will bring it back — which is the point.
 
 **RouteForge's side of this line** is telling you the model is unreachable rather
-than listing it as available: backlog B37 (`docs/backlog/bugs.md`). Until that
-ships, `GET /health` reports what is *configured*, not what can serve — an
-endpoint that died hours ago still appears in `models`.
+than listing it as available (backlog B37, `docs/backlog/bugs.md`). `GET /health`
+keeps `status: "ok"` (API liveness); `models` lists only models that are not
+known-down, and `unavailable` is `[{model, reason}]` for those with an open
+circuit or a non-healthy probe (`"circuit open"`, `"probe: <status>"`).
+`schema_missing` lists DB columns the code expects but the live DB lacks
+(`null` means the boot check did not run).
 
 **The Langfuse overlay used to have the same problem, and no longer does.** After
 a host reboot on 2026-09-19 the api, ui, db and model server all came back while

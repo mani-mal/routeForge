@@ -55,3 +55,26 @@ def test_health_excludes_model_with_unhealthy_probe(client):
     # an unknown/garbage value is also not healthy (fail closed)
     reg._rows["h-model"] = replace(reg._rows["h-model"], probe_status="weird")
     assert "h-model" not in client.get("/health").json()["models"]
+
+
+def test_health_is_side_effect_free_on_breaker(client, monkeypatch, caplog):
+    """A liveness poll must not flip the half-open dedup flag or emit the
+    transition log/metric."""
+    import logging
+    from app.obs import metrics
+    _loaded(client)
+    breaker = client.app.state.breaker
+    for _ in range(10):
+        breaker.record_failure("h-model", now=0.0)
+    # Cooldown elapsed (monotonic clock is far past the 0.0 open time).
+    assert breaker.state("h-model").state == "half_open"
+    before = dict(breaker._m)
+    calls: list[str] = []
+    monkeypatch.setattr(metrics, "observe_breaker_transition", calls.append)
+    caplog.set_level(logging.INFO)
+    caplog.clear()
+    client.get("/health")
+    client.get("/health")
+    assert breaker._m == before
+    assert calls == []
+    assert not [r for r in caplog.records if "circuit transition" in r.getMessage()]

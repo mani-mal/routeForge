@@ -2027,7 +2027,7 @@ state) — there is no separate aggregation step left to get this wrong in.
 
 ## B37 — `/health` reports a model as available for 22 hours after its endpoint died  ✅ RESOLVED (2026-11-05, fix/ops-batch-b62)
 
-**Resolved 2026-11-05 (fix/ops-batch-b62):** GET /health keeps status "ok" (API liveness) but models lists only models that are not known-down; a model with an open circuit (app/gateway/breaker.py) or a non-healthy probe_status is moved to unavailable: [{model, reason}] ("circuit open", "probe: <status>"). Not built: periodic re-probing (probe_status is still only set at onboarding/edit; the breaker is the live signal).
+**Resolved 2026-11-05 (fix/ops-batch-b62):** GET /health keeps status "ok" (API liveness) but models lists only models that are not known-down; a model with an open circuit (app/gateway/breaker.py) or a non-healthy probe_status is moved to unavailable: [{model, reason}] ("circuit open", "probe: <status>"). Note: an enabled row with the default probe_status "unknown" routes but is listed under `unavailable` (fail-closed, display only). Not built: periodic re-probing (probe_status is still only set at onboarding/edit; the breaker is the live signal).
 
 **Observed (DGX Spark, 2026-09-18).** The vLLM container serving `qwen3.8-27b`
 stopped at `00:13:48Z` (clean SIGTERM, exit 0, `restart: unless-stopped`, so it

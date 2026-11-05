@@ -172,21 +172,27 @@ def health(request: Request) -> dict:
     registry = getattr(request.app.state, "registry", None)
     pool = registry.effective_pool() if registry else s.routing.model_pool
     breaker = getattr(request.app.state, "breaker", None)
-    open_circuits = breaker.open_set() if breaker is not None else frozenset()
+    # Side-effect-free read: open_set() mutates the half-open dedup flag and
+    # can emit the transition log/metric, which a liveness poll must not do.
+    def _circuit_open(name: str) -> bool:
+        return breaker is not None and breaker.state(name).state == "open"
     bad_probe = registry.probe_not_healthy() if registry else {}
     models: list[str] = []
     unavailable: list[dict[str, str]] = []
     for c in pool:
-        if c.name in open_circuits:
+        if _circuit_open(c.name):
             unavailable.append({"model": c.name, "reason": "circuit open"})
         elif c.name in bad_probe:
             unavailable.append({"model": c.name,
                                 "reason": f"probe: {bad_probe[c.name]}"})
         else:
             models.append(c.name)
+    # None = the boot-time check did not run (it errored); [] = ran, clean.
+    sm = getattr(request.app.state, "schema_missing", [])
+    schema_missing = None if sm is None else list(sm)
     return {"status": "ok", "backend": "litellm",
             "models": models, "unavailable": unavailable,
-            "schema_missing": list(getattr(request.app.state, "schema_missing", []))}
+            "schema_missing": schema_missing}
 
 
 @router.get("/metrics")

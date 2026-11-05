@@ -127,7 +127,7 @@ function fieldsOf(m: OnboardedModel): ModelFormFields {
     displayName: m.display_name,
     tier: m.tier,
     endpoint: m.endpoint,
-    apiKeyEnv: m.api_key_env ?? "",
+    apiKeyEnv: m.api_key_env?.startsWith("(invalid") ? "" : (m.api_key_env ?? ""),
     priceInput: String(m.price_input),
     priceOutput: String(m.price_output),
     quality: m.quality === null ? "" : String(m.quality),

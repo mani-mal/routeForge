@@ -74,3 +74,24 @@ def test_probe_maps_auth_failure(monkeypatch, code):
 def test_probe_result_status_is_fail_closed():
     assert ProbeResult(True, "ok").status == "healthy"
     assert ProbeResult(False, "x").status == "unreachable"
+
+
+def test_listing_masks_non_name_api_key_env():
+    from types import SimpleNamespace
+    from app.api.admin_routes import _INVALID_ENV_MASK, _ENV_NAME_RE, _onboarded_dict
+
+    def row(v):
+        return SimpleNamespace(
+            slug="s", display_name="S", provider="onprem", tier="mid", quality=None,
+            price_input=0.1, price_output=0.1, price_cached_input=None,
+            endpoint="http://e/v1", api_key_env=v, context_window=None,
+            context_window_source=None, enabled=True, allowed_app_ids=None,
+            probe_status="ok", probe_error=None, notes=None, updated_at=None,
+            region=None, prompt_retention=None, accepts_raw_sensitive=None)
+
+    assert _onboarded_dict(row("sk-live-SECRET"))["api_key_env"] == _INVALID_ENV_MASK
+    assert "SECRET" not in str(_onboarded_dict(row("sk-live-SECRET")))
+    assert _onboarded_dict(row("MY_KEY"))["api_key_env"] == "MY_KEY"
+    assert _onboarded_dict(row(None))["api_key_env"] is None
+    # re-submitting the mask is refused by the PUT validation
+    assert not _ENV_NAME_RE.match(_INVALID_ENV_MASK)

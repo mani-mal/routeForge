@@ -86,12 +86,24 @@ def _policy_dict(p) -> dict | None:
             "model_aliases": p.model_aliases}
 
 
+_INVALID_ENV_MASK = "(invalid: not an env var name \u2014 edit to fix)"
+
+
+def _masked_api_key_env(v: str | None) -> str | None:
+    """api_key_env must be an env-var NAME. A value stored before that
+    validation existed may be a raw key; never echo it back."""
+    if v is None or _ENV_NAME_RE.match(v):
+        return v
+    return _INVALID_ENV_MASK
+
+
 def _onboarded_dict(m) -> dict:
     return {"slug": m.slug, "display_name": m.display_name, "provider": m.provider,
             "tier": m.tier, "quality": m.quality, "price_input": m.price_input,
             "price_output": m.price_output,
             "price_cached_input": m.price_cached_input, "endpoint": m.endpoint,
-            "api_key_env": m.api_key_env, "context_window": m.context_window,
+            "api_key_env": _masked_api_key_env(m.api_key_env),
+            "context_window": m.context_window,
             "context_window_source": m.context_window_source,
             "enabled": m.enabled, "allowed_app_ids": m.allowed_app_ids,
             "probe_status": m.probe_status, "probe_error": m.probe_error,
