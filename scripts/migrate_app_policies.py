@@ -83,6 +83,9 @@ COLUMNS: list[tuple[str, str, str]] = [
     # candidate set is unchanged until an operator sets one.
     ("allowed_regions", "JSON", "JSON"),
     ("require_no_retention", "BOOLEAN", "BOOLEAN"),
+    # 2026-11-05 model metrics slice 4 — display-only monthly budget. NULL = no
+    # budget shown; never read by enforcement or by AppPolicy.version().
+    ("monthly_budget_usd", "DOUBLE PRECISION", "FLOAT"),
 ]
 
 # The endpoint-side half of the same feature: what an operator DECLARED about

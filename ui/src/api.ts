@@ -297,6 +297,7 @@ export interface AdminPolicy {
   allowed_models: string[] | null;
   residency: string | null;
   max_spend_usd_per_day: number | null;
+  monthly_budget_usd: number | null;   // display only; never enforced
   max_cost_usd_per_request: number | null;
   max_rpm: number | null;
   compression_enabled: boolean | null;   // null = inherit global Headroom toggle
