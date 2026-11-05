@@ -2215,7 +2215,9 @@ enforces, or the clamp is missing a residency-independent posture check. This is
 before the fix — the code really does let an `enforced` app hold `capture_io=full` once
 it is not `onprem_only`.
 
-## B26 — Catch-all exception handler in the request path logs nothing
+## B26 — Catch-all exception handler in the request path logs nothing  ✅ RESOLVED (2026-11-05, fix/ops-batch-b62)
+
+**Resolved 2026-11-05 (fix/ops-batch-b62):** already fixed before this branch by 42af441 (the catch-all handlers call logging.getLogger("serving.api").exception with the request id, no content); pinned by tests/test_serving_error_logs.py. No new code.
 
 **Severity:** medium (operational; makes production 500s undiagnosable)
 **Found:** 2026-09-10, docs-reclassification Task 3, while debugging a multi-step example
@@ -2242,7 +2244,9 @@ genuine bug anywhere in `pipeline.run()` is invisible in logs — it shows up on
 unexplained 500 count on the dashboard, with no way to tell which of the countless
 possible causes it was.
 
-## B27 — `capture_io` accepts an invalid value with 200 and stores it silently
+## B27 — `capture_io` accepts an invalid value with 200 and stores it silently  ✅ RESOLVED (2026-11-05, fix/ops-batch-b62)
+
+**Resolved 2026-11-05 (fix/ops-batch-b62):** set_policy now 422s a capture_io outside off|redacted|full (app/api/admin_routes.py), like its sibling enums.
 
 **Severity:** low-medium (fail-safe today, but silent, undocumented, and inconsistent
 with its three sibling fields)

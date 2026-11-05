@@ -1020,3 +1020,17 @@ def test_application_accepts_every_legal_default_residency(client):
                         json={"id": f"res-ok-{i}", "name": "ResOk",
                               "default_residency": value})
         assert r.status_code == 200, r.text
+
+
+def test_policy_rejects_bad_capture_io(client):
+    """B27: capture_io is validated like its sibling enums, not stored verbatim."""
+    _login(client)
+    client.post("/admin/applications", json={"id": "capapp", "name": "Cap"})
+    r = client.put("/admin/applications/capapp/policy", json={"capture_io": "bogus_capture"})
+    assert r.status_code == 422
+    assert "capture_io" in r.text
+    stored = client.get("/admin/applications/capapp").json()
+    assert "bogus_capture" not in str(stored)
+    for ok in ("off", "redacted"):
+        assert client.put("/admin/applications/capapp/policy",
+                          json={"capture_io": ok}).status_code == 200

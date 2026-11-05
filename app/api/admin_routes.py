@@ -28,7 +28,7 @@ from app.apps.policy import AppPolicyView, alias_pairs, policy_view_from
 from app.apps.snapshot import build_config_snapshot
 from app.apps.tokens import new_service_credential, new_token
 from app.api.routes import _sanitize_session_id
-from app.policy.compile import (PolicyViolation, check_invariants, compile_policy,
+from app.policy.compile import (TELEMETRY_IOS, PolicyViolation, check_invariants, compile_policy,
                                 validate_effective)
 from app.policy.effective import PROTECTED_ENTITIES
 from app.policy.enums import (
@@ -608,6 +608,10 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
             raise HTTPException(422, f"bad pii_detection {body.pii_detection!r}")
         if body.stream_mode is not None and body.stream_mode not in STREAM_MODES:
             raise HTTPException(422, f"bad stream_mode {body.stream_mode!r}")
+        if body.capture_io is not None and body.capture_io not in TELEMETRY_IOS:
+            raise HTTPException(
+                422, f"bad capture_io {body.capture_io!r}; legal values: "
+                f"{list(TELEMETRY_IOS)}")
         if body.trajectory_mode is not None and body.trajectory_mode not in TRAJECTORY_MODES:
             raise HTTPException(422, f"bad trajectory_mode {body.trajectory_mode!r}")
         if body.policy_mode is not None and body.policy_mode not in POLICY_MODES:
