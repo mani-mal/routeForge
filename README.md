@@ -24,10 +24,10 @@ Plane (training, evaluation, promotion) is **orchestrated, not hosted**: RouteFo
 capture training substrate, trigger an external job and onboard the result, but runs no
 training or inference compute itself.
 
-**Paper and artifact:** *Eligibility-Constrained LLM Routing: When the Candidate Pool Is a
-Per-Request Variable* — source, PDF and data in
-[`docs/research/paper/`](docs/research/paper/); the version that accompanies it is tag
-[`arxiv-v1`](https://github.com/mani-mal/routeForge/tree/arxiv-v1). Code is Apache-2.0
+**Paper and artifact:** *RouteForge: Testing and Replaying Policy-Constrained LLM Routing* —
+source, PDF and data in [`docs/research/paper/`](docs/research/paper/); the version that
+accompanies it is tag [`arxiv-v2`](https://github.com/mani-mal/routeForge/tree/arxiv-v2)
+(`arxiv-v1` marks an earlier draft). Code is Apache-2.0
 ([`LICENSE`](LICENSE)); see [`CITATION.cff`](CITATION.cff) to cite it.
 
 ## Architecture
