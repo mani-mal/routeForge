@@ -256,6 +256,19 @@ the fully-verified path regardless of `stream_mode`. (The dashboard's live
 decision stream is a *separate*, admin-only channel — see
 [Decision stream](#the-decision-stream-admin-only).)
 
+### Streaming with `tools`
+
+A tool-calling turn (`tools` offered, or `role: "tool"` results replayed) streams
+**live** only for an app with `stream_mode: stream_unverified`, compiled
+`client_output: raw` (e.g. `policy_mode: passthrough`), that is not `onprem_only` and has
+no `require_verification` on the request. Text deltas and `delta.tool_calls` fragments
+(`index`, then `id`/`type`/`function.name` on the first fragment, `function.arguments`
+pieces after) arrive as the model produces them, and the stream finishes with
+`finish_reason: "tool_calls"`. All other tool turns are served as one complete,
+verified completion and then emitted as the same SSE shape (the whole `tool_calls`
+in one frame) — no time-to-first-token benefit. See
+[`stream_mode`](per-app-config.md#stream_mode).
+
 ### Token usage on a stream (`stream_options.include_usage`)
 
 Send `"stream_options": {"include_usage": true}` to receive token usage on a stream,

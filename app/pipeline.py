@@ -840,8 +840,7 @@ class Pipeline:
             # replayed tool call's arguments reach the model verbatim.
             # `reps.redacted` is None only when no detector ran, in which case
             # there is nothing to redact and the raw view IS the redacted one.
-            san_messages = list(reps.raw if eff.protection.model_input == "raw"
-                                else (reps.redacted or reps.raw))
+            san_messages = self._tool_turn_messages(reps, eff)
             recall = RecallResult([], None)
         else:
             # Step 4 (task mode) always decides "direct" -- agent loops are
@@ -947,20 +946,7 @@ class Pipeline:
                     latency_ms=check_latency_ms)
 
         if tool_mode:
-            # No compression on a tool conversation: Headroom rewrites text and
-            # would corrupt tool_call/tool_result structure. Build a bypassed
-            # CompressionResult so the cost/trace accounting below is identical.
-            # Tool schemas and replayed tool_call arguments are billed prompt
-            # tokens too; leaving them out under-priced every agent turn.
-            tb = (sum(count_tokens(m.content) for m in san_messages)
-                  + sum(count_tokens(json.dumps(m.tool_calls))
-                        for m in san_messages if m.tool_calls)
-                  + (count_tokens(json.dumps(tools)) if tools else 0))
-            comp = CompressionResult(
-                san_messages, tb, tb,
-                CompressionRecord(
-                    enabled=self._co_cfg_provider().enabled, applied=False,
-                    bypass_reason="tool_calling", tokens_before=tb, tokens_after=tb))
+            comp = self._tool_turn_compression(san_messages, tools)
         else:
             comp = compress(san_messages, ctx, self._co_cfg_provider(), ccr=self._ccr)
         complexity = min(1.0, comp.tokens_after / 2000)
@@ -1176,6 +1162,34 @@ class Pipeline:
             "raw_tool_calls": raw_tool_calls,
         }
 
+    @staticmethod
+    def _tool_turn_messages(reps: Representations, eff: EffectivePolicy) -> list[Message]:
+        """The structured, per-message view of a client-driven tool conversation
+        that the model is shown (shared by `run()` and the live `run_stream()`
+        tool path). `model_input` picks the view: `redact` sends the gate's
+        per-message redacted copy (content AND replayed tool_call arguments
+        masked), `raw` the client's messages untouched. `reps.redacted` is None
+        only when no detector ran, so the raw view IS the redacted one."""
+        return list(reps.raw if eff.protection.model_input == "raw"
+                    else (reps.redacted or reps.raw))
+
+    def _tool_turn_compression(self, san_messages: list[Message],
+                               tools: list[dict] | None) -> CompressionResult:
+        """No compression on a tool conversation: Headroom rewrites text and
+        would corrupt tool_call/tool_result structure. Build a bypassed
+        CompressionResult so the cost/trace accounting is identical. Tool
+        schemas and replayed tool_call arguments are billed prompt tokens too;
+        leaving them out under-priced every agent turn."""
+        tb = (sum(count_tokens(m.content) for m in san_messages)
+              + sum(count_tokens(json.dumps(m.tool_calls))
+                    for m in san_messages if m.tool_calls)
+              + (count_tokens(json.dumps(tools)) if tools else 0))
+        return CompressionResult(
+            san_messages, tb, tb,
+            CompressionRecord(
+                enabled=self._co_cfg_provider().enabled, applied=False,
+                bypass_reason="tool_calling", tokens_before=tb, tokens_after=tb))
+
     async def run_stream(self, request_id: str, tenant_id: str,
                          request: ChatRequest, app_policy=None,
                          profile: AppPrivacyProfile | None = None,
@@ -1183,7 +1197,7 @@ class Pipeline:
                          internals: dict | None = None,
                          workload: str | None = None,
                          trajectory=None
-                         ) -> tuple[AsyncIterator[str], Callable[[], dict]]:
+                         ) -> tuple[AsyncIterator[str | list], Callable[[], dict]]:
         """Real backend token-streaming substrate for the direct (single-shot)
         path (Tasks 6-7 wire the route to this). Skips step-9 verification --
         the verification marker in the final metadata is "waived".
@@ -1256,12 +1270,17 @@ class Pipeline:
                      else reps.text_raw)
         model_text = reps.text_raw if eff.protection.model_input == "raw" else sanitized
 
-        # A client-driven tool conversation needs run()'s structured path: it
-        # forwards `tools` and keeps per-message roles/tool_call_ids, where the
-        # live token path below flattens everything into one prompt and has no
-        # way to stream a tool_calls answer. Serve it as one complete
-        # completion; the route then emits it (tool_calls included) as SSE.
-        if _is_tool_conversation(request):
+        # A client-driven tool conversation streams LIVE only when the app may
+        # receive raw output: `stream_unverified`, compiled `client_output ==
+        # raw`, and neither the residency nor the verification floor applies.
+        # Anything else (redact egress, incremental_verify,
+        # verified_then_stream, onprem_only, require_verification) is served as
+        # one complete, verified completion by run() and then emitted as SSE.
+        tool_mode = _is_tool_conversation(request)
+        if tool_mode and not (
+                eff.protection.stream_mode == "stream_unverified"
+                and eff.protection.client_output == "raw"
+                and not ctx.onprem_only and not ctx.require_verification):
             raise StreamFallback(
                 "tool-calling conversation: served as one complete completion, "
                 "then streamed")
@@ -1298,21 +1317,31 @@ class Pipeline:
                 "client_output=redact: unverified streaming cannot redact egress, "
                 "so the response is verified as a complete response first")
 
+        tools = request.tools if tool_mode else None
+        tool_choice = request.tool_choice if tool_mode else None
         # `model_input` selects the model-facing view here exactly as in run().
-        san_messages = [Message(role=request.messages[-1].role, content=model_text)]
+        if tool_mode:
+            # Same structured messages + tools as run()'s tool path (shared
+            # helpers); no memory, no compression.
+            san_messages = self._tool_turn_messages(reps, eff)
+            recall = RecallResult([], None)
+            comp = self._tool_turn_compression(san_messages, tools)
+        else:
+            san_messages = [Message(role=request.messages[-1].role, content=model_text)]
         # Memory READ only (Feature 5, Task 2) -- mirrors run()'s hook. NEVER
         # a WRITE on this path: step-9 verify() never runs while streaming
         # (waived, by design -- see this method's docstring), so there is no
         # verified output to build a sanitized-only summary from. Writing
         # `result.text` here would be writing un-verified content, which R1 /
         # this task's "never on any path" rule forbids.
-        mem_cfg = self._s.serving.memory
-        recall = recall_memory(self._memory, mem_cfg, ctx, san_messages,
-                               tenant_id=tenant_id, application_id=tenant_id,
-                               session_id=session_id or "")
-        if recall.messages:
-            san_messages = recall.messages + san_messages
-        comp = compress(san_messages, ctx, self._co_cfg_provider(), ccr=self._ccr)
+        if not tool_mode:
+            mem_cfg = self._s.serving.memory
+            recall = recall_memory(self._memory, mem_cfg, ctx, san_messages,
+                                   tenant_id=tenant_id, application_id=tenant_id,
+                                   session_id=session_id or "")
+            if recall.messages:
+                san_messages = recall.messages + san_messages
+            comp = compress(san_messages, ctx, self._co_cfg_provider(), ccr=self._ccr)
         complexity = min(1.0, comp.tokens_after / 2000)
         if internals is not None:
             internals["outcome_ctx"]["complexity"] = complexity
@@ -1327,15 +1356,20 @@ class Pipeline:
                 if hasattr(request, k)}
         stream, records = await self._gateway.run_stream(
             ctx, comp.messages, comp.tokens_after, complexity, hint,
+            tools=tools, tool_choice=tool_choice,
             params=request.generation_params(), attempt_log=_attempt_log(internals))
 
         meta: dict = {}
 
-        async def _deltas() -> AsyncIterator[str]:
+        async def _deltas() -> AsyncIterator[str | list]:
+            """Yields text deltas (`str`) and, on a live tool turn, tool-call
+            fragments (`list[dict]`) in arrival order."""
             result: GenerationResult | None = None
             async for chunk in stream:
                 if chunk.delta is not None:
                     yield chunk.delta
+                if chunk.tool_calls_delta is not None:
+                    yield chunk.tool_calls_delta
                 if chunk.final is not None:
                     result = chunk.final
                     if internals is not None and "outcome_ctx" in internals:

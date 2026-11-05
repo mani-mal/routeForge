@@ -1579,12 +1579,22 @@ def _stream_unverified_response(
         try:
             yield sse_frame(openai_chunk(request_id, model, role="assistant",
                                          created=created))
+            streamed_tool_calls = False
             async for delta in watched:
+                if isinstance(delta, list):
+                    # A live tool-call fragment batch (client_output=raw only;
+                    # run_stream gates this): forwarded exactly as received.
+                    streamed_tool_calls = True
+                    yield sse_frame(openai_chunk(request_id, model, tool_calls=delta,
+                                                 created=created))
+                    continue
                 yield sse_frame(openai_chunk(request_id, model, delta=delta,
                                              created=created))
             meta = get_meta()  # valid only now that `deltas` is fully drained
-            yield sse_frame(openai_chunk(request_id, model, finish_reason="stop",
-                                         created=created))
+            yield sse_frame(openai_chunk(
+                request_id, model,
+                finish_reason="tool_calls" if streamed_tool_calls else "stop",
+                created=created))
             usage = _stream_usage(body, meta.get("usage") if meta else None)
             if usage is not None:   # B53: only when the client asked for it
                 yield sse_frame(usage_chunk(request_id, model, usage,
