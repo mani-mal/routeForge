@@ -34,12 +34,17 @@ const inputCls =
 
 function HealthBadge({ status, error }: { status: string; error: string | null }) {
   const cls =
-    status === "healthy" ? "text-cheap" : status === "unreachable" ? "text-alert" : "text-gray-500";
-  const mark = status === "healthy" ? "●" : status === "unreachable" ? "●" : "○";
+    status === "healthy"
+      ? "text-cheap"
+      : status === "unreachable" || status === "unauthorized"
+        ? "text-alert"
+        : "text-gray-500";
+  const mark = status === "healthy" || status === "unreachable" || status === "unauthorized" ? "●" : "○";
+  const label = status === "unauthorized" ? "unauthorized (credentials rejected)" : status;
   return (
     <span className={`inline-flex items-center gap-1 whitespace-nowrap font-mono text-xs ${cls}`} title={error ?? undefined}>
       <span aria-hidden="true">{mark}</span>
-      {status}
+      {label}
     </span>
   );
 }
@@ -210,6 +215,7 @@ function ModelFields({
             title={lockSlug ? "The slug is the model's identity and the key the endpoint is probed for — to change it, delete the model and onboard it again." : undefined}
             className={`${inputCls}${lockSlug ? " text-gray-500 cursor-not-allowed" : ""}`}
           />
+          <span className="text-[11px] text-gray-500">Must equal the model id the endpoint serves (its /v1/models id).</span>
         </label>
         <label className="flex flex-col gap-1 text-xs text-gray-500">
           tier
@@ -226,6 +232,7 @@ function ModelFields({
         <label className="flex flex-col gap-1 text-xs text-gray-500">
           api key env (optional)
           <input value={fields.apiKeyEnv} onChange={(e) => set({ apiKeyEnv: e.target.value })} placeholder="(none)" className={inputCls} />
+          <span className="text-[11px] text-gray-500">Name of an environment variable in the API container, e.g. SP_ONPREM_API_KEY — not the key.</span>
         </label>
         <div className="grid grid-cols-2 gap-3">
           <label className="flex flex-col gap-1 text-xs text-gray-500">
@@ -333,7 +340,9 @@ function ProbeResult({ status, error }: { status: string; error: string | null }
     <span className={`text-xs ${status === "healthy" ? "text-cheap" : "text-alert"}`}>
       {status === "healthy"
         ? "probe ok — enabled"
-        : `probe failed — saved disabled: ${error ?? "unreachable"}`}
+        : status === "unauthorized"
+          ? `endpoint rejected the credentials — saved disabled: ${error ?? "unauthorized"}`
+          : `probe failed — saved disabled: ${error ?? "unreachable"}`}
     </span>
   );
 }

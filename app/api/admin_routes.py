@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import os
 import re
 import time
 
@@ -1056,12 +1057,28 @@ async def _validate_policy_values(body: "PolicyIn", settings, session,
             "monthly budget (it is display only and never blocks a request).")
 
 
+_ENV_NAME_RE = re.compile(r"^(?=.{1,128}$)[A-Z_][A-Z0-9_]*$")
+
+
+def _onboard_warnings(s, body: OnboardIn) -> list[str]:
+    warns = price_warnings(s, body.price_input, body.price_output)
+    if body.api_key_env and not os.environ.get(body.api_key_env):
+        warns = [*warns, f"env var {body.api_key_env} is not set in the API container"]
+    return warns
+
+
 def _static_validate_onboard(body: OnboardIn, s) -> None:
     tiers = set(s.routing.tiers)
     if body.tier not in tiers:
         raise HTTPException(422, f"bad tier {body.tier!r}")
     if not re.match(r"^https?://", body.endpoint):
         raise HTTPException(422, "endpoint must be an http(s) URL")
+    # B32/B61: api_key_env is the NAME of an env var, never the key. The shape
+    # check also stops a pasted key from being stored (and echoed) in clear.
+    if body.api_key_env is not None and not _ENV_NAME_RE.match(body.api_key_env):
+        raise HTTPException(
+            422, "api_key_env is the NAME of an environment variable in the API "
+            "container (e.g. SP_ONPREM_API_KEY), not the key itself")
     if body.price_input < 0 or body.price_output < 0:
         raise HTTPException(422, "price must be >= 0")
     if body.price_cached_input is not None and body.price_cached_input < 0:
@@ -1218,7 +1235,7 @@ async def onboard_model(body: OnboardIn, request: Request,
             quality=body.quality, context_window=context_window,
             context_window_source=context_window_source,
             allowed_app_ids=body.allowed_app_ids, notes=body.notes,
-            enabled=final_enabled, probe_status=("healthy" if ok else "unreachable"),
+            enabled=final_enabled, probe_status=_probe.status,
             probe_error=(None if ok else detail),
             # P1b declarations. `region`/`prompt_retention` are full-replace,
             # same as every other optional field on this route (api_key_env,
@@ -1239,9 +1256,9 @@ async def onboard_model(body: OnboardIn, request: Request,
         await session.commit()
     await reg.refresh(request.app.state.db)
     return {"slug": body.slug, "enabled": final_enabled,
-            "probe_status": "healthy" if ok else "unreachable",
+            "probe_status": _probe.status,
             "probe_error": None if ok else detail,
-            "warnings": price_warnings(s, body.price_input, body.price_output)}
+            "warnings": _onboard_warnings(s, body)}
 
 
 # {slug:path} (not {slug}) so real OpenAI-compatible ids that contain a slash
@@ -1277,7 +1294,7 @@ async def edit_onboarded_model(slug: str, body: OnboardIn, request: Request,
             quality=body.quality, context_window=context_window,
             context_window_source=context_window_source,
             allowed_app_ids=body.allowed_app_ids, notes=body.notes,
-            enabled=final_enabled, probe_status=("healthy" if ok else "unreachable"),
+            enabled=final_enabled, probe_status=_probe.status,
             probe_error=(None if ok else detail),
             # region/prompt_retention: same full-replace semantics as
             # onboard_model above. accepts_raw_sensitive: the deliberate
@@ -1288,9 +1305,9 @@ async def edit_onboarded_model(slug: str, body: OnboardIn, request: Request,
         await session.commit()
     await reg.refresh(request.app.state.db)
     return {"slug": slug, "enabled": final_enabled,
-            "probe_status": "healthy" if ok else "unreachable",
+            "probe_status": _probe.status,
             "probe_error": None if ok else detail,
-            "warnings": price_warnings(s, body.price_input, body.price_output)}
+            "warnings": _onboard_warnings(s, body)}
 
 
 @admin_router.delete("/infra/models/{slug:path}")  # {slug:path} for slashed ids — see PUT above (B19)

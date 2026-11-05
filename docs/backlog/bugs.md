@@ -907,7 +907,9 @@ have. Boot still succeeds (serving must not refuse to start over a missing analy
 column), but the gap is now a loud boot-time log line instead of a silent per-request
 WARNING an operator has to notice.
 
-## B61 — UI: the onboarding form's "api key env" field accepts a key value, and gives no hint  🔴 OPEN
+## B61 — UI: the onboarding form's "api key env" field accepts a key value, and gives no hint  ✅ RESOLVED (2026-11-05, fix/ops-batch-b62)
+
+**Resolved 2026-11-05 (fix/ops-batch-b62):** admin API 422s an api_key_env that is not an env-var NAME (^[A-Z_][A-Z0-9_]*$, max 128); a well-formed but unset name is accepted with a warning; 401/403 probes give probe_status "unauthorized" (not routable, same as unreachable); the onboarding form has helper text, an unauthorized label, and a slug note.
 
 **Severity:** low-medium (operator trap; leaks a secret into the config table and the screen).
 **Found:** 2026-10-06, onboarding `qwen3-coder-next` on the DGX lab.
@@ -2166,7 +2168,9 @@ container", "keys rejected", "keys belong to project X, not Y"); (4) put the
 "server-reachable host, not the browser URL" note beside the field instead of in
 a tooltip.
 
-## B32 — Onboard form's "api key env" silently accepts a raw key; a 401 is reported as "unreachable"
+## B32 — Onboard form's "api key env" silently accepts a raw key; a 401 is reported as "unreachable"  ✅ RESOLVED (2026-11-05, fix/ops-batch-b62)
+
+**Resolved 2026-11-05 (fix/ops-batch-b62):** fixed together with B61 (same change): name validation, unset-env warning, new probe_status "unauthorized".
 
 **Severity:** low–medium (UX; no privacy impact). Every operator onboarding an
 authenticated endpoint (vLLM `--api-key`, NIM) is likely to hit it.
