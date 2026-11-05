@@ -1,6 +1,6 @@
 // Map each pool model to an Artificial Analysis slug. Suggestions come first;
 // any other slug can be typed. The server validates against the latest snapshot.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { adminApi } from "../../api";
 import type { ExternalMap, ExternalMapRow } from "../../api";
 
@@ -85,6 +85,14 @@ function Row({ row, onSaved }: { row: ExternalMapRow; onSaved: () => void }) {
 export function MappingDialog({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
   const [data, setData] = useState<ExternalMap | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    closeRef.current?.focus();
+    return () => opener?.focus?.();
+  }, []);
 
   useEffect(() => {
     adminApi
@@ -96,6 +104,21 @@ export function MappingDialog({ onClose, onSaved }: { onClose: () => void; onSav
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
+      if (e.key === "Tab" && dialogRef.current) {
+        // keep focus inside the dialog
+        const f = dialogRef.current.querySelectorAll<HTMLElement>("button:not([disabled]), input, a[href]");
+        if (f.length === 0) return;
+        const first = f[0];
+        const last = f[f.length - 1];
+        const active = document.activeElement;
+        if (e.shiftKey && (active === first || !dialogRef.current.contains(active))) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && (active === last || !dialogRef.current.contains(active))) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -104,16 +127,22 @@ export function MappingDialog({ onClose, onSaved }: { onClose: () => void; onSav
   const saved = useCallback(() => onSaved(), [onSaved]);
 
   return (
-    <div role="dialog" aria-modal="true" aria-label="Map models to Artificial Analysis" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+    <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Map models to Artificial Analysis" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
       <div className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-md border border-edge bg-panel p-4 shadow-xl">
         <div className="mb-3 flex items-start justify-between gap-2">
           <h2 className="font-display text-base font-semibold text-gray-50">Map models to Artificial Analysis</h2>
-          <button type="button" className={BTN} onClick={onClose}>
+          <button ref={closeRef} type="button" className={BTN} onClick={onClose}>
             Close (Esc)
           </button>
         </div>
         <p className="mb-3 text-xs text-gray-300">
           Each save is checked against the latest snapshot. Unmapped models show no published figures.
+        </p>
+        <p className="mb-3 text-xs text-gray-300">
+          Published data:{" "}
+          <a href="https://artificialanalysis.ai/" target="_blank" rel="noopener noreferrer" className="text-accent underline">
+            Artificial Analysis
+          </a>
         </p>
         {error && (
           <p role="alert" className="text-sm text-red-300">

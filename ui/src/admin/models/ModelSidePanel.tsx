@@ -49,7 +49,8 @@ function Published({ row }: { row: ModelMetricsRow }) {
             {pubMoney(p.price_in)} / {pubMoney(p.price_out)} / {pubMoney(p.price_blended)}
           </Item>
           <Item label="Snapshot">
-            #{p.snapshot_id} · {stamp(p.retrieved_at)} · {p.index_version ? `index ${p.index_version}` : "index version not recorded"}
+            #{p.snapshot_id} · {stamp(p.retrieved_at)}
+            {p.dated_at_upload ? " (date of upload, not of fetch)" : ""} · {p.index_version ? `index ${p.index_version}` : "index version not recorded"}
           </Item>
         </dl>
       )}

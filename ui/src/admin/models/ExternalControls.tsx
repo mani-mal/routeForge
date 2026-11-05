@@ -61,9 +61,9 @@ export function ExternalControls({
     <div className="flex flex-col gap-2">
       <p className="text-sm text-gray-100">
         {snapshot
-          ? `Artificial Analysis snapshot: ${stamp(snapshot.retrieved_at)} (${
-              snapshot.index_version ? `index ${snapshot.index_version}` : "index version not recorded"
-            })`
+          ? `Artificial Analysis snapshot: ${stamp(snapshot.retrieved_at)}${
+              snapshot.dated_at_upload ? " (date of upload, not of fetch)" : ""
+            } (${snapshot.index_version ? `index ${snapshot.index_version}` : "index version not recorded"})`
           : "Artificial Analysis snapshot: none imported yet"}
       </p>
       <div className="flex flex-wrap items-center gap-3">

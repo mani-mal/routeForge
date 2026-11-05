@@ -496,7 +496,10 @@ async function extJson<T>(r: Response): Promise<T> {
   try {
     const d = ((await r.json()) as { detail?: unknown }).detail;
     if (typeof d === "string" && d.trim()) msg = d;
-    else if (d && typeof d === "object") {
+    else if (Array.isArray(d)) {
+      // FastAPI validation errors: a list of {msg}
+      msg = d.map((e: { msg?: string }) => e.msg ?? "").filter(Boolean).join("; ") || msg;
+    } else if (d && typeof d === "object") {
       const o = d as { message?: unknown; retry_after_s?: unknown };
       if (typeof o.message === "string") {
         msg = o.message;
@@ -504,8 +507,6 @@ async function extJson<T>(r: Response): Promise<T> {
           msg += ` Try again in ${Math.ceil(o.retry_after_s)} s.`;
         }
       }
-    } else if (Array.isArray(d)) {
-      msg = d.map((e: { msg?: string }) => e.msg ?? "").filter(Boolean).join("; ") || msg;
     }
   } catch {
     /* non-JSON error body */
@@ -520,6 +521,8 @@ export interface ExternalSnapshotInfo {
   retrieved_at: string;
   index_version: string | null;
   row_count: number;
+  /** True when an import carried no fetch date: retrieved_at is the upload time. */
+  dated_at_upload: boolean;
 }
 export interface ExternalSnapshots {
   snapshots: ExternalSnapshotInfo[];
@@ -539,6 +542,7 @@ export interface ExternalMap {
 export interface ExternalImportResult {
   snapshot_id: number;
   row_count: number;
+  dated_at_upload?: boolean;
 }
 
 /** Artificial Analysis figures for a mapped model. Every field is nullable
@@ -558,6 +562,7 @@ export interface PublishedMetrics {
   ttfat_s: number | null;
   snapshot_id: number;
   retrieved_at: string;
+  dated_at_upload?: boolean;
   index_version: string | null;
 }
 
@@ -569,6 +574,8 @@ export type ComparabilityValue =
 
 export interface Comparability {
   overall: ComparabilityValue;
+  /** 0 = comparable .. 3 = not_comparable; the server owns the severity order. */
+  overall_rank: number;
   speed: ComparabilityValue;
   ttft: ComparabilityValue;
   price: ComparabilityValue;
@@ -578,6 +585,7 @@ export interface Comparability {
 export interface PublishedSnapshotInfo {
   snapshot_id: number;
   retrieved_at: string;
+  dated_at_upload?: boolean;
   index_version: string | null;
   source: string;
   origin: string;
@@ -669,7 +677,7 @@ export interface ModelMetricsRow {
   speed_tps: MetricField;
   ttft_ms: { p50: number | null; p95: number | null; n: number; insufficient?: boolean; scope?: string };
   status: string;
-  /** 0 = worst (cost anomaly) .. 4 = healthy; the server owns the order. */
+  /** 0 = worst (cost anomaly) .. 5 = healthy; the server owns the order. */
   status_rank: number;
   status_reasons: string[];
   /** AA figures; null when unmapped or the slug is not in the latest snapshot. */

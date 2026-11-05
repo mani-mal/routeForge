@@ -190,7 +190,7 @@ const COLS: Col[] = [
     label: "Comparable?",
     published: true,
     tip: "Whether the published figures can be compared with what RouteForge measured for this model. Decided by the server; hover a badge for the reasons.",
-    sort: (r) => r.comparability?.overall ?? null,
+    sort: (r) => r.comparability?.overall_rank ?? null,
     render: (r) => {
       if (!r.comparability) return <span className="font-mono">—</span>;
       const c = comparabilityLabel(r.comparability.overall);
