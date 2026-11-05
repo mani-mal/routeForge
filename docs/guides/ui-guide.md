@@ -265,7 +265,9 @@ Four cards (each with a "?" tooltip giving the definition):
   attempted cost per task (or "per request" when the app sends no trajectory id) sits beneath.
 - **Successful (reported)** - the share of labelled tasks the application reported as
   successful, with "completed without failure" beneath (not a quality measure). With no labels
-  it points to [Reporting task success](reporting-task-success.md).
+  it points to [Reporting task success](reporting-task-success.md). Labels entered by an admin in
+  the console count too, not only those the application sends. When enough tasks are labelled
+  and none succeeded, Cost per successful task reads "no successful tasks reported".
 - **p95 task time** - how long the slowest 5% of tasks take.
 
 Below: **Spend by workload** (the "Retries and failovers" line overlaps the workloads and is

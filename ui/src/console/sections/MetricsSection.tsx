@@ -22,6 +22,7 @@ const SELECT =
   "bg-ink border border-edge rounded-md px-2 py-1.5 text-sm text-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent";
 
 const GUIDE_URL = "https://github.com/mani-mal/routeForge/blob/main/docs/guides/reporting-task-success.md";
+const GUIDE_PATH = "docs/guides/reporting-task-success.md";
 
 const RISK: Record<string, { icon: string; label: string }> = {
   low: { icon: "✓", label: "risk: low" },
@@ -129,7 +130,11 @@ function Cards({ cur, prev }: { cur: AppWindowView; prev: AppWindowView }) {
   const succ = cur.successful_reported;
   const p95 = cur.p95_task_time_ms;
   const p95Unit = p95.task_unit === "request" ? "per request" : "per task";
-  const cptValue = cpt.successful_insufficient || cpt.successful === null ? insufficientText(cpt.n_labelled) : money(cpt.successful);
+  const cptValue = cpt.successful_insufficient
+    ? insufficientText(cpt.n_labelled)
+    : cpt.successful === null
+      ? "no successful tasks reported"
+      : money(cpt.successful);
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
       <BudgetCard cur={cur} />
@@ -141,12 +146,11 @@ function Cards({ cur, prev }: { cur: AppWindowView; prev: AppWindowView }) {
         <span className="text-xl font-bold font-mono text-gray-100">{cptValue}</span>
         <span className="text-xs text-gray-300">
           attempted {money(cpt.attempted)} per {unit}
-          {cpt.task_unit === "request" ? " (per request)" : ""}
         </span>
       </Card>
       <Card
         label="Successful (reported)"
-        tip="Share of labelled tasks the application reported as successful (task_success = 1; the latest label wins). Reported by your application, not measured by RouteForge. Needs at least 20 labelled tasks."
+        tip="Share of labelled tasks the application reported as successful (task_success = 1; the latest label wins). Reported by your application (or entered by an admin in the console), not measured by RouteForge. Needs at least 20 labelled tasks."
         delta={succ ? change(succ.value, prev.successful_reported?.value)?.text : null}
       >
         {succ ? (
@@ -156,7 +160,8 @@ function Cards({ cur, prev }: { cur: AppWindowView; prev: AppWindowView }) {
             No reports yet — see{" "}
             <a className="underline text-accent" href={GUIDE_URL} target="_blank" rel="noreferrer">
               Reporting task success
-            </a>
+            </a>{" "}
+            ({GUIDE_PATH} in the repo)
           </span>
         )}
         <span className="text-xs text-gray-300">

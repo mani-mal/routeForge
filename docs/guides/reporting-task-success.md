@@ -13,7 +13,7 @@ you use for `/v1/chat/completions`:
 | field | value |
 |---|---|
 | `score_name` | `"task_success"` |
-| `value` | `1` (the task succeeded) or `0` (it failed). Any other value is ignored. |
+| `value` | `1` (the task succeeded) or `0` (it failed). Send the number 1 or 0; other values are stored but not counted. |
 | `request_id` | the `request_id` of **any** request that belonged to the task |
 | `comment` | optional free text |
 

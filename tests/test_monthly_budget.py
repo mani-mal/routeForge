@@ -72,3 +72,5 @@ def test_not_enforced(monkeypatch):
         assert _put(c, "mb-free", {"monthly_budget_usd": 0.000001}).status_code == 200
         for _ in range(2):  # the first call's spend is already above the budget
             assert app.chat(HELLO).status_code == 200
+        mtd = c.get("/admin/metrics/app/mb-free").json()["current"]["budget"]["month_to_date_usd"]
+        assert mtd > 0.000001  # spend really exceeded the budget, and the second call still passed
