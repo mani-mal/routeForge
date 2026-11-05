@@ -2333,7 +2333,9 @@ consumed.
 that render it) is deployment-affecting and needs its own change with its own testing —
 out of scope for a docs-only sweep.
 
-## B29 — UI stats type omits `cache_saved_usd`, which the API already returns
+## B29 — UI stats type omits `cache_saved_usd`, which the API already returns  ✅ RESOLVED (2026-11-05, fix/ops-batch-b62)
+
+**Resolved 2026-11-05 (fix/ops-batch-b62):** still true after the metrics slices (only prompt_cache_saved_usd had been added). ui/src/api.ts types cache_saved_usd (optional, for older servers) on RequestSummary, Stats and the request cost detail; aggregate.ts sums it; CostSection renders it as the semantic-cache lever (bar, legend, tile); the drilldown shows it.
 
 **Severity:** medium (a real savings figure the API produces cannot be rendered)
 **Found:** 2026-09-10, docs-reclassification Task 7 review. **Open.**

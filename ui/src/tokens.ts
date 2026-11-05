@@ -30,6 +30,7 @@ export const LEVER_HEX = {
   routing: TIER_HEX.mid,
   compression: TIER_HEX.frontier,
   promptCache: TIER_HEX.cheap,
+  semanticCache: "#a78bfa",
 } as const;
 
 export type Tier = keyof typeof TIER_HEX;

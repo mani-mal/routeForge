@@ -12,8 +12,9 @@ export function costAgg(rs: RequestSummary[]) {
   const routingSaved = rs.reduce((a, r) => a + r.routing_saved_usd, 0);
   const compressionSaved = rs.reduce((a, r) => a + r.compression_saved_usd, 0);
   const promptCacheSaved = rs.reduce((a, r) => a + (r.prompt_cache_saved_usd ?? 0), 0);
+  const semanticCacheSaved = rs.reduce((a, r) => a + (r.cache_saved_usd ?? 0), 0);
   const savedPct = baseline > 0 ? ((baseline - total) / baseline) * 100 : 0;
-  return { total, baseline, routingSaved, compressionSaved, promptCacheSaved, savedPct };
+  return { total, baseline, routingSaved, compressionSaved, promptCacheSaved, semanticCacheSaved, savedPct };
 }
 
 // Quality-per-resource density, mirroring the backend formulas in
