@@ -1031,7 +1031,9 @@ exists, so that limits hold across replicas. Reply 429 with `Retry-After`, in th
 error envelope (B49). LiteLLM Proxy's per-key TPM/RPM/parallel limits are the reference
 behaviour operators will compare against.
 
-## B58 — FEATURE: live token streaming for tool-bearing requests (coding agents)  🔴 OPEN
+## B58 — FEATURE: live token streaming for tool-bearing requests (coding agents)  ✅ RESOLVED (2026-11-05, PR #130)
+
+> **Resolved:** tool turns stream live for `stream_unverified` + `client_output: raw` apps that are not `onprem_only` / `require_verification`; everything else stays buffered as before. The `redact` case (stream text, hold back tool calls) and the `onprem_only` + passthrough floor question remain possible follow-ups. Token-detail parity on the stream path is B85.
 
 **Severity:** medium (UX; answers are correct, but nothing appears until generation finishes).
 **Found:** 2026-09-27, same evaluation as B59.
