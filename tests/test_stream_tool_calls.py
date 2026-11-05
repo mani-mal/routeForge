@@ -214,6 +214,7 @@ import asyncio  # noqa: E402
 from tests._litellm_fake import make_streaming_tool_acompletion  # noqa: E402
 
 _SSN = "482-73-1946"
+_EMAIL = "jane.doe@example.com"
 
 
 def _frag_first(idx, call_id, name):
@@ -320,7 +321,8 @@ def test_live_stream_first_frame_arrives_before_completion(client, monkeypatch):
 
         await client.app(scope, receive, send)
 
-    asyncio.run(drive())
+    with client:   # portal: run on the loop the app's DB is bound to
+        client.portal.call(drive)
     assert "first-content-frame" in events and "backend-done" in events, events
     assert events.index("first-content-frame") < events.index("backend-done"), events
 
@@ -458,3 +460,215 @@ def test_outcome_row_records_tool_call_reply(client, monkeypatch):
     assert rows[0]["reply_tool_calls"] == 1
     assert rows[0]["finish_reason"] == "tool_calls"
     assert "Paris" not in r.text
+
+
+# --- review fixes -------------------------------------------------------------
+
+def _snapshot(client, request_id):
+    _login(client)
+    r = client.get(f"/api/requests/{request_id}")
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_live_tool_stream_snapshot_matches_nonstream(client, monkeypatch):
+    """The recorded response (console snapshot, display) for a live tool turn
+    carries the assistant tool_calls and finish_reason "tool_calls", exactly
+    as the same request served non-streamed."""
+    token = _make_live_app(client, "live-snap", capture_io="redacted", pii_detection="regex")
+    monkeypatch.setattr(litellm_backend, "acompletion", make_streaming_tool_acompletion([
+        _frag_first(0, "call-1", "get_weather"), _frag_args(0, '{"city": '),
+        _frag_args(0, '"Paris"}')]))
+    frames = _parse_sse(_post_stream(client, token).text)
+    live = _snapshot(client, frames[0]["id"])
+
+    monkeypatch.setattr(litellm_backend, "acompletion", make_recording_acompletion(
+        make_response(content=None, tool_calls=[_TOOL_CALL])))
+    nr = client.post("/v1/chat/completions", headers={"Authorization": f"Bearer {token}"},
+                     json={"model": "auto", "tools": _TOOLS,
+                           "messages": [{"role": "user", "content": "weather in Paris?"}]})
+    ref = _snapshot(client, nr.json()["id"])
+
+    lc, rc = live["choices"][0], ref["choices"][0]
+    assert lc["finish_reason"] == rc["finish_reason"] == "tool_calls"
+    assert lc["message"]["content"] == rc["message"]["content"] is None
+    assert lc["message"]["tool_calls"] == rc["message"]["tool_calls"]
+    assert live["display"]["output"] == ref["display"]["output"]
+    assert "raw_tool_calls" not in live
+
+
+def _fail_stream_calls(monkeypatch, exc, *, after=None, nonstream=None):
+    """Patch the backend seam: streaming calls raise `exc` (after yielding
+    `after` chunks), non-streaming calls return `nonstream`."""
+    from tests._litellm_fake import _FakeStreamChunk
+    calls: list[bool] = []
+
+    async def fake(model, call):
+        calls.append(bool(call.get("stream")))
+        if not call.get("stream"):
+            if nonstream is None:
+                raise exc
+            return nonstream
+
+        async def gen():
+            for c in after or []:
+                yield c
+            raise exc
+        if after is None:
+            raise exc
+        return gen()
+
+    monkeypatch.setattr(litellm_backend, "_acompletion", fake)
+    return calls, _FakeStreamChunk
+
+
+def test_live_stream_context_overflow_before_first_chunk_is_a_400(client, monkeypatch):
+    from app.errors import ContextWindowExceeded
+    token = _make_live_app(client, "live-overflow")
+    _fail_stream_calls(monkeypatch, ContextWindowExceeded("m: maximum context length exceeded"))
+    r = _post_stream(client, token)
+    assert r.status_code == 400, r.text
+    assert r.json()["error"]["code"] == "context_length_exceeded"
+
+
+def test_live_stream_backend_error_before_first_chunk_uses_buffered_failover(client, monkeypatch):
+    token = _make_live_app(client, "live-prefail")
+    calls, _ = _fail_stream_calls(
+        monkeypatch, RuntimeError("connection refused"),
+        nonstream=make_response(content=None, tool_calls=[_TOOL_CALL]))
+    r = _post_stream(client, token)
+    assert r.status_code == 200, r.text
+    frames = _parse_sse(r.text)
+    assert _streamed_calls(frames)[0]["function"] == _TOOL_CALL["function"]
+    assert calls[0] is True and False in calls   # live attempt, then buffered run()
+
+
+def test_live_stream_backend_error_after_fragments_emits_error_frame(client, monkeypatch):
+    from tests._litellm_fake import _FakeStreamChunk
+    token = _make_live_app(client, "live-midfail")
+    _fail_stream_calls(monkeypatch, RuntimeError("connection reset"), after=[
+        _FakeStreamChunk(tool_calls=_frag_first(0, "call-1", "get_weather"))])
+    r = _post_stream(client, token)
+    assert r.status_code == 200
+    frames = _parse_sse(r.text)
+    assert frames[-1] == "[DONE]"
+    assert "error" in frames[-2] and frames[-2]["error"]["message"]
+    assert _streamed_calls(frames[:-2] + ["x"])[0]["id"] == "call-1"
+
+
+def test_enforced_stream_unverified_tool_turn_stays_buffered_and_redacted(client, monkeypatch):
+    """stream_unverified + the enforced preset (compiled client_output=redact):
+    never live, and an SSN in model-generated tool arguments is redacted."""
+    _litellm_fake.CALLS.clear()
+    _login(client)
+    token = client.post("/admin/applications",
+                        json={"id": "live-enforced", "name": "e"}).json()["token"]
+    assert client.put("/admin/applications/live-enforced/policy",
+                      json={"stream_mode": "stream_unverified", "pii_detection": "regex",
+                            "policy_mode": "enforced"}).status_code in (200, 422)
+    monkeypatch.setattr(litellm_backend, "acompletion", make_recording_acompletion(
+        make_response(content=None, tool_calls=[
+            {"id": "c1", "type": "function",
+             "function": {"name": "get_weather", "arguments": json.dumps({"city": _SSN})}}])))
+    r = _post_stream(client, token)
+    assert r.status_code == 200, r.text
+    assert _SSN not in r.text
+    assert not _litellm_fake.CALLS[-1].get("stream")
+
+
+def test_live_stream_model_input_redact_sends_redacted_messages(client, monkeypatch):
+    _litellm_fake.CALLS.clear()
+    token = _make_live_app(client, "live-mi-redact", pii_detection="regex",
+                           model_input="redact", client_output="raw")
+    monkeypatch.setattr(litellm_backend, "acompletion",
+                        make_streaming_tool_acompletion(["ok"]))
+    r = _post_stream(client, token, messages=[
+        {"role": "user", "content": "look up"},
+        {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "c1", "type": "function",
+             "function": {"name": "get_weather", "arguments": json.dumps({"city": _EMAIL})}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": f"found {_EMAIL}"}])
+    assert r.status_code == 200, r.text
+    call = _litellm_fake.CALLS[-1]
+    assert call["stream"] is True
+    assert _EMAIL not in json.dumps(call["messages"])
+    assert [m["role"] for m in call["messages"]] == ["user", "assistant", "tool"]
+
+
+def test_unsolicited_tool_calls_on_a_plain_stream_are_dropped(client, monkeypatch):
+    token = _make_live_app(client, "live-unsolicited")
+    monkeypatch.setattr(litellm_backend, "acompletion", make_streaming_tool_acompletion([
+        "hello", _frag_first(0, "call-1", "get_weather")]))
+    r = client.post("/v1/chat/completions", headers={"Authorization": f"Bearer {token}"},
+                    json={"model": "auto", "stream": True,
+                          "messages": [{"role": "user", "content": "hi"}]})
+    frames = _parse_sse(r.text)
+    assert not _streamed_calls(frames)
+    assert frames[-2]["choices"][0]["finish_reason"] == "stop"
+
+
+def test_truncated_tool_call_reports_length(client, monkeypatch):
+    from tests._litellm_fake import _FakeStreamChunk
+
+    async def fake(model, call):
+        async def gen():
+            yield _FakeStreamChunk(tool_calls=_frag_first(0, "call-1", "get_weather"))
+            yield _FakeStreamChunk(tool_calls=_frag_args(0, '{"city": "Pa'))
+            yield _FakeStreamChunk(finish_reason="length")
+            yield _FakeStreamChunk(empty_choices=True,
+                                   usage={"prompt_tokens": 5, "completion_tokens": 5})
+        return gen()
+    monkeypatch.setattr(litellm_backend, "_acompletion", fake)
+    token = _make_live_app(client, "live-length")
+    frames = _parse_sse(_post_stream(client, token).text)
+    assert frames[-2]["choices"][0]["finish_reason"] == "length"
+
+
+# backend-level normalisation of misbehaving providers
+
+def _run_fragments(monkeypatch, items):
+    import asyncio
+    monkeypatch.setattr(litellm_backend, "acompletion", make_streaming_tool_acompletion(items))
+    return asyncio.run(_drain(_backend()))
+
+
+def test_backend_normalises_indexless_and_repeated_fragments(monkeypatch):
+    # No index at all, ids/names repeated on every fragment, second call new id.
+    items = [
+        [{"id": "a", "type": "function", "function": {"name": "get_weather", "arguments": '{"c'}}],
+        [{"id": "a", "type": "function", "function": {"name": "get_weather", "arguments": 'ity": 1}'}}],
+        [{"id": "b", "type": "function", "function": {"name": "get_time", "arguments": "{}"}}],
+    ]
+    chunks = _run_fragments(monkeypatch, items)
+    frags = [f for c in chunks[:-1] for f in c.tool_calls_delta]
+    assert [f["index"] for f in frags] == [0, 0, 1]
+    assert [bool(f.get("id")) for f in frags] == [True, False, True]
+    assert [f["function"].get("name") for f in frags] == ["get_weather", None, "get_time"]
+    assert [c["id"] for c in chunks[-1].final.tool_calls] == ["a", "b"]
+    assert chunks[-1].final.tool_calls[0]["function"]["arguments"] == '{"city": 1}'
+
+
+def test_backend_reused_index_for_new_call_and_missing_id(monkeypatch):
+    items = [
+        [{"index": 0, "id": "a", "function": {"name": "f", "arguments": "{}"}}],
+        [{"index": 0, "id": "b", "function": {"name": "g", "arguments": "{}"}}],
+        [{"index": 1, "function": {"name": "h", "arguments": "{}"}}],
+    ]
+    calls = _run_fragments(monkeypatch, items)[-1].final.tool_calls
+    assert [c["function"]["name"] for c in calls] == ["f", "g", "h"]
+    assert calls[0]["id"] == "a" and calls[1]["id"] == "b"
+    assert calls[2]["id"].startswith("call_")
+
+
+def test_backend_yields_text_before_tool_fragments_of_one_chunk(monkeypatch):
+    from tests._litellm_fake import _FakeStreamChunk
+
+    async def fake(model, call):
+        async def gen():
+            yield _FakeStreamChunk(content="hi", tool_calls=_frag_first(0, "a", "f"))
+        return gen()
+    import asyncio
+    monkeypatch.setattr(litellm_backend, "_acompletion", fake)
+    chunks = asyncio.run(_drain(_backend()))
+    assert [(c.delta is not None, c.tool_calls_delta is not None) for c in chunks[:2]] == [
+        (True, False), (False, True)]

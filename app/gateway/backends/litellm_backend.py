@@ -9,6 +9,7 @@ import math
 import os
 import re
 import time
+import uuid
 from typing import AsyncIterator
 
 from litellm import ContextWindowExceededError, acompletion
@@ -118,7 +119,7 @@ def _to_wire(m) -> dict:
 
 def _fragment_dict(c) -> dict:
     """One streamed tool-call fragment (pydantic object or dict) as a plain
-    dict, keeping only the keys that were actually set."""
+    dict, keeping only the keys that were actually set (`index` may be None)."""
     if c is None:
         return {}
     if not isinstance(c, dict):
@@ -127,7 +128,7 @@ def _fragment_dict(c) -> dict:
             "type": getattr(c, "type", None),
             "function": {"name": getattr(getattr(c, "function", None), "name", None),
                          "arguments": getattr(getattr(c, "function", None), "arguments", None)}}
-    out: dict = {"index": c.get("index") or 0}
+    out: dict = {"index": c.get("index")}
     for k in ("id", "type"):
         if c.get(k):
             out[k] = c[k]
@@ -137,17 +138,64 @@ def _fragment_dict(c) -> dict:
     return out
 
 
-def _merge_fragments(acc: dict[int, dict], fragments: list[dict]) -> None:
-    """Assemble fragments by index: concatenate `arguments`, keep the first
-    non-null id/type/name. Result matches the non-streamed `tool_calls` shape."""
-    for f in fragments:
-        cur = acc.setdefault(f["index"], {"id": None, "type": "function",
-                                          "function": {"name": None, "arguments": ""}})
-        cur["id"] = cur["id"] or f.get("id")
-        cur["type"] = f.get("type") or cur["type"]
-        fn = f.get("function") or {}
-        cur["function"]["name"] = cur["function"]["name"] or fn.get("name")
-        cur["function"]["arguments"] += fn.get("arguments") or ""
+class _ToolCallAssembler:
+    """Normalises and assembles streamed tool-call fragments.
+
+    Providers differ: some omit `index`, reuse one for a second call, repeat
+    `id`/`name` on every fragment, or never send an id. The OpenAI SDK's
+    delta accumulator concatenates repeated strings, so the wire must be
+    well-formed: one wire index per call, `id`/`type`/`name` once on the
+    first fragment (an id is synthesised if the provider sent none), then
+    only `arguments` pieces. `calls` is the non-streamed `tool_calls` shape.
+    """
+
+    def __init__(self) -> None:
+        self._by_provider: dict = {}      # provider index -> wire index
+        self._calls: list[dict] = []
+
+    def _new(self, call_id: str | None) -> int:
+        self._calls.append({"id": call_id or f"call_{uuid.uuid4().hex[:24]}",
+                            "type": "function",
+                            "function": {"name": None, "arguments": ""}})
+        return len(self._calls) - 1
+
+    def feed(self, fragments: list[dict]) -> list[dict]:
+        out: list[dict] = []
+        for f in fragments:
+            pidx, fid = f.get("index"), f.get("id")
+            wire = self._by_provider.get(pidx) if pidx is not None else None
+            if wire is None and pidx is None:
+                if fid:   # no index: match a known id, else it is a new call
+                    wire = next((i for i, c in enumerate(self._calls)
+                                 if c["id"] == fid), None)
+                elif self._calls:
+                    wire = len(self._calls) - 1
+            if wire is not None and fid and self._calls[wire]["id"] != fid \
+                    and self._calls[wire]["function"]["name"] is not None:
+                wire = None   # provider reused an index for a new call
+            if wire is None:
+                wire = self._new(fid)
+            if pidx is not None:
+                self._by_provider[pidx] = wire
+            cur = self._calls[wire]
+            fn = f.get("function") or {}
+            frag: dict = {"index": wire}
+            first = cur["function"]["name"] is None and fn.get("name")
+            if first:
+                cur["function"]["name"] = fn["name"]
+                frag.update(id=cur["id"], type="function")
+                frag["function"] = {"name": fn["name"]}
+            args = fn.get("arguments") or ""
+            if args:
+                cur["function"]["arguments"] += args
+                frag.setdefault("function", {})["arguments"] = args
+            if "function" in frag or "id" in frag:
+                out.append(frag)
+        return out
+
+    @property
+    def calls(self) -> list[dict]:
+        return [c for c in self._calls]
 
 
 class LiteLLMBackend:
@@ -276,7 +324,7 @@ class LiteLLMBackend:
         parts: list[str] = []
         usage: dict = {}
         finish = None
-        assembled: dict[int, dict] = {}
+        assembler = _ToolCallAssembler()
         async for chunk in await _acompletion(model, call):
             choices = getattr(chunk, "choices", None)
             content = None
@@ -285,9 +333,13 @@ class LiteLLMBackend:
                 delta = getattr(choices[0], "delta", None)
                 content = getattr(delta, "content", None) if delta is not None else None
                 raw_calls = getattr(delta, "tool_calls", None) if delta is not None else None
-                fragments = [f for f in (_fragment_dict(c) for c in raw_calls or []) if f]
+                raw_frags = [f for f in (_fragment_dict(c) for c in raw_calls or []) if f]
+                if content:   # keep arrival order: text before this chunk's calls
+                    parts.append(content)
+                    yield StreamChunk(delta=content)
+                    content = None
+                fragments = assembler.feed(raw_frags) if raw_frags else []
                 if fragments:
-                    _merge_fragments(assembled, fragments)
                     yield StreamChunk(tool_calls_delta=fragments)
             u = getattr(chunk, "usage", None)
             if u is not None:
@@ -306,7 +358,7 @@ class LiteLLMBackend:
         yield StreamChunk(final=GenerationResult(
             model=model, text=text, tokens_in=tokens_in, tokens_out=tokens_out,
             latency_ms=latency_ms, cost_usd=cost_usd, confidence=None,
-            tool_calls=[assembled[i] for i in sorted(assembled)],
+            tool_calls=assembler.calls,
             cached_prompt_tokens=cached_in,
             finish_reason=_finish_reason(finish)))
 

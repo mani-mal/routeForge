@@ -57,8 +57,10 @@ class StreamFallback(Exception):
       * the app streams `stream_unverified` but has explicitly declared
         `client_output: redact` (design §2.5: egress redaction needs the
         complete response, which this mode cannot provide), or
-      * the request is a client-driven tool conversation, which only `run()`
-        can serve (tools forwarded, per-message structure kept).
+      * the request is a client-driven tool conversation that is not live-
+        eligible (live needs `stream_unverified`, compiled `client_output:
+        raw`, and neither floor); `run()` serves it (tools forwarded,
+        per-message structure kept).
     """
     pass
 
@@ -1211,7 +1213,8 @@ class Pipeline:
         Interface (documented design choice): `run_stream` is a coroutine that
         eagerly runs the gate and the runtime floor, then returns
         `(deltas, get_meta)`:
-          * `deltas` -- an async generator yielding ordered token-delta `str`s.
+          * `deltas` -- an async generator yielding ordered token-delta `str`s
+            and, on a live tool turn, tool-call fragment lists (`list[dict]`).
           * `get_meta` -- a zero-arg callable returning the final metadata dict
             (records/trace, two-lever cost, tokens, model, ctx-derived policy,
             `sanitized_prompt`, `raw_completion`, and the "waived" verification
@@ -1369,7 +1372,13 @@ class Pipeline:
                 if chunk.delta is not None:
                     yield chunk.delta
                 if chunk.tool_calls_delta is not None:
-                    yield chunk.tool_calls_delta
+                    if tool_mode:
+                        yield chunk.tool_calls_delta
+                    else:
+                        # The client offered no tools and replayed none: tool
+                        # calls here are unsolicited, never forwarded.
+                        logging.getLogger("serving.pipeline").warning("dropping unsolicited tool_calls on a "
+                                    "non-tool stream request=%s", request_id)
                 if chunk.final is not None:
                     result = chunk.final
                     if internals is not None and "outcome_ctx" in internals:
@@ -1377,6 +1386,8 @@ class Pipeline:
             # The backend stream ended normally: anything raised from here on
             # is a pipeline outcome, not a backend failure (spec §4).
             get_meta.backend_completed = True   # type: ignore[attr-defined]
+            if result is not None:
+                get_meta.finish_reason = result.finish_reason   # type: ignore[attr-defined]
             if result is None:
                 raise PipelineRejected("stream ended without a final result")
             meta.update(self._assemble_stream_meta(
@@ -1482,6 +1493,9 @@ class Pipeline:
                        "checks": self._eligibility_checks(ctx, records)},
             "sanitized_prompt": sanitized,
             "raw_completion": result.text,
+            # Internal-only (popped in routes.py): the assembled tool_calls of
+            # a live tool turn, so the recorded response matches run()'s.
+            "raw_tool_calls": result.tool_calls or None,
             # Step-9 verification marker: "waived" this task. Tasks 6/7 refine to
             # "waived" (stream_unverified) / "incremental" (incremental_verify).
             "verification": "waived",

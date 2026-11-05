@@ -853,6 +853,8 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
                     request_id, tenant, body, app_policy=app_policy, profile=profile,
                     session_id=client_session_id, internals=internals,
                     workload=workload, trajectory=trajectory)
+                if stream_mode == "stream_unverified":
+                    deltas = await _prime_stream(deltas)
             except StreamFallback:
                 pass  # fall through: run the FULL verified pipeline, then chunk it
             else:
@@ -1493,11 +1495,11 @@ class _WatchedDeltas:
     `ok`. Callers therefore meter `error` only when `failed` AND the pipeline
     did not flag `get_meta.backend_completed` (`_backend_failed`)."""
 
-    def __init__(self, deltas: AsyncIterator[str]) -> None:
+    def __init__(self, deltas: AsyncIterator) -> None:
         self._deltas = deltas
         self.failed = False
 
-    async def __aiter__(self) -> AsyncIterator[str]:
+    async def __aiter__(self) -> AsyncIterator:
         try:
             async for delta in self._deltas:
                 yield delta
@@ -1544,9 +1546,39 @@ async def _record_failed_stream(request: Request, *, tenant: str, request_id: st
                              started_ns=started_ns)
 
 
+async def _prime_stream(deltas: AsyncIterator) -> AsyncIterator:
+    """Pull the first item off a live backend stream BEFORE the 200 and the
+    role frame are committed. The backend call only starts on the first
+    iteration, so an unreachable endpoint or a context overflow surfaces
+    here, not as a truncated body. Any failure before the first item raises
+    `StreamFallback`: the request is then served by the buffered `run()`
+    path, which owns failover and the HTTP error mapping (e.g. the B36 400)."""
+    done = object()
+    try:
+        first = await deltas.__anext__()
+    except StopAsyncIteration:
+        first = done
+    except Exception as e:
+        await deltas.aclose()
+        logging.getLogger("serving.api").warning(
+            "live stream failed before first byte (%s); serving buffered", e)
+        raise StreamFallback("backend failed before the first chunk") from e
+
+    async def _chained() -> AsyncIterator:
+        try:
+            if first is not done:
+                yield first
+            async for d in deltas:
+                yield d
+        finally:
+            await deltas.aclose()
+
+    return _chained()
+
+
 def _stream_unverified_response(
         request: Request, *, request_id: str,
-        deltas: AsyncIterator[str], get_meta: Callable[[], dict],
+        deltas: AsyncIterator, get_meta: Callable[[], dict],
         body: ChatRequest, tenant: str, app_policy: AppPolicyView,
         app_langfuse: object | None, profile: AppPrivacyProfile,
         session_id: str | None, s, internals: dict | None = None,
@@ -1591,14 +1623,26 @@ def _stream_unverified_response(
                 yield sse_frame(openai_chunk(request_id, model, delta=delta,
                                              created=created))
             meta = get_meta()  # valid only now that `deltas` is fully drained
-            yield sse_frame(openai_chunk(
-                request_id, model,
-                finish_reason="tool_calls" if streamed_tool_calls else "stop",
-                created=created))
+            # A truncated tool call ("length") must not read as a clean one.
+            finish = ("length" if streamed_tool_calls
+                      and getattr(get_meta, "finish_reason", None) == "length"
+                      else "tool_calls" if streamed_tool_calls else "stop")
+            yield sse_frame(openai_chunk(request_id, model, finish_reason=finish,
+                                         created=created))
             usage = _stream_usage(body, meta.get("usage") if meta else None)
             if usage is not None:   # B53: only when the client asked for it
                 yield sse_frame(usage_chunk(request_id, model, usage,
                                             created=created))
+            yield SSE_DONE
+        except Exception as e:
+            # Bytes are already on the wire: surface the failure as an OpenAI
+            # error frame + [DONE] (as the keepalive path does) instead of a
+            # bare connection abort. Metering happens in `finally`.
+            mapped = _error_status_detail(e) or (500, "stream interrupted",
+                                                 CODE_INTERNAL_ERROR)
+            logging.getLogger("serving.api").warning(
+                "request %s stream failed after first byte: %s", request_id, e)
+            yield sse_error_frame(*mapped, extra=_error_extra(e))
             yield SSE_DONE
         finally:
             # A backend failure has no final metadata to finalize: meter it
@@ -1632,7 +1676,7 @@ def _stream_unverified_response(
 
 def _incremental_verify_response(
         request: Request, *, request_id: str,
-        deltas: AsyncIterator[str], get_meta: Callable[[], dict],
+        deltas: AsyncIterator, get_meta: Callable[[], dict],
         body: ChatRequest, tenant: str, app_policy: AppPolicyView,
         app_langfuse: object | None, profile: AppPrivacyProfile,
         session_id: str | None, s, internals: dict | None = None,
@@ -1753,7 +1797,8 @@ async def _finalize_stream(
     `get_meta`); we best-effort drain the remaining backend deltas so the final
     accounting (cost, tokens, decision) is recovered rather than silently lost.
     run_stream only returns normally when the request is NOT onprem_only, NOT
-    require_verification, and not a client-driven tool conversation, so
+    require_verification, and (if a tool conversation) only for the live-
+    eligible shape (stream_unverified + client_output=raw), so
     recording step 9 as waived/incremental (rather than a complete-response
     verdict) is sound."""
     log = logging.getLogger("serving.obs")
@@ -1773,9 +1818,17 @@ async def _finalize_stream(
         # (`client_text`), else the raw streamed text (stream_unverified).
         text = client_text if client_text is not None else (
             meta.get("raw_completion") or "")
-        resp["choices"] = [{"index": 0,
-                            "message": {"role": "assistant", "content": text},
-                            "finish_reason": "stop"}]
+        # A live tool turn records what run() records: the assistant
+        # `tool_calls` (content null when there is no text) and "tool_calls".
+        # `raw_tool_calls` stays in `resp` for `_finalize` (it pops it for
+        # capture_io=full); client_output is raw here, so raw == redacted.
+        tool_calls = meta.get("raw_tool_calls")
+        message: dict = {"role": "assistant",
+                         "content": (text or None) if tool_calls else text}
+        if tool_calls:
+            message["tool_calls"] = tool_calls
+        resp["choices"] = [{"index": 0, "message": message,
+                            "finish_reason": "tool_calls" if tool_calls else "stop"}]
         # Make the trace's VerificationRecord say WHY (Global Constraint 2).
         # run_stream stamps a performed=False/passed=True "waived" record; name
         # the reason + performed flag for this specific mode so the console and
