@@ -1331,15 +1331,16 @@ ALTER TABLE routing_outcomes ADD COLUMN inherited_entity_types JSON;
 > ALTER TABLE routing_outcomes      ADD COLUMN route_reason VARCHAR(16);
 > ```
 
-> **A deployment still on pre-P1a code now needs twelve `ALTER`s before the image
-> is rolled:** P1a's 4 on `app_policies`, P1b's 5 (2 on `app_policies`, 3 on
-> `onboarded_models`), P2a's 2 (1 on `onboarded_models`, 1 on
-> `usage_records`), and B50's 1 (on `onboarded_models`).
-> `scripts/migrate_app_policies.py` applies all of them and is
-> idempotent — it skips a table that is absent and a column that already exists,
-> so running it repeatedly is safe. **It has been exercised against SQLite only.
-> Run it against a restored Postgres snapshot first; the Spark and DGX both run
-> Postgres.** (That dry run is carried forward from P1b and is still outstanding.)
+> **Run `scripts/migrate_app_policies.py` before rolling any new image.** It
+> covers **every** column added to an existing table after that table's first
+> release (all tables in `app/apps/models.py`), plus the later-added indexes
+> (`CREATE INDEX IF NOT EXISTS`, `CONCURRENTLY` on Postgres). It is idempotent --
+> it skips an absent table, a column that exists and an index that exists -- and
+> runs one transaction per table. `tests/test_migration_completeness.py` fails
+> when a model column is neither in the frozen original set nor listed in the
+> script, so it stays complete; the per-feature `ALTER` notes below are history.
+> **Run it against a restored Postgres snapshot first; the Spark and DGX both run
+> Postgres.**
 
 > **Upgrade order for the five P1b columns (2026-09-19): migrate first, then roll the
 > image.** Run these five `ALTER`s — or `scripts/migrate_app_policies.py`, which now

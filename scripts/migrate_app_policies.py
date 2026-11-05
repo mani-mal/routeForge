@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Idempotent column migration for `app_policies` and `onboarded_models`.
+"""Idempotent column + index migration for every table in `app/apps/models.py`.
 
 RouteForge has no migration tool: `Base.metadata.create_all` creates missing
 TABLES but never ALTERs an existing one (see [[routeforge-schema-no-migrations]]).
@@ -8,7 +8,8 @@ already-deployed database (the shared Langfuse Postgres on a customer node)
 keeps the old shape and any admin write touching the new field fails with a raw
 DB error instead of a clean 422 — until this runs.
 
-This adds every post-original column that is missing on either table, and is
+This adds every column added to an existing table after that table's first
+release (and the later-added indexes) that is missing, and is
 safe to run repeatedly: a column that already exists is left untouched. Works
 against Postgres (deployment) and SQLite (dev/offline). Reads `DATABASE_URL`
 exactly like the app (`app/apps/db.py`).
@@ -24,7 +25,12 @@ a column it does not know about, so applying the ALTERs early is always safe;
 the new image reads them on every policy lookup / pool refresh, so on a database
 missing one, requests fail with a raw DB error until it exists.
 
-Every column here is nullable with no default. An existing row therefore gets
+`tests/test_migration_completeness.py` fails when a model column is neither in
+the frozen original set nor listed here, so this stays complete.
+
+Every column here is nullable with no default, except the four NOT NULL columns
+that carry a literal DEFAULT (`usage_records.quality`/`quality_source`,
+`routing_outcomes.cache_hit`, `external_snapshots.dated_at_upload`). An existing row therefore gets
 `NULL`, which is "inherit the deployment default" for an `app_policies` column
 and "undeclared / unknown" for an `onboarded_models` one — so this migration on
 its own changes no application's behaviour and no endpoint's eligibility.
@@ -51,6 +57,8 @@ TABLE = "app_policies"
 # a no-op.
 COLUMNS: list[tuple[str, str, str]] = [
     ("compression_enabled", "BOOLEAN", "BOOLEAN"),
+    ("trajectory_mode", "VARCHAR(16)", "VARCHAR(16)"),
+    ("model_aliases", "JSON", "JSON"),
     ("capture_io", "VARCHAR(16)", "VARCHAR(16)"),
     ("pii_detection", "VARCHAR(16)", "VARCHAR(16)"),
     ("stream_mode", "VARCHAR(24)", "VARCHAR(24)"),
@@ -103,6 +111,8 @@ MODEL_COLUMNS: list[tuple[str, str, str]] = [
 USAGE_TABLE = "usage_records"
 
 USAGE_COLUMNS: list[tuple[str, str, str]] = [
+    ("quality", "DOUBLE PRECISION NOT NULL DEFAULT 0.0", "FLOAT NOT NULL DEFAULT 0.0"),
+    ("quality_source", "VARCHAR(20) NOT NULL DEFAULT '?'", "VARCHAR(20) NOT NULL DEFAULT '?'"),
     ("cached_prompt_tokens", "INTEGER", "INTEGER"),
     # 2026-11-04 model metrics slice 1: per-lever savings. Nullable, no default;
     # NULL routing_saved_usd marks a pre-change row (baseline_usd there is the
@@ -123,9 +133,83 @@ OBSERVATIONS_COLUMNS: list[tuple[str, str, str]] = [
 OUTCOMES_TABLE = "routing_outcomes"
 
 OUTCOMES_COLUMNS: list[tuple[str, str, str]] = [
-    # 2026-11-04 model metrics slice 1: why the served model's tier. Nullable.
     ("route_reason", "VARCHAR(16)", "VARCHAR(16)"),
+    ("session", "VARCHAR(128)", "VARCHAR(128)"),
+    ("cache_hit", "BOOLEAN NOT NULL DEFAULT FALSE", "BOOLEAN NOT NULL DEFAULT 0"),
+    ("requested_model", "VARCHAR(100)", "VARCHAR(100)"),
+    ("requested_alias", "VARCHAR(64)", "VARCHAR(64)"),
+    ("max_tokens", "INTEGER", "INTEGER"),
+    ("conflicting_core", "JSON", "JSON"),
+    ("routing_tokens", "INTEGER", "INTEGER"),
+    ("trajectory_key", "VARCHAR(32)", "VARCHAR(32)"),
+    ("inherited_entity_types", "JSON", "JSON"),
+    ("finish_reason", "VARCHAR(16)", "VARCHAR(16)"),
+    ("reply_has_text", "BOOLEAN", "BOOLEAN"),
+    ("reply_tool_calls", "INTEGER", "INTEGER"),
+    ("reasoning_tokens", "INTEGER", "INTEGER"),
 ]
+
+APPLICATIONS_TABLE = "applications"
+
+APPLICATIONS_COLUMNS: list[tuple[str, str, str]] = [
+    ("langfuse_host", "VARCHAR(255)", "VARCHAR(255)"),
+]
+
+TOKENS_TABLE = "app_tokens"
+
+TOKENS_COLUMNS: list[tuple[str, str, str]] = [
+    ("expires_at", "TIMESTAMP WITH TIME ZONE", "DATETIME"),
+    ("session_binding", "VARCHAR(128)", "VARCHAR(128)"),
+    ("issued_by", "VARCHAR(64)", "VARCHAR(64)"),
+]
+
+EXTERNAL_SNAPSHOTS_TABLE = "external_snapshots"
+
+EXTERNAL_SNAPSHOTS_COLUMNS: list[tuple[str, str, str]] = [
+    ("dated_at_upload", "BOOLEAN NOT NULL DEFAULT FALSE", "BOOLEAN NOT NULL DEFAULT 0"),
+]
+
+# (index name, table, columns) -- indexes added to a table after its first
+# release. Created with IF NOT EXISTS (CONCURRENTLY on Postgres).
+INDEXES: list[tuple[str, str, str]] = [
+    ("ix_routing_outcomes_session", "routing_outcomes", "session"),
+    ("ix_routing_outcomes_trajectory_key", "routing_outcomes", "trajectory_key"),
+    ("ix_outcome_feedback_app_request", "outcome_feedback",
+     "application_id, request_id"),
+]
+
+ALL_TABLES: list[tuple[str, list[tuple[str, str, str]]]] = [
+    (APPLICATIONS_TABLE, APPLICATIONS_COLUMNS),
+    (TOKENS_TABLE, TOKENS_COLUMNS),
+    (TABLE, COLUMNS),
+    (MODELS_TABLE, MODEL_COLUMNS),
+    (USAGE_TABLE, USAGE_COLUMNS),
+    (OBSERVATIONS_TABLE, OBSERVATIONS_COLUMNS),
+    (OUTCOMES_TABLE, OUTCOMES_COLUMNS),
+    (EXTERNAL_SNAPSHOTS_TABLE, EXTERNAL_SNAPSHOTS_COLUMNS),
+]
+
+
+async def _create_indexes(engine, dialect: str) -> None:
+    print("  indexes:")
+    for name, table, cols in INDEXES:
+        # CONCURRENTLY cannot run inside a transaction block: use AUTOCOMMIT.
+        conc = "CONCURRENTLY " if dialect == "postgresql" else ""
+        conn_engine = engine.execution_options(isolation_level="AUTOCOMMIT")
+        async with conn_engine.connect() as conn:
+            try:
+                present = await conn.run_sync(
+                    lambda sync_conn, t=table: {
+                        i["name"] for i in inspect(sync_conn).get_indexes(t)})
+            except NoSuchTableError:
+                print(f"    ~ {name}: table {table} absent, skipped")
+                continue
+            if name in present:
+                print(f"    = {name}: already present")
+                continue
+            await conn.execute(text(
+                f"CREATE INDEX {conc}IF NOT EXISTS {name} ON {table} ({cols})"))
+            print(f"    + {name}: created")
 
 
 async def _run() -> int:
@@ -147,11 +231,7 @@ async def _run() -> int:
         # got a traceback instead of the per-column log. Per-table scoping means
         # a table that is absent is reported and skipped, and the other table's
         # migration still commits.
-        for table, columns in ((TABLE, COLUMNS),
-                               (MODELS_TABLE, MODEL_COLUMNS),
-                               (USAGE_TABLE, USAGE_COLUMNS),
-                               (OBSERVATIONS_TABLE, OBSERVATIONS_COLUMNS),
-                               (OUTCOMES_TABLE, OUTCOMES_COLUMNS)):
+        for table, columns in ALL_TABLES:
             print(f"  {table}:")
             async with engine.begin() as conn:
                 try:
@@ -174,6 +254,7 @@ async def _run() -> int:
                     await conn.execute(
                         text(f'ALTER TABLE {table} ADD COLUMN {name} {col_type}'))
                     print(f"    + {name}: added ({col_type})")
+        await _create_indexes(engine, dialect)
     finally:
         await engine.dispose()
     print("migrate_app_policies: done")
