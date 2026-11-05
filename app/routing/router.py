@@ -467,7 +467,10 @@ class Router:
                     f"(tier {cheapest.tier}) is estimated at ${cheapest_est:.4f} "
                     f"({tokens_after} prompt + {out_tokens} output tokens), over the "
                     f"per-request cap ${ctx.max_cost_usd:.4f}. Raise the application's "
-                    "max_cost_usd_per_request, lower max_tokens, or lower the model's price.",
+                    "max_cost_usd_per_request, lower max_tokens, or lower the model's price. "
+                    "The figure is an estimate from RouteForge's own token count, which "
+                    "runs roughly 1.5x what vLLM reports for English prose, so the "
+                    "request may cost less than shown.",
                     core),
                 rejected=tuple((c.name, None) for c, _e in over),
                 core=core)

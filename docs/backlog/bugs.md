@@ -185,7 +185,9 @@ Extends B72 steps 4–5.
 Keep three kinds of caching apart in names and reports: provider prompt caching,
 self-hosted KV or prefix caching, and RouteForge's semantic response cache.
 
-## B83 — FEATURE: date the prices and the savings baseline  🔴 OPEN
+## B83 — FEATURE: date the prices and the savings baseline  ✅ RESOLVED (2026-11-05, fix/ops-batch-b62)
+
+**Resolved 2026-11-05 (fix/ops-batch-b62):** delivered by PRs #124-#128: as_of per pricing.yaml entry plus baseline_as_of and pricing_stale_days (config/pricing.yaml, app/config/schema.py); the baseline date is shown beside the savings figure (OutcomeCards.tsx); prices_undated / prices_stale alerts in app/metrics/compute.py shown on the Models page. Prices stay operator-owned; nothing is fetched at runtime.
 
 **Why.** Prices for a fixed intelligence level fall roughly 10× a year (Artificial Analysis
 trend, not a forecast). The cost dashboard's savings figure is computed against an
@@ -438,7 +440,9 @@ a warning when secrets exist but no key is set. Rotating the `kit-gtm` key in La
 advised, because database backups taken before the fix hold the cleartext value.
 
 
-## B73 — FEATURE: finish the Artificial Analysis model metrics on the console (published quality snapshot, time to first token, output speed)  🔴 OPEN
+## B73 — FEATURE: finish the Artificial Analysis model metrics on the console (published quality snapshot, time to first token, output speed)  ✅ RESOLVED (2026-11-05, fix/ops-batch-b62)
+
+**Resolved 2026-11-05 (fix/ops-batch-b62):** delivered by the model-metrics slices (PRs #124-#128): TTFT p50/p95 and output speed (tokens/s) on the Models page (ui/src/admin/models/ModelTable.tsx); Artificial Analysis snapshot import, refresh and model mapping (app/api/external_metrics_routes.py, app/metrics/external.py, ExternalControls/MappingDialog, scripts/aa_fetch.py), display-only. NOT done and left as follow-ups if wanted: seeding a dated published `quality:` into config/routing.yaml (routing-affecting; needs a policy_simulate replay) and agent-level (AA-AgentPerf) metrics.
 
 **Found 2026-10-13** by an audit of what was built from the owner's original request to use
 [Artificial Analysis](https://artificialanalysis.ai/) metrics for the model/agent metrics on
@@ -845,6 +849,8 @@ See also B63 (the shadow-prices-only output has no `rows` block, so no estimated
 can be printed beside the caveat in that mode).
 
 ## B64 — The admission cost estimate over-counts tokens, so the per-request budget rejects requests that would cost less than the cap  🔴 OPEN
+
+**Update 2026-11-05 (fix/ops-batch-b62):** item (3) shipped -- the budget 422 (`app/routing/router.py`) now says the figure is an estimate from RouteForge's own token count, roughly 1.5x what vLLM reports on English prose. Admission math unchanged. Items (1) and (2) remain open, so this stays OPEN.
 
 **Severity:** medium (requests refused that the operator's own cap would allow; no privacy
 effect — it errs towards refusing).
