@@ -6,10 +6,12 @@ carry the file to an air-gapped RouteForge, and use the console's Import.
 
     AA_API_KEY=... python scripts/aa_fetch.py aa-models.json
 
-Sends only the `x-api-key` header. Prints the number of models written.
+Sends only the `x-api-key` header. Writes {"routeforge_fetched_at": <UTC ISO time>, "data": <raw AA payload>}.
+Prints the number of models written.
 """
 from __future__ import annotations
 
+import datetime as dt
 import json
 import os
 import sys
@@ -43,8 +45,11 @@ def main(argv: list[str]) -> int:
         print("response was not JSON", file=sys.stderr)
         return 1
     entries = payload.get("data") if isinstance(payload, dict) else payload
-    with open(argv[1], "wb") as f:
-        f.write(raw)
+    # Wrapped so an import records when the data was fetched, not when it was uploaded.
+    wrapped = {"routeforge_fetched_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+               "data": payload}
+    with open(argv[1], "w", encoding="utf-8") as f:
+        json.dump(wrapped, f)
     print(len(entries) if isinstance(entries, list) else 0)
     return 0
 

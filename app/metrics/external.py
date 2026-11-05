@@ -14,6 +14,13 @@ from sqlalchemy import delete, select
 from app.apps.models import ExternalModelMap, ExternalModelMetric, ExternalSnapshot
 
 SOURCE = "artificial_analysis"
+MAX_SLUG_LEN = 128
+MAX_NAME_LEN = 200
+MAX_CREATOR_LEN = 100
+
+def aware(t: dt.datetime) -> dt.datetime:
+    """SQLite returns naive datetimes; they are stored as UTC."""
+    return t if t.tzinfo else t.replace(tzinfo=dt.timezone.utc)
 
 _METRIC_FIELDS = ("intelligence_index", "coding_index", "math_index", "price_in",
                   "price_out", "price_blended", "output_tps", "ttft_s", "ttfat_s")
@@ -68,13 +75,15 @@ def parse_aa_payload(payload: object) -> list[AAModel]:
         slug = _text(e.get("slug")) or _text(e.get("id"))
         if slug is None:
             raise AAPayloadError(f"entry {i} has neither 'slug' nor 'id'")
+        if len(slug) > MAX_SLUG_LEN:
+            raise AAPayloadError(f"entry {i} has a slug longer than {MAX_SLUG_LEN} characters")
         if slug in out:
             continue
         ev, pr = _sub(e, "evaluations"), _sub(e, "pricing")
         out[slug] = AAModel(
             slug=slug,
-            name=_text(e.get("name")) or slug,
-            creator=_text(_sub(e, "model_creator").get("name")),
+            name=(_text(e.get("name")) or slug)[:MAX_NAME_LEN],
+            creator=(_text(_sub(e, "model_creator").get("name")) or "")[:MAX_CREATOR_LEN] or None,
             intelligence_index=_num(ev.get("artificial_analysis_intelligence_index")),
             coding_index=_num(ev.get("artificial_analysis_coding_index")),
             math_index=_num(ev.get("artificial_analysis_math_index")),
@@ -90,11 +99,11 @@ def parse_aa_payload(payload: object) -> list[AAModel]:
 
 async def store_snapshot(session, models: list[AAModel], *, origin: str,
                          retrieved_at: dt.datetime, index_version: str | None,
-                         api_tier: str | None) -> int:
+                         api_tier: str | None, dated_at_upload: bool = False) -> int:
     """Add the snapshot + rows to the session and commit. Returns the snapshot id."""
     snap = ExternalSnapshot(source=SOURCE, origin=origin, retrieved_at=retrieved_at,
                             index_version=index_version, api_tier=api_tier,
-                            row_count=len(models))
+                            row_count=len(models), dated_at_upload=dated_at_upload)
     session.add(snap)
     await session.flush()
     session.add_all([
@@ -189,4 +198,5 @@ def comparability(*, mapped: bool, in_snapshot: bool, placement: str, provider: 
                 label[key] = PARTIAL
     reasons.append(f"AA measures its own chosen provider; this endpoint is {provider or 'unknown'}")
     overall = max(label.values(), key=_SEVERITY.index)
-    return {"overall": overall, **label, "reasons": reasons}
+    return {"overall": overall, "overall_rank": _SEVERITY.index(overall), **label,
+            "reasons": reasons}

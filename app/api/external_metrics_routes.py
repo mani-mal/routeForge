@@ -6,7 +6,9 @@ no tenant, model-usage or request data.
 """
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
+import json
 import os
 import re
 
@@ -31,16 +33,32 @@ external_metrics_router = APIRouter(
 
 async def fetch_aa(api_key: str, *,
                    transport: httpx.AsyncBaseTransport | None = None) -> object:
-    """The one outbound call. Only the key header is sent."""
-    async with httpx.AsyncClient(timeout=AA_TIMEOUT_S, transport=transport) as c:
-        r = await c.get(AA_URL, headers={"x-api-key": api_key})
-    if r.status_code != 200:
-        raise HTTPException(502, f"Artificial Analysis returned HTTP {r.status_code}")
+    """The one outbound call. Only the key header is sent.
+
+    Bounded: AA_TIMEOUT_S is a whole-call deadline (not httpx's per-phase timeout)
+    and the body is streamed with the same cap as an import. Raises HTTPException
+    (502) for every upstream failure, never leaking the key."""
     try:
-        return r.json()
+        async with asyncio.timeout(AA_TIMEOUT_S):
+            async with httpx.AsyncClient(timeout=AA_TIMEOUT_S, transport=transport) as c:
+                async with c.stream("GET", AA_URL, headers={"x-api-key": api_key}) as r:
+                    if r.status_code != 200:
+                        raise HTTPException(
+                            502, f"Artificial Analysis returned HTTP {r.status_code}")
+                    buf = bytearray()
+                    async for chunk in r.aiter_bytes():
+                        buf.extend(chunk)
+                        if len(buf) > MAX_BODY_BYTES:
+                            raise HTTPException(
+                                502, "Artificial Analysis response exceeds 10 MB")
+    except TimeoutError:
+        raise HTTPException(502, f"Artificial Analysis timed out after {AA_TIMEOUT_S:g}s")
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"Artificial Analysis unreachable: {type(e).__name__}")
+    try:
+        return json.loads(bytes(buf))
     except ValueError:
         raise HTTPException(502, "Artificial Analysis returned a non-JSON response")
-
 
 def _fetch_disabled_reason() -> str | None:
     if os.environ.get("SP_EXTERNAL_FETCH", "").strip().lower() == "off":
@@ -50,8 +68,30 @@ def _fetch_disabled_reason() -> str | None:
     return None
 
 
-def _aware(t: dt.datetime) -> dt.datetime:
-    return t if t.tzinfo else t.replace(tzinfo=dt.timezone.utc)
+_aware = ext.aware
+
+def _parse_when(value: str, where: str) -> dt.datetime:
+    """An ISO-8601 fetch date; naive means UTC. A future date is refused (422)."""
+    try:
+        when = _aware(dt.datetime.fromisoformat(value.strip()))
+    except (ValueError, AttributeError):
+        raise HTTPException(422, f"{where} is not an ISO-8601 date: {str(value)[:40]!r}")
+    if when > dt.datetime.now(dt.timezone.utc):
+        raise HTTPException(422, f"{where} is in the future")
+    return when
+
+def _rate_wait(newest, now: dt.datetime) -> float:
+    """Seconds until the next refresh is allowed (<= 0 means allowed)."""
+    if newest is None:
+        return 0.0
+    return REFRESH_MIN_INTERVAL_S - (now - _aware(newest.retrieved_at)).total_seconds()
+
+def _too_soon(wait: float) -> HTTPException:
+    secs = int(wait) + 1
+    return HTTPException(
+        429, headers={"Retry-After": str(secs)},
+        detail={"message": f"refresh allowed once per {REFRESH_MIN_INTERVAL_S // 60} "
+                           f"minutes; retry in {secs}s", "retry_after_s": secs})
 
 
 def _norm(s: str) -> str:
@@ -79,20 +119,29 @@ def _parse_or_422(payload: object) -> list[ext.AAModel]:
 
 @external_metrics_router.post("/import")
 async def import_snapshot(request: Request,
-                          index_version: str | None = Query(None, max_length=16)) -> dict:
-    import json
+                          index_version: str | None = Query(None, max_length=16),
+                          retrieved_at: str | None = Query(None, max_length=40)) -> dict:
+    """Date of the snapshot: the file's top-level `routeforge_fetched_at` (written by
+    scripts/aa_fetch.py), else `?retrieved_at=`, else the upload time, which is
+    stored with `dated_at_upload` so the console says so."""
     raw = await _read_capped(request)
     try:
         payload = json.loads(raw)
     except ValueError:
         raise HTTPException(422, "body is not valid JSON")
+    when: dt.datetime | None = None
+    if isinstance(payload, dict) and "routeforge_fetched_at" in payload:
+        when = _parse_when(payload["routeforge_fetched_at"], "routeforge_fetched_at")
+        payload = payload.get("data")
+    elif retrieved_at:
+        when = _parse_when(retrieved_at, "retrieved_at")
     models = _parse_or_422(payload)
     async with request.app.state.db.session() as s:
         sid = await ext.store_snapshot(
-            s, models, origin="import", retrieved_at=dt.datetime.now(dt.timezone.utc),
-            index_version=index_version, api_tier=None)
-    return {"snapshot_id": sid, "row_count": len(models)}
-
+            s, models, origin="import",
+            retrieved_at=when or dt.datetime.now(dt.timezone.utc),
+            index_version=index_version, api_tier=None, dated_at_upload=when is None)
+    return {"snapshot_id": sid, "row_count": len(models), "dated_at_upload": when is None}
 
 @external_metrics_router.post("/refresh")
 async def refresh_snapshot(request: Request,
@@ -102,33 +151,34 @@ async def refresh_snapshot(request: Request,
         raise HTTPException(409, reason)
     api_key = os.environ["AA_API_KEY"].strip()
     transport = getattr(request.app.state, "aa_transport", None)
-    # The rate-limit check, the fetch and the insert share one session (and, on
-    # Postgres, one advisory transaction lock; SQLite serialises sessions), so a
-    # concurrent second refresh waits, then sees the new snapshot and gets 429.
-    async with request.app.state.db.session() as s:
-        if s.get_bind().dialect.name == "postgresql":
-            await s.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _ADVISORY_LOCK_KEY})
-        newest = await ext.latest_snapshot(s)
-        now = dt.datetime.now(dt.timezone.utc)
-        if newest is not None:
-            wait = REFRESH_MIN_INTERVAL_S - (now - _aware(newest.retrieved_at)).total_seconds()
-            if wait > 0:
-                raise HTTPException(429, detail={
-                    "message": f"refresh allowed once per {REFRESH_MIN_INTERVAL_S // 60} "
-                               f"minutes; retry in {int(wait) + 1}s",
-                    "retry_after_s": int(wait) + 1})
-        try:
-            payload = await fetch_aa(api_key, transport=transport)
-        except httpx.HTTPError as e:
-            raise HTTPException(502, f"Artificial Analysis unreachable: {type(e).__name__}")
+    db = request.app.state.db
+    # Never hold a DB session (on SQLite: the process-wide write lock the serving path
+    # authenticates under) across the outbound call. Three phases: a short pre-check,
+    # the fetch with no session open, a short re-check + insert.
+    lock = getattr(request.app.state, "aa_refresh_lock", None)
+    if lock is None:
+        lock = request.app.state.aa_refresh_lock = asyncio.Lock()
+    async with lock:  # one in-flight AA call per process; a waiter re-checks the clock
+        async with db.session() as s:
+            wait = _rate_wait(await ext.latest_snapshot(s), dt.datetime.now(dt.timezone.utc))
+        if wait > 0:
+            raise _too_soon(wait)
+        payload = await fetch_aa(api_key, transport=transport)
         try:
             models = ext.parse_aa_payload(payload)
         except ext.AAPayloadError as e:
             raise HTTPException(502, f"Artificial Analysis returned an unexpected payload: {e}")
-        sid = await ext.store_snapshot(s, models, origin="fetch", retrieved_at=now,
-                                       index_version=index_version, api_tier=None)
+        async with db.session() as s:
+            if s.get_bind().dialect.name == "postgresql":  # cross-replica
+                await s.execute(text("SELECT pg_advisory_xact_lock(:k)"),
+                                {"k": _ADVISORY_LOCK_KEY})
+            now = dt.datetime.now(dt.timezone.utc)
+            wait = _rate_wait(await ext.latest_snapshot(s), now)
+            if wait > 0:  # another replica stored one meanwhile: discard ours
+                raise _too_soon(wait)
+            sid = await ext.store_snapshot(s, models, origin="fetch", retrieved_at=now,
+                                           index_version=index_version, api_tier=None)
     return {"snapshot_id": sid, "row_count": len(models)}
-
 
 @external_metrics_router.get("/snapshots")
 async def list_snapshots(request: Request) -> dict:
@@ -138,7 +188,8 @@ async def list_snapshots(request: Request) -> dict:
     return {
         "snapshots": [{"id": x.id, "source": x.source, "origin": x.origin,
                        "retrieved_at": _aware(x.retrieved_at).isoformat(),
-                       "index_version": x.index_version, "row_count": x.row_count}
+                       "index_version": x.index_version, "row_count": x.row_count,
+                       "dated_at_upload": bool(x.dated_at_upload)}
                       for x in snaps],
         "fetch_enabled": reason is None, "fetch_disabled_reason": reason}
 

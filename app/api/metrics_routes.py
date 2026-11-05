@@ -95,7 +95,9 @@ async def metrics_summary(
     return {"window": _window_json(hours, since, until), "current": current,
             "previous": previous, "alerts": alerts,
             "published": None if snapshot is None else {
-                "snapshot_id": snapshot.id, "retrieved_at": snapshot.retrieved_at.isoformat(),
+                "snapshot_id": snapshot.id,
+                "retrieved_at": ext.aware(snapshot.retrieved_at).isoformat(),
+                "dated_at_upload": bool(snapshot.dated_at_upload),
                 "index_version": snapshot.index_version, "source": snapshot.source,
                 "origin": snapshot.origin},
             "baseline": {"model": pricing.baseline_model,

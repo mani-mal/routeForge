@@ -213,7 +213,7 @@ def test_models_include_published_after_import_and_map(seeded):
     async def _go():
         async with seeded.app.state.db.session() as s:
             await ext.set_map(s, "xm-cloud", "aa-x", by="t")
-            await ext.set_map(s, "xm-gone", "no-such", by="t")
+            await ext.set_map(s, "xm-onprem", "no-such", by="t")
     asyncio.run(_go())
     body = seeded.get("/admin/metrics/models").json()
     row = next(x for x in body["models"] if x["model"] == "xm-cloud")
@@ -221,10 +221,21 @@ def test_models_include_published_after_import_and_map(seeded):
     assert row["published"]["intelligence_index"] == 61.5
     assert row["published"]["index_version"] == "v4" and row["published"]["snapshot_id"]
     assert row["published"]["retrieved_at"]
-    assert set(row["comparability"]) == {"overall", "speed", "ttft", "price", "reasons"}
+    assert set(row["comparability"]) == {"overall", "overall_rank", "speed", "ttft",
+                                         "price", "reasons"}
+    assert row["comparability"]["overall"] == "insufficient_local_data"
+    assert row["comparability"]["price"] == "comparable"
+    assert row["comparability"]["overall_rank"] == 2
+    assert row["published"]["retrieved_at"].endswith("+00:00")  # M6: tz-aware
+    assert row["published"]["dated_at_upload"] is True
+    missing = next(x for x in body["models"] if x["model"] == "xm-onprem")
+    assert missing["published"] is None
+    assert missing["comparability"]["overall"] == "not_comparable"
+    assert any("not in latest snapshot" in r for r in missing["comparability"]["reasons"])
     s = seeded.get("/admin/metrics/summary").json()
     assert s["published"]["index_version"] == "v4"
     assert {"snapshot_id", "retrieved_at", "source", "origin"} <= set(s["published"])
+    assert s["published"]["retrieved_at"].endswith("+00:00") and s["published"]["dated_at_upload"]
     assert not any(a["kind"].startswith("aa_") for a in s["alerts"])
 
 

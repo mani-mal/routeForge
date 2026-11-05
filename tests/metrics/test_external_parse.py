@@ -63,3 +63,23 @@ def test_slug_falls_back_to_id():
 def test_duplicate_slug_keeps_first():
     out = parse_aa_payload([{"slug": "d", "name": "first"}, {"slug": "d", "name": "second"}])
     assert [m.name for m in out] == ["first"]
+
+
+def test_slug_over_128_refuses_whole_payload():
+    with pytest.raises(AAPayloadError, match="slug"):
+        parse_aa_payload([FULL, {**FULL, "slug": "x" * 129}])
+    assert parse_aa_payload([{**FULL, "slug": "x" * 128}])[0].slug == "x" * 128
+
+
+def test_name_and_creator_truncated_to_column_lengths():
+    m = parse_aa_payload([{**FULL, "name": "n" * 500, "model_creator": {"name": "c" * 300}}])[0]
+    assert len(m.name) == 200 and len(m.creator) == 100
+
+
+def test_price_drift_flags_free_at_aa():
+    from app.config.schema import PriceCfg
+    from app.metrics.compute import _price_drift
+    aa = parse_aa_payload([{**FULL, "pricing": {"price_1m_input_tokens": 0,
+                                                 "price_1m_output_tokens": None}}])[0]
+    out = _price_drift("m", aa, PriceCfg(input=1.0, output=2.0, tier="mid", provider="azure"))
+    assert out and "free at AA" in out and "output" not in out

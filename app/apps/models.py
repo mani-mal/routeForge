@@ -565,6 +565,8 @@ class ExternalSnapshot(Base):
     index_version: Mapped[str | None] = mapped_column(String(16), nullable=True)
     api_tier: Mapped[str | None] = mapped_column(String(16), nullable=True)
     row_count: Mapped[int] = mapped_column(Integer)
+    # True when an import carried no fetch date, so retrieved_at is the upload time.
+    dated_at_upload: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class ExternalModelMetric(Base):

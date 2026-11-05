@@ -13,7 +13,7 @@ from math import floor, log10
 from typing import Callable
 
 from app.config.schema import PriceCfg, PricingCfg
-from app.metrics.external import AAModel, comparability
+from app.metrics.external import AAModel, aware as ext_aware, comparability
 
 MIN_N_REQUESTS = 30
 MIN_N_TASKS = 20
@@ -413,7 +413,11 @@ def _price_drift(model: str, aa: AAModel, price: PriceCfg) -> str | None:
     parts = []
     for label, ours, theirs in (("input", price.input, aa.price_in),
                                 ("output", price.output, aa.price_out)):
-        if theirs is None or theirs <= 0:
+        if theirs is None or theirs < 0:
+            continue
+        if theirs == 0:  # AA lists it as free: flag any nonzero price here (no division)
+            if ours > 0:
+                parts.append(f"{label} ${ours:g}/1M in pricing.yaml vs free at AA")
             continue
         if abs(ours - theirs) / theirs > _PRICE_DRIFT:
             parts.append(f"{label} ${ours:g}/1M in pricing.yaml vs ${theirs:g}/1M at AA")
@@ -429,7 +433,9 @@ def _median(vals: list[float]) -> float | None:
 def _published_json(aa: AAModel, snapshot) -> dict:
     d = {f: getattr(aa, f) for f in aa.__dataclass_fields__}
     d["snapshot_id"] = snapshot.id if snapshot is not None else None
-    d["retrieved_at"] = snapshot.retrieved_at.isoformat() if snapshot is not None else None
+    d["retrieved_at"] = (
+        ext_aware(snapshot.retrieved_at).isoformat() if snapshot is not None else None)
+    d["dated_at_upload"] = bool(snapshot.dated_at_upload) if snapshot is not None else False
     d["index_version"] = snapshot.index_version if snapshot is not None else None
     return d
 
@@ -537,7 +543,7 @@ def page_alerts(pricing: PricingCfg, *, today: date, excluded_rows: int,
             alerts.append({"kind": "aa_snapshot_missing", "severity": "info", "model": None,
                            "message": "No Artificial Analysis snapshot imported yet"})
         else:
-            got = snapshot.retrieved_at
+            got = ext_aware(snapshot.retrieved_at)
             age = (today - got.date()).days
             if age > AA_STALE_DAYS:
                 alerts.append({"kind": "aa_snapshot_stale", "severity": "warning",

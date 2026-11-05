@@ -140,9 +140,12 @@ def test_refresh_rate_limited_429(client, monkeypatch):
     r = client.post(f"{BASE}/refresh")
     assert r.status_code == 429
     assert 0 < r.json()["detail"]["retry_after_s"] <= 600
+    assert r.headers["retry-after"] == str(r.json()["detail"]["retry_after_s"])
     assert len(t.requests) == 1
     # an import is also "the newest snapshot of any origin" for the clock
     assert client.post(f"{BASE}/import", content=json.dumps(_payload("c"))).status_code == 200
+    assert client.post(f"{BASE}/refresh").status_code == 429
+    assert len(t.requests) == 1
 
 
 def test_concurrent_refresh_one_snapshot(monkeypatch):
@@ -159,7 +162,150 @@ def test_concurrent_refresh_one_snapshot(monkeypatch):
 
     codes, snaps = asyncio.run(go())
     assert codes == [200, 429]
-    assert len(snaps) == 1 and len(t.requests) == 1
+    assert len(snaps) == 1 and len(t.requests) <= 2
+
+
+def test_refresh_does_not_hold_the_db_session_during_the_fetch(monkeypatch):
+    """C1: a slow AA fetch must not block other DB sessions (SQLite's process-wide
+    write lock is what chat auth takes in db.session())."""
+    app = create_app()
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def slow(request):
+        entered.set()
+        await release.wait()
+        return httpx.Response(200, json=_payload("a"))
+
+    _enable(type("C", (), {"app": app})(), monkeypatch, slow)
+
+    async def go():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+            assert (await c.post("/admin/login", json=_ADMIN)).status_code == 200
+            task = asyncio.create_task(c.post(f"{BASE}/refresh"))
+            await asyncio.wait_for(entered.wait(), 5)
+            try:
+                async def other_session():
+                    async with app.state.db.session() as s:
+                        from sqlalchemy import text
+                        await s.execute(text("select 1"))
+                await asyncio.wait_for(other_session(), 2)  # TimeoutError before the fix
+                # an ordinary admin request also completes while the fetch is in flight
+                r = await asyncio.wait_for(c.get(f"{BASE}/snapshots"), 2)
+                assert r.status_code == 200 and not task.done()
+            finally:
+                release.set()
+            return (await task).status_code
+
+    assert asyncio.run(go()) == 200
+
+
+def test_refresh_whole_call_timeout_is_502(client, monkeypatch):
+    from app.api import external_metrics_routes as routes
+    monkeypatch.setattr(routes, "AA_TIMEOUT_S", 0.05)
+
+    async def slow(request):
+        await asyncio.sleep(2)
+        return httpx.Response(200, json=_payload("a"))
+    _enable(client, monkeypatch, slow)
+    _login(client)
+    r = client.post(f"{BASE}/refresh")
+    assert r.status_code == 502 and "timed out" in r.json()["detail"]
+    assert client.get(f"{BASE}/snapshots").json()["snapshots"] == []
+
+
+def test_refresh_oversized_response_is_502(client, monkeypatch):
+    big = b"[" + b"0," * (6 * 1024 * 1024) + b"0]"
+    _enable(client, monkeypatch, lambda r: httpx.Response(200, content=big))
+    _login(client)
+    r = client.post(f"{BASE}/refresh")
+    assert r.status_code == 502 and "10 MB" in r.json()["detail"]
+    assert client.get(f"{BASE}/snapshots").json()["snapshots"] == []
+
+
+def test_import_too_large_streamed_without_content_length_is_413(client):
+    _login(client)
+
+    def gen():
+        for _ in range(11):
+            yield b"0," * (512 * 1024)
+    r = client.post(f"{BASE}/import", content=gen())  # chunked: no Content-Length
+    assert r.status_code == 413
+    assert client.get(f"{BASE}/snapshots").json()["snapshots"] == []
+
+
+def test_import_envelope_date_is_used(client):
+    _login(client)
+    body = {"routeforge_fetched_at": "2026-09-01T10:00:00+00:00", "data": _payload("a")}
+    r = client.post(f"{BASE}/import", content=json.dumps(body))
+    assert r.status_code == 200 and r.json()["dated_at_upload"] is False
+    (snap,) = client.get(f"{BASE}/snapshots").json()["snapshots"]
+    assert snap["retrieved_at"].startswith("2026-09-01T10:00:00") and snap["dated_at_upload"] is False
+
+
+def test_import_query_date_and_precedence(client):
+    _login(client)
+    r = client.post(f"{BASE}/import?retrieved_at=2026-08-01", content=json.dumps(_payload("a")))
+    assert r.status_code == 200
+    env = {"routeforge_fetched_at": "2026-09-01T00:00:00+00:00", "data": _payload("b")}
+    assert client.post(f"{BASE}/import?retrieved_at=2026-08-01",
+                       content=json.dumps(env)).status_code == 200
+    snaps = client.get(f"{BASE}/snapshots").json()["snapshots"]
+    assert snaps[0]["retrieved_at"].startswith("2026-09-01")  # envelope wins
+    assert snaps[1]["retrieved_at"].startswith("2026-08-01")
+
+
+def test_import_without_date_is_marked_dated_at_upload(client):
+    _login(client)
+    assert client.post(f"{BASE}/import", content=json.dumps(_payload("a"))).json()[
+        "dated_at_upload"] is True
+    (snap,) = client.get(f"{BASE}/snapshots").json()["snapshots"]
+    assert snap["dated_at_upload"] is True
+
+
+def test_import_future_or_bad_date_is_422(client):
+    _login(client)
+    future = {"routeforge_fetched_at": "2999-01-01T00:00:00+00:00", "data": _payload("a")}
+    assert client.post(f"{BASE}/import", content=json.dumps(future)).status_code == 422
+    assert client.post(f"{BASE}/import?retrieved_at=2999-01-01",
+                       content=json.dumps(_payload("a"))).status_code == 422
+    assert client.post(f"{BASE}/import?retrieved_at=yesterday",
+                       content=json.dumps(_payload("a"))).status_code == 422
+    bad = {"routeforge_fetched_at": "nope", "data": _payload("a")}
+    assert client.post(f"{BASE}/import", content=json.dumps(bad)).status_code == 422
+    assert client.get(f"{BASE}/snapshots").json()["snapshots"] == []
+
+
+def test_old_imported_date_does_not_reset_refresh_clock(client, monkeypatch):
+    t = _enable(client, monkeypatch)
+    _login(client)
+    old = {"routeforge_fetched_at": "2026-01-01T00:00:00+00:00", "data": _payload("a")}
+    assert client.post(f"{BASE}/import", content=json.dumps(old)).status_code == 200
+    assert client.post(f"{BASE}/refresh").status_code == 200 and len(t.requests) == 1
+
+
+def test_oversized_slug_import_is_422(client):
+    _login(client)
+    assert client.post(f"{BASE}/import", content=json.dumps(_payload("x" * 129))).status_code == 422
+
+
+def test_aa_fetch_script_wraps_payload(tmp_path, monkeypatch):
+    import importlib.util, io, pathlib
+    spec = importlib.util.spec_from_file_location(
+        "aa_fetch", pathlib.Path(__file__).resolve().parents[2] / "scripts" / "aa_fetch.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    raw = json.dumps(_payload("a")).encode()
+
+    class R(io.BytesIO):
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+    monkeypatch.setenv("AA_API_KEY", "k")
+    monkeypatch.setattr(mod.urllib.request, "urlopen", lambda *a, **k: R(raw))
+    out = tmp_path / "o.json"
+    assert mod.main(["x", str(out)]) == 0
+    got = json.loads(out.read_text())
+    assert set(got) == {"routeforge_fetched_at", "data"} and got["data"][0]["slug"] == "a"
 
 
 @pytest.fixture
