@@ -6,7 +6,7 @@ Every sample-size gate and status is decided here, server-side.
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from functools import cached_property
 from math import floor, log10
@@ -165,6 +165,7 @@ class _Task:
     cost_by_model: dict
     ok_by_model: dict
     label: tuple | None = None  # (ts, success, feedback id)
+    rows: list = field(default_factory=list)  # the task's counted OutcomeRows
 
     @cached_property
     def primary_model(self) -> str | None:
@@ -196,6 +197,7 @@ def _build_tasks(usage: list[UsageRow], outcomes: list[OutcomeRow],
         key = f"t:{o.trajectory_key}" if o.trajectory_key else f"r:{o.request_id}"
         t = tasks.setdefault(key, _Task(key, set(), 0.0, defaultdict(float), defaultdict(int)))
         t.apps.add(o.application_id)
+        t.rows.append(o)
         req_task[o.request_id] = key
         for m, c in cost_by_req.get(o.request_id, {}).items():
             t.cost += c
@@ -213,6 +215,20 @@ def _build_tasks(usage: list[UsageRow], outcomes: list[OutcomeRow],
         if t.label is None or (f.ts, f.id) >= (t.label[0], t.label[2]):
             t.label = (f.ts, f.value_num == 1, f.id)
     return list(tasks.values()), any_key
+
+
+def _reported(tasks: list[_Task]) -> dict | None:
+    """Reported success over the labelled tasks; None when nothing is labelled."""
+    labelled = [t for t in tasks if t.label is not None]
+    if not labelled:
+        return None
+    insufficient = len(labelled) < MIN_N_TASKS
+    return {
+        "value": None if insufficient
+        else sum(1 for t in labelled if t.label[1]) / len(labelled),
+        "n": len(labelled), "insufficient": insufficient,
+        "apps_reporting": len({a for t in labelled for a in t.apps}),
+    }
 
 
 def _cost_per_task(tasks: list[_Task], task_unit: str) -> dict:
@@ -250,16 +266,7 @@ def summarize(usage: list[UsageRow], outcomes: list[OutcomeRow],
 
     tasks, any_key = _build_tasks(usage, outcomes, feedback)
     unit = "task" if any_key else "request"
-    labelled = [t for t in tasks if t.label is not None]
-    reported = None
-    if labelled:
-        insufficient = len(labelled) < MIN_N_TASKS
-        reported = {
-            "value": None if insufficient else sum(1 for t in labelled if t.label[1]) / len(labelled),
-            "n": len(labelled),
-            "insufficient": insufficient,
-            "apps_reporting": len({a for t in labelled for a in t.apps}),
-        }
+    reported = _reported(tasks)
 
     counted = [u for u in usage if u.routing_saved_usd is not None]
 
@@ -324,26 +331,23 @@ def _month_budget(month_usage: list[UsageRow], monthly_budget_usd: float | None,
             "forecast_usd": forecast, "risk": risk, "month": start.strftime("%Y-%m")}
 
 
-def _p95_task_time(outcomes: list[OutcomeRow], unit: str) -> dict:
-    """p95 of (last request ts - first request ts + last request latency) over
-    tasks with at least one ok request; with request units, p95 request latency."""
+def _p95_task_time(tasks: list[_Task], outcomes: list[OutcomeRow], unit: str) -> dict:
+    """p95 task duration over tasks with at least one ok request. `ts` is when a
+    request FINISHED, so a task runs from (first.ts - first.latency) to last.ts:
+    last.ts - first.ts + the first request's latency. With request units, p95
+    request latency of ok requests."""
     if unit == "request":
         vals = sorted(o.latency_ms for o in outcomes
                       if o.status == "ok" and o.latency_ms is not None)
         gate = MIN_N_REQUESTS
     else:
-        groups: dict[str, list[OutcomeRow]] = defaultdict(list)
-        for o in outcomes:
-            if o.status in _DENOMINATOR:
-                groups[f"t:{o.trajectory_key}" if o.trajectory_key
-                       else f"r:{o.request_id}"].append(o)
         vals = []
-        for rows in groups.values():
-            if not any(o.status == "ok" for o in rows):
+        for t in tasks:
+            if not any(o.status == "ok" for o in t.rows):
                 continue
-            rows.sort(key=lambda o: o.ts)
+            rows = sorted(t.rows, key=lambda o: o.ts)
             span_ms = (rows[-1].ts - rows[0].ts).total_seconds() * 1000.0
-            vals.append(span_ms + (rows[-1].latency_ms or 0.0))
+            vals.append(span_ms + (rows[0].latency_ms or 0.0))
         vals.sort()
         gate = MIN_N_TASKS
     insufficient = len(vals) < gate
@@ -359,16 +363,7 @@ def app_view(usage: list[UsageRow], outcomes: list[OutcomeRow], feedback: list[F
     usage, independent of the window."""
     tasks, any_key = _build_tasks(usage, outcomes, feedback)
     unit = "task" if any_key else "request"
-    labelled = [t for t in tasks if t.label is not None]
-    reported = None
-    if labelled:
-        insufficient = len(labelled) < MIN_N_TASKS
-        reported = {
-            "value": None if insufficient
-            else sum(1 for t in labelled if t.label[1]) / len(labelled),
-            "n": len(labelled), "insufficient": insufficient,
-            "apps_reporting": len({a for t in labelled for a in t.apps}),
-        }
+    reported = _reported(tasks)
 
     by_req = {o.request_id: o for o in outcomes}
     spend: dict[str | None, float] = defaultdict(float)
@@ -388,7 +383,7 @@ def app_view(usage: list[UsageRow], outcomes: list[OutcomeRow], feedback: list[F
         "cost_per_task": _cost_per_task(tasks, unit),
         "successful_reported": reported,
         "completed": _completed(outcomes),
-        "p95_task_time_ms": _p95_task_time(outcomes, unit),
+        "p95_task_time_ms": _p95_task_time(tasks, outcomes, unit),
         "spend_by_workload": [
             {"workload": w, "usd": float(v)}
             for w, v in sorted(spend.items(), key=lambda kv: (-kv[1], kv[0] or ""))],

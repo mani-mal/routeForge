@@ -126,9 +126,10 @@ def test_p95_task_time():
                           latency=250.0))
     os.append(outcome("fail", "backend_failed", traj="kf", chosen=None, attempts=["m"]))
     p = view([], os)["p95_task_time_ms"]
-    # span 1000*(t+1) + last latency 250; kf has no ok request and is excluded
+    # ts is request END time: duration = span + FIRST request's latency (100), not the last's (250);
+    # kf has no ok request and is excluded
     assert p["n"] == 20 and p["task_unit"] == "task" and p["insufficient"] is False
-    assert p["value"] == 1000 * 19 + 250     # idx round(0.95*19)=18 -> t=18 -> 19000+250
+    assert p["value"] == 1000 * 19 + 100     # idx round(0.95*19)=18 -> t=18 -> 19000+100
     one = view([], os[:2])["p95_task_time_ms"]
     assert one["n"] == 1 and one["insufficient"] is True and one["value"] is None
 

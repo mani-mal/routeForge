@@ -165,7 +165,7 @@ function Cards({ cur, prev }: { cur: AppWindowView; prev: AppWindowView }) {
       </Card>
       <Card
         label="p95 task time"
-        tip="95th percentile of task duration: last request time minus first request time plus the last request's latency, over tasks with at least one successful request. Without trajectory ids it is p95 request latency. Needs at least 20 tasks (30 requests)."
+        tip="95th percentile of task duration: time from the start of the first request to the end of the last, over tasks with at least one successful request. Without trajectory ids it is p95 request latency. Needs at least 20 tasks (30 requests)."
         delta={change(p95.value, prev.p95_task_time_ms.value)?.text}
       >
         <span className="text-xl font-bold font-mono text-gray-100">
