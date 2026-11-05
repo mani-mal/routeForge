@@ -362,3 +362,25 @@ def test_map_put_and_clear(started):
     assert client.put(f"{BASE}/map", json={"model": name, "ext_model_slug": None}).status_code == 200
     row = next(m for m in client.get(f"{BASE}/map").json()["models"] if m["model"] == name)
     assert row["ext_model_slug"] is None
+
+
+def test_import_date_within_clock_skew_is_stored_as_now(client):
+    import datetime as dt
+    _login(client)
+    ahead = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=23)).isoformat()
+    body = {"routeforge_fetched_at": ahead, "data": _payload("a")}
+    assert client.post(f"{BASE}/import", content=json.dumps(body)).status_code == 200
+    (snap,) = client.get(f"{BASE}/snapshots").json()["snapshots"]
+    got = dt.datetime.fromisoformat(snap["retrieved_at"])
+    assert got <= dt.datetime.now(dt.timezone.utc) and snap["dated_at_upload"] is False
+    q = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=23)).strftime("%Y-%m-%dT%H:%M:%S")
+    assert client.post(f"{BASE}/import?retrieved_at={q}",
+                       content=json.dumps(_payload("b"))).status_code == 200
+
+
+def test_import_date_beyond_clock_skew_is_422(client):
+    import datetime as dt
+    _login(client)
+    far = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=25)).isoformat()
+    body = {"routeforge_fetched_at": far, "data": _payload("a")}
+    assert client.post(f"{BASE}/import", content=json.dumps(body)).status_code == 422

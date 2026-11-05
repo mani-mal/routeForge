@@ -25,6 +25,9 @@ AA_URL = "https://artificialanalysis.ai/api/v2/data/llms/models"
 AA_TIMEOUT_S = 20.0
 REFRESH_MIN_INTERVAL_S = 600
 MAX_BODY_BYTES = 10 * 1024 * 1024
+# Air-gapped servers' clocks drift: a fetch date up to this far ahead is accepted
+# (and stored as now); beyond it the import is refused.
+FETCH_DATE_SKEW = dt.timedelta(hours=24)
 _ADVISORY_LOCK_KEY = 7_302_411
 
 external_metrics_router = APIRouter(
@@ -71,14 +74,16 @@ def _fetch_disabled_reason() -> str | None:
 _aware = ext.aware
 
 def _parse_when(value: str, where: str) -> dt.datetime:
-    """An ISO-8601 fetch date; naive means UTC. A future date is refused (422)."""
+    """An ISO-8601 fetch date; naive means UTC. A date more than FETCH_DATE_SKEW ahead of
+    now is refused (422); one within the skew is clamped to now."""
     try:
         when = _aware(dt.datetime.fromisoformat(value.strip()))
     except (ValueError, AttributeError):
         raise HTTPException(422, f"{where} is not an ISO-8601 date: {str(value)[:40]!r}")
-    if when > dt.datetime.now(dt.timezone.utc):
+    now = dt.datetime.now(dt.timezone.utc)
+    if when > now + FETCH_DATE_SKEW:
         raise HTTPException(422, f"{where} is in the future")
-    return when
+    return min(when, now)
 
 def _rate_wait(newest, now: dt.datetime) -> float:
     """Seconds until the next refresh is allowed (<= 0 means allowed)."""
