@@ -38,7 +38,7 @@ Analysis" and links to <https://artificialanalysis.ai/>.
 
 ### Import dating
 
-An imported snapshot is dated by, in order: the file's top-level `routeforge_fetched_at`;
+Precedence is file date > `?retrieved_at` > upload time; `?retrieved_at` is ignored when the file carries its own `routeforge_fetched_at`. The import response says which was used in `date_source` (`file` | `query` | `upload`). An imported snapshot is dated by, in order: the file's top-level `routeforge_fetched_at`;
 the `?retrieved_at=` query (ISO-8601, naive = UTC); else the upload time, stored with
 `dated_at_upload: true` and shown in the console as "date of upload, not of fetch". A
 date up to 24 hours ahead of the server clock (air-gapped clock drift) is accepted and stored as now; further ahead is refused (422). The stale alert (30 days) and the refresh clock use this date,
@@ -46,7 +46,7 @@ so an old file does not look fresh when its date is known.
 
 ## Endpoints (admin session required)
 
-- `POST /admin/external-metrics/import?index_version=&retrieved_at=` -> `{"snapshot_id","row_count","dated_at_upload"}`; 413 over 10 MB; 422 if not AA-shaped, a slug is over 128 characters, or a date is invalid or more than 24 hours in the future.
+- `POST /admin/external-metrics/import?index_version=&retrieved_at=` -> `{"snapshot_id","row_count","dated_at_upload","date_source"}`; 413 over 10 MB; 422 if not AA-shaped, a slug is over 128 characters, or a date is invalid or more than 24 hours in the future.
 - `POST /admin/external-metrics/refresh?index_version=` -> same; 409 key unset or fetch disabled; 429 rate limited (`retry_after_s`); 502 AA error or timeout (nothing stored, rate-limit clock not consumed).
 - `GET /admin/external-metrics/snapshots` -> snapshots newest first (each with `dated_at_upload`), plus `fetch_enabled` and `fetch_disabled_reason`.
 - `GET /admin/external-metrics/map` -> pool models with `placement`, current `ext_model_slug` and up to 3 `suggestions` from the latest snapshot.

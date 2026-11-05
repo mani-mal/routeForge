@@ -135,10 +135,13 @@ async def import_snapshot(request: Request,
     except ValueError:
         raise HTTPException(422, "body is not valid JSON")
     when: dt.datetime | None = None
+    source = "upload"
     if isinstance(payload, dict) and "routeforge_fetched_at" in payload:
+        source = "file"
         when = _parse_when(payload["routeforge_fetched_at"], "routeforge_fetched_at")
         payload = payload.get("data")
     elif retrieved_at:
+        source = "query"
         when = _parse_when(retrieved_at, "retrieved_at")
     models = _parse_or_422(payload)
     async with request.app.state.db.session() as s:
@@ -146,7 +149,8 @@ async def import_snapshot(request: Request,
             s, models, origin="import",
             retrieved_at=when or dt.datetime.now(dt.timezone.utc),
             index_version=index_version, api_tier=None, dated_at_upload=when is None)
-    return {"snapshot_id": sid, "row_count": len(models), "dated_at_upload": when is None}
+    return {"snapshot_id": sid, "row_count": len(models), "dated_at_upload": when is None,
+            "date_source": source}
 
 @external_metrics_router.post("/refresh")
 async def refresh_snapshot(request: Request,

@@ -384,3 +384,14 @@ def test_import_date_beyond_clock_skew_is_422(client):
     far = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=25)).isoformat()
     body = {"routeforge_fetched_at": far, "data": _payload("a")}
     assert client.post(f"{BASE}/import", content=json.dumps(body)).status_code == 422
+
+
+def test_import_reports_date_source(client):
+    _login(client)
+    env = {"routeforge_fetched_at": "2026-09-01T00:00:00+00:00", "data": _payload("a")}
+    r = client.post(f"{BASE}/import?retrieved_at=2026-08-01", content=json.dumps(env))
+    assert r.json()["date_source"] == "file"
+    r = client.post(f"{BASE}/import?retrieved_at=2026-08-01", content=json.dumps(_payload("b")))
+    assert r.json()["date_source"] == "query"
+    r = client.post(f"{BASE}/import", content=json.dumps(_payload("c")))
+    assert r.json()["date_source"] == "upload"
