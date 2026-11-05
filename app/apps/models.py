@@ -133,6 +133,10 @@ class AppPolicy(Base):
     allowed_models: Mapped[list | None] = mapped_column(JSON, nullable=True)
     residency: Mapped[str | None] = mapped_column(String(32), nullable=True)
     max_spend_usd_per_day: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Display-only monthly budget (USD) for the Metrics tab's month-end forecast.
+    # NEVER enforced and NEVER part of AppPolicy.version(): the daily cap above is
+    # the only spend limit that blocks requests.
+    monthly_budget_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
     # Per-request cost cap (USD) for this app. null = inherit
     # policy.yaml budgets.default_max_spend_usd. Agent clients send 25K-token
     # turns, which a deployment-wide $0.05 cap rejects on any priced model.

@@ -73,6 +73,7 @@ def _policy_dict(p) -> dict | None:
     return {"allowed_tiers": p.allowed_tiers, "allowed_providers": p.allowed_providers,
             "allowed_models": p.allowed_models, "residency": p.residency,
             "max_spend_usd_per_day": p.max_spend_usd_per_day,
+            "monthly_budget_usd": p.monthly_budget_usd,
             "max_cost_usd_per_request": p.max_cost_usd_per_request, "max_rpm": p.max_rpm,
             "compression_enabled": p.compression_enabled, "capture_io": p.capture_io,
             "pii_detection": p.pii_detection, "stream_mode": p.stream_mode,
@@ -207,6 +208,7 @@ class PolicyIn(BaseModel):
     allowed_models: list[str] | None = None
     residency: str | None = None
     max_spend_usd_per_day: float | None = None
+    monthly_budget_usd: float | None = None   # display only; never enforced
     max_cost_usd_per_request: float | None = None  # None = inherit budgets.default_max_spend_usd
     max_rpm: int | None = None
     compression_enabled: bool | None = None   # None = inherit global Headroom toggle
@@ -1048,6 +1050,10 @@ async def _validate_policy_values(body: "PolicyIn", settings, session,
         raise HTTPException(
             422, "max_spend_usd_per_day must be > 0 (0 rejects every request). Omit it, "
             "or reset it, for no daily cap.")
+    if changed("monthly_budget_usd") and not body.monthly_budget_usd > 0:
+        raise HTTPException(
+            422, "monthly_budget_usd must be > 0. Omit it, or reset it, for no "
+            "monthly budget (it is display only and never blocks a request).")
 
 
 def _static_validate_onboard(body: OnboardIn, s) -> None:

@@ -6,7 +6,7 @@ Every sample-size gate and status is decided here, server-side.
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from functools import cached_property
 from math import floor, log10
@@ -165,6 +165,7 @@ class _Task:
     cost_by_model: dict
     ok_by_model: dict
     label: tuple | None = None  # (ts, success, feedback id)
+    rows: list = field(default_factory=list)  # the task's counted OutcomeRows
 
     @cached_property
     def primary_model(self) -> str | None:
@@ -196,6 +197,7 @@ def _build_tasks(usage: list[UsageRow], outcomes: list[OutcomeRow],
         key = f"t:{o.trajectory_key}" if o.trajectory_key else f"r:{o.request_id}"
         t = tasks.setdefault(key, _Task(key, set(), 0.0, defaultdict(float), defaultdict(int)))
         t.apps.add(o.application_id)
+        t.rows.append(o)
         req_task[o.request_id] = key
         for m, c in cost_by_req.get(o.request_id, {}).items():
             t.cost += c
@@ -213,6 +215,20 @@ def _build_tasks(usage: list[UsageRow], outcomes: list[OutcomeRow],
         if t.label is None or (f.ts, f.id) >= (t.label[0], t.label[2]):
             t.label = (f.ts, f.value_num == 1, f.id)
     return list(tasks.values()), any_key
+
+
+def _reported(tasks: list[_Task]) -> dict | None:
+    """Reported success over the labelled tasks; None when nothing is labelled."""
+    labelled = [t for t in tasks if t.label is not None]
+    if not labelled:
+        return None
+    insufficient = len(labelled) < MIN_N_TASKS
+    return {
+        "value": None if insufficient
+        else sum(1 for t in labelled if t.label[1]) / len(labelled),
+        "n": len(labelled), "insufficient": insufficient,
+        "apps_reporting": len({a for t in labelled for a in t.apps}),
+    }
 
 
 def _cost_per_task(tasks: list[_Task], task_unit: str) -> dict:
@@ -250,16 +266,7 @@ def summarize(usage: list[UsageRow], outcomes: list[OutcomeRow],
 
     tasks, any_key = _build_tasks(usage, outcomes, feedback)
     unit = "task" if any_key else "request"
-    labelled = [t for t in tasks if t.label is not None]
-    reported = None
-    if labelled:
-        insufficient = len(labelled) < MIN_N_TASKS
-        reported = {
-            "value": None if insufficient else sum(1 for t in labelled if t.label[1]) / len(labelled),
-            "n": len(labelled),
-            "insufficient": insufficient,
-            "apps_reporting": len({a for t in labelled for a in t.apps}),
-        }
+    reported = _reported(tasks)
 
     counted = [u for u in usage if u.routing_saved_usd is not None]
 
@@ -289,6 +296,104 @@ def summarize(usage: list[UsageRow], outcomes: list[OutcomeRow],
         "savings": sv,
         "route_reasons": dict(reasons),
         "workloads": workloads,
+    }
+
+
+# --------------------------------------------------------------------------
+# Team-lead view of one application
+# --------------------------------------------------------------------------
+
+_RETRY_REASONS = ("failover", "escalation")
+_RISK_WATCH = 0.9
+_RISK_HIGH = 1.1
+
+
+def _month_budget(month_usage: list[UsageRow], monthly_budget_usd: float | None,
+                  now: datetime) -> dict:
+    """Month-to-date spend, the month-end forecast and the risk band.
+
+    The month is the calendar month of `now` in UTC. The forecast is spend per
+    elapsed day (fractional, at least one day, so the first hours of a month
+    cannot project an absurd figure) times the days in the month. Risk compares
+    the forecast to the budget: below 90% low, 90-110% watch, above 110% high;
+    null without a budget."""
+    start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    next_start = (start + timedelta(days=32)).replace(day=1)
+    days_in_month = (next_start - start).days
+    mtd = float(sum(u.cost_usd for u in month_usage))
+    elapsed_days = max(1.0, (now - start).total_seconds() / 86400.0)
+    forecast = mtd / elapsed_days * days_in_month
+    risk = None
+    if monthly_budget_usd:
+        ratio = forecast / monthly_budget_usd
+        risk = "low" if ratio < _RISK_WATCH else "watch" if ratio <= _RISK_HIGH else "high"
+    return {"monthly_budget_usd": monthly_budget_usd, "month_to_date_usd": mtd,
+            "forecast_usd": forecast, "risk": risk, "month": start.strftime("%Y-%m")}
+
+
+def _p95_task_time(tasks: list[_Task], outcomes: list[OutcomeRow], unit: str) -> dict:
+    """p95 task duration over tasks with at least one ok request. `ts` is when a
+    request FINISHED, so a task runs from (first.ts - first.latency) to last.ts:
+    last.ts - first.ts + the first request's latency. With request units, p95
+    request latency of ok requests."""
+    if unit == "request":
+        vals = sorted(o.latency_ms for o in outcomes
+                      if o.status == "ok" and o.latency_ms is not None)
+        gate = MIN_N_REQUESTS
+    else:
+        vals = []
+        for t in tasks:
+            if not any(o.status == "ok" for o in t.rows):
+                continue
+            rows = sorted(t.rows, key=lambda o: o.ts)
+            span_ms = (rows[-1].ts - rows[0].ts).total_seconds() * 1000.0
+            vals.append(span_ms + (rows[0].latency_ms or 0.0))
+        vals.sort()
+        gate = MIN_N_TASKS
+    insufficient = len(vals) < gate
+    return {"value": None if insufficient else _pctile(vals, 0.95), "n": len(vals),
+            "insufficient": insufficient, "task_unit": unit}
+
+
+def app_view(usage: list[UsageRow], outcomes: list[OutcomeRow], feedback: list[FeedbackRow],
+             *, month_usage: list[UsageRow], monthly_budget_usd: float | None,
+             now: datetime) -> dict:
+    """One application over one window, for its team lead. `usage`/`outcomes`/
+    `feedback` are the window's rows; `month_usage` is the calendar month's
+    usage, independent of the window."""
+    tasks, any_key = _build_tasks(usage, outcomes, feedback)
+    unit = "task" if any_key else "request"
+    reported = _reported(tasks)
+
+    by_req = {o.request_id: o for o in outcomes}
+    spend: dict[str | None, float] = defaultdict(float)
+    retry_usd = 0.0
+    for u in usage:
+        o = by_req.get(u.request_id)
+        spend[o.workload if o else None] += u.cost_usd
+        if o is not None and o.route_reason in _RETRY_REASONS:
+            retry_usd += u.cost_usd
+
+    routed = [o for o in outcomes if attributed_model(o) is not None]
+    models = Counter(attributed_model(o) for o in routed)
+    reasons = Counter(o.route_reason for o in routed if o.route_reason)
+    n_reasons = sum(reasons.values())
+    return {
+        "budget": _month_budget(month_usage, monthly_budget_usd, now),
+        "cost_per_task": _cost_per_task(tasks, unit),
+        "successful_reported": reported,
+        "completed": _completed(outcomes),
+        "p95_task_time_ms": _p95_task_time(tasks, outcomes, unit),
+        "spend_by_workload": [
+            {"workload": w, "usd": float(v)}
+            for w, v in sorted(spend.items(), key=lambda kv: (-kv[1], kv[0] or ""))],
+        "retries_and_failovers_usd": float(retry_usd),
+        "models_used": [
+            {"model": m, "requests": n, "share": n / len(routed)}
+            for m, n in sorted(models.items(), key=lambda kv: (-kv[1], kv[0]))],
+        "route_reasons": [
+            {"reason": r, "count": n, "share": n / n_reasons}
+            for r, n in sorted(reasons.items(), key=lambda kv: (-kv[1], kv[0]))],
     }
 
 

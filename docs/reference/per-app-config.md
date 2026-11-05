@@ -1214,6 +1214,10 @@ live view and never carries chat tokens, regardless of any app's `stream_mode`.
 
 Estimated-cost cap for one request, in USD. `null` inherits `budgets.default_max_spend_usd` (policy.yaml, 0.05). The router estimates `prompt_tokens × input price + (max_tokens or budgets.default_estimated_output_tokens) × output price`. It falls back to a cheaper allowed tier before rejecting, and never goes below the risk floor. A coding agent (≈25K prompt tokens, `max_tokens` 8192) on a model priced $10/$10 per 1M estimates ≈$0.33 and needs this raised, or the model priced realistically. On-prem models are often priced 0.
 
+### `monthly_budget_usd`
+
+A monthly spend budget in USD, `> 0` when set (0 or negative is a 422); `null` (or `reset: ["monthly_budget_usd"]`) means none. **Display only.** The Metrics tab shows month-to-date spend against it with a month-end forecast and a risk band; it never blocks a request (the daily cap, `max_spend_usd_per_day`, is the only spend limit that does) and it is not part of `app_policy_version`, so setting it changes nothing about routing or the policy certificate.
+
 ## Manual DB migration for already-deployed databases
 
 RouteForge has no migration tool — `Base.metadata.create_all` (SQLAlchemy) only creates
@@ -1247,6 +1251,7 @@ ALTER TABLE app_policies ADD COLUMN content_integrity VARCHAR(32); -- 2026-09-18
 ALTER TABLE app_policies ADD COLUMN escalate_residency_on_detection BOOLEAN; -- 2026-09-18 (P1a)
 ALTER TABLE app_policies ADD COLUMN allowed_regions JSON;          -- 2026-09-19 (P1b)
 ALTER TABLE app_policies ADD COLUMN require_no_retention BOOLEAN;  -- 2026-09-19 (P1b)
+ALTER TABLE app_policies ADD COLUMN monthly_budget_usd FLOAT;      -- 2026-11-05 (metrics slice 4)
 ```
 
 P1b also adds three columns to a **second** table, `onboarded_models` — the endpoint side

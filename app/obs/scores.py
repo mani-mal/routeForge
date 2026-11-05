@@ -16,7 +16,7 @@ log = logging.getLogger("serving.obs")
 
 SCORE_NAMES = frozenset({
     "route_correct", "preferred_model", "failure_type", "quality",
-    "corrected_output",
+    "corrected_output", "task_success",
 })
 
 # Langfuse score-config dataType per score name, so a lazily-created config
@@ -24,6 +24,7 @@ SCORE_NAMES = frozenset({
 # categorical picker) instead of defaulting to NUMERIC for everything.
 _SCORE_DATATYPES = {
     "route_correct": "NUMERIC", "quality": "NUMERIC",
+    "task_success": "NUMERIC",  # 1 = task succeeded, 0 = it failed
     "preferred_model": "CATEGORICAL", "failure_type": "CATEGORICAL",
     # corrected_output is always posted as value=1 (a NUMERIC marker) with the
     # correction TEXT in the score's `comment` — see both feedback handlers'

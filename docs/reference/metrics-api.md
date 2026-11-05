@@ -6,6 +6,7 @@ Admin-authenticated, content-free (model names, app ids, workload slugs, numbers
 
 - `GET /admin/metrics/summary` returns `window`, `current`, `previous`, `alerts`, `baseline`, `generated_at`.
 - `GET /admin/metrics/models` returns `window`, `models`, `generated_at`.
+- `GET /admin/metrics/app/{app_id}` returns `application_id`, `window`, `current`, `previous`, `generated_at` (the team-lead view, below). Only `hours` is accepted; an unknown app is 404.
 
 Query parameters (both): `hours` (default 720, 1-8760, else 422), `application_id`, `workload`, `placement` (`onprem` | `cloud`, else 422). The previous window is the same length immediately before the current one.
 
@@ -49,3 +50,16 @@ Worst first: `cost_anomaly`, `performance_degradation`, `cache_regression`, `pri
 ## Published metrics (Artificial Analysis)
 
 Display-only; attribution "Published data: Artificial Analysis" (https://artificialanalysis.ai/). Each model row carries `published` (the mapped AA model's fields plus `snapshot_id`, `retrieved_at`, `index_version`; `null` when unmapped or the slug is not in the latest snapshot; any metric may be `null` = not published) and `comparability` `{overall, overall_rank, speed, ttft, price, reasons[]}` (`overall_rank` 0 = comparable .. 3 = not_comparable, server-owned, for sorting). Labels: `comparable`, `partially_comparable`, `not_comparable`, `insufficient_local_data`; `overall` is the worst (`not_comparable` > `insufficient_local_data` > `partially_comparable` > `comparable`). On-prem and unmapped models are `not_comparable`; local n below the speed/TTFT minimum is `insufficient_local_data`; a median prompt outside 500-2000 tokens makes speed/TTFT `partially_comparable`; the provider note is informational. `price_drift` (cloud, mapped, `pricing.yaml` input or output more than 10% from AA's) is a status. `/summary` adds `published` `{snapshot_id, retrieved_at, dated_at_upload, index_version, source, origin}` or `null`; `retrieved_at` is always timezone-aware UTC.
+
+## Team-lead app view (`GET /admin/metrics/app/{app_id}`)
+
+`current` and `previous` (same-length window before) each hold:
+
+- `budget`: `{monthly_budget_usd, month_to_date_usd, forecast_usd, risk, month}`. The month is the current UTC calendar month, **independent of `hours`**, so `previous.budget` equals `current.budget`. `month_to_date_usd` is the sum of the app's `usage_records.cost_usd` since the 1st 00:00 UTC. `forecast_usd` = month-to-date / elapsed days (fractional, minimum 1 day) x days in the month. `risk` compares the forecast to the budget: `low` below 90%, `watch` 90-110% inclusive, `high` above 110%; `null` without a budget. `monthly_budget_usd` is display only: it blocks nothing and is not part of `app_policy_version`.
+- `cost_per_task`, `successful_reported`, `completed`: exactly as in `/summary`.
+- `p95_task_time_ms`: `{value, n, insufficient, task_unit}`. Per task (a `trajectory_key` group with at least one ok request): last request ts - first request ts + the *first* request's latency (`ts` is when a request finished, so the task started one first-request latency before its first `ts`). With `task_unit` `request` (no request has a trajectory key) it is the p95 request latency of ok requests. Minimum 20 tasks, or 30 requests for the request unit.
+- `spend_by_workload`: `[{workload, usd}]` sorted by spend, descending; `workload` null is untagged (including usage rows with no outcome row). `retries_and_failovers_usd` is the cost of requests whose `route_reason` is `failover` or `escalation`; it **overlaps** the workload lines and is not additive to them.
+- `models_used`: `[{model, requests, share}]` over the app's routed requests, per attributed model (`chosen`, else the last attempt). A request that failed over is counted once, under the model that ended it.
+- `route_reasons`: `[{reason, count, share}]` over routed requests, requests without a reason excluded from both counts and shares.
+
+How applications report `task_success` labels: [Reporting task success](../guides/reporting-task-success.md).

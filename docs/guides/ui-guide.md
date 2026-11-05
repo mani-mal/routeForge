@@ -112,11 +112,11 @@ A tier legend (cheap / mid / frontier dots) sits top-right of the table.
 ## 2. Application Page — header + tabs
 
 `AppPage.tsx`. Header shows **← Fleet** (back), the app **name**, and
-`app-id · <default_residency>` beneath. Six tabs follow.
+`app-id · <default_residency>` beneath. Seven tabs follow (Overview, Cost, Metrics, Privacy, Traffic, Requests, Settings).
 
 The page owns **one request feed** for this app: seeded from `GET /api/requests?limit=500&app=<id>`
 and kept live via the shared SSE stream **filtered to this tenant** (`summary.tenant_id === appId`).
-Every tab is a pure aggregation of that feed (`console/aggregate.ts`), so all six move
+Every tab is a pure aggregation of that feed (`console/aggregate.ts`), so the feed-driven tabs move
 together as new requests arrive. Newest 500 requests are held client-side.
 
 ---
@@ -243,6 +243,37 @@ request's own baseline and actual across the app to get the tab's aggregate figu
 the headline `% saved`. The baseline is **live** — it moves with real traffic, nothing is
 hardcoded. On-prem tiers are priced at a small **representative amortized** rate (not
 $0), so actual spend and routing savings read believably rather than as a flat 100%.
+
+---
+
+## 4f. Metrics tab
+
+`sections/MetricsSection.tsx`, fed by `GET /admin/metrics/app/{app_id}` (see
+[`../reference/metrics-api.md`](../reference/metrics-api.md)) and, for the table at the bottom,
+`/admin/metrics/models` filtered to this app. The owner question for a team lead: *what are we
+spending, is it working, and why?* Unlike the other tabs it does not use the live request
+feed; it loads once per window (24 h / 7 d / 30 d / 90 d) and shows the change against the
+previous window of the same length.
+
+Four cards (each with a "?" tooltip giving the definition):
+
+- **Spend / monthly budget** - month-to-date spend against the budget set in Settings, the
+  projected month-end spend and a risk word (`low`, `watch`, `high`, each with an icon). The
+  month is the current UTC calendar month, whatever the window. The budget is display only.
+  Without one the card says to set it in Settings.
+- **Cost per successful task** - needs at least 20 tasks labelled by the application; the
+  attempted cost per task (or "per request" when the app sends no trajectory id) sits beneath.
+- **Successful (reported)** - the share of labelled tasks the application reported as
+  successful, with "completed without failure" beneath (not a quality measure). With no labels
+  it points to [Reporting task success](reporting-task-success.md). Labels entered by an admin in
+  the console count too, not only those the application sends. When enough tasks are labelled
+  and none succeeded, Cost per successful task reads "no successful tasks reported".
+- **p95 task time** - how long the slowest 5% of tasks take.
+
+Below: **Spend by workload** (the "Retries and failovers" line overlaps the workloads and is
+not added to them), **Models used** and **Why the pricier model was used** as labelled share
+bars, then the full model table. Anything below its minimum sample reads
+`insufficient data (n=...)`, never zero.
 
 ---
 
