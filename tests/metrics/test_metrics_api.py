@@ -65,6 +65,52 @@ def test_response_is_content_free(client):
 
 
 
+def test_app_metrics_requires_admin(client):
+    assert client.get("/admin/metrics/app/anything").status_code == 401
+
+
+def test_app_metrics_404_unknown(client):
+    _login(client)
+    assert client.get("/admin/metrics/app/no-such-app").status_code == 404
+
+
+def test_app_metrics_hours_out_of_range_is_422(client):
+    _seed(client, "mx-h", "h")
+    _login(client)
+    for h in (0, 9000):
+        assert client.get(f"/admin/metrics/app/mx-h?hours={h}").status_code == 422
+
+
+def test_app_metrics_shape(client):
+    app_id, tok = _seed(client, "mx-f", "f")
+    other, tok2 = _seed(client, "mx-g", "g")
+    for _i in range(3):
+        _chat(client, tok, PROMPT)
+    _chat(client, tok2)
+    _login(client)
+    assert client.put(f"/admin/applications/{app_id}/policy",
+                      json={"monthly_budget_usd": 150.0}).status_code == 200
+    r = client.get(f"/admin/metrics/app/{app_id}")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["application_id"] == app_id
+    assert {"window", "current", "previous", "generated_at"} <= set(body)
+    cur = body["current"]
+    assert {"budget", "cost_per_task", "successful_reported", "completed", "p95_task_time_ms",
+            "spend_by_workload", "retries_and_failovers_usd", "models_used",
+            "route_reasons"} <= set(cur)
+    b = cur["budget"]
+    assert b["monthly_budget_usd"] == 150.0 and b["risk"] == "low"
+    assert b["month_to_date_usd"] > 0 and b["forecast_usd"] > 0
+    assert len(b["month"]) == 7
+    assert cur["completed"]["n"] == 3               # the other app's chat is not here
+    assert sum(m["requests"] for m in cur["models_used"]) == 3
+    assert cur["cost_per_task"]["task_unit"] == "request"
+    assert body["previous"]["budget"] == b
+    assert PROMPT not in json.dumps(body)
+
+
+
 
 # --- seeded-DB tests: rows shaped like the real writers -------------------------------
 # build_failure_outcome stores chosen=None, attempts=[<last model tried>] for

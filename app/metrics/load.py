@@ -15,16 +15,38 @@ from app.apps.models import EndpointObservation, OutcomeFeedback, RoutingOutcome
 from app.metrics.compute import FeedbackRow, ObservationRow, OutcomeRow, UsageRow
 
 
+_USAGE_COLS = ("request_id", "application_id", "ts", "model", "provider", "status",
+               "cost_usd", "prompt_tokens", "cached_prompt_tokens", "compression_saved_usd",
+               "routing_saved_usd", "prompt_cache_saved_usd", "semantic_cache_saved_usd")
+
+
+def _usage_rows(rows) -> list[UsageRow]:
+    return [UsageRow(
+        request_id=u.request_id, application_id=u.application_id, ts=u.ts, model=u.model,
+        provider=u.provider, status=u.status, cost_usd=u.cost_usd or 0.0,
+        prompt_tokens=u.prompt_tokens or 0, cached_prompt_tokens=u.cached_prompt_tokens,
+        compression_saved_usd=u.compression_saved_usd, routing_saved_usd=u.routing_saved_usd,
+        prompt_cache_saved_usd=u.prompt_cache_saved_usd,
+        semantic_cache_saved_usd=u.semantic_cache_saved_usd) for u in rows]
+
+
+async def load_usage(session, *, since: datetime, until: datetime,
+                     application_id: str | None) -> list[UsageRow]:
+    """Usage rows only (the month-to-date spend of the team-lead view)."""
+    U = UsageRecord
+    q = select(*(getattr(U, c) for c in _USAGE_COLS)).where(U.ts >= since, U.ts < until)
+    if application_id:
+        q = q.where(U.application_id == application_id)
+    return _usage_rows((await session.execute(q)).all())
+
+
 async def load_window(session, *, since: datetime, until: datetime,
                       application_id: str | None,
                       ) -> tuple[list[UsageRow], list[OutcomeRow], list[FeedbackRow]]:
     """Every usage, outcome and task_success row of one window. Placement and
     workload filters are applied by the caller, after attribution."""
     U, O = UsageRecord, RoutingOutcome
-    uq = select(U.request_id, U.application_id, U.ts, U.model, U.provider, U.status,
-                U.cost_usd, U.prompt_tokens, U.cached_prompt_tokens,
-                U.compression_saved_usd, U.routing_saved_usd, U.prompt_cache_saved_usd,
-                U.semantic_cache_saved_usd).where(U.ts >= since, U.ts < until)
+    uq = select(*(getattr(U, c) for c in _USAGE_COLS)).where(U.ts >= since, U.ts < until)
     oq = select(O.request_id, O.application_id, O.ts, O.status, O.chosen, O.workload,
                 O.trajectory_key, O.latency_ms, O.route_reason, O.attempts
                 ).where(O.ts >= since, O.ts < until)
@@ -38,14 +60,7 @@ async def load_window(session, *, since: datetime, until: datetime,
         OutcomeFeedback.score_name == "task_success",
         OutcomeFeedback.request_id.in_(window_ids))
 
-    usage = [UsageRow(
-        request_id=u.request_id, application_id=u.application_id, ts=u.ts, model=u.model,
-        provider=u.provider, status=u.status, cost_usd=u.cost_usd or 0.0,
-        prompt_tokens=u.prompt_tokens or 0, cached_prompt_tokens=u.cached_prompt_tokens,
-        compression_saved_usd=u.compression_saved_usd, routing_saved_usd=u.routing_saved_usd,
-        prompt_cache_saved_usd=u.prompt_cache_saved_usd,
-        semantic_cache_saved_usd=u.semantic_cache_saved_usd)
-        for u in (await session.execute(uq)).all()]
+    usage = _usage_rows((await session.execute(uq)).all())
     outcomes = [OutcomeRow(
         request_id=o.request_id, application_id=o.application_id, ts=o.ts, status=o.status,
         chosen=o.chosen, workload=o.workload, trajectory_key=o.trajectory_key,
