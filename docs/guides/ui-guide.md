@@ -629,7 +629,7 @@ and ⓘ notes (requests that predate savings tracking). Hidden when empty.
 status reasons; Esc or Close dismisses). The Columns picker adds TTFT p50/p95, Errors,
 Failovers and Cache hit. **Speed** and **TTFT** are model-level over all applications and
 ignore the application and workload filters. Statuses, worst first: Cost anomaly,
-Performance degradation, Cache regression, Insufficient data, Healthy; sorting the Status
+Performance degradation, Cache regression, Price drift, Insufficient data, Healthy; sorting the Status
 column follows that order. **Errors** include backend failures, verification failures and
 context overflows, attributed to the last model tried. A **Successful (reported)** column
 shows each model's labelled-task success.
@@ -640,6 +640,33 @@ success, or completed without failure when the model has too few labelled tasks 
 names say which; the tooltip names each point's kinds). Dot size is spend; circle is
 on-prem, diamond is cloud. Models without a point are omitted and counted in a note.
 Alerts always show, even when the window has only policy rejections.
+
+**Published data (Artificial Analysis)**: a "Published data" panel shows the freshness stamp
+"Artificial Analysis snapshot: <date> (index <version> | index version not recorded)" (with "date of upload, not of fetch" added when an imported file carried no fetch date) and
+three controls. **Refresh** fetches a new snapshot (admin-triggered only; it is disabled, with
+the reason shown as text, when `AA_API_KEY` is unset or `SP_EXTERNAL_FETCH=off`, and the server
+allows one refresh per 10 minutes). **Import file** uploads a JSON file produced by
+`scripts/aa_fetch.py` on a connected machine, for air-gapped sites. **Map models** opens a
+dialog listing each pool model with its Artificial Analysis slug (suggestions first; type any
+other slug; Save per row, Clear to unmap). The server's refusal (409, 413, 422, 429, 502) is
+shown as text next to the controls. After an import, refresh or mapping save the page reloads.
+
+The model table gains a **Published · Artificial Analysis** column group, separated from
+"Measured here": Intelligence, Speed (AA), Price in / out (AA, USD per 1M tokens) and
+**Comparable?**. "—" means not published or not mapped, never zero. The badge pairs an icon
+with a word (✓ Comparable, ◐ Partially comparable, ✕ Not comparable, … Insufficient local
+data); hover for the reasons. The server decides comparability: on-prem models are never
+comparable (AA measures hosted APIs), and speed and TTFT are only partially comparable when
+your median prompt is outside AA's ~1k tokens. The side panel's Published section lists every
+AA field (TTFT in seconds, unlike the local millisecond figures), the snapshot id, date and
+index version, and the comparability per metric with reasons. A cloud model whose
+`pricing.yaml` price differs from AA's by more than 10% gets the **Price drift** status.
+
+The chart has a view toggle: **Your workload** (above) or **Published AA comparison**
+(Y = Intelligence Index, X = AA blended price; only mapped models with both values, others
+counted in a note). Whenever published data is shown, the page footer reads "Published data:
+Artificial Analysis" and links to https://artificialanalysis.ai/. AA data is display-only; it
+never affects routing. See `docs/reference/external-metrics.md`.
 
 **Diagnostics** (collapsed): routing reasons from the window, and cache hit and failovers
 per model. Definitions: `docs/reference/metrics-api.md`.

@@ -9,6 +9,8 @@ import { AlertsList } from "./AlertsList";
 import { stamp } from "./format";
 import { ModelTable } from "./ModelTable";
 import { ModelChart } from "./ModelChart";
+import type { ChartView } from "./ModelChart";
+import { ExternalControls } from "./ExternalControls";
 import { Diagnostics } from "./Diagnostics";
 
 const WINDOWS: { hours: number; label: string }[] = [
@@ -32,6 +34,8 @@ export function ModelsPage() {
   const [models, setModels] = useState<MetricsModels | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
+  const [chartView, setChartView] = useState<ChartView>("workload");
 
   useEffect(() => {
     adminApi.apps().then(setApps).catch(() => {});
@@ -65,7 +69,7 @@ export function ModelsPage() {
     return () => {
       cancelled = true;
     };
-  }, [hours, applicationId, workload, placement]);
+  }, [hours, applicationId, workload, placement, reload]);
 
   // Empty only when the window has no usage AND no outcome rows (the server decides):
   // a window of nothing but policy rejections still has something to show.
@@ -137,6 +141,9 @@ export function ModelsPage() {
       {summary && models && !error && (
         <>
           <AlertsList alerts={summary.alerts} />
+          <Panel title="Published data">
+            <ExternalControls snapshot={summary.published} onChanged={() => setReload((n) => n + 1)} />
+          </Panel>
           {empty ? (
             <Panel title="No data">
               <p className="text-sm text-gray-300">
@@ -150,10 +157,18 @@ export function ModelsPage() {
                 <ModelTable rows={models.models} />
               </Panel>
               <Panel title="Cost vs success">
-                <ModelChart rows={models.models} />
+                <ModelChart rows={models.models} view={chartView} onView={setChartView} />
               </Panel>
               <Diagnostics routeReasons={summary.current.route_reasons} rows={models.models} />
             </>
+          )}
+          {(chartView === "aa" || models.models.some((m) => m.published)) && (
+            <p className="text-xs text-gray-300">
+              Published data:{" "}
+              <a href="https://artificialanalysis.ai/" target="_blank" rel="noopener noreferrer" className="text-accent underline">
+                Artificial Analysis
+              </a>
+            </p>
           )}
         </>
       )}

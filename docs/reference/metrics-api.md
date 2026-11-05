@@ -27,7 +27,7 @@ Query parameters (both): `hours` (default 720, 1-8760, else 422), `application_i
 
 - `successful_reported`: `{value, n, insufficient}`, the model's labelled tasks, minimum 20.
 - `chart`: the server-chosen point `{x, x_kind, y, y_kind}` or `null`. `x` is cost per successful task (`per_successful_task`) when that has a value, else cost per task (`per_task`); `y` is `successful_reported` (`reported`) when it has a value, else `completed` (`completed`). `null` when either has no value.
-- `status_rank`: 0 (`cost_anomaly`) to 4 (`healthy`), the sort key for severity.
+- `status_rank`: 0 (`cost_anomaly`) to 5 (`healthy`), the sort key for severity.
 - `cost_per_task.successful` (summary and per model) is `null` below 20 labelled tasks; `successful_insufficient` says so.
 
 ## Cost of a request
@@ -44,4 +44,8 @@ Each call scans every usage, outcome and feedback row of the current and previou
 
 ## Statuses
 
-Worst first: `cost_anomaly`, `performance_degradation`, `cache_regression`, `insufficient_data`, `healthy`. Non-healthy statuses (except `insufficient_data`) also appear in `alerts`, after the page alerts (`prices_undated`, `prices_stale`, `savings_partial`).
+Worst first: `cost_anomaly`, `performance_degradation`, `cache_regression`, `price_drift`, `insufficient_data`, `healthy`. Non-healthy statuses (except `insufficient_data`) also appear in `alerts`, after the page alerts (`prices_undated`, `prices_stale`, `savings_partial`, `aa_snapshot_missing` info, `aa_snapshot_stale` warning when the newest snapshot is over 30 days old).
+
+## Published metrics (Artificial Analysis)
+
+Display-only; attribution "Published data: Artificial Analysis" (https://artificialanalysis.ai/). Each model row carries `published` (the mapped AA model's fields plus `snapshot_id`, `retrieved_at`, `index_version`; `null` when unmapped or the slug is not in the latest snapshot; any metric may be `null` = not published) and `comparability` `{overall, overall_rank, speed, ttft, price, reasons[]}` (`overall_rank` 0 = comparable .. 3 = not_comparable, server-owned, for sorting). Labels: `comparable`, `partially_comparable`, `not_comparable`, `insufficient_local_data`; `overall` is the worst (`not_comparable` > `insufficient_local_data` > `partially_comparable` > `comparable`). On-prem and unmapped models are `not_comparable`; local n below the speed/TTFT minimum is `insufficient_local_data`; a median prompt outside 500-2000 tokens makes speed/TTFT `partially_comparable`; the provider note is informational. `price_drift` (cloud, mapped, `pricing.yaml` input or output more than 10% from AA's) is a status. `/summary` adds `published` `{snapshot_id, retrieved_at, dated_at_upload, index_version, source, origin}` or `null`; `retrieved_at` is always timezone-aware UTC.

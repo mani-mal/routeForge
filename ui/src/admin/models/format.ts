@@ -1,6 +1,6 @@
 // Shared formatters for the Models station. Insufficient data is always text,
 // never a blank or a zero (a zero would read as a measurement).
-import type { MetricField } from "../../api";
+import type { ComparabilityValue, MetricField } from "../../api";
 
 export function insufficientText(n: number): string {
   return `insufficient data (n=${n})`;
@@ -64,8 +64,37 @@ export const STATUS_LABEL: Record<string, { icon: string; label: string }> = {
   cache_regression: { icon: "⚠", label: "Cache regression" },
   performance_degradation: { icon: "⚠", label: "Performance degradation" },
   cost_anomaly: { icon: "⚠", label: "Cost anomaly" },
+  price_drift: { icon: "⚠", label: "Price drift" },
 };
 
 export function statusLabel(s: string): { icon: string; label: string } {
   return STATUS_LABEL[s] ?? { icon: "•", label: s.replace(/_/g, " ") };
+}
+
+/** AA publishes TTFT in seconds; the local fields are milliseconds. */
+export function secs(v: number | null | undefined): string {
+  if (v === null || v === undefined || Number.isNaN(v)) return "—";
+  return `${v.toFixed(2)} s`;
+}
+
+/** A published (AA) number, "—" when not published (never 0). */
+export function pub(v: number | null | undefined, digits = 1): string {
+  if (v === null || v === undefined || Number.isNaN(v)) return "—";
+  return v.toFixed(digits);
+}
+
+export function pubMoney(v: number | null | undefined): string {
+  if (v === null || v === undefined || Number.isNaN(v)) return "—";
+  return money(v);
+}
+
+export const COMPARABILITY_LABEL: Record<ComparabilityValue, { icon: string; label: string }> = {
+  comparable: { icon: "✓", label: "Comparable" },
+  partially_comparable: { icon: "◐", label: "Partially comparable" },
+  not_comparable: { icon: "✕", label: "Not comparable" },
+  insufficient_local_data: { icon: "…", label: "Insufficient local data" },
+};
+
+export function comparabilityLabel(v: string): { icon: string; label: string } {
+  return COMPARABILITY_LABEL[v as ComparabilityValue] ?? { icon: "•", label: v.replace(/_/g, " ") };
 }

@@ -16,6 +16,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.admin_routes import admin_router
 from app.api.metrics_routes import metrics_router
+from app.api.external_metrics_routes import external_metrics_router
 from app.policy.trajectory import DbTrajectoryStore, prune_envelopes
 from app.api.bus import DecisionBus
 from app.api.openai_errors import CODE_INVALID_REQUEST, error_payload
@@ -469,6 +470,7 @@ def create_app() -> FastAPI:
     app.include_router(ui_router)
     app.include_router(admin_router)
     app.include_router(metrics_router)
+    app.include_router(external_metrics_router)
 
     # B49: OpenAI-shaped errors on /v1/* only. /admin/* and /api/* keep
     # FastAPI's {"detail": ...} -- the console reads it. Handlers are

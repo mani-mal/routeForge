@@ -2,13 +2,16 @@ import { useCallback, useState } from "react";
 import type { ReactNode } from "react";
 import type { ModelMetricsRow } from "../../api";
 import { ModelSidePanel } from "./ModelSidePanel";
-import { field, insufficientText, money, ms, percent, statusLabel, tps } from "./format";
+import { comparabilityLabel, field, insufficientText, money, ms, percent, pub, pubMoney, statusLabel, tps } from "./format";
 
 interface Col {
   key: string;
   label: string;
   tip: string;
   optional?: boolean;
+  /** Published (Artificial Analysis) group; the first one carries the group border. */
+  published?: boolean;
+  first?: boolean;
   sort: (r: ModelMetricsRow) => number | string | null;
   render: (r: ModelMetricsRow) => ReactNode;
 }
@@ -31,7 +34,7 @@ const COLS: Col[] = [
   {
     key: "status",
     label: "Status",
-    tip: "Sorted by severity, worst first: cost anomaly, performance degradation, cache regression, insufficient data, healthy. Hover a status for the reasons.",
+    tip: "Sorted by severity, worst first: cost anomaly, performance degradation, cache regression, price drift, insufficient data, healthy. Hover a status for the reasons.",
     sort: (r) => -r.status_rank, // server-ranked; descending puts the worst first
     render: (r) => {
       const s = statusLabel(r.status);
@@ -151,7 +154,56 @@ const COLS: Col[] = [
     sort: (r) => r.cache_hit_rate,
     render: (r) => <span className="font-mono">{percent(r.cache_hit_rate)}</span>,
   },
+  {
+    key: "aa_intel",
+    label: "Intelligence",
+    published: true,
+    first: true,
+    tip: "Artificial Analysis Intelligence Index. Published by Artificial Analysis, not measured here. — means not published or not mapped.",
+    sort: (r) => r.published?.intelligence_index ?? null,
+    render: (r) => <span className="font-mono">{pub(r.published?.intelligence_index)}</span>,
+  },
+  {
+    key: "aa_speed",
+    label: "Speed (AA)",
+    published: true,
+    tip: "Output tokens per second as published by Artificial Analysis for its own chosen provider, on ~1k-token prompts.",
+    sort: (r) => r.published?.output_tps ?? null,
+    render: (r) => (
+      <span className="font-mono">{r.published?.output_tps == null ? "—" : `${r.published.output_tps.toFixed(1)} tok/s`}</span>
+    ),
+  },
+  {
+    key: "aa_price",
+    label: "Price in / out (AA)",
+    published: true,
+    tip: "Artificial Analysis list price, USD per 1M tokens, input / output.",
+    sort: (r) => r.published?.price_in ?? null,
+    render: (r) => (
+      <span className="font-mono">
+        {r.published ? `${pubMoney(r.published.price_in)} / ${pubMoney(r.published.price_out)}` : "—"}
+      </span>
+    ),
+  },
+  {
+    key: "aa_comparable",
+    label: "Comparable?",
+    published: true,
+    tip: "Whether the published figures can be compared with what RouteForge measured for this model. Decided by the server; hover a badge for the reasons.",
+    sort: (r) => r.comparability?.overall_rank ?? null,
+    render: (r) => {
+      if (!r.comparability) return <span className="font-mono">—</span>;
+      const c = comparabilityLabel(r.comparability.overall);
+      return (
+        <span title={r.comparability.reasons.join("; ")} className="text-gray-100">
+          <span aria-hidden="true">{c.icon} </span>
+          {c.label}
+        </span>
+      );
+    },
+  },
 ];
+
 
 function cmp(a: number | string | null, b: number | string | null): number {
   if (a === null && b === null) return 0;
@@ -176,6 +228,8 @@ export function ModelTable({ rows }: { rows: ModelMetricsRow[] }) {
     if (an !== bn) return r;
     return desc ? -r : r;
   });
+  const measuredN = cols.filter((c) => !c.published).length;
+  const publishedN = cols.length - measuredN;
   const grid = { gridTemplateColumns: `minmax(150px,2fr) repeat(${cols.length - 1}, minmax(110px,1fr))` };
   const close = useCallback(() => setSelected(null), []);
   const selectedRow = rows.find((r) => r.model === selected) ?? null;
@@ -215,6 +269,20 @@ export function ModelTable({ rows }: { rows: ModelMetricsRow[] }) {
 
       <div className="overflow-x-auto">
         <div className="min-w-max flex flex-col gap-1.5">
+          <div className="grid gap-3 px-3" style={grid} aria-hidden="true">
+            <span
+              className="text-[11px] font-display font-semibold uppercase tracking-[0.12em] text-gray-400"
+              style={{ gridColumn: `span ${measuredN}` }}
+            >
+              Measured here
+            </span>
+            <span
+              className="border-l border-edge pl-3 text-[11px] font-display font-semibold uppercase tracking-[0.12em] text-gray-400"
+              style={{ gridColumn: `span ${publishedN}` }}
+            >
+              Published · Artificial Analysis
+            </span>
+          </div>
           <div className="grid gap-3 px-3" style={grid} role="row">
             {cols.map((c) => (
               <button
@@ -223,7 +291,7 @@ export function ModelTable({ rows }: { rows: ModelMetricsRow[] }) {
                 onClick={() => toggleSort(c.key)}
                 title={c.tip}
                 aria-sort={sortKey === c.key ? (desc ? "descending" : "ascending") : "none"}
-                className="text-left text-[11px] font-display font-semibold uppercase tracking-[0.12em] text-gray-300 hover:text-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                className={`text-left text-[11px] font-display font-semibold uppercase tracking-[0.12em] text-gray-300 hover:text-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${c.first ? "border-l border-edge pl-3" : ""}`}
               >
                 {c.label}
                 {sortKey === c.key && <span aria-hidden="true">{desc ? " ▼" : " ▲"}</span>}
@@ -240,7 +308,7 @@ export function ModelTable({ rows }: { rows: ModelMetricsRow[] }) {
               style={grid}
             >
               {cols.map((c) => (
-                <span key={c.key} className="min-w-0">
+                <span key={c.key} className={`min-w-0 ${c.first ? "border-l border-edge pl-3" : ""}`}>
                   {c.render(r)}
                 </span>
               ))}
