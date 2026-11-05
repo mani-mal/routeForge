@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import type { ReactNode } from "react";
 import type { ModelMetricsRow } from "../../api";
-import { field, insufficientText, money, ms, percent, statusLabel, tps } from "./format";
+import { comparabilityLabel, field, insufficientText, money, ms, percent, pub, pubMoney, secs, stamp, statusLabel, tps } from "./format";
 
 function Item({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -9,6 +9,77 @@ function Item({ label, children }: { label: string; children: ReactNode }) {
       <dt className="text-[11px] font-display font-semibold uppercase tracking-[0.12em] text-gray-400">{label}</dt>
       <dd className="text-sm text-gray-50">{children}</dd>
     </div>
+  );
+}
+
+function Published({ row }: { row: ModelMetricsRow }) {
+  const p = row.published;
+  const cmp = row.comparability;
+  const per: [string, string][] = cmp
+    ? [
+        ["Speed", cmp.speed],
+        ["TTFT", cmp.ttft],
+        ["Price", cmp.price],
+      ]
+    : [];
+  return (
+    <section className="mt-4 border-t border-edge pt-3" aria-label="Published data">
+      <h3 className="mb-2 font-display text-sm font-semibold text-gray-50">Published · Artificial Analysis</h3>
+      {!p ? (
+        <p className="text-sm text-gray-300">
+          No published figures for this model.
+          {cmp && cmp.reasons.length > 0 ? ` ${cmp.reasons[0]}.` : ""}
+        </p>
+      ) : (
+        <dl className="flex flex-col gap-2">
+          <Item label="AA model">
+            {p.name ?? p.slug}
+            <span className="block text-xs text-gray-300">
+              slug {p.slug}
+              {p.creator ? ` · ${p.creator}` : ""}
+            </span>
+          </Item>
+          <Item label="Intelligence / coding / math index">
+            {pub(p.intelligence_index)} / {pub(p.coding_index)} / {pub(p.math_index)}
+          </Item>
+          <Item label="Speed (AA)">{p.output_tps == null ? "—" : `${p.output_tps.toFixed(1)} tok/s`}</Item>
+          <Item label="TTFT (AA, seconds)">{secs(p.ttft_s)}</Item>
+          <Item label="Time to first answer token (AA, seconds)">{secs(p.ttfat_s)}</Item>
+          <Item label="Price in / out / blended (USD per 1M tokens)">
+            {pubMoney(p.price_in)} / {pubMoney(p.price_out)} / {pubMoney(p.price_blended)}
+          </Item>
+          <Item label="Snapshot">
+            #{p.snapshot_id} · {stamp(p.retrieved_at)} · {p.index_version ? `index ${p.index_version}` : "index version not recorded"}
+          </Item>
+        </dl>
+      )}
+      {cmp && (
+        <div className="mt-3">
+          <div className="text-[11px] font-display font-semibold uppercase tracking-[0.12em] text-gray-400">
+            Comparability with your measurements
+          </div>
+          <p className="mt-1 text-sm text-gray-50">
+            <span aria-hidden="true">{comparabilityLabel(cmp.overall).icon} </span>
+            Overall: {comparabilityLabel(cmp.overall).label}
+          </p>
+          <ul className="mt-1 text-sm text-gray-200">
+            {per.map(([k, v]) => (
+              <li key={k}>
+                <span aria-hidden="true">{comparabilityLabel(v).icon} </span>
+                {k}: {comparabilityLabel(v).label}
+              </li>
+            ))}
+          </ul>
+          {cmp.reasons.length > 0 && (
+            <ul className="mt-1 list-disc pl-5 text-sm text-gray-200">
+              {cmp.reasons.map((r, i) => (
+                <li key={i}>{r}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -90,6 +161,7 @@ export function ModelSidePanel({ row, onClose }: { row: ModelMetricsRow; onClose
         <Item label="Errors">{row.errors.toLocaleString()}</Item>
         <Item label="Failovers">{row.failovers.toLocaleString()}</Item>
       </dl>
+      <Published row={row} />
     </aside>
   );
 }

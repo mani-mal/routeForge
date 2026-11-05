@@ -470,7 +470,118 @@ export const adminApi = {
     fetch(`/admin/metrics/summary?${metricsQuery(p)}`, { credentials: "same-origin" }).then(j<MetricsSummary>),
   metricsModels: (p: MetricsParams) =>
     fetch(`/admin/metrics/models?${metricsQuery(p)}`, { credentials: "same-origin" }).then(j<MetricsModels>),
+  // Artificial Analysis published metrics (docs/reference/external-metrics.md)
+  externalSnapshots: () =>
+    fetch("/admin/external-metrics/snapshots", { credentials: "same-origin" }).then(extJson<ExternalSnapshots>),
+  externalMap: () => fetch("/admin/external-metrics/map", { credentials: "same-origin" }).then(extJson<ExternalMap>),
+  externalSetMap: (model: string, ext_model_slug: string | null) =>
+    fetch("/admin/external-metrics/map", opts("PUT", { model, ext_model_slug })).then(extJson<unknown>),
+  externalRefresh: () =>
+    fetch("/admin/external-metrics/refresh", { method: "POST", credentials: "same-origin" }).then(
+      extJson<ExternalImportResult>,
+    ),
+  externalImport: (file: File) =>
+    fetch("/admin/external-metrics/import", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: file,
+    }).then(extJson<ExternalImportResult>),
 };
+
+// 409/413/422/502 carry `detail` as a string; 429 carries {message, retry_after_s}.
+async function extJson<T>(r: Response): Promise<T> {
+  if (r.ok) return (await r.json()) as T;
+  let msg = `${r.status} ${r.statusText}`;
+  try {
+    const d = ((await r.json()) as { detail?: unknown }).detail;
+    if (typeof d === "string" && d.trim()) msg = d;
+    else if (d && typeof d === "object") {
+      const o = d as { message?: unknown; retry_after_s?: unknown };
+      if (typeof o.message === "string") {
+        msg = o.message;
+        if (typeof o.retry_after_s === "number" && !msg.includes(String(Math.ceil(o.retry_after_s)))) {
+          msg += ` Try again in ${Math.ceil(o.retry_after_s)} s.`;
+        }
+      }
+    } else if (Array.isArray(d)) {
+      msg = d.map((e: { msg?: string }) => e.msg ?? "").filter(Boolean).join("; ") || msg;
+    }
+  } catch {
+    /* non-JSON error body */
+  }
+  throw new Error(msg);
+}
+
+export interface ExternalSnapshotInfo {
+  id: number;
+  source: string;
+  origin: string;
+  retrieved_at: string;
+  index_version: string | null;
+  row_count: number;
+}
+export interface ExternalSnapshots {
+  snapshots: ExternalSnapshotInfo[];
+  fetch_enabled: boolean;
+  fetch_disabled_reason: string | null;
+}
+export interface ExternalMapRow {
+  model: string;
+  placement: string;
+  ext_model_slug: string | null;
+  suggestions: string[];
+}
+export interface ExternalMap {
+  models: ExternalMapRow[];
+  snapshot_id: number | null;
+}
+export interface ExternalImportResult {
+  snapshot_id: number;
+  row_count: number;
+}
+
+/** Artificial Analysis figures for a mapped model. Every field is nullable
+ *  (null = not published, never 0). `ttft_s` is SECONDS; local TTFT is ms. */
+export interface PublishedMetrics {
+  slug: string;
+  name: string | null;
+  creator: string | null;
+  intelligence_index: number | null;
+  coding_index: number | null;
+  math_index: number | null;
+  price_in: number | null;
+  price_out: number | null;
+  price_blended: number | null;
+  output_tps: number | null;
+  ttft_s: number | null;
+  ttfat_s: number | null;
+  snapshot_id: number;
+  retrieved_at: string;
+  index_version: string | null;
+}
+
+export type ComparabilityValue =
+  | "comparable"
+  | "partially_comparable"
+  | "not_comparable"
+  | "insufficient_local_data";
+
+export interface Comparability {
+  overall: ComparabilityValue;
+  speed: ComparabilityValue;
+  ttft: ComparabilityValue;
+  price: ComparabilityValue;
+  reasons: string[];
+}
+
+export interface PublishedSnapshotInfo {
+  snapshot_id: number;
+  retrieved_at: string;
+  index_version: string | null;
+  source: string;
+  origin: string;
+}
 
 // --- Models-page metrics (GET /admin/metrics/*; docs/reference/metrics-api.md) ---
 export interface MetricField {
@@ -527,6 +638,8 @@ export interface MetricsSummary {
   current: MetricsWindowSummary;
   previous: MetricsWindowSummary;
   alerts: MetricsAlert[];
+  /** Newest AA snapshot, or null when none has been imported. */
+  published?: PublishedSnapshotInfo | null;
   baseline: { model: string; as_of: string | null };
   generated_at: string;
 }
@@ -559,6 +672,9 @@ export interface ModelMetricsRow {
   /** 0 = worst (cost anomaly) .. 4 = healthy; the server owns the order. */
   status_rank: number;
   status_reasons: string[];
+  /** AA figures; null when unmapped or the slug is not in the latest snapshot. */
+  published?: PublishedMetrics | null;
+  comparability?: Comparability;
 }
 
 export interface MetricsModels {
