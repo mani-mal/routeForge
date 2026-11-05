@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import os
 import re
 import time
 
@@ -27,7 +28,7 @@ from app.apps.policy import AppPolicyView, alias_pairs, policy_view_from
 from app.apps.snapshot import build_config_snapshot
 from app.apps.tokens import new_service_credential, new_token
 from app.api.routes import _sanitize_session_id
-from app.policy.compile import (PolicyViolation, check_invariants, compile_policy,
+from app.policy.compile import (TELEMETRY_IOS, PolicyViolation, check_invariants, compile_policy,
                                 validate_effective)
 from app.policy.effective import PROTECTED_ENTITIES
 from app.policy.enums import (
@@ -85,12 +86,24 @@ def _policy_dict(p) -> dict | None:
             "model_aliases": p.model_aliases}
 
 
+_INVALID_ENV_MASK = "(invalid: not an env var name \u2014 edit to fix)"
+
+
+def _masked_api_key_env(v: str | None) -> str | None:
+    """api_key_env must be an env-var NAME. A value stored before that
+    validation existed may be a raw key; never echo it back."""
+    if v is None or _ENV_NAME_RE.match(v):
+        return v
+    return _INVALID_ENV_MASK
+
+
 def _onboarded_dict(m) -> dict:
     return {"slug": m.slug, "display_name": m.display_name, "provider": m.provider,
             "tier": m.tier, "quality": m.quality, "price_input": m.price_input,
             "price_output": m.price_output,
             "price_cached_input": m.price_cached_input, "endpoint": m.endpoint,
-            "api_key_env": m.api_key_env, "context_window": m.context_window,
+            "api_key_env": _masked_api_key_env(m.api_key_env),
+            "context_window": m.context_window,
             "context_window_source": m.context_window_source,
             "enabled": m.enabled, "allowed_app_ids": m.allowed_app_ids,
             "probe_status": m.probe_status, "probe_error": m.probe_error,
@@ -607,6 +620,10 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
             raise HTTPException(422, f"bad pii_detection {body.pii_detection!r}")
         if body.stream_mode is not None and body.stream_mode not in STREAM_MODES:
             raise HTTPException(422, f"bad stream_mode {body.stream_mode!r}")
+        if body.capture_io is not None and body.capture_io not in TELEMETRY_IOS:
+            raise HTTPException(
+                422, f"bad capture_io {body.capture_io!r}; legal values: "
+                f"{list(TELEMETRY_IOS)}")
         if body.trajectory_mode is not None and body.trajectory_mode not in TRAJECTORY_MODES:
             raise HTTPException(422, f"bad trajectory_mode {body.trajectory_mode!r}")
         if body.policy_mode is not None and body.policy_mode not in POLICY_MODES:
@@ -1056,12 +1073,28 @@ async def _validate_policy_values(body: "PolicyIn", settings, session,
             "monthly budget (it is display only and never blocks a request).")
 
 
+_ENV_NAME_RE = re.compile(r"^(?=.{1,128}$)[A-Z_][A-Z0-9_]*$")
+
+
+def _onboard_warnings(s, body: OnboardIn) -> list[str]:
+    warns = price_warnings(s, body.price_input, body.price_output)
+    if body.api_key_env and not os.environ.get(body.api_key_env):
+        warns = [*warns, f"env var {body.api_key_env} is not set in the API container"]
+    return warns
+
+
 def _static_validate_onboard(body: OnboardIn, s) -> None:
     tiers = set(s.routing.tiers)
     if body.tier not in tiers:
         raise HTTPException(422, f"bad tier {body.tier!r}")
     if not re.match(r"^https?://", body.endpoint):
         raise HTTPException(422, "endpoint must be an http(s) URL")
+    # B32/B61: api_key_env is the NAME of an env var, never the key. The shape
+    # check also stops a pasted key from being stored (and echoed) in clear.
+    if body.api_key_env is not None and not _ENV_NAME_RE.match(body.api_key_env):
+        raise HTTPException(
+            422, "api_key_env is the NAME of an environment variable in the API "
+            "container (e.g. SP_ONPREM_API_KEY), not the key itself")
     if body.price_input < 0 or body.price_output < 0:
         raise HTTPException(422, "price must be >= 0")
     if body.price_cached_input is not None and body.price_cached_input < 0:
@@ -1218,7 +1251,7 @@ async def onboard_model(body: OnboardIn, request: Request,
             quality=body.quality, context_window=context_window,
             context_window_source=context_window_source,
             allowed_app_ids=body.allowed_app_ids, notes=body.notes,
-            enabled=final_enabled, probe_status=("healthy" if ok else "unreachable"),
+            enabled=final_enabled, probe_status=_probe.status,
             probe_error=(None if ok else detail),
             # P1b declarations. `region`/`prompt_retention` are full-replace,
             # same as every other optional field on this route (api_key_env,
@@ -1239,9 +1272,9 @@ async def onboard_model(body: OnboardIn, request: Request,
         await session.commit()
     await reg.refresh(request.app.state.db)
     return {"slug": body.slug, "enabled": final_enabled,
-            "probe_status": "healthy" if ok else "unreachable",
+            "probe_status": _probe.status,
             "probe_error": None if ok else detail,
-            "warnings": price_warnings(s, body.price_input, body.price_output)}
+            "warnings": _onboard_warnings(s, body)}
 
 
 # {slug:path} (not {slug}) so real OpenAI-compatible ids that contain a slash
@@ -1277,7 +1310,7 @@ async def edit_onboarded_model(slug: str, body: OnboardIn, request: Request,
             quality=body.quality, context_window=context_window,
             context_window_source=context_window_source,
             allowed_app_ids=body.allowed_app_ids, notes=body.notes,
-            enabled=final_enabled, probe_status=("healthy" if ok else "unreachable"),
+            enabled=final_enabled, probe_status=_probe.status,
             probe_error=(None if ok else detail),
             # region/prompt_retention: same full-replace semantics as
             # onboard_model above. accepts_raw_sensitive: the deliberate
@@ -1288,9 +1321,9 @@ async def edit_onboarded_model(slug: str, body: OnboardIn, request: Request,
         await session.commit()
     await reg.refresh(request.app.state.db)
     return {"slug": slug, "enabled": final_enabled,
-            "probe_status": "healthy" if ok else "unreachable",
+            "probe_status": _probe.status,
             "probe_error": None if ok else detail,
-            "warnings": price_warnings(s, body.price_input, body.price_output)}
+            "warnings": _onboard_warnings(s, body)}
 
 
 @admin_router.delete("/infra/models/{slug:path}")  # {slug:path} for slashed ids — see PUT above (B19)

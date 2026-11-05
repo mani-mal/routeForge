@@ -19,6 +19,7 @@ export interface RequestSummary {
   routing_saved_usd: number;
   compression_saved_usd: number;
   prompt_cache_saved_usd: number;
+  cache_saved_usd?: number; // semantic-cache lever (skipped model); absent on older servers
   latency_ms: number;
   hops: number;
   detected_entities: string[]; // TYPES only, never raw values
@@ -93,6 +94,7 @@ export interface ChatResponse {
     routing_saved_usd: number;
     compression_saved_usd: number;
     prompt_cache_saved_usd: number;
+    cache_saved_usd?: number;
   };
   policy: {
     sensitivity: string;
@@ -148,6 +150,7 @@ export interface Stats {
   routing_saved_usd: number;
   compression_saved_usd: number;
   prompt_cache_saved_usd: number;
+  cache_saved_usd?: number;
   onprem_count: number;
   tier_distribution: Record<string, number>;
   latency_p50_ms: number;

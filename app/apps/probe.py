@@ -25,6 +25,18 @@ class ProbeResult:
     ok: bool
     detail: str
     max_model_len: int | None = None
+    # True when the endpoint answered 401/403 (B32/B61): reachable, but our
+    # credentials were rejected. Still `ok=False` -- treated exactly like
+    # unreachable for enabling and eligibility.
+    unauthorized: bool = False
+
+    @property
+    def status(self) -> str:
+        """The `probe_status` value to store: healthy | unauthorized |
+        unreachable. Anything not exactly `healthy` is not routable."""
+        if self.ok:
+            return "healthy"
+        return "unauthorized" if self.unauthorized else "unreachable"
 
 
 def parse_max_model_len(entry: object) -> int | None:
@@ -75,6 +87,13 @@ async def probe_endpoint(endpoint: str, slug: str, api_key_env: str | None
     try:
         async with httpx.AsyncClient(timeout=5) as c:
             resp = await c.get(url, headers=headers)
+            if resp.status_code in (401, 403):
+                return ProbeResult(
+                    False,
+                    f"endpoint rejected the credentials (HTTP {resp.status_code}); "
+                    "is api_key_env the name of an environment variable that is set "
+                    "in the API container?",
+                    unauthorized=True)
             resp.raise_for_status()
             entries = resp.json().get("data", [])
             ids = {m.get("id") for m in entries}

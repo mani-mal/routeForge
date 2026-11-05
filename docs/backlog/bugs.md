@@ -185,7 +185,9 @@ Extends B72 steps 4–5.
 Keep three kinds of caching apart in names and reports: provider prompt caching,
 self-hosted KV or prefix caching, and RouteForge's semantic response cache.
 
-## B83 — FEATURE: date the prices and the savings baseline  🔴 OPEN
+## B83 — FEATURE: date the prices and the savings baseline  ✅ RESOLVED (2026-11-05, fix/ops-batch-b62)
+
+**Resolved 2026-11-05 (fix/ops-batch-b62):** delivered by PRs #124-#128: as_of per pricing.yaml entry plus baseline_as_of and pricing_stale_days (config/pricing.yaml, app/config/schema.py); the baseline date is shown beside the savings figure (OutcomeCards.tsx); prices_undated / prices_stale alerts in app/metrics/compute.py shown on the Models page. Prices stay operator-owned; nothing is fetched at runtime.
 
 **Why.** Prices for a fixed intelligence level fall roughly 10× a year (Artificial Analysis
 trend, not a forecast). The cost dashboard's savings figure is computed against an
@@ -438,7 +440,9 @@ a warning when secrets exist but no key is set. Rotating the `kit-gtm` key in La
 advised, because database backups taken before the fix hold the cleartext value.
 
 
-## B73 — FEATURE: finish the Artificial Analysis model metrics on the console (published quality snapshot, time to first token, output speed)  🔴 OPEN
+## B73 — FEATURE: finish the Artificial Analysis model metrics on the console (published quality snapshot, time to first token, output speed)  ✅ RESOLVED (2026-11-05, fix/ops-batch-b62)
+
+**Resolved 2026-11-05 (fix/ops-batch-b62):** delivered by the model-metrics slices (PRs #124-#128): TTFT p50/p95 and output speed (tokens/s) on the Models page (ui/src/admin/models/ModelTable.tsx); Artificial Analysis snapshot import, refresh and model mapping (app/api/external_metrics_routes.py, app/metrics/external.py, ExternalControls/MappingDialog, scripts/aa_fetch.py), display-only. NOT done and left as follow-ups if wanted: seeding a dated published `quality:` into config/routing.yaml (routing-affecting; needs a policy_simulate replay) and agent-level (AA-AgentPerf) metrics.
 
 **Found 2026-10-13** by an audit of what was built from the owner's original request to use
 [Artificial Analysis](https://artificialanalysis.ai/) metrics for the model/agent metrics on
@@ -846,6 +850,8 @@ can be printed beside the caveat in that mode).
 
 ## B64 — The admission cost estimate over-counts tokens, so the per-request budget rejects requests that would cost less than the cap  🔴 OPEN
 
+**Update 2026-11-05 (fix/ops-batch-b62):** item (3) shipped -- the budget 422 (`app/routing/router.py`) now says the figure is an estimate from RouteForge's own token count, roughly 1.5x what vLLM reports on English prose. Admission math unchanged. Items (1) and (2) remain open, so this stays OPEN.
+
 **Severity:** medium (requests refused that the operator's own cap would allow; no privacy
 effect — it errs towards refusing).
 **Found:** 2026-10-06, the B60 re-run on the DGX lab (`docs/research/feasible-route-bench.md`
@@ -882,7 +888,9 @@ alongside the shadow prices.
 shadow-only `simulation.json` and print it in `report.md`, so the counts are visible without
 needing a proposal.
 
-## B62 — No boot-time check for a column the ORM expects and the live table is missing  🔴 OPEN
+## B62 — No boot-time check for a column the ORM expects and the live table is missing  ✅ RESOLVED (2026-11-05, fix/ops-batch-b62)
+
+**Resolved 2026-11-05 (fix/ops-batch-b62):** boot-time ORM-vs-live-DB column check (app/apps/db.py::missing_schema_columns, run at startup in app/main.py); one ERROR line names every missing table.column and points at scripts/migrate_app_policies.py; GET /health carries schema_missing. Boot still succeeds; a failing check only warns.
 
 **Severity:** medium (silent data loss: a deployed DB missing a column boots and serves
 traffic, but every write that touches the column fails and is swallowed).
@@ -905,7 +913,9 @@ have. Boot still succeeds (serving must not refuse to start over a missing analy
 column), but the gap is now a loud boot-time log line instead of a silent per-request
 WARNING an operator has to notice.
 
-## B61 — UI: the onboarding form's "api key env" field accepts a key value, and gives no hint  🔴 OPEN
+## B61 — UI: the onboarding form's "api key env" field accepts a key value, and gives no hint  ✅ RESOLVED (2026-11-05, fix/ops-batch-b62)
+
+**Resolved 2026-11-05 (fix/ops-batch-b62):** admin API 422s an api_key_env that is not an env-var NAME (^[A-Z_][A-Z0-9_]*$, max 128); a well-formed but unset name is accepted with a warning; 401/403 probes give probe_status "unauthorized" (not routable, same as unreachable); the onboarding form has helper text, an unauthorized label, and a slug note.
 
 **Severity:** low-medium (operator trap; leaks a secret into the config table and the screen).
 **Found:** 2026-10-06, onboarding `qwen3-coder-next` on the DGX lab.
@@ -2015,7 +2025,9 @@ uses, so each signal's sample count comes from its own observations (an `error` 
 never contributes to the latency count, because `observe_error` never touches latency
 state) — there is no separate aggregation step left to get this wrong in.
 
-## B37 — `/health` reports a model as available for 22 hours after its endpoint died
+## B37 — `/health` reports a model as available for 22 hours after its endpoint died  ✅ RESOLVED (2026-11-05, fix/ops-batch-b62)
+
+**Resolved 2026-11-05 (fix/ops-batch-b62):** GET /health keeps status "ok" (API liveness) but models lists only models that are not known-down; a model with an open circuit (app/gateway/breaker.py) or a non-healthy probe_status is moved to unavailable: [{model, reason}] ("circuit open", "probe: <status>"). Note: an enabled row with the default probe_status "unknown" routes but is listed under `unavailable` (fail-closed, display only). Not built: periodic re-probing (probe_status is still only set at onboarding/edit; the breaker is the live signal).
 
 **Observed (DGX Spark, 2026-09-18).** The vLLM container serving `qwen3.8-27b`
 stopped at `00:13:48Z` (clean SIGTERM, exit 0, `restart: unless-stopped`, so it
@@ -2164,7 +2176,9 @@ container", "keys rejected", "keys belong to project X, not Y"); (4) put the
 "server-reachable host, not the browser URL" note beside the field instead of in
 a tooltip.
 
-## B32 — Onboard form's "api key env" silently accepts a raw key; a 401 is reported as "unreachable"
+## B32 — Onboard form's "api key env" silently accepts a raw key; a 401 is reported as "unreachable"  ✅ RESOLVED (2026-11-05, fix/ops-batch-b62)
+
+**Resolved 2026-11-05 (fix/ops-batch-b62):** fixed together with B61 (same change): name validation, unset-env warning, new probe_status "unauthorized".
 
 **Severity:** low–medium (UX; no privacy impact). Every operator onboarding an
 authenticated endpoint (vLLM `--api-key`, NIM) is likely to hit it.
@@ -2209,7 +2223,9 @@ enforces, or the clamp is missing a residency-independent posture check. This is
 before the fix — the code really does let an `enforced` app hold `capture_io=full` once
 it is not `onprem_only`.
 
-## B26 — Catch-all exception handler in the request path logs nothing
+## B26 — Catch-all exception handler in the request path logs nothing  ✅ RESOLVED (2026-11-05, fix/ops-batch-b62)
+
+**Resolved 2026-11-05 (fix/ops-batch-b62):** already fixed before this branch by 42af441 (the catch-all handlers call logging.getLogger("serving.api").exception with the request id, no content); pinned by tests/test_serving_error_logs.py. No new code.
 
 **Severity:** medium (operational; makes production 500s undiagnosable)
 **Found:** 2026-09-10, docs-reclassification Task 3, while debugging a multi-step example
@@ -2236,7 +2252,9 @@ genuine bug anywhere in `pipeline.run()` is invisible in logs — it shows up on
 unexplained 500 count on the dashboard, with no way to tell which of the countless
 possible causes it was.
 
-## B27 — `capture_io` accepts an invalid value with 200 and stores it silently
+## B27 — `capture_io` accepts an invalid value with 200 and stores it silently  ✅ RESOLVED (2026-11-05, fix/ops-batch-b62)
+
+**Resolved 2026-11-05 (fix/ops-batch-b62):** set_policy now 422s a capture_io outside off|redacted|full (app/api/admin_routes.py), like its sibling enums.
 
 **Severity:** low-medium (fail-safe today, but silent, undocumented, and inconsistent
 with its three sibling fields)
@@ -2323,7 +2341,9 @@ consumed.
 that render it) is deployment-affecting and needs its own change with its own testing —
 out of scope for a docs-only sweep.
 
-## B29 — UI stats type omits `cache_saved_usd`, which the API already returns
+## B29 — UI stats type omits `cache_saved_usd`, which the API already returns  ✅ RESOLVED (2026-11-05, fix/ops-batch-b62)
+
+**Resolved 2026-11-05 (fix/ops-batch-b62):** still true after the metrics slices (only prompt_cache_saved_usd had been added). ui/src/api.ts types cache_saved_usd (optional, for older servers) on RequestSummary, Stats and the request cost detail; aggregate.ts sums it; CostSection renders it as the semantic-cache lever (bar, legend, tile); the drilldown shows it.
 
 **Severity:** medium (a real savings figure the API produces cannot be rendered)
 **Found:** 2026-09-10, docs-reclassification Task 7 review. **Open.**

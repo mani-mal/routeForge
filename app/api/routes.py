@@ -165,11 +165,34 @@ async def _authenticate(request: Request
 
 @router.get("/health")
 def health(request: Request) -> dict:
+    """`status` is the API process's own liveness (compose healthchecks key on
+    it) and stays "ok". `models` lists only models not known to be down; the
+    excluded ones are named, with a reason, under `unavailable` (B37)."""
     s = request.app.state.settings
     registry = getattr(request.app.state, "registry", None)
     pool = registry.effective_pool() if registry else s.routing.model_pool
+    breaker = getattr(request.app.state, "breaker", None)
+    # Side-effect-free read: open_set() mutates the half-open dedup flag and
+    # can emit the transition log/metric, which a liveness poll must not do.
+    def _circuit_open(name: str) -> bool:
+        return breaker is not None and breaker.state(name).state == "open"
+    bad_probe = registry.probe_not_healthy() if registry else {}
+    models: list[str] = []
+    unavailable: list[dict[str, str]] = []
+    for c in pool:
+        if _circuit_open(c.name):
+            unavailable.append({"model": c.name, "reason": "circuit open"})
+        elif c.name in bad_probe:
+            unavailable.append({"model": c.name,
+                                "reason": f"probe: {bad_probe[c.name]}"})
+        else:
+            models.append(c.name)
+    # None = the boot-time check did not run (it errored); [] = ran, clean.
+    sm = getattr(request.app.state, "schema_missing", [])
+    schema_missing = None if sm is None else list(sm)
     return {"status": "ok", "backend": "litellm",
-            "models": [c.name for c in pool]}
+            "models": models, "unavailable": unavailable,
+            "schema_missing": schema_missing}
 
 
 @router.get("/metrics")

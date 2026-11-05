@@ -40,6 +40,10 @@ class _OnboardedRow:
     # never a guessed default. An operator's explicit value wins over a
     # probed one; `effective_pool()` carries it onto the candidate untouched.
     context_window: int | None = None
+    # Last onboarding probe result (healthy | unreachable | unauthorized | ...).
+    # Read by /health only; eligibility keys on `enabled`, which the admin
+    # routes AND with the probe. Anything but "healthy" is "known down".
+    probe_status: str = "healthy"
 
 
 class ModelRegistry:
@@ -83,7 +87,8 @@ class ModelRegistry:
                     region=r.region, prompt_retention=r.prompt_retention,
                     accepts_raw_sensitive=r.accepts_raw_sensitive,
                     price_cached_input=r.price_cached_input,
-                    context_window=r.context_window)
+                    context_window=r.context_window,
+                    probe_status=r.probe_status or "unknown")
                 for r in rows}
             self._generation += 1
         except Exception:
@@ -231,6 +236,14 @@ class ModelRegistry:
         can report them as `disabled` state. Never an eligibility input."""
         return tuple(sorted(slug for slug, r in self._onboarded().items()
                             if not r.enabled))
+
+    def probe_not_healthy(self) -> dict[str, str]:
+        """slug -> stored probe_status for every onboarded row whose last
+        probe was not exactly `healthy` (fail closed: an unknown value counts
+        as not healthy). For /health's `unavailable` list; not an eligibility
+        input."""
+        return {slug: r.probe_status for slug, r in self._onboarded().items()
+                if r.probe_status != "healthy"}
 
     def known_slugs(self) -> frozenset[str]:
         """Every slug the deployment has heard of: the YAML pool plus every

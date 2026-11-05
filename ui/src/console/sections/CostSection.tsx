@@ -18,6 +18,7 @@ import { LEVER_HEX, SIGNAL_HEX, TIER_HEX } from "../../tokens";
 const ROUTING_COLOR = LEVER_HEX.routing;
 const COMPRESSION_COLOR = LEVER_HEX.compression;
 const PROMPT_CACHE_COLOR = LEVER_HEX.promptCache;
+const SEMANTIC_CACHE_COLOR = LEVER_HEX.semanticCache;
 const QUALITY_COLOR = SIGNAL_HEX.quality;
 
 export function CostSection({ requests }: { requests: RequestSummary[] }) {
@@ -32,12 +33,12 @@ export function CostSection({ requests }: { requests: RequestSummary[] }) {
     fontSize: 12,
   };
 
-  const { total, baseline, routingSaved, compressionSaved, promptCacheSaved, savedPct } = costAgg(requests);
+  const { total, baseline, routingSaved, compressionSaved, promptCacheSaved, semanticCacheSaved, savedPct } = costAgg(requests);
   const { tokenIntelligenceDensity, costIntelligenceDensity } = densityAgg(requests);
   const qualityProvenance = provenanceNote(qualitySourceAgg(requests));
   const compressionRan = compressionSaved > 0;
 
-  const savingsData = [{ name: "saved", routing: routingSaved, compression: compressionSaved, promptCache: promptCacheSaved }];
+  const savingsData = [{ name: "saved", routing: routingSaved, compression: compressionSaved, promptCache: promptCacheSaved, semanticCache: semanticCacheSaved }];
 
   const sorted = [...requests].sort((a, b) => (a.ts ?? "").localeCompare(b.ts ?? ""));
   let cumTotal = 0;
@@ -96,6 +97,13 @@ export function CostSection({ requests }: { requests: RequestSummary[] }) {
                   radius={[3, 3, 3, 3]}
                   barSize={16}
                 />
+                <Bar
+                  dataKey="semanticCache"
+                  name="semantic cache saved"
+                  fill={SEMANTIC_CACHE_COLOR}
+                  radius={[3, 3, 3, 3]}
+                  barSize={16}
+                />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -111,6 +119,10 @@ export function CostSection({ requests }: { requests: RequestSummary[] }) {
             <span className="flex items-center gap-1">
               <span className="h-2 w-2 rounded-full" style={{ backgroundColor: PROMPT_CACHE_COLOR }} /> prompt cache{" "}
               {formatUsd(promptCacheSaved)}
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: SEMANTIC_CACHE_COLOR }} /> semantic cache{" "}
+              {formatUsd(semanticCacheSaved)}
             </span>
           </div>
         </div>
@@ -180,6 +192,7 @@ export function CostSection({ requests }: { requests: RequestSummary[] }) {
         <StatTile label="Routing saved" value={formatUsd(routingSaved)} />
         <StatTile label="Compression saved" value={compressionRan ? formatUsd(compressionSaved) : "off / not run"} />
         <StatTile label="Prompt cache saved" value={formatUsd(promptCacheSaved)} />
+        <StatTile label="Semantic cache saved" value={formatUsd(semanticCacheSaved)} />
         <StatTile
           label="Token Intelligence Density"
           value={formatDensity(tokenIntelligenceDensity)}

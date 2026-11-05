@@ -434,3 +434,12 @@ def test_budget_core_asserts_on_a_candidate_violating_neither():
         # floor 'cheap' makes the fitting cheap candidate violate nothing
         r._budget_core(ctx, allowed, tier_pick="frontier", floor="cheap",
                        tokens_after=20, out_tokens=512)
+
+
+def test_budget_rejection_says_the_cost_is_an_estimate():
+    """B64 item 3: the budget 422 names its figure as an estimate from
+    RouteForge's own token count (roughly 1.5x vLLM's on English prose)."""
+    reg = _budget_registry(with_cheap=True)
+    msg = str(_raise(S_ONPREM, reg, _high_risk_ctx(reg)))
+    assert "estimate from RouteForge's own token count" in msg
+    assert "roughly 1.5x what vLLM reports" in msg
