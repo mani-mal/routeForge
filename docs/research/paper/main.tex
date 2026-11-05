@@ -36,10 +36,11 @@ self-hosted, OpenAI-compatible gateway that derives this \emph{eligible set} per
 rejects the request when it is empty. RouteForge combines a policy compiler whose placement and
 protection components are tested for independence with a property-based harness, an evaluation
 harness whose oracle never credits an endpoint a request was not allowed to use, and a replay
-analyser for proposed policy changes. The compiler checks found two fail-open defects. Across
-four live runs on synthetic traffic, 3{,}611 requests in all, none of the 987 requests that the
-compiled policy confined to on-premises compute was attempted on a cloud endpoint. Replay matched
-the recorded first-decision admission (routed or rejected) of every request; the identity of the
+analyser for proposed policy changes. The compiler checks found two fail-open defects. In the two
+live runs with cloud endpoints, none of the 987 requests that the compiled policy confined to
+on-premises compute was attempted on a cloud endpoint. Across all four live runs on synthetic
+traffic, 3{,}611 requests in all, replay matched the recorded first-decision admission (routed
+or rejected) of every request; the identity of the
 serving endpoint diverged during outages, because replay omits operational failure state. A single
 prospective comparison predicted 180 cloud-bound requests and observed 178. The evaluation also
 exposed weaknesses: on a benchmark at which every model passed, the length-based router paid
@@ -85,7 +86,7 @@ endpoints:
     alternative.
   \item \textbf{Evaluation must respect it.} An oracle that credits the globally best model
     overstates the regret of any router that obeyed the policy.
-  \item \textbf{Policy becomes something an operator can ask questions about.} If the records
+  \item \textbf{A policy change can be tested before it is applied.} If the records
     of past routing decisions contain every input the router read, and no request content, a
     proposed policy can be replayed against recorded traffic before anyone applies it.
 \end{itemize}
@@ -106,8 +107,7 @@ restrictions across related calls. Concretely:
     capacity, with an explicit statement of which counterfactuals it can and cannot answer
     (Section~\ref{sec:sim}).
   \item Live measurements on a GPU lab with on-premises and cloud endpoints
-    (Section~\ref{sec:exp}), and negative results that we consider as useful as the positive
-    ones (Section~\ref{sec:neg}).
+    (Section~\ref{sec:exp}), including negative results (Section~\ref{sec:neg}).
   \item A live counterexample to request-level eligibility for agent trajectories, and a
     prototype that carries detector-derived placement restrictions across calls
     (Section~\ref{sec:traj}).
@@ -359,7 +359,7 @@ with the other stage's inputs fixed:
 NI-1 holds the observation fixed. It does not say that changing the detector leaves runtime
 placement unchanged for the same text: switching detection from \code{presidio} to \code{off}
 changes what is observed, and so, through stage~2, what placement the request receives. That
-interaction is declared and raise-only, but it exists, and NI-1 is not a claim about final
+interaction is declared and can only raise placement, but NI-1 is not a claim about final
 routing.
 
 \paragraph{Eligibility and monotonicity.} Given the compiled policy and the endpoint registry,
@@ -444,7 +444,8 @@ percentile interval), and each \emph{figure}---one metric, overall or within one
 judged on its whole range: \code{regressed} if the entire range lies beyond the tolerance in
 the worsening direction, \code{within tolerance} if it lies entirely inside, and
 \code{inconclusive} otherwise. A candidate's verdict is \code{regressed} if any judged figure
-is. No correction is made for the number of figures judged.
+is, \code{pass} if every figure is \code{within tolerance}, and \code{inconclusive} otherwise.
+No correction is made for the number of figures judged.
 
 We measured the false-alarm rate of this candidate-level verdict in a synthetic null
 experiment: two arms scored from one shared distribution, so there is no true difference, with
@@ -565,8 +566,8 @@ counts cannot establish concurrency without request durations.
 All live runs are on one GPU lab running production builds of RouteForge
 (Table~\ref{tab:endpoints}). On-premises prices are illustrative values the operator declared.
 Cloud prices are the aggregator's paid list prices for the same models, read on 2026-10-09; the
-free variants actually called were billed nothing. \textbf{Every dollar figure in this section
-is stated-price accounting, not a bill.}
+free variants actually called were billed nothing. Every dollar figure in this section is
+stated-price accounting, not a bill.
 
 \begin{table}[t]
 \centering
@@ -622,7 +623,7 @@ run & endpoints & rows & statuses & what it adds \\
 
 In runs 3 and 4, 641 rows belonged to the on-premises-only application and 346 rows from the
 other two applications were raised to on-premises placement because an entity was detected.
-\textbf{None of the 987 had a cloud endpoint anywhere in its recorded attempt chain}, including
+None of the 987 had a cloud endpoint anywhere in its recorded attempt chain, including
 retries and failovers. These are requests restricted by the compiled policy, not every truly
 sensitive request that could occur. Under independent Bernoulli trials, zero violations in 987
 gives a one-sided 95\% upper bound on the violation rate of $1 - 0.05^{1/987} \approx 0.30\%$;
@@ -632,13 +633,13 @@ request from the on-premises-only application that names a cloud model is refuse
 reason. In every benchmark run, simulated and live, no strategy chose an endpoint outside a
 case's eligible set.
 
-A pattern detector has a cost here that is easy to miss. In run 4, 83 of the 173
+Pattern detection also restricts requests that carry no identifier. In run 4, 83 of the 173
 detection-raised requests (48\%) carried no planted identifier: random digits in synthetic logs
 and JSON matched credit-card and bank-number patterns. This is the share of a selected group,
 not the detector's false-positive rate, which needs the count of truly negative requests; we
 have not computed a confusion matrix against the generator's ground truth, nor the false-negative
-rate. The errors observed are in the safe direction---those requests stayed on-premises---and
-they are paid for at the on-premises price.
+rate. These errors are in the safe direction: the requests stayed on-premises and were paid
+for at the on-premises price.
 
 \subsection{Replay fidelity}
 
@@ -671,9 +672,8 @@ both arms. Endpoint
 identity agreed completely when endpoints were answering and diverged during outages. In run 2
 all 65 disagreements were requests the live router diverted because a breaker was open. In run
 3 replay sent 180 requests to a provider that answered 31, and its baseline cost was 26\% below
-the recorded cost; in run 4 the two costs were within 1.2\%. \textbf{Replay describes the
-deployment with its endpoints healthy.} It does not model breaker or failure state, and its
-figures should be read that way.
+the recorded cost; in run 4 the two costs were within 1.2\%. Replay describes the deployment
+with its endpoints healthy; it does not model breaker or failure state.
 
 Fidelity also depends on recording every input the router reads. An early deployment did not
 record a client's explicit model choice; replay agreement was 0.0206 over 194 rows, behind a
@@ -718,7 +718,7 @@ the configuration alone finds nothing lost. Replay found 5 requests [2, 9] rejec
 remaining endpoint was over those requests' budget; a retention rule likewise rejected 4 [1, 7].
 In runs 3 and 4, with an inexpensive on-premises endpoint available, the same kind of tightening
 rejected none. The effect depends on what else is eligible for the traffic that actually
-arrives, which is the argument for replay over inspection.
+arrives, which a check of the configuration alone cannot see.
 
 \paragraph{Capacity.} In run 4, moving everything on-premises takes the on-premises mid endpoint
 from 50.0\% to 90.9\% of its stated requests-per-minute limit in its busiest minute
@@ -753,7 +753,7 @@ endpoint failures. Every answered call passed: 738 of 738. The suite is at ceili
 rank the models; it is an equal-quality cost stress test, not evidence of routing
 effectiveness. An earlier run on the starter suite had the cheap model passing 18 and 19 of 22
 cases against the mid model's 16, which invites the reading that the tier order is wrong for
-this pair. \textbf{We do not make that claim.} The starter suite contains cases that cannot be
+this pair. We do not make that claim. The starter suite contains cases that cannot be
 answered from their prompt, and the gap did not survive well-posed cases. What the two suites
 support together is narrower: a tier is not a quality measurement, and a small suite with
 strict graders can manufacture a ranking.
@@ -781,9 +781,8 @@ sample & cheapest eligible & RouteForge router & ratio \\
 The router pays about 6.7 to 6.8 times the cheapest eligible price for the same result, with a
 cost regret of about \$0.0050 per case; both strategies passed every answered case. The cause is
 the length-based tier rule: a longer request targets a higher tier whether or not it is harder.
-Two thirds of this suite is long by construction and the prices are stated, so the ratio is a
-property of the suite; the direction is a property of the rule. No strategy chose an endpoint
-outside a case's eligible set in any run.
+Two thirds of this suite is long by construction and the prices are stated, so the size of
+the ratio depends on the suite; that the router overpays follows from the rule.
 
 Where two endpoints shared a tier and a quality default in live traffic, the cost term decided:
 all 84 unrestricted mid-tier requests in run 4 went to the cloud endpoint.
@@ -793,8 +792,8 @@ changed scoring weights altered no route and passed trivially; a candidate that 
 cheap tier changed 12 of 22 routes and was \code{inconclusive}. On the extended suite the same
 candidate changed 30 of 108 routes and raised mean chosen cost by \$0.00014 per case, with a 90\%
 range of [0.000085, 0.00020] that excludes zero. The tolerance had been set in advance at
-0.0005, the whole range lies inside it, and the verdict was \code{pass}: a real worsening,
-measured, and smaller than what we had said we would accept. All 38 judged figures had enough
+0.0005, the whole range lies inside it, and the verdict was \code{pass}: the worsening is real
+but within the tolerance set beforehand. All 38 judged figures had enough
 cases. Separately from the 18 compiler mutants of Section~\ref{sec:eligibility}, the check
 catches 15 of 15 single-rule mutations of its own detectors in simulation, and flags planted
 regressions. A \code{regressed} verdict on live endpoints has not been produced.
@@ -847,7 +846,7 @@ the limits that bound; daily quotas, burst controls and provider overload are ou
     aggregate that hides a threefold spread. On the 21 served calls of a real coding agent
     session it was 0.96 to 1.02. A per-request cap enforced on this estimate over-rejects prose
     and under-counts logs; it is an admission heuristic, not a bound on spend.
-  \item \textbf{HTTP success is not a useful answer.} Both on-premises models reason before
+  \item \textbf{An HTTP 200 may carry no answer.} Both on-premises models reason before
     answering, and reasoning is billed as output. With output limits of 768 to 1{,}536 tokens,
     43\% of the cheap model's answers and 20\% of the mid model's in run 4 had no visible text.
     Each is an HTTP 200 with a full bill, and the record does not distinguish it from a useful
@@ -865,7 +864,7 @@ the limits that bound; daily quotas, burst controls and provider overload are ou
 requirement never removes an endpoint. The router is not: with a placement clamp and a budget
 fallback that respects a risk floor, relaxing placement for a request with a tight budget and a
 detected identifier can make it newly rejected as over budget. We have a constructed example and
-a test that pins it. It did not occur in 2{,}699 live rows across three runs, in which every
+a test that pins it. It did not occur in the 2{,}699 live rows of runs 2 to 4, in which every
 relaxation newly rejected nothing. The only invariant a relaxation satisfies is that the
 eligible set grows.
 
@@ -878,8 +877,7 @@ is a function of length, and quality is a default unless measured. On a benchmar
 paid about 6.7 times the cheapest eligible stated price for the same answers.
 
 \paragraph{A small suite can manufacture a ranking.} Our first benchmark runs suggested the cheap
-model was better than the mid one. A larger suite of well-posed cases removed the gap. We report
-the episode because the first reading was ours, and it was wrong.
+model was better than the mid one. A larger suite of well-posed cases removed the gap.
 
 \paragraph{Not measured.} A saving against a frontier-only baseline: the lab has no paid prices.
 Any difference in quality between the models: the larger suite is at ceiling. A baseline that
@@ -939,7 +937,7 @@ without the identifier, and the router, correctly finding nothing sensitive in \
 request}, sends it to a cloud endpoint.
 
 No stated guarantee is broken: the guarantee is per request. What fails is the property an
-operator is likely to assume---that a conversation which has touched restricted data stays where
+operator is likely to assume: that a conversation which has touched restricted data stays where
 that data must stay. That property needs state across requests.
 
 \subsection{An agent's cost is in the context it re-sends}
@@ -955,7 +953,7 @@ to another endpoint, for a lower price or after a failure, gives that up. The ro
 Section~\ref{sec:system} prices each call as though it were the first. In the failures above,
 failover moved 121 requests to a different endpoint (86 in run 3, 35 in run 4); in a trajectory
 each is a switch in mid-conversation. Repeated input tokens are not measured cache misses or cash
-savings; this is one session and a motivation, not a distribution.
+savings; this is a single session, offered as motivation.
 
 \subsection{The trajectory-level problem}
 \label{sec:trajproblem}
@@ -1253,14 +1251,14 @@ generates every table.
 
 We studied what follows when the set of endpoints a request may use is derived from policy, per
 request, before anything is scored, in a self-hosted gateway that mixes on-premises and cloud
-endpoints. Filtering of this kind exists in other gateways; what this paper contributes is a
-tested combination around it and an account of what that combination exposed. Property checks of
+endpoints. Filtering of this kind exists in other gateways; this paper contributes a tested
+combination of components around it and reports what testing that combination found. Property checks of
 the compiler found two fail-open defects that ordinary tests had missed. On a lab with
 on-premises and cloud endpoints, no request confined to on-premises compute had a cloud endpoint
 in its attempt chain, under the stated assumptions about declarations, detection and the
 enforcement code. Replay reproduced the recorded first-decision admission of every request but
 not the serving endpoint during outages, and one prospective prediction of the cloud share
-was close to what was later observed. The evaluation harness showed plainly that the router's
+was close to what was later observed. The evaluation harness showed that the router's
 own choices among eligible models are its weakest part: where every model was good enough, it
 paid several times the cheapest eligible stated price. A better scoring rule is a separable
 problem that the harness can evaluate. For agent trajectories, a live example showed a
