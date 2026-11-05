@@ -415,3 +415,9 @@ def test_admin_feedback_write_feedback_failure_on_corrected_output_does_not_bloc
         assert len(rows) == 1
         assert rows[0].score_name == "quality"
         assert rows[0].source == "admin"
+
+
+def test_task_success_is_an_accepted_score_name():
+    from app.obs.scores import SCORE_NAMES, _SCORE_DATATYPES
+    assert "task_success" in SCORE_NAMES
+    assert _SCORE_DATATYPES["task_success"] == "NUMERIC"

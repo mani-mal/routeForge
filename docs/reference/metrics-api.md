@@ -61,3 +61,5 @@ Display-only; attribution "Published data: Artificial Analysis" (https://artific
 - `spend_by_workload`: `[{workload, usd}]` sorted by spend, descending; `workload` null is untagged (including usage rows with no outcome row). `retries_and_failovers_usd` is the cost of requests whose `route_reason` is `failover` or `escalation`; it **overlaps** the workload lines and is not additive to them.
 - `models_used`: `[{model, requests, share}]` over the app's routed requests, per attributed model (`chosen`, else the last attempt). A request that failed over is counted once, under the model that ended it.
 - `route_reasons`: `[{reason, count, share}]` over routed requests, requests without a reason excluded from both counts and shares.
+
+How applications report `task_success` labels: [Reporting task success](../guides/reporting-task-success.md).

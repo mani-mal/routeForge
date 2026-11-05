@@ -8,19 +8,21 @@ import { api, adminApi, subscribeStream } from "../api";
 import type { RequestSummary, ChatResponse, AdminApp } from "../api";
 import { OverviewSection } from "./sections/OverviewSection";
 import { CostSection } from "./sections/CostSection";
+import { MetricsSection } from "./sections/MetricsSection";
 import { PrivacySection } from "./sections/PrivacySection";
 import { TrafficSection } from "./sections/TrafficSection";
 import { RequestDrilldown } from "./RequestDrilldown";
 import { RequestList } from "../components/RequestList";
 import { AppConfig } from "../admin/ApplicationsPanel";
 
-type Tab = "overview" | "cost" | "privacy" | "traffic" | "requests" | "settings";
+type Tab = "overview" | "cost" | "metrics" | "privacy" | "traffic" | "requests" | "settings";
 
 const REQUEST_CAP = 500;
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "overview", label: "Overview" },
   { key: "cost", label: "Cost" },
+  { key: "metrics", label: "Metrics" },
   { key: "privacy", label: "Privacy" },
   { key: "traffic", label: "Traffic" },
   { key: "requests", label: "Requests" },
@@ -120,6 +122,7 @@ export function AppPage({ appId, onBack }: { appId: string; onBack: () => void }
       <div className="flex-1 p-4">
         {tab === "overview" && <OverviewSection requests={requests} />}
         {tab === "cost" && <CostSection requests={requests} />}
+        {tab === "metrics" && <MetricsSection appId={appId} />}
         {tab === "privacy" && <PrivacySection requests={requests} />}
         {tab === "traffic" && <TrafficSection requests={requests} />}
         {tab === "requests" && (

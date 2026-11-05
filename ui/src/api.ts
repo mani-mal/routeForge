@@ -471,6 +471,10 @@ export const adminApi = {
     fetch(`/admin/metrics/summary?${metricsQuery(p)}`, { credentials: "same-origin" }).then(j<MetricsSummary>),
   metricsModels: (p: MetricsParams) =>
     fetch(`/admin/metrics/models?${metricsQuery(p)}`, { credentials: "same-origin" }).then(j<MetricsModels>),
+  metricsApp: (appId: string, hours: number) =>
+    fetch(`/admin/metrics/app/${encodeURIComponent(appId)}?hours=${hours}`, { credentials: "same-origin" }).then(
+      j<MetricsApp>,
+    ),
   // Artificial Analysis published metrics (docs/reference/external-metrics.md)
   externalSnapshots: () =>
     fetch("/admin/external-metrics/snapshots", { credentials: "same-origin" }).then(extJson<ExternalSnapshots>),
@@ -697,6 +701,34 @@ export interface MetricsParams {
   applicationId?: string;
   workload?: string;
   placement?: string;
+}
+
+export interface AppBudget {
+  monthly_budget_usd: number | null;
+  month_to_date_usd: number;
+  forecast_usd: number;
+  risk: "low" | "watch" | "high" | null;
+  month: string;
+}
+
+export interface AppWindowView {
+  budget: AppBudget;
+  cost_per_task: MetricsWindowSummary["cost_per_task"];
+  successful_reported: MetricField | null;
+  completed: MetricField;
+  p95_task_time_ms: { value: number | null; n: number; insufficient: boolean; task_unit: "task" | "request" | string };
+  spend_by_workload: { workload: string | null; usd: number }[];
+  retries_and_failovers_usd: number;
+  models_used: { model: string; requests: number; share: number }[];
+  route_reasons: { reason: string; count: number; share: number }[];
+}
+
+export interface MetricsApp {
+  application_id: string;
+  window: { hours: number; since: string; until: string };
+  current: AppWindowView;
+  previous: AppWindowView;
+  generated_at: string;
 }
 
 function metricsQuery(p: MetricsParams): string {
