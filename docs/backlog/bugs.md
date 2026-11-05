@@ -882,7 +882,9 @@ alongside the shadow prices.
 shadow-only `simulation.json` and print it in `report.md`, so the counts are visible without
 needing a proposal.
 
-## B62 — No boot-time check for a column the ORM expects and the live table is missing  🔴 OPEN
+## B62 — No boot-time check for a column the ORM expects and the live table is missing  ✅ RESOLVED (2026-11-05, fix/ops-batch-b62)
+
+**Resolved 2026-11-05 (fix/ops-batch-b62):** boot-time ORM-vs-live-DB column check (app/apps/db.py::missing_schema_columns, run at startup in app/main.py); one ERROR line names every missing table.column and points at scripts/migrate_app_policies.py; GET /health carries schema_missing. Boot still succeeds; a failing check only warns.
 
 **Severity:** medium (silent data loss: a deployed DB missing a column boots and serves
 traffic, but every write that touches the column fails and is swallowed).

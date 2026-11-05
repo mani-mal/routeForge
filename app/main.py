@@ -23,7 +23,7 @@ from app.api.openai_errors import CODE_INVALID_REQUEST, error_payload
 from app.api.pg_bridge import PgDecisionBridge
 from app.apps.admin_auth import SessionStore
 from app.apps.bootstrap import seed_all
-from app.apps.db import Database
+from app.apps.db import Database, missing_schema_columns
 from app.apps.policy import RateLimiter
 from app.apps import store as apps_store
 from app.api.routes import router
@@ -395,6 +395,26 @@ def create_app() -> FastAPI:
     @app.on_event("shutdown")
     async def _stop_bridge() -> None:
         await app.state.bridge.stop()
+
+    app.state.schema_missing = []
+
+    @app.on_event("startup")
+    async def _check_schema() -> None:
+        """B62: log loudly (once) when the live DB lacks a column the code
+        expects. Boot still succeeds; a failing check only warns."""
+        slog = logging.getLogger("serving.schema")
+        try:
+            await app.state.db.ensure_ready()
+            missing = await missing_schema_columns(app.state.db.engine)
+            app.state.schema_missing = missing
+            if missing:
+                slog.error(
+                    "database schema is missing %d column(s) the code expects: %s "
+                    "-- run scripts/migrate_app_policies.py (see "
+                    "docs/reference/per-app-config.md)",
+                    len(missing), ", ".join(missing))
+        except Exception:
+            slog.warning("schema check failed; continuing to boot", exc_info=True)
 
     @app.on_event("startup")
     async def _seed_signals() -> None:

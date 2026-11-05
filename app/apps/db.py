@@ -152,3 +152,26 @@ class Database:
 
     async def dispose(self) -> None:
         await self.engine.dispose()
+
+
+def _missing_columns_sync(sync_conn) -> list[str]:
+    from sqlalchemy import inspect
+    insp = inspect(sync_conn)
+    existing_tables = set(insp.get_table_names())
+    missing: list[str] = []
+    for table in Base.metadata.sorted_tables:
+        if table.name not in existing_tables:
+            continue
+        live = {c["name"] for c in insp.get_columns(table.name)}
+        missing.extend(f"{table.name}.{c.name}" for c in table.columns
+                       if c.name not in live)
+    return sorted(missing)
+
+
+async def missing_schema_columns(engine) -> list[str]:
+    """B62: every `table.column` the ORM declares that the live table lacks
+    (tables that do not exist are skipped: create_all makes them). Names only,
+    content-free. `create_all` never ALTERs, so a deploy that skipped the
+    ALTER step shows up here instead of as swallowed per-request write errors."""
+    async with engine.connect() as conn:
+        return await conn.run_sync(_missing_columns_sync)

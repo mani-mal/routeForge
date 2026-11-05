@@ -169,7 +169,8 @@ def health(request: Request) -> dict:
     registry = getattr(request.app.state, "registry", None)
     pool = registry.effective_pool() if registry else s.routing.model_pool
     return {"status": "ok", "backend": "litellm",
-            "models": [c.name for c in pool]}
+            "models": [c.name for c in pool],
+            "schema_missing": list(getattr(request.app.state, "schema_missing", []))}
 
 
 @router.get("/metrics")
