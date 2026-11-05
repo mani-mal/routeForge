@@ -1,0 +1,5 @@
+pool size 4 requirement ids 11
+compile_policy us: median/p99 (13.5305, 78.311)
+feasible_set us:   median/p99 (18.84, 77.333)
+core worst (k=11) us: (1027.852, 1794.586)
+core typical us: (5.242, 10.655)

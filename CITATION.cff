@@ -1,6 +1,6 @@
 cff-version: 1.2.0
 message: "If you use RouteForge or its research artifact, please cite it as below."
-title: "RouteForge: Research Artifact for Eligibility-Constrained LLM Routing"
+title: "RouteForge: Research Artifact for Testing and Replaying Policy-Constrained LLM Routing"
 type: software
 license: Apache-2.0
 authors:
@@ -8,9 +8,8 @@ authors:
     given-names: Mani
     email: mani.malarvannan@cdw.com
 repository-code: "https://github.com/mani-mal/routeForge"
-version: arxiv-v1
-commit: 93bf327ed50cc54faf3da0b1d7595b8080ba4e12
-date-released: 2026-10-20
+version: arxiv-v2
+date-released: 2026-11-05
 keywords:
   - LLM routing
   - data residency
@@ -19,7 +18,7 @@ keywords:
   - property-based testing
 preferred-citation:
   type: article
-  title: "Eligibility-Constrained LLM Routing: When the Candidate Pool Is a Per-Request Variable"
+  title: "RouteForge: Testing and Replaying Policy-Constrained LLM Routing"
   authors:
     - family-names: Malarvannan
       given-names: Mani

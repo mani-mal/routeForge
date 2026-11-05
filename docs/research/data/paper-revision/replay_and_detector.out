@@ -1,0 +1,22 @@
+run 1: rows 912 excluded {'before_since': 0, 'cache_hit': 0, 'unknown_status': 0, 'unknown_app': 0, 'missing_features': 0, 'missing_routing_tokens': 0} admission 912/912 | ok 876 first-attempt agree 876 (1.000) final-serving agree 876 (1.000) multi-attempt rows 0
+run 2: rows 900 excluded {'before_since': 0, 'cache_hit': 0, 'unknown_status': 0, 'unknown_app': 0, 'missing_features': 0, 'missing_routing_tokens': 0} admission 900/900 | ok 880 first-attempt agree 815 (0.926) final-serving agree 809 (0.919) multi-attempt rows 6
+run 3: rows 899 excluded {'before_since': 0, 'cache_hit': 0, 'unknown_status': 0, 'unknown_app': 0, 'missing_features': 0, 'missing_routing_tokens': 0} admission 899/899 | ok 878 first-attempt agree 807 (0.919) final-serving agree 721 (0.821) multi-attempt rows 86
+run 3 onprem_only rows 498 status {'ok': 477, 'no_eligible': 21} attempts 478 cloud-attempts 0 rows-without-attempt 21
+  run 3 detect ALL: {'TN': 525, 'FP': 96, 'TP': 257}
+  run 3 detect code: {'TN': 90, 'TP': 19}
+  run 3 detect json: {'FP': 85, 'TP': 35}
+  run 3 detect logs: {'TN': 82, 'TP': 40, 'FP': 11}
+  run 3 detect prose: {'TN': 257, 'TP': 129}
+  run 3 detect question: {'TN': 96, 'TP': 34}
+  run 3 entity types on negatives: {'CREDIT_CARD': 84, 'US_BANK_NUMBER': 96}
+run 3 answers: {'qwen3.6-35b': {'200': 304, '200_empty': 141}, 'openrouter-mid': {'200': 19, '200_empty': 5}, 'glm-5.3-flash': {'200': 543, '200_empty': 87}, 'openrouter-frontier': {'200': 12}, '-': {'non200': 22}}
+run 4: rows 900 excluded {'before_since': 0, 'cache_hit': 0, 'unknown_status': 0, 'unknown_app': 0, 'missing_features': 0, 'missing_routing_tokens': 0} admission 900/900 | ok 878 first-attempt agree 878 (1.000) final-serving agree 843 (0.960) multi-attempt rows 35
+run 4 onprem_only rows 489 status {'ok': 467, 'no_eligible': 22} attempts 467 cloud-attempts 0 rows-without-attempt 22
+  run 4 detect ALL: {'TN': 550, 'TP': 222, 'FP': 106}
+  run 4 detect code: {'TN': 108, 'TP': 27}
+  run 4 detect json: {'TP': 32, 'FP': 95}
+  run 4 detect logs: {'TN': 96, 'TP': 28, 'FP': 11}
+  run 4 detect prose: {'TN': 233, 'TP': 105}
+  run 4 detect question: {'TN': 113, 'TP': 30}
+  run 4 entity types on negatives: {'US_BANK_NUMBER': 106, 'CREDIT_CARD': 95}
+run 4 answers: {'qwen3.6-35b': {'200': 324, '200_empty': 139}, 'glm-5.3-flash': {'200': 376, '200_empty': 74}, 'openrouter-mid': {'200': 119, '200_empty': 25}, 'openrouter-frontier': {'200': 59}, '-': {'non200': 22}}

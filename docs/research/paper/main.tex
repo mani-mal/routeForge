@@ -20,7 +20,7 @@
 \newcommand{\E}{\mathcal{E}}
 \newcommand{\repourl}{\url{https://github.com/mani-mal/routeForge}}
 
-\title{Eligibility-Constrained LLM Routing:\\When the Candidate Pool Is a Per-Request Variable}
+\title{RouteForge: Testing and Replaying\\Policy-Constrained LLM Routing}
 \author{Mani Malarvannan\\CDW\\\texttt{mani.malarvannan@cdw.com}}
 \date{}
 
@@ -28,27 +28,22 @@
 \maketitle
 
 \begin{abstract}
-LLM gateways in mixed on-premises and cloud deployments must restrict which endpoints may
-receive each request before they optimise model selection. Where compute may run, whether a
-provider keeps prompts, its region, what a tenant has allowed and an estimate of what a request
-will cost together decide which endpoints may see a request at all. We present RouteForge, a
-self-hosted, OpenAI-compatible gateway that derives this \emph{eligible set} per request and
-rejects the request when it is empty. RouteForge combines a policy compiler whose placement and
-protection components are tested for independence with a property-based harness, an evaluation
-harness whose oracle never credits an endpoint a request was not allowed to use, and a replay
-analyser for proposed policy changes. The compiler checks found two fail-open defects. In the two
-live runs with cloud endpoints, none of the 987 requests that the compiled policy confined to
-on-premises compute was attempted on a cloud endpoint. Across all four live runs on synthetic
-traffic, 3{,}611 requests in all, replay matched the recorded first-decision admission (routed
-or rejected) of every request; the identity of the
-serving endpoint diverged during outages, because replay omits operational failure state. A single
-prospective comparison predicted 180 cloud-bound requests and observed 178. The evaluation also
-exposed weaknesses: on a benchmark at which every model passed, the length-based router paid
-about 6.7 times the cheapest eligible stated price. Finally, a compaction example shows a
-restriction raised by a tool result being lost across calls, and motivates a prototype that
-preserves detector-derived placement restrictions within a configured identity and lifetime.
-These results support policy-aware testing and operational analysis, not a claim of better
-routing quality, of general privacy, or of calibrated prediction under arbitrary traffic.
+An LLM gateway that serves several applications over on-premises and cloud endpoints must decide
+which endpoints may receive a request before it chooses among them. We present RouteForge, a
+self-hosted, OpenAI-compatible gateway that computes this \emph{eligible set} for every request
+from operator-declared application policy, endpoint declarations and detected sensitive
+content, and rejects the request when the set is empty. We study three things around it. First,
+enforcement: a property-based harness for the policy compiler found two fail-open defects, and in
+two live runs with cloud endpoints none of the 945 outbound attempts made for the 987 requests
+confined to on-premises compute went to a cloud endpoint. Second, evaluation: a benchmark whose
+oracle credits only eligible endpoints showed that the length-based router paid about 6.7 times
+the cheapest eligible stated price when every model answered correctly. Third, replay: re-running
+recorded, content-free routing decisions under a proposed policy reproduced the admission
+decision of all 3{,}611 requests in four live runs, but not which endpoint served during outages,
+and one prospective prediction of the cloud-bound count (180) was close to the later observation
+(178). All traffic is synthetic. We also show a restriction lost when an agent compacts its
+context, and a prototype that carries detector-derived placement restrictions across related
+calls.
 \end{abstract}
 
 \noindent\textbf{Keywords:} LLM routing, data residency, policy compilation, replay,
@@ -60,62 +55,53 @@ property-based testing, agents
 \section{Introduction}
 
 A router that sends each request to the cheapest model good enough for it is a familiar idea.
-The usual formulation takes a set of models as given and optimises over it. That is a reasonable
-model of a single team calling public APIs. It is a poor model of the deployments that most need
-a router: a hospital, a bank or a public agency running several applications against a mix of
-their own GPUs and contracted cloud endpoints.
+The usual formulation takes a set of models as given and optimises over it. That fits a single
+team calling public APIs. It fits less well a deployment that combines application-specific
+restrictions with on-premises and cloud endpoints: a hospital, a bank or a public agency running
+several applications against a mix of their own GPUs and contracted cloud endpoints.
 
-In those deployments the question that comes first is not \emph{which model is best} but
-\emph{which models may see this request}. The answer depends on the application (it may be
-confined to on-premises compute), on the request (a detected identifier may confine it
-further), on what the operator has declared about each endpoint (its region, whether it keeps
-prompts, whether it may receive unredacted sensitive text), and on a budget. It changes from
-request to request. We call the result the \textbf{eligible set} and write $\E(r)$ for a
-request $r$.
+In such a deployment the first question is not \emph{which model is best} but \emph{which models
+may see this request}. The answer depends on the application (it may be confined to
+on-premises compute), on the request (a detected identifier may confine it further), and on what
+the operator has declared about each endpoint (its region, whether it keeps prompts, whether it
+may receive unredacted sensitive text). It changes from request to request. We call the result
+the \textbf{eligible set} and write $\E(r)$ for a request $r$.
 
-Pre-selection filtering of this kind is not new in itself. Open-source and hosted gateways
-filter deployments by region, context window or data-retention policy before a routing strategy
-chooses (Section~\ref{sec:related}), and policy engines can return filtered sets rather than a
-single allow or deny. What we study is the engineering consequences of treating $\E$ as the
-first-class, fail-closed quantity in a self-hosted gateway that mixes on-premises and cloud
-endpoints:
+Filtering candidates before a routing strategy chooses is not new: open-source and hosted
+gateways filter by region, context window or data retention, and policy engines can return a
+filtered set rather than allow or deny (Section~\ref{sec:related}). This paper studies the
+engineering consequences of three design rules in a self-hosted gateway that mixes on-premises
+and cloud endpoints:
 \begin{itemize}
-  \item \textbf{It must be computed before scoring and fail closed.} If eligibility is a penalty
-    in a score, or a check made after a choice, an optimiser can trade it away or a refactor
-    can skip it. If $\E$ is empty the request is rejected, never sent to the nearest
-    alternative.
-  \item \textbf{Evaluation must respect it.} An oracle that credits the globally best model
-    overstates the regret of any router that obeyed the policy.
-  \item \textbf{A policy change can be tested before it is applied.} If the records
-    of past routing decisions contain every input the router read, and no request content, a
-    proposed policy can be replayed against recorded traffic before anyone applies it.
+  \item \textbf{Compute the permitted endpoints before scoring, and reject when none remain.} If
+    eligibility were a penalty in a score, or a check after a choice, an optimiser could trade it
+    away or a refactor could skip it. An empty set rejects the request; it is never served by the
+    nearest alternative.
+  \item \textbf{Evaluate against eligible endpoints only.} An oracle that credits the globally
+    best model overstates the regret of any router that obeyed the policy.
+  \item \textbf{Test a policy change before applying it.} If the records of past routing
+    decisions contain every input the router read, and no request content, a proposed policy can
+    be replayed against recorded traffic.
 \end{itemize}
 
-\paragraph{Contributions.} RouteForge combines a policy compiler with separately testable
-placement and protection components, an eligibility-aware evaluation harness, and a replay
-analyser for policy changes. We report the defects these tools exposed, the limits of replay
-under operational failures, and a prototype that preserves detector-derived placement
-restrictions across related calls. Concretely:
+\paragraph{Contributions.}
 \begin{enumerate}
-  \item A policy compiler whose placement and protection components resolve independently,
-    with an explicit conditional dispatch invariant and a property-based harness that found two
-    fail-open defects (Sections~\ref{sec:system} and~\ref{sec:eligibility}).
-  \item FeasibleRouteBench, an offline harness with a feasible oracle and regret metrics that
-    never credit an ineligible endpoint (Section~\ref{sec:eval}).
-  \item A replay analyser over content-free records: scenario comparison, minimal conflicting
-    cores, empirical prices of single requirements, bootstrap ranges and a reading of stated
-    capacity, with an explicit statement of which counterfactuals it can and cannot answer
-    (Section~\ref{sec:sim}).
-  \item Live measurements on a GPU lab with on-premises and cloud endpoints
-    (Section~\ref{sec:exp}), including negative results (Section~\ref{sec:neg}).
-  \item A live counterexample to request-level eligibility for agent trajectories, and a
-    prototype that carries detector-derived placement restrictions across calls
-    (Section~\ref{sec:traj}).
+  \item \textbf{Enforcement and compiler testing.} An enforcement contract for every outbound
+    attempt, a policy compiler whose placement and protection fields resolve independently, and a
+    property-based harness that found two fail-open defects; live attempt chains checked against
+    the contract (Sections~\ref{sec:system}, \ref{sec:eligibility} and~\ref{sec:placement}).
+  \item \textbf{Eligibility-aware evaluation.} FeasibleRouteBench, whose oracle and regret
+    metrics never credit an ineligible endpoint, and what it showed about the shipped router
+    (Sections~\ref{sec:eval} and~\ref{sec:bench}).
+  \item \textbf{Policy replay and its measured limits.} A replay analyser over content-free
+    records, with scenario comparison, minimal conflicting cores, empirical prices of single
+    requirements and bootstrap ranges, and its fidelity measured on live runs, including where it
+    fails (Sections~\ref{sec:sim} and~\ref{sec:exp}).
 \end{enumerate}
-Feasible oracles, hitting-set explanations, bootstrap intervals and persistent labels are
-established ideas; we adapt and evaluate them in this setting rather than claim to invent them.
-We do not claim a better routing algorithm. The scoring rule is simple and, as
-Sections~\ref{sec:bench} and~\ref{sec:neg} show, not good at choosing among eligible models.
+Section~\ref{sec:traj} is a bounded extension to agent trajectories: a live counterexample and a
+prototype. Feasible oracles, hitting-set explanations, bootstrap intervals and persistent labels
+are established ideas; we adapt and evaluate them here. We do not claim a better routing
+algorithm. Section~\ref{sec:neg} collects the limitations.
 
 % ---------------------------------------------------------------------------
 \section{System and enforcement contract}
@@ -176,6 +162,57 @@ retention never satisfies an application's requirement on it. (An endpoint whose
 unredacted sensitive text is undeclared is kept; only an explicit refusal excludes it.) When an
 aggregator fronts several upstream providers, the declaration covers the aggregator endpoint as
 a whole; RouteForge does not pin or observe the upstream provider.
+
+\paragraph{Where each constraint applies.} Three stages decide a request, in this order.
+\begin{enumerate}
+  \item \emph{Gate.} The detector runs on the request text and tool-call arguments; the
+    application's policy is compiled, and sensitivity rules may raise placement on a detected
+    entity type. A gate error rejects the request.
+  \item \emph{Eligibility.} One function computes $E_{\mathrm{policy}}$ from the compiled policy
+    and the registry: placement (residency and allowed providers); the application's region and
+    retention requirements against each endpoint's declaration; the raw-sensitive rule, which
+    excludes an endpoint declared not to accept unredacted sensitive text when this request
+    would send it unredacted (that is, when the compiled \code{model\_input} is \code{raw} and
+    sensitive content was detected or detection is off); the application's tier and model
+    allowlists; a model the client named; and per-model registry gates. Two operational
+    exclusions follow, endpoints that already failed for this request and endpoints whose
+    circuit breaker is open; neither is policy. An empty $E_{\mathrm{policy}}$ is \emph{policy
+    infeasibility}.
+  \item \emph{Router.} Inside $E_{\mathrm{policy}}$ the router picks a target tier from request
+    length, raises it to the request's risk floor, applies the per-request cost cap to each
+    candidate's estimated cost, and scores what remains (Eq.~\eqref{eq:score}). The cost cap and
+    the risk floor are router admission rules, not eligibility: a request whose eligible set is
+    nonempty can still be refused because no candidate fits the cap at or above the floor. We
+    call that \emph{router refusal}.
+\end{enumerate}
+
+\paragraph{A running example.} Table~\ref{tab:example} shows one application and three
+endpoints. The application requires region \code{us} and no prompt retention, sends input
+unredacted (\code{model\_input: raw}), and caps estimated cost at \$0.01 per request; a
+sensitivity rule raises placement to \code{onprem\_only} when an SSN is detected. For a request
+with no detected entity, $E_{\mathrm{policy}} = \{A\}$: B fails the region requirement and C the
+retention requirement. For a request containing an SSN, C is excluded by residency instead,
+because placement is checked first and its reason is the one recorded; $E_{\mathrm{policy}}$ is
+still $\{A\}$. The router then estimates A's cost against the cap. If the call to A fails, A is
+excluded, the set is recomputed and is empty, so the request ends as \emph{failed} rather than
+being sent to B or C. Later sections return to this example for replay and conflicting cores.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Running example: three endpoints and why each is or is not eligible for one
+application (region \code{us}, no retention, \code{model\_input: raw}).}
+\label{tab:example}
+\begin{tabular}{@{}lllllp{4.4cm}@{}}
+\toprule
+endpoint & provider & region & retention & raw sensitive & excluded by (no entity / SSN) \\
+\midrule
+A & on-premises & us & none & undeclared & --- / --- \\
+B & on-premises & eu & none & undeclared & region / region \\
+C & cloud & us & retained & refused & retention / residency \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \paragraph{The enforcement contract.} Write $E_{\mathrm{policy}}(r, \rho)$ for the endpoints
 that satisfy request $r$'s compiled policy against registry state $\rho$, and
@@ -244,7 +281,7 @@ ceiling. At each selection the router estimates a candidate's cost from the inpu
 token per four characters of message text, plus serialised tools and tool calls) and an output
 size (the client's \code{max\_completion\_tokens} or \code{max\_tokens}, else a configured
 default of 512), priced at the endpoint's stated per-million-token rates without cache
-discounts. A candidate whose estimate exceeds the cap is excluded. Every failover hop applies
+discounts. A candidate whose estimate exceeds the cap is not admitted. Every failover hop applies
 the same cap to its own estimate; actual spend across the attempt chain is accounted after the
 fact,
 \[
@@ -252,7 +289,8 @@ C_{\mathrm{request}} = \sum_{j \in \mathrm{Attempts}(r)}
   \frac{p^{\mathrm{in}}_j n^{\mathrm{in}}_j + p^{\mathrm{out}}_j n^{\mathrm{out}}_j}{10^6},
 \]
 with $n$ the token counts the endpoint reports, but it is not enforced against the cap. Reasoning
-tokens are billed as output; a failed attempt that returns no usage contributes zero. Section~\ref{sec:tokens}
+tokens are billed as output. A failed attempt that returns no usage is recorded as zero, but
+its true consumption is unknown. Section~\ref{sec:tokens}
 reports how far the estimate departs from the serving engine's count.
 
 \paragraph{The router.} The target tier is a function of request length,
@@ -292,34 +330,43 @@ potentially sensitive metadata.
 \section{Eligibility, placement and protection}
 \label{sec:eligibility}
 
-\paragraph{Two kinds of axis.} \emph{Placement} governs where compute may run. \emph{Protection}
-governs what the model is shown, what the client receives, what telemetry stores, which
-detector runs, and whether lossy transformations and streaming are allowed. Table~\ref{tab:axes}
-enumerates the axes.
+\paragraph{Kinds of setting.} Table~\ref{tab:axes} groups an application's settings by what
+they act on. \emph{Placement} governs where compute may run. \emph{Endpoint requirements} are
+compared with each endpoint's declarations. Both decide eligibility. \emph{Router admission}
+settings act after eligibility (Section~\ref{sec:system}). \emph{Protection} settings govern what
+the model is shown, what the client receives, what telemetry stores, which detector runs, and
+whether lossy transformations and streaming are allowed. One protection value also enters
+eligibility: under \code{model\_input: raw} a sensitive request is sent unredacted, so an endpoint
+declared not to accept unredacted sensitive text is excluded, and switching to \code{redact} can
+make that endpoint eligible again.
 
 \begin{table}[t]
 \centering
 \small
-\caption{Policy axes. ``Protective end'' is the value an unparseable input resolves to; such a
-write is also refused. Placement axes change endpoint eligibility; protection axes change data
-handling and never eligibility.}
+\caption{Application settings. ``Protective end'' is the value an unparseable input resolves to;
+such a write is also refused. Placement and endpoint requirements decide eligibility; router
+admission settings act after it; protection settings govern data handling, and
+\code{model\_input} also feeds the raw-sensitive eligibility rule.}
 \label{tab:axes}
-\begin{tabular}{@{}lp{5.2cm}p{2.6cm}l@{}}
+\begin{tabular}{@{}l>{\raggedright\arraybackslash}p{6.4cm}p{2.6cm}@{}}
 \toprule
-axis & values (stricter to the right or by inclusion) & protective end & kind \\
+setting & values (stricter to the right or by inclusion) & protective end \\
 \midrule
-residency & \code{any} $<$ \code{private\_cloud\_ok} $<$ \code{onprem\_only} & \code{onprem\_only} & placement \\
-allowed regions & a set of region labels; $R' \subseteq R$ is stricter; unset = no constraint & empty set & placement \\
-no retention & false $<$ true & --- & placement \\
-allowed tiers / providers / models & sets, ordered by inclusion & --- & placement \\
-cost cap (USD) & a number; lower is stricter & --- & placement \\
-\midrule
-model input & \code{raw} $<$ \code{redact} & \code{redact} & protection \\
-client output & \code{raw} $<$ \code{redact} & \code{redact} & protection \\
-telemetry I/O & \code{full}, \code{redacted}, \code{off} & \code{off} & protection \\
-detection & \code{off}, \code{regex}, \code{presidio} & \code{presidio} & protection \\
-content integrity & \code{transformations\_allowed} $<$ \code{exact} & \code{exact} & protection \\
-stream mode & \code{off} and three opt-in modes & \code{off} & protection \\
+\multicolumn{3}{@{}l}{\emph{Placement (eligibility)}} \\
+residency & \code{any} $<$ \code{private\_cloud\_ok} $<$ \code{onprem\_only} & \code{onprem\_only} \\
+\multicolumn{3}{@{}l}{\emph{Endpoint requirements (eligibility)}} \\
+allowed regions & a set of region labels; $R' \subseteq R$ is stricter; unset = no constraint & empty set \\
+no retention & false $<$ true & --- \\
+allowed tiers / providers / models & sets, ordered by inclusion & --- \\
+\multicolumn{3}{@{}l}{\emph{Router admission (after eligibility)}} \\
+cost cap (USD) & a number; lower is stricter & --- \\
+\multicolumn{3}{@{}l}{\emph{Protection (data handling)}} \\
+model input & \code{raw} $<$ \code{redact} & \code{redact} \\
+client output & \code{raw} $<$ \code{redact} & \code{redact} \\
+telemetry I/O & \code{full}, \code{redacted}, \code{off} & \code{off} \\
+detection & \code{off}, \code{regex}, \code{presidio} & \code{presidio} \\
+content integrity & \code{transformations\_allowed} $<$ \code{exact} & \code{exact} \\
+stream mode & \code{off} and three opt-in modes & \code{off} \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -337,12 +384,12 @@ records that the value was clamped. Placement has no ceiling flag; it can only b
 by the application or by a sensitivity rule.
 
 \paragraph{Compiler component independence.} We use a restricted, static form of
-noninterference~\cite{goguen}. The policy is compiled in two stages, and each property holds
-with the other stage's inputs fixed:
+noninterference~\cite{goguen}. It concerns the compiled policy, not the final eligible set.
+Write $\mathrm{place}(\cdot)$ for the placement and endpoint-requirement fields of the compiled
+policy and $\mathrm{prot}_b(\cdot)$ for protection field $b$. The policy is compiled in two
+stages, and each property holds with the other stage's inputs fixed:
 \begin{enumerate}
-  \item \emph{Static compilation} resolves placement and protection from configuration. Writing
-    $\mathrm{place}(\cdot)$ and $\mathrm{prot}_b(\cdot)$ for the placement and protection
-    components of the compiled policy:
+  \item \emph{Static compilation} resolves placement and protection from configuration:
     \begin{description}
       \item[NI-1.] For any policy $\pi$, protection axis $a$, values $v, v'$, and a fixed tuple
         of detected entity types:
@@ -359,17 +406,23 @@ with the other stage's inputs fixed:
 NI-1 holds the observation fixed. It does not say that changing the detector leaves runtime
 placement unchanged for the same text: switching detection from \code{presidio} to \code{off}
 changes what is observed, and so, through stage~2, what placement the request receives. That
-interaction is declared and can only raise placement, but NI-1 is not a claim about final
-routing.
+interaction is declared and can only raise placement. Runtime eligibility also depends on
+protection through the raw-sensitive rule above. So placement and protection fields are resolved
+independently during static compilation, while the final eligible set can depend on detected
+sensitivity and on whether the outgoing input is redacted.
 
 \paragraph{Eligibility and monotonicity.} Given the compiled policy and the endpoint registry,
-the eligible set is computed in one place. For fixed request features and registry, if
-$\pi'$ is stricter than $\pi$ on every axis of Table~\ref{tab:axes}, then
+the eligible set is computed in one place. Hold fixed the detected entity types, the outgoing
+representation (\code{model\_input}), the registry and operational state. If $\pi'$ is at least
+as strict as $\pi$ on every placement and endpoint-requirement setting of Table~\ref{tab:axes},
+then
 \[
   E_{\mathrm{policy}}(r, \pi') \subseteq E_{\mathrm{policy}}(r, \pi).
 \]
-This does not extend to the router's served/rejected decision: the tier, risk-floor and budget
-logic above can reject a request whose eligible set is nonempty, and Section~\ref{sec:neg}
+The statement does not hold across protection settings: changing \code{model\_input} from
+\code{raw} to \code{redact}, the protective direction, can add an endpoint. Nor does it extend to
+the router's served/rejected decision: the tier, risk-floor and cost-cap logic can reject a
+request whose eligible set is nonempty, and Section~\ref{sec:neg}
 gives a case where \emph{relaxing} placement makes a request newly rejected. We therefore keep
 two kinds of rejection apart: \emph{policy infeasibility} ($\E$ is empty) and \emph{router
 refusal} ($\E$ is nonempty but no candidate fits the cost cap at or above the risk floor).
@@ -398,8 +451,9 @@ requirements. A \emph{conflicting core} is a set of requirements that together e
 endpoint, i.e.\ a hitting set of the endpoints' failure sets. RouteForge returns a
 \emph{minimum-cardinality} core, found exactly by searching subsets in increasing size over at
 most eleven requirement identifiers ($2^{11}$ subsets); ties are broken by a fixed requirement
-order. A minimum core is also subset-minimal. For example, with two endpoints, an on-premises
-endpoint that fails \{\code{allowed\_regions}, \code{max\_cost}\} and a cloud endpoint that fails
+order. Nine identifiers are eligibility requirements; the cost cap and the risk floor enter a core
+only for a router refusal, computed over the eligible candidates. A minimum core is also subset-minimal. For example, with two endpoints, an on-premises
+endpoint that fails \{\code{allowed\_regions}, \code{allowed\_models}\} and a cloud endpoint that fails
 \{\code{residency}, \code{no\_retention}\}, every core needs one requirement from each, so a
 minimum core has size two, and the fixed order selects \{\code{residency},
 \code{allowed\_regions}\}. The failure sets are computed once, for the request's fixed context;
@@ -407,7 +461,7 @@ the core is not re-validated by relaxing its members and recomputing derived pre
 Endpoint \emph{state} (no endpoints configured, disabled, breaker open, already failed in this
 request) is reported separately and is never part of a core, so ``nothing is onboarded'' is not
 confused with contradictory policy. No remediation hint proposes relaxing a security
-requirement. The search's runtime at eleven requirements was not measured.
+requirement. Section~\ref{sec:overhead} reports the search's runtime.
 
 % ---------------------------------------------------------------------------
 \section{Evaluating a router that has to obey a policy}
@@ -437,30 +491,9 @@ over common cases. Results are also reported per group of cases (placement, prot
 application, workload) with the case count beside every figure, and no figure for a group below
 a minimum size.
 
-\paragraph{An offline version check (experimental).} A candidate routing configuration is
-scored beside the current one on the same cases, the paired per-case difference of each named
-metric is bootstrapped over cases~\cite{efron} (1{,}000 resamples by default, 90\% two-sided
-percentile interval), and each \emph{figure}---one metric, overall or within one group---is
-judged on its whole range: \code{regressed} if the entire range lies beyond the tolerance in
-the worsening direction, \code{within tolerance} if it lies entirely inside, and
-\code{inconclusive} otherwise. A candidate's verdict is \code{regressed} if any judged figure
-is, \code{pass} if every figure is \code{within tolerance}, and \code{inconclusive} otherwise.
-No correction is made for the number of figures judged.
-
-We measured the false-alarm rate of this candidate-level verdict in a synthetic null
-experiment: two arms scored from one shared distribution, so there is no true difference, with
-a share $f$ of the 22 cases redrawn between the arms (modelling fresh stochastic generations or
-noisy endpoint measurements; on an identical frozen matrix every paired difference would be
-zero and no figure could regress), 300 draws per setting and 400 resamples. With nonzero
-tolerances on one or two metrics (14 to 28 figures judged), an earlier rule that judged the
-point estimate called the candidate regressed in 66\% to 97\% of draws; the whole-range rule
-does so in 0.3\% to 31\%: about 2\% and 0.3\% with $f = 0.3$, and 25\% to 31\% with every case
-redrawn. With all eight metrics at zero tolerance (102 to 108 figures) the rates are 100\% and
-55\% to 83\%. A false-alarm rate of a quarter to a third, when every case is redrawn, is too
-high for a promotion gate. We therefore present the check as experimental: its
-\code{regressed} verdict has no controlled error rate, a family-wise correction is not built,
-and the script for this null experiment is not in the repository. The check applies nothing;
-a routing change is still made by an operator.
+Appendix~\ref{app:version} describes an exploratory statistical check that compares a candidate
+routing configuration with the current one on the same cases. Its false-alarm rate is too high
+for it to serve as a promotion gate, and no result in the main text depends on it.
 
 \paragraph{Failure injection.} In simulation, where quality is an input, the harness is
 exercised with failure injection. From Eq.~\eqref{eq:score} follows a condition for when a dead
@@ -620,26 +653,54 @@ run & endpoints & rows & statuses & what it adds \\
 \end{table}
 
 \subsection{Placement holds}
+\label{sec:placement}
 
 In runs 3 and 4, 641 rows belonged to the on-premises-only application and 346 rows from the
 other two applications were raised to on-premises placement because an entity was detected.
-None of the 987 had a cloud endpoint anywhere in its recorded attempt chain, including
-retries and failovers. These are requests restricted by the compiled policy, not every truly
-sensitive request that could occur. Under independent Bernoulli trials, zero violations in 987
-gives a one-sided 95\% upper bound on the violation rate of $1 - 0.05^{1/987} \approx 0.30\%$;
+Of the 987, 944 were served, 43 were rejected before any dispatch, all as router refusals whose
+conflicting core was the cost cap together with the risk floor, and none failed after an attempt. Their recorded attempt chains hold 945
+outbound attempts in all, one of them a retry, and none of the 945 was to a cloud endpoint.
+These are requests restricted by the compiled policy, not every truly sensitive request that
+could occur. Under independent Bernoulli trials, zero violations in 987 requests
+gives a one-sided 95\% upper bound on the per-request violation rate of
+$1 - 0.05^{1/987} \approx 0.30\%$;
 for a deterministic program this is a description of the sample, not a security bound over
 unseen policies, which is what the property checks of Section~\ref{sec:eligibility} address. A
 request from the on-premises-only application that names a cloud model is refused with the
 reason. In every benchmark run, simulated and live, no strategy chose an endpoint outside a
 case's eligible set.
 
-Pattern detection also restricts requests that carry no identifier. In run 4, 83 of the 173
-detection-raised requests (48\%) carried no planted identifier: random digits in synthetic logs
-and JSON matched credit-card and bank-number patterns. This is the share of a selected group,
-not the detector's false-positive rate, which needs the count of truly negative requests; we
-have not computed a confusion matrix against the generator's ground truth, nor the false-negative
-rate. These errors are in the safe direction: the requests stayed on-premises and were paid
-for at the on-premises price.
+Pattern detection also restricts requests that carry no identifier. The traffic generator
+records which requests had an SSN and an e-mail address planted, so the detector can be scored
+against that ground truth (Table~\ref{tab:detector}; a request counts as detected when any entity
+type was found). No planted request was missed in either run. False positives were confined to
+two kinds of text: every identifier-free JSON request and about a tenth of identifier-free log
+requests were flagged, because random digit strings matched credit-card and bank-number
+patterns; prose, code and questions produced none. In run 4, 83 of the 173 requests whose
+placement was raised by detection (48\%) carried no planted identifier. These errors are in the
+safe direction: the requests stayed on-premises and were paid for at the on-premises price. The
+ground truth covers only the two planted entity types, and the measurement is on synthetic text.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Detector against the generator's ground truth (planted SSN and e-mail), runs 3 and 4,
+all applications. FP = flagged without a planted identifier; FN = planted but not flagged.}
+\label{tab:detector}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+kind of text & planted (run 3 / 4) & FN & not planted & FP \\
+\midrule
+prose & 129 / 105 & 0 / 0 & 257 / 233 & 0 / 0 \\
+questions & 34 / 30 & 0 / 0 & 96 / 113 & 0 / 0 \\
+code & 19 / 27 & 0 / 0 & 90 / 108 & 0 / 0 \\
+logs & 40 / 28 & 0 / 0 & 93 / 107 & 11 / 11 \\
+JSON & 35 / 32 & 0 / 0 & 85 / 95 & 85 / 95 \\
+\midrule
+all & 257 / 222 & 0 / 0 & 621 / 656 & 96 / 106 \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \subsection{Replay fidelity}
 
@@ -648,18 +709,19 @@ for at the on-premises price.
 \small
 \caption{Replay fidelity: agreement of the replayed current arm with what was recorded.
 \emph{Admission} compares the first routing decision, routed or rejected, over all rows (a
-failed request was routed); \emph{first endpoint} compares the replayed first choice with the
-endpoint that served, over served rows. Attempt-chain and
-cost agreement are not reported because replay is first-decision only.}
+failed request was routed). Over served rows, \emph{first attempt} compares replay's first
+choice with the recorded first attempted endpoint, and \emph{final endpoint} compares it with
+the endpoint that finally served after any retry or failover. Attempt-chain and cost agreement
+are not reported because replay is first-decision only.}
 \label{tab:fidelity}
-\begin{tabular}{@{}clll@{}}
+\begin{tabular}{@{}cp{5.2cm}lll@{}}
 \toprule
-run & endpoints during the run & admission agreement & first-endpoint agreement \\
+run & endpoints during the run & admission & first attempt & final endpoint \\
 \midrule
-1 & answering & 1.0 over 912 & 1.0 \\
-2 & one endpoint down for 181.5\,s & 1.0 over 900 & 0.926 over 880 \\
-3 & cloud provider down for 24 of 30 min & 1.0 over 899 & 0.919 over 878 \\
-4 & answering (one endpoint refusing a third of calls) & 1.0 over 900 & 1.0 over 878 \\
+1 & answering & 1.0 over 912 & 1.0 over 876 & 1.0 \\
+2 & one endpoint down for 181.5\,s & 1.0 over 900 & 0.926 over 880 & 0.919 \\
+3 & cloud provider down for 24 of 30 min & 1.0 over 899 & 0.919 over 878 & 0.821 \\
+4 & answering (one endpoint refusing a third of calls) & 1.0 over 900 & 1.0 over 878 & 0.960 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -668,9 +730,11 @@ Replay matched the recorded first-decision admission of all 3{,}611 rows
 (Table~\ref{tab:fidelity}): every request recorded as rejected replayed as rejected, and every
 request recorded as served or failed replayed as routed. Admission agreement does not test
 whether a routed request would be served; the two failed requests of run 2 count as routed in
-both arms. Endpoint
-identity agreed completely when endpoints were answering and diverged during outages. In run 2
-all 65 disagreements were requests the live router diverted because a breaker was open. In run
+both arms. The first attempted endpoint agreed completely when endpoints were answering and
+diverged during outages. In run 2 all 65 first-attempt disagreements were requests the live
+router diverted because a breaker was open. Agreement with the final serving endpoint is lower
+whenever a retry or failover moved a request (6, 86 and 35 requests in runs 2 to 4); replay does
+not model those moves. In run
 3 replay sent 180 requests to a provider that answered 31, and its baseline cost was 26\% below
 the recorded cost; in run 4 the two costs were within 1.2\%. Replay describes the deployment
 with its endpoints healthy; it does not model breaker or failure state.
@@ -756,7 +820,7 @@ cases against the mid model's 16, which invites the reading that the tier order 
 this pair. We do not make that claim. The starter suite contains cases that cannot be
 answered from their prompt, and the gap did not survive well-posed cases. What the two suites
 support together is narrower: a tier is not a quality measurement, and a small suite with
-strict graders can manufacture a ranking.
+strict graders can produce a model ranking that a larger suite does not support.
 
 \paragraph{Cost at equal quality.} Because every endpoint passed every answered case, the
 cheapest eligible endpoint is the oracle, and the router's regret is pure stated cost
@@ -786,17 +850,6 @@ the ratio depends on the suite; that the router overpays follows from the rule.
 
 Where two endpoints shared a tier and a quality default in live traffic, the cost term decided:
 all 84 unrestricted mid-tier requests in run 4 went to the cloud endpoint.
-
-\paragraph{The version check on live endpoints.} On the starter suite, two candidates that
-changed scoring weights altered no route and passed trivially; a candidate that removes the
-cheap tier changed 12 of 22 routes and was \code{inconclusive}. On the extended suite the same
-candidate changed 30 of 108 routes and raised mean chosen cost by \$0.00014 per case, with a 90\%
-range of [0.000085, 0.00020] that excludes zero. The tolerance had been set in advance at
-0.0005, the whole range lies inside it, and the verdict was \code{pass}: the worsening is real
-but within the tolerance set beforehand. All 38 judged figures had enough
-cases. Separately from the 18 compiler mutants of Section~\ref{sec:eligibility}, the check
-catches 15 of 15 single-rule mutations of its own detectors in simulation, and flags planted
-regressions. A \code{regressed} verdict on live endpoints has not been produced.
 
 \subsection{Failures}
 
@@ -846,15 +899,29 @@ the limits that bound; daily quotas, burst controls and provider overload are ou
     aggregate that hides a threefold spread. On the 21 served calls of a real coding agent
     session it was 0.96 to 1.02. A per-request cap enforced on this estimate over-rejects prose
     and under-counts logs; it is an admission heuristic, not a bound on spend.
-  \item \textbf{An HTTP 200 may carry no answer.} Both on-premises models reason before
-    answering, and reasoning is billed as output. With output limits of 768 to 1{,}536 tokens,
-    43\% of the cheap model's answers and 20\% of the mid model's in run 4 had no visible text.
-    Each is an HTTP 200 with a full bill, and the record does not distinguish it from a useful
-    answer; the synthetic traffic requested no tool calls, so these are not tool-only replies.
+  \item \textbf{Transport success, a usable completion and task success are different.} Of
+    run 4's HTTP 200 responses, 139 of 324 from the cheap on-premises model (43\%), 74 of 376
+    from the mid on-premises model (20\%) and 25 of 119 from the cloud mid model (21\%) contained
+    no visible text; the cloud frontier model's 59 all did. Both on-premises models reason before
+    answering, reasoning is billed as output, and output limits were 768 to 1{,}536 tokens. Each
+    empty response is a transport success with a full bill but not a usable completion, and the
+    record does not distinguish it. Task success was not measured on the live traffic, which had
+    no grader; the synthetic traffic requested no tool calls, so these are not tool-only replies.
     We did not separate finish reasons, truncation and reasoning-only responses, and we read the
-    rates as a sensitivity to the output-limit configuration on this synthetic traffic, not as a
-    property of the models.
+    rates as a sensitivity to the output-limit configuration, not as a property of the models.
 \end{itemize}
+
+\subsection{Policy-side overhead}
+\label{sec:overhead}
+
+We timed the policy-side steps in process, without network or database, on a developer laptop
+(14 hardware threads, WSL2), with the lab configuration's four-endpoint pool. Compiling one
+application's policy took a median of 14\,$\mu$s (99th percentile 78\,$\mu$s), and computing the
+eligible set 19\,$\mu$s (77\,$\mu$s). The conflicting-core search took 5\,$\mu$s for a
+two-endpoint rejection and 1.0\,ms (1.8\,ms) in the worst case, eleven endpoints each failing a
+different requirement, where all $2^{11}$ subsets are enumerated. These exclude PII detection,
+which runs on every request and dominates the gate, and the write of the outcome record; neither
+was measured. Timings vary between runs of the script by tens of percent. Inference calls in the live runs took seconds.
 
 % ---------------------------------------------------------------------------
 \section{Negative results and limits}
@@ -868,24 +935,26 @@ a test that pins it. It did not occur in the 2{,}699 live rows of runs 2 to 4, i
 relaxation newly rejected nothing. The only invariant a relaxation satisfies is that the
 eligible set grows.
 
-\paragraph{A scoring term can be inert.} One term of the scoring rule was, for the product's
-history to that point, algebraically unable to change a ranking; a weight of 0.2 or 20 gave
+\paragraph{The availability term was inert until it was measured.} Before availability was
+measured (the term was then named capacity), the scoring rule added $w_a \cdot 1$ to every candidate's score. Adding the same
+constant to every score preserves their order, and the tie-break (lower estimated cost) does not
+read the score, so no value of $w_a$ could change a selection: a weight of 0.2 or 20 gave
 identical outcomes. Recording each term's value and source per decision is what exposed it.
 
 \paragraph{The router does not choose well among eligible models} (Section~\ref{sec:bench}). Tier
 is a function of length, and quality is a default unless measured. On a benchmark at ceiling it
 paid about 6.7 times the cheapest eligible stated price for the same answers.
 
-\paragraph{A small suite can manufacture a ranking.} Our first benchmark runs suggested the cheap
-model was better than the mid one. A larger suite of well-posed cases removed the gap.
+\paragraph{The initial model ranking was not supported by the extended suite.} Our first
+benchmark runs suggested the cheap model was better than the mid one. A larger suite of
+well-posed cases removed the gap.
 
-\paragraph{Not measured.} A saving against a frontier-only baseline: the lab has no paid prices.
-Any difference in quality between the models: the larger suite is at ceiling. A baseline that
-applies the same eligibility predicates through a generic policy engine before the same scoring
-rule. Gate, compilation, eligibility and replay overhead, and the conflicting-core search time.
-Attempt-chain agreement under replay. A detector confusion matrix. A \code{regressed} verdict
-from the version check on live endpoints, and a controlled false-alarm rate for it. Coverage of
-the uncertainty ranges, directly or under dependence. Any effect on real text: every prompt in
+\paragraph{Not measured.} A matched baseline that applies the same eligibility predicates
+through a simple filter or a generic policy engine before the same scoring rule. A saving
+against a frontier-only baseline: the lab has no paid prices. Any difference in quality between
+the models: the larger suite is at ceiling. Detection, recording and replay overhead.
+Attempt-chain agreement under replay. Detector accuracy on real text, or for entity types the
+generator did not plant. Coverage of the uncertainty ranges, directly or under dependence. Any effect on real text: every prompt in
 Section~\ref{sec:exp} is synthetic, except the content-free records of one coding-agent session
 (40 rows, of which 21 were served and 19 rejected by the cost cap).
 
@@ -899,13 +968,13 @@ with frozen signals; the live runs span several builds of RouteForge (Section~\r
 \section{From request-level to trajectory-level feasibility}
 \label{sec:traj}
 
-Everything above treats a request as the unit. An agent does not make a request; it makes a
-\emph{trajectory}: tens of related calls while it plans, calls tools, reads results, retries and
-resumes. By default RouteForge sees each call separately and keeps no state between them. Two
+Everything above treats a request as the unit. An agent task usually spans multiple related
+inference calls, a \emph{trajectory}: tens of calls while it plans, calls tools, reads results,
+retries and resumes. By default RouteForge sees each call separately and keeps no state between them. Two
 observations show what that leaves out (Sections~\ref{sec:compaction} and~\ref{sec:resend}). We
 then state the problem (Section~\ref{sec:trajproblem}) and report a prototype for its placement
 part (Section~\ref{sec:envelope}). Cache-aware optimisation, quality-aware sequential routing and
-feasible-trajectory regret are not implemented.
+feasible-trajectory regret are not implemented; Appendix~\ref{app:trajopt} sketches them.
 
 \subsection{A restriction that does not survive compaction}
 \label{sec:compaction}
@@ -968,7 +1037,9 @@ incorporated \emph{before} call $t$ is dispatched:
   \E_t = \{\, e : e \models P_t^{+} \,\}, \qquad e_t \in \E_t, \qquad P_{t+1}^{-} = P_t^{+}.
   \label{eq:envelope}
 \end{equation}
-$\E_t$ is then non-increasing unless a named, recorded operation lowers a constraint. A tool
+With the registry, configuration and operational state held fixed, $\E_t$ is then
+non-increasing unless a named, recorded operation lowers a constraint; a newly onboarded
+endpoint, by contrast, can enlarge it. A tool
 result that arrives after one model call must update the envelope before the next outbound call
 that contains it or is derived from it. The invariants to check, over generated \emph{event
 sequences} rather than single policies, are: an observation may tighten but omission may not
@@ -977,23 +1048,6 @@ sub-agent starts at least as strict as the context it was given; retry, failover
 preserve the envelope; an unknown trajectory fails closed; and NI-1 and NI-2 hold at every step.
 The failure artifact is the shortest event sequence that violates one.
 Table~\ref{tab:compaction} is such a sequence for the first invariant, found by hand.
-
-\paragraph{Sequential objective (proposed, not implemented).} With $e_t \in \E_t$ and a
-task-success requirement,
-\begin{equation}
-  \min \sum_t \Bigl[\, \mathrm{cost}_t(e_t) + \lambda_L\, \mathrm{latency}_t(e_t)
-    + \lambda_S\, \mathrm{switch}_t(e_{t-1}, e_t) \,\Bigr]
-  \quad \text{s.t.} \quad \Pr[\text{task completed}] \ge \tau,
-\end{equation}
-where $\mathrm{switch}$ is the cost, in the same currency, of reprocessing context an endpoint
-had cached and another must process again. Changing the model can change later tool calls,
-observations and whether the task completes, so the objective is over a trajectory whose
-dynamics depend on the choices; replaying a fixed recorded sequence does not evaluate it.
-
-\paragraph{Feasible trajectory oracle (proposed).} The best sequence in hindsight that stays
-inside $\E_t$ at every step, with regret measured against it and never against a sequence that
-leaves the envelope. Its definition needs the state dynamics and the hindsight information to be
-specified, which we have not done.
 
 \paragraph{What is specific here.} Cache-aware and load-aware routing exist in serving systems,
 and we do not claim them. The part that follows from this paper is the order of operations: the
@@ -1148,7 +1202,7 @@ follows a learned label with a confidence fallback, while in RouteForge eligibil
 deterministic function of operator-declared application policy and per-endpoint declarations
 (region, retention, acceptance of raw sensitive text), with a detector that can only raise
 placement. RouteForge also adds conflicting-core explanations, an eligibility-aware oracle and
-replay, which ComplianceGate does not describe; ComplianceGate's learned complexity signal is a
+replay, which ComplianceGate does not describe; ComplianceGate's learned complexity signal is likely a
 better tier estimate than our length rule. Nguyen et al.~\cite{maxsat} formulate
 language-conditioned routing as weighted MaxSAT/MaxSMT, in which a user's natural-language
 feedback induces hard and soft constraints over partially observable model attributes. Their
@@ -1170,12 +1224,16 @@ several per-request admission requirements. Our evaluation differs from~\cite{ro
 in one respect that matters for a constrained router: the oracle credits only endpoints the
 request was allowed to use.
 
-\paragraph{Routing for agents.} Agentic Routing~\cite{agenticrouting},
-Agent-as-a-Router~\cite{agentasrouter} and ORACLE~\cite{oracle} observe, as
-Section~\ref{sec:traj} does, that routing each call independently can be wrong for a multi-step
-task, and optimise accuracy and cost at the level of the task; Agora~\cite{agora} allocates
-reasoning steps among experts by auction. From their abstracts, none describes a placement
-constraint carried along the trajectory; we have not compared full texts. Inside serving
+\paragraph{Routing for agents.} Agentic Routing~\cite{agenticrouting} chooses a model at each
+step of an agent harness and optimises task loss and cost over the trajectory;
+Agent-as-a-Router~\cite{agentasrouter} chooses one model per coding task as a contextual bandit
+with memory and feedback; ORACLE~\cite{oracle} binds one model and verifier to a whole agent
+program at its first request, which keeps the program's prefix cache on one backend; and
+Agora~\cite{agora} allocates reasoning steps among experts by auction. ORACLE argues, as
+Section~\ref{sec:traj} does, that treating each request as an independent routing unit loses
+task-level information, and it is the one of the four that accounts for prefix-cache locality.
+We read all four and found no constraint on which providers or endpoints a call may
+reach, and so none carried across a trajectory. Inside serving
 systems, cache-aware routing places a request on the worker that already holds its
 prefix~\cite{dynamo,pagedattention}, and AA-AgentPerf~\cite{aaagentperf} benchmarks hardware on
 agent trajectories. These operate within a pool that is already eligible, and
@@ -1222,9 +1280,9 @@ not claim an information-flow guarantee about model outputs.
 \section{Code and artifact availability}
 \label{sec:artifact}
 
-RouteForge's source code and the research artifact are public at \repourl. The version that
-accompanies this paper is tagged \code{arxiv-v1}; apart from the paper source, citation and license files, it is
-identical to commit \nolinkurl{93bf327ed50cc54faf3da0b1d7595b8080ba4e12}. The live experiments ran on
+RouteForge's source code and the research artifact are public at \repourl. The revision that
+accompanies this version of the paper is tagged \code{arxiv-v2} and contains this paper's source;
+the tag \code{arxiv-v1} marks the revision for an earlier draft. The live experiments ran on
 earlier builds (API versions 0.30.0 to 0.32.1); the research notes in \code{docs/research/}
 identify the build or pull request behind each run, and the code has changed since. No archival
 DOI has been minted. The code is released under the Apache License 2.0; this paper is
@@ -1238,33 +1296,31 @@ conflicting-core, feasible-set and trajectory-envelope tests; FeasibleRouteBench
 suite's generator; the replay analyser (\code{scripts/policy\_simulate.py}); and, under
 \code{docs/research/data/}, each live run's synthetic traffic generator, client log,
 content-free outcome records, configuration snapshot, scenario and capacity files, benchmark
-outputs, and the trajectory probe scripts and results. The policy and replay analyses can be
-recomputed offline from these files without GPUs or provider accounts; the live measurements
-additionally require the inference endpoints described in Section~\ref{sec:exp}, and live model
-answers will differ between runs. Recomputing tables from the released records is not
-reproduction of the original model generations. Not included: the script for the version
-check's synthetic null experiment (Section~\ref{sec:eval}), and a single manifest that
-generates every table.
+outputs, and the trajectory probe scripts and results. Two scripts under
+\code{docs/research/data/paper-revision/} recompute Table~\ref{tab:fidelity}, the attempt counts
+of Section~\ref{sec:placement}, Table~\ref{tab:detector}, the empty-response rates of
+Section~\ref{sec:tokens} and the timings of Section~\ref{sec:overhead}, with the commands in its
+README. The policy and replay analyses can be recomputed offline without GPUs or provider
+accounts; the live measurements additionally require the inference endpoints of
+Section~\ref{sec:exp}, and live model answers will differ between runs. Recomputing tables from
+the released records is not reproduction of the original model generations. Not included: the
+script for the version check's synthetic null experiment (Appendix~\ref{app:version}), and a
+single manifest that generates every table.
 
 % ---------------------------------------------------------------------------
 \section{Conclusion}
 
-We studied what follows when the set of endpoints a request may use is derived from policy, per
-request, before anything is scored, in a self-hosted gateway that mixes on-premises and cloud
-endpoints. Filtering of this kind exists in other gateways; this paper contributes a tested
-combination of components around it and reports what testing that combination found. Property checks of
-the compiler found two fail-open defects that ordinary tests had missed. On a lab with
-on-premises and cloud endpoints, no request confined to on-premises compute had a cloud endpoint
-in its attempt chain, under the stated assumptions about declarations, detection and the
-enforcement code. Replay reproduced the recorded first-decision admission of every request but
-not the serving endpoint during outages, and one prospective prediction of the cloud share
-was close to what was later observed. The evaluation harness showed that the router's
-own choices among eligible models are its weakest part: where every model was good enough, it
-paid several times the cheapest eligible stated price. A better scoring rule is a separable
-problem that the harness can evaluate. For agent trajectories, a live example showed a
-restriction lost to compaction, and a small prototype preserved detector-derived placement
-restrictions within its identity and lifetime assumptions; the broader provenance, identity,
-expiry and cost questions remain open.
+We studied a self-hosted gateway that derives, per request and before any scoring, the set of
+endpoints a request may use, and rejects the request when that set is empty. Property checks of
+the policy compiler found two fail-open defects that ordinary tests had missed. In two live runs
+with on-premises and cloud endpoints, no attempt made for a request confined to on-premises
+compute went to a cloud endpoint. An evaluation harness that credits only eligible endpoints
+showed that the router's choice among eligible models is its weakest part: where every model was
+good enough, it paid several times the cheapest eligible stated price. Replay of recorded,
+content-free decisions reproduced every admission decision but not the serving endpoint during
+outages. For agent trajectories, a restriction was lost to context compaction, and a small
+prototype carried detector-derived placement restrictions across calls; the broader provenance,
+identity, expiry and cost questions remain open.
 
 % ---------------------------------------------------------------------------
 \begin{thebibliography}{99}
@@ -1395,5 +1451,70 @@ Unsatisfiable Subsets of Constraints. Journal of Automated Reasoning 40(1):1--33
 on Security and Privacy, pp.~11--20, 1982.
 
 \end{thebibliography}
+
+% ---------------------------------------------------------------------------
+\appendix
+\section{An exploratory version check}
+\label{app:version}
+
+A candidate routing configuration is
+scored beside the current one on the same cases, the paired per-case difference of each named
+metric is bootstrapped over cases~\cite{efron} (1{,}000 resamples by default, 90\% two-sided
+percentile interval), and each \emph{figure}---one metric, overall or within one group---is
+judged on its whole range: \code{regressed} if the entire range lies beyond the tolerance in
+the worsening direction, \code{within tolerance} if it lies entirely inside, and
+\code{inconclusive} otherwise. A candidate's verdict is \code{regressed} if any judged figure
+is, \code{pass} if every figure is \code{within tolerance}, and \code{inconclusive} otherwise.
+No correction is made for the number of figures judged.
+
+We measured the false-alarm rate of this candidate-level verdict in a synthetic null
+experiment: two arms scored from one shared distribution, so there is no true difference, with
+a share $f$ of the 22 cases redrawn between the arms (modelling fresh stochastic generations or
+noisy endpoint measurements; on an identical frozen matrix every paired difference would be
+zero and no figure could regress), 300 draws per setting and 400 resamples. With nonzero
+tolerances on one or two metrics (14 to 28 figures judged), an earlier rule that judged the
+point estimate called the candidate regressed in 66\% to 97\% of draws; the whole-range rule
+does so in 0.3\% to 31\%: about 2\% and 0.3\% with $f = 0.3$, and 25\% to 31\% with every case
+redrawn. With all eight metrics at zero tolerance (102 to 108 figures) the rates are 100\% and
+55\% to 83\%. A false-alarm rate of a quarter to a third, when every case is redrawn, is too
+high for a promotion gate. We therefore present the check as experimental: its
+\code{regressed} verdict has no controlled error rate, a family-wise correction is not built,
+and the script for this null experiment is not in the repository. The check applies nothing;
+a routing change is still made by an operator.
+
+\paragraph{On live endpoints.} On the starter suite, two candidates that
+changed scoring weights altered no route and passed trivially; a candidate that removes the
+cheap tier changed 12 of 22 routes and was \code{inconclusive}. On the extended suite the same
+candidate changed 30 of 108 routes and raised mean chosen cost by \$0.00014 per case, with a 90\%
+range of [0.000085, 0.00020] that excludes zero. The tolerance had been set in advance at
+0.0005, the whole range lies inside it, and the verdict was \code{pass}: the worsening is real
+but within the tolerance set beforehand. All 38 judged figures had enough
+cases. Separately from the 18 compiler mutants of Section~\ref{sec:eligibility}, the check
+catches 15 of 15 single-rule mutations of its own detectors in simulation, and flags planted
+regressions. A \code{regressed} verdict on live endpoints has not been produced.
+
+
+\section{Trajectory-level optimisation: a sketch}
+\label{app:trajopt}
+
+Neither object below is implemented or evaluated.
+
+\paragraph{Sequential objective.} With $e_t \in \E_t$ and a
+task-success requirement,
+\begin{equation}
+  \min \sum_t \Bigl[\, \mathrm{cost}_t(e_t) + \lambda_L\, \mathrm{latency}_t(e_t)
+    + \lambda_S\, \mathrm{switch}_t(e_{t-1}, e_t) \,\Bigr]
+  \quad \text{s.t.} \quad \Pr[\text{task completed}] \ge \tau,
+\end{equation}
+where $\mathrm{switch}$ is the cost, in the same currency, of reprocessing context an endpoint
+had cached and another must process again. Changing the model can change later tool calls,
+observations and whether the task completes, so the objective is over a trajectory whose
+dynamics depend on the choices; replaying a fixed recorded sequence does not evaluate it.
+
+\paragraph{Feasible trajectory oracle.} The best sequence in hindsight that stays
+inside $\E_t$ at every step, with regret measured against it and never against a sequence that
+leaves the envelope. Its definition needs the state dynamics and the hindsight information to be
+specified, which we have not done.
+
 
 \end{document}
