@@ -15,8 +15,9 @@ run2                             eligible-set size min/median/max 1/3.0/3, empty
 run3                             eligible-set size min/median/max 2/2/4, empty 0; rejections {'residency': 996}
 run4                             eligible-set size min/median/max 2/2.0/4, empty 0; rejections {'residency': 978}
 synthetic-grid                   eligible-set size min/median/max 0/0.0/10, empty 6296; rejections {'app_scope': 4428, 'not_requested': 1536, 'prior_failure': 648, 'prompt_retention_not_allowed': 2052, 'raw_sensitive_not_accepted': 1728, 'region_not_allowed': 15552, 'residency': 42336}
+synthetic-state-grid             eligible-set size min/median/max 0/0.0/6, empty 1446; rejections {'app_scope': 1560, 'circuit_open': 760, 'model_scope': 560, 'not_requested': 3900, 'prompt_retention_not_allowed': 720, 'region_not_allowed': 1440, 'residency': 5760}
 
-OPA batch: 14471 requests over 9 input sets in ONE `opa eval` (one container); wall incl. container start 11359 ms; query eval 10192.6 ms total = 704.3 us/request (batch)
+OPA batch: 16391 requests over 10 input sets in ONE `opa eval` (one container); wall incl. container start 10436 ms; query eval 9074.7 ms total = 553.6 us/request (batch)
 
 == Agreement with the shipped eligible set (exact set equality), hop 1 ==
 input set                            n |    filter set=    filter adm= |       OPA set=       OPA adm=
@@ -29,6 +30,7 @@ run2                               900 | 900/900 (100.0%) 900/900 (100.0%) | 900
 run3                               899 | 899/899 (100.0%) 899/899 (100.0%) | 899/899 (100.0%) 899/899 (100.0%)
 run4                               900 | 900/900 (100.0%) 900/900 (100.0%) | 900/900 (100.0%) 900/900 (100.0%)
 synthetic-grid                    6912 | 6912/6912 (100.0%) 6912/6912 (100.0%) | 6912/6912 (100.0%) 6912/6912 (100.0%)
+synthetic-state-grid              1920 | 1920/1920 (100.0%) 1920/1920 (100.0%) | 1920/1920 (100.0%) 1920/1920 (100.0%)
 
 == Same router on each eligible set: outcome, first pick, hop-2 (exclude shipped pick) ==
 input set                        | baseline       outcome=   pick= (shipped routed)      hop2 set=
@@ -66,7 +68,33 @@ run2                             eligibility-empty at hop 1: 0/900; router rejec
 run3                             eligibility-empty at hop 1: 0/899; router rejections by kind {'budget': {2: 21}}
 run4                             eligibility-empty at hop 1: 0/900; router rejections by kind {'budget': {2: 22}}
 synthetic-grid                   eligible-empty requests: 6296/6912; shipped core size distribution {'eligibility': {1: 5184, 2: 936, 3: 164, 4: 12}}
+synthetic-state-grid             eligible-empty requests: 1446/1920; shipped core size distribution {'eligibility': {2: 470, 1: 480}}; empty only because of open circuits (policy set non-empty, no core): 496
 Each baseline reports the empty set only: no reason code, no core, no named requirement. (Router rejections in this harness still carry a core under the baselines because the shared router is shipped code; that is not a baseline capability.)
+
+== Endpoint-state grid (allowlist / disabled / open circuit): shipped rejections ==
+1920 requests x 8 enabled endpoints in the pool (+3 disabled onboarded rows ['d0', 'd1', 'd2'], which the registry keeps OUT of the pool)
+  app_scope                not permitted for application                 1560
+  circuit_open             excluded · circuit open                        760
+  model_scope              not permitted for application                  560
+  not_requested            not requested model                           3900
+  prompt_retention_not_allowed excluded · prompt retention · endpoint declares 'retained', application requires 'none'     720
+  region_not_allowed       excluded · region · endpoint declares 'de', application allows 'us'     240
+  region_not_allowed       excluded · region · endpoint declares 'eu', application allows 'us'    1200
+  residency                excluded · residency                          3840
+  residency                not permitted for application                 1920
+  stage nonzero? endpoint allowlist (model_scope / 'not permitted for application'): True; open circuit (circuit_open): True; disabled via feasible_set (model_scope / 'disabled by admin'): False
+  disabled stage at predicate level (candidate_rejection handed each disabled row, 5760 evaluations): {"('app_scope', 'not permitted for application')": 1200, "('model_scope', 'disabled by admin')": 1040, "('model_scope', 'not permitted for application')": 160, "('not_requested', 'not requested model')": 1860, "('residency', 'excluded · residency')": 960, "('residency', 'not permitted for application')": 480, 'None': 60}
+  shipped conflicting cores of the policy-empty requests: requirement ids named {'allowed_providers': 120, 'allowed_regions': 60, 'allowed_tiers': 30, 'endpoint_app_allowlist': 20, 'requested_model': 950, 'residency': 240}; endpoint state reported {'disabled': 950}
+  empty total                                                      1446/1920
+  empty, would be non-empty without the open circuits               496/1920
+  empty, would be non-empty without the endpoint allowlists          48/1920
+  empty, non-empty only if BOTH removed                               8/1920
+  empty regardless of circuits and allowlists                       930/1920
+  router on the circuit-emptied requests (policy set non-empty): {'routed (breaker bypass within the policy set)': 496}
+  agreement on this grid: filter set= 1920/1920 (100.0%), OPA set= 1920/1920 (100.0%)
+  allowlist rejected >=1 endpoint      n=  420  filter set= 420/420 (100.0%)  OPA set= 420/420 (100.0%)
+  open circuit rejected >=1 endpoint   n=  604  filter set= 604/604 (100.0%)  OPA set= 604/604 (100.0%)
+  empty set (any cause)                n= 1446  filter set= 1446/1446 (100.0%)  OPA set= 1446/1446 (100.0%)
 
 == Disagreements (baseline eligible set != shipped) ==
 none
@@ -77,30 +105,30 @@ none
 shipped app/policy/feasible.py, whole file          : 354
 shipped feasible.py, verdict-path functions only     : 169 (17 functions: _ctx_scope, _data_handling_rejection, _declared, _placement_providers, _pool, _raw_sensitive_rejection, _region_rejection, _resolve_placement, _retention_rejection, candidate_rejection, endpoint_allows_app, feasible_set, is_disabled, model_in_scope, not_requested, provider_placeable, tier_in_scope)
 shipped app/policy/core.py (conflicting-core search) : 246
-plain filter baseline_filter.py, whole file          : 33
-plain filter, eligible()+declared() only             : 33
-OPA eligibility.rego, whole file                     : 68
+plain filter baseline_filter.py, whole file          : 35
+plain filter, eligible()+declared() only             : 35
+OPA eligibility.rego, whole file                     : 70
 
 == Per-request eligibility time (microseconds) ==
-(1-minute load average at timing start: 5.3 on 14 CPUs)
-starter/healthcare-sim           shipped feasible_set median    61.5 p99   714.0 (n=330) | plain filter median   3.08 p99  70.04
-extended/healthcare-sim          shipped feasible_set median    56.9 p99   614.7 (n=1620) | plain filter median   2.41 p99   8.49
-extended/dgx-lab-live-cloud      shipped feasible_set median    51.3 p99   383.3 (n=1620) | plain filter median   2.61 p99   5.54
-empty-set/cloud-only-sim         shipped feasible_set median    25.6 p99    79.5 (n=60) | plain filter median   0.91 p99   1.37
-run1                             shipped feasible_set median    23.8 p99   288.8 (n=3000) | plain filter median   2.40 p99  42.08
-run2                             shipped feasible_set median    45.0 p99   489.7 (n=3000) | plain filter median   2.69 p99  39.54
-run3                             shipped feasible_set median    53.3 p99   655.2 (n=3000) | plain filter median   3.76 p99  16.40
-run4                             shipped feasible_set median    57.0 p99   777.1 (n=3000) | plain filter median   2.79 p99  12.43
+(1-minute load average at timing start: 4.8 on 14 CPUs)
+starter/healthcare-sim           shipped feasible_set median    24.2 p99    66.7 (n=330) | plain filter median   1.24 p99   2.62
+extended/healthcare-sim          shipped feasible_set median    32.5 p99   188.2 (n=1620) | plain filter median   1.54 p99   4.27
+extended/dgx-lab-live-cloud      shipped feasible_set median    32.0 p99   246.2 (n=1620) | plain filter median   2.28 p99  41.22
+empty-set/cloud-only-sim         shipped feasible_set median    25.2 p99   321.1 (n=60) | plain filter median   0.78 p99   2.04
+run1                             shipped feasible_set median    15.1 p99   150.0 (n=3000) | plain filter median   1.43 p99  41.03
+run2                             shipped feasible_set median    24.6 p99   115.7 (n=3000) | plain filter median   1.93 p99  25.95
+run3                             shipped feasible_set median    28.7 p99   206.4 (n=3000) | plain filter median   1.34 p99   5.27
+run4                             shipped feasible_set median    25.8 p99   171.0 (n=3000) | plain filter median   1.31 p99   6.21
 (shipped number includes registry.effective_pool(); the filter's endpoint/request dicts are pre-built outside the timed region, so its figure is the predicate cost alone.)
 
 OPA `opa bench` (eval of data.eligibility.single per request; container start excluded; bench's own default sampling):
-starter/healthcare-sim           4 endpoints: N=855 mean 1842.9 us median 906.8 us p99 12081.2 us
-extended/healthcare-sim          4 endpoints: N=850 mean 1200.2 us median 837.5 us p99 3726.5 us
-extended/dgx-lab-live-cloud      4 endpoints: N=842 mean 1388.2 us median 875.5 us p99 6177.1 us
-empty-set/cloud-only-sim         2 endpoints: N=11607 mean 184.1 us median 84.4 us p99 901.1 us
-run1                             1 endpoints: N=4813 mean 226.1 us median 142.1 us p99 1329.4 us
-run2                             3 endpoints: N=3088 mean 404.5 us median 248.7 us p99 1893.5 us
-run3                             4 endpoints: N=1064 mean 1008.7 us median 653.9 us p99 4442.7 us
-run4                             4 endpoints: N=2330 mean 675.7 us median 464.6 us p99 2805.2 us
-calibration: trivial policy      (returns all endpoint names, no predicates): N=25603 mean 47.4 us median 18.5 us p99 213.8 us
-OPA container start+exit (`opa version`, 5 runs): median 1435 ms (min 802, max 3727) -- NOT a per-request cost; paid once per batch
+starter/healthcare-sim           4 endpoints: N=2272 mean 704.4 us median 454.7 us p99 2810.8 us
+extended/healthcare-sim          4 endpoints: N=2331 mean 723.0 us median 503.7 us p99 2802.4 us
+extended/dgx-lab-live-cloud      4 endpoints: N=1636 mean 735.0 us median 455.2 us p99 2764.0 us
+empty-set/cloud-only-sim         2 endpoints: N=9979 mean 104.8 us median 65.5 us p99 532.5 us
+run1                             1 endpoints: N=4060 mean 260.3 us median 170.0 us p99 1415.1 us
+run2                             3 endpoints: N=2274 mean 524.5 us median 336.8 us p99 2096.0 us
+run3                             4 endpoints: N=1045 mean 1004.2 us median 662.8 us p99 4874.2 us
+run4                             4 endpoints: N=2032 mean 694.9 us median 469.9 us p99 2543.0 us
+calibration: trivial policy      (returns all endpoint names, no predicates): N=27247 mean 41.3 us median 16.1 us p99 176.7 us
+OPA container start+exit (`opa version`, 5 runs): median 1309 ms (min 778, max 2238) -- NOT a per-request cost; paid once per batch

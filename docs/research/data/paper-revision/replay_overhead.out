@@ -1,0 +1,21 @@
+machine: Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.39 | python 3.12.3 | nproc 14
+cpu: Intel(R) Core(TM) Ultra 7 165U
+1-minute load average at start: 4.77
+
+== PART 1: scripts/policy_simulate.py end to end (fresh process each run) ==
+process start + imports only (python -c import app.eval.simulate...) median   0.50 s  min   0.47  max   0.59  (n=5 runs)
+(a) plain replay (empty proposal)                          median   1.33 s  min   1.15  max   1.65  (n=5 runs)
+(b) --scenarios (5 scenarios)                              median   3.46 s  min   3.26  max   4.51  (n=5 runs)
+(c1) plain replay + --uncertainty (defaults)               median   2.29 s  min   1.81  max   2.85  (n=5 runs)
+(c2) --scenarios + --uncertainty (defaults)                median   4.51 s  min   4.35  max   6.59  (n=5 runs)
+
+== PART 2: in-process pieces ==
+rows: 900 exported, 900 simulated, excluded {'before_since': 0, 'cache_hit': 0, 'unknown_status': 0, 'unknown_app': 0, 'missing_features': 0, 'missing_routing_tokens': 0}
+load export + snapshot            :     23.2 ms
+build_scenario (in-memory DB etc.):    201.6 ms
+simulate_row, one arm, per row    : median    181.0 us  p99    693.9 us  max   1679.5 us  mean    211.2 us  (n=4500 = 900 rows x 5 passes)
+simulate_row, whole run (all rows): median pass    182.4 ms (min 175.5, max 222.6)
+(simulate_row replays ONE arm, i.e. one config. A proposal run replays two arms (current and proposed); --scenarios replays the shared current arm once plus one arm per scenario.)
+
+1-minute load average at end: 3.55
+rc 0

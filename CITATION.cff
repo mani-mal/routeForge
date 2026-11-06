@@ -8,7 +8,7 @@ authors:
     given-names: Mani
     email: mani.malarvannan@cdw.com
 repository-code: "https://github.com/mani-mal/routeForge"
-version: arxiv-v3
+version: arxiv-v4
 date-released: 2026-11-06
 keywords:
   - LLM routing
