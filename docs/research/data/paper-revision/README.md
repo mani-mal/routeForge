@@ -48,8 +48,8 @@ otherwise. `matched_baseline.out` is the captured output.
 
 | File | What it is |
 |---|---|
-| `baseline_filter.py` | The plain-filter baseline (33 code lines), written from the documented semantics. Imports neither `app.policy.feasible` nor `app.policy.core`. Returns a set of endpoint names, nothing else. |
-| `eligibility.rego` | The same predicates as an OPA/Rego policy (68 non-comment lines). Evaluated in ONE `opa eval` for every request of every input set; per-request cost is timed separately with `opa bench`. |
+| `baseline_filter.py` | The plain-filter baseline (35 code lines), written from the documented semantics. Imports neither `app.policy.feasible` nor `app.policy.core`. Returns a set of endpoint names, nothing else. |
+| `eligibility.rego` | The same predicates as an OPA/Rego policy (70 non-comment lines). Evaluated in ONE `opa eval` for every request of every input set; per-request cost is timed separately with `opa bench`. |
 | `matched_baseline.py` | Builds inputs, runs the three filters, feeds each eligible set to the shipped `Router.select`, prints agreement, disagreements, core statistics, line counts and timings. |
 
 What is held fixed. The gate, `compile_policy`, placement resolution (`allowed_providers`,
@@ -153,3 +153,69 @@ RF_PARTS=2,3 uv run python -u docs/research/data/paper-revision/detection_and_re
 Machine: Intel Core Ultra 7 165U laptop, 14 logical CPUs, WSL2, Python 3.12.3, presidio-analyzer 2.2.363,
 spaCy 3.8.13 with `en_core_web_lg` 3.8.0. Timings vary by tens of percent between runs and part 3 is noisy
 (the outcomes-on/off difference is inside the noise and is not a measured cost of the write).
+
+## Matched baseline, second grid: endpoint allowlist, disabled model, open circuit (2026-11-06)
+
+`matched_baseline.py` gained a second synthetic input set, `synthetic-state-grid`
+(1920 requests: 3 tenants x 5 open-circuit sets x onprem_only x 2 provider sets x 4 pins x
+2 tier scopes x 2 region scopes x require_no_retention). The first grid never reached three
+stages of `feasible_set`: the endpoint-side `allowed_app_ids` allowlist, a disabled model, and an
+open circuit. All endpoints in this grid are onboarded rows of a scratch in-memory registry
+(`n0..n7` enabled, with and without allowlists; `d0..d2` disabled), the only place the allowlist
+and the enabled flag exist. Open circuits are passed as `feasible_set(open_circuits=...)`.
+
+What changed in the baselines. `baseline_filter.py` already took `app_denied` and `disabled`
+per endpoint (the first grid and the runs fed them, never nonzero), so only the open circuit
+was new: a request now carries `open_circuits` and the filter drops those names
+(`eligibility.rego` gained `circuit_ok`, one line, and its `allowed` rule one conjunct).
+`request_facts` emits `open_circuits`; the disabled rows are handed to both baselines with
+`disabled: true`. Nothing else in the baselines changed.
+
+Results are in `matched_baseline.out` under "Endpoint-state grid". The disabled stage cannot fire
+through `feasible_set`: `registry.effective_pool()` already omits disabled onboarded rows, so a
+disabled model leaves the set by absence (and shows up as `state: disabled` in the conflicting core).
+`is_disabled` is also only true for `provider == "onprem"`. The script therefore also hands
+`candidate_rejection` each disabled row directly (predicate level) and reports what it returns.
+The open circuit empties the eligible set but never the router's: `Router.select` bypasses stage 7
+within the policy-eligible set, and the conflicting core ignores circuits (state, not policy); the
+script reports the router outcome on every request a circuit emptied.
+
+## End-to-end time split (`e2e_breakdown.py`, 2026-11-06)
+
+```bash
+export LITELLM_LOCAL_MODEL_COST_MAP=True
+export SP_CONFIG_OVERLAY_DIR=$PWD/deploy/dgx_lab/config-overlay
+uv run python docs/research/data/paper-revision/e2e_breakdown.py > e2e_breakdown.out
+python3 docs/research/data/paper-revision/e2e_breakdown_summarize.py > e2e_breakdown_summary.out
+```
+
+Splits the `POST /v1/chat/completions` in-process time of `detection_and_record_overhead.py` part 3
+(zero-latency stub backend) into harness, database and application compute, for sqlite in-memory,
+Postgres 16.4 (default fsync) and a Postgres with `fsync=off` as a diagnostic, regex and Presidio, a
+62-char and a 4013-char prompt. Pass A wraps only the ASGI app (wall vs ASGI-call time; "own" = ASGI
+call minus the stubbed backend). Pass B wraps functions at run time (nothing under `app/` is edited) and
+records exclusive times per stage, with `Database.session()` timed as a whole and tagged by the store
+function called inside. Needs docker for Postgres (throwaway containers, removed at the end).
+`e2e_breakdown_summarize.py` only parses the `.out`.
+
+Caveats. The machine was never idle: load average was 4.1-5.6 during these runs (other processes on
+the host), so absolute numbers moved between two complete runs by tens of percent; the second run is
+the one saved. The Postgres is a docker loopback port under WSL2, whose measured `SELECT 1` round trip
+is about 2 ms, so its database times are an upper bound dominated by the network path. sqlite in-memory
+time includes the busy-poll in `_patch_aiosqlite_wakeup` (about 1,200-1,500 event-loop turns per request
+against about 65 on Postgres; the script prints both).
+
+## Replay overhead (`replay_overhead.py`, 2026-11-06)
+
+```bash
+export LITELLM_LOCAL_MODEL_COST_MAP=True
+export SP_CONFIG_OVERLAY_DIR=$PWD/deploy/dgx_lab/config-overlay
+uv run python docs/research/data/paper-revision/replay_overhead.py > replay_overhead.out
+```
+
+Times `scripts/policy_simulate.py` over run 4 (900 rows, 5 scenarios) as a fresh process each time
+(5 runs, median), and in process the load, scenario build and `simulate_row` per row (900 rows x 5
+passes). Plain replay passes an empty proposal because the CLI requires one. Load average at start
+was 4.8.
+
+Machine for all three: Intel Core Ultra 7 165U, 14 threads, WSL2, Python 3.12.3.

@@ -1,0 +1,637 @@
+machine: Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.39 | python 3.12.3 | nproc 14
+cpu: Intel(R) Core(TM) Ultra 7 165U
+1-minute load average at start: 4.64
+Postgres default fsync (postgres:16.4-alpine, postgres (PostgreSQL) 16.4; loopback docker port): SELECT 1 round trip median 1935 us p99 3963 us; INSERT+COMMIT median 4872 us
+Postgres fsync=off,synchronous_commit=off (same image; diagnostic): SELECT 1 round trip median 2094 us p99 5549 us; INSERT+COMMIT median 5224 us
+
+=== event-loop evidence ===
+event-loop iterations per request, sqlite in-memory: POST /v1/chat/completions 1161, GET /health 14
+event-loop iterations per request, Postgres (default fsync): POST /v1/chat/completions 65, GET /health 14
+
+=== diagnostic: GIL switch interval ===
+diagnostic: sqlite in-memory, short prompt, regex, asgi-call median vs sys.setswitchinterval
+  switchinterval   5.000 ms: asgi median   44.23 ms
+  switchinterval   0.500 ms: asgi median   41.45 ms
+  switchinterval   0.050 ms: asgi median   40.69 ms
+
+#### database=sqlite in-memory (app default for this harness)  detection=regex  (n=300 per prompt)
+GET /health (no pipeline): wall median 3.496 ms, asgi median 1.487 ms => test-client overhead (wall - asgi) 2.010 ms
+
+-- prompt short (62 ch)
+   PASS A (no wrappers): wall median   42.86 ms p99  222.40 | asgi median   40.86 | harness (wall-asgi) median   1.89 | backend_stub median    6.9 us | OWN (asgi-stub) median   40.85 p99  219.79 ms
+   PASS B (stage wrappers): wall median   62.62 ms (instrumentation overhead +19.76 ms vs pass A)
+   SQL per request: 9 statements (median), 4 commits
+   exclusive time per request, instrumented (asgi mean 72.15 ms, median 59.89):
+     component                                         mean ms median ms % of asgi
+     db commit                                          23.878    20.186     33.1%
+     store.resolve_application                          19.040    16.041     26.4%
+     store.prune_snapshots                              12.200    10.541     16.9%
+     store.record_snapshot                               5.646     4.761      7.8%
+     db:snapshot write                                   2.311     0.492      3.2%
+     unlabelled (ASGI/FastAPI/pydantic/json/loop)        2.079     1.852      2.9%
+     db:usage write                                      1.293     0.448      1.8%
+     db:auth lookup                                      0.962     0.487      1.3%
+     pipeline.run                                        0.645     0.594      0.9%
+     db:outcome write                                    0.470     0.407      0.7%
+     _finalize                                           0.456     0.392      0.6%
+     export_trace (telemetry)                            0.374     0.319      0.5%
+     gateway.run (step 7)                                0.357     0.317      0.5%
+     detect.analyze                                      0.352     0.322      0.5%
+     store.record_usage                                  0.344     0.297      0.5%
+     store.write_outcome                                 0.339     0.313      0.5%
+     feasible_set                                        0.276     0.256      0.4%
+     compile_policy                                      0.227     0.201      0.3%
+     router.select (step 6)                              0.195     0.178      0.3%
+     build_context                                       0.183     0.130      0.3%
+     build_ok_outcome                                    0.104     0.091      0.1%
+     gate.evaluate                                       0.101     0.074      0.1%
+     auth (_authenticate)                                0.070     0.062      0.1%
+     summarize (snapshot)                                0.057     0.051      0.1%
+     _record_outcome                                     0.057     0.051      0.1%
+     verify (step 9)                                     0.031     0.029      0.0%
+     hash_token                                          0.030     0.028      0.0%
+     pipeline._gate_inputs                               0.024     0.021      0.0%
+     bus.publish                                         0.015     0.009      0.0%
+     backend_stub (litellm call, stubbed)                0.010     0.008      0.0%
+     detect.anonymize                                    0.009     0.009      0.0%
+     redact_tool_calls                                   0.008     0.006      0.0%
+   database sessions, inclusive (open+ORM+SQL+commit+close), mean ms per request: db:auth lookup 27.29, db:outcome write 7.83, db:snapshot write 22.48, db:usage write 8.91; all sessions 66.51 ms; of which commit 23.88 ms
+   inclusive pipeline.run                     mean    2.124 ms median    2.005 ms
+   inclusive _finalize                        mean   40.584 ms median   32.943 ms
+   inclusive gate.evaluate                    mean    0.545 ms median    0.454 ms
+   inclusive router.select (step 6)           mean    0.282 ms median    0.261 ms
+   inclusive gateway.run (step 7)             mean    0.649 ms median    0.611 ms
+   inclusive verify (step 9)                  mean    0.052 ms median    0.047 ms
+   inclusive export_trace (telemetry)         mean    0.670 ms median    0.599 ms
+   RouteForge compute excluding stub and ALL database sessions (mean): 5.62 ms
+
+-- prompt long (4013 ch)
+   PASS A (no wrappers): wall median   56.59 ms p99  290.19 | asgi median   54.15 | harness (wall-asgi) median   2.48 | backend_stub median    7.8 us | OWN (asgi-stub) median   54.11 p99  287.35 ms
+   PASS B (stage wrappers): wall median   60.95 ms (instrumentation overhead +4.36 ms vs pass A)
+   SQL per request: 9 statements (median), 4 commits
+   exclusive time per request, instrumented (asgi mean 71.78 ms, median 58.42):
+     component                                         mean ms median ms % of asgi
+     db commit                                          22.624    19.080     31.5%
+     store.resolve_application                          17.921    14.850     25.0%
+     store.prune_snapshots                              11.907    10.310     16.6%
+     store.record_snapshot                               5.468     4.451      7.6%
+     db:usage write                                      3.683     0.431      5.1%
+     db:snapshot write                                   2.241     0.480      3.1%
+     unlabelled (ASGI/FastAPI/pydantic/json/loop)        2.072     1.891      2.9%
+     detect.analyze                                      0.928     0.886      1.3%
+     pipeline.run                                        0.629     0.592      0.9%
+     db:auth lookup                                      0.606     0.468      0.8%
+     db:outcome write                                    0.447     0.394      0.6%
+     _finalize                                           0.434     0.395      0.6%
+     export_trace (telemetry)                            0.403     0.321      0.6%
+     gateway.run (step 7)                                0.349     0.308      0.5%
+     store.write_outcome                                 0.326     0.301      0.5%
+     store.record_usage                                  0.322     0.290      0.4%
+     feasible_set                                        0.296     0.259      0.4%
+     compile_policy                                      0.246     0.232      0.3%
+     router.select (step 6)                              0.188     0.170      0.3%
+     build_context                                       0.181     0.141      0.3%
+     build_ok_outcome                                    0.098     0.090      0.1%
+     gate.evaluate                                       0.095     0.085      0.1%
+     auth (_authenticate)                                0.072     0.061      0.1%
+     summarize (snapshot)                                0.057     0.052      0.1%
+     _record_outcome                                     0.055     0.049      0.1%
+     verify (step 9)                                     0.032     0.028      0.0%
+     hash_token                                          0.030     0.027      0.0%
+     pipeline._gate_inputs                               0.026     0.020      0.0%
+     detect.anonymize                                    0.011     0.009      0.0%
+     bus.publish                                         0.010     0.008      0.0%
+     backend_stub (litellm call, stubbed)                0.010     0.008      0.0%
+     redact_tool_calls                                   0.008     0.006      0.0%
+   database sessions, inclusive (open+ORM+SQL+commit+close), mean ms per request: db:auth lookup 25.41, db:outcome write 7.74, db:snapshot write 21.81, db:usage write 10.61; all sessions 65.58 ms; of which commit 22.62 ms
+   inclusive pipeline.run                     mean    2.707 ms median    2.617 ms
+   inclusive _finalize                        mean   41.512 ms median   31.547 ms
+   inclusive gate.evaluate                    mean    1.166 ms median    1.093 ms
+   inclusive router.select (step 6)           mean    0.272 ms median    0.251 ms
+   inclusive gateway.run (step 7)             mean    0.631 ms median    0.583 ms
+   inclusive verify (step 9)                  mean    0.052 ms median    0.045 ms
+   inclusive export_trace (telemetry)         mean    0.695 ms median    0.596 ms
+   RouteForge compute excluding stub and ALL database sessions (mean): 6.19 ms
+
+#### database=sqlite in-memory (app default for this harness)  detection=presidio  (n=120 per prompt)
+GET /health (no pipeline): wall median 2.409 ms, asgi median 1.029 ms => test-client overhead (wall - asgi) 1.380 ms
+
+-- prompt short (62 ch)
+   PASS A (no wrappers): wall median   59.92 ms p99  148.16 | asgi median   57.97 | harness (wall-asgi) median   1.99 | backend_stub median    7.3 us | OWN (asgi-stub) median   57.97 p99  145.63 ms
+   PASS B (stage wrappers): wall median   59.55 ms (instrumentation overhead -0.36 ms vs pass A)
+   SQL per request: 9 statements (median), 4 commits
+   exclusive time per request, instrumented (asgi mean 65.99 ms, median 57.35):
+     component                                         mean ms median ms % of asgi
+     detect.analyze                                     18.774    16.720     28.5%
+     db commit                                          14.904    14.206     22.6%
+     store.resolve_application                          12.450    11.100     18.9%
+     store.prune_snapshots                               7.044     6.367     10.7%
+     store.record_snapshot                               4.190     3.415      6.3%
+     unlabelled (ASGI/FastAPI/pydantic/json/loop)        1.575     1.426      2.4%
+     db:outcome write                                    1.550     0.301      2.3%
+     db:snapshot write                                   1.434     0.372      2.2%
+     pipeline.run                                        0.602     0.556      0.9%
+     db:auth lookup                                      0.406     0.360      0.6%
+     _finalize                                           0.356     0.313      0.5%
+     db:usage write                                      0.349     0.326      0.5%
+     compile_policy                                      0.293     0.213      0.4%
+     store.record_usage                                  0.276     0.240      0.4%
+     gateway.run (step 7)                                0.272     0.242      0.4%
+     export_trace (telemetry)                            0.271     0.224      0.4%
+     store.write_outcome                                 0.250     0.232      0.4%
+     feasible_set                                        0.239     0.217      0.4%
+     router.select (step 6)                              0.154     0.140      0.2%
+     build_context                                       0.128     0.118      0.2%
+     build_ok_outcome                                    0.081     0.072      0.1%
+     gate.evaluate                                       0.079     0.070      0.1%
+     hash_token                                          0.058     0.024      0.1%
+     verify (step 9)                                     0.058     0.051      0.1%
+     auth (_authenticate)                                0.050     0.046      0.1%
+     summarize (snapshot)                                0.046     0.038      0.1%
+     _record_outcome                                     0.044     0.039      0.1%
+     pipeline._gate_inputs                               0.020     0.018      0.0%
+     detect.anonymize                                    0.010     0.009      0.0%
+     redact_tool_calls                                   0.009     0.007      0.0%
+     backend_stub (litellm call, stubbed)                0.008     0.008      0.0%
+     bus.publish                                         0.008     0.007      0.0%
+   database sessions, inclusive (open+ORM+SQL+commit+close), mean ms per request: db:auth lookup 17.56, db:outcome write 6.58, db:snapshot write 14.02, db:usage write 4.76; all sessions 42.91 ms; of which commit 14.90 ms
+   inclusive pipeline.run                     mean   20.410 ms median   18.148 ms
+   inclusive _finalize                        mean   26.394 ms median   22.310 ms
+   inclusive gate.evaluate                    mean   11.357 ms median   10.369 ms
+   inclusive router.select (step 6)           mean    0.219 ms median    0.196 ms
+   inclusive gateway.run (step 7)             mean    0.499 ms median    0.464 ms
+   inclusive verify (step 9)                  mean    7.732 ms median    6.887 ms
+   inclusive export_trace (telemetry)         mean    0.505 ms median    0.449 ms
+   RouteForge compute excluding stub and ALL database sessions (mean): 23.07 ms
+
+-- prompt long (4013 ch)
+   PASS A (no wrappers): wall median  154.69 ms p99  515.46 | asgi median  151.29 | harness (wall-asgi) median   2.21 | backend_stub median    8.5 us | OWN (asgi-stub) median  151.28 p99  509.14 ms
+   PASS B (stage wrappers): wall median  215.07 ms (instrumentation overhead +60.38 ms vs pass A)
+   SQL per request: 9 statements (median), 4 commits
+   exclusive time per request, instrumented (asgi mean 223.79 ms, median 212.55):
+     component                                         mean ms median ms % of asgi
+     detect.analyze                                    144.869   147.566     64.7%
+     db commit                                          26.319    22.759     11.8%
+     store.resolve_application                          19.779    17.390      8.8%
+     store.prune_snapshots                              13.132    10.975      5.9%
+     store.record_snapshot                               6.203     4.655      2.8%
+     db:usage write                                      4.481     0.441      2.0%
+     unlabelled (ASGI/FastAPI/pydantic/json/loop)        2.202     1.969      1.0%
+     db:auth lookup                                      1.553     0.492      0.7%
+     pipeline.run                                        0.849     0.729      0.4%
+     db:snapshot write                                   0.544     0.503      0.2%
+     db:outcome write                                    0.456     0.402      0.2%
+     _finalize                                           0.450     0.418      0.2%
+     export_trace (telemetry)                            0.381     0.310      0.2%
+     store.record_usage                                  0.341     0.295      0.2%
+     store.write_outcome                                 0.336     0.303      0.1%
+     gateway.run (step 7)                                0.331     0.308      0.1%
+     compile_policy                                      0.324     0.297      0.1%
+     feasible_set                                        0.301     0.276      0.1%
+     router.select (step 6)                              0.188     0.167      0.1%
+     build_context                                       0.168     0.145      0.1%
+     gate.evaluate                                       0.103     0.093      0.0%
+     build_ok_outcome                                    0.097     0.087      0.0%
+     verify (step 9)                                     0.080     0.066      0.0%
+     auth (_authenticate)                                0.073     0.062      0.0%
+     summarize (snapshot)                                0.070     0.052      0.0%
+     _record_outcome                                     0.057     0.053      0.0%
+     hash_token                                          0.028     0.028      0.0%
+     pipeline._gate_inputs                               0.023     0.021      0.0%
+     detect.anonymize                                    0.018     0.013      0.0%
+     redact_tool_calls                                   0.011     0.009      0.0%
+     bus.publish                                         0.010     0.009      0.0%
+     backend_stub (litellm call, stubbed)                0.010     0.009      0.0%
+   database sessions, inclusive (open+ORM+SQL+commit+close), mean ms per request: db:auth lookup 28.99, db:outcome write 8.91, db:snapshot write 22.83, db:usage write 12.44; all sessions 73.17 ms; of which commit 26.32 ms
+   inclusive pipeline.run                     mean  146.961 ms median  149.890 ms
+   inclusive _finalize                        mean   45.560 ms median   36.656 ms
+   inclusive gate.evaluate                    mean  134.571 ms median  134.870 ms
+   inclusive router.select (step 6)           mean    0.270 ms median    0.243 ms
+   inclusive gateway.run (step 7)             mean    0.611 ms median    0.579 ms
+   inclusive verify (step 9)                  mean   10.665 ms median   10.036 ms
+   inclusive export_trace (telemetry)         mean    0.695 ms median    0.585 ms
+   RouteForge compute excluding stub and ALL database sessions (mean): 150.61 ms
+
+#### database=Postgres default fsync (postgres:16.4-alpine, postgres (PostgreSQL) 16.4; loopback docker port)  detection=regex  (n=300 per prompt)
+GET /health (no pipeline): wall median 3.937 ms, asgi median 1.743 ms => test-client overhead (wall - asgi) 2.194 ms
+
+-- prompt short (62 ch)
+   PASS A (no wrappers): wall median   68.60 ms p99  130.25 | asgi median   66.15 | harness (wall-asgi) median   2.55 | backend_stub median    8.0 us | OWN (asgi-stub) median   66.14 p99  127.34 ms
+   PASS B (stage wrappers): wall median   77.25 ms (instrumentation overhead +8.64 ms vs pass A)
+   SQL per request: 10 statements (median), 5 commits
+   exclusive time per request, instrumented (asgi mean 87.55 ms, median 74.62):
+     component                                         mean ms median ms % of asgi
+     db commit                                          39.508    32.644     45.1%
+     store.resolve_application                          16.628    13.956     19.0%
+     store.prune_snapshots                              10.476     9.348     12.0%
+     store.record_snapshot                               6.487     5.597      7.4%
+     db:other                                            5.737     4.808      6.6%
+     unlabelled (ASGI/FastAPI/pydantic/json/loop)        2.102     1.978      2.4%
+     pipeline.run                                        0.668     0.642      0.8%
+     _finalize                                           0.585     0.519      0.7%
+     db:snapshot write                                   0.569     0.497      0.6%
+     db:usage write                                      0.509     0.445      0.6%
+     db:auth lookup                                      0.503     0.469      0.6%
+     db:outcome write                                    0.475     0.411      0.5%
+     gateway.run (step 7)                                0.400     0.335      0.5%
+     detect.analyze                                      0.390     0.346      0.4%
+     export_trace (telemetry)                            0.380     0.344      0.4%
+     store.record_usage                                  0.354     0.318      0.4%
+     store.write_outcome                                 0.346     0.324      0.4%
+     feasible_set                                        0.296     0.271      0.3%
+     compile_policy                                      0.229     0.199      0.3%
+     router.select (step 6)                              0.202     0.179      0.2%
+     build_context                                       0.156     0.138      0.2%
+     build_ok_outcome                                    0.105     0.097      0.1%
+     gate.evaluate                                       0.094     0.081      0.1%
+     auth (_authenticate)                                0.089     0.065      0.1%
+     _record_outcome                                     0.065     0.055      0.1%
+     summarize (snapshot)                                0.061     0.054      0.1%
+     verify (step 9)                                     0.041     0.030      0.0%
+     hash_token                                          0.032     0.028      0.0%
+     pipeline._gate_inputs                               0.023     0.021      0.0%
+     bus.publish                                         0.011     0.009      0.0%
+     detect.anonymize                                    0.011     0.009      0.0%
+     backend_stub (litellm call, stubbed)                0.011     0.008      0.0%
+     redact_tool_calls                                   0.008     0.007      0.0%
+   database sessions, inclusive (open+ORM+SQL+commit+close), mean ms per request: db:auth lookup 26.29, db:other 8.25, db:outcome write 12.33, db:snapshot write 22.88, db:usage write 11.88; all sessions 81.62 ms; of which commit 39.51 ms
+   inclusive pipeline.run                     mean    2.199 ms median    2.085 ms
+   inclusive _finalize                        mean   56.868 ms median   48.390 ms
+   inclusive gate.evaluate                    mean    0.534 ms median    0.486 ms
+   inclusive router.select (step 6)           mean    0.287 ms median    0.261 ms
+   inclusive gateway.run (step 7)             mean    0.697 ms median    0.619 ms
+   inclusive verify (step 9)                  mean    0.063 ms median    0.050 ms
+   inclusive export_trace (telemetry)         mean    0.708 ms median    0.652 ms
+   RouteForge compute excluding stub and ALL database sessions (mean): 5.91 ms
+
+-- prompt long (4013 ch)
+   PASS A (no wrappers): wall median   70.29 ms p99  127.79 | asgi median   67.50 | harness (wall-asgi) median   2.68 | backend_stub median    8.2 us | OWN (asgi-stub) median   67.49 p99  124.85 ms
+   PASS B (stage wrappers): wall median   73.01 ms (instrumentation overhead +2.72 ms vs pass A)
+   SQL per request: 10 statements (median), 5 commits
+   exclusive time per request, instrumented (asgi mean 78.85 ms, median 70.40):
+     component                                         mean ms median ms % of asgi
+     db commit                                          34.729    31.205     44.0%
+     store.resolve_application                          14.438    13.380     18.3%
+     store.prune_snapshots                               9.651     8.857     12.2%
+     store.record_snapshot                               5.847     5.176      7.4%
+     db:other                                            4.981     4.457      6.3%
+     unlabelled (ASGI/FastAPI/pydantic/json/loop)        2.059     1.932      2.6%
+     detect.analyze                                      0.973     0.930      1.2%
+     pipeline.run                                        0.720     0.621      0.9%
+     db:snapshot write                                   0.561     0.466      0.7%
+     _finalize                                           0.537     0.505      0.7%
+     db:auth lookup                                      0.521     0.445      0.7%
+     db:usage write                                      0.492     0.428      0.6%
+     db:outcome write                                    0.428     0.397      0.5%
+     export_trace (telemetry)                            0.427     0.340      0.5%
+     gateway.run (step 7)                                0.386     0.326      0.5%
+     store.write_outcome                                 0.339     0.316      0.4%
+     store.record_usage                                  0.328     0.293      0.4%
+     feasible_set                                        0.295     0.258      0.4%
+     compile_policy                                      0.247     0.237      0.3%
+     router.select (step 6)                              0.191     0.170      0.2%
+     build_context                                       0.153     0.140      0.2%
+     build_ok_outcome                                    0.109     0.097      0.1%
+     gate.evaluate                                       0.102     0.086      0.1%
+     auth (_authenticate)                                0.070     0.062      0.1%
+     summarize (snapshot)                                0.062     0.052      0.1%
+     _record_outcome                                     0.060     0.053      0.1%
+     verify (step 9)                                     0.048     0.029      0.1%
+     hash_token                                          0.030     0.028      0.0%
+     pipeline._gate_inputs                               0.024     0.020      0.0%
+     detect.anonymize                                    0.011     0.009      0.0%
+     backend_stub (litellm call, stubbed)                0.011     0.009      0.0%
+     redact_tool_calls                                   0.011     0.006      0.0%
+     bus.publish                                         0.010     0.009      0.0%
+   database sessions, inclusive (open+ORM+SQL+commit+close), mean ms per request: db:auth lookup 22.91, db:other 7.16, db:outcome write 10.79, db:snapshot write 20.67, db:usage write 10.82; all sessions 72.35 ms; of which commit 34.73 ms
+   inclusive pipeline.run                     mean    2.871 ms median    2.681 ms
+   inclusive _finalize                        mean   50.942 ms median   45.764 ms
+   inclusive gate.evaluate                    mean    1.166 ms median    1.115 ms
+   inclusive router.select (step 6)           mean    0.272 ms median    0.247 ms
+   inclusive gateway.run (step 7)             mean    0.669 ms median    0.588 ms
+   inclusive verify (step 9)                  mean    0.068 ms median    0.047 ms
+   inclusive export_trace (telemetry)         mean    0.727 ms median    0.633 ms
+   RouteForge compute excluding stub and ALL database sessions (mean): 6.50 ms
+
+#### database=Postgres default fsync (postgres:16.4-alpine, postgres (PostgreSQL) 16.4; loopback docker port)  detection=presidio  (n=120 per prompt)
+GET /health (no pipeline): wall median 4.066 ms, asgi median 1.781 ms => test-client overhead (wall - asgi) 2.285 ms
+
+-- prompt short (62 ch)
+   PASS A (no wrappers): wall median  109.08 ms p99  179.38 | asgi median  106.38 | harness (wall-asgi) median   2.84 | backend_stub median    9.2 us | OWN (asgi-stub) median  106.37 p99  173.91 ms
+   PASS B (stage wrappers): wall median  112.73 ms (instrumentation overhead +3.65 ms vs pass A)
+   SQL per request: 10 statements (median), 5 commits
+   exclusive time per request, instrumented (asgi mean 124.17 ms, median 109.79):
+     component                                         mean ms median ms % of asgi
+     db commit                                          42.917    35.950     34.6%
+     detect.analyze                                     29.478    26.580     23.7%
+     store.resolve_application                          17.550    15.651     14.1%
+     store.prune_snapshots                              11.698     9.966      9.4%
+     store.record_snapshot                               7.695     6.263      6.2%
+     db:other                                            5.828     5.059      4.7%
+     unlabelled (ASGI/FastAPI/pydantic/json/loop)        2.189     1.968      1.8%
+     pipeline.run                                        0.822     0.785      0.7%
+     _finalize                                           0.602     0.533      0.5%
+     db:snapshot write                                   0.585     0.497      0.5%
+     db:auth lookup                                      0.576     0.469      0.5%
+     db:usage write                                      0.502     0.449      0.4%
+     gateway.run (step 7)                                0.466     0.338      0.4%
+     db:outcome write                                    0.444     0.388      0.4%
+     export_trace (telemetry)                            0.377     0.320      0.3%
+     store.write_outcome                                 0.367     0.332      0.3%
+     feasible_set                                        0.347     0.290      0.3%
+     compile_policy                                      0.333     0.286      0.3%
+     store.record_usage                                  0.322     0.304      0.3%
+     router.select (step 6)                              0.204     0.181      0.2%
+     build_context                                       0.204     0.158      0.2%
+     gate.evaluate                                       0.165     0.097      0.1%
+     build_ok_outcome                                    0.104     0.100      0.1%
+     verify (step 9)                                     0.081     0.070      0.1%
+     _record_outcome                                     0.073     0.056      0.1%
+     auth (_authenticate)                                0.073     0.065      0.1%
+     summarize (snapshot)                                0.067     0.054      0.1%
+     hash_token                                          0.033     0.028      0.0%
+     pipeline._gate_inputs                               0.025     0.021      0.0%
+     detect.anonymize                                    0.012     0.012      0.0%
+     backend_stub (litellm call, stubbed)                0.011     0.009      0.0%
+     bus.publish                                         0.010     0.009      0.0%
+     redact_tool_calls                                   0.010     0.010      0.0%
+   database sessions, inclusive (open+ORM+SQL+commit+close), mean ms per request: db:auth lookup 27.68, db:other 8.66, db:outcome write 13.38, db:snapshot write 25.94, db:usage write 12.86; all sessions 88.52 ms; of which commit 42.92 ms
+   inclusive pipeline.run                     mean   31.847 ms median   28.679 ms
+   inclusive _finalize                        mean   62.381 ms median   52.384 ms
+   inclusive gate.evaluate                    mean   17.326 ms median   16.039 ms
+   inclusive router.select (step 6)           mean    0.329 ms median    0.265 ms
+   inclusive gateway.run (step 7)             mean    0.806 ms median    0.626 ms
+   inclusive verify (step 9)                  mean   12.618 ms median   11.451 ms
+   inclusive export_trace (telemetry)         mean    0.688 ms median    0.617 ms
+   RouteForge compute excluding stub and ALL database sessions (mean): 35.64 ms
+
+-- prompt long (4013 ch)
+   PASS A (no wrappers): wall median  116.63 ms p99  255.92 | asgi median  115.24 | harness (wall-asgi) median   1.33 | backend_stub median    6.6 us | OWN (asgi-stub) median  115.24 p99  253.33 ms
+   PASS B (stage wrappers): wall median  202.59 ms (instrumentation overhead +85.96 ms vs pass A)
+   SQL per request: 10 statements (median), 5 commits
+   exclusive time per request, instrumented (asgi mean 211.13 ms, median 200.11):
+     component                                         mean ms median ms % of asgi
+     detect.analyze                                    128.668   122.432     60.9%
+     db commit                                          38.720    33.775     18.3%
+     store.resolve_application                          14.121    12.643      6.7%
+     store.prune_snapshots                               9.877     9.020      4.7%
+     store.record_snapshot                               6.566     5.647      3.1%
+     db:other                                            5.743     4.795      2.7%
+     unlabelled (ASGI/FastAPI/pydantic/json/loop)        1.753     1.655      0.8%
+     pipeline.run                                        0.735     0.682      0.3%
+     _finalize                                           0.555     0.461      0.3%
+     db:snapshot write                                   0.478     0.412      0.2%
+     db:usage write                                      0.433     0.364      0.2%
+     db:auth lookup                                      0.404     0.367      0.2%
+     db:outcome write                                    0.376     0.333      0.2%
+     gateway.run (step 7)                                0.352     0.280      0.2%
+     export_trace (telemetry)                            0.320     0.281      0.2%
+     store.record_usage                                  0.299     0.268      0.1%
+     feasible_set                                        0.293     0.248      0.1%
+     store.write_outcome                                 0.284     0.277      0.1%
+     compile_policy                                      0.273     0.260      0.1%
+     router.select (step 6)                              0.190     0.158      0.1%
+     build_context                                       0.162     0.124      0.1%
+     build_ok_outcome                                    0.107     0.087      0.1%
+     gate.evaluate                                       0.100     0.091      0.0%
+     verify (step 9)                                     0.070     0.064      0.0%
+     auth (_authenticate)                                0.061     0.055      0.0%
+     summarize (snapshot)                                0.052     0.047      0.0%
+     _record_outcome                                     0.051     0.047      0.0%
+     hash_token                                          0.028     0.028      0.0%
+     pipeline._gate_inputs                               0.019     0.018      0.0%
+     detect.anonymize                                    0.014     0.011      0.0%
+     redact_tool_calls                                   0.009     0.009      0.0%
+     backend_stub (litellm call, stubbed)                0.009     0.008      0.0%
+     bus.publish                                         0.009     0.007      0.0%
+   database sessions, inclusive (open+ORM+SQL+commit+close), mean ms per request: db:auth lookup 22.23, db:other 8.25, db:outcome write 12.39, db:snapshot write 22.49, db:usage write 11.96; all sessions 77.33 ms; of which commit 38.72 ms
+   inclusive pipeline.run                     mean  130.577 ms median  124.005 ms
+   inclusive _finalize                        mean   56.507 ms median   47.019 ms
+   inclusive gate.evaluate                    mean  119.055 ms median  111.557 ms
+   inclusive router.select (step 6)           mean    0.276 ms median    0.227 ms
+   inclusive gateway.run (step 7)             mean    0.637 ms median    0.525 ms
+   inclusive verify (step 9)                  mean    9.930 ms median    8.863 ms
+   inclusive export_trace (telemetry)         mean    0.639 ms median    0.538 ms
+   RouteForge compute excluding stub and ALL database sessions (mean): 133.79 ms
+
+#### database=Postgres fsync=off,synchronous_commit=off (same image; diagnostic)  detection=regex  (n=300 per prompt)
+GET /health (no pipeline): wall median 3.696 ms, asgi median 1.623 ms => test-client overhead (wall - asgi) 2.073 ms
+
+-- prompt short (62 ch)
+   PASS A (no wrappers): wall median   88.34 ms p99  192.95 | asgi median   85.28 | harness (wall-asgi) median   2.74 | backend_stub median    8.6 us | OWN (asgi-stub) median   85.24 p99  187.23 ms
+   PASS B (stage wrappers): wall median   84.10 ms (instrumentation overhead -4.23 ms vs pass A)
+   SQL per request: 10 statements (median), 5 commits
+   exclusive time per request, instrumented (asgi mean 88.45 ms, median 81.29):
+     component                                         mean ms median ms % of asgi
+     db commit                                          35.096    29.777     39.7%
+     store.resolve_application                          18.523    16.170     20.9%
+     store.prune_snapshots                              11.671    10.433     13.2%
+     store.record_snapshot                               7.881     6.399      8.9%
+     db:other                                            6.746     5.629      7.6%
+     unlabelled (ASGI/FastAPI/pydantic/json/loop)        2.086     1.892      2.4%
+     pipeline.run                                        0.635     0.579      0.7%
+     _finalize                                           0.545     0.486      0.6%
+     db:snapshot write                                   0.511     0.443      0.6%
+     db:auth lookup                                      0.511     0.456      0.6%
+     db:usage write                                      0.491     0.401      0.6%
+     db:outcome write                                    0.445     0.365      0.5%
+     export_trace (telemetry)                            0.424     0.305      0.5%
+     detect.analyze                                      0.365     0.323      0.4%
+     feasible_set                                        0.356     0.243      0.4%
+     gateway.run (step 7)                                0.352     0.310      0.4%
+     store.record_usage                                  0.346     0.288      0.4%
+     store.write_outcome                                 0.332     0.296      0.4%
+     compile_policy                                      0.237     0.185      0.3%
+     router.select (step 6)                              0.222     0.171      0.3%
+     build_context                                       0.163     0.124      0.2%
+     build_ok_outcome                                    0.111     0.093      0.1%
+     gate.evaluate                                       0.086     0.075      0.1%
+     auth (_authenticate)                                0.078     0.063      0.1%
+     summarize (snapshot)                                0.059     0.050      0.1%
+     _record_outcome                                     0.057     0.051      0.1%
+     verify (step 9)                                     0.033     0.028      0.0%
+     hash_token                                          0.031     0.029      0.0%
+     pipeline._gate_inputs                               0.023     0.020      0.0%
+     detect.anonymize                                    0.011     0.009      0.0%
+     backend_stub (litellm call, stubbed)                0.010     0.008      0.0%
+     bus.publish                                         0.009     0.008      0.0%
+     redact_tool_calls                                   0.007     0.006      0.0%
+   database sessions, inclusive (open+ORM+SQL+commit+close), mean ms per request: db:auth lookup 27.04, db:other 10.16, db:outcome write 11.50, db:snapshot write 23.15, db:usage write 10.73; all sessions 82.58 ms; of which commit 35.10 ms
+   inclusive pipeline.run                     mean    2.202 ms median    1.895 ms
+   inclusive _finalize                        mean   57.050 ms median   50.662 ms
+   inclusive gate.evaluate                    mean    0.623 ms median    0.437 ms
+   inclusive router.select (step 6)           mean    0.308 ms median    0.242 ms
+   inclusive gateway.run (step 7)             mean    0.670 ms median    0.569 ms
+   inclusive verify (step 9)                  mean    0.052 ms median    0.046 ms
+   inclusive export_trace (telemetry)         mean    0.722 ms median    0.574 ms
+   RouteForge compute excluding stub and ALL database sessions (mean): 5.86 ms
+
+-- prompt long (4013 ch)
+   PASS A (no wrappers): wall median   89.13 ms p99  244.35 | asgi median   86.41 | harness (wall-asgi) median   2.62 | backend_stub median    8.3 us | OWN (asgi-stub) median   86.40 p99  241.72 ms
+   PASS B (stage wrappers): wall median   81.70 ms (instrumentation overhead -7.43 ms vs pass A)
+   SQL per request: 10 statements (median), 5 commits
+   exclusive time per request, instrumented (asgi mean 84.13 ms, median 78.86):
+     component                                         mean ms median ms % of asgi
+     db commit                                          32.481    29.531     38.6%
+     store.resolve_application                          17.775    15.613     21.1%
+     store.prune_snapshots                              11.139    10.429     13.2%
+     store.record_snapshot                               7.227     6.329      8.6%
+     db:other                                            6.165     5.457      7.3%
+     unlabelled (ASGI/FastAPI/pydantic/json/loop)        2.164     1.985      2.6%
+     detect.analyze                                      0.979     0.890      1.2%
+     pipeline.run                                        0.689     0.612      0.8%
+     db:snapshot write                                   0.539     0.450      0.6%
+     db:auth lookup                                      0.519     0.457      0.6%
+     _finalize                                           0.519     0.479      0.6%
+     db:usage write                                      0.480     0.410      0.6%
+     gateway.run (step 7)                                0.435     0.314      0.5%
+     db:outcome write                                    0.425     0.360      0.5%
+     export_trace (telemetry)                            0.375     0.306      0.4%
+     store.record_usage                                  0.348     0.297      0.4%
+     store.write_outcome                                 0.345     0.303      0.4%
+     feasible_set                                        0.297     0.255      0.4%
+     router.select (step 6)                              0.269     0.176      0.3%
+     compile_policy                                      0.256     0.229      0.3%
+     build_context                                       0.165     0.137      0.2%
+     build_ok_outcome                                    0.107     0.093      0.1%
+     gate.evaluate                                       0.101     0.090      0.1%
+     auth (_authenticate)                                0.074     0.064      0.1%
+     summarize (snapshot)                                0.062     0.050      0.1%
+     _record_outcome                                     0.057     0.051      0.1%
+     verify (step 9)                                     0.040     0.028      0.0%
+     hash_token                                          0.030     0.028      0.0%
+     pipeline._gate_inputs                               0.030     0.021      0.0%
+     detect.anonymize                                    0.011     0.010      0.0%
+     backend_stub (litellm call, stubbed)                0.010     0.008      0.0%
+     bus.publish                                         0.010     0.008      0.0%
+     redact_tool_calls                                   0.008     0.006      0.0%
+   database sessions, inclusive (open+ORM+SQL+commit+close), mean ms per request: db:auth lookup 25.49, db:other 9.00, db:outcome write 10.69, db:snapshot write 21.94, db:usage write 10.36; all sessions 77.47 ms; of which commit 32.48 ms
+   inclusive pipeline.run                     mean    2.974 ms median    2.634 ms
+   inclusive _finalize                        mean   53.433 ms median   49.763 ms
+   inclusive gate.evaluate                    mean    1.175 ms median    1.073 ms
+   inclusive router.select (step 6)           mean    0.363 ms median    0.253 ms
+   inclusive gateway.run (step 7)             mean    0.808 ms median    0.592 ms
+   inclusive verify (step 9)                  mean    0.061 ms median    0.046 ms
+   inclusive export_trace (telemetry)         mean    0.690 ms median    0.575 ms
+   RouteForge compute excluding stub and ALL database sessions (mean): 6.65 ms
+
+#### database=Postgres fsync=off,synchronous_commit=off (same image; diagnostic)  detection=presidio  (n=120 per prompt)
+GET /health (no pipeline): wall median 4.401 ms, asgi median 1.888 ms => test-client overhead (wall - asgi) 2.513 ms
+
+-- prompt short (62 ch)
+   PASS A (no wrappers): wall median  118.56 ms p99  238.09 | asgi median  115.45 | harness (wall-asgi) median   2.67 | backend_stub median    9.2 us | OWN (asgi-stub) median  115.44 p99  235.31 ms
+   PASS B (stage wrappers): wall median  134.85 ms (instrumentation overhead +16.30 ms vs pass A)
+   SQL per request: 10 statements (median), 5 commits
+   exclusive time per request, instrumented (asgi mean 137.37 ms, median 132.39):
+     component                                         mean ms median ms % of asgi
+     db commit                                          42.136    36.781     30.7%
+     detect.analyze                                     31.549    29.876     23.0%
+     store.resolve_application                          22.088    18.565     16.1%
+     store.prune_snapshots                              14.348    12.852     10.4%
+     store.record_snapshot                               9.651     7.948      7.0%
+     db:other                                            8.070     6.365      5.9%
+     unlabelled (ASGI/FastAPI/pydantic/json/loop)        2.094     1.994      1.5%
+     pipeline.run                                        1.076     0.763      0.8%
+     _finalize                                           0.668     0.534      0.5%
+     db:snapshot write                                   0.642     0.531      0.5%
+     db:usage write                                      0.555     0.453      0.4%
+     db:auth lookup                                      0.519     0.474      0.4%
+     gateway.run (step 7)                                0.500     0.335      0.4%
+     db:outcome write                                    0.448     0.404      0.3%
+     store.write_outcome                                 0.420     0.325      0.3%
+     export_trace (telemetry)                            0.412     0.311      0.3%
+     compile_policy                                      0.352     0.292      0.3%
+     store.record_usage                                  0.346     0.314      0.3%
+     feasible_set                                        0.342     0.282      0.2%
+     router.select (step 6)                              0.259     0.183      0.2%
+     build_context                                       0.188     0.144      0.1%
+     build_ok_outcome                                    0.139     0.104      0.1%
+     gate.evaluate                                       0.136     0.095      0.1%
+     _record_outcome                                     0.092     0.056      0.1%
+     summarize (snapshot)                                0.091     0.052      0.1%
+     verify (step 9)                                     0.077     0.067      0.1%
+     auth (_authenticate)                                0.073     0.066      0.1%
+     hash_token                                          0.033     0.029      0.0%
+     pipeline._gate_inputs                               0.023     0.022      0.0%
+     detect.anonymize                                    0.013     0.012      0.0%
+     backend_stub (litellm call, stubbed)                0.012     0.010      0.0%
+     redact_tool_calls                                   0.010     0.010      0.0%
+     bus.publish                                         0.010     0.009      0.0%
+   database sessions, inclusive (open+ORM+SQL+commit+close), mean ms per request: db:auth lookup 31.80, db:other 11.82, db:outcome write 13.56, db:snapshot write 29.02, db:usage write 13.05; all sessions 99.26 ms; of which commit 42.14 ms
+   inclusive pipeline.run                     mean   34.107 ms median   31.774 ms
+   inclusive _finalize                        mean   69.298 ms median   62.476 ms
+   inclusive gate.evaluate                    mean   19.141 ms median   17.906 ms
+   inclusive router.select (step 6)           mean    0.364 ms median    0.271 ms
+   inclusive gateway.run (step 7)             mean    0.877 ms median    0.633 ms
+   inclusive verify (step 9)                  mean   12.748 ms median   11.570 ms
+   inclusive export_trace (telemetry)         mean    0.843 ms median    0.584 ms
+   RouteForge compute excluding stub and ALL database sessions (mean): 38.10 ms
+
+-- prompt long (4013 ch)
+   PASS A (no wrappers): wall median  100.20 ms p99  165.37 | asgi median   99.16 | harness (wall-asgi) median   1.15 | backend_stub median    6.3 us | OWN (asgi-stub) median   99.15 p99  163.61 ms
+   PASS B (stage wrappers): wall median   95.52 ms (instrumentation overhead -4.69 ms vs pass A)
+   SQL per request: 10 statements (median), 5 commits
+   exclusive time per request, instrumented (asgi mean 100.49 ms, median 94.53):
+     component                                         mean ms median ms % of asgi
+     detect.analyze                                     59.363    55.395     59.1%
+     db commit                                          16.473    15.896     16.4%
+     store.resolve_application                           8.149     7.627      8.1%
+     store.prune_snapshots                               5.214     4.895      5.2%
+     store.record_snapshot                               4.393     4.230      4.4%
+     db:other                                            3.167     2.990      3.2%
+     unlabelled (ASGI/FastAPI/pydantic/json/loop)        0.934     0.886      0.9%
+     pipeline.run                                        0.379     0.347      0.4%
+     _finalize                                           0.252     0.230      0.3%
+     db:snapshot write                                   0.210     0.187      0.2%
+     db:auth lookup                                      0.195     0.178      0.2%
+     db:usage write                                      0.186     0.161      0.2%
+     gateway.run (step 7)                                0.178     0.151      0.2%
+     store.write_outcome                                 0.173     0.129      0.2%
+     compile_policy                                      0.166     0.149      0.2%
+     db:outcome write                                    0.165     0.147      0.2%
+     store.record_usage                                  0.148     0.134      0.1%
+     export_trace (telemetry)                            0.143     0.126      0.1%
+     feasible_set                                        0.140     0.124      0.1%
+     router.select (step 6)                              0.099     0.087      0.1%
+     build_context                                       0.078     0.068      0.1%
+     gate.evaluate                                       0.052     0.047      0.1%
+     build_ok_outcome                                    0.051     0.047      0.1%
+     verify (step 9)                                     0.038     0.035      0.0%
+     _record_outcome                                     0.030     0.026      0.0%
+     summarize (snapshot)                                0.027     0.024      0.0%
+     auth (_authenticate)                                0.027     0.024      0.0%
+     hash_token                                          0.020     0.020      0.0%
+     pipeline._gate_inputs                               0.012     0.012      0.0%
+     backend_stub (litellm call, stubbed)                0.007     0.006      0.0%
+     detect.anonymize                                    0.007     0.006      0.0%
+     redact_tool_calls                                   0.006     0.005      0.0%
+     bus.publish                                         0.004     0.004      0.0%
+   database sessions, inclusive (open+ORM+SQL+commit+close), mean ms per request: db:auth lookup 11.84, db:other 4.65, db:outcome write 5.37, db:snapshot write 11.38, db:usage write 5.26; all sessions 38.49 ms; of which commit 16.47 ms
+   inclusive pipeline.run                     mean   60.390 ms median   56.346 ms
+   inclusive _finalize                        mean   27.298 ms median   25.719 ms
+   inclusive gate.evaluate                    mean   55.413 ms median   51.587 ms
+   inclusive router.select (step 6)           mean    0.131 ms median    0.113 ms
+   inclusive gateway.run (step 7)             mean    0.316 ms median    0.274 ms
+   inclusive verify (step 9)                  mean    4.169 ms median    3.771 ms
+   inclusive export_trace (telemetry)         mean    0.279 ms median    0.248 ms
+   RouteForge compute excluding stub and ALL database sessions (mean): 61.99 ms
+
+(removed container rf-e2e-pg-d72d20)
+
+(removed container rf-e2e-pg-d542a6)
+
+=== SUMMARY: median per-request time, ms ===
+database                                                     detect    prompt              wall    asgi  harness     OWN  own p99 db(mean)  non-db  sql
+sqlite in-memory (app default for this harness)              regex     short (62 ch)      42.86   40.86     1.89   40.85   219.79    66.51    5.62    9
+sqlite in-memory (app default for this harness)              regex     long (4013 ch)     56.59   54.15     2.48   54.11   287.35    65.58    6.19    9
+sqlite in-memory (app default for this harness)              presidio  short (62 ch)      59.92   57.97     1.99   57.97   145.63    42.91   23.07    9
+sqlite in-memory (app default for this harness)              presidio  long (4013 ch)    154.69  151.29     2.21  151.28   509.14    73.17  150.61    9
+Postgres default fsync (postgres:16.4-alpine, postgres (Post regex     short (62 ch)      68.60   66.15     2.55   66.14   127.34    81.62    5.91   10
+Postgres default fsync (postgres:16.4-alpine, postgres (Post regex     long (4013 ch)     70.29   67.50     2.68   67.49   124.85    72.35    6.50   10
+Postgres default fsync (postgres:16.4-alpine, postgres (Post presidio  short (62 ch)     109.08  106.38     2.84  106.37   173.91    88.52   35.64   10
+Postgres default fsync (postgres:16.4-alpine, postgres (Post presidio  long (4013 ch)    116.63  115.24     1.33  115.24   253.33    77.33  133.79   10
+Postgres fsync=off,synchronous_commit=off (same image; diagn regex     short (62 ch)      88.34   85.28     2.74   85.24   187.23    82.58    5.86   10
+Postgres fsync=off,synchronous_commit=off (same image; diagn regex     long (4013 ch)     89.13   86.41     2.62   86.40   241.72    77.47    6.65   10
+Postgres fsync=off,synchronous_commit=off (same image; diagn presidio  short (62 ch)     118.56  115.45     2.67  115.44   235.31    99.26   38.10   10
+Postgres fsync=off,synchronous_commit=off (same image; diagn presidio  long (4013 ch)    100.20   99.16     1.15   99.15   163.61    38.49   61.99   10
+done 0

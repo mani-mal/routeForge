@@ -1,0 +1,13 @@
+database                                     detect    prompt             labelled non-DB (med-sum / mean-sum)  unlabelled (med/mean)  detection (med)  non-DB total (med-sum)
+sqlite in-memory (app default for this harne regex     short (62 ch)                 3.14 /   3.57 ms       1.85 /  2.08 ms          0.32 ms                 4.99 ms
+sqlite in-memory (app default for this harne regex     long (4013 ch)                3.74 /   4.15 ms       1.89 /  2.07 ms          0.89 ms                 5.63 ms
+sqlite in-memory (app default for this harne presidio  short (62 ch)                19.12 /  21.55 ms       1.43 /  1.57 ms         16.72 ms                20.55 ms
+sqlite in-memory (app default for this harne presidio  long (4013 ch)              150.71 / 148.43 ms       1.97 /  2.20 ms        147.57 ms               152.68 ms
+Postgres default fsync (postgres:16.4-alpine regex     short (62 ch)                 3.43 /   3.85 ms       1.98 /  2.10 ms          0.35 ms                 5.41 ms
+Postgres default fsync (postgres:16.4-alpine regex     long (4013 ch)                3.98 /   4.47 ms       1.93 /  2.06 ms          0.93 ms                 5.91 ms
+Postgres default fsync (postgres:16.4-alpine presidio  short (62 ch)                29.99 /  33.49 ms       1.97 /  2.19 ms         26.58 ms                31.96 ms
+Postgres default fsync (postgres:16.4-alpine presidio  long (4013 ch)              125.39 / 132.07 ms       1.66 /  1.75 ms        122.43 ms               127.05 ms
+Postgres fsync=off,synchronous_commit=off (s regex     short (62 ch)                 3.16 /   3.80 ms       1.89 /  2.09 ms          0.32 ms                 5.05 ms
+Postgres fsync=off,synchronous_commit=off (s regex     long (4013 ch)                3.85 /   4.51 ms       1.99 /  2.16 ms          0.89 ms                 5.83 ms
+Postgres fsync=off,synchronous_commit=off (s presidio  short (62 ch)                33.24 /  36.04 ms       1.99 /  2.09 ms         29.88 ms                35.24 ms
+Postgres fsync=off,synchronous_commit=off (s presidio  long (4013 ch)               56.93 /  61.07 ms       0.89 /  0.93 ms         55.40 ms                57.81 ms

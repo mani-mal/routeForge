@@ -40,5 +40,7 @@ def eligible(req, endpoints):
             continue
         if e["name"] in req["app_denied"] or e["disabled"]:
             continue
+        if e["name"] in req["open_circuits"]:
+            continue
         out.add(e["name"])
     return out

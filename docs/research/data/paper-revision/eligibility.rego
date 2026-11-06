@@ -11,7 +11,7 @@
 #                                    allowed_regions[]|null, require_no_retention,
 #                                    sends_raw_sensitive, allowed_tiers[]|null,
 #                                    allowed_models[]|null, requested_model|null,
-#                                    exclude[], app_denied[]}
+#                                    exclude[], app_denied[], open_circuits[]}
 # Output: data.eligibility.batch[<set>][<request id>] = sorted endpoint names.
 package eligibility
 
@@ -90,6 +90,8 @@ app_ok(req, e) if not e.name in req.app_denied
 
 enabled_ok(_, e) if not e.disabled
 
+circuit_ok(req, e) if not e.name in req.open_circuits
+
 allowed(req, e) if {
 	placement_ok(req, e)
 	region_ok(req, e)
@@ -101,6 +103,7 @@ allowed(req, e) if {
 	pin_ok(req, e)
 	app_ok(req, e)
 	enabled_ok(req, e)
+	circuit_ok(req, e)
 }
 
 eligible_for(req, endpoints) := {e.name | some e in endpoints; allowed(req, e)}
