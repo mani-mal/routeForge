@@ -27,7 +27,7 @@ An LLM gateway that serves several applications over on-premises and cloud endpo
 
 ## Comments
 
-26 pages, 1 figure, 14 tables. Code and data: https://github.com/mani-mal/routeForge (tag arxiv-v2)
+27 pages, 1 figure, 16 tables. Code and data: https://github.com/mani-mal/routeForge (tag arxiv-v3)
 
 ## Optional fields — leave blank
 

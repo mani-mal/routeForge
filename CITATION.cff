@@ -8,8 +8,8 @@ authors:
     given-names: Mani
     email: mani.malarvannan@cdw.com
 repository-code: "https://github.com/mani-mal/routeForge"
-version: arxiv-v2
-date-released: 2026-11-05
+version: arxiv-v3
+date-released: 2026-11-06
 keywords:
   - LLM routing
   - data residency
