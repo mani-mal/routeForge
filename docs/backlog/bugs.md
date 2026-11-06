@@ -210,6 +210,62 @@ measure (for the same workload), price or latency drift, and external models wor
 shadow trial. It never onboards, disables or promotes anything. Onboarding stays the only
 way a model enters.
 
+## B86 — Request path spends most of its own time in database round trips (key lookup, snapshot write)  🔴 OPEN
+
+**Severity:** medium (latency only; nothing wrong is served or recorded).
+**Found:** 2026-11-06, profiling for the paper (`docs/research/data/paper-revision/e2e_breakdown.py`,
+captured in `e2e_breakdown.out` / `e2e_breakdown_summary.out`).
+
+With a zero-latency backend stub, one `/v1/chat/completions` request took a median of 43–70 ms
+in process with regex detection, of which RouteForge's own compute was only about 5–6 ms. Most
+of the rest is the database: each request makes 9–10 SQL statements and 4–5 commits, in four or
+five separate sessions. Instrumented mean time per request, by session (inclusive of open, ORM,
+SQL, commit and close; range over the regex/Presidio × short/long cells):
+
+| session | sqlite in-memory | Postgres 16.4 (docker loopback) |
+|---|---|---|
+| key lookup (`store.resolve_token`) | 18–29 ms | 22–28 ms |
+| snapshot write + prune (`routes.py` ~1229) | 14–23 ms | 21–26 ms |
+| usage write | 5–12 ms | 11–13 ms |
+| outcome write | 7–9 ms | 11–13 ms |
+| other | — | 7–9 ms |
+
+These are inflated: the laptop was loaded (load average 4–5), the instrumentation slows the
+run, SQLite pays for the `_patch_aiosqlite_wakeup` busy-poll (about 1,200–1,500 event-loop turns
+per request vs about 65 on Postgres), and the Postgres was a WSL2 docker loopback port with a
+~2 ms round trip. The **shape** is the finding, not the absolute numbers.
+
+- **Key lookup.** `resolve_token` runs three SELECTs (token, then `selectinload` of the
+  application and its policy) and stamps `last_used_at`, which the caller commits — so every
+  request also writes. **Wanted:** a short-TTL in-process cache of token-hash → (application,
+  policy view, expiry, binding), invalidated on token revoke / app or policy change (per-replica
+  staleness bound stated: a revoked token must stop working within one TTL at most); and stamp
+  `last_used_at` at most once per interval per token (or batch it with the observation flush).
+- **Snapshot write.** The console's snapshot cache (B3) writes the summary and the full response
+  and then runs `prune_snapshots` — a `DELETE … WHERE request_id NOT IN (newest 500)` — on
+  **every** request, synchronously, in its own session. **Wanted:** move the snapshot write off
+  the response path (background task / the same buffered flusher as `endpoint_observations`),
+  and prune periodically or every N writes instead of every request.
+- **Usage + outcome writes** could share one session and one commit.
+- **Acceptance:** re-run `e2e_breakdown.py` on Postgres; per-request DB time at least halved,
+  and the existing auth, revocation (`tests/` token/revoke tests), snapshot/console and outcome
+  tests still pass. Note any change in the paper (`docs/research/paper/main.tex` §Overhead
+  quotes "9–10 statements, 4–5 commits").
+
+## B87 — `is_disabled` treats only on-prem rows as disableable  🔴 OPEN
+
+**Severity:** low (latent; no effect today).
+**Found:** 2026-11-06, matched-baseline state grid (`docs/research/data/paper-revision/matched_baseline.py`).
+
+`app/policy/feasible.py::is_disabled` returns true only for `provider == "onprem"` rows the
+registry reports as not enabled. A disabled row of any other provider is not rejected by that
+predicate (60 of 5,760 direct `candidate_rejection` evaluations in the grid). It is harmless
+today only because `registry.effective_pool()` omits disabled rows, so they never reach
+`feasible_set`. If a disabled cloud or onboarded non-onprem row ever reaches the pool (a new
+provider kind, a pool built another way), it would be eligible. **Wanted:** drop the provider
+condition (or state in the code why it is needed), and add a test that a disabled row of each
+provider kind is rejected by `candidate_rejection`.
+
 ## B85 — Stream path records fewer token details than the non-stream path (reasoning and cached tokens)  🔴 OPEN
 
 **Severity:** low (records only; no effect on what a client receives).
