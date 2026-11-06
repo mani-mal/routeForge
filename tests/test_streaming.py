@@ -158,15 +158,17 @@ def test_stream_without_app_override_still_400s(client):
     assert "streaming is not supported" in v1_error(r)["message"]
 
 
-def test_stream_with_invalid_token_still_400s_not_401(client):
-    # The old guard ran unconditionally before auth; preserved for this edge
-    # case too -- a stream request never leaks whether the token was valid.
-    r = client.post("/v1/chat/completions",
-                    headers={"Authorization": "Bearer not-a-real-token"},
-                    json={"model": "auto",
-                          "messages": [{"role": "user", "content": "hi"}],
-                          "stream": True})
-    assert r.status_code == 400
+def test_stream_with_invalid_token_401s(client):
+    # A bad key must be reported as a bad key. The old 400 ("streaming is not
+    # supported ... set stream_mode") sent an OpenCode user to change the
+    # app's stream_mode when the client was sending no valid key at all.
+    for headers in ({"Authorization": "Bearer not-a-real-token"}, {}):
+        r = client.post("/v1/chat/completions", headers=headers,
+                        json={"model": "auto",
+                              "messages": [{"role": "user", "content": "hi"}],
+                              "stream": True})
+        assert r.status_code == 401
+        assert v1_error(r)["code"] == "invalid_api_key"
 
 
 def test_non_stream_request_with_invalid_token_still_401s(client):

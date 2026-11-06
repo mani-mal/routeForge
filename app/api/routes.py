@@ -698,12 +698,11 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
     if auth is None:
         # Fail closed: no valid token -> reject. Never fall through to a
         # default tenant (that was the old fail-open behavior). A stream
-        # request with no resolvable app policy at all keeps the old,
-        # unconditional 400 (the reject guard used to run before auth) --
-        # backwards compatible even for this edge case.
+        # request gets the same 401: answering it with "streaming is not
+        # supported" sent operators to change stream_mode when the real
+        # fault was a missing or wrong key (a non-stream request already
+        # returns 401, so this reveals nothing new).
         metrics.observe_request("-", "unauthorized")
-        if body.stream and s.serving.reject_stream_requests:
-            raise ApiError(400, _STREAM_REJECT, code=CODE_STREAMING_NOT_SUPPORTED)
         raise ApiError(401, "invalid or missing API token", code=CODE_INVALID_API_KEY)
     tenant, app_policy, app_langfuse = auth
     stream_mode = _resolve_stream_mode(body, app_policy, s)
