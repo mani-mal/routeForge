@@ -26,8 +26,8 @@ training or inference compute itself.
 
 **Paper and artifact:** *RouteForge: Testing and Replaying Policy-Constrained LLM Routing* —
 source, PDF and data in [`docs/research/paper/`](docs/research/paper/); the version that
-accompanies it is tag [`arxiv-v2`](https://github.com/mani-mal/routeForge/tree/arxiv-v2)
-(`arxiv-v1` marks an earlier draft). Code is Apache-2.0
+accompanies it is tag [`arxiv-v3`](https://github.com/mani-mal/routeForge/tree/arxiv-v3)
+(`arxiv-v1` and `arxiv-v2` mark earlier drafts). Code is Apache-2.0
 ([`LICENSE`](LICENSE)); see [`CITATION.cff`](CITATION.cff) to cite it.
 
 ## Architecture

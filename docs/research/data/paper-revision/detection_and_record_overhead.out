@@ -1,0 +1,87 @@
+machine: Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.39 | python 3.12.3 | nproc 14
+cpu: Intel(R) Core(TM) Ultra 7 165U
+== PART 1: PII detection on live-run prompt texts ==
+texts: 1800 (runs 3 and 4, seeds {3: 4, 4: 5}); lengths chars: min 30 median 2506 max 66000; with planted PII 505
+  length buckets: {'<1k chars': 471, '5-20k': 447, '1-5k': 817, '20-60k': 57, '>=60k': 8}
+  kinds: {'question': 209, 'prose': 490, 'json': 192, 'code': 198, 'logs': 206, 'prose+pii': 253, 'logs+pii': 70, 'question+pii': 64, 'json+pii': 70, 'code+pii': 48}
+
+[regex] per-text analyze() time (per-text median of reps; then median/p99 across texts)
+  kind   code         median      482.4 us  p99     8062.0 us  n=198
+  kind   code+pii     median      489.1 us  p99     4771.2 us  n=48
+  kind   json         median      837.4 us  p99    13102.4 us  n=192
+  kind   json+pii     median      860.6 us  p99    15257.5 us  n=70
+  kind   logs         median      578.7 us  p99     9195.5 us  n=206
+  kind   logs+pii     median      628.2 us  p99     4633.9 us  n=70
+  kind   prose        median      599.8 us  p99     8830.9 us  n=490
+  kind   prose+pii    median      615.8 us  p99    10081.3 us  n=253
+  kind   question     median        9.0 us  p99       17.8 us  n=209
+  kind   question+pii median       33.7 us  p99      135.5 us  n=64
+  length <1k chars    median       31.9 us  p99      379.4 us  n=471
+  length 1-5k         median      465.5 us  p99     1592.5 us  n=817
+  length 5-20k        median     1612.2 us  p99     5790.4 us  n=447
+  length 20-60k       median     4638.1 us  p99    15446.8 us  n=57
+  length >=60k        median     9986.6 us  p99    10522.4 us  n=8
+  all              median      478.0 us  p99     8830.9 us  n=1800
+  mean 952.0 us/text, 5.03 M chars/s over 1800 texts
+
+[presidio] constructor (AnalyzerEngine + spaCy model load): 6.64 s
+[presidio] cold first analyze() call (before warmup): 286.7 ms
+[presidio] warmup() call: 204.5 ms
+
+[presidio] per-text analyze() time (per-text median of reps; then median/p99 across texts)
+  kind   code         median   117843.0 us  p99  2437345.3 us  n=198
+  kind   code+pii     median    95763.9 us  p99  4025135.3 us  n=48
+  kind   json         median   202972.0 us  p99  7193524.4 us  n=192
+  kind   json+pii     median   177496.9 us  p99 14024902.1 us  n=70
+  kind   logs         median   123360.8 us  p99  2535565.9 us  n=206
+  kind   logs+pii     median   138445.9 us  p99  1451469.0 us  n=70
+  kind   prose        median    86678.7 us  p99  1016959.0 us  n=490
+  kind   prose+pii    median    84462.8 us  p99  1062245.7 us  n=253
+  kind   question     median     6995.2 us  p99    21310.0 us  n=209
+  kind   question+pii median    12019.9 us  p99    77842.8 us  n=64
+  length <1k chars    median    14920.3 us  p99   121542.8 us  n=471
+  length 1-5k         median    84380.0 us  p99   577432.9 us  n=817
+  length 5-20k        median   255774.7 us  p99  2551190.1 us  n=447
+  length 20-60k       median   703203.0 us  p99 14024902.1 us  n=57
+  length >=60k        median   971927.1 us  p99  2517208.0 us  n=8
+  all              median    85434.8 us  p99  2437345.3 us  n=1800
+  mean 224605.0 us/text, 0.02 M chars/s over 1800 texts
+  regex: entities>0 on 505/505 planted-PII texts; on 220/1295 no-PII texts
+  presidio: entities>0 on 505/505 planted-PII texts; on 836/1295 no-PII texts
+
+[anonymize] on texts where the detector found entities
+  regex    anonymize median        4.5 us  p99      824.1 us  n=3625  (texts=725, entities/text median 2, max 857)
+  presidio anonymize median       22.8 us  p99     2421.4 us  n=6705  (texts=1341, entities/text median 15, max 877)
+
+[versions] presidio-analyzer 2.2.363 | spacy 3.8.13
+  spaCy model: core_web_lg 3.8.0 lang en
+
+== PART 2: routing_outcomes write (session open + insert + commit, one row) ==
+row columns: 45 | JSON size of row ~ 1657 bytes
+SQLite file DB (default journal): median   10.218 ms  p99   24.901 ms  n=2000
+Postgres (postgres:16.4-alpine, postgres (PostgreSQL) 16.4; same host, loopback docker port, default fsync): median    4.853 ms  p99    9.814 ms  n=2000
+
+== PART 3: in-process POST /v1/chat/completions, zero-latency stub backend ==
+
+[detection=regex] harness baseline GET /health (TestClient + ASGI, no pipeline): median    1.603 ms  p99    5.575 ms  n=300
+  short no-PII (62 ch)                 median   41.622 ms  p99  223.497 ms  n=400  model=local-8b
+  short PII (SSN+email)                median   42.976 ms  p99  364.268 ms  n=400  model=local-32b
+  run3 prose no-PII (4013 ch)          median   64.185 ms  p99  263.391 ms  n=400  model=local-32b
+  run3 prose + PII (4077 ch)           median   72.466 ms  p99  374.288 ms  n=400  model=local-32b
+  -- outcomes.enabled=false (usage row still written) --
+  short no-PII (62 ch)                 median   54.105 ms  p99  165.712 ms  n=400
+  short PII (SSN+email)                median   60.869 ms  p99  303.699 ms  n=400
+  run3 prose no-PII (4013 ch)          median   57.648 ms  p99  324.421 ms  n=400
+  run3 prose + PII (4077 ch)           median   60.957 ms  p99  297.836 ms  n=400
+
+[detection=presidio] harness baseline GET /health (TestClient + ASGI, no pipeline): median    3.711 ms  p99   18.880 ms  n=300
+  short no-PII (62 ch)                 median   58.192 ms  p99  338.390 ms  n=150  model=local-8b
+  short PII (SSN+email)                median   55.024 ms  p99  231.999 ms  n=150  model=local-32b
+  run3 prose no-PII (4013 ch)          median  116.702 ms  p99  246.550 ms  n=150  model=local-32b
+  run3 prose + PII (4077 ch)           median  115.404 ms  p99  303.125 ms  n=150  model=local-32b
+  -- outcomes.enabled=false (usage row still written) --
+  short no-PII (62 ch)                 median   47.486 ms  p99  206.782 ms  n=150
+  short PII (SSN+email)                median   53.452 ms  p99  207.597 ms  n=150
+  run3 prose no-PII (4013 ch)          median  105.934 ms  p99  217.892 ms  n=150
+  run3 prose + PII (4077 ch)           median  110.865 ms  p99  224.158 ms  n=150
+exit 0

@@ -89,7 +89,9 @@ and cloud endpoints:
   \item \textbf{Enforcement and compiler testing.} An enforcement contract for every outbound
     attempt, a policy compiler whose placement and protection fields resolve independently, and a
     property-based harness that found two fail-open defects; live attempt chains checked against
-    the contract (Sections~\ref{sec:system}, \ref{sec:eligibility} and~\ref{sec:placement}).
+    the contract, and a matched baseline that applies the same predicates as a plain filter and
+    as an OPA policy (Sections~\ref{sec:system}, \ref{sec:eligibility}, \ref{sec:placement}
+    and~\ref{sec:baseline}).
   \item \textbf{Eligibility-aware evaluation.} FeasibleRouteBench, whose oracle and regret
     metrics never credit an ineligible endpoint, and what it showed about the shipped router
     (Sections~\ref{sec:eval} and~\ref{sec:bench}).
@@ -673,7 +675,7 @@ case's eligible set.
 Pattern detection also restricts requests that carry no identifier. The traffic generator
 records which requests had an SSN and an e-mail address planted, so the detector can be scored
 against that ground truth (Table~\ref{tab:detector}; a request counts as detected when any entity
-type was found). No planted request was missed in either run. False positives were confined to
+type was found). The three applications used the regex detector. No planted request was missed in either run. False positives were confined to
 two kinds of text: every identifier-free JSON request and about a tenth of identifier-free log
 requests were flagged, because random digit strings matched credit-card and bank-number
 patterns; prose, code and questions produced none. In run 4, 83 of the 173 requests whose
@@ -911,17 +913,117 @@ the limits that bound; daily quotas, burst controls and provider overload are ou
     rates as a sensitivity to the output-limit configuration, not as a property of the models.
 \end{itemize}
 
-\subsection{Policy-side overhead}
+\subsection{A matched baseline}
+\label{sec:baseline}
+
+Is a dedicated eligibility function needed, or would a generic policy engine in front of the
+same router do? We wrote the eligibility predicates (placement, providers, regions, retention,
+raw sensitive text, application scope, tier and model scope, requested model, prior failure) twice
+more: as a 33-line Python filter and as a 68-line Rego policy evaluated by the Open Policy Agent
+(OPA 0.70.0). Each baseline's eligible set was passed to the shipped router, so cost cap, risk
+floor, tier targeting and scoring are identical and any difference in decisions comes from
+eligibility alone. The gate, the compiled policy and the resolved placement are the shipped
+ones, so the baselines receive the same request facts. Inputs were the starter, extended and empty-set
+suites, the four live runs replayed, and a synthetic grid of 6{,}912 requests over a ten-endpoint
+pool with undeclared, \code{unknown}, padded and mixed-case declarations
+(Table~\ref{tab:baseline}).
+
+\begin{table}[t]
+\centering
+\small
+\caption{Matched baseline. Agreement is exact equality of the eligible set with the shipped
+function's, and every count is the same for the plain filter and for OPA; ``first pick'' runs the shipped router on each baseline's set and counts requests the
+shipped path routed; the second hop excludes the shipped first pick. Times are medians per
+request on one laptop; the shipped figure includes reading the registry, and the OPA figure is
+\code{opa bench} inside a container, excluding its start.}
+\label{tab:baseline}
+\begin{tabular}{@{}lrccc@{}}
+\toprule
+input & requests & same set & same first pick & same second hop \\
+\midrule
+suites: starter, extended (two pools), empty-set & 242 & 242 & 192 of 192 & 192 of 192 \\
+live runs 1--4, replayed & 3{,}611 & 3{,}611 & 3{,}514 of 3{,}514 & 3{,}514 of 3{,}514 \\
+synthetic grid, 10 endpoints & 6{,}912 & 6{,}912 & --- & --- \\
+\midrule
+\multicolumn{5}{@{}l}{median time per request: shipped 24--62\,$\mu$s; filter 0.9--3.8\,$\mu$s; OPA
+84--907\,$\mu$s} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Both baselines agreed with the shipped function on every request, and so did every routing
+decision built on them. The agreement is partly by construction: the baselines were written by
+someone who had read the shipped code, so it is an upper bound on what an independent
+implementation would reach. Several stages were never exercised by real traffic: the live runs
+rejected endpoints only for placement, region and retention; application scope, a requested
+model and prior failure occur only in the grid; an endpoint allowlist, a disabled model and an
+open circuit occur nowhere, and the baselines do not model open circuits. Within those limits
+the predicates are easy to state, and a generic engine states them correctly.
+
+What the baselines do not give is the explanation. Of the grid's 6{,}912 requests, 6{,}296 had
+an empty eligible set; the shipped path named a conflicting core for each (sizes 1, 2, 3 and 4
+for 5{,}184, 936, 164 and 12 requests), while each baseline returned only an empty set. In the
+live runs no request had an empty eligible set, and every rejection was a router refusal whose
+core comes from the shared router. Nor does a pre-filter by itself re-check eligibility between
+attempts: the shipped gateway calls the router again after each failed attempt, and eligibility
+is recomputed with the failed endpoints excluded and open circuits removed. A baseline gives the
+same second-hop set when it is told the exclusion (Table~\ref{tab:baseline}), but a deployment
+must arrange to ask. The shipped function was slower than the plain filter (it reads the
+registry and records a reason per endpoint) and faster than the OPA policy evaluated in a
+container; all three are far below an inference call.
+
+\subsection{Overhead}
 \label{sec:overhead}
 
-We timed the policy-side steps in process, without network or database, on a developer laptop
-(14 hardware threads, WSL2), with the lab configuration's four-endpoint pool. Compiling one
-application's policy took a median of 14\,$\mu$s (99th percentile 78\,$\mu$s), and computing the
-eligible set 19\,$\mu$s (77\,$\mu$s). The conflicting-core search took 5\,$\mu$s for a
-two-endpoint rejection and 1.0\,ms (1.8\,ms) in the worst case, eleven endpoints each failing a
-different requirement, where all $2^{11}$ subsets are enumerated. These exclude PII detection,
-which runs on every request and dominates the gate, and the write of the outcome record; neither
-was measured. Timings vary between runs of the script by tens of percent. Inference calls in the live runs took seconds.
+We timed the request path in process, without network, on a developer laptop (Intel Core Ultra 7
+165U, 14 hardware threads, WSL2), with the lab configuration's four-endpoint pool. Timings vary
+between runs of the scripts by tens of percent. Inference calls in the live runs took seconds.
+
+\emph{Policy steps.} Compiling one application's policy took a median of 14\,$\mu$s (99th
+percentile 78\,$\mu$s), and computing the eligible set 19\,$\mu$s (77\,$\mu$s). The
+conflicting-core search took 5\,$\mu$s for a two-endpoint rejection and 1.0\,ms (1.8\,ms) in the
+worst case, eleven endpoints each failing a different requirement, where all $2^{11}$ subsets are
+enumerated.
+
+\emph{Detection} dominates the gate, and its cost grows with the length of the text
+(Table~\ref{tab:detcost}). We regenerated the 1{,}800 prompts of runs 3 and 4 from their
+generators (recovering the seeds by matching every recorded prompt length) and timed each
+detector on them. Regex detection took a median of 0.48\,ms per prompt; Presidio with the
+\code{en\_core\_web\_lg} spaCy model took 85\,ms, with a 99th percentile of 14\,s on the 57 prompts of 20{,}000 to
+60{,}000 characters. Loading Presidio took 6.6\,s once per process. Redacting the found entities
+took a median of 5 to 23\,$\mu$s.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Detection time per prompt, the 1{,}800 regenerated prompts of runs 3 and 4 (505 with a
+planted SSN and e-mail address), median / 99th percentile. Presidio was timed once per prompt.}
+\label{tab:detcost}
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+prompt length (characters) & prompts & regex (ms) & Presidio (ms) \\
+\midrule
+under 1{,}000 & 471 & 0.03 / 0.38 & 15 / 122 \\
+1{,}000 to 5{,}000 & 817 & 0.47 / 1.6 & 84 / 577 \\
+5{,}000 to 20{,}000 & 447 & 1.6 / 5.8 & 256 / 2{,}551 \\
+20{,}000 to 60{,}000 & 57 & 4.6 / 15 & 703 / 14{,}025 \\
+60{,}000 and over & 8 & 10 / 11 & 972 / 2{,}517 \\
+all & 1{,}800 & 0.48 / 8.8 & 85 / 2{,}437 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\emph{Recording.} The content-free outcome record is written synchronously on the request path,
+in its own transaction after the usage record; per-attempt endpoint observations are buffered
+and flushed in the background. Writing one record took a median of 4.9\,ms (99th percentile
+9.8\,ms) on PostgreSQL 16.4 in a local container and 10\,ms (25\,ms) on a SQLite file.
+
+\emph{End to end.} Through the HTTP handler in process, with a backend stub that returns at once,
+one request took a median of 42 to 73\,ms with regex detection and 55 to 117\,ms with Presidio,
+depending on prompt length and identifiers. This includes the test client, an in-memory SQLite
+application database and the two record writes; switching the outcome write off did not change
+the medians beyond run-to-run noise, and we did not attribute the remainder to components. We
+read it as an upper bound for this setup, not a production figure.
 
 % ---------------------------------------------------------------------------
 \section{Negative results and limits}
@@ -949,10 +1051,11 @@ paid about 6.7 times the cheapest eligible stated price for the same answers.
 benchmark runs suggested the cheap model was better than the mid one. A larger suite of
 well-posed cases removed the gap.
 
-\paragraph{Not measured.} A matched baseline that applies the same eligibility predicates
-through a simple filter or a generic policy engine before the same scoring rule. A saving
+\paragraph{Not measured.} A baseline written without knowledge of the shipped code, and the
+eligibility stages no input exercised (Section~\ref{sec:baseline}). A saving
 against a frontier-only baseline: the lab has no paid prices. Any difference in quality between
-the models: the larger suite is at ceiling. Detection, recording and replay overhead.
+the models: the larger suite is at ceiling. Replay overhead, gateway overhead against a
+production database and network, and the per-component split of the end-to-end time.
 Attempt-chain agreement under replay. Detector accuracy on real text, or for entity types the
 generator did not plant. Coverage of the uncertainty ranges, directly or under dependence. Any effect on real text: every prompt in
 Section~\ref{sec:exp} is synthetic, except the content-free records of one coding-agent session
@@ -1281,8 +1384,8 @@ not claim an information-flow guarantee about model outputs.
 \label{sec:artifact}
 
 RouteForge's source code and the research artifact are public at \repourl. The revision that
-accompanies this version of the paper is tagged \code{arxiv-v2} and contains this paper's source;
-the tag \code{arxiv-v1} marks the revision for an earlier draft. The live experiments ran on
+accompanies this version of the paper is tagged \code{arxiv-v3} and contains this paper's source;
+the tags \code{arxiv-v1} and \code{arxiv-v2} mark the revisions for earlier drafts. The live experiments ran on
 earlier builds (API versions 0.30.0 to 0.32.1); the research notes in \code{docs/research/}
 identify the build or pull request behind each run, and the code has changed since. No archival
 DOI has been minted. The code is released under the Apache License 2.0; this paper is
@@ -1296,16 +1399,15 @@ conflicting-core, feasible-set and trajectory-envelope tests; FeasibleRouteBench
 suite's generator; the replay analyser (\code{scripts/policy\_simulate.py}); and, under
 \code{docs/research/data/}, each live run's synthetic traffic generator, client log,
 content-free outcome records, configuration snapshot, scenario and capacity files, benchmark
-outputs, and the trajectory probe scripts and results. Two scripts under
+outputs, and the trajectory probe scripts and results. Scripts under
 \code{docs/research/data/paper-revision/} recompute Table~\ref{tab:fidelity}, the attempt counts
 of Section~\ref{sec:placement}, Table~\ref{tab:detector}, the empty-response rates of
-Section~\ref{sec:tokens} and the timings of Section~\ref{sec:overhead}, with the commands in its
-README. The policy and replay analyses can be recomputed offline without GPUs or provider
+Section~\ref{sec:tokens}, the matched baseline (Table~\ref{tab:baseline}, with its Rego
+policy), the timings of Section~\ref{sec:overhead} (Table~\ref{tab:detcost}) and the version
+check's null experiment (Appendix~\ref{app:version}), with the commands in its README. The policy and replay analyses can be recomputed offline without GPUs or provider
 accounts; the live measurements additionally require the inference endpoints of
 Section~\ref{sec:exp}, and live model answers will differ between runs. Recomputing tables from
-the released records is not reproduction of the original model generations. Not included: the
-script for the version check's synthetic null experiment (Appendix~\ref{app:version}), and a
-single manifest that generates every table.
+the released records is not reproduction of the original model generations. Not included: a single manifest that generates every table.
 
 % ---------------------------------------------------------------------------
 \section{Conclusion}
@@ -1469,17 +1571,30 @@ No correction is made for the number of figures judged.
 
 We measured the false-alarm rate of this candidate-level verdict in a synthetic null
 experiment: two arms scored from one shared distribution, so there is no true difference, with
-a share $f$ of the 22 cases redrawn between the arms (modelling fresh stochastic generations or
+a share $f$ of the cases redrawn in the candidate arm (modelling fresh stochastic generations or
 noisy endpoint measurements; on an identical frozen matrix every paired difference would be
-zero and no figure could regress), 300 draws per setting and 400 resamples. With nonzero
-tolerances on one or two metrics (14 to 28 figures judged), an earlier rule that judged the
-point estimate called the candidate regressed in 66\% to 97\% of draws; the whole-range rule
-does so in 0.3\% to 31\%: about 2\% and 0.3\% with $f = 0.3$, and 25\% to 31\% with every case
-redrawn. With all eight metrics at zero tolerance (102 to 108 figures) the rates are 100\% and
-55\% to 83\%. A false-alarm rate of a quarter to a third, when every case is redrawn, is too
-high for a promotion gate. We therefore present the check as experimental: its
-\code{regressed} verdict has no controlled error rate, a family-wise correction is not built,
-and the script for this null experiment is not in the repository. The check applies nothing;
+zero and no figure could regress), 300 draws per setting and 400 resamples, through the shipped
+decision functions. Cases are the 22 of the starter suite with their real groups (and 200
+cases with the same group proportions); figures over groups smaller than the shipped minimum of
+five cases are not judged, which leaves 8 figures per metric. Per-case scores were drawn either
+from the 22 scores of a simulated starter-suite run or from an independent parametric model
+(pass with probability 0.8, lognormal cost); the ranges below span both.
+
+With a nonzero tolerance on one or two metrics (8 to 16 figures), the whole-range rule called
+the candidate regressed in 6\% to 21\% of draws when every case was redrawn, and in 0.3\% to 2.3\%
+with $f = 0.3$; an earlier rule that judged the point estimate did so in 57\% to 86\% and 33\%
+to 70\%. With all eight metrics at zero tolerance (58 to 64 figures) the whole-range rule gave
+51\% to 68\% ($f = 1$) and 31\% to 48\% ($f = 0.3$). At 200 cases, one metric, every case
+redrawn: 5\% to 11\%, against 69\% to 79\%. Admitting groups of two cases raises the rates
+(8\% to 42\% for one or two metrics, every case redrawn). A Bonferroni-adjusted interval, which
+is not shipped, brings one or two metrics to at most 4\% but leaves 11\% to 14\% with all eight
+at zero tolerance, and fails on groups of two cases, where a percentile bootstrap is unreliable.
+An earlier draft quoted rates from a script that was not committed and whose score distribution
+and figure counts were not recorded; the committed script does not reproduce them and replaces
+them. The rates depend on the assumed score distribution. A false-alarm rate of up to a fifth
+on one or two metrics, and over half with every metric at zero tolerance, is too high for a
+promotion gate. We therefore present the check as experimental: its \code{regressed} verdict
+has no controlled error rate, and a family-wise correction is not built. The check applies nothing;
 a routing change is still made by an operator.
 
 \paragraph{On live endpoints.} On the starter suite, two candidates that

@@ -1,0 +1,123 @@
+##### run 1: shipped min_group_size=5 #####
+min_group_size=5  draws=300  resamples=400  seed=20261106  cost unit=USD per 1000 requests
+  placement {'any': 8, 'escalated': 2, 'onprem_only': 4, 'us_only': 8}
+  protection {'enforced': 22}
+  application {'policy-57810d29': 8, 'policy-7b90407f': 8, 'policy-8fb5374a': 4, 'policy-d30395cb': 2}
+  workload {'claim_summary': 10, 'faq': 8, 'onprem_required': 4}
+pool pass rate 0.909
+
+=== distribution A empirical (22 real starter rows); rates % [95% Wilson interval, 300 draws] ===
+n   f    tolerances                         figs(pub) | first rule | new regressed | new inconclusive | new pass
+published row:  first / regressed / inconclusive / pass
+22  1.0  pass_rate 0.05                       8.0( 14) |  57.3 [51.7,62.8] |   5.7 [ 3.6, 8.9] |  75.3 [70.2,79.9] |  19.0 [15.0,23.8]
+                                             published:  90.3 /  24.7 /  74.3 /  1.0   (figures judged min-max 8-8)
+22  1.0  pass_rate 0.1+mean_chosen_cost 0.25  16.0( 28) |  86.0 [81.6,89.5] |  12.7 [ 9.4,16.9] |  87.0 [82.7,90.3] |   0.3 [ 0.1, 1.9]
+                                             published:  97.3 /  30.7 /  69.3 /  0.0   (figures judged min-max 16-16)
+22  1.0  all 8 at 0                          64.0(102) |  99.7 [98.1,99.9] |  51.3 [45.7,56.9] |  48.7 [43.1,54.3] |   0.0 [ 0.0, 1.3]
+                                             published: 100.0 /  82.7 /  17.3 /  0.0   (figures judged min-max 58-64)
+22  0.3  pass_rate 0.05                       8.0( 14) |  32.7 [27.6,38.2] |   0.3 [ 0.1, 1.9] |  45.0 [39.5,50.7] |  54.7 [49.0,60.2]
+                                             published:  66.3 /   2.0 /  66.7 / 31.3   (figures judged min-max 8-8)
+22  0.3  pass_rate 0.1+mean_chosen_cost 0.25  16.0( 28) |  58.7 [53.0,64.1] |   2.3 [ 1.1, 4.7] |  90.7 [86.8,93.5] |   7.0 [ 4.6,10.5]
+                                             published:  73.0 /   0.3 /  92.7 /  7.0   (figures judged min-max 16-16)
+22  0.3  all 8 at 0                          63.9(108) |  99.3 [97.6,99.8] |  31.0 [26.0,36.4] |  69.0 [63.6,74.0] |   0.0 [ 0.0, 1.3]
+                                             published: 100.0 /  55.0 /  45.0 /  0.0   (figures judged min-max 58-64)
+200 1.0  pass_rate 0.05                      13.0( 14) |  69.0 [63.6,74.0] |   5.3 [ 3.3, 8.5] |  94.0 [90.7,96.2] |   0.7 [ 0.2, 2.4]
+                                             published:  74.7 /   9.3 /  90.7 /  0.0   (figures judged min-max 13-13)
+--- NOT SHIPPED: Bonferroni variant (interval 1-0.1/m, m = mean figures judged, resamples raised to the minimum that level needs) ---
+22  1.0  pass_rate 0.05                     m=8    | regressed   1.7 [ 0.7, 3.8] | inconclusive  81.0 [76.2,85.0] | pass  17.3 [13.5,22.0]
+22  1.0  pass_rate 0.1+mean_chosen_cost 0.25 m=16   | regressed   2.0 [ 0.9, 4.3] | inconclusive  98.0 [95.7,99.1] | pass   0.0 [ 0.0, 1.3]
+22  1.0  all 8 at 0                         m=64   | regressed  10.7 [ 7.7,14.7] | inconclusive  89.3 [85.3,92.3] | pass   0.0 [ 0.0, 1.3]
+22  0.3  pass_rate 0.05                     m=8    | regressed   0.0 [ 0.0, 1.3] | inconclusive  45.3 [39.8,51.0] | pass  54.7 [49.0,60.2]
+22  0.3  pass_rate 0.1+mean_chosen_cost 0.25 m=16   | regressed   0.0 [ 0.0, 1.3] | inconclusive  96.7 [94.0,98.2] | pass   3.3 [ 1.8, 6.0]
+22  0.3  all 8 at 0                         m=64   | regressed   1.7 [ 0.7, 3.8] | inconclusive  98.3 [96.2,99.3] | pass   0.0 [ 0.0, 1.3]
+200 1.0  pass_rate 0.05                     m=13   | regressed   0.3 [ 0.1, 1.9] | inconclusive  99.7 [98.1,99.9] | pass   0.0 [ 0.0, 1.3]
+
+=== distribution B parametric (pass 0.8, lognormal cost); rates % [95% Wilson interval, 300 draws] ===
+n   f    tolerances                         figs(pub) | first rule | new regressed | new inconclusive | new pass
+published row:  first / regressed / inconclusive / pass
+22  1.0  pass_rate 0.05                       8.0( 14) |  67.0 [61.5,72.1] |  11.0 [ 7.9,15.0] |  85.3 [80.9,88.9] |   3.7 [ 2.1, 6.4]
+                                             published:  90.3 /  24.7 /  74.3 /  1.0   (figures judged min-max 8-8)
+22  1.0  pass_rate 0.1+mean_chosen_cost 0.25  16.0( 28) |  84.0 [79.4,87.7] |  21.3 [17.1,26.3] |  78.7 [73.7,82.9] |   0.0 [ 0.0, 1.3]
+                                             published:  97.3 /  30.7 /  69.3 /  0.0   (figures judged min-max 16-16)
+22  1.0  all 8 at 0                          63.4(102) | 100.0 [98.7,100.0] |  67.7 [62.2,72.7] |  32.3 [27.3,37.8] |   0.0 [ 0.0, 1.3]
+                                             published: 100.0 /  82.7 /  17.3 /  0.0   (figures judged min-max 54-64)
+22  0.3  pass_rate 0.05                       8.0( 14) |  50.3 [44.7,56.0] |   0.3 [ 0.1, 1.9] |  67.7 [62.2,72.7] |  32.0 [27.0,37.5]
+                                             published:  66.3 /   2.0 /  66.7 / 31.3   (figures judged min-max 8-8)
+22  0.3  pass_rate 0.1+mean_chosen_cost 0.25  16.0( 28) |  69.7 [64.2,74.6] |   1.3 [ 0.5, 3.4] |  93.0 [89.5,95.4] |   5.7 [ 3.6, 8.9]
+                                             published:  73.0 /   0.3 /  92.7 /  7.0   (figures judged min-max 16-16)
+22  0.3  all 8 at 0                          63.5(108) | 100.0 [98.7,100.0] |  48.0 [42.4,53.6] |  52.0 [46.4,57.6] |   0.0 [ 0.0, 1.3]
+                                             published: 100.0 /  55.0 /  45.0 /  0.0   (figures judged min-max 58-64)
+200 1.0  pass_rate 0.05                      13.0( 14) |  79.0 [74.0,83.2] |  10.7 [ 7.7,14.7] |  89.3 [85.3,92.3] |   0.0 [ 0.0, 1.3]
+                                             published:  74.7 /   9.3 /  90.7 /  0.0   (figures judged min-max 13-13)
+--- NOT SHIPPED: Bonferroni variant (interval 1-0.1/m, m = mean figures judged, resamples raised to the minimum that level needs) ---
+22  1.0  pass_rate 0.05                     m=8    | regressed   2.7 [ 1.4, 5.2] | inconclusive  95.0 [91.9,96.9] | pass   2.3 [ 1.1, 4.7]
+22  1.0  pass_rate 0.1+mean_chosen_cost 0.25 m=16   | regressed   4.0 [ 2.3, 6.9] | inconclusive  96.0 [93.1,97.7] | pass   0.0 [ 0.0, 1.3]
+22  1.0  all 8 at 0                         m=64   | regressed  14.3 [10.8,18.8] | inconclusive  85.7 [81.2,89.2] | pass   0.0 [ 0.0, 1.3]
+22  0.3  pass_rate 0.05                     m=8    | regressed   0.0 [ 0.0, 1.3] | inconclusive  69.3 [63.9,74.3] | pass  30.7 [25.7,36.1]
+22  0.3  pass_rate 0.1+mean_chosen_cost 0.25 m=16   | regressed   0.0 [ 0.0, 1.3] | inconclusive  99.0 [97.1,99.7] | pass   1.0 [ 0.3, 2.9]
+22  0.3  all 8 at 0                         m=64   | regressed   4.0 [ 2.3, 6.9] | inconclusive  96.0 [93.1,97.7] | pass   0.0 [ 0.0, 1.3]
+200 1.0  pass_rate 0.05                     m=13   | regressed   2.0 [ 0.9, 4.3] | inconclusive  98.0 [95.7,99.1] | pass   0.0 [ 0.0, 1.3]
+
+runtime 245 s
+##### run 2: min_group_size=2 (13 scopes, closest to the published 14) #####
+min_group_size=2  draws=300  resamples=400  seed=20261106  cost unit=USD per 1000 requests
+  placement {'any': 8, 'escalated': 2, 'onprem_only': 4, 'us_only': 8}
+  protection {'enforced': 22}
+  application {'policy-57810d29': 8, 'policy-7b90407f': 8, 'policy-8fb5374a': 4, 'policy-d30395cb': 2}
+  workload {'claim_summary': 10, 'faq': 8, 'onprem_required': 4}
+pool pass rate 0.909
+
+=== distribution A empirical (22 real starter rows); rates % [95% Wilson interval, 300 draws] ===
+n   f    tolerances                         figs(pub) | first rule | new regressed | new inconclusive | new pass
+published row:  first / regressed / inconclusive / pass
+22  1.0  pass_rate 0.05                      13.0( 14) |  69.0 [63.6,74.0] |   7.7 [ 5.2,11.2] |  75.0 [69.8,79.6] |  17.3 [13.5,22.0]
+                                             published:  90.3 /  24.7 /  74.3 /  1.0   (figures judged min-max 13-13)
+22  1.0  pass_rate 0.1+mean_chosen_cost 0.25  26.0( 28) |  96.7 [94.0,98.2] |  34.7 [29.5,40.2] |  65.3 [59.8,70.5] |   0.0 [ 0.0, 1.3]
+                                             published:  97.3 /  30.7 /  69.3 /  0.0   (figures judged min-max 26-26)
+22  1.0  all 8 at 0                         103.4(102) | 100.0 [98.7,100.0] |  72.3 [67.0,77.1] |  27.7 [22.9,33.0] |   0.0 [ 0.0, 1.3]
+                                             published: 100.0 /  82.7 /  17.3 /  0.0   (figures judged min-max 100-104)
+22  0.3  pass_rate 0.05                      13.0( 14) |  39.0 [33.7,44.6] |   0.3 [ 0.1, 1.9] |  45.0 [39.5,50.7] |  54.7 [49.0,60.2]
+                                             published:  66.3 /   2.0 /  66.7 / 31.3   (figures judged min-max 13-13)
+22  0.3  pass_rate 0.1+mean_chosen_cost 0.25  26.0( 28) |  77.0 [71.9,81.4] |   4.7 [ 2.8, 7.7] |  91.7 [88.0,94.3] |   3.7 [ 2.1, 6.4]
+                                             published:  73.0 /   0.3 /  92.7 /  7.0   (figures judged min-max 26-26)
+22  0.3  all 8 at 0                         103.3(108) |  99.7 [98.1,99.9] |  34.7 [29.5,40.2] |  65.3 [59.8,70.5] |   0.0 [ 0.0, 1.3]
+                                             published: 100.0 /  55.0 /  45.0 /  0.0   (figures judged min-max 100-104)
+200 1.0  pass_rate 0.05                      13.0( 14) |  69.0 [63.6,74.0] |   5.3 [ 3.3, 8.5] |  94.0 [90.7,96.2] |   0.7 [ 0.2, 2.4]
+                                             published:  74.7 /   9.3 /  90.7 /  0.0   (figures judged min-max 13-13)
+--- NOT SHIPPED: Bonferroni variant (interval 1-0.1/m, m = mean figures judged, resamples raised to the minimum that level needs) ---
+22  1.0  pass_rate 0.05                     m=13   | regressed   2.0 [ 0.9, 4.3] | inconclusive  80.7 [75.8,84.7] | pass  17.3 [13.5,22.0]
+22  1.0  pass_rate 0.1+mean_chosen_cost 0.25 m=26   | regressed  23.3 [18.9,28.4] | inconclusive  76.7 [71.6,81.1] | pass   0.0 [ 0.0, 1.3]
+22  1.0  all 8 at 0                         m=104  | regressed  35.7 [30.5,41.2] | inconclusive  64.3 [58.8,69.5] | pass   0.0 [ 0.0, 1.3]
+22  0.3  pass_rate 0.05                     m=13   | regressed   0.0 [ 0.0, 1.3] | inconclusive  45.3 [39.8,51.0] | pass  54.7 [49.0,60.2]
+22  0.3  pass_rate 0.1+mean_chosen_cost 0.25 m=26   | regressed   1.3 [ 0.5, 3.4] | inconclusive  97.0 [94.4,98.4] | pass   1.7 [ 0.7, 3.8]
+22  0.3  all 8 at 0                         m=104  | regressed   2.7 [ 1.4, 5.2] | inconclusive  97.3 [94.8,98.6] | pass   0.0 [ 0.0, 1.3]
+200 1.0  pass_rate 0.05                     m=13   | regressed   0.3 [ 0.1, 1.9] | inconclusive  99.7 [98.1,99.9] | pass   0.0 [ 0.0, 1.3]
+
+=== distribution B parametric (pass 0.8, lognormal cost); rates % [95% Wilson interval, 300 draws] ===
+n   f    tolerances                         figs(pub) | first rule | new regressed | new inconclusive | new pass
+published row:  first / regressed / inconclusive / pass
+22  1.0  pass_rate 0.05                      13.0( 14) |  82.7 [78.0,86.5] |  15.3 [11.7,19.8] |  82.7 [78.0,86.5] |   2.0 [ 0.9, 4.3]
+                                             published:  90.3 /  24.7 /  74.3 /  1.0   (figures judged min-max 13-13)
+22  1.0  pass_rate 0.1+mean_chosen_cost 0.25  26.0( 28) |  96.0 [93.1,97.7] |  42.0 [36.6,47.7] |  58.0 [52.3,63.4] |   0.0 [ 0.0, 1.3]
+                                             published:  97.3 /  30.7 /  69.3 /  0.0   (figures judged min-max 26-26)
+22  1.0  all 8 at 0                         102.4(102) | 100.0 [98.7,100.0] |  85.3 [80.9,88.9] |  14.7 [11.1,19.1] |   0.0 [ 0.0, 1.3]
+                                             published: 100.0 /  82.7 /  17.3 /  0.0   (figures judged min-max 94-104)
+22  0.3  pass_rate 0.05                      13.0( 14) |  58.3 [52.7,63.8] |   1.0 [ 0.3, 2.9] |  68.3 [62.9,73.3] |  30.7 [25.7,36.1]
+                                             published:  66.3 /   2.0 /  66.7 / 31.3   (figures judged min-max 13-13)
+22  0.3  pass_rate 0.1+mean_chosen_cost 0.25  26.0( 28) |  84.0 [79.4,87.7] |   5.7 [ 3.6, 8.9] |  92.0 [88.4,94.6] |   2.3 [ 1.1, 4.7]
+                                             published:  73.0 /   0.3 /  92.7 /  7.0   (figures judged min-max 26-26)
+22  0.3  all 8 at 0                         102.4(108) | 100.0 [98.7,100.0] |  55.0 [49.3,60.5] |  45.0 [39.5,50.7] |   0.0 [ 0.0, 1.3]
+                                             published: 100.0 /  55.0 /  45.0 /  0.0   (figures judged min-max 94-104)
+200 1.0  pass_rate 0.05                      13.0( 14) |  79.0 [74.0,83.2] |  10.7 [ 7.7,14.7] |  89.3 [85.3,92.3] |   0.0 [ 0.0, 1.3]
+                                             published:  74.7 /   9.3 /  90.7 /  0.0   (figures judged min-max 13-13)
+--- NOT SHIPPED: Bonferroni variant (interval 1-0.1/m, m = mean figures judged, resamples raised to the minimum that level needs) ---
+22  1.0  pass_rate 0.05                     m=13   | regressed   5.0 [ 3.1, 8.1] | inconclusive  93.3 [89.9,95.6] | pass   1.7 [ 0.7, 3.8]
+22  1.0  pass_rate 0.1+mean_chosen_cost 0.25 m=26   | regressed  23.7 [19.2,28.8] | inconclusive  76.3 [71.2,80.8] | pass   0.0 [ 0.0, 1.3]
+22  1.0  all 8 at 0                         m=103  | regressed  53.7 [48.0,59.2] | inconclusive  46.3 [40.8,52.0] | pass   0.0 [ 0.0, 1.3]
+22  0.3  pass_rate 0.05                     m=13   | regressed   0.0 [ 0.0, 1.3] | inconclusive  69.3 [63.9,74.3] | pass  30.7 [25.7,36.1]
+22  0.3  pass_rate 0.1+mean_chosen_cost 0.25 m=26   | regressed   3.3 [ 1.8, 6.0] | inconclusive  96.3 [93.6,97.9] | pass   0.3 [ 0.1, 1.9]
+22  0.3  all 8 at 0                         m=103  | regressed   8.0 [ 5.4,11.6] | inconclusive  92.0 [88.4,94.6] | pass   0.0 [ 0.0, 1.3]
+200 1.0  pass_rate 0.05                     m=13   | regressed   2.0 [ 0.9, 4.3] | inconclusive  98.0 [95.7,99.1] | pass   0.0 [ 0.0, 1.3]
+
+runtime 571 s
+total wall seconds 834
