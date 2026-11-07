@@ -266,6 +266,36 @@ provider kind, a pool built another way), it would be eligible. **Wanted:** drop
 condition (or state in the code why it is needed), and add a test that a disabled row of each
 provider kind is rejected by `candidate_rejection`.
 
+## B88 — A streamed request whose client hangs up right after `[DONE]` is never metered  🔴 OPEN
+
+**Severity:** medium (breaks "usage is metered durably" and "every request emits a
+DecisionRecord" for any client that closes promptly; skews usage, cost and outcome data).
+**Found:** 2026-11-07, Spark, while setting up prime-agent (app `prime-agent`,
+`stream_mode: stream_unverified`, model `qwen3.8-27b`).
+
+- **Measured:** three prime-agent requests returned 200 through RouteForge (the token's
+  `last_used_at` moved, the client got full answers, one turn used a tool), but none of them
+  left a `usage_records` or `routing_outcomes` row. In the same window, `kit-gtm` (also
+  `stream_unverified`) was recorded normally.
+- **Cause:** `_stream_unverified_response` (`app/api/routes.py`) calls `_finalize_stream`,
+  which writes the usage row, the outcome row and the trace, in the SSE generator's `finally`,
+  after `[DONE]` is yielded. prime-agent closes the socket as soon as it reads `[DONE]`.
+  Starlette/uvicorn then cancel the response task, and the cancellation lands inside the
+  database write. The api log shows `CancelledError: Cancelled via cancel scope … RequestResponseCycle.run_asgi`
+  followed by `asyncpg … InterfaceError: connection is closed`.
+- **B78 did not cover this case.** B78 records a disconnect *during* generation as
+  `cancelled`. Here the response completed; the record of it is what gets cancelled.
+  `_incremental_verify_response` and the keepalive/`verified_then_stream` paths finalize the
+  same way and are probably affected too (not yet measured).
+
+**Wanted:** make the finalize step run to completion regardless of the client, for example
+with an `anyio.CancelScope(shield=True)` around `_finalize_stream` / `_record_failed_stream`,
+or by handing it to a tracked background task that the app drains on shutdown. Keep it best
+effort (a DB error must still not break the stream). **Acceptance:** a test whose client
+closes the connection immediately after reading `[DONE]` finds one `ok` usage row and one
+outcome row, for `stream_unverified`, `incremental_verify` and `verified_then_stream`; then
+re-run prime-agent on the Spark and see its rows appear.
+
 ## B85 — Stream path records fewer token details than the non-stream path (reasoning and cached tokens)  🔴 OPEN
 
 **Severity:** low (records only; no effect on what a client receives).
