@@ -1839,14 +1839,23 @@ async def _finalize_stream(
             if isinstance(rec, dict) and rec.get("step") == "verify":
                 rec["reason"] = verify_reason
                 rec["performed"] = verify_performed
-        await _finalize(request, resp, body=body, tenant=tenant,
-                        app_policy=app_policy, app_langfuse=app_langfuse,
-                        profile=profile, session_id=session_id, s=s,
-                        internals=internals, request_id=request_id,
-                        started_ns=started_ns,
-                        workload=workload, workload_source=workload_source,
-                        outcome_session=outcome_session,
-                        requested_alias=requested_alias)
+        # Shielded (B88): this runs in the SSE generator's `finally`. A client
+        # that hangs up right after `[DONE]` makes Starlette's disconnect
+        # listener cancel -- and keep re-cancelling -- this generator, which
+        # cut the usage/outcome writes short. The response had completed, so
+        # nothing was metered, and the cancelled write left a broken asyncpg
+        # connection in the pool that 500'd the next request's key lookup.
+        # Only the DB writes are shielded; the drain above is not, so a
+        # mid-answer disconnect still cancels the backend generation (B78).
+        with anyio.CancelScope(shield=True):
+            await _finalize(request, resp, body=body, tenant=tenant,
+                            app_policy=app_policy, app_langfuse=app_langfuse,
+                            profile=profile, session_id=session_id, s=s,
+                            internals=internals, request_id=request_id,
+                            started_ns=started_ns,
+                            workload=workload, workload_source=workload_source,
+                            outcome_session=outcome_session,
+                            requested_alias=requested_alias)
     except Exception:  # finalize must never break the (already sent) stream
         log.exception("streaming finalize failed (swallowed)")
 
