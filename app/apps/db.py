@@ -95,7 +95,10 @@ def make_engine(url: str | None = None):
             return create_async_engine(
                 url, connect_args=connect_args, poolclass=StaticPool)
         return create_async_engine(url, connect_args=connect_args)
-    return create_async_engine(url)
+    # pool_pre_ping (B88): test a pooled connection on checkout and replace it
+    # if dead, so one connection broken by a cancelled write (or a Postgres
+    # restart) cannot fail an unrelated request with a 500.
+    return create_async_engine(url, pool_pre_ping=True)
 
 
 class Database:

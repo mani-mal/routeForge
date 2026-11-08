@@ -266,7 +266,7 @@ provider kind, a pool built another way), it would be eligible. **Wanted:** drop
 condition (or state in the code why it is needed), and add a test that a disabled row of each
 provider kind is rejected by `candidate_rejection`.
 
-## B88 — A streamed request whose client hangs up right after `[DONE]` is never metered  🔴 OPEN
+## B88 — A streamed request whose client hangs up right after `[DONE]` is never metered  ✅ RESOLVED (2026-11-08)
 
 **Severity:** medium (breaks "usage is metered durably" and "every request emits a
 DecisionRecord" for any client that closes promptly; skews usage, cost and outcome data).
@@ -295,6 +295,23 @@ effort (a DB error must still not break the stream). **Acceptance:** a test whos
 closes the connection immediately after reading `[DONE]` finds one `ok` usage row and one
 outcome row, for `stream_unverified`, `incremental_verify` and `verified_then_stream`; then
 re-run prime-agent on the Spark and see its rows appear.
+
+**Worse than first recorded (2026-11-08, Spark):** the cancelled write also left a broken
+asyncpg connection in the pool. The next request to check it out failed its API-key lookup
+(`_authenticate` → `store.resolve_application`, "connection is closed") and returned **500**:
+78 such 500s in 30 hours, against 145 cancelled writes and 119 connections the pool failed to
+terminate. Any app could draw a broken connection, not only the one that hung up.
+
+**Resolved:** 2026-11-08. `_finalize_stream` (`app/api/routes.py`) now runs `_finalize` inside
+`anyio.CancelScope(shield=True)`, as the keepalive path and `_record_failed_stream` already
+did. That covers both live modes (`stream_unverified`, `incremental_verify`);
+`verified_then_stream` and the non-stream path were already shielded or run outside the
+generator. The drain-on-disconnect stays unshielded, so a mid-answer hang-up still cancels the
+backend (B78). Postgres engines now use `pool_pre_ping=True` (`app/apps/db.py`), so a dead
+pooled connection is replaced on checkout instead of failing a request. Test:
+`tests/test_client_disconnect_cancel.py::test_live_stream_hangup_after_done_still_records`
+(drives the real `StreamingResponse` with a client that disconnects on `[DONE]`; fails for
+both modes without the shield).
 
 ## B85 — Stream path records fewer token details than the non-stream path (reasoning and cached tokens)  🔴 OPEN
 

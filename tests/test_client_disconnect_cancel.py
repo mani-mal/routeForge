@@ -301,3 +301,75 @@ def test_keepalive_stream_real_asgi_disconnect_still_records_cancelled(monkeypat
     assert cancelled is True
     assert work_was_cancelled is True
     assert recorded == [("acme", "req-real-disc")]
+
+
+@pytest.mark.parametrize("mode", ["stream_unverified", "incremental_verify"])
+def test_live_stream_hangup_after_done_still_records(monkeypatch, mode):
+    """B88: a client (prime-agent) that closes the socket as soon as it reads
+    `[DONE]`. The response completed, but the usage/outcome write in the
+    generator's `finally` was cancelled by Starlette's disconnect listener,
+    so the request was never metered (and the half-done write broke a pooled
+    DB connection). Drives the REAL `StreamingResponse.__call__`; the fake
+    `_finalize` awaits, as the real DB write does, and must still complete."""
+    from app.api import routes
+    from app.apps.policy import AppPolicyView
+    from app.apps.privacy import AppPrivacyProfile
+    from app.config.loader import load_settings
+    from app.models import ChatRequest, Message
+
+    recorded = []
+
+    async def slow_finalize(request, resp, *, request_id, **_kw):
+        await asyncio.sleep(0.2)          # a DB round trip, outlasting the hang-up
+        recorded.append(request_id)
+
+    monkeypatch.setattr(routes, "_finalize", slow_finalize)
+
+    class _PassVerifier:
+        def __init__(self, *_a):
+            pass
+
+        def feed(self, d):
+            return d
+
+        def flush(self):
+            return ""
+
+    monkeypatch.setattr(routes, "StreamingVerifier", _PassVerifier)
+
+    async def go():
+        async def deltas():
+            yield "one "
+            yield "two"
+
+        def get_meta():
+            return {"raw_completion": "one two", "trace": [], "model": "local-8b"}
+        get_meta.detector = None
+        get_meta.ctx = None
+
+        make = (routes._stream_unverified_response if mode == "stream_unverified"
+                else routes._incremental_verify_response)
+        resp = make(
+            object(), request_id=f"req-b88-{mode}", deltas=deltas(),
+            get_meta=get_meta,
+            body=ChatRequest(model="auto", messages=[Message(role="user", content="hi")]),
+            tenant="acme", app_policy=AppPolicyView(), app_langfuse=None,
+            profile=AppPrivacyProfile(recognizers=(), rules=()),
+            session_id=None, s=load_settings(), started=0.0)
+
+        done = asyncio.Event()
+
+        async def send(message):
+            if message.get("type") == "http.response.body" and b"[DONE]" in message.get("body", b""):
+                done.set()
+
+        async def receive():
+            await done.wait()             # hang up the moment [DONE] arrives
+            return {"type": "http.disconnect"}
+
+        scope = {"type": "http", "asgi": {"spec_version": "2.3"}}
+        await resp(scope, receive, send)
+        await asyncio.sleep(0.3)          # let any (shielded) write settle
+
+    asyncio.run(go())
+    assert recorded == [f"req-b88-{mode}"]
