@@ -313,6 +313,122 @@ pooled connection is replaced on checkout instead of failing a request. Test:
 (drives the real `StreamingResponse` with a client that disconnects on `[DONE]`; fails for
 both modes without the shield).
 
+## B89 — Neither Helm chart boots and works at its default values  🔴 OPEN
+
+**Severity:** high (the Kubernetes / GreenLake / PCAI packaging path fails at default values;
+the Definition of done requires Helm deploys that boot with the config lint passing).
+**Found:** 2026-11-08, a qwen3.8-27b audit run on the Spark, re-checked against `main` (2e3179a).
+Review: `docs/audits/2026-11-08-qwen3.8-27b-config-deploy-audit-review.md`.
+
+- **Lint failure at boot (reproduced).** `deploy/helm/serving-plane/templates/configmap.yaml` and
+  `deploy/hpe/routeforge/templates/serving-config.yaml` render each `providers.*` block with
+  only `enabled:`. The lint requires `litellm_prefix` for every enabled provider, so the api
+  exits with `CONFIG_LINT: PROVIDER_NO_LITELLM_MAP onprem has no litellm_prefix`.
+- **The UI can't reach the api (serving-plane chart).** The `ui/nginx.conf` baked into the image uses
+  `resolver 127.0.0.11` (Docker's DNS) and `http://api:8080`. On Kubernetes the Service is
+  `<release>-serving-plane-api` and the DNS server is different. The HPE chart overrides this
+  with `ui-nginx-config.yaml`; the serving-plane chart has no override, so every `/api`, `/v1`
+  and `/admin` call from the console fails.
+- **Presidio is the default but the image lacks it.** Both charts default
+  `piiDetection: presidio` (passed as `SP_PII_DETECTION`), but the Dockerfile's default
+  `EXTRAS="observability,postgres"` doesn't install presidio, so `make_detector("presidio")`
+  raises ImportError in `create_app`. The HPE comment "image bakes the Presidio model" is wrong
+  for the default build.
+- **No admin credentials.** The serving-plane chart never sets `ADMIN_EMAIL` / `ADMIN_PASSWORD`, so
+  the api seeds `admin@routeforge.local` / `changeme`, and the chart enables ingress by default.
+  The HPE chart also defaults `adminPassword: changeme`.
+- **MinIO images can't be pulled.** HPE `values.yaml` uses `minio/minio` and `minio/mc`, which were
+  removed from Docker Hub. Compose already moved to `quay.io/minio/*`, dgx_lab to `bitnamilegacy/*`.
+
+**Wanted:** render `litellm_prefix` + `api_key_env` from values; add an nginx ConfigMap to the
+serving-plane chart (port the HPE one); default `piiDetection: regex` in both charts, or
+document that the image must be built with `EXTRAS=...,presidio`; add an admin Secret to the
+serving-plane chart and refuse to install with `changeme`, or generate a password;
+fix the MinIO image refs. **Acceptance:** a CI step runs `helm template` for both charts,
+extracts the rendered `serving.yaml`, and runs it through `load_settings()` + `enforce()`
+together with the shipped routing/policy/pricing configs. This is the pre-install lint that would have
+caught the boot failure.
+
+## B90 — Risk-class names are not linted, so a typo becomes a 500 on every affected request  🔴 OPEN
+
+**Severity:** medium (a config error surfaces at request time, not at boot; this goes against rule 5
+and the "drift is a boot failure" promise).
+**Found:** 2026-11-08, same audit as B89 (reproduced).
+
+`app/config/lint.py` checks only the *values* of `routing.risk_floors` (the tiers). It never
+checks the *keys* against `app/policy/enums.py::RISK_CLASS` (`low|medium|high`), or the
+`risk_class` of each `policy.yaml` sensitivity rule. A config with `risk_floors.critical` or a rule with
+`risk_class: critical` passes the lint. A request that resolves to a risk class with no floor
+then raises `KeyError` at `app/routing/router.py:332` (also 393, 431) and returns 500.
+
+**Wanted:** lint that `set(risk_floors) == RISK_CLASS` and that every rule's
+`risk_class ∈ RISK_CLASS`, with named errors (`RISK_FLOOR_CLASS_UNKNOWN`,
+`RISK_FLOOR_CLASS_MISSING`, `RULE_RISK_CLASS_UNKNOWN`). Add a test for each.
+
+## B91 — Config lint enforces less than CLAUDE.md says (canonical values, one owner per concern)  🔴 OPEN
+
+**Severity:** low–medium (it fails closed today, but on-prem routing can die with no boot signal; the
+docs overclaim what the lint checks).
+**Found:** 2026-11-08, same audit as B89.
+
+- **Provider spelling.** Only a subset check runs (pool/pricing providers ⊆ serving providers). If every
+  file renames `onprem` to `on-prem`, the lint passes, but `ONPREM_ONLY_PROVIDERS = {"onprem"}`
+  (`app/policy/feasible.py`) and onboarded rows (forced to `provider="onprem"`) no longer
+  match. Every `onprem_only` request is then rejected.
+- **Tier set.** Nothing asserts `tiers == {cheap, mid, frontier}`, so an extra `strong` tier
+  passes when `tier_quality` and `tier_latency_ms` cover it.
+- **Sensitivity enum.** The lint checks it only against itself. `enums.SENSITIVITY` is described as
+  "used by the boot config-lint" but `lint.py` doesn't import it.
+- **One owner per concern.** No check exists. The config models silently drop unknown keys, so a value
+  restated in the wrong file (e.g. `budgets:` in `routing.yaml`) is ignored with no warning.
+
+**Wanted:** pin the canonical provider (`onprem` must be declared in serving), the tier set and
+the sensitivity enum to `app/policy/enums.py`. Reject unknown top-level keys per file
+(`extra="forbid"`, or an explicit owned-keys table) so a value in the wrong file fails the boot.
+If any of these is left out on purpose, correct the CLAUDE.md "Config lint" section instead.
+
+## B92 — Dead switches still in the deploy artifacts (`inference_backend`, `allowBackendFallback`, `fail_closed`, CCR PVC)  🔴 OPEN
+
+**Severity:** low (nothing breaks, but the docs point operators at switches that do nothing).
+**Found:** 2026-11-08, same audit as B89.
+
+- `inference_backend` / `SP_INFERENCE_BACKEND`: nothing in `app/` reads them (only a stale comment
+  in `app/policy/feasible.py`). They are still set in the `Dockerfile` (`ENV` plus a header comment that
+  says the lint rejects `none`, which it doesn't), in both charts (configmap, api env, values, README,
+  NOTES — presented as *the* backend switch, default `mock`), `deploy/compose/.env.example`,
+  `deploy/README.md` and `app/gateway/backends/README.md`. The 2026-08-03 pure-router pivot was supposed to
+  remove them.
+- `servingPlane.allowBackendFallback` → `allow_backend_fallback`: rendered, never read.
+- `policy.fail_closed` in `config/serving.yaml` and both charts: never read (fail-closed is
+  unconditional in code, which is correct; the key only suggests it can be switched off).
+- serving-plane chart mounts a `ccr-store` PVC at `/var/lib/serving-plane/ccr`, but
+  `app/compression/ccr.py::CCRStore` is in-memory only. It provisions 20Gi that nothing uses.
+
+**Wanted:** remove them all (keep a CHANGELOG note for operators whose values files set them).
+
+## B93 — Repo and packaging hygiene from the same audit  🔴 OPEN
+
+**Severity:** low, except the first item, which can leak secrets.
+**Found:** 2026-11-08, same audit as B89.
+
+- **`.gitignore` matches only `.env`.** The Spark checkout has `deploy/spark/.env.bak-*` files
+  containing real secrets (admin and Postgres passwords, the session HMAC key, the Fernet key). They are
+  untracked but not ignored, so one `git add .` commits them. Add `.env.*` + `!.env.example`, and
+  delete the backups on the Spark.
+- The Spark's local `deploy/spark/.env` sets `API_EXTRAS=agent,...`. The `agent` extra was removed
+  2026-09-17, so a rebuild from that file fails. Fix it on the Spark (the file is not tracked).
+- `.env.example` (root) lacks `ADMIN_EMAIL` / `ADMIN_PASSWORD`, `SP_SERVER_PORT`,
+  `SP_CONFIG_OVERLAY_DIR`, `SP_PROVIDER_<NAME>_ENABLED`. `deploy/compose/.env.example` lacks
+  `SP_SESSION_ID_KEY`, `SP_LOG_LEVEL`, `DATABASE_URL`.
+- `deploy/compose/docker-compose.yml` builds with `EXTRAS: "observability"`, but its comment offers a
+  Postgres `DATABASE_URL`, which needs the `postgres` extra (asyncpg). Say so in the comment.
+- `deploy/hpe/routeforge-0.2.7.tgz` is tracked next to the chart source and can drift from it.
+  Gitignore it (build it with `scripts/package.sh`), or add a check that it matches the source.
+- The `Dockerfile` copies all of `tests/` into the runtime image; only `tests/personas.yaml` is needed
+  (`/api/traffic`).
+- HPE `langfuse-app.yaml` seeds the Langfuse login from the RouteForge admin credentials. Say so in
+  the HPE README.
+
 ## B85 — Stream path records fewer token details than the non-stream path (reasoning and cached tokens)  🔴 OPEN
 
 **Severity:** low (records only; no effect on what a client receives).
