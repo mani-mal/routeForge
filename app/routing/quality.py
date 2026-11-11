@@ -88,6 +88,9 @@ class QualityResolver:
             self._build_maps(settings.routing.model_pool)
         self._snapshot: tuple[dict[OverrideKey, QualityScore],
                               dict[OverrideKey, QualityScore]] = ({}, {})
+        # B80: calibrated LOWER bounds, kept apart from the score overrides so
+        # a bound can never move `resolve()`'s score or source.
+        self._bounds: dict[OverrideKey, tuple[float, str]] = {}
         self.set_overrides(overrides or {})
 
     def _build_maps(self, pool) -> None:
@@ -142,6 +145,44 @@ class QualityResolver:
                         "quality override skipped: model=%s workload=%s source=%r "
                         "is not an override source", k[0], k[1], q.source)
         self._snapshot = (customer, calibrated)
+
+    def set_bounds(self, mapping: "Mapping[OverrideKey, tuple[float, str]]") -> None:
+        """Swap the calibrated lower-bound snapshot (B80). Same discipline as
+        `set_overrides`: build the new map first, then replace the reference in
+        one assignment. A non-finite or out-of-[0, 1] bound is skipped with a
+        warning."""
+        log = logging.getLogger("serving.routing")
+        new: dict[OverrideKey, tuple[float, str]] = {}
+        for key, (lower, set_id) in mapping.items():
+            try:
+                ok = math.isfinite(lower) and 0.0 <= lower <= 1.0
+            except TypeError:
+                ok = False
+            if not ok:
+                log.warning(
+                    "quality bound skipped: model=%s workload=%s lower=%r "
+                    "is not a finite value in [0, 1]", key[0], key[1], lower)
+                continue
+            new[(key[0], key[1])] = (lower, set_id)
+        self._bounds = new
+
+    def bounds_map(self) -> dict[OverrideKey, tuple[float, str]]:
+        """A copy of the current lower-bound map, for the snapshot."""
+        return dict(self._bounds)
+
+    def resolve_lower(self, model: str,
+                      workload: str | None) -> tuple[float | None, str | None]:
+        """The calibrated lower bound for `(model, workload)`, then
+        `(model, None)`: `(lower, "calibrated")`, else `(None, None)`. No
+        customer, published or tier-default rung -- an unknown bound never
+        clears a floor."""
+        bounds = self._bounds   # one read
+        hit = bounds.get((model, workload)) if workload is not None else None
+        if hit is None:
+            hit = bounds.get((model, None))
+        if hit is None:
+            return None, None
+        return hit[0], "calibrated"
 
     def override_maps(self) -> tuple[dict[OverrideKey, QualityScore],
                                      dict[OverrideKey, QualityScore]]:

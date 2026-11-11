@@ -101,3 +101,45 @@ def test_registry_aware_resolver_covers_onboarded_onprem_tier():
     assert any(c.name == "local-32b" and c.tier == "mid" for c in reg.effective_pool())
     r = QualityResolver(s, registry=reg)
     assert r.resolve("local-32b") == QualityScore(s.routing.tier_quality["mid"], "tier_default")
+
+
+# --------------------------------------------------------------------------- #
+# B80: calibrated lower bounds, a SEPARATE snapshot from the score overrides
+def test_resolve_lower_workload_bound_beats_model_wide():
+    s = _settings()
+    r = QualityResolver(s, registry=_registry(s))
+    r.set_bounds({("local-8b", None): (0.5, "s1"), ("local-8b", "code"): (0.8, "s2")})
+    assert r.resolve_lower("local-8b", "code") == (0.8, "calibrated")
+    assert r.resolve_lower("local-8b", "chat") == (0.5, "calibrated")
+    assert r.resolve_lower("local-8b", None) == (0.5, "calibrated")
+
+
+def test_resolve_lower_without_bound_is_none_none():
+    s = _settings()
+    r = QualityResolver(s, registry=_registry(s))
+    assert r.resolve_lower("local-8b", "code") == (None, None)
+    r.set_bounds({("other", None): (0.5, "s1")})
+    assert r.resolve_lower("local-8b", "code") == (None, None)
+
+
+def test_bounds_never_change_resolve():
+    s = _settings()
+    r = QualityResolver(s, registry=_registry(s))
+    before = r.resolve("local-8b", "code")
+    r.set_bounds({("local-8b", "code"): (0.9, "s1"), ("local-8b", None): (0.9, "s1")})
+    assert r.resolve("local-8b", "code") == before
+    assert r.resolve("local-8b", "code").source == before.source
+
+
+def test_set_bounds_skips_invalid_and_copy_is_returned(caplog):
+    s = _settings()
+    r = QualityResolver(s, registry=_registry(s))
+    with caplog.at_level("WARNING", logger="serving.routing"):
+        r.set_bounds({("a", None): (float("nan"), "s"), ("b", None): (1.5, "s"),
+                      ("c", None): (-0.1, "s"), ("d", None): (0.4, "s")})
+    assert r.bounds_map() == {("d", None): (0.4, "s")}
+    assert sum("quality bound skipped" in m for m in caplog.messages) == 3
+    r.bounds_map().clear()
+    assert r.resolve_lower("d", None) == (0.4, "calibrated")
+    r.set_bounds({})
+    assert r.resolve_lower("d", None) == (None, None)

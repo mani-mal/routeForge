@@ -217,6 +217,9 @@ async def refresh_quality(app: FastAPI) -> bool:
         try:
             async with app.state.db.session() as session:
                 rows = await apps_store.load_quality_overrides(session)
+                bounds = await apps_store.load_quality_bounds(session)
+            # Both reads succeeded: install both snapshots, or neither.
+            app.state.quality.set_bounds(bounds)
             app.state.quality.set_overrides({
                 key: [QualityScore(score, source, set_id)
                       for source, (score, set_id) in by_source.items()]
