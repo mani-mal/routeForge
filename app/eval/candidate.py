@@ -59,6 +59,10 @@ NOT_EVALUABLE = {
     "fallback": "the bench does not model same-provider retries",
     "prompt_opt": "managed prompts are not part of a bench run",
     "quality_refresh_s": "it is a serving-process refresh interval",
+    "quality_floors":
+        "a candidate file cannot supply the calibrated lower bounds the floor "
+        "reads; quality floors are evaluated by the bench's router_floor arm "
+        "with split-fitted bounds",
 }
 
 
