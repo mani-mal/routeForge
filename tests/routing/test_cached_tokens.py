@@ -9,7 +9,7 @@ def test_usage_dict_reads_cached_tokens_from_a_dict_shape():
     u = {"prompt_tokens": 1000, "completion_tokens": 50,
          "prompt_tokens_details": {"cached_tokens": 768}}
     assert _usage_dict(u) == {"prompt_tokens": 1000, "completion_tokens": 50,
-                              "cached_tokens": 768}
+                              "cached_tokens": 768, "reasoning_tokens": None}
 
 
 def test_usage_dict_reads_cached_tokens_from_an_object_shape():

@@ -15,6 +15,18 @@
     "snapshot_generated_at": "2026-09-24T00:00:00Z",
     "snapshot_sha256": "dbec407b6ebba4f5a32decb60dd635d8edd4180c9b17a94305cd6f0d6bf72eb9"
   },
+  "rows": {
+    "estimated_tokens": 13,
+    "excluded": {
+      "before_since": 0,
+      "cache_hit": 0,
+      "missing_features": 0,
+      "missing_routing_tokens": 0,
+      "unknown_app": 0,
+      "unknown_status": 0
+    },
+    "simulated": 160
+  },
   "schema": "routeforge.simulation/v1",
   "shadow_prices": {
     "baseline": "snapshot",

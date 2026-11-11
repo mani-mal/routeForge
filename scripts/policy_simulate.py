@@ -75,21 +75,35 @@ from app.eval.outcomes import _round6, load_export  # noqa: E402
 from app.eval.proposal import (  # noqa: E402
     ProposalError, apply_proposal, assumptions_block, load_proposal, normalized_edits,
 )
-from app.eval.scenario import SnapshotError, load_snapshot  # noqa: E402
+from app.eval.scenario import (  # noqa: E402
+    SnapshotError, build_scenario, close_scenario, load_snapshot,
+)
 from app.eval.scenarios import (  # noqa: E402
     ComparisonInvariantError, ScenarioError, compare, comparison_doc, load_scenarios,
     render_comparison,
 )
 from app.eval.shadow import ShadowInvariantError, render_shadow_section, shadow_prices  # noqa: E402
 from app.eval.simulate import (  # noqa: E402
-    REPORT_CAVEAT, agreement_ok, baseline_check, parse_since, render_report, simulate,
-    summarize,
+    REPORT_CAVEAT, _excluded_lines, agreement_ok, baseline_check, parse_since, render_report,
+    rows_block, select_rows, simulate, summarize,
 )
 from app.eval.uncertainty import (  # noqa: E402
     MAX_REPLICATES, UncertaintyPlan, app_sizes, cost_line, level_text, load_posteriors,
     min_replicates, plan_block, plan_inputs, render_uncertainty_section, results_block,
     tail_index, window_days,
 )
+
+
+async def _shadow_rows(records: list[dict], snapshot: dict, base, since) -> dict:
+    """B63: the `rows` block for a shadow-prices-only run, which has no
+    `simulate()` pass to read it from. Same selection `shadow_prices` makes
+    over the baseline scenario, so the counts describe the rows it priced."""
+    scn = await build_scenario(snapshot, base=base)
+    try:
+        rows, excluded = select_rows(records, set(scn.apps), since=since)
+    finally:
+        await close_scenario(scn)
+    return rows_block(rows, excluded)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -476,7 +490,7 @@ def main(argv: list[str] | None = None) -> int:
                 uncertainty_block.update(results_block(
                     results, plan, days=window_days(sim["inputs"]["window"])))
 
-        shadow_block = None
+        shadow_block = shadow_rows = None
         if args.shadow_prices:
             # P3c-1: the CALLER applies any proposal first -- shadow_prices
             # itself never sees a proposal, only the (possibly proposal-
@@ -487,6 +501,8 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 baseline_doc = snapshot
                 baseline_label = "snapshot"
+            if not args.proposal:
+                shadow_rows = asyncio.run(_shadow_rows(records, snapshot, base, since))
             shadow_block = asyncio.run(shadow_prices(
                 records, baseline_doc, base=base, cap=args.max_relaxations,
                 baseline_label=baseline_label, since=since, uncertainty=plan,
@@ -538,13 +554,17 @@ def main(argv: list[str] | None = None) -> int:
         # just the inputs (proposal fields null) plus the shadow block, and
         # `report.md` is the P3a caveat followed by the shadow section.
         sim = {"schema": "routeforge.simulation/v1", "inputs": inputs,
-              "shadow_prices": shadow_block}
+              "rows": shadow_rows, "shadow_prices": shadow_block}
         caveat = "\n".join("> " + line for line in REPORT_CAVEAT.split("\n"))
         report_text = caveat + "\n\n"
         if uncertainty_block is not None:
             sim["uncertainty"] = uncertainty_block
             report_text += render_uncertainty_section(uncertainty_block) + "\n"
         report_text += render_shadow_section(shadow_block)
+        report_text += ("\n## Excluded rows\n\n"
+                        f"simulated: {shadow_rows['simulated']} &middot; "
+                        f"estimated_tokens: {shadow_rows['estimated_tokens']}\n\n"
+                        + "\n".join(_excluded_lines(shadow_rows["excluded"])) + "\n")
         newly_rejected = 0
         print(f"policy_simulate: shadow prices only "
               f"({len(warnings)} export warnings) -> {out}")

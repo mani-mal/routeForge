@@ -25,7 +25,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import { adminApi, getPrivacy } from "../api";
-import type { AdminApp, AdminPolicy, DeploymentEnvelope } from "../api";
+import type { AdminApp, AdminPolicy, DeploymentEnvelope, LangfuseSummary } from "../api";
 import { BUILTIN_ENTITIES, PrivacyRulesEditor } from "./PrivacyRulesEditor";
 import { TokenReveal } from "./clipboard";
 
@@ -454,22 +454,63 @@ function ExemptPatternTester({ patterns }: { patterns: string[] }) {
 // after a successful save; the secret is write-only and is never rendered back,
 // before or after saving.
 function LangfuseCredsForm({ app, onSaved }: { app: AdminApp; onSaved: () => void }) {
+  const [saved, setSaved] = useState<LangfuseSummary | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [editing, setEditing] = useState(false);
   const [host, setHost] = useState("");
   const [publicKey, setPublicKey] = useState("");
   const [secretKey, setSecretKey] = useState("");
   const [projectId, setProjectId] = useState("");
+  const [skipVerify, setSkipVerify] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   const uid = useId();
+
+  const hasCreds = !!saved && !!saved.secret_set;
+
+  async function load() {
+    try {
+      setSaved(await adminApi.getLangfuseCreds(app.id));
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not read saved credentials.");
+    } finally {
+      setLoaded(true);
+    }
+  }
+  useEffect(() => { void load(); }, [app.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function resetForm() {
+    setHost(""); setPublicKey(""); setSecretKey(""); setProjectId("");
+    setSkipVerify(false);
+    setEditing(false);
+  }
+
+  function startEdit() {
+    setHost(saved?.host ?? "");
+    setPublicKey(saved?.public_key ?? "");
+    setProjectId(saved?.project_id ?? "");
+    setSecretKey("");
+    setSkipVerify(false);
+    setErr(null);
+    setNote(null);
+    setEditing(true);
+  }
 
   async function save() {
     setBusy(true);
     setErr(null);
+    setNote(null);
     try {
-      await adminApi.setLangfuseCreds(app.id, {
-        host, public_key: publicKey, secret_key: secretKey, project_id: projectId,
-      });
-      setHost(""); setPublicKey(""); setSecretKey(""); setProjectId("");
+      // Only send what the operator typed; a blank secret means "keep".
+      const body: Partial<{ host: string; public_key: string; secret_key: string; project_id: string }> = {
+        host: host.trim(), public_key: publicKey.trim(), project_id: projectId.trim(),
+      };
+      if (secretKey) body.secret_key = secretKey;
+      const r = await adminApi.setLangfuseCreds(app.id, body, !skipVerify);
+      setSaved(r.langfuse);
+      resetForm();
+      setNote(r.verified ? "verified" : "saved without verification");
       onSaved();
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Could not save credentials.");
@@ -478,56 +519,105 @@ function LangfuseCredsForm({ app, onSaved }: { app: AdminApp; onSaved: () => voi
     }
   }
 
-  const canSave = host && publicKey && secretKey && projectId && !busy;
+  async function remove() {
+    if (!window.confirm("Remove this app's Langfuse credentials? It will share the default project again.")) return;
+    setBusy(true);
+    setErr(null);
+    setNote(null);
+    try {
+      await adminApi.deleteLangfuseCreds(app.id);
+      await load();
+      resetForm();
+      onSaved();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not remove credentials.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const showForm = loaded && (editing || !hasCreds);
+  const canSave = !!host.trim() && !!publicKey.trim() && !!projectId.trim()
+    && (!!secretKey || hasCreds) && !busy;
+  const secretShown = saved?.secret_last4 ? `\u2022\u2022\u2022\u2022${saved.secret_last4}` : "set";
 
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
         <span>
           Send this app's traces to its own Langfuse project.{" "}
-          {app.has_langfuse_keys
+          {hasCreds
             ? <span className="text-cheap">credentials set ✓</span>
             : <span className="text-gray-600">not set — this app shares the default project</span>}
         </span>
         <Help label="Langfuse credentials">
           Create the project in Langfuse first, then paste its <strong>project</strong>-scoped keys
           below. Use the keys from <em>Project → Settings → API Keys</em> (not organization keys).
-          Leave blank to keep sharing the default project. Raw (<code className="font-mono">full</code>)
-          capture is only ever permitted once this app has its own project — the shared project never
-          receives raw I/O.
+          Saving checks the keys against Langfuse from the RouteForge API process. Raw (
+          <code className="font-mono">full</code>) capture is only ever permitted once this app has its
+          own project — the shared project never receives raw I/O, and the credentials cannot be removed
+          while this app's capture is <code className="font-mono">full</code>.
         </Help>
       </div>
-      <div className="flex flex-wrap items-end gap-2">
-        <label className="flex flex-col gap-1 text-xs text-gray-400">
-          host
-          <input id={`${uid}-host`} value={host} onChange={(e) => setHost(e.target.value)}
-            placeholder="http://langfuse-web:3000"
-            title="Server-reachable Langfuse (in-cluster, e.g. http://langfuse-web:3000) — not the browser URL"
-            className={`${inputCls} w-48`} />
-        </label>
-        <label className="flex flex-col gap-1 text-xs text-gray-400">
-          public key
-          <input id={`${uid}-pk`} value={publicKey} onChange={(e) => setPublicKey(e.target.value)}
-            placeholder="pk-lf-…" className={`${inputCls} w-36`} />
-        </label>
-        <label className="flex flex-col gap-1 text-xs text-gray-400">
-          secret key
-          <input id={`${uid}-sk`} type="password" value={secretKey} onChange={(e) => setSecretKey(e.target.value)}
-            autoComplete="off" placeholder={app.has_langfuse_keys ? "(unchanged — enter to replace)" : "sk-lf-…"}
-            className={`${inputCls} w-36`} />
-        </label>
-        <label className="flex flex-col gap-1 text-xs text-gray-400">
-          project id
-          <input id={`${uid}-pid`} value={projectId} onChange={(e) => setProjectId(e.target.value)}
-            placeholder="cmt5…"
-            title="The project's id (e.g. cmt5…) — the project settings URL, or GET {host}/api/public/projects"
-            className={`${inputCls} w-32`} />
-        </label>
-        <button type="button" onClick={save} disabled={!canSave} className={`${btnCls} py-1`}>
-          {busy ? "saving…" : "Save credentials"}
-        </button>
-        {err && <span className="basis-full text-xs text-frontier">{err}</span>}
-      </div>
+
+      {loaded && hasCreds && !editing && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-300">
+          <span>host <code className="font-mono text-gray-100">{saved?.host}</code>{saved?.host_source === "deployment" && " (deployment default)"}</span>
+          <span>public key <code className="font-mono text-gray-100">{saved?.public_key}</code></span>
+          <span>project id <code className="font-mono text-gray-100">{saved?.project_id}</code></span>
+          <span>secret <code className="font-mono text-gray-100">{secretShown}</code></span>
+          <button type="button" onClick={startEdit} disabled={busy} className={`${btnCls} py-1`}>Edit</button>
+          <button type="button" onClick={remove} disabled={busy} className={`${btnCls} py-1`}>Remove</button>
+        </div>
+      )}
+
+      {showForm && (
+        <div className="flex flex-wrap items-start gap-2">
+          <label className="flex flex-col gap-1 text-xs text-gray-400">
+            host
+            <input id={`${uid}-host`} value={host} onChange={(e) => setHost(e.target.value)}
+              placeholder="e.g. http://langfuse-web:3000"
+              className={`${inputCls} w-56 placeholder:text-gray-600`} />
+            <span className="max-w-56 text-[11px] text-gray-500">
+              Use the address the API container can reach, not the browser URL.
+            </span>
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-gray-400">
+            public key
+            <input id={`${uid}-pk`} value={publicKey} onChange={(e) => setPublicKey(e.target.value)}
+              placeholder="e.g. pk-lf-…" className={`${inputCls} w-36 placeholder:text-gray-600`} />
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-gray-400">
+            secret key
+            <input id={`${uid}-sk`} type="password" value={secretKey} onChange={(e) => setSecretKey(e.target.value)}
+              autoComplete="off"
+              placeholder={hasCreds ? "leave blank to keep the stored secret" : "e.g. sk-lf-…"}
+              className={`${inputCls} w-56 placeholder:text-gray-600`} />
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-gray-400">
+            project id
+            <input id={`${uid}-pid`} value={projectId} onChange={(e) => setProjectId(e.target.value)}
+              placeholder="e.g. cmt5…" className={`${inputCls} w-32 placeholder:text-gray-600`} />
+          </label>
+          <div className="flex flex-col gap-1 pt-4">
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={save} disabled={!canSave} className={`${btnCls} py-1`}>
+                {busy ? "saving…" : "Save credentials"}
+              </button>
+              {editing && (
+                <button type="button" onClick={() => { setEditing(false); setErr(null); }}
+                  disabled={busy} className={`${btnCls} py-1`}>Cancel</button>
+              )}
+            </div>
+            <label className="flex items-center gap-1 text-[11px] text-gray-500">
+              <input type="checkbox" checked={skipVerify} onChange={(e) => setSkipVerify(e.target.checked)} />
+              skip verification (Langfuse not reachable from the API now)
+            </label>
+          </div>
+        </div>
+      )}
+      {err && <span className="text-xs text-frontier">{err}</span>}
+      {note && <span className="text-xs text-cheap">{note}</span>}
     </div>
   );
 }
@@ -1030,11 +1120,15 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
   // server does NOT fold that into its downgrade clamp. Named here only for the
   // summary line; the clamp below still keys on the per-app override alone.
   const effPii = p.pii_detection ?? deployment?.default_pii_detection ?? null;
-  // `full` is refused for an onprem_only app that has not declared the
-  // no-protection posture. SERVER-DRIVEN, not a mirror: the rule is
-  // `model_input == "raw" AND client_output == "raw"` (app/policy/compile.py,
-  // CAPTURE_FULL_ONPREM_NEEDS_NO_PROTECTION) — two independent axes, not a
-  // `policy_mode` string. This used to test `effPolicyMode !== "passthrough"`
+  // `full` is refused, at ANY residency (B31), for an app that has not
+  // declared the no-protection posture. SERVER-DRIVEN, not a mirror: the rule
+  // is `has_no_protection_posture` (app/policy/compile.py,
+  // CAPTURE_FULL_NEEDS_NO_PROTECTION) — for onprem_only, `model_input ==
+  // "raw" AND client_output == "raw"` only (unchanged by B31); elsewhere that
+  // OR detection off — independent axes, not a `policy_mode` string. (Server-side, detection off counts only when the app
+  // or its passthrough preset turned it off, not when it merely inherits an
+  // "off" deployment default; `effective` does not carry that source, so the
+  // console is the lenient side there and the server's 422 has the last word.) This used to test `effPolicyMode !== "passthrough"`
   // and had already drifted stricter than the API: an app configured over the
   // admin API as onprem_only + model_input: raw + client_output: raw +
   // capture_io: full with NO policy_mode set is legal server-side, yet the
@@ -1048,7 +1142,8 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
   // reads as "unknown, don't block", same as `redactedBlocked`: the server
   // refuses the write and its 422 renders under Save.
   const effNoProtection = app.effective
-    ? app.effective.model_input === "raw" && app.effective.client_output === "raw"
+    ? (app.effective.model_input === "raw" && app.effective.client_output === "raw")
+      || (effResidency !== "onprem_only" && app.effective.detection === "off")
     : true;
   // The posture is a PARAMETER rather than read directly, because a recipe
   // sets it itself: the preview must ask "would this be refused AFTER the
@@ -1056,9 +1151,15 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
   // leaving.
   const fullBlockedForPosture = (noProtection: boolean) => !hasOwnProject
     ? "needs this app's own Langfuse project"
-    : effResidency === "onprem_only" && !noProtection
-      ? "onprem_only without a declared no-protection posture — set model_input and client_output to raw (policy_mode = passthrough is the preset for both)"
+    : !noProtection
+      ? effResidency === "onprem_only"
+        ? "onprem_only needs a declared no-protection posture — policy_mode = passthrough (model_input and client_output raw); pii detection off alone does not qualify"
+        : "needs a declared no-protection posture — policy_mode = passthrough (model_input and client_output raw), or pii detection off"
       : null;
+  // A row saved before B31 can hold `full` without the posture; the server
+  // serves it as `redacted` until the policy is re-saved. Say so.
+  const fullServedRedacted = p.capture_io === "full"
+    && app.effective?.telemetry_io === "redacted";
   const fullBlocked = fullBlockedForPosture(effNoProtection);
   // `redacted` needs a detector to redact WITH. THIS control is now
   // server-driven, not a mirror (Task 9 review round 1 — a Fix-round-1
@@ -1609,7 +1710,7 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
           sit ~1000px apart with the dependency invisible. */}
       <Step n={4} title="Telemetry" summary={telemetrySummary(p, app, effCapture)} dirty={dirty[4]}
         open={open.has(4)} onToggle={() => toggle(4)}>
-        <LangfuseCredsForm app={app} onSaved={onSaved} />
+        <LangfuseCredsForm key={app.id} app={app} onSaved={onSaved} />
 
         <Row label="eval capture" htmlFor={`${uid}-capture`}
           hint="raw (full) goes only to this app's own project"
@@ -1617,15 +1718,16 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
             <>
               What this app's traces carry. Raw I/O only ever reaches this app's own Langfuse
               project — never the shared one, which fails closed to{" "}
-              <code className="font-mono">redacted</code> if the project is missing. An onprem_only
-              app must first declare a no-protection posture before{" "}
+              <code className="font-mono">redacted</code> if the project is missing. At any
+              residency, an app must first declare a no-protection posture before{" "}
               <code className="font-mono">full</code> is permitted — that is{" "}
               <code className="font-mono">model_input = raw</code> AND{" "}
-              <code className="font-mono">client_output = raw</code>, the two axes the server
-              actually checks. <code className="font-mono">policy_mode = passthrough</code> (step 3)
-              is the preset that resolves both, and setting the axes directly over the admin API
-              does the same. Residency is placement; these are protection, and it is the protection
-              posture the capture ceiling keys on.
+              <code className="font-mono">client_output = raw</code>, or (except for an
+              onprem_only app) <code className="font-mono">pii detection = off</code>.{" "}
+              <code className="font-mono">policy_mode = passthrough</code> (step 3) is the preset
+              that resolves both data axes, and setting them directly over the admin API does the
+              same. Residency is placement; these are protection, and it is the protection posture
+              the capture ceiling keys on.
             </>
           }>
           <select id={`${uid}-capture`} value={p.capture_io ?? ""}
@@ -1643,6 +1745,13 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
               full{fullBlocked ? ` — ${fullBlocked}` : ""}
             </option>
           </select>
+          {fullServedRedacted && (
+            <p className="mt-1 text-xs text-frontier">
+              Saved as <code className="font-mono">full</code> without a declared no-protection
+              posture, so it is served as <code className="font-mono">redacted</code> until this
+              policy is re-saved with a posture or a different capture.
+            </p>
+          )}
         </Row>
 
         {saveFor(4)}

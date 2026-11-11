@@ -412,7 +412,7 @@ def _seed_full_capture_app(client, app_id: str) -> str:
                     json={"id": app_id, "name": app_id, "owner_email": "a@b.c"})
     assert r.status_code == 200, r.text
     token = r.json()["token"]
-    lf = client.put(f"/admin/applications/{app_id}/langfuse",
+    lf = client.put(f"/admin/applications/{app_id}/langfuse?verify=false",
                     json={"host": "http://lf.test:3000", "public_key": "pub",
                           "secret_key": "sek", "project_id": f"proj-{app_id}"})
     assert lf.status_code == 200, lf.text
@@ -498,3 +498,75 @@ def test_full_with_own_project_still_exports_raw_to_that_project_only(
     assert _SSN in dict(own.attributes)["input.value"]      # raw, in its OWN project
     assert not [s for s in shared_mem.get_finished_spans()
                 if s.name == "serving.request"]             # shared project: nothing
+
+
+# --------------------------------------------------------------------------- #
+# B31: a row stored before raw capture needed a declared no-protection posture
+# at every residency. It must be SERVED -- never failed -- and never exported
+# raw: the compiler denies it to `redacted` until the policy is re-saved.
+# --------------------------------------------------------------------------- #
+def test_b31_stored_full_without_posture_compiles_to_redacted():
+    from app.apps.policy import AppPolicyView
+    from app.policy.compile import compile_policy
+
+    s = load_settings()
+    eff = compile_policy(AppPolicyView(residency="any", capture_io="full"), s)
+    assert eff.protection.telemetry_io == "redacted"
+    assert eff.protection.sources["telemetry_io"] == "ceiling"
+    assert eff.capture_full_refused is True
+    # ...and the declared postures keep `full`.
+    for view in (AppPolicyView(residency="any", capture_io="full",
+                               policy_mode="passthrough"),
+                 AppPolicyView(residency="any", capture_io="full",
+                               pii_detection="off")):
+        eff = compile_policy(view, s)
+        assert eff.protection.telemetry_io == "full"
+        assert eff.capture_full_refused is False
+
+
+def test_b31_stored_full_without_posture_is_served_redacted(client, monkeypatch):
+    import asyncio
+
+    from app.apps import store as _store
+    from tests.test_admin_api import _login
+
+    shared_mem, shared_provider = _wire(monkeypatch, redacting=False)
+    app_mem = InMemorySpanExporter()
+    app_provider = TracerProvider()
+    app_provider.add_span_processor(
+        SimpleSpanProcessor(otel.RedactingSpanExporter(app_mem, skip_io=True)))
+    monkeypatch.setattr(export_mod, "get_app_tracer",
+                        lambda *a, **k: app_provider.get_tracer("t"))
+
+    _login(client)
+    r = client.post("/admin/applications",
+                    json={"id": "b31-legacy", "name": "b31-legacy"})
+    assert r.status_code == 200, r.text
+    token = r.json()["token"]
+    assert client.put("/admin/applications/b31-legacy/langfuse?verify=false",
+                      json={"host": "http://lf.test:3000", "public_key": "pub",
+                            "secret_key": "sek",
+                            "project_id": "proj-b31"}).status_code == 200
+    # The API refuses this write now; the row predates the rule.
+    assert client.put("/admin/applications/b31-legacy/policy",
+                      json={"capture_io": "full"}).status_code == 422
+
+    async def _seed_legacy_row():
+        async with client.app.state.db.session() as s:
+            await _store.upsert_policy(s, "b31-legacy", capture_io="full")
+            await s.commit()
+    asyncio.run(_seed_legacy_row())
+
+    resp = _ask(client, token, f"my SSN is {_SSN} please help")   # 200, not failed
+
+    app_provider.force_flush()
+    own = next(s for s in app_mem.get_finished_spans() if s.name == "serving.request")
+    attrs = dict(own.attributes)
+    assert attrs["sp.capture_io"] == "redacted"
+    assert _SSN not in str(attrs)
+    assert resp["display"]["mode"] == "redacted"
+    assert _SSN not in json.dumps(resp["display"])
+    # The admin view shows the stored value AND what it compiles to.
+    got = client.get("/admin/applications/b31-legacy").json()
+    assert got["policy"]["capture_io"] == "full"
+    assert got["effective"]["telemetry_io"] == "redacted"

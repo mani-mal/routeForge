@@ -20,7 +20,7 @@ def _make_app(client, app_id: str = "fbapp", *, with_langfuse: bool = False):
     body = r.json()
     token = body["token"]
     if with_langfuse:
-        lf = client.put(f"/admin/applications/{app_id}/langfuse", json={
+        lf = client.put(f"/admin/applications/{app_id}/langfuse?verify=false", json={
             "host": "http://airgap:3000", "public_key": "pk", "secret_key": "sk",
             "project_id": "proj_air"})
         assert lf.status_code == 200, lf.text

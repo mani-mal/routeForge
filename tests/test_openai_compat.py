@@ -415,3 +415,47 @@ def test_outcome_recording_adds_nothing_to_the_rejection_wire() -> None:
     assert err["code"] == "no_eligible_model"
     assert set(err["conflicting_core"]) == {"requirements", "state", "candidates_considered"}
     assert "routing_tokens" not in r.text
+
+
+# --- B43: usage carries OpenAI's nested cached-token shape -------------------
+def _cached_response(cached: int | None):
+    from tests._litellm_fake import FakeResponse
+    usage: dict = {"prompt_tokens": 1000, "completion_tokens": 50}
+    if cached is not None:
+        usage["prompt_tokens_details"] = {"cached_tokens": cached}
+    return FakeResponse({
+        "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+        "usage": usage})
+
+
+def test_usage_reports_cached_tokens_in_openai_nested_shape(client, monkeypatch):
+    """OpenAI reports provider prompt-cache hits as
+    `usage.prompt_tokens_details.cached_tokens`; a drop-in endpoint must too.
+    The flat `cached_prompt_tokens` stays for now (deprecated)."""
+    monkeypatch.setattr(litellm_backend, "acompletion",
+                        make_recording_acompletion(_cached_response(768)))
+    r = client.post("/v1/chat/completions", headers=_AUTH, json={
+        "messages": [{"role": "user", "content": "capital of France?"}]})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["usage"]["prompt_tokens_details"] == {"cached_tokens": 768}
+    assert body["usage"]["cached_prompt_tokens"] == 768      # deprecated duplicate
+    _validate_openai(body)
+    ChatCompletion = pytest.importorskip("openai.types.chat").ChatCompletion
+    parsed = ChatCompletion.model_validate(body)
+    assert parsed.usage.prompt_tokens_details.cached_tokens == 768
+
+
+def test_usage_omits_nested_details_when_cached_count_is_unreported(client, monkeypatch):
+    """Unknown is not 0 (B75): with no reported count there is no
+    `prompt_tokens_details` at all -- never a null a strict client could
+    reject. The deprecated flat key keeps its pre-B75 wire value, 0."""
+    monkeypatch.setattr(litellm_backend, "acompletion",
+                        make_recording_acompletion(_cached_response(None)))
+    r = client.post("/v1/chat/completions", headers=_AUTH, json={
+        "messages": [{"role": "user", "content": "capital of France?"}]})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "prompt_tokens_details" not in body["usage"]
+    assert body["usage"]["cached_prompt_tokens"] == 0
+    _validate_openai(body)

@@ -1,0 +1,69 @@
+{{/*
+Kubernetes-correct nginx config for the UI. The image's baked ui/nginx.conf is
+Docker Compose-specific: it hardcodes `resolver 127.0.0.11` (Docker's embedded
+DNS) and the short upstream name `api`, neither of which exists on Kubernetes,
+so every /api, /v1 and /admin call from the console would fail. This ConfigMap
+is mounted over the image's conf (see deployment-ui.yaml) and proxies to this
+chart's api Service by in-cluster FQDN.
+
+The upstream is a TRUE LITERAL (`proxy_pass http://<host:port>;` with NO URI
+part and NO variable), so nginx resolves the name once at startup via the pod's
+/etc/resolv.conf (CoreDNS) and needs no `resolver` directive. Do NOT append
+`$request_uri` or any variable to proxy_pass: that flips nginx to per-request
+resolution, which then requires a `resolver` and 502s without one. Every
+proxied location sets `proxy_http_version 1.1` (nginx's HTTP/1.0 default is
+refused by Envoy sidecars with 426). Keep the locations in step with
+ui/nginx.conf: /api/stream (SSE), /api/, /v1/, /admin/ and the SPA fallback.
+*/}}
+{{- $api := printf "%s.%s.svc.cluster.local:%v" (include "serving-plane.componentFullname" (dict "root" . "component" "api")) .Release.Namespace .Values.service.api.port }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "serving-plane.fullname" . }}-ui-nginx
+  labels:
+    {{- include "serving-plane.labels" . | nindent 4 }}
+data:
+  serving-plane.conf: |
+    server {
+        listen 80;
+        server_name _;
+        root /usr/share/nginx/html;
+        index index.html;
+
+        # SPA: unknown routes fall back to index.html.
+        location / {
+            try_files $uri $uri/ /index.html;
+        }
+
+        # SSE decision stream — must not buffer, long read timeout.
+        location /api/stream {
+            proxy_pass http://{{ $api }};
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_set_header Host $host;
+            proxy_buffering off;
+            proxy_cache off;
+            proxy_read_timeout 3600s;
+        }
+
+        # REST API + OpenAI-compatible endpoint.
+        location /api/ {
+            proxy_pass http://{{ $api }};
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_set_header Host $host;
+        }
+        location /v1/ {
+            proxy_pass http://{{ $api }};
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_set_header Host $host;
+        }
+        # Admin console API (session-cookie authed).
+        location /admin/ {
+            proxy_pass http://{{ $api }};
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_set_header Host $host;
+        }
+    }

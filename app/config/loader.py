@@ -232,4 +232,8 @@ def load_settings(config_dir: str = "config") -> Settings:
 
     return Settings(serving=serving, routing=routing, policy=policy, pricing=pricing,
                     routing_policy_version=_policy_version(routing_raw, pricing_raw),
-                    prompt_version=pv, active_prompts=active_prompts)
+                    prompt_version=pv, active_prompts=active_prompts,
+                    config_keys={"serving": sorted(serving_raw),
+                                 "routing": sorted(routing_raw),
+                                 "policy": sorted(policy_raw),
+                                 "pricing": sorted(pricing_raw)})

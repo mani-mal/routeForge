@@ -13,14 +13,15 @@
 # ${OIDC_CLIENT_ID/SECRET/DOMAIN} and ${AIRGAP_REGISTRY} in THIS file at import
 # time — leave those tokens as-is unless you know the resolved value.
 #
-# Default posture is demo-safe and CPU-only: inference_backend=mock, no GPU node
-# required, Headroom compression off.
+# Default posture is demo-safe and CPU-only: regex PII detection, no GPU node
+# required, Headroom compression off. This bundle deploys no inference — on-prem
+# models are onboarded at runtime.
 # =============================================================================
 
 nameOverride: ""
 fullnameOverride: ""
 
-# StorageClass for ALL PVCs (Langfuse Postgres/ClickHouse/MinIO + optional CCR).
+# StorageClass for ALL PVCs (Langfuse Postgres/ClickHouse/MinIO).
 # PCAI does not guarantee a default StorageClass — set this to your platform's
 # class explicitly. "" falls back to the cluster default if one exists.
 global:
@@ -93,11 +94,12 @@ ezua:
   #
   # DEFAULT OFF for this shareable-demo bundle: with SSO on, every viewer needs
   # a PCAI account, so you can't just hand out a URL + password. routeForge's
-  # own admin login (credentials.adminEmail/adminPassword, seeded into the API)
+  # own admin login (credentials.adminEmail/adminPassword, seeded into the API; the password is
+  # generated when left empty)
   # already gates ALL data — the static UI loads, but /api/* (incl. the SSE
   # decision stream) returns 401 until you log in. So SSO here is redundant for
-  # a demo; the app login IS the shared credential. Change adminPassword from
-  # `changeme` before sharing. Set enabled:true for a locked-down/multi-tenant
+  # a demo; the app login IS the shared credential. Read the generated
+  # adminPassword from the routeforge-creds Secret (see NOTES.txt) before sharing. Set enabled:true for a locked-down/multi-tenant
   # deploy (then viewers authenticate with their PCAI identity first).
   authorizationPolicy:
     enabled: false
@@ -107,24 +109,17 @@ ezua:
       istio: "ingressgateway"
 
 # ---------------------------------------------------------------------------
-# servingPlane: maps onto config/serving.yaml (infra switches only). Backends,
+# servingPlane: maps onto config/serving.yaml (infra switches only).
 # PII mode, compression, providers — all switchable here with no image rebuild.
 # ---------------------------------------------------------------------------
 servingPlane:
-  inferenceBackend: mock        # mock | vllm | dynamo | none  (mock = CPU-only default)
-  allowBackendFallback: true    # false => api exits non-zero if backend unreachable
-
-  vllm:
-    baseUrl: http://vllm:8000/v1
-    timeoutS: 60
-  dynamo:
-    endpoint: http://dynamo-frontend:8080
-    routerMode: kv
-    timeoutS: 60
-
   policy:
-    piiDetection: presidio       # presidio | regex | off (image bakes the Presidio model)
-    failClosed: true             # never relax (CLAUDE.md rule 5)
+    # regex | presidio | off. Default is regex: the default image build
+    # (EXTRAS="observability,postgres") does NOT include Presidio or its spaCy
+    # model. `presidio` needs an api image built with
+    # EXTRAS=observability,postgres,presidio (see the Dockerfile), otherwise the
+    # api fails to start.
+    piiDetection: regex
 
   contextOptimization:
     enabled: false               # Headroom. OFF so the demo can show before/after
@@ -140,14 +135,17 @@ servingPlane:
       residency: local_only      # NEVER external object store — hard rule 6
       ttlHours: 24
       exportToTelemetry: false    # must stay false
-      storageClassName: ""        # "" => global.storageClassName; must be in-cluster block/file
-      size: 20Gi
     cacheAlignment: true
 
+  # Provider availability plus the LiteLLM transport each one egresses through.
+  # Same shape and defaults as config/serving.yaml. litellmPrefix is required
+  # (the boot lint rejects an enabled provider without it); the *Env fields are
+  # the NAMES of env vars holding the endpoint/key -- set the values themselves
+  # via extraEnv (valueFrom.secretKeyRef), never here.
   providers:
-    onprem:  {enabled: true}
-    azure:   {enabled: false}
-    bedrock: {enabled: false}
+    onprem:  {enabled: true,  litellmPrefix: openai, apiKeyEnv: SP_ONPREM_API_KEY}
+    azure:   {enabled: false, litellmPrefix: azure, apiBaseEnv: AZURE_API_BASE, apiKeyEnv: AZURE_API_KEY, apiVersionEnv: AZURE_API_VERSION}
+    bedrock: {enabled: false, litellmPrefix: bedrock}
 
   server:
     host: 0.0.0.0
@@ -181,8 +179,8 @@ langfuse:
     postgres: postgres:16
     clickhouse: clickhouse/clickhouse-server:24
     redis: redis:7
-    minio: minio/minio
-    mc: minio/mc
+    minio: quay.io/minio/minio
+    mc: quay.io/minio/mc
 
   postgres:
     size: 20Gi
@@ -232,7 +230,9 @@ credentials:
   langfusePublicKey: pk-lf-local
   langfuseSecretKey: sk-lf-local
   adminEmail: admin@routeforge.local
-  adminPassword: changeme          # CHANGE THIS
+  # Empty => generated once (randAlphaNum 24) and reused on upgrade from the
+  # existing routeforge-creds Secret. The literal `changeme` is refused.
+  adminPassword: ""
 
 # ---------------------------------------------------------------------------
 # Services / resources / scheduling

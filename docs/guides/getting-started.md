@@ -272,11 +272,12 @@ not *where the request may go*.
   `policy_mode: "passthrough"` + `capture_io: "redacted"` is legal whenever the app names
   a detector.
 - **`onprem_only` apps *may* downgrade detection** — detection and residency are independent
-  axes, so this buys nothing to refuse. In the `enforced` posture, `pii_detection: "off"`
-  needs `capture_io: "off"`: with no telemetry I/O captured there is no egress path for
-  the unsanitized prompt. (`pii_detection: "regex"` is not `off` — it still sanitizes —
-  so an `onprem_only` app running `regex` may also use `capture_io: "redacted"`; only
-  `capture_io: "full"` needs `policy_mode: "passthrough"`, regardless of `pii_detection`.)
+  axes, so this buys nothing to refuse. At `onprem_only`, `pii_detection: "off"` in the
+  `enforced` posture needs `capture_io: "off"`: `capture_io: "full"` needs `policy_mode:
+  "passthrough"` there, whatever `pii_detection` is. (Off-prem, detection off is itself a
+  declared no-protection posture and also pairs with `"full"` into the app's own project.
+  `pii_detection: "regex"` is not `off` — it still sanitizes — so an app running `regex`
+  may also use `capture_io: "redacted"`.)
   Do **not** flip residency to `any` + an `allowed_providers` pin to work around a
   detection or telemetry rule — that swaps a hard residency floor for a mutable allowlist
   and is strictly weaker.
@@ -317,13 +318,11 @@ only about the trace payload.
     exporter steps `full` down to **`redacted`** — and if no detector ran, it steps
     `redacted` down to **`off`**, never to raw. No code path exports raw content under a
     `redacted` label.
-  - **An `onprem_only` app must first declare a no-protection posture** — that is
-    `model_input: "raw"` **and** `client_output: "raw"`, which is exactly what
-    `policy_mode: "passthrough"` resolves to. While it is in the `enforced` posture the
-    gate is running, so residency beats eval convenience and `full` is refused
-    (`CAPTURE_FULL_ONPREM_NEEDS_NO_PROTECTION`). A **non-`onprem_only`** app may hold
-    `full` in either posture, own project still required. That is the whole full-capture
-    rule; see [`choosing-app-settings.md`](./choosing-app-settings.md#the-full-capture-rule),
+  - **The app must first declare a no-protection posture, at any residency** — that is
+    `model_input: "raw"` **and** `client_output: "raw"` (exactly what `policy_mode:
+    "passthrough"` resolves to); off-prem, the app's own `pii_detection: "off"` also
+    qualifies, at `onprem_only` it does not. Otherwise `full` is refused
+    (`CAPTURE_FULL_NEEDS_NO_PROTECTION`). That is the whole full-capture rule; see [`choosing-app-settings.md`](./choosing-app-settings.md#the-full-capture-rule),
     which states it identically. Placement does not move either way: `onprem_only` stays
     absolute in both postures.
   - **`redacted` is refused only when `pii_detection` resolves to `off`**
@@ -464,9 +463,10 @@ entities without a pattern, e.g. names). See the `capture_io` section below.)*
   "max_spend_usd_per_day": 50.0,
   "pii_detection": "presidio", "capture_io": "off", "stream_mode": "verified_then_stream" }
 ```
-*(For an `onprem_only` app in the default `enforced` posture, `capture_io: full` and
-`stream_unverified` are both refused — those guarantees can't be waived. `pii_detection` is
-free to downgrade even here: `off` then needs `capture_io: "off"`, while `regex` may also
+*(For an app in the default `enforced` posture with a detector running, `capture_io: full`
+is refused at any residency, and `stream_unverified` is refused for `onprem_only` — those
+guarantees can't be waived. `pii_detection` is free to downgrade even here: at
+`onprem_only`, `off` then needs `capture_io: "off"`, while `regex` may also
 use `capture_io: "redacted"` (it still sanitizes); for a hospital app you want detection
 left at `presidio` anyway.)*
 
