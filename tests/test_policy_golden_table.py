@@ -34,10 +34,14 @@ def _rejects(mode, pii, capture, residency, stream, own_project):
         if not own_project:
             return "CAPTURE_FULL_NEEDS_OWN_PROJECT"
         # full requires a declared no-protection posture at ANY residency
-        # (B31, 2026-11-11 -- a deliberate contract change: it used to apply to
-        # onprem_only alone). The posture is raw/raw (`passthrough`) or the
-        # app's own pii_detection=off.
-        if not (mode == "passthrough" or pii == "off"):
+        # (B31, 2026-11-11 -- a deliberate TIGHTENING: it used to apply to
+        # onprem_only alone). onprem_only is unchanged: raw/raw
+        # (`passthrough`) only. Elsewhere: raw/raw, or the app's own
+        # pii_detection=off.
+        if residency == "onprem_only":
+            if mode != "passthrough":
+                return "CAPTURE_FULL_NEEDS_NO_PROTECTION"
+        elif not (mode == "passthrough" or pii == "off"):
             return "CAPTURE_FULL_NEEDS_NO_PROTECTION"
     if capture == "redacted" and eff_pii == "off":
         return "CAPTURE_REDACTED_NEEDS_A_DETECTOR"

@@ -63,17 +63,20 @@ in every guide and in the code (`validate_effective`, `app/policy/compile.py`):
 capture_io: "full" ALWAYS requires the application's own provisioned Langfuse project.
   (never relaxed by anything — raw I/O is tenant-isolated)
 
-and then, at ANY residency, a declared no-protection posture:
-  model_input: "raw" AND client_output: "raw"
-      (which is exactly what policy_mode: "passthrough" resolves to)
-  OR pii_detection: "off", set by the app (or by its passthrough preset)
+and then a declared no-protection posture, at ANY residency:
+  onprem_only     + full  ->  model_input: "raw" AND client_output: "raw"
+                              (exactly what policy_mode: "passthrough" resolves to);
+                              pii_detection: "off" alone does NOT qualify
+  non-onprem_only + full  ->  the same, OR pii_detection: "off" set by the app
+                              (or by its passthrough preset)
 ```
 
-So `enforced + full` with a detector running is refused at every residency
-(`CAPTURE_FULL_NEEDS_NO_PROTECTION`). Residency does not gate raw capture at all; the
-*posture* does (B31, 2026-11-11 — before that, only `onprem_only` apps were checked). An
-app saved earlier with `full` and no posture is served as `redacted` until its policy is
-re-saved. Full detail and every error code:
+So `enforced + full` with a detector running is refused at every residency, and
+`onprem_only + pii_detection: off + full` is refused too
+(`CAPTURE_FULL_NEEDS_NO_PROTECTION`). B31 (2026-11-11) only tightened: before it, a
+non-`onprem_only` app needed no posture at all. An app saved earlier with `full` and no
+posture is served as `redacted`, and its policy writes are refused, until `capture_io`
+is changed or a posture declared. Full detail and every error code:
 [`per-app-config.md`](../reference/per-app-config.md#the-validation-rules-with-their-error-codes).
 
 ---
@@ -650,7 +653,8 @@ What happens:
 - `app_policy_version` moves on the next response, which is how the customer's
   conformance probe learns the posture changed without anyone having to tell it.
 - **You must deal with `capture_io` in the same write if it is `full`**: an `enforced`
-  app with a detector running cannot hold `capture_io: "full"`, at any residency. Send
+  app cannot hold `capture_io: "full"` with a detector running at any residency, nor at
+  `onprem_only` at all. Send
   it together: `{"policy_mode": "enforced", "capture_io": "off"}` (or `"redacted"`,
   which is legal again once the gate is sanitizing something).
 - Placement does not move, in either direction. It never did.

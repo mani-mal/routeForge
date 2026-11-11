@@ -41,8 +41,8 @@ Two requirements to know about:
 - **`capture_io: "full"` needs the app's own provisioned Langfuse project.** Raw I/O is
   tenant-isolated — it never lands in the shared project. Attach one with
   `PUT /admin/applications/{app_id}/langfuse` first, or the policy write is a 422. It
-  also needs a declared no-protection posture — `passthrough`, or the app's own
-  `pii_detection: "off"` — at any residency.
+  also needs a declared no-protection posture at any residency — `passthrough`; or,
+  off-prem only, the app's own `pii_detection: "off"`.
 - **`capture_io: "redacted"` needs a detector.** It is rejected only when the app's
   effective `pii_detection` resolves to `off` — which is what a `passthrough` app that
   names no detector inherits. A `passthrough` app that *does* name
@@ -126,8 +126,8 @@ behaviour they needed — so it was replaced by an explicit `policy_mode` (CLAUD
   still cannot reach `capture_io=full`, at any residency (since B31, 2026-11-11; before
   that only `onprem_only` apps were checked). Raw capture of a protected app was never
   sensible. Spelled on the axes, the posture is `model_input: "raw"` **and**
-  `client_output: "raw"` (exactly what `policy_mode: "passthrough"` resolves to), or the
-  app's own `pii_detection: "off"`. See
+  `client_output: "raw"` (exactly what `policy_mode: "passthrough"` resolves to); for a
+  non-`onprem_only` app the app's own `pii_detection: "off"` also qualifies. See
   [the full-capture rule](./choosing-app-settings.md#the-full-capture-rule) — one rule,
   same wording in every guide.
 - `capture_io=redacted` is still rejected when `pii_detection` resolves to `off`:
@@ -168,9 +168,10 @@ The valid residency values are `any`, `private_cloud_ok`, and `onprem_only`. Any
 other than `onprem_only` allows the enabled cloud providers into the routing pool. So
 moving off `onprem_only` does two things at once:
 
-1. ✅ Nothing, any more. Residency has no bearing on `capture_io=full` since B31
-   (2026-11-11): raw capture needs a declared no-protection posture at every residency,
-   and `pii_detection=off` (or `passthrough`) is one at `onprem_only` too.
+1. ✅ Unlocks `capture_io=full` for a `pii_detection=off` app: off-prem, detection off
+   counts as a declared no-protection posture; at `onprem_only` only `passthrough` does.
+   (Since B31, 2026-11-11, an `enforced` app with a detector running gets no `full` at
+   any residency.)
 2. ⚠️ **Removes the on-prem lock.** If any cloud provider is enabled
    (`azure`/`bedrock` in `config/serving.yaml`), the router is now free to send that
    customer's traffic to cloud — off their infrastructure. That contradicts "on-prem
