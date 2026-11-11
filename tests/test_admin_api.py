@@ -518,6 +518,39 @@ def test_b31_onprem_pii_off_full_is_still_refused(client):
     assert r.status_code == 200, r.text
 
 
+def test_b31_default_residency_patch_cannot_strand_pii_off_full_on_onprem(client):
+    # B31 review: a policy with no residency of its own inherits the app's
+    # `default_residency`. Off-prem, pii_detection=off + capture_io=full is a
+    # legal posture; moving the default to onprem_only through the APP PATCH
+    # (not the policy PUT) must be judged the same way and refused.
+    _login(client)
+    _own_project_app(client, "b31-defres")
+    r = client.put("/admin/applications/b31-defres/policy",
+                   json={"pii_detection": "off", "capture_io": "full"})
+    assert r.status_code == 200, r.text
+    assert r.json()["policy"]["residency"] is None          # inherits the default
+    r = client.patch("/admin/applications/b31-defres",
+                     json={"default_residency": "onprem_only"})
+    assert r.status_code == 422, r.text
+    assert "onprem_only" in r.text
+    got = client.get("/admin/applications/b31-defres").json()
+    assert got["default_residency"] != "onprem_only"          # nothing applied
+    # An unrelated PATCH (rename) is not blocked...
+    r = client.patch("/admin/applications/b31-defres", json={"name": "Renamed"})
+    assert r.status_code == 200, r.text
+    assert r.json()["name"] == "Renamed"
+    # ...nor is a default_residency change whose result is legal.
+    r = client.patch("/admin/applications/b31-defres",
+                     json={"default_residency": "private_cloud_ok"})
+    assert r.status_code == 200, r.text
+    # And a policy that pins its own residency is not moved by the default.
+    assert client.put("/admin/applications/b31-defres/policy",
+                      json={"residency": "any"}).status_code == 200
+    r = client.patch("/admin/applications/b31-defres",
+                     json={"default_residency": "onprem_only"})
+    assert r.status_code == 200, r.text
+
+
 def test_policy_raw_capture_still_blocked_cases(client, monkeypatch):
     # Task 9 Part B: raw capture (pii off + capture full) stays blocked for:
     # onprem_only, no own Langfuse, capture_io=redacted, and operator flag off.

@@ -364,7 +364,9 @@ def _posture_requirement(residency: str) -> str:
     if residency == "onprem_only":
         return ("model_input='raw' AND client_output='raw' (for an onprem_only "
                 "app pii_detection='off' alone does not qualify)")
-    return "model_input='raw' AND client_output='raw', or pii_detection='off'"
+    return ("model_input='raw' AND client_output='raw', or pii_detection='off' "
+            "set explicitly on the app (an 'off' inherited from the deployment "
+            "default does not count)")
 
 
 def compile_policy(app_policy, deployment: Settings) -> EffectivePolicy:
@@ -472,8 +474,12 @@ def compile_policy(app_policy, deployment: Settings) -> EffectivePolicy:
         rejected.append(("telemetry_io", str(telemetry_io)))
         telemetry_io, sources["telemetry_io"] = _DENY["telemetry_io"], _CEILING
     # Raw capture needs a declared no-protection posture (B31). Without one,
-    # deny to `redacted` -- which always has a detector here, because
-    # detection off would itself be the posture. Only the placement-free half
+    # deny to `redacted`. That normally has a detector to redact with, since
+    # detection the APP turned off would itself be the posture. The exception
+    # is detection off only by inheriting an "off" deployment default: then
+    # `redacted` has no detector, and the export boundary
+    # (`resolve_capture_io`) steps it down to `off` -- still never raw, and
+    # the write is refused all the same. Only the placement-free half
     # is applied here (a compiled protection value never reads residency);
     # `validate_effective` adds the stricter onprem_only half at write time.
     # A write is refused on `capture_full_refused`; a stored row is served

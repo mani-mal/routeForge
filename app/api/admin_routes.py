@@ -551,14 +551,48 @@ async def update_application(app_id: str, body: UpdateAppIn, request: Request,
     if (body.default_residency is not None
             and body.default_residency not in RESIDENCY):
         raise HTTPException(422, f"bad default_residency {body.default_residency!r}")
+    settings = request.app.state.settings
     async with request.app.state.db.session() as session:
+        if body.default_residency is not None:
+            # A policy row with no residency of its own inherits
+            # `default_residency` (`policy_view_from`), so changing it changes
+            # that app's effective policy -- and must pass the same rules a
+            # policy PUT does. Without this, an off-prem `pii_detection: off` +
+            # `capture_io: full` app could be moved to `onprem_only` here,
+            # where pii off alone is not a declared posture (B31 review).
+            current = await store.get_application_with_policy(session, app_id)
+            if current is None:
+                raise HTTPException(404, "application not found")
+            if body.default_residency != current.default_residency:
+                await _validate_default_residency_change(
+                    current, body.default_residency, settings)
         app = await store.update_application(
             session, app_id, **body.model_dump(exclude_none=True))
         if app is None:
             raise HTTPException(404, "application not found")
         await session.commit()
         full = await store.get_application_with_policy(session, app_id)
-        return _app_dict(full, settings=request.app.state.settings)
+        return _app_dict(full, settings=settings)
+
+
+async def _validate_default_residency_change(app, new_default: str, settings) -> None:
+    """Judge the post-write policy of `app` with `default_residency` moved to
+    `new_default`, exactly as `set_policy` judges a policy PUT: compile it,
+    run `validate_effective` + `check_invariants`, 422 on a violation. Only a
+    policy row that sets no residency of its own is affected."""
+    import dataclasses
+
+    from app.apps.langfuse_provision import load_app_langfuse
+    view = policy_view_from(app)
+    if app.policy is None or not app.policy.residency:
+        view = dataclasses.replace(view, residency=new_default)
+    try:
+        validate_effective(
+            compile_policy(view, settings), settings,
+            has_own_langfuse_project=lambda: load_app_langfuse(app) is not None)
+        check_invariants(view, settings)
+    except PolicyViolation as exc:
+        raise HTTPException(422, exc.message)
 
 
 @admin_router.put("/applications/{app_id}/langfuse")

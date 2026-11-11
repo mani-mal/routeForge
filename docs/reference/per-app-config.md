@@ -672,6 +672,15 @@ independently:
   `capture_io` is changed or a posture declared** — every write is judged on the
   post-write state, including one that only edits an unrelated field such as
   `max_rpm`.
+- **Where the `onprem_only` half is checked, and where it is not.** The stricter
+  `onprem_only` rule is enforced when a policy is written: by the policy `PUT`, and by
+  `PATCH /admin/applications/{app_id}` when it changes `default_residency` (a policy with
+  no residency of its own inherits that default, so moving it is judged like a policy
+  write and refused with the same 422). The compiled policy itself never reads
+  residency (a placement value may not change a protection value), so one path is
+  *not* clamped: a per-request `sensitivity_rules` escalation that raises an off-prem
+  `pii_detection: off` + `capture_io: full` app to `onprem_only` for that request still
+  exports that request's raw I/O to the app's own project — the same as before B31.
 - **Raw I/O only ever reaches the app's own provisioned Langfuse project**, never the
   shared/default project. `capture_io=full` is rejected (422) unless
   `load_app_langfuse(app)` resolves — the app must have its own project, either
