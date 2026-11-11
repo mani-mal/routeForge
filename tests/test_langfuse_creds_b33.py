@@ -130,12 +130,12 @@ def test_delete_removes_credentials(lf):
 def test_delete_refused_while_capture_io_full(lf):
     lf.put(URL, json=FULL)
     assert lf.put("/admin/applications/b33/policy",
-                  json={"capture_io": "full"}).status_code == 200
+                  json={"capture_io": "full", "policy_mode": "passthrough"}).status_code == 200
     r = lf.delete(URL)
     assert r.status_code == 422
     assert "full" in r.json()["detail"]
     assert lf.get(URL).json()["secret_set"] is True
-    lf.put("/admin/applications/b33/policy", json={"capture_io": "redacted"})
+    lf.put("/admin/applications/b33/policy", json={"capture_io": "off"}).raise_for_status()
     assert lf.delete(URL).status_code == 200
 
 

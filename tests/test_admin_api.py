@@ -458,7 +458,7 @@ def test_policy_raw_capture_allowed_for_non_onprem_app_with_own_langfuse(client)
 
 def _own_project_app(client, app_id: str) -> None:
     client.post("/admin/applications", json={"id": app_id, "name": app_id})
-    r = client.put(f"/admin/applications/{app_id}/langfuse", json={
+    r = client.put(f"/admin/applications/{app_id}/langfuse?verify=false", json={
         "host": f"https://{app_id}-langfuse:3000", "public_key": "pk",
         "secret_key": "sk", "project_id": f"proj_{app_id}"})
     assert r.status_code == 200, r.text

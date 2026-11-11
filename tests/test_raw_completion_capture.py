@@ -183,7 +183,7 @@ def test_full_export_with_custom_recognizers_keeps_client_redacted(client, monke
                           "owner_email": "a@b.c"})
     assert r.status_code == 200, r.text
     token = r.json()["token"]
-    assert client.put("/admin/applications/raw-full-custom/langfuse",
+    assert client.put("/admin/applications/raw-full-custom/langfuse?verify=false",
                       json={"host": "http://lf.test:3000", "public_key": "pub",
                             "secret_key": "sek",
                             "project_id": "proj-raw-full-custom"}).status_code == 200
