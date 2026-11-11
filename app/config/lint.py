@@ -27,9 +27,16 @@ log = logging.getLogger(__name__)
 # One owner per concern (CLAUDE.md "Configuration"): the top-level keys each
 # file owns, computed from the schema models so the table cannot drift from
 # them. serving.yaml's `policy` and `server` sections are flattened by the
-# loader into ServingCfg fields, so they are owned top-level keys too.
+# loader into ServingCfg fields: the sections are owned top-level keys, but the
+# flattened field names are not (the loader never reads them at the top level,
+# so one written there is ignored and must warn, not pass silently).
+_SERVING_FLATTENED = frozenset({
+    "pii_detection", "allow_app_pii_downgrade", "allow_app_passthrough",
+    "default_policy_mode", "reject_stream_requests", "stream_keepalive_s",
+    "derive_session_id",
+})
 OWNED_KEYS: dict[str, frozenset[str]] = {
-    "serving": frozenset(ServingCfg.model_fields) | {"policy", "server"},
+    "serving": (frozenset(ServingCfg.model_fields) - _SERVING_FLATTENED) | {"policy", "server"},
     "policy": frozenset(PolicyCfg.model_fields),
     "routing": frozenset(RoutingCfg.model_fields),
     "pricing": frozenset(PricingCfg.model_fields),

@@ -408,6 +408,18 @@ def test_unknown_key_warns_but_does_not_fail(tmp_path, caplog):
                for r in caplog.records)
 
 
+def test_flattened_serving_field_at_top_level_warns(tmp_path, caplog):
+    # The loader reads pii_detection only from serving.yaml's `policy:` section,
+    # so a top-level copy is ignored and must be reported, not pass silently.
+    import logging
+    d = _config_copy(tmp_path, {"serving.yaml": lambda r: r.update(pii_detection="off")})
+    with caplog.at_level(logging.WARNING, logger="app.config.lint"):
+        errs = lint_settings(load_settings(d))
+    assert errs == []
+    assert any("UNKNOWN_CONFIG_KEY" in r.message and "pii_detection" in r.message
+               for r in caplog.records)
+
+
 def test_shipped_config_has_no_unknown_keys(caplog):
     import logging
     with caplog.at_level(logging.WARNING, logger="app.config.lint"):
@@ -428,4 +440,6 @@ def test_overlay_keys_are_checked_after_merge(tmp_path, monkeypatch):
 
 def test_overlay_valid_addition_still_lints_clean(monkeypatch):
     monkeypatch.setenv("SP_CONFIG_OVERLAY_DIR", "deploy/dgx_lab/config-overlay")
-    load_settings()  # must not raise; overlay merge path intact
+    s = load_settings()  # overlay merge path intact
+    assert lint_settings(s) == []
+    assert s.config_keys  # the ownership check actually ran on the merged keys
