@@ -236,6 +236,31 @@ def test_shadow_prices_without_proposal(tmp_path):
     assert "What each constraint costs" in report
 
 
+def test_shadow_prices_without_proposal_carries_rows_block(tmp_path):
+    """B63: the shadow-only output counts simulated, estimated-token and
+    excluded rows, in the same shape as proposal mode's `rows` block."""
+    from tests.eval.sim_fixtures import app_entry
+    snap = make_snapshot(apps=[app_entry("app-a", allowed_models=["ghost-model"])])
+    lines = [_line(make_row(f"r{i}", "app-a")) for i in range(3)]
+    lines.append(_line(make_row("rc", "app-a", cache_hit=True)))
+    lines.append(_line(make_row("rs", "app-a", routing_tokens=None, prompt_tokens=None,
+                                completion_tokens=None, status="rejected")))
+    lines.append(_line(make_row("ru", "stranger")))
+    proc, out = _run_cli_no_proposal(tmp_path, lines, snap, "--shadow-prices")
+    assert proc.returncode == 0, proc.stderr
+    sim = json.loads((out / "simulation.json").read_text())
+    rows = sim["rows"]
+    assert set(rows) == {"simulated", "excluded", "estimated_tokens"}
+    assert rows["excluded"]["cache_hit"] == 1
+    assert rows["excluded"]["unknown_app"] == 1
+    assert rows["simulated"] + sum(rows["excluded"].values()) == len(lines)
+    assert rows["simulated"] >= 3
+    report = (out / "report.md").read_text()
+    assert "## Excluded rows" in report
+    assert "| cache_hit | 1 |" in report
+    assert f"simulated: {rows['simulated']}" in report
+
+
 def test_shadow_prices_with_proposal_appends_to_p3a_output(tmp_path):
     from tests.eval.sim_fixtures import app_entry
     snap = make_snapshot(apps=[app_entry("app-a", allowed_models=["ghost-model"])])

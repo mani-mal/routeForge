@@ -484,8 +484,8 @@ def _placement_providers(settings: Settings, residency: str,
     # healthy onboarded on-prem model, drop "onprem" from `enabled` so an
     # onprem_only request resolves to an empty allowed set and is rejected
     # downstream by the router's "no candidates after residency filter" path --
-    # never silently routed to cloud (CLAUDE.md backend rule; replaces the old
-    # inference_backend == "none" drop).
+    # never silently routed to cloud (CLAUDE.md: derived reject, not a backend
+    # value).
     if registry is not None and not registry.has_healthy_onprem():
         enabled = enabled - {"onprem"}
     if residency == "onprem_only":

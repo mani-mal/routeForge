@@ -86,20 +86,17 @@ def _cached_tokens(u) -> int | None:
 def _usage_dict(u) -> dict:
     """Normalize a litellm usage object (pydantic-ish), a plain dict, or a
     SimpleNamespace-style object into a `{prompt_tokens, completion_tokens,
-    cached_tokens}` dict -- streaming's terminal usage chunk shape varies by
-    provider."""
-    if isinstance(u, dict):
-        return {"prompt_tokens": u.get("prompt_tokens", 0),
-                "completion_tokens": u.get("completion_tokens", 0),
-                "cached_tokens": _cached_tokens(u)}
-    if hasattr(u, "model_dump"):
-        d = u.model_dump()
-        return {"prompt_tokens": d.get("prompt_tokens", 0),
-                "completion_tokens": d.get("completion_tokens", 0),
-                "cached_tokens": _cached_tokens(d)}
-    return {"prompt_tokens": getattr(u, "prompt_tokens", 0),
-            "completion_tokens": getattr(u, "completion_tokens", 0),
-            "cached_tokens": _cached_tokens(u)}
+    cached_tokens, reasoning_tokens}` dict -- streaming's terminal usage chunk
+    shape varies by provider. Cached and reasoning counts come from the same
+    helpers the non-stream path uses (B85), so the two paths cannot disagree."""
+    src = u.model_dump() if not isinstance(u, dict) and hasattr(u, "model_dump") else u
+    if isinstance(src, dict):
+        prompt, completion = src.get("prompt_tokens", 0), src.get("completion_tokens", 0)
+    else:
+        prompt, completion = getattr(src, "prompt_tokens", 0), getattr(src, "completion_tokens", 0)
+    return {"prompt_tokens": prompt, "completion_tokens": completion,
+            "cached_tokens": _cached_tokens(src),
+            "reasoning_tokens": _reasoning_tokens(src)}
 
 
 def _to_wire(m) -> dict:
@@ -360,7 +357,8 @@ class LiteLLMBackend:
             latency_ms=latency_ms, cost_usd=cost_usd, confidence=None,
             tool_calls=assembler.calls,
             cached_prompt_tokens=cached_in,
-            finish_reason=_finish_reason(finish)))
+            finish_reason=_finish_reason(finish),
+            reasoning_tokens=usage.get("reasoning_tokens")))
 
     async def health(self) -> BackendHealth:
         # Per-model reachability is probed at onboard time (registry), not at

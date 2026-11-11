@@ -7,10 +7,10 @@ description: >-
   the serving-plane API + UI *and* a self-hosted Langfuse v3 observability
   stack (Postgres, ClickHouse, Redis, MinIO). Carries the PCAI-required Istio
   VirtualService + Kyverno ClusterPolicy so it passes the platform's service
-  mesh and policy controls. CPU-only by default (inferenceBackend: mock) — no
+  mesh and policy controls. CPU-only by default — no
   GPU node required.
 type: application
-version: 0.2.7
+version: 0.3.0
 appVersion: "0.2.0"
 keywords:
   - llm
