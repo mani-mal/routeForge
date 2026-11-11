@@ -756,7 +756,8 @@ def test_me_exposes_readonly_deployment_envelope(client):
     d = body["deployment"]
     assert set(d) == {"default_policy_mode", "default_pii_detection",
                       "default_capture_io", "reject_stream_requests",
-                      "allow_app_passthrough", "allow_app_pii_downgrade"}
+                      "allow_app_passthrough", "allow_app_pii_downgrade",
+                      "quality_floors"}
     # Mirrors config, not a hardcoded guess: an install that flips a ceiling
     # must see the flip here or the UI will offer a posture the write refuses.
     from app.config.loader import load_settings
@@ -765,6 +766,9 @@ def test_me_exposes_readonly_deployment_envelope(client):
     assert d["allow_app_passthrough"] == s.serving.allow_app_passthrough
     assert d["allow_app_pii_downgrade"] == s.serving.allow_app_pii_downgrade
     assert d["default_capture_io"] == s.serving.observability.langfuse.capture_io
+    assert d["quality_floors"] == {
+        "mode": s.routing.quality_floors.mode,
+        "workloads": dict(s.routing.quality_floors.workloads)}
 
 
 def test_me_deployment_envelope_still_requires_admin(client):

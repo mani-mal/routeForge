@@ -486,6 +486,12 @@ async def me(request: Request, admin_id: str = Depends(require_admin)) -> dict:
             "reject_stream_requests": s.serving.reject_stream_requests,
             "allow_app_passthrough": s.serving.allow_app_passthrough,
             "allow_app_pii_downgrade": s.serving.allow_app_pii_downgrade,
+            # B80: the deployment's floors, so the settings page can show an
+            # app value beside the one it can only raise.
+            "quality_floors": {
+                "mode": s.routing.quality_floors.mode,
+                "workloads": dict(s.routing.quality_floors.workloads),
+            },
         },
     }
 
