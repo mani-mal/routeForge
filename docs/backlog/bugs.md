@@ -558,7 +558,9 @@ If any of these is left out on purpose, correct the CLAUDE.md "Config lint" sect
 - HPE `langfuse-app.yaml` seeds the Langfuse login from the RouteForge admin credentials. Say so in
   the HPE README.
 
-## B85 — Stream path records fewer token details than the non-stream path (reasoning and cached tokens)  🔴 OPEN
+## B85 — Stream path records fewer token details than the non-stream path (reasoning and cached tokens)  ✅ RESOLVED (2026-11-11, fix/b85-stream-token-parity)
+
+> **Resolved:** `_usage_dict` now reads `cached_tokens` and `reasoning_tokens` with the same `_cached_tokens` / `_reasoning_tokens` helpers the non-stream path uses, and `generate_stream`'s final `GenerationResult` carries `reasoning_tokens`. `tests/routing/test_stream_token_parity.py` feeds one usage payload (nested, partial, absent, null) non-streamed and as a stream's final chunk and asserts equal token fields and cost.
 
 **Severity:** low (records only; no effect on what a client receives).
 **Found:** 2026-11-05, review of B58 (live tool streaming), which made it matter for tool turns too.
@@ -1233,7 +1235,9 @@ endpoint's measured ratio — never below a floor that could under-estimate; (3)
 count. Any change here touches admission, so it needs its own spec and the consumer-contract
 checks.
 
-## B63 — `--shadow-prices` with no `--proposal` carries no `rows` block, so excluded and estimated counts are invisible  🔴 OPEN
+## B63 — `--shadow-prices` with no `--proposal` carries no `rows` block, so excluded and estimated counts are invisible  ✅ RESOLVED (2026-11-11, fix/b85-stream-token-parity)
+
+> **Resolved:** the shadow-only `simulation.json` now carries a `rows` block (`simulated`, `estimated_tokens`, `excluded`) built by the same `rows_block` helper `summarize` uses, and `report.md` ends with an "Excluded rows" section. Additive key; schema string unchanged. `docs/reference/policy-simulator.md` §8.5 updated.
 
 **Severity:** low (reporting gap; no effect on the prices themselves).
 **Found:** 2026-10-06, B60 final review (`docs/reference/policy-simulator.md` §8.5).
