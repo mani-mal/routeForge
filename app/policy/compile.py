@@ -219,6 +219,14 @@ class EffectivePolicy:
     #: exactly as unprotected whether the passthrough came from its own row or
     #: from the default.
     clamped: tuple[tuple[str, str], ...] = ()
+    #: B31: the app resolved to `capture_io: full` WITHOUT a declared
+    #: no-protection posture (`has_no_protection_posture`), so the compiler
+    #: denied telemetry to `redacted` -- the request still runs, it just never
+    #: exports raw I/O. Kept as evidence for `validate_effective`, which refuses
+    #: the WRITE with `CAPTURE_FULL_NEEDS_NO_PROTECTION`; a row stored before
+    #: the rule applied at every residency is served as `redacted` until it is
+    #: re-saved, never failed and never exported raw.
+    capture_full_refused: bool = False
 
 
 # --- helpers -----------------------------------------------------------------
@@ -353,6 +361,56 @@ def resolve_tool_args_min_score(value, default) -> tuple[float, bool]:
 
 # --- the compiler ------------------------------------------------------------
 
+def _declares_no_protection(model_input: str, client_output: str,
+                            detection: str, detection_source: str) -> bool:
+    """The PLACEMENT-FREE half of `has_no_protection_posture`: raw/raw, or PII
+    detection off by the app's own choice (its explicit `pii_detection: off`,
+    or the `passthrough` preset's -- not an inherited deployment default).
+
+    `compile_policy` uses only this half to deny an unpostured `full` to
+    `redacted`, because a compiled protection value may never depend on
+    residency (rule 2a; the noninterference invariant, design §7.3). The
+    stricter `onprem_only` half is a write-time rule in `validate_effective`."""
+    if model_input == "raw" and client_output == "raw":
+        return True
+    return detection == "off" and (detection_source == _APP
+                                   or detection_source.startswith("preset:"))
+
+
+def has_no_protection_posture(model_input: str, client_output: str,
+                              detection: str, detection_source: str,
+                              residency: str) -> bool:
+    """Has the app DECLARED the no-protection posture raw telemetry capture
+    (`capture_io: full`) requires? (CLAUDE.md rule 2.) Two cases:
+
+    * **`onprem_only`**: `model_input == raw` AND `client_output == raw` --
+      exactly the pre-B31 rule. Detection off alone does NOT qualify: residency
+      beats eval (rule 8), and with detection off an app's custom recognizers
+      can still redact the model input, so it has not declared itself
+      unprotected.
+    * **any other residency**: the same raw/raw, OR PII detection off by the
+      app's own choice (`_declares_no_protection`).
+
+    B31 only ever TIGHTENED: it added the check for non-`onprem_only` apps and
+    left `onprem_only` exactly as it was. Like the pre-B31 rule, the residency
+    half is enforced at WRITE time only (`validate_effective`); the compiled
+    protection never reads residency."""
+    if residency == "onprem_only":
+        return model_input == "raw" and client_output == "raw"
+    return _declares_no_protection(model_input, client_output, detection,
+                                   detection_source)
+
+
+def _posture_requirement(residency: str) -> str:
+    """The posture `capture_io: full` needs at this residency, for messages."""
+    if residency == "onprem_only":
+        return ("model_input='raw' AND client_output='raw' (for an onprem_only "
+                "app pii_detection='off' alone does not qualify)")
+    return ("model_input='raw' AND client_output='raw', or pii_detection='off' "
+            "set explicitly on the app (an 'off' inherited from the deployment "
+            "default does not count)")
+
+
 def compile_policy(app_policy, deployment: Settings) -> EffectivePolicy:
     """Compile one application's stored policy plus the deployment's settings
     into the single `EffectivePolicy` every consumer reads.
@@ -457,6 +515,22 @@ def compile_policy(app_policy, deployment: Settings) -> EffectivePolicy:
     if telemetry_io not in TELEMETRY_IOS:              # malformed deployment value
         rejected.append(("telemetry_io", str(telemetry_io)))
         telemetry_io, sources["telemetry_io"] = _DENY["telemetry_io"], _CEILING
+    # Raw capture needs a declared no-protection posture (B31). Without one,
+    # deny to `redacted`. That normally has a detector to redact with, since
+    # detection the APP turned off would itself be the posture. The exception
+    # is detection off only by inheriting an "off" deployment default: then
+    # `redacted` has no detector, and the export boundary
+    # (`resolve_capture_io`) steps it down to `off` -- still never raw, and
+    # the write is refused all the same. Only the placement-free half
+    # is applied here (a compiled protection value never reads residency);
+    # `validate_effective` adds the stricter onprem_only half at write time.
+    # A write is refused on `capture_full_refused`; a stored row is served
+    # redacted.
+    capture_full_refused = False
+    if telemetry_io == "full" and not _declares_no_protection(
+            model_input, client_output, detection, sources["detection"]):
+        capture_full_refused = True
+        telemetry_io, sources["telemetry_io"] = "redacted", _CEILING
 
     content_integrity, sources["content_integrity"] = _resolve(
         "content_integrity", _get(app_policy, "content_integrity"),
@@ -531,6 +605,7 @@ def compile_policy(app_policy, deployment: Settings) -> EffectivePolicy:
         version=version,
         rejected=tuple(rejected),
         clamped=tuple(clamped),
+        capture_full_refused=capture_full_refused,
         allowed_regions=allowed_regions,
         require_no_retention=require_no_retention,
         trajectory_mode=trajectory_mode,
@@ -619,15 +694,15 @@ _OPERATOR_NAME = {
 }
 
 
-def _capture_alternatives(residency: str) -> str:
+def _capture_alternatives(posture: bool) -> str:
     """The legal `capture_io` values to offer when `redacted` is refused.
 
-    `full` is offered only off-prem. For an `onprem_only` app raw capture needs
-    the declared no-protection posture as well, so naming it here would send
-    the operator straight into the next 422 — and a test asserts the word
-    "full" never appears in that app's message.
+    `full` is offered only when the app has declared a no-protection posture
+    (`has_no_protection_posture`) -- raw capture needs it at every residency,
+    so naming `full` otherwise would send the operator straight into the next
+    422.
     """
-    if residency == "onprem_only":
+    if not posture:
         return "capture_io='off'."
     return "capture_io='full' with the app's own Langfuse project, or capture_io='off'."
 
@@ -726,8 +801,13 @@ def validate_effective(eff: EffectivePolicy, deployment: Settings, *,
                 f"(refused pii_detection={value!r}; "
                 "serving.policy.allow_app_pii_downgrade is false).")
 
-    # --- 3. telemetry capture.
-    if p.telemetry_io == "full":
+    # --- 3. telemetry capture. `compile_policy` has already denied a `full`
+    # without the posture to `redacted`; `capture_full_refused` is how this
+    # rule still sees what the app asked for.
+    posture = has_no_protection_posture(p.model_input, p.client_output,
+                                        p.detection, p.sources.get("detection", ""),
+                                        residency)
+    if p.telemetry_io == "full" or eff.capture_full_refused:
         # (a) Own provisioned Langfuse project — NEVER relaxed, by anything.
         # Raw I/O stays tenant-isolated: one customer's raw prompts must never
         # land in another's traces or in the shared project (CLAUDE.md rule 2).
@@ -743,25 +823,21 @@ def validate_effective(eff: EffectivePolicy, deployment: Settings, *,
                 "for an application with its own provisioned Langfuse project "
                 "(raw I/O must never reach the shared project; CLAUDE.md rule 2). "
                 "Use 'redacted'.")
-        # (b) Posture. Before `policy_mode` existed, `onprem_only` was used as a
-        # proxy for "maximum protection", so raw capture was refused for onprem
-        # apps outright. That proxy is what this feature removes: an app the
-        # operator has explicitly put in a no-protection posture has declared
-        # it, and raw capture into its OWN project is then coherent at any
-        # residency — the whole point of onprem_only + passthrough. Spelled on
-        # the axes now rather than on `policy_mode`, which is exactly what
-        # `policy_mode: passthrough` compiles to; an app still showing the gate
-        # a redacted view keeps the old rule (rule 8: residency beats eval).
-        if residency == "onprem_only" and not (p.model_input == "raw"
-                                               and p.client_output == "raw"):
+        # (b) Posture, at ANY residency (B31). Before B31 only `onprem_only`
+        # apps were checked, which left an `enforced` app elsewhere free to
+        # hold raw capture. B31 only tightens: `onprem_only` keeps its stricter
+        # raw/raw rule, every other residency now needs a posture too
+        # (`has_no_protection_posture` holds both cases).
+        if eff.capture_full_refused or not posture:
+            where = ("an onprem_only application" if residency == "onprem_only"
+                     else "an application")
             raise PolicyViolation(
-                "CAPTURE_FULL_ONPREM_NEEDS_NO_PROTECTION",
-                "capture_io='full' stores raw telemetry and is not allowed for "
-                "an onprem_only application that has not declared a "
-                "no-protection posture — that is model_input='raw' AND "
-                "client_output='raw' (residency beats eval; CLAUDE.md rules "
-                "2/8). Use 'redacted', or set policy_mode='passthrough' (which "
-                "resolves both axes to 'raw') to declare the app unprotected.")
+                "CAPTURE_FULL_NEEDS_NO_PROTECTION",
+                "capture_io='full' stores raw telemetry and is allowed for "
+                f"{where} only once it has declared a no-protection posture — "
+                f"{_posture_requirement(residency)} (CLAUDE.md rules 2/8). Use "
+                "'redacted', or set policy_mode='passthrough' (which resolves "
+                "both axes to 'raw') to declare the app unprotected.")
 
     if p.telemetry_io == "redacted" and p.detection == "off":
         # Redacted telemetry needs something to redact with. This is the one
@@ -780,12 +856,12 @@ def validate_effective(eff: EffectivePolicy, deployment: Settings, *,
                 "policy_mode='passthrough': passthrough leaves PII detection "
                 "off, so there is nothing to redact telemetry with. Set "
                 "pii_detection='regex' or 'presidio' to keep redacted "
-                "telemetry, or use " + _capture_alternatives(residency))
+                "telemetry, or use " + _capture_alternatives(posture))
         raise PolicyViolation(
             "CAPTURE_REDACTED_NEEDS_A_DETECTOR",
             "capture_io='redacted' cannot be combined with pii_detection "
             "off: redacted telemetry needs a detector to redact with, and "
-            "none is configured. Use " + _capture_alternatives(residency))
+            "none is configured. Use " + _capture_alternatives(posture))
 
     # --- 4. streaming. `stream_unverified` streams real backend tokens and
     # explicitly waives step 9, so it can only ever be an app's own, narrow

@@ -50,6 +50,7 @@ ORIGINAL_COLUMNS: dict[str, frozenset[str]] = {
     "admin_users": frozenset({"id", "email", "password_hash", "created_at"}),
     # 1cb9858
     "model_quality": frozenset({"id", "model_name", "task_class", "score", "source", "calibrated_at", "eval_run_id", "notes"}),
+    "model_quality_bounds": frozenset({"id", "model_name", "task_class", "lower", "ci_level", "set_id", "calibrated_at"}),
     # adec76b
     "onboarded_models": frozenset({"slug", "display_name", "provider", "tier", "quality", "price_input", "price_output", "endpoint", "api_key_env", "context_window", "enabled", "allowed_app_ids", "probe_status", "probe_error", "notes", "updated_at"}),
     # d329a75
@@ -63,7 +64,7 @@ ORIGINAL_COLUMNS: dict[str, frozenset[str]] = {
 # Tables created whole by create_all on a deployed DB (no ALTER needed): they
 # gained no column after their introducing commit, so nothing to migrate.
 CREATED_WHOLE = frozenset({
-    "service_credentials", "app_recognizers", "app_sensitivity_rules", "outcome_feedback", "trajectory_envelopes", "request_snapshots", "admin_users", "model_quality", "external_model_metrics", "external_model_map",
+    "service_credentials", "app_recognizers", "app_sensitivity_rules", "outcome_feedback", "trajectory_envelopes", "request_snapshots", "admin_users", "model_quality", "model_quality_bounds", "external_model_metrics", "external_model_map",
 })
 
 # Indexes added to an existing table after its first release.

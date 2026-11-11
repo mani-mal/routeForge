@@ -14,7 +14,7 @@ from dataclasses import fields as _dataclass_fields
 
 from pydantic import BaseModel, ValidationError
 
-from app.apps.policy import AppPolicyView
+from app.apps.policy import AppPolicyView, floor_pairs
 from app.eval.graders import GraderSpec, compile_grader
 from app.policy.detectors import make_detector
 
@@ -61,6 +61,8 @@ class Case(BaseModel):
                 # A bare string would otherwise pass through and be matched
                 # character by character (or not at all) downstream.
                 raise ValueError(f"{key} must be a list")
+            elif key == "quality_floors":
+                converted[key] = floor_pairs(value)
             else:
                 converted[key] = value
         return AppPolicyView(**converted)

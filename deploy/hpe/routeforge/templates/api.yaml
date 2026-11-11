@@ -1,4 +1,3 @@
-{{- $ccrEnabled := and .Values.servingPlane.contextOptimization.enabled .Values.servingPlane.contextOptimization.ccr.enabled }}
 {{- $secret := include "routeforge.secretName" . }}
 apiVersion: apps/v1
 kind: Deployment
@@ -44,11 +43,9 @@ spec:
               containerPort: {{ .Values.servingPlane.server.port }}
               protocol: TCP
           env:
-            # These three are read from env by app/config/loader.py, and env WINS
+            # These are read from env by app/config/loader.py, and env WINS
             # over the mounted serving.yaml — so they must be set here or the
             # ConfigMap's values are silently ignored (learned on the DGX deploy).
-            - name: SP_INFERENCE_BACKEND
-              value: {{ .Values.servingPlane.inferenceBackend | quote }}
             - name: SP_PII_DETECTION
               value: {{ .Values.servingPlane.policy.piiDetection | quote }}
             - name: SP_SERVER_PORT
@@ -115,10 +112,6 @@ spec:
               mountPath: /app/config/serving.yaml
               subPath: serving.yaml
               readOnly: true
-            {{- if $ccrEnabled }}
-            - name: ccr-store
-              mountPath: /var/lib/serving-plane/ccr
-            {{- end }}
           startupProbe:
             httpGet:
               path: /health
@@ -141,11 +134,6 @@ spec:
         - name: serving-config
           configMap:
             name: routeforge-serving-config
-        {{- if $ccrEnabled }}
-        - name: ccr-store
-          persistentVolumeClaim:
-            claimName: routeforge-ccr
-        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

@@ -59,6 +59,8 @@ COLUMNS: list[tuple[str, str, str]] = [
     ("compression_enabled", "BOOLEAN", "BOOLEAN"),
     ("trajectory_mode", "VARCHAR(16)", "VARCHAR(16)"),
     ("model_aliases", "JSON", "JSON"),
+    ("quality_floors", "JSON", "JSON"),
+    ("quality_floor_mode", "VARCHAR(16)", "VARCHAR(16)"),
     ("capture_io", "VARCHAR(16)", "VARCHAR(16)"),
     ("pii_detection", "VARCHAR(16)", "VARCHAR(16)"),
     ("stream_mode", "VARCHAR(24)", "VARCHAR(24)"),
@@ -109,6 +111,10 @@ MODEL_COLUMNS: list[tuple[str, str, str]] = [
     # NULL on every existing row, which reads as "unknown provenance" and
     # changes no stored context_window.
     ("context_window_source", "VARCHAR(16)", "VARCHAR(16)"),
+    # 2026-11-11 B68 -- the endpoint's API key as a Fernet token under
+    # ENCRYPTION_KEY. NULL on every existing row = no stored key; the row keeps
+    # using its api_key_env (or the provider default) exactly as before.
+    ("api_key_enc", "TEXT", "TEXT"),
 ]
 
 # 2026-09-19 P2a cached-token accounting. Nullable with no default: an existing

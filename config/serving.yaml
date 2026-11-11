@@ -78,7 +78,6 @@ outcomes:
 
 policy:
   pii_detection: presidio        # presidio | regex | off
-  fail_closed: true              # never relax this
   allow_app_pii_downgrade: true  # false = locked-down deployment: no app may weaken PII detection
   # Protection posture inherited by any app whose policy_mode is null.
   # enforced = privacy-first (detection + redaction); passthrough = router,

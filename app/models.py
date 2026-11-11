@@ -186,6 +186,12 @@ class ExecutionPolicyContext(BaseModel):
     # router's quality term reads -- a RANKING input only. Eligibility
     # (`app/policy/feasible.py`), placement and residency never read it.
     workload: str | None = None
+    # B80: the effective quality floor and mode for this request's workload,
+    # resolved once by `app/routing/quality_floor.py::resolve_floor` in
+    # `build_context`. The router reads these two fields and never re-derives
+    # the floor. Content-free: a number and an enum.
+    quality_floor: float | None = None
+    quality_floor_mode: str = "off"
     max_cost_usd: float
     max_latency_ms: int
     risk_class: str
@@ -289,9 +295,20 @@ class DecisionRecord(BaseModel):
     # scored, and inventing terms for them would be exactly the overstatement
     # P2a exists to remove.
     scoring: dict | None = None
+    # B80: on a FAILED gateway hop (`chosen` is None, nothing served), the
+    # model the gateway actually tried. Needed because under an enforced
+    # quality floor the router serves the cheapest qualifier, which is not
+    # necessarily `scoring["candidates"][0]` (scoring stays score-ranked).
+    # A model id only; None on every other record.
+    attempted: str | None = None
     # Step-7 breaker: True when every candidate policy admitted was held open
     # and the router tried one anyway (app/routing/router.py::select).
     circuit_bypass: bool = False
+    # B70/B71: RoutingDecision.tier_downgrade -- `{"from", "to", "cause"}`
+    # when a prior failure or an open circuit moved the served tier below the
+    # one tier targeting picked (never below the hard floor). Tier names and
+    # a fixed cause enum only; None otherwise.
+    tier_downgrade: dict | None = None
 
 
 class VerificationRecord(BaseModel):

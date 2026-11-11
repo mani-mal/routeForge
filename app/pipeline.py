@@ -5,7 +5,7 @@ import logging
 import time
 from typing import AsyncIterator, Callable, TYPE_CHECKING
 
-from app.apps.outcomes import outcome_context, outcome_trace, reply_shape
+from app.apps.outcomes import decision_trace, outcome_context, outcome_trace, reply_shape
 from app.cache.store import CacheEntry, DeterministicSemanticCache
 from app.config.schema import ContextOptimizationCfg, PoolCandidate, Settings
 from app.errors import PolicyGateError
@@ -520,6 +520,17 @@ class Pipeline:
         return _chosen_scoring(served.scoring, served.chosen)
 
     @staticmethod
+    def _served_quality_floor(records: list[DecisionRecord]) -> dict | None:
+        """B80: the SERVED hop's (same rule as `_served_scoring`) quality-floor
+        record -- the router's own content-free dict, never re-derived. `None`
+        when no router ran (a semantic-cache hit), or that hop decided under no
+        shadow/enforce floor."""
+        chosen_hops = [r for r in records if r.chosen is not None]
+        if not chosen_hops or not chosen_hops[-1].scoring:
+            return None
+        return chosen_hops[-1].scoring.get("quality_floor")
+
+    @staticmethod
     def _publish_telemetry_views(internals: dict | None,
                                  reps: Representations) -> None:
         """Hand the caller the two values the EXPORTER needs (design §2.6).
@@ -738,6 +749,9 @@ class Pipeline:
                        **self._certificate(
                            eff, ctx, det, self._endpoint_registry_version(),
                            self._endpoint_declaration(served)),
+                       # B80: no router ran on a cache hit, so no floor
+                       # decided this answer.
+                       "quality_floor": None,
                        "checks": checks},
             "sanitized_prompt": sanitized,
             # No raw/pre-verify text exists for a cache hit (no model call ran
@@ -1181,6 +1195,8 @@ class Pipeline:
                            self._endpoint_declaration(
                                self._candidate_by_name(result.model)),
                            self._served_scoring(records), tool_args),
+                       # B80: the served router hop's quality-floor record.
+                       "quality_floor": self._served_quality_floor(records),
                        "checks": self._eligibility_checks(ctx, records)},
             "sanitized_prompt": sanitized,
             "raw_completion": result.text,
@@ -1407,6 +1423,10 @@ class Pipeline:
             ctx, comp.messages, comp.tokens_after, complexity, hint,
             tools=tools, tool_choice=tool_choice,
             params=request.generation_params(), attempt_log=_attempt_log(internals))
+        if internals is not None:
+            # B70 item 2: a streamed backend failure's outcome row keeps the
+            # routing decision (eligible set, tier target) -- reason-free.
+            internals["routing_trace"] = decision_trace(records)
 
         meta: dict = {}
 
@@ -1539,6 +1559,8 @@ class Pipeline:
                            self._endpoint_declaration(
                                self._candidate_by_name(result.model)),
                            self._served_scoring(records), tool_args),
+                       # B80: the served router hop's quality-floor record.
+                       "quality_floor": self._served_quality_floor(records),
                        "checks": self._eligibility_checks(ctx, records)},
             "sanitized_prompt": sanitized,
             "raw_completion": result.text,

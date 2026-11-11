@@ -214,7 +214,9 @@ def test_display_full_mode_shows_raw_bodies(monkeypatch, tmp_path):
     _echo_backend(monkeypatch)
 
     _login(client)
-    pr = client.put(f"/admin/applications/{app_id}/policy", json={"capture_io": "full"})
+    # B31: full needs a declared no-protection posture at every residency.
+    pr = client.put(f"/admin/applications/{app_id}/policy",
+                    json={"capture_io": "full", "pii_detection": "off"})
     assert pr.status_code == 200, pr.text  # would 422 if not genuinely full-eligible
 
     text = "my ssn is 123-45-6789 please help"

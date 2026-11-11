@@ -92,12 +92,20 @@ function CacheBadge({ status }: { status: OnboardedModel["cache_reporting"] }) {
 // The onboard/edit field set, held as strings (what the inputs actually carry)
 // so one control block serves both forms. Onboard (POST) and edit (PUT) take
 // the same full `OnboardIn` body server-side, so they take the same fields.
+type KeyMode = "none" | "env" | "stored";
+
 type ModelFormFields = {
   slug: string;
   displayName: string;
   tier: string;
   endpoint: string;
+  // B68: how the endpoint's key is supplied. "stored" = typed here, stored
+  // encrypted, never shown again; "env" = name of an env var in the API pod.
+  keyMode: KeyMode;
   apiKeyEnv: string;
+  // The password input. Never pre-filled from the server (it cannot be: the
+  // key is write-only). Empty in "stored" mode = keep the stored key.
+  apiKey: string;
   priceInput: string;
   priceOutput: string;
   quality: string;
@@ -114,7 +122,7 @@ type ModelFormFields = {
 };
 
 const EMPTY_FIELDS: ModelFormFields = {
-  slug: "", displayName: "", tier: "mid", endpoint: "", apiKeyEnv: "",
+  slug: "", displayName: "", tier: "mid", endpoint: "", keyMode: "none", apiKeyEnv: "", apiKey: "",
   priceInput: "", priceOutput: "", quality: "", contextWindow: "",
   appIds: [], notes: "",
   region: "", promptRetention: "unknown", acceptsRawSensitive: "unknown",
@@ -127,7 +135,9 @@ function fieldsOf(m: OnboardedModel): ModelFormFields {
     displayName: m.display_name,
     tier: m.tier,
     endpoint: m.endpoint,
+    keyMode: m.api_key_source === "stored" ? "stored" : m.api_key_env ? "env" : "none",
     apiKeyEnv: m.api_key_env?.startsWith("(invalid") ? "" : (m.api_key_env ?? ""),
+    apiKey: "",
     priceInput: String(m.price_input),
     priceOutput: String(m.price_output),
     quality: m.quality === null ? "" : String(m.quality),
@@ -146,13 +156,25 @@ function fieldsOf(m: OnboardedModel): ModelFormFields {
 // One body shape for POST and PUT — the server re-validates and re-probes the
 // whole body on either. `enabled` is explicit admin intent; the server ANDs it
 // with the probe result, so an unreachable model is always saved disabled.
+// B68 key fields: exactly one of api_key / api_key_env. In "stored" mode an
+// empty password input OMITS api_key, which the server reads as "keep the
+// stored key"; "none" (and "env" with no name) sends api_key: null, which
+// removes any stored key.
+function keyBody(f: ModelFormFields): Pick<OnboardIn, "api_key" | "api_key_env"> {
+  if (f.keyMode === "stored") {
+    return f.apiKey.trim() ? { api_key_env: null, api_key: f.apiKey } : { api_key_env: null };
+  }
+  if (f.keyMode === "env" && f.apiKeyEnv.trim()) return { api_key_env: f.apiKeyEnv.trim() };
+  return { api_key_env: null, api_key: null };
+}
+
 function toBody(f: ModelFormFields, enabled: boolean): OnboardIn {
   return {
     slug: f.slug.trim(),
     display_name: f.displayName.trim(),
     tier: f.tier,
     endpoint: f.endpoint.trim(),
-    api_key_env: f.apiKeyEnv.trim() ? f.apiKeyEnv.trim() : null,
+    ...keyBody(f),
     price_input: Number(f.priceInput),
     price_output: Number(f.priceOutput),
     quality: f.quality.trim() ? Number(f.quality) : null,
@@ -186,11 +208,15 @@ function ModelFields({
   apps,
   lockSlug = false,
   contextWindowSource = null,
+  storedKey = null,
 }: {
   fields: ModelFormFields;
   onChange: (f: ModelFormFields) => void;
   apps: AdminApp[];
   lockSlug?: boolean;
+  // B68: on the edit form, whether a key is already stored for this model
+  // (and its hint), so "stored" mode can say "leave blank to keep it".
+  storedKey?: { hint: string | null } | null;
   // B50: the stored row's `context_window_source`, so the edit form can show
   // the number came from the endpoint rather than an operator. Undefined/null
   // on the onboard form (nothing stored yet) — no hint there.
@@ -229,11 +255,61 @@ function ModelFields({
           endpoint
           <input required value={fields.endpoint} onChange={(e) => set({ endpoint: e.target.value })} placeholder="http://host:port/v1" className={inputCls} />
         </label>
-        <label className="flex flex-col gap-1 text-xs text-gray-500">
-          api key env (optional)
-          <input value={fields.apiKeyEnv} onChange={(e) => set({ apiKeyEnv: e.target.value })} placeholder="(none)" className={inputCls} />
-          <span className="text-[11px] text-gray-500">Name of an environment variable in the API container, e.g. SP_ONPREM_API_KEY — not the key.</span>
-        </label>
+        <div className="flex flex-col gap-1 text-xs text-gray-500">
+          <label className="flex flex-col gap-1">
+            endpoint API key
+            <select
+              value={fields.keyMode}
+              onChange={(e) => set({ keyMode: e.target.value as KeyMode, apiKey: "" })}
+              className={inputCls}
+            >
+              <option value="none">no key</option>
+              <option value="stored">API key (stored encrypted)</option>
+              <option value="env">API key env var</option>
+            </select>
+          </label>
+          {fields.keyMode === "stored" && (
+            <>
+              <input
+                type="password"
+                autoComplete="new-password"
+                aria-label="API key (stored encrypted)"
+                required={!storedKey}
+                value={fields.apiKey}
+                onChange={(e) => set({ apiKey: e.target.value })}
+                placeholder={storedKey ? `key stored ${keyDots(storedKey.hint)} — leave blank to keep` : "paste the endpoint's API key"}
+                className={inputCls}
+              />
+              <span className="text-[11px] text-gray-500">
+                Stored encrypted (needs ENCRYPTION_KEY on the API server) and never shown again. Takes effect immediately — no redeploy.
+              </span>
+              {storedKey && (
+                <button
+                  type="button"
+                  onClick={() => set({ keyMode: "none", apiKey: "" })}
+                  className="self-start rounded border border-edge text-gray-400 hover:text-frontier hover:border-frontier px-2 py-0.5 text-[11px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                >
+                  remove stored key
+                </button>
+              )}
+            </>
+          )}
+          {fields.keyMode === "env" && (
+            <>
+              <input
+                aria-label="API key env var"
+                value={fields.apiKeyEnv}
+                onChange={(e) => set({ apiKeyEnv: e.target.value })}
+                placeholder="SP_ONPREM_API_KEY"
+                className={inputCls}
+              />
+              <span className="text-[11px] text-gray-500">Name of an environment variable in the API container, e.g. SP_ONPREM_API_KEY — not the key.</span>
+            </>
+          )}
+          {fields.keyMode === "none" && storedKey && (
+            <span className="text-[11px] text-frontier">The stored key will be removed on save.</span>
+          )}
+        </div>
         <div className="grid grid-cols-2 gap-3">
           <label className="flex flex-col gap-1 text-xs text-gray-500">
             price / 1M input ($)
@@ -331,6 +407,21 @@ function ModelFields({
       </div>
     </>
   );
+}
+
+function keyDots(hint: string | null | undefined): string {
+  return hint ? `••••${hint}` : "••••";
+}
+
+// B68: one line saying where this endpoint's key comes from. Never the key.
+function KeyStatus({ model }: { model: OnboardedModel }) {
+  const text =
+    model.api_key_source === "stored"
+      ? `key stored ${keyDots(model.api_key_hint)}`
+      : model.api_key_source === "env" || model.api_key_env
+        ? `using env ${model.api_key_env}`
+        : "no key";
+  return <span className="font-mono text-[11px] text-gray-500">{text}</span>;
 }
 
 // What the POST/PUT ack tells us: the probe re-ran, and `enabled` is the
@@ -495,7 +586,10 @@ function ModelRow({
           </span>
         </td>
         <td className="py-2 pr-3 align-top">
-          <span className="font-mono text-xs text-gray-400 break-all">{model.endpoint}</span>
+          <div className="flex flex-col gap-0.5">
+            <span className="font-mono text-xs text-gray-400 break-all">{model.endpoint}</span>
+            <KeyStatus model={model} />
+          </div>
         </td>
         <td className="py-2 pr-3 align-top">
           <span className="text-xs text-gray-400">{appNames}</span>
@@ -544,6 +638,7 @@ function ModelRow({
                 apps={apps}
                 lockSlug
                 contextWindowSource={model.context_window_source}
+                storedKey={model.api_key_source === "stored" ? { hint: model.api_key_hint ?? null } : null}
               />
               <div className="flex items-center gap-3">
                 <button

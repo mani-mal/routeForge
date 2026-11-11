@@ -19,7 +19,7 @@ deploy/hpe/
     └── templates/
         ├── ezua/             ← PCAI integration: Kyverno + VirtualServices + SSO
         ├── api.yaml  ui.yaml  serving-config.yaml  ui-nginx-config.yaml
-        ├── app-secret.yaml  registry-secret.yaml  ccr-pvc.yaml
+        ├── app-secret.yaml  registry-secret.yaml  
         └── langfuse-datastores.yaml  langfuse-app.yaml
 ```
 
@@ -76,7 +76,7 @@ Find `<your-pcai-domain>` in the console URL / Harbor endpoint, e.g.
 
 ```bash
 deploy/hpe/scripts/package.sh
-# → deploy/hpe/routeforge-0.2.7.tgz
+# → deploy/hpe/routeforge-<version>.tgz   (build artifact, gitignored; not committed)
 ```
 
 > **Bump the chart version on every re-upload.** PCAI stores uploaded charts in an
@@ -94,18 +94,38 @@ Edit these in `routeforge/values.yaml` (or in the wizard's Values step):
 | `imageCredentials.enabled` + `imageCredentials.password` | `true` + a `read:packages` **GHCR classic PAT** | always (GHCR is private) |
 | `image.registry` | `ghcr.io/mani-mal` (default) — or `harbor.ingress.<domain>/routeforge` for Harbor | only to switch off GHCR |
 | `global.storageClassName` | your PCAI StorageClass | if no cluster default |
-| `thirdPartyRegistry` | Harbor mirror prefix | **air-gapped** PCAI (no internet for langfuse/postgres/etc.) |
-| `credentials.adminPassword` | a real password | always (demo default is `changeme`) |
+| `thirdPartyRegistry` | Harbor mirror prefix | **air-gapped** PCAI (no internet for langfuse/postgres/etc.); re-mirror MinIO under the `quay.io/minio/*` path (images resolve to `<reg>/quay.io/minio/minio` and `.../mc`) |
+| `credentials.adminPassword` | a real password, or leave empty | optional: empty (default) => the chart generates one and keeps it across upgrades; `changeme` is refused |
+| `servingPlane.policy.piiDetection` | `regex` (default) or `presidio` | `presidio` needs an API image built with `EXTRAS=observability,postgres,presidio` |
 
-Everything else is demo-safe as shipped: `inferenceBackend: mock` (CPU-only, no
-GPU), Presidio PII detection, compression off.
+Everything else is demo-safe as shipped: CPU-only (no GPU), regex PII detection
+(the default image has no Presidio), compression off. No inference is deployed; onboard
+your own endpoint at runtime.
+
+**Upgrading across 0.3.0:** use `helm upgrade --reset-then-reuse-values` (Helm >= 3.14) or `-f`
+a fresh values file, not plain `--reuse-values` (the old stored values lack the new provider keys
+and defaults). Under GitOps / `helm template`-driven installs (ArgoCD) `lookup` is always empty,
+so set `credentials.adminPassword` (or `credentials.existingSecret`) explicitly, or every sync
+regenerates the Secret and it drifts from the seeded login.
+
+**Removed values (chart 0.3.0).** If your values file sets any of these, delete them (Helm
+ignores unknown keys, but they no longer do anything): `servingPlane.inferenceBackend`,
+`servingPlane.allowBackendFallback`, `servingPlane.vllm.*`, `servingPlane.dynamo.*`,
+`servingPlane.policy.failClosed`, `servingPlane.contextOptimization.ccr.storageClassName`
+and `.size` (the CCR cache is in-memory; the `routeforge-ccr` PVC is no longer created).
+Provider blocks are now `servingPlane.providers.<name>.{enabled,litellmPrefix,apiKeyEnv,...}`.
+MinIO images are now `quay.io/minio/minio` and `quay.io/minio/mc`. `adminPassword: changeme`
+is refused; read a generated password with
+`kubectl get secret routeforge-creds -o jsonpath='{.data.ADMIN_PASSWORD}' | base64 -d`. An
+existing install whose Secret still holds `changeme` fails the upgrade until you set a new
+`credentials.adminPassword` (and rotate the stored admin, see below).
 
 ## Import (in the PCAI console — matches the wizard steps)
 
 1. **Framework Details** — Name `routeForge`; a short Description; Category
    (any — e.g. *Data Science* / *Gen AI*); **Framework Icon**: upload
    `deploy/hpe/icon.svg`.
-2. **Framework Chart** — upload `routeforge-0.2.7.tgz` from step 2. Set **Release
+2. **Framework Chart** — upload `routeforge-<version>.tgz` (built by `deploy/hpe/scripts/package.sh` in step 2). Set **Release
    Name** to a plain DNS label like `routeforge` (no dots — `0.1` is rejected by
    `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`). Leave **Wait** unchecked (the Langfuse cold
    start can exceed the wait timeout and get marked failed); **Debug** on is handy.
@@ -139,14 +159,13 @@ The bundle came up `2/2` for both `routeforge-api` and `routeforge-ui` on the
 | Door | Where | Credential |
 |---|---|---|
 | PCAI SSO (oauth2-proxy) | in front of the UI host, **only if** `ezua.authorizationPolicy.enabled: true` | your **PCAI account** (same as the console home page) — *not* the admin creds below |
-| **routeForge admin login** | the UI console app itself (`/admin/login`) | **`credentials.adminEmail` / `adminPassword`** — default `admin@routeforge.local` / `changeme` |
-| Langfuse | the separate `…-langfuse-…` URL | same `adminEmail` / `adminPassword` (Langfuse-seeded) |
+| **routeForge admin login** | the UI console app itself (`/admin/login`) | **`credentials.adminEmail` / `adminPassword`** — default email `admin@routeforge.local`; password generated (see above) |
+| Langfuse | the separate `…-langfuse-…` URL | same `adminEmail` / `adminPassword` (`langfuse-app.yaml` seeds the Langfuse login from the RouteForge admin credentials) |
 
 The **routeForge admin login is the shareable demo credential.** The static UI
 loads without it, but every `/api/*` call (including the SSE decision stream)
 returns 401 until you log in — so it protects all data even with SSO off.
-`changeme` is a demo default; **change `credentials.adminPassword` before
-sharing the URL.**
+The password is generated unless you set one; **read or set it before sharing the URL.**
 
 The admin user is seeded into the shared Langfuse Postgres from
 `ADMIN_EMAIL`/`ADMIN_PASSWORD` **idempotently** — if an earlier install already
@@ -324,19 +343,19 @@ the chart:
   `REQUESTS_CA_BUNDLE`/`SSL_CERT_FILE`. This is the usual cause of an API pod that
   pulls fine but never goes Ready (startup TLS hangs). Leave it on for PCAI.
 
-- **No GPU needed.** `inferenceBackend: mock` schedules on CPU nodes. Switch to
-  `vllm`/`dynamo` later (GPU nodes + `nodeSelector`) — not required for the demo.
+- **No GPU needed.** The bundle schedules on CPU nodes and deploys no inference;
+  onboard your own on-prem endpoint at runtime.
 - **UI runs stock nginx as root** (binds :80). If PCAI's pod-security admission
   rejects root containers, rebuild `serving-plane-ui` on
   `nginxinc/nginx-unprivileged` (listens :8080) and adjust the nginx `listen`
   port + `service.ui`. See `templates/ui.yaml`.
 - **CCR residency (hard rule 6).** If you turn Headroom on
-  (`servingPlane.contextOptimization.enabled=true`), the CCR PVC must be an
-  in-cluster **block/file** StorageClass, never object storage. Langfuse's MinIO
+  (`servingPlane.contextOptimization.enabled=true`), the CCR cache must stay
+  in-cluster (it is currently in-memory; no PVC is provisioned), never object storage. Langfuse's MinIO
   is for event uploads only — never point CCR at it.
 - **Air-gapped installs.** Mirror the `langfuse.images.*` refs into Harbor and
-  set `thirdPartyRegistry`. If Presidio's model can't be fetched, set
-  `servingPlane.policy.piiDetection: regex` or bake the model into the API image.
+  set `thirdPartyRegistry`. The default detector is `regex`; for `presidio`
+  build the API image with `EXTRAS=observability,postgres,presidio` (bakes the spaCy model).
 - **Verify against current HPE docs at deploy time** — the ezua contract
   (gateway name, required labels) can change between AI Essentials versions.
   This bundle targets the AI Essentials 1.9.x+ Import Framework.

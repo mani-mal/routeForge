@@ -54,7 +54,7 @@ def test_snapshot_shape_and_versions():
         app = next(a for a in doc["apps"] if a["application_id"] == "default")
         assert "pii_exempt_patterns" not in app["policy"]
         assert "residency" in app["policy"]
-        assert set(doc["quality"]) == {"customer", "calibrated"}
+        assert set(doc["quality"]) == {"customer", "calibrated", "bounds"}
 
 
 def test_snapshot_has_no_forbidden_keys_or_secret_values(monkeypatch):
@@ -144,3 +144,28 @@ def test_snapshot_skips_app_deleted_mid_read(monkeypatch):
     assert r.status_code == 200, r.text
     ids = [a["application_id"] for a in r.json()["apps"]]
     assert "default" not in ids and ids
+
+
+def test_snapshot_bounds_and_app_floors_round_trip():
+    from app.eval.scenario import build_scenario, close_scenario
+    import asyncio
+    with TestClient(create_app()) as c:
+        _login(c)
+        c.app.state.quality.set_bounds({("local-8b", "claims"): (0.9, "cal-1"),
+                                        ("local-8b", None): (0.7, "cal-0")})
+        doc = c.get("/admin/config-snapshot").json()
+        base = c.app.state.settings
+    assert doc["quality"]["bounds"] == [
+        {"model": "local-8b", "workload": None, "lower": 0.7, "set_id": "cal-0"},
+        {"model": "local-8b", "workload": "claims", "lower": 0.9, "set_id": "cal-1"}]
+    assert all("quality_floors" in a["policy"] and "quality_floor_mode" in a["policy"]
+               for a in doc["apps"])
+
+    async def go():
+        scn = await build_scenario(doc, base=base)
+        try:
+            return scn.quality.bounds_map()
+        finally:
+            await close_scenario(scn)
+    assert asyncio.run(go()) == {("local-8b", "claims"): (0.9, "cal-1"),
+                                 ("local-8b", None): (0.7, "cal-0")}

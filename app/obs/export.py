@@ -507,6 +507,18 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                         if rec.get("scoring"):
                             sp.set_attribute("sp.scoring",
                                              json.dumps(redact_tree(rec["scoring"])))
+                            # B80: the hop's quality-floor status, a fixed
+                            # enum -- filterable without parsing sp.scoring.
+                            floor = rec["scoring"].get("quality_floor")
+                            if isinstance(floor, dict) and floor.get("status"):
+                                sp.set_attribute("sp.quality_floor_status",
+                                                 redact_value(str(floor["status"])))
+                        if isinstance(rec.get("tier_downgrade"), dict):
+                            # B70/B71: the hop was served below the tier its
+                            # targeting picked, by a prior failure or an open
+                            # circuit. Tier names + a cause enum only.
+                            sp.set_attribute("sp.tier_downgrade",
+                                             json.dumps(redact_tree(rec["tier_downgrade"])))
                         for k in ("hop_index", "actual_cost_usd", "est_cost_usd", "latency_ms"):
                             if rec.get(k) is not None:
                                 sp.set_attribute(f"sp.{k}", float(rec[k]))

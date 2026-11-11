@@ -113,3 +113,15 @@ def test_empty_flag_and_placement_filtered_nulls():
     assert s["empty"] is False and s["completed"]["policy_rejections"] == 1
     s = summarize([], [outcome("r", "no_eligible", chosen=None)], [], placement_filtered=True)
     assert s["completed"]["policy_rejections"] is None and s["completed"]["excluded"] is None
+
+
+def test_no_failover_is_a_failure_not_a_tier_reason():
+    # B70 item 1: a backend_failed row with route_reason no_failover is counted
+    # among failures, never among the "why this tier" shares.
+    outs = [outcome("a", reason="failover"),
+            outcome("b", status="backend_failed", reason="no_failover", chosen=None),
+            outcome("c", status="backend_failed", chosen=None)]
+    s = summarize([], outs, [])
+    assert s["route_reasons"] == {"failover": 1}
+    assert s["completed"]["failures"] == 2
+    assert s["completed"]["no_failover"] == 1

@@ -79,7 +79,9 @@ A standard `ChatCompletion` **plus routeForge-specific fields**:
       "message": { "role": "assistant", "content": "…" },
       "finish_reason": "stop" }
   ],
-  "usage": { "prompt_tokens": 123, "completion_tokens": 45, "total_tokens": 168 },
+  "usage": { "prompt_tokens": 123, "completion_tokens": 45, "total_tokens": 168,
+             "prompt_tokens_details": { "cached_tokens": 64 },  // only when the provider reported it
+             "cached_prompt_tokens": 64 },                      // DEPRECATED duplicate, see notes
 
   // ---- routeForge extensions ----
   "trace":  [ /* DecisionRecord, VerificationRecord, CompressionRecord, MemoryRecord, CacheRecord */ ],
@@ -123,6 +125,16 @@ Notes:
   `raw_tool_calls`: popped before serialization, **never** a key on this response body
   or on `display.output`. It reaches telemetry only when the app is configured
   `capture_io: "full"`, and only into that app's own Langfuse project.
+- **`usage`** follows OpenAI's shape. When the serving provider reports how many prompt
+  tokens it served from its own prompt cache, the count is in
+  `usage.prompt_tokens_details.cached_tokens`, exactly where OpenAI puts it. When the
+  provider reports nothing (or no provider was called, e.g. a semantic-cache hit),
+  `prompt_tokens_details` is **omitted** rather than sent as `null` or a guessed `0`.
+  **Deprecated:** the flat `usage.cached_prompt_tokens` key is still sent beside it (`0`
+  when unreported) for clients that started reading it before the nested shape existed
+  (B43, 2026-11-11). It will be removed in a later release; read
+  `prompt_tokens_details.cached_tokens` instead. The same rules apply to a stream's
+  terminal usage frame.
 - `model` is the slug; `model_display` is the human-readable name.
 - `object` and `created` are **always** emitted, on every response shape (direct,
   cache hit and streaming). The `openai` SDK's `ChatCompletion` model
@@ -276,12 +288,13 @@ exactly as OpenAI does. The stream then ends with one extra frame, after the
 `finish_reason` frame and before `data: [DONE]`, whose `choices` array is empty:
 
 ```
-data: {"id":"req-…","object":"chat.completion.chunk","created":…,"model":"…","choices":[],"usage":{"prompt_tokens":53,"completion_tokens":8,"total_tokens":61,"cached_prompt_tokens":0}}
+data: {"id":"req-…","object":"chat.completion.chunk","created":…,"model":"…","choices":[],"usage":{"prompt_tokens":53,"completion_tokens":8,"total_tokens":61,"cached_prompt_tokens":32,"prompt_tokens_details":{"cached_tokens":32}}}
 data: [DONE]
 ```
 
 The numbers are RouteForge's own accounting, the same `usage` object a non-streamed
-response carries (including the `cached_prompt_tokens` extension). The frame is
+response carries (`prompt_tokens_details.cached_tokens` when the provider reported a
+prompt-cache count, plus the deprecated flat `cached_prompt_tokens`). The frame is
 emitted in every `stream_mode`. Without `include_usage: true` the stream is
 unchanged and carries no usage frame. A stream that ends early (client disconnect)
 or fails at the backend has no usage frame. Agent clients that size their context
@@ -321,6 +334,8 @@ The message text is identical to what the HTTP error response would contain. Cli
 ### Client disconnect handling
 
 When a client disconnects while waiting for a complete answer, the backend work is cancelled and the usage row is recorded with `status: cancelled`.
+
+On a real-token stream (`stream_unverified` / `incremental_verify`), a mid-answer disconnect drains the remaining backend output to recover the request's normal accounting. If the backend fails during that drain, the request is recorded as `status: cancelled` (with its `cancelled` routing outcome), never left unmetered.
 
 For non-streamed requests (`stream: false`), a disconnected client receives:
 
@@ -398,7 +413,7 @@ Every error the inference endpoint can return:
 | `429` | `rate limit exceeded for this application` | `rate_limit_exceeded` | Over your `max_rpm`. |
 | `429` | `daily budget exceeded for this application` | `insufficient_quota` | Over your `max_spend_usd_per_day`. |
 | `500` | `internal error` | `internal_error` | Unexpected server-side failure. |
-| `502` | `no backend could serve this request: … (last error: <model>: <ErrorType>: <message>)` | `backend_unavailable` | Every candidate failed upstream; the last upstream error is included. A context-window refusal mixed with any other failure stays `502`. |
+| `502` | `no backend could serve this request: … (last error: <model>: <ErrorType>: <message>)` | `backend_unavailable` | Every candidate failed upstream; the last upstream error is included. A context-window refusal mixed with any other failure stays `502`. When the request's only eligible endpoint failed, the message adds `; no failover candidate: the only eligible endpoint … failed`; when only candidates below the request's risk or escalation floor remain, it adds `; no failover candidate at or above the request's <risk floor\|escalation floor> (<tier>): …` -- failover never serves a request below that floor (2026-11-11). |
 | `503` | `policy evaluation unavailable` | `policy_unavailable` | **Fail-closed:** the privacy gate itself errored. |
 
 **Which codes are whose.** `context_length_exceeded`, `invalid_api_key`,
@@ -534,6 +549,23 @@ response text. Line format, columns and an example:
 
 ---
 
+## `POST`/`PUT`/`GET /admin/infra/models` — endpoint API key fields (admin-only)
+
+The full onboarding body is in
+[`onboarding-models.md`](../guides/onboarding-models.md#b-onboard-it); these are the
+key fields (B68), detailed in its section (b3):
+
+| Field | In | Notes |
+|---|---|---|
+| `api_key` | request | The endpoint's bearer token, stored encrypted with `ENCRYPTION_KEY` and never returned. `422` (nothing stored or probed) if sent with `api_key_env`, if not printable ASCII without spaces/control characters (empty included), or if `ENCRYPTION_KEY` is unset or shorter than 32 bytes. On `PUT`: omitted = keep the stored key — but `422` if the endpoint's scheme/host/port changes; `null` = remove it; a value = replace it, clear `api_key_env` and re-probe. `POST` never keeps a prior row's key. |
+| `api_key_env` | request | Name of an env var in the API container. Sending it removes any stored key. |
+| `api_key_source` | response | `"stored"` \| `"env"` \| `null`. On `GET` rows and the `POST`/`PUT` acks. |
+| `api_key_hint` | response (`GET`) | Last 4 characters of a stored key of 12+ characters; otherwise `null`. |
+
+Neither the key nor its ciphertext appears in any response, the config snapshot,
+traces, outcome rows or logs. A rotated key is used at once by the replica that took the
+write and by every other replica within `routing.quality_refresh_s` (60 s default).
+
 ## `POST /admin/quality/calibrations` (admin-only)
 
 Admin-only, like every route in this section (`401` without the admin session cookie).
@@ -545,27 +577,56 @@ and `force_registry_mismatch` (default `false`).
 A validation failure (unsupported schema, a `set_id` that doesn't match the file's own
 content hash, an unknown model, a unit `workload` that is not null or a lower-case
 workload slug, an out-of-range score, duplicate `(model, workload)` units, no recommended
-units at all, or a registry-version mismatch without `force_registry_mismatch`) is `422`
+units and no lower bound, a recommended or `no_change` unit whose `ci_low` is non-finite,
+outside `[0, 1]` or above its `mean`, or a registry-version mismatch without
+`force_registry_mismatch`) is `422`
 and writes nothing. Re-applying an already-applied `set_id` is `409`. A dry run previews
 each recommended unit's current effective quality/source and proposed score, whether a
 `customer` row would still win (`customer_wins`), and any more specific existing rows
-that will keep winning for their workload (`shadowed_by`), without writing anything; an
-apply writes one `model_quality` row per recommended unit, refreshes this replica's
+that will keep winning for their workload (`shadowed_by`), without writing anything. A
+dry run also returns `bounds`, the list of calibrated lower bounds (`{model, workload,
+lower, ci_level}`) an apply would store for the quality-floor router, one per
+`recommended` or `no_change` unit that carries a `ci_low`. An apply writes one
+`model_quality` row per recommended unit plus one `model_quality_bounds` row per bound
+(a file of only `no_change` units with `ci_low` is a valid bounds-only set), refreshes this replica's
 routing quality snapshot immediately, and returns `{"set_id", "applied", "refreshed",
 "registry_version_match", "forced"}`. Apply and revert each log one JSON audit line.
 
 ## `GET /admin/quality/calibrations` (admin-only)
 
-Lists applied calibration sets: `[{"set_id", "applied_at", "units"}, ...]`, newest first.
+Lists applied calibration sets: `[{"set_id", "applied_at", "units", "bounds"}, ...]`,
+newest first. `units` counts score rows, `bounds` lower-bound rows; a bounds-only set has
+`units: 0`. A set applied before bounds existed shows `bounds: 0`: revert it and re-apply
+the same file to give it bounds. Re-apply only the newest set, or several sets in their
+original oldest-to-newest order: the newest `calibrated_at` wins per key, so re-applying an
+older set while a newer one exists makes it outrank the newer one. A changed registry may
+need `force_registry_mismatch=true`.
 
 ## `DELETE /admin/quality/calibrations/{set_id}` (admin-only)
 
-Reverts one applied set (deletes its `model_quality` rows and refreshes this replica's
-snapshot immediately). `404` if `set_id` is not an applied set. Other sets and any
+Reverts one applied set (deletes its `model_quality` and `model_quality_bounds` rows and
+refreshes this replica's snapshot immediately) and returns `{"set_id", "deleted"}`, where
+`deleted` counts score rows plus bound rows. `404` if `set_id` is not an applied set. Other sets and any
 `customer` row are untouched.
 
 Full field reference, the estimator, the replay diff, precedence and the refresh
 behaviour: [`quality-calibration.md`](./quality-calibration.md).
+
+## Quality floors on the admin API and the response (B80)
+
+Quality-floor routing is off by default. Reference:
+[`per-app-config.md`](./per-app-config.md) `quality_floors`.
+
+- **Per-app policy.** `PUT /admin/applications/{id}/policy` accepts `quality_floors`
+  (`{workload: number in (0, 1]}`) and `quality_floor_mode` (`off | shadow | enforce`);
+  A stored `null` means inherit (none). A `null` or omitted value in the PUT body leaves the stored value unchanged; to clear one, name it in `reset` (`reset: ["quality_floors"]`). A malformed value is `422`. The policy read returns both.
+- **`GET /admin/me`.** The `deployment` envelope gains `quality_floors`:
+  `{"mode": "off", "workloads": {"claims": 0.8}}`, the deployment default mode and floors,
+  so a client can show an app's value beside the one it can only raise.
+- **Chat completion response.** `policy.quality_floor` carries the quality-floor record of
+  the served router hop (floor, mode, workload, status, the chosen model's lower bound and
+  its source, every eligible candidate's bound); `null` when no floor decided the request.
+  Shape: [`routing-observability.md`](./routing-observability.md) §6.
 
 ---
 

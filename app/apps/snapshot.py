@@ -8,7 +8,8 @@ deployment. Content-free and secret-free BY CONSTRUCTION: every field is
 listed explicitly below -- nothing is dumped wholesale except the routing,
 pricing and policy config sections, which hold no secrets, plus the four
 deployment posture values in `SERVING_POLICY_FIELDS` (not secrets). Excluded: endpoint
-URLs, `api_key_env`, `serving.observability` (Langfuse), `pii_exempt_patterns`
+URLs, `api_key_env`, `api_key_enc` (B68: a stored endpoint key, write-only),
+`serving.observability` (Langfuse), `pii_exempt_patterns`
 (operator regexes), custom recognizers, and per-app credential columns.
 """
 from __future__ import annotations
@@ -51,10 +52,17 @@ def _jsonable(value):
     return value
 
 
+def _policy_value(name: str, value):
+    # Floors travel as the {workload: floor} map the admin API shows.
+    if name == "quality_floors" and value is not None:
+        return dict(value)
+    return _jsonable(value)
+
+
 def policy_dict(view: AppPolicyView) -> dict:
     """Every `AppPolicyView` field except the excluded ones; sets become
     sorted lists. Shared with the simulator's tests as the one spelling."""
-    return {f.name: _jsonable(getattr(view, f.name))
+    return {f.name: _policy_value(f.name, getattr(view, f.name))
             for f in dataclasses.fields(view)
             if f.name not in _EXCLUDED_POLICY_FIELDS}
 
@@ -62,6 +70,12 @@ def policy_dict(view: AppPolicyView) -> dict:
 def _quality_entries(overrides: dict) -> list[dict]:
     rows = [{"model": model, "workload": workload, "score": q.score, "set_id": q.set_id}
             for (model, workload), q in overrides.items()]
+    return sorted(rows, key=lambda r: (r["model"], r["workload"] or ""))
+
+
+def _bound_entries(bounds: dict) -> list[dict]:
+    rows = [{"model": model, "workload": workload, "lower": lower, "set_id": set_id}
+            for (model, workload), (lower, set_id) in bounds.items()]
     return sorted(rows, key=lambda r: (r["model"], r["workload"] or ""))
 
 
@@ -111,6 +125,7 @@ async def build_config_snapshot(session, *, settings, registry, quality, signals
         "onboarded": sorted(onboarded, key=lambda o: o["slug"]),
         "apps": sorted(apps, key=lambda x: x["application_id"]),
         "quality": {"customer": _quality_entries(customer),
-                    "calibrated": _quality_entries(calibrated)},
+                    "calibrated": _quality_entries(calibrated),
+                    "bounds": _bound_entries(quality.bounds_map())},
         "signals": signals.snapshot(),
     }

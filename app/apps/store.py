@@ -15,7 +15,7 @@ from sqlalchemy.orm import selectinload
 
 from app.apps.models import (
     Application, AppPolicy, AppRecognizer, AppSensitivityRule, AppToken,
-    EndpointObservation, ModelQuality, OnboardedModel, OutcomeFeedback,
+    EndpointObservation, ModelQuality, ModelQualityBound, OnboardedModel, OutcomeFeedback,
     RequestSnapshot, RoutingOutcome, ServiceCredential, UsageRecord, utcnow,
 )
 from app.api.history import _LOCAL_PROVIDERS
@@ -547,7 +547,7 @@ POLICY_FIELDS: frozenset[str] = frozenset({
     "model_input", "client_output", "content_integrity",
     "escalate_residency_on_detection",
     "allowed_regions", "require_no_retention", "trajectory_mode",
-    "tool_args_min_score", "model_aliases"})
+    "tool_args_min_score", "model_aliases", "quality_floors", "quality_floor_mode"})
 
 
 async def upsert_policy(session: AsyncSession, app_id: str, **fields) -> AppPolicy:
@@ -932,20 +932,44 @@ async def load_quality_overrides(
     return out
 
 
+async def load_quality_bounds(
+    session: AsyncSession,
+) -> dict[tuple[str, str | None], tuple[float, str]]:
+    """`(model, task_class)` -> `(lower, set_id)` from the calibrated lower
+    bounds; among rows for one key the newest `calibrated_at` wins. Ids and
+    numbers only -- content-free."""
+    rows = (await session.execute(select(ModelQualityBound))).scalars().all()
+    best: dict[tuple[str, str | None], tuple[dt.datetime, float, str]] = {}
+    for r in rows:
+        key = (r.model_name, r.task_class)
+        cur = best.get(key)
+        if cur is None or r.calibrated_at > cur[0]:
+            best[key] = (r.calibrated_at, r.lower, r.set_id)
+    return {k: (lower, set_id) for k, (_at, lower, set_id) in best.items()}
+
+
 async def write_calibration_set(
     session: AsyncSession, *, set_id: str, units: list[dict],
+    bounds: list[dict] = (),
 ) -> int:
     """Write one `model_quality` row per unit for a new calibration set
     (P2b-3 §6). Each unit dict has `model`, `workload` (`None` for the `(model,
     *)` unit) and `score`. Every row is written with `source="calibrated"`,
-    `eval_run_id=set_id` and `notes="P2b-3 set"`. Returns the row count.
+    `eval_run_id=set_id` and `notes="P2b-3 set"`. Each `bounds` dict (`model`,
+    `workload`, `lower`, `ci_level`) becomes a `model_quality_bounds` row under
+    the same `set_id` (B80). Returns the score-row count.
 
-    Raises `ValueError` if `set_id` already exists (idempotent apply is the
-    admin route's job, not this function's -- see spec §6). Caller commits.
+    Raises `ValueError` if `set_id` already exists in either table (idempotent
+    apply is the admin route's job, not this function's -- see spec §6).
+    Caller commits.
     """
     existing = (await session.execute(
         select(ModelQuality.id).where(ModelQuality.eval_run_id == set_id).limit(1)
     )).scalar_one_or_none()
+    if existing is None:
+        existing = (await session.execute(
+            select(ModelQualityBound.id).where(ModelQualityBound.set_id == set_id).limit(1)
+        )).scalar_one_or_none()
     if existing is not None:
         raise ValueError(f"calibration set already exists: {set_id}")
     count = 0
@@ -960,49 +984,72 @@ async def write_calibration_set(
             notes="P2b-3 set",
         ))
         count += 1
+    for b in bounds:
+        session.add(ModelQualityBound(
+            id=uuid.uuid4().hex,
+            model_name=b["model"],
+            task_class=b.get("workload"),
+            lower=b["lower"],
+            ci_level=b["ci_level"],
+            set_id=set_id,
+        ))
     return count
 
 
 async def list_calibration_sets(session: AsyncSession) -> list[dict]:
-    """Applied calibration sets, newest first: `{set_id, applied_at, units}`
-    grouped by `eval_run_id` over the `calibrated` rows (P2b-3 §6)."""
+    """Applied calibration sets, newest first: `{set_id, applied_at, units,
+    bounds}` grouped by `eval_run_id` over the `calibrated` score rows and by
+    `set_id` over the lower-bound rows (P2b-3 §6, B80). `units` counts score
+    rows, `bounds` bound rows; a bounds-only set is listed too."""
     stmt = (
         select(ModelQuality)
         .where(ModelQuality.source == "calibrated", ModelQuality.eval_run_id.is_not(None))
     )
     rows = (await session.execute(stmt)).scalars().all()
+    bound_rows = (await session.execute(select(ModelQualityBound))).scalars().all()
     groups: dict[str, dict] = {}
-    for r in rows:
-        g = groups.get(r.eval_run_id)
+
+    def touch(set_id: str, at: dt.datetime, kind: str) -> None:
+        g = groups.get(set_id)
         if g is None:
-            groups[r.eval_run_id] = {
-                "set_id": r.eval_run_id, "applied_at": r.calibrated_at, "units": 1}
-        else:
-            g["units"] += 1
-            if r.calibrated_at > g["applied_at"]:
-                g["applied_at"] = r.calibrated_at
+            g = groups[set_id] = {
+                "set_id": set_id, "applied_at": at, "units": 0, "bounds": 0}
+        g[kind] += 1
+        if at > g["applied_at"]:
+            g["applied_at"] = at
+
+    for r in rows:
+        touch(r.eval_run_id, r.calibrated_at, "units")
+    for b in bound_rows:
+        touch(b.set_id, b.calibrated_at, "bounds")
     return sorted(groups.values(), key=lambda g: g["applied_at"], reverse=True)
 
 
 async def delete_calibration_set(session: AsyncSession, set_id: str) -> int:
-    """Delete every `calibrated` row belonging to `set_id`. Returns the number
-    of rows deleted (0 if the set does not exist). Customer rows and other
-    calibration sets are untouched (P2b-3 §6). Caller commits."""
+    """Delete every `calibrated` score row and every lower-bound row belonging
+    to `set_id`. Returns the total number of rows deleted (0 if the set does
+    not exist). Customer rows and other calibration sets are untouched (P2b-3
+    §6). Caller commits."""
     ids = (await session.execute(
         select(ModelQuality.id).where(
             ModelQuality.eval_run_id == set_id, ModelQuality.source == "calibrated")
     )).scalars().all()
-    if not ids:
-        return 0
-    await session.execute(delete(ModelQuality).where(ModelQuality.id.in_(ids)))
-    return len(ids)
+    bound_ids = (await session.execute(
+        select(ModelQualityBound.id).where(ModelQualityBound.set_id == set_id)
+    )).scalars().all()
+    if ids:
+        await session.execute(delete(ModelQuality).where(ModelQuality.id.in_(ids)))
+    if bound_ids:
+        await session.execute(
+            delete(ModelQualityBound).where(ModelQualityBound.id.in_(bound_ids)))
+    return len(ids) + len(bound_ids)
 
 
 # --- onboarded models (runtime model registry; replaces infra_models/infra_settings) ---
 
 _ONBOARDED_FIELDS = {
     "display_name", "provider", "tier", "quality", "price_input",
-    "price_output", "price_cached_input", "endpoint", "api_key_env",
+    "price_output", "price_cached_input", "endpoint", "api_key_env", "api_key_enc",
     "context_window", "context_window_source", "enabled", "allowed_app_ids",
     "probe_status", "probe_error", "notes",
     "region", "prompt_retention", "accepts_raw_sensitive"}

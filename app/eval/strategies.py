@@ -245,11 +245,14 @@ def _router_chain(rt: Router, inp: StrategyInput, failed: Callable[[str], bool],
 
 
 def router_attempts(settings: Settings, registry: "ModelRegistry",
-                    signals: SignalStore, max_attempts: int) -> AttemptStrategy:
+                    signals: SignalStore, max_attempts: int,
+                    quality: QualityResolver | None = None) -> AttemptStrategy:
     """`router` with the gateway's failover (see `_router_chain`). `signals`
     is read, never written -- the cold arm passes an empty store; the online
-    arm is `OnlineArm`."""
-    rt = Router(settings, registry=registry, signals=signals)
+    arm is `OnlineArm`. `quality`, when given, is the router's
+    `QualityResolver` (the `router_floor` arm's, loaded with lower bounds,
+    B80); `None` keeps the router's own default resolver."""
+    rt = Router(settings, quality_resolver=quality, registry=registry, signals=signals)
 
     def _router_attempts(inp: StrategyInput, failed: Callable[[str], bool]):
         return _router_chain(rt, inp, failed, max_attempts)
