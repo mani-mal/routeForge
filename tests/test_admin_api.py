@@ -118,7 +118,7 @@ def test_manual_langfuse_creds_enable_full_capture(client):
     r = client.put(f"/admin/applications/{app_id}/policy", json={"capture_io": "full"})
     assert r.status_code == 422
     # Attach manual creds.
-    r = client.put(f"/admin/applications/{app_id}/langfuse", json={
+    r = client.put(f"/admin/applications/{app_id}/langfuse?verify=false", json={
         "host": "http://airgap:3000", "public_key": "pk", "secret_key": "sk",
         "project_id": "proj_air"})
     assert r.status_code == 200, r.text
@@ -131,14 +131,14 @@ def test_manual_langfuse_creds_enable_full_capture(client):
 
 def test_manual_langfuse_creds_404_for_unknown_app(client):
     _login(client)
-    r = client.put("/admin/applications/doesnotexist/langfuse", json={
+    r = client.put("/admin/applications/doesnotexist/langfuse?verify=false", json={
         "host": "http://h:3000", "public_key": "pk", "secret_key": "sk",
         "project_id": "p"})
     assert r.status_code == 404
 
 
 def test_manual_langfuse_creds_requires_admin_login(client):
-    r = client.put("/admin/applications/anything/langfuse", json={
+    r = client.put("/admin/applications/anything/langfuse?verify=false", json={
         "host": "http://h:3000", "public_key": "pk", "secret_key": "sk",
         "project_id": "p"})
     assert r.status_code == 401
@@ -149,7 +149,7 @@ def test_app_dict_never_returns_secret(client):
     resp = client.post("/admin/applications",
                        json={"id": "nosecret", "name": "NoSecret"}).json()
     app_id = resp["application"]["id"]
-    client.put(f"/admin/applications/{app_id}/langfuse", json={
+    client.put(f"/admin/applications/{app_id}/langfuse?verify=false", json={
         "host": "http://h:3000", "public_key": "pk", "secret_key": "TOPSECRET",
         "project_id": "p"})
     body = client.get("/admin/applications").json()
@@ -167,12 +167,12 @@ def test_manual_langfuse_creds_rejects_blank_or_bad_input(client):
     app_id = resp["application"]["id"]
     # Blank/whitespace-only secret_key must not silently encrypt to a
     # non-empty Fernet token and unlock capture_io='full'.
-    r = client.put(f"/admin/applications/{app_id}/langfuse", json={
+    r = client.put(f"/admin/applications/{app_id}/langfuse?verify=false", json={
         "host": "https://h:3000", "public_key": "pk", "secret_key": "   ",
         "project_id": "p"})
     assert r.status_code == 422
     # Non-http(s) host is rejected too.
-    r = client.put(f"/admin/applications/{app_id}/langfuse", json={
+    r = client.put(f"/admin/applications/{app_id}/langfuse?verify=false", json={
         "host": "not-a-url", "public_key": "pk", "secret_key": "sk",
         "project_id": "p"})
     assert r.status_code == 422
@@ -442,7 +442,7 @@ def test_policy_raw_capture_allowed_for_non_onprem_app_with_own_langfuse(client)
     # project (operator flag on by default).
     _login(client)
     client.post("/admin/applications", json={"id": "raw-eval", "name": "RawEval"})
-    r = client.put("/admin/applications/raw-eval/langfuse", json={
+    r = client.put("/admin/applications/raw-eval/langfuse?verify=false", json={
         "host": "https://raw-eval-langfuse:3000", "public_key": "pk",
         "secret_key": "sk", "project_id": "proj_raw_eval"})
     assert r.status_code == 200, r.text
@@ -458,7 +458,7 @@ def test_policy_raw_capture_allowed_for_non_onprem_app_with_own_langfuse(client)
 
 def _own_project_app(client, app_id: str) -> None:
     client.post("/admin/applications", json={"id": app_id, "name": app_id})
-    r = client.put(f"/admin/applications/{app_id}/langfuse", json={
+    r = client.put(f"/admin/applications/{app_id}/langfuse?verify=false", json={
         "host": f"https://{app_id}-langfuse:3000", "public_key": "pk",
         "secret_key": "sk", "project_id": f"proj_{app_id}"})
     assert r.status_code == 200, r.text
@@ -563,7 +563,7 @@ def test_policy_raw_capture_still_blocked_cases(client, monkeypatch):
     # test_b31_onprem_pii_off_full_is_still_refused.
     client.post("/admin/applications", json={"id": "raw-onp", "name": "RawOnp",
                                               "default_residency": "onprem_only"})
-    client.put("/admin/applications/raw-onp/langfuse", json={
+    client.put("/admin/applications/raw-onp/langfuse?verify=false", json={
         "host": "https://raw-onp-langfuse:3000", "public_key": "pk",
         "secret_key": "sk", "project_id": "proj_raw_onp"})
     r = client.put("/admin/applications/raw-onp/policy", json={"capture_io": "full"})
@@ -590,7 +590,7 @@ def test_policy_raw_capture_still_blocked_cases(client, monkeypatch):
     with TestClient(create_app()) as c2:
         _login(c2)
         c2.post("/admin/applications", json={"id": "raw-flagoff", "name": "RawFlagOff"})
-        c2.put("/admin/applications/raw-flagoff/langfuse", json={
+        c2.put("/admin/applications/raw-flagoff/langfuse?verify=false", json={
             "host": "https://raw-flagoff-langfuse:3000", "public_key": "pk",
             "secret_key": "sk", "project_id": "proj_raw_flagoff"})
         r = c2.put("/admin/applications/raw-flagoff/policy",
@@ -606,7 +606,7 @@ def test_policy_effective_capture_full_bypass_closed(client):
     # EFFECTIVE (still-full) capture_io, not treated as unset.
     _login(client)
     client.post("/admin/applications", json={"id": "eff-full", "name": "EffFull"})
-    client.put("/admin/applications/eff-full/langfuse", json={
+    client.put("/admin/applications/eff-full/langfuse?verify=false", json={
         "host": "https://eff-full-langfuse:3000", "public_key": "pk",
         "secret_key": "sk", "project_id": "proj_eff_full"})
     assert client.put("/admin/applications/eff-full/policy",
@@ -669,7 +669,7 @@ def test_policy_effective_capture_reevaluates_on_pii_only_put(client):
     # is turning its detector back on (that removes the posture anywhere).
     _login(client)
     client.post("/admin/applications", json={"id": "eff-pii-onprem", "name": "EffPiiOnprem"})
-    assert client.put("/admin/applications/eff-pii-onprem/langfuse", json={
+    assert client.put("/admin/applications/eff-pii-onprem/langfuse?verify=false", json={
         "host": "https://eff-pii-langfuse:3000", "public_key": "pk",
         "secret_key": "sk", "project_id": "proj_eff_pii"}).status_code == 200
     assert client.put("/admin/applications/eff-pii-onprem/policy",
@@ -727,7 +727,7 @@ def test_onprem_only_cannot_reach_full_even_with_manual_creds(client):
     # Valid, well-formed manual creds — proves the block below is the
     # residency clamp, not the missing-project check (CLAUDE.md rule 8:
     # residency beats eval; onprem_only must never be lifted to unlock 'full').
-    r = client.put("/admin/applications/onprem-app/langfuse", json={
+    r = client.put("/admin/applications/onprem-app/langfuse?verify=false", json={
         "host": "https://onprem-langfuse:3000", "public_key": "pk",
         "secret_key": "sk", "project_id": "proj_onprem"})
     assert r.status_code == 200, r.text
@@ -762,7 +762,7 @@ def test_policy_mode_passthrough_unlocks_full_capture_for_onprem_app(client):
     _login(client)
     client.post("/admin/applications", json={"id": "pt-full", "name": "PtFull",
                                              "default_residency": "onprem_only"})
-    assert client.put("/admin/applications/pt-full/langfuse", json={
+    assert client.put("/admin/applications/pt-full/langfuse?verify=false", json={
         "host": "https://pt-full-langfuse:3000", "public_key": "pk",
         "secret_key": "sk", "project_id": "proj_pt_full"}).status_code == 200
     # enforced (the default) -> still refused: no declared posture
@@ -960,7 +960,7 @@ def test_policy_reset_of_policy_mode_cannot_strand_raw_capture_on_an_onprem_app(
     _login(client)
     client.post("/admin/applications", json={"id": "rst-posture", "name": "RstPosture",
                                              "default_residency": "onprem_only"})
-    assert client.put("/admin/applications/rst-posture/langfuse", json={
+    assert client.put("/admin/applications/rst-posture/langfuse?verify=false", json={
         "host": "https://rst-posture-langfuse:3000", "public_key": "pk",
         "secret_key": "sk", "project_id": "proj_rst_posture"}).status_code == 200
     assert client.put("/admin/applications/rst-posture/policy",
@@ -986,7 +986,7 @@ def test_policy_reset_of_policy_mode_allowed_once_raw_capture_is_dropped(client)
     client.post("/admin/applications", json={"id": "rst-posture-ok",
                                              "name": "RstPostureOk",
                                              "default_residency": "onprem_only"})
-    assert client.put("/admin/applications/rst-posture-ok/langfuse", json={
+    assert client.put("/admin/applications/rst-posture-ok/langfuse?verify=false", json={
         "host": "https://rst-posture-ok-langfuse:3000", "public_key": "pk",
         "secret_key": "sk", "project_id": "proj_rst_posture_ok"}).status_code == 200
     assert client.put("/admin/applications/rst-posture-ok/policy",
@@ -1010,7 +1010,7 @@ def test_policy_reset_of_residency_does_not_change_the_capture_verdict(client):
     _login(client)
     client.post("/admin/applications", json={"id": "rst-residency", "name": "RstResidency",
                                              "default_residency": "onprem_only"})
-    assert client.put("/admin/applications/rst-residency/langfuse", json={
+    assert client.put("/admin/applications/rst-residency/langfuse?verify=false", json={
         "host": "https://rst-residency-langfuse:3000", "public_key": "pk",
         "secret_key": "sk", "project_id": "proj_rst_residency"}).status_code == 200
     assert client.put("/admin/applications/rst-residency/policy",

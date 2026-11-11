@@ -343,6 +343,15 @@ export interface AdminEffectivePolicy {
   content_integrity: string;
 }
 
+export interface LangfuseSummary {
+  host: string | null;
+  host_source?: "app" | "deployment";
+  public_key: string | null;
+  project_id: string | null;
+  secret_set: boolean;
+  secret_last4: string | null;
+}
+
 export interface AdminApp {
   id: string;
   name: string;
@@ -448,11 +457,19 @@ export const adminApi = {
     fetch(`/admin/applications/${id}`, opts("PATCH", body)).then(j<AdminApp>),
   setPolicy: (id: string, body: AdminPolicyWrite) =>
     fetch(`/admin/applications/${id}/policy`, opts("PUT", body)).then(j<AdminApp>),
-  // Manual per-app Langfuse creds (B15) — for an air-gapped operator who can't
-  // reach the org-scoped auto-provisioning API. Secret is write-only: never
-  // echoed back in AdminApp; only `has_langfuse_keys` reflects it was set.
-  setLangfuseCreds: (id: string, body: { host: string; public_key: string; secret_key: string; project_id: string }) =>
-    fetch(`/admin/applications/${id}/langfuse`, opts("PUT", body)).then(j<AdminApp>),
+  // Per-app Langfuse creds (B15, B33). The secret is write-only: reads return
+  // the non-secret fields plus `secret_set` (and the last 4 only for a long
+  // secret). PUT is a partial update and verifies from the API process unless
+  // `verify` is false (air-gapped).
+  getLangfuseCreds: (id: string) =>
+    fetch(`/admin/applications/${id}/langfuse`, { credentials: CRED }).then(j<LangfuseSummary>),
+  setLangfuseCreds: (id: string,
+    body: Partial<{ host: string; public_key: string; secret_key: string; project_id: string }>,
+    verify = true) =>
+    fetch(`/admin/applications/${id}/langfuse${verify ? "" : "?verify=false"}`, opts("PUT", body))
+      .then(j<AdminApp & { verified: boolean; langfuse: LangfuseSummary }>),
+  deleteLangfuseCreds: (id: string) =>
+    fetch(`/admin/applications/${id}/langfuse`, opts("DELETE")).then(j<AdminApp>),
   createToken: (id: string, name: string) =>
     fetch(`/admin/applications/${id}/tokens`, opts("POST", { name })).then(j<{ token: string; id: string; prefix: string }>),
   revokeToken: (tokenId: string) =>

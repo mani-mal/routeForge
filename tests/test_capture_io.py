@@ -412,7 +412,7 @@ def _seed_full_capture_app(client, app_id: str) -> str:
                     json={"id": app_id, "name": app_id, "owner_email": "a@b.c"})
     assert r.status_code == 200, r.text
     token = r.json()["token"]
-    lf = client.put(f"/admin/applications/{app_id}/langfuse",
+    lf = client.put(f"/admin/applications/{app_id}/langfuse?verify=false",
                     json={"host": "http://lf.test:3000", "public_key": "pub",
                           "secret_key": "sek", "project_id": f"proj-{app_id}"})
     assert lf.status_code == 200, lf.text
@@ -543,7 +543,7 @@ def test_b31_stored_full_without_posture_is_served_redacted(client, monkeypatch)
                     json={"id": "b31-legacy", "name": "b31-legacy"})
     assert r.status_code == 200, r.text
     token = r.json()["token"]
-    assert client.put("/admin/applications/b31-legacy/langfuse",
+    assert client.put("/admin/applications/b31-legacy/langfuse?verify=false",
                       json={"host": "http://lf.test:3000", "public_key": "pub",
                             "secret_key": "sek",
                             "project_id": "proj-b31"}).status_code == 200

@@ -49,7 +49,7 @@ def _make_full_app(client, app_id: str, *, stream_mode: str | None = None,
     r = client.post("/admin/applications", json={"id": app_id, "name": app_id})
     assert r.status_code == 200, r.text
     token = r.json()["token"]
-    lf = client.put(f"/admin/applications/{app_id}/langfuse",
+    lf = client.put(f"/admin/applications/{app_id}/langfuse?verify=false",
                     json={"host": "http://lf.test:3000", "public_key": "pub",
                           "secret_key": "sek", "project_id": f"proj-{app_id}"})
     assert lf.status_code == 200, lf.text
