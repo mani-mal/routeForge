@@ -21,7 +21,7 @@ onboarding-relevant ones:
 |---|---|---|
 | `DATABASE_URL` | Application/token/policy/usage store | Unset → local SQLite `./routeforge.db`. In a real deploy point at the shared Postgres. |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Seeds the first admin login on first boot | Defaults `admin@routeforge.local` / `changeme` — **override these**. |
-| `ENCRYPTION_KEY` | Fernet key encrypting per-app Langfuse secrets at rest | 32-byte / 64-hex. Unset → secrets stored as plaintext (dev only). |
+| `ENCRYPTION_KEY` | Fernet key encrypting per-app Langfuse secrets and onboarded endpoint API keys at rest | 32-byte / 64-hex. Unset → Langfuse secrets stored as plaintext (dev only); an endpoint `api_key` is **refused** (`422`), never stored in clear — also when the key decodes to fewer than 32 bytes. Changing it makes stored endpoint keys undecryptable (re-enter them). |
 | `LANGFUSE_HOST` | Langfuse ingestion host | Needed for any Langfuse feature. |
 | `LANGFUSE_ORG_PUBLIC_KEY` / `LANGFUSE_ORG_SECRET_KEY` | Org-scoped keys that enable **per-app Langfuse project auto-provisioning** | Optional. Absent → all apps share the default project. |
 
@@ -208,6 +208,22 @@ ALTER TABLE app_policies ADD COLUMN IF NOT EXISTS quality_floor_mode VARCHAR(16)
 
 Existing apps keep both null: they inherit the deployment's floors and mode.
 
+### Upgrading `onboarded_models` for stored endpoint keys (B68)
+
+An onboarded endpoint's API key can be given at onboarding time and is stored
+encrypted in a new column (see
+[`onboarding-models.md` (b3)](onboarding-models.md#b3-endpoint-api-keys--two-ways-exactly-one-per-model)).
+`create_all` does not add it to an existing table. **Run this before rolling the
+image** (or run `scripts/migrate_app_policies.py`, which includes it); the
+image's boot-time schema check (B62) names the column if it is missing:
+
+```sql
+ALTER TABLE onboarded_models ADD COLUMN IF NOT EXISTS api_key_enc TEXT;
+```
+
+Existing rows read `NULL`: no stored key, so each keeps using its
+`api_key_env` (or the provider default) exactly as before.
+
 ### Service credentials (machine-issued, short-lived tokens)
 
 A **service credential** lets a system — for example a CI runner or an agent
@@ -285,9 +301,9 @@ curl -b cookies.txt -X PUT \
 | `max_spend_usd_per_day` | float \| null | Daily USD cap. Over it → request rejected `429` and a `rejected` usage row recorded. |
 | `max_rpm` | int \| null | Requests/minute (sliding window). Over it → `429`. |
 | `compression_enabled` | bool \| null | Gate Headroom compression for this app. `null` = inherit the global toggle. Safety bypass rules still apply regardless. |
-| `capture_io` | str \| null | `off \| redacted \| full` telemetry I/O capture. `null` = inherit global. `full` **always** needs the app's own Langfuse project, and is refused for an `onprem_only` app whose effective `policy_mode` is `enforced` — set `policy_mode: passthrough` to declare the app unprotected. `redacted` is refused wherever nothing is sanitized (`passthrough`, or `pii_detection: off`) — `pii_detection: regex` still sanitizes (at lower fidelity than `presidio`) so it pairs fine with `redacted`. See [`../reference/per-app-config.md`](../reference/per-app-config.md). |
+| `capture_io` | str \| null | `off \| redacted \| full` telemetry I/O capture. `null` = inherit global. `full` **always** needs the app's own Langfuse project, and — at any residency — a declared no-protection posture: `model_input` and `client_output` both `raw` (`policy_mode: passthrough`); off-prem only, the app's own `pii_detection: off` also qualifies. A row saved before this rule (B31) without the posture is served as `redacted`, and its policy writes are refused, until `capture_io` is changed or a posture declared. `redacted` is refused wherever nothing is sanitized (`passthrough`, or `pii_detection: off`) — `pii_detection: regex` still sanitizes (at lower fidelity than `presidio`) so it pairs fine with `redacted`. See [`../reference/per-app-config.md`](../reference/per-app-config.md). |
 | `policy_mode` | str \| null | `enforced \| passthrough` — the **protection** posture. `null` = inherit `policy.default_policy_mode`. `enforced` runs detection, redaction, escalation and the capture ceiling; `passthrough` makes RouteForge a router, meter and tracer only. Refused when the deployment sets `allow_app_passthrough: false`. **It never touches placement** — it cannot widen `allowed_providers` or clear `onprem_only`, and `onprem_only` + `passthrough` is a valid configuration. |
-| `pii_detection` | str \| null | `off \| regex \| presidio` per-app override of the detector. `null` = inherit global (not a downgrade). An explicit `off`/`regex` is refused unless the deployment sets `allow_app_pii_downgrade`. Only `off` is additionally refused in combination with `capture_io: redacted` (`regex` is allowed there). It is **allowed** for an `onprem_only` app (detection and residency are independent axes) — but an `onprem_only` + `enforced` app with `pii_detection: off` needs `capture_io: off`. |
+| `pii_detection` | str \| null | `off \| regex \| presidio` per-app override of the detector. `null` = inherit global (not a downgrade). An explicit `off`/`regex` is refused unless the deployment sets `allow_app_pii_downgrade`. Only `off` is additionally refused in combination with `capture_io: redacted` (`regex` is allowed there). It is **allowed** for an `onprem_only` app (detection and residency are independent axes) — but an `onprem_only` + `enforced` app with `pii_detection: off` needs `capture_io: off`. Off-prem, `off` is itself a declared no-protection posture, so it also pairs with `full` (own project). |
 | `pii_entity_denylist` | list[str] \| null | Entity **types** the gate detects but does not redact for this app. Presidio built-in names only; an unknown name is a 422. `US_SSN` can never be named. No deployment ceiling — this is a narrowing, not a downgrade. |
 | `pii_score_threshold` | float \| null | `[0.0, 1.0]`. Scored entities below this confidence are dropped before redaction. Never applies to `US_SSN`; never drops unscored (regex / custom-recognizer) hits. To remove a stored floor entirely, name it in `reset`; `0` is a different thing — a floor that passes every score. |
 | `pii_exempt_patterns` | list[str] \| null | Regexes `fullmatch`ed against a detected entity's **value**, whatever type it was given — the type-independent complement to the denylist. Max 25 patterns, 200 chars each, each must compile under Python `re`. Never exempts `US_SSN`. |
@@ -302,7 +318,7 @@ curl -b cookies.txt -X PUT \
 > deployment default" name it in `reset`, e.g.
 > `{"reset": ["policy_mode", "pii_score_threshold"]}`. Every clamp above is evaluated on
 > the *effective* (post-merge, post-reset) state, so a partial PUT is judged on what the
-> write will actually produce — clearing `policy_mode` on an `onprem_only` app that is
+> write will actually produce — clearing `policy_mode` on an app that is
 > storing `capture_io: full` is refused, because the app would land back in the
 > `enforced` posture while still capturing raw I/O. Full detail in
 > [`../reference/per-app-config.md`](../reference/per-app-config.md).

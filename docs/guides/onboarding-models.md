@@ -45,7 +45,9 @@ Field reference (`OnboardIn`):
 | `display_name` | str | yes | What the UI shows customers. |
 | `tier` | str | yes | One of `cheap \| mid \| frontier`. There is no `strong` tier. |
 | `endpoint` | str (URL) | yes | Base URL of your OpenAI-compatible server. |
-| `api_key_env` | str \| null | no | Name of the env var holding the bearer token for this endpoint, if any — never the key value itself. |
+| `api_key_env` | str \| null | no | Name of the env var holding the bearer token for this endpoint, if any — never the key value itself. See (b3). |
+| `api_key` | str \| null | no | The endpoint's bearer token itself, stored **encrypted** and never returned — see (b3). Never together with `api_key_env`. On `PUT`, omitted = keep the stored key, `null` = remove it. Needs `ENCRYPTION_KEY`. |
+| `api_key_source`, `api_key_hint` | str \| null | **response only — never send them** | Where the key comes from (`"stored"` \| `"env"` \| `null`) and, for a stored key of 12+ characters, its last 4 characters. See (b3). |
 | `price_input` | float | yes | USD per 1M input tokens. |
 | `price_output` | float | yes | USD per 1M output tokens. |
 | `price_cached_input` | float \| null | no | USD per 1M prompt tokens this endpoint served from its **own** prompt cache — see (b2). `null`/omitted = undeclared, which bills cached tokens at the full `price_input` rate. |
@@ -149,6 +151,87 @@ Two behaviours worth knowing:
   scripted display-name update was written against an older body shape would
   overstate spend with no operator action.
 
+## (b3) Endpoint API keys — two ways, exactly one per model
+
+An endpoint started with a key (vLLM `--api-key`, NIM, a gateway in front of
+your servers) needs RouteForge to send `Authorization: Bearer <key>`. There are
+two ways to give it, and a model uses **exactly one** (sending both is `422`):
+
+| | `api_key` (stored) | `api_key_env` |
+|---|---|---|
+| What you send | the key itself | the **name** of an env var in the API container |
+| Where the key lives | `onboarded_models.api_key_enc`, Fernet-encrypted with `ENCRYPTION_KEY` | your secret manager → the pod's environment |
+| Needs a redeploy to add/rotate | **no** — usable as soon as the write returns | yes (new env entry, pod roll) |
+| Use it when | you want onboarding to be one step in the console | secrets are managed outside RouteForge (Vault, sealed secrets) |
+
+With neither, the provider-level `providers.onprem.api_key_env` in
+`config/serving.yaml` is the fallback, exactly as before.
+
+**`ENCRYPTION_KEY` is required for a stored key**, and it must decode to at
+least 32 bytes (64 hex characters). Without one the write is refused — `422 set
+ENCRYPTION_KEY to store endpoint keys, or use api_key_env` — and a shorter one
+(e.g. `changeme`) is refused with a `422` naming the 32-byte requirement; nothing
+is stored and nothing is probed. A stored key is never kept in clear (this is
+stricter than the per-app Langfuse secret, which falls back to plaintext in dev
+and accepts a short key). Surrounding whitespace is stripped; what remains must
+be printable ASCII with no spaces or control characters (`422` otherwise —
+including an empty key).
+
+**Write-only.** No admin read returns the key or its ciphertext. `GET
+/admin/infra/models` (and the `POST`/`PUT` acks) say only `api_key_source`:
+`"stored"`, `"env"` or `null`; a stored key of at least 12 characters also gets
+`api_key_hint`, its last 4 characters. The key is not in the config snapshot
+(`GET /admin/config-snapshot`), traces, outcome rows, decision records or logs.
+Upstream error text (a probe failure, a backend error that echoes the request,
+a stream that fails before or after its first byte) has any live endpoint key —
+stored, from a model's `api_key_env`, or the provider-level key — replaced with
+`<redacted-key>`, including its repr/JSON-escaped forms, before it is logged,
+stored or returned. A `422` for a malformed onboarding body does not echo the body.
+
+**Switching and clearing.** One `PUT` switches modes: sending `api_key` clears
+`api_key_env`, and sending `api_key_env` removes the stored key. `api_key: null`
+(with no `api_key_env`) removes the stored key. **Omitting `api_key` on a `PUT`
+keeps the stored key** — the console cannot resubmit a write-only value, so an
+unrelated edit (a price, a display name) must not wipe it. (`api_key_env` itself
+still full-replaces, as before.)
+
+**A stored key never follows the endpoint to a new host.** A `PUT` that changes
+the endpoint's scheme, host or port with `api_key` omitted is `422 changing the
+endpoint requires re-entering api_key, or sending api_key: null to remove it` —
+nothing is probed or saved. (A path-only change keeps the key.) Otherwise an
+admin session could repoint a model at a host it controls and read the key off
+the probe, and a model moved to another vendor would ship the old vendor's key.
+A `POST` never inherits a stored key either: re-onboarding over a disabled row
+(B19) starts with no stored key unless the body gives one.
+
+**Rotation.** `PUT` the new `api_key`. The endpoint is re-probed with the new key
+(`401`/`403` → `probe_status: "unauthorized"`, saved disabled — B61). The
+replica that served the `PUT` uses the new key at once. **Every other replica
+picks it up on its next registry reload, at most `routing.quality_refresh_s`
+later (60 s by default)** — the same background loop that reloads quality
+overrides also reloads onboarded models, so no restart is needed. Until then a
+replica may still send the old key; rotate the key at the endpoint after that
+window if the old one must keep working in between.
+
+**If `ENCRYPTION_KEY` changes.** Nothing probes periodically, so the stored
+`probe_status` and `enabled` do not change. Instead, each replica, on its next
+registry reload (≤ `routing.quality_refresh_s`), finds the key no longer
+decrypts, logs one WARNING naming the model's slug (never the value) and **takes
+the model out of routing on that replica**; `/health` lists it as
+`unauthorized`. This only narrows the pool — an `onprem_only` request with no
+other healthy on-prem model is rejected, never sent to cloud. Until that reload,
+a replica still routing to it sends a placeholder key; the endpoint answers
+`401`, which does not trip the circuit breaker (a 4xx is the request's fault,
+B36), so the request fails over to a peer or ends in `502`. `GET
+/admin/infra/models` still shows the DB row (`enabled`, `api_key_source:
+"stored"`, no hint). Re-enter the key with a `PUT`: it re-probes and the model
+returns to routing.
+
+Existing deployments need the column first:
+`ALTER TABLE onboarded_models ADD COLUMN IF NOT EXISTS api_key_enc TEXT;`
+(or run `scripts/migrate_app_policies.py`) — see
+[`admin-setup.md`](admin-setup.md#upgrading-onboarded_models-for-stored-endpoint-keys-b68).
+
 ## (c) What the probe checks
 
 On both `POST` (onboard) and `PUT` (edit), routeForge does
@@ -159,6 +242,9 @@ model ids. The persisted `enabled` is the requested `enabled`
 - Reachable + `enabled: true` → saved enabled, `probe_status: "healthy"`.
 - Reachable + `enabled: false` → saved disabled — an admin can explicitly
   take a healthy model out of rotation.
+- Reachable but the credentials are rejected (`401`/`403`) → saved disabled,
+  `probe_status: "unauthorized"`. The probe sends the model's stored key, else
+  the value of its `api_key_env` — see (b3).
 - Unreachable, or reachable but the slug isn't in `/models` → **always**
   saved disabled, `probe_status: "unreachable"`, `probe_error` set — an
   unreachable model can never end up enabled, regardless of what `enabled`
@@ -275,7 +361,8 @@ candidates from the cloud pool (`config/routing.yaml`'s `model_pool`) are
 still available if `providers.azure`/`providers.bedrock` are enabled, but
 on-prem candidates only exist once an operator onboards one. Onboarding
 takes effect immediately — the `ModelRegistry` refreshes on every admin
-write, no restart required.
+write, no restart required. Other replicas reload it in the background every
+`routing.quality_refresh_s` (60 s by default).
 
 ## Cloud providers are config, not onboarding
 

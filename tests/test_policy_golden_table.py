@@ -33,9 +33,16 @@ def _rejects(mode, pii, capture, residency, stream, own_project):
     if capture == "full":
         if not own_project:
             return "CAPTURE_FULL_NEEDS_OWN_PROJECT"
-        # onprem_only + full requires the declared no-protection posture
-        if residency == "onprem_only" and mode != "passthrough":
-            return "CAPTURE_FULL_ONPREM_NEEDS_NO_PROTECTION"
+        # full requires a declared no-protection posture at ANY residency
+        # (B31, 2026-11-11 -- a deliberate TIGHTENING: it used to apply to
+        # onprem_only alone). onprem_only is unchanged: raw/raw
+        # (`passthrough`) only. Elsewhere: raw/raw, or the app's own
+        # pii_detection=off.
+        if residency == "onprem_only":
+            if mode != "passthrough":
+                return "CAPTURE_FULL_NEEDS_NO_PROTECTION"
+        elif not (mode == "passthrough" or pii == "off"):
+            return "CAPTURE_FULL_NEEDS_NO_PROTECTION"
     if capture == "redacted" and eff_pii == "off":
         return "CAPTURE_REDACTED_NEEDS_A_DETECTOR"
     if stream == "stream_unverified" and residency == "onprem_only":
@@ -212,7 +219,8 @@ def test_own_project_callable_is_only_invoked_for_full_capture():
         validate_effective(eff, S, has_own_langfuse_project=_lookup)
     assert calls == []
 
-    eff = compile_policy(AppPolicyView(residency="any", capture_io="full"), S)
+    eff = compile_policy(AppPolicyView(residency="any", capture_io="full",
+                                       policy_mode="passthrough"), S)
     validate_effective(eff, S, has_own_langfuse_project=_lookup)
     assert calls == [1]
 

@@ -79,7 +79,9 @@ A standard `ChatCompletion` **plus routeForge-specific fields**:
       "message": { "role": "assistant", "content": "…" },
       "finish_reason": "stop" }
   ],
-  "usage": { "prompt_tokens": 123, "completion_tokens": 45, "total_tokens": 168 },
+  "usage": { "prompt_tokens": 123, "completion_tokens": 45, "total_tokens": 168,
+             "prompt_tokens_details": { "cached_tokens": 64 },  // only when the provider reported it
+             "cached_prompt_tokens": 64 },                      // DEPRECATED duplicate, see notes
 
   // ---- routeForge extensions ----
   "trace":  [ /* DecisionRecord, VerificationRecord, CompressionRecord, MemoryRecord, CacheRecord */ ],
@@ -123,6 +125,16 @@ Notes:
   `raw_tool_calls`: popped before serialization, **never** a key on this response body
   or on `display.output`. It reaches telemetry only when the app is configured
   `capture_io: "full"`, and only into that app's own Langfuse project.
+- **`usage`** follows OpenAI's shape. When the serving provider reports how many prompt
+  tokens it served from its own prompt cache, the count is in
+  `usage.prompt_tokens_details.cached_tokens`, exactly where OpenAI puts it. When the
+  provider reports nothing (or no provider was called, e.g. a semantic-cache hit),
+  `prompt_tokens_details` is **omitted** rather than sent as `null` or a guessed `0`.
+  **Deprecated:** the flat `usage.cached_prompt_tokens` key is still sent beside it (`0`
+  when unreported) for clients that started reading it before the nested shape existed
+  (B43, 2026-11-11). It will be removed in a later release; read
+  `prompt_tokens_details.cached_tokens` instead. The same rules apply to a stream's
+  terminal usage frame.
 - `model` is the slug; `model_display` is the human-readable name.
 - `object` and `created` are **always** emitted, on every response shape (direct,
   cache hit and streaming). The `openai` SDK's `ChatCompletion` model
@@ -276,12 +288,13 @@ exactly as OpenAI does. The stream then ends with one extra frame, after the
 `finish_reason` frame and before `data: [DONE]`, whose `choices` array is empty:
 
 ```
-data: {"id":"req-…","object":"chat.completion.chunk","created":…,"model":"…","choices":[],"usage":{"prompt_tokens":53,"completion_tokens":8,"total_tokens":61,"cached_prompt_tokens":0}}
+data: {"id":"req-…","object":"chat.completion.chunk","created":…,"model":"…","choices":[],"usage":{"prompt_tokens":53,"completion_tokens":8,"total_tokens":61,"cached_prompt_tokens":32,"prompt_tokens_details":{"cached_tokens":32}}}
 data: [DONE]
 ```
 
 The numbers are RouteForge's own accounting, the same `usage` object a non-streamed
-response carries (including the `cached_prompt_tokens` extension). The frame is
+response carries (`prompt_tokens_details.cached_tokens` when the provider reported a
+prompt-cache count, plus the deprecated flat `cached_prompt_tokens`). The frame is
 emitted in every `stream_mode`. Without `include_usage: true` the stream is
 unchanged and carries no usage frame. A stream that ends early (client disconnect)
 or fails at the backend has no usage frame. Agent clients that size their context
@@ -321,6 +334,8 @@ The message text is identical to what the HTTP error response would contain. Cli
 ### Client disconnect handling
 
 When a client disconnects while waiting for a complete answer, the backend work is cancelled and the usage row is recorded with `status: cancelled`.
+
+On a real-token stream (`stream_unverified` / `incremental_verify`), a mid-answer disconnect drains the remaining backend output to recover the request's normal accounting. If the backend fails during that drain, the request is recorded as `status: cancelled` (with its `cancelled` routing outcome), never left unmetered.
 
 For non-streamed requests (`stream: false`), a disconnected client receives:
 
@@ -533,6 +548,23 @@ response text. Line format, columns and an example:
 [`routing-outcomes.md`](./routing-outcomes.md) §7.
 
 ---
+
+## `POST`/`PUT`/`GET /admin/infra/models` — endpoint API key fields (admin-only)
+
+The full onboarding body is in
+[`onboarding-models.md`](../guides/onboarding-models.md#b-onboard-it); these are the
+key fields (B68), detailed in its section (b3):
+
+| Field | In | Notes |
+|---|---|---|
+| `api_key` | request | The endpoint's bearer token, stored encrypted with `ENCRYPTION_KEY` and never returned. `422` (nothing stored or probed) if sent with `api_key_env`, if not printable ASCII without spaces/control characters (empty included), or if `ENCRYPTION_KEY` is unset or shorter than 32 bytes. On `PUT`: omitted = keep the stored key — but `422` if the endpoint's scheme/host/port changes; `null` = remove it; a value = replace it, clear `api_key_env` and re-probe. `POST` never keeps a prior row's key. |
+| `api_key_env` | request | Name of an env var in the API container. Sending it removes any stored key. |
+| `api_key_source` | response | `"stored"` \| `"env"` \| `null`. On `GET` rows and the `POST`/`PUT` acks. |
+| `api_key_hint` | response (`GET`) | Last 4 characters of a stored key of 12+ characters; otherwise `null`. |
+
+Neither the key nor its ciphertext appears in any response, the config snapshot,
+traces, outcome rows or logs. A rotated key is used at once by the replica that took the
+write and by every other replica within `routing.quality_refresh_s` (60 s default).
 
 ## `POST /admin/quality/calibrations` (admin-only)
 

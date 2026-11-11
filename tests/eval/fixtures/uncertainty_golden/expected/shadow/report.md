@@ -26,3 +26,16 @@
 Relaxing a constraint can newly reject a row: a wider allowed set can lift the target to the risk floor, and the budget fallback never goes below the floor.
 
 Non-binding: 3 · skipped by cap: 0
+
+## Excluded rows
+
+simulated: 111 &middot; estimated_tokens: 0
+
+| reason | count |
+|---|---|
+| before_since | 0 |
+| cache_hit | 0 |
+| missing_features | 0 |
+| missing_routing_tokens | 0 |
+| unknown_app | 0 |
+| unknown_status | 0 |

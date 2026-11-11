@@ -853,6 +853,17 @@ def _assumptions_summary(results: list[RowResult], assumptions: dict | None) -> 
     return block
 
 
+def rows_block(rows: list[dict], excluded: dict[str, int]) -> dict:
+    """The `rows` block of `simulation.json`: how many rows were simulated,
+    how many were excluded (per reason), and -- B60 -- how many of the
+    simulated rows have no backend token count (rejected, failed before a
+    response, or served with no reported usage) and so are sized and priced
+    from RouteForge's own routing token count: an estimate. Shared by the
+    proposal run and the shadow-prices-only run (B63)."""
+    return {"simulated": len(rows), "excluded": dict(excluded),
+            "estimated_tokens": sum(1 for r in rows if replay_tokens(r)[2])}
+
+
 def summarize(results: list[RowResult], excluded: dict[str, int], *, inputs: dict,
              edits: dict, assumptions: dict | None = None) -> dict:
     """The deterministic `simulation.json` document (spec §8). `inputs` is
@@ -874,12 +885,7 @@ def summarize(results: list[RowResult], excluded: dict[str, int], *, inputs: dic
         "inputs": full_inputs,
         "edits": edits,
         "assumptions": _assumptions_summary(results, assumptions),
-        "rows": {"simulated": len(results), "excluded": dict(excluded),
-                 # B60: rows with no backend token count -- rejected, failed
-                 # before a response, or served with no reported usage --
-                 # sized and priced from RouteForge's own routing token
-                 # count -- an estimate.
-                 "estimated_tokens": sum(1 for r in results if replay_tokens(r.row)[2])},
+        "rows": rows_block([r.row for r in results], excluded),
         "baseline": _baseline(results),
         "totals": totals,
         "by_app": {app_id: _bucket_stats([r for r in results

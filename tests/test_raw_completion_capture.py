@@ -81,6 +81,32 @@ def _wire_app_tracer(monkeypatch):
     return mem, provider
 
 
+def force_full_capture_with_enforced_client(monkeypatch) -> None:
+    """Make the EXPORT boundary see `capture_io: full` for an app whose
+    compiled policy is otherwise `enforced` with a BUILT-IN detector running.
+
+    Since B31 no stored policy reaches that combination. (A `full` app CAN
+    still have its client output redacted: off-prem, `pii_detection: off` +
+    `enforced` + a privacy profile's custom recognizers is legal, and those
+    recognizers still redact egress -- see
+    `test_full_export_with_custom_recognizers_keeps_client_redacted`, which
+    drives that real configuration.) This patch keeps a backstop for the
+    built-in-detector case: if `full` ever coincides with it, the raw
+    pre-verify values reach ONLY the app's own trace, never the client body or
+    `display`. Patched on `app.api.routes` alone, so the pipeline still runs
+    the app's real `enforced` posture."""
+    import dataclasses
+
+    import app.api.routes as routes_mod
+    real = routes_mod.compile_policy
+
+    def _full(app_policy, settings):
+        eff = real(app_policy, settings)
+        return dataclasses.replace(eff, protection=dataclasses.replace(
+            eff.protection, telemetry_io="full"))
+    monkeypatch.setattr(routes_mod, "compile_policy", _full)
+
+
 def _output_value_for(mem, request_id: str) -> str:
     for span in mem.get_finished_spans():
         if span.name == "serving.request" and \
@@ -99,15 +125,15 @@ def _make_app(client, app_id: str, *, capture_io: str, with_langfuse: bool) -> s
     assert r.status_code == 200, r.text
     token = r.json()["token"]
     if with_langfuse:
-        lf = client.put(f"/admin/applications/{app_id}/langfuse",
+        lf = client.put(f"/admin/applications/{app_id}/langfuse?verify=false",
                         json={"host": "http://lf.test:3000", "public_key": "pub",
                               "secret_key": "sek", "project_id": f"proj-{app_id}"})
         assert lf.status_code == 200, lf.text
     pr = client.put(f"/admin/applications/{app_id}/policy",
                     json={"capture_io": capture_io})
     # Would 422 for capture_io="full" if the app weren't genuinely
-    # full-eligible (non-onprem residency + own Langfuse project) --
-    # app/api/admin_routes.py::set_policy.
+    # full-eligible (own Langfuse project + declared no-protection posture)
+    # -- app/policy/compile.py::validate_effective.
     assert pr.status_code == 200, pr.text
     return token
 
@@ -117,7 +143,8 @@ def test_full_export_stores_pre_verify_raw_completion(client, monkeypatch):
     _leaky_backend(monkeypatch, leaked)
     mem, provider = _wire_app_tracer(monkeypatch)
 
-    token = _make_app(client, "raw-full", capture_io="full", with_langfuse=True)
+    force_full_capture_with_enforced_client(monkeypatch)
+    token = _make_app(client, "raw-full", capture_io="redacted", with_langfuse=True)
     r = client.post("/v1/chat/completions",
                     headers={"Authorization": f"Bearer {token}"},
                     json={"model": "auto",
@@ -137,6 +164,49 @@ def test_full_export_stores_pre_verify_raw_completion(client, monkeypatch):
     provider.force_flush()
     out = _output_value_for(mem, resp["id"])
     assert _SSN in out
+
+
+def test_full_export_with_custom_recognizers_keeps_client_redacted(client, monkeypatch):
+    """The REAL legal configuration in which `full` capture and a redacted
+    client reply coexist after B31: off-prem, `pii_detection: off` (a declared
+    posture there) + `enforced` + a privacy profile with a custom recognizer.
+    The recognizer still runs on egress (`EffectiveDetector`, pipeline), so the
+    client never sees the value -- while the app's own trace keeps the raw,
+    pre-verify completion. No patching of the policy."""
+    acct = "ACCT-482731"
+    _leaky_backend(monkeypatch, f"noted: {acct}")
+    mem, provider = _wire_app_tracer(monkeypatch)
+
+    _login(client)
+    r = client.post("/admin/applications",
+                    json={"id": "raw-full-custom", "name": "raw-full-custom",
+                          "owner_email": "a@b.c"})
+    assert r.status_code == 200, r.text
+    token = r.json()["token"]
+    assert client.put("/admin/applications/raw-full-custom/langfuse?verify=false",
+                      json={"host": "http://lf.test:3000", "public_key": "pub",
+                            "secret_key": "sek",
+                            "project_id": "proj-raw-full-custom"}).status_code == 200
+    assert client.put("/admin/applications/raw-full-custom/privacy", json={
+        "recognizers": [{"name": "ACCOUNT_ID", "regex": r"\bACCT-\d{6}\b",
+                         "score": 0.9, "enabled": True}],
+        "rules": []}).status_code == 200
+    pr = client.put("/admin/applications/raw-full-custom/policy",
+                    json={"residency": "any", "policy_mode": "enforced",
+                          "pii_detection": "off", "capture_io": "full"})
+    assert pr.status_code == 200, pr.text
+
+    r = client.post("/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={"model": "auto",
+                          "messages": [{"role": "user", "content": "please repeat it back"}]})
+    assert r.status_code == 200, r.text
+    resp = r.json()
+    assert acct not in resp["choices"][0]["message"]["content"]   # egress redacted
+    assert "raw_completion" not in resp
+    assert acct not in (resp["display"]["output"] or "")
+    provider.force_flush()
+    assert acct in _output_value_for(mem, resp["id"])              # raw, own project
 
 
 def test_redacted_export_never_gets_raw_completion(client, monkeypatch):

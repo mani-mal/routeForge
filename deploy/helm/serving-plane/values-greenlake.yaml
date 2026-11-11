@@ -20,17 +20,6 @@ image:
 imagePullSecrets:
   - name: greenlake-registry-cred
 
-servingPlane:
-  contextOptimization:
-    ccr:
-      # GreenLake gives you a conformant cluster but does not guarantee a
-      # default StorageClass — set this explicitly rather than relying on one
-      # existing. Confirm the class name with the platform team; it must be
-      # in-cluster block/file storage, never an S3-compatible/object-store
-      # class (hard rule 6 — CCR never leaves the residency boundary).
-      storageClassName: "greenlake-block-storage"
-      size: 20Gi
-
 ingress:
   className: "nginx"    # confirm the installed controller's IngressClass name
   host: serving-plane.greenlake.example.com
@@ -47,8 +36,9 @@ ingress:
 #   - name: HF_HUB_OFFLINE
 #     value: "1"
 
-# If Presidio's model can't be downloaded in an air-gapped install, fall back
-# to regex detection or bake the model into the image instead:
+# The default detector is regex. To use Presidio, build the api image with
+# EXTRAS=observability,postgres,presidio (the build downloads the spaCy model,
+# so an air-gapped site needs it done in the image build, not at runtime):
 # servingPlane:
 #   policy:
-#     piiDetection: regex
+#     piiDetection: presidio

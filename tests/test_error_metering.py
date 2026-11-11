@@ -332,6 +332,56 @@ def test_real_token_stream_client_disconnect_writes_no_error_row(monkeypatch):
     assert finalized == ["req-sdisc"]   # the disconnect took the finalize path
 
 
+@pytest.mark.parametrize("mode", ["stream_unverified", "incremental_verify"])
+def test_backend_failure_after_client_disconnect_writes_one_cancelled_row(mode):
+    """B47: the client hangs up mid-stream, THEN the backend fails while the
+    drain-on-disconnect is recovering the final accounting. That used to log
+    "drain-on-disconnect failed" and write nothing at all. The client was
+    already gone, so it is `cancelled` (B78 semantics) -- exactly one usage
+    row, plus the request's `cancelled` routing outcome."""
+    from app.policy.detectors import RegexDetector
+
+    async def deltas():
+        yield "one "
+        yield "two "
+        raise RuntimeError("backend connection reset")   # during the drain
+
+    def get_meta():
+        raise RuntimeError("never reached")
+    get_meta.chosen_model = "local-8b"
+    get_meta.ctx = None
+    get_meta.detector = RegexDetector()
+
+    build = (routes._stream_unverified_response if mode == "stream_unverified"
+             else routes._incremental_verify_response)
+    rid = f"req-b47-{mode}"
+    with _client() as c:
+        async def go():
+            resp = build(
+                _disconnected_request(c), request_id=rid, deltas=deltas(),
+                get_meta=get_meta,
+                body=ChatRequest(model="auto",
+                                 messages=[Message(role="user", content="hi")]),
+                tenant="demo", app_policy=AppPolicyView(), app_langfuse=None,
+                profile=AppPrivacyProfile(recognizers=(), rules=()),
+                session_id=None, s=c.app.state.settings, started=0.0)
+            gen = resp.body_iterator
+            await gen.__anext__()   # role frame
+            await gen.aclose()      # the client went away mid-answer
+
+        c.portal.call(go)
+
+        rows = _rows(c)
+        assert [(r.request_id, r.status) for r in rows] == [(rid, "cancelled")]
+        _assert_zero_footprint(rows[0])
+
+        async def outcome():
+            async with c.app.state.db.session() as session:
+                return await store.get_outcome(session, rid, application_id="demo")
+        row = c.portal.call(outcome)
+        assert row is not None and row.status == "cancelled"
+
+
 # --------------------------------------------------------------------------- #
 # 5. aggregates: error_count, and every other figure is untouched by errors
 # --------------------------------------------------------------------------- #
