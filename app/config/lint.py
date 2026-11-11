@@ -120,7 +120,7 @@ def lint_settings(s: Settings) -> list[str]:
     # keys must already match the outcomes workload grammar (never normalised).
     qf = s.routing.quality_floors
     if qf.mode not in QUALITY_FLOOR_MODES:
-        errs.append(f"QUALITY_FLOOR_MODE_UNKNOWN {qf.mode!r} "
+        errs.append(f"QUALITY_FLOOR_MODE_UNKNOWN {qf.mode} "
                     f"(allowed: {', '.join(QUALITY_FLOOR_MODES)})")
     from app.apps.outcomes import _WORKLOAD_RE  # lazy: avoid import cycle
     for wl, floor in qf.workloads.items():
