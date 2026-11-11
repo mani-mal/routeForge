@@ -125,6 +125,13 @@ class Entity(BaseModel):
     # culls one (FilteredDetector wraps only the base detector). None = a
     # built-in recognizer.
     source: str | None = None
+    # Set by `dedupe` on a MERGED span when any member of its overlap cluster
+    # was itself exempt from the tool-argument bar (`merge.exempt_from_score_bar`:
+    # unscored, custom, a PROTECTED type). The merged span takes type/score/
+    # source from its best member only, so without this a weak Presidio match
+    # overlapping an SSN or a custom match could carry the whole span below the
+    # bar. Read by the bar only; detection, placeholders and types ignore it.
+    bar_exempt: bool = False
 
 
 class ExecutionPolicyContext(BaseModel):

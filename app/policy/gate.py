@@ -10,8 +10,7 @@ from app.models import ChatRequest, Entity, ExecutionPolicyContext, Message
 from app.policy.compile import EffectivePolicy, apply_signals, compile_policy
 from app.policy.context import build_context, match_sensitivity_rule
 from app.policy.detectors import Detector, detection_ran
-from app.policy.effective import PROTECTED_ENTITIES
-from app.policy.merge import dedupe
+from app.policy.merge import dedupe, exempt_from_score_bar
 
 if TYPE_CHECKING:
     from app.apps.policy import AppPolicyView
@@ -87,9 +86,13 @@ def below_tool_arg_bar(e: Entity, min_score: float) -> bool:
     * an operator-declared custom recognizer (`source == "custom"`): the
       operator wrote that pattern, and `pii_score_threshold` never culls one
       either.
+    * a span a detector's own `dedupe` MERGED from a cluster containing any of
+      the above (`Entity.bar_exempt`): the merged span takes type and score
+      from the highest-scoring member only, so the exemption is carried
+      across the cluster explicitly rather than lost in the merge.
     """
     return (min_score > 0.0 and e.score is not None and e.score < min_score
-            and e.type not in PROTECTED_ENTITIES and e.source != "custom")
+            and not exempt_from_score_bar(e))
 
 
 # Characters a detector span over RAW JSON can swallow around a value (e.g.
@@ -276,7 +279,8 @@ def redact_tool_calls_with_entities(tool_calls: list[dict] | None,
                 ls, lt = s - leaf.start, t - leaf.start
                 leaf.add(Entity(type=e.type, start=ls, end=lt,
                                 value=leaf.text[ls:lt], score=e.score,
-                                source=e.source), min_score)
+                                source=e.source, bar_exempt=e.bar_exempt),
+                         min_score)
 
     # Pass 2: raw scan over the argument strings as the gate classifies them.
     raw = "\n".join(t.args for t in targets)
@@ -288,7 +292,8 @@ def redact_tool_calls_with_entities(tool_calls: list[dict] | None,
         for leaf in all_leaves:
             for s, t in _occurrences(value, leaf.text):
                 leaf.add(Entity(type=e.type, start=s, end=t, value=value,
-                                score=e.score, source=e.source), min_score)
+                                score=e.score, source=e.source,
+                                bar_exempt=e.bar_exempt), min_score)
 
     out = list(tool_calls)
     n_redacted = 0

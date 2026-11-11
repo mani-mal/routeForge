@@ -186,3 +186,73 @@ def test_detection_unchanged_skipped_type_still_classifies():
     stats = reps.tool_arg_stats()
     assert (stats.redacted, stats.skipped) == (0, 1)
     assert stats.skipped_types == frozenset({"US_DRIVER_LICENSE"})
+
+
+# --- exemptions survive a detector's own dedupe merge (security review) -------
+
+class _MergingDetector:
+    """Returns fixed overlapping entities run through `dedupe`, exactly as
+    PresidioDetector / EffectiveDetector hand them to the redactor: one merged
+    span per overlap cluster, typed and scored by its best member only."""
+
+    def __init__(self, needle: str, members: list[tuple[str, int, int, float | None, str | None]]):
+        self._needle = needle
+        self._members = members
+
+    def analyze(self, text: str) -> list[Entity]:
+        from app.policy.merge import dedupe
+        out: list[Entity] = []
+        i = text.find(self._needle)
+        while i != -1:
+            for etype, s, t, score, source in self._members:
+                out.append(Entity(type=etype, start=i + s, end=i + t,
+                                  value=text[i + s:i + t], score=score, source=source))
+            i = text.find(self._needle, i + 1)
+        return dedupe(out)
+
+    def anonymize(self, text, entities):
+        return RegexDetector().anonymize(text, entities)
+
+    def warmup(self) -> None:
+        return None
+
+
+@pytest.mark.parametrize("label,members,bar", [
+    # A custom match loses the tie-break to a longer, equally weak Presidio span.
+    ("custom", [("US_DRIVER_LICENSE", 0, 9, 0.3, None),
+                ("EMPLOYEE_ID", 1, 8, 0.3, "custom")], 0.5),
+    # An unscored (regex-style) match inside a weak scored one.
+    ("unscored", [("US_DRIVER_LICENSE", 0, 9, 0.3, None),
+                  ("US_BANK_NUMBER", 1, 9, None, None)], 0.5),
+    # A context-scored SSN overlapped by a higher-scoring type, under a bar
+    # raised above both: the SSN guarantee must survive the merge.
+    ("ssn", [("PHONE_NUMBER", 0, 9, 0.75, None),
+             ("US_SSN", 0, 9, 0.4, None)], 0.9),
+])
+@pytest.mark.parametrize("as_json", [True, False])
+def test_exempt_member_of_a_merged_span_keeps_it_redacted(label, members, bar, as_json):
+    needle = "X48273194"
+    args = json.dumps({"v": needle}) if as_json else f"lookup {needle} now"
+    out = redact_tool_calls_with_entities([_call(args)], _MergingDetector(needle, members),
+                                          min_score=bar)
+    assert needle not in _args(out.tool_calls), label
+    assert out.skipped == 0 and out.redacted >= 1
+
+
+def test_dedupe_carries_the_exemption_and_changes_nothing_else():
+    from app.policy.merge import dedupe
+    weak = Entity(type="US_DRIVER_LICENSE", start=0, end=9, value="X48273194", score=0.3)
+    custom = Entity(type="EMPLOYEE_ID", start=1, end=8, value="4827319", score=0.3,
+                    source="custom")
+    (merged,) = dedupe([weak, custom])
+    assert (merged.type, merged.start, merged.end, merged.score) == ("US_DRIVER_LICENSE", 0, 9, 0.3)
+    assert merged.bar_exempt is True
+    # A cluster with no exempt member stays bar-eligible.
+    other = Entity(type="DATE_TIME", start=2, end=6, value="8273", score=0.6)
+    (plain,) = dedupe([weak, other])
+    assert plain.type == "DATE_TIME" and plain.bar_exempt is False
+    # The B4/B20 SSN backstop still wins its same-span tie-break.
+    ssn = Entity(type="US_SSN", start=0, end=11, value="818-30-4221", score=1.0)
+    dt = Entity(type="DATE_TIME", start=0, end=11, value="818-30-4221", score=0.85)
+    (won,) = dedupe([dt, ssn])
+    assert won.type == "US_SSN" and won.score == 1.0

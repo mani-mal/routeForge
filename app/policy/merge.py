@@ -6,6 +6,20 @@ from __future__ import annotations
 
 from app.models import Entity
 
+# The one entity type that carries an absolute privacy guarantee (CLAUDE.md
+# rules 3/8). Defined here, in the leaf module, so `dedupe` can honour it;
+# re-exported by app/policy/effective.py, its historical home.
+PROTECTED_ENTITIES = frozenset({"US_SSN"})
+
+
+def exempt_from_score_bar(e: Entity) -> bool:
+    """True when no score bar may drop `e` (B69's tool-argument bar): an
+    unscored match (every RegexDetector hit), an operator-declared custom
+    recognizer match, a PROTECTED type (US_SSN), or a merged span any of whose
+    cluster members was one of those (`Entity.bar_exempt`, set by `dedupe`)."""
+    return (e.bar_exempt or e.score is None or e.source == "custom"
+            or e.type in PROTECTED_ENTITIES)
+
 
 def _score(e: Entity) -> float:
     return getattr(e, "score", 0.0) or 0.0
@@ -46,7 +60,14 @@ def dedupe(ents: list[Entity]) -> list[Entity]:
         # "Best" member decides type/score/value: highest score (None -> 0.0),
         # then longest span, as the tiebreak.
         best = max(cluster, key=lambda e: (_score(e), e.end - e.start))
+        # `bar_exempt`: the merged span inherits type/score/source from
+        # `best` alone, so an exempt member (an SSN, a custom or unscored
+        # match) that lost the tie-break would otherwise lose its exemption
+        # with it -- and a weak `best` could take the whole region below the
+        # tool-argument bar. Protection is carried across the cluster.
         merged.append(Entity(type=best.type, start=start, end=end,
                              value=best.value, score=best.score,
-                             source=best.source))
+                             source=best.source,
+                             bar_exempt=any(exempt_from_score_bar(e)
+                                            for e in cluster)))
     return merged

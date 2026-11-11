@@ -7,15 +7,16 @@ from collections.abc import Iterable
 
 from app.models import Entity
 from app.policy.detectors import Detector, RegexDetector
-from app.policy.merge import dedupe
+from app.policy.merge import PROTECTED_ENTITIES, dedupe
 from app.policy.recognizers import CustomRecognizer
 
-# The one entity type that carries an absolute privacy guarantee (CLAUDE.md
-# rules 3/8): an SSN must never slip the gate, so an app can neither denylist it
-# nor threshold it away. PresidioDetector seeds it with score=1.0 precisely so
-# it survives dedupe; FilteredDetector honors the same contract on egress from
-# the filter, so no per-app tuning can ever un-redact an SSN.
-PROTECTED_ENTITIES = frozenset({"US_SSN"})
+# `PROTECTED_ENTITIES` (defined in app/policy/merge.py, re-exported here): the
+# one entity type that carries an absolute privacy guarantee (CLAUDE.md rules
+# 3/8): an SSN must never slip the gate, so an app can neither denylist it nor
+# threshold it away. PresidioDetector seeds it with score=1.0 precisely so it
+# survives dedupe; FilteredDetector honors the same contract on egress from the
+# filter, so no per-app tuning can ever un-redact an SSN.
+__all__ = ["PROTECTED_ENTITIES", "FilteredDetector", "EffectiveDetector"]
 
 
 class FilteredDetector:
