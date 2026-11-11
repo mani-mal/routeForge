@@ -360,3 +360,18 @@ def test_quality_floor_workload_invalid_is_named(key):
 def test_default_routing_yaml_has_quality_floors_off():
     qf = load_settings().routing.quality_floors
     assert qf.mode == "off" and qf.workloads == {}
+
+
+def test_quality_floor_mode_yaml_bare_off_means_off():
+    from app.config.schema import QualityFloorsCfg
+    s = copy.deepcopy(load_settings())
+    s.routing.quality_floors = QualityFloorsCfg(mode=False)
+    assert s.routing.quality_floors.mode == "off"
+    assert not any(e.startswith("QUALITY_FLOOR_") for e in lint_settings(s))
+
+
+def test_quality_floor_mode_yaml_bare_on_is_named():
+    from app.config.schema import QualityFloorsCfg
+    s = copy.deepcopy(load_settings())
+    s.routing.quality_floors = QualityFloorsCfg(mode=True)
+    assert any(e.startswith("QUALITY_FLOOR_MODE_UNKNOWN on") for e in lint_settings(s))

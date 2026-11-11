@@ -1,7 +1,7 @@
 import datetime
 import logging
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.prompts.store import PromptArtifact
 
@@ -120,6 +120,17 @@ class QualityFloorsCfg(BaseModel):
     config lint, not here, so a bad value is a named boot failure."""
     mode: str = "off"
     workloads: dict[str, float] = {}
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def _yaml_bool_mode(cls, v):
+        # YAML 1.1 reads bare `off`/`on` as booleans. `off` is what the
+        # operator meant; `on` becomes "on" so lint names it as unknown.
+        if v is False:
+            return "off"
+        if v is True:
+            return "on"
+        return v
 
 
 class RoutingCfg(BaseModel):
