@@ -550,12 +550,17 @@ half_open --first reported failure-------------------------------> open       (c
   request fails that one call.
 - **Where it acts:** after the tier is chosen. The router picks the target tier —
   complexity, risk floor, escalation, the clamp to the best allowed tier, and the budget
-  fallback — from the **policy**-eligible set, with open circuits still in it. Only then are
-  open circuits dropped, and only among that tier's final candidates, labelled by the last
-  stage of the one eligibility seam (`feasible_set` stage 7, code `circuit_open`, reason
-  "excluded · circuit open", §2). **The breaker never changes the target tier**: an open
-  frontier model does not move a high-risk request to mid (CLAUDE.md rule 8). It can only
-  remove a candidate policy admitted; it cannot widen placement.
+  fallback — and the **hard floor** (`max(risk floor, escalation min_tier)`, clamped the
+  same way) from the **policy**-eligible set, with open circuits and this request's prior
+  failures still in it. Only then are open circuits dropped, and only among that tier's
+  final candidates, labelled by the last stage of the one eligibility seam (`feasible_set`
+  stage 7, code `circuit_open`, reason "excluded · circuit open", §2). **The breaker may
+  lower a complexity-raised tier, never the hard floor** (2026-11-11, B71 item 1): an open
+  frontier model never moves a high-risk request to mid (CLAUDE.md rule 8), but a low-risk
+  request that only its length sent to frontier is served on the highest lower tier at or
+  above its hard floor that has a closed, in-budget candidate, and the decision records
+  `tier_downgrade` (below). It can only remove a candidate policy admitted; it cannot widen
+  placement.
 - **Cloud models are covered too.** The breaker keys on model name, so the YAML cloud pool
   (`azure-*`, `bedrock-*`) is excluded when open exactly like an onboarded model. Cloud
   models just have no `circuit` row in the admin view, which lists onboarded models only. `Gateway.run` and `Gateway.run_stream` pass the
@@ -563,18 +568,37 @@ half_open --first reported failure-------------------------------> open       (c
   A streamed request has no failover, so the up-front exclusion is the only protection it
   gets.
 
-### `circuit_bypass`
+### `tier_downgrade` and `circuit_bypass`
 
-If every final candidate in the target tier is open, the router does not reject the
-request, and it does not step to another tier either. It bypasses the breaker **within that
-tier**: it ranks all of the tier's candidates, open ones included, sets
-`circuit_bypass: true` on the router's `DecisionRecord`, and appends
-`"; circuit bypass: every candidate in the target tier is open"` to the decision's reason
-(so the Langfuse span's `sp.reason` shows it). Closed candidates in *other* tiers are not
-used; picking one would change the tier policy chose. Trying an endpoint that may have
-recovered is what the request would have done with no breaker, so the breaker never makes
-a request worse off than no breaker would: it only ever removes an open model when a
-closed peer in the same tier can take its place. The bypass only restores candidates policy
+If every final candidate in the chosen tier is open, the router does not reject the
+request. Two cases:
+
+- **The tier is above the hard floor** (complexity raised it there) **and a lower tier at
+  or above the hard floor has a closed, in-budget, non-excluded candidate.** The router
+  steps down one tier at a time, highest first, and serves from the first such tier. The
+  decision carries `tier_downgrade: {"from": <tier>, "to": <tier>, "cause":
+  "circuit_open"}` -- on the `DecisionRecord`, inside its scoring record (`sp.scoring`),
+  as its own span attribute `sp.tier_downgrade` (JSON; tier names and a fixed cause enum,
+  content-free) and in the outcome row's `scoring.tier_downgrade` -- and the reason gains
+  `"; tier downgrade from <tier>: circuit open"`. This is B71 item 1: an endpoint alone
+  in its tier and down no longer costs every request a wasted attempt.
+- **Otherwise** -- the tier IS the hard floor, or no lower qualifying tier has a closed
+  candidate -- it bypasses the breaker **within that tier**: it ranks all of the tier's
+  candidates, open ones included, sets `circuit_bypass: true` on the router's
+  `DecisionRecord`, and appends `"; circuit bypass: every candidate in the target tier is
+  open"` to the decision's reason (so the Langfuse span's `sp.reason` shows it). Trying an
+  endpoint that may have recovered is what the request would have done with no breaker.
+
+The same hard-floor rule governs **failover** (2026-11-11, B70 items 1-3): a model that
+failed on this request is excluded from the re-select, but the target tier and the hard
+floor are still computed from the policy-eligible set, so the failure cannot clamp them
+down. A same-tier peer serves first, then the next tier up; failing both, only a tier
+that complexity alone raised the target over may step down (to the highest surviving tier
+at or above the hard floor; `tier_downgrade` with cause `prior_failure`). If nothing
+survives at or above the hard floor the request fails with the exhausted `502`, whose
+message names the floor; a request whose only eligible endpoint failed says "no failover
+candidate" and its outcome row reads `route_reason: no_failover`
+(`docs/reference/routing-outcomes.md`). The bypass only restores candidates policy
 already admitted: an `onprem_only` request whose on-prem models are all open still never
 reaches cloud. If the set is empty for a policy reason, the request is rejected as before.
 

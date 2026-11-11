@@ -193,15 +193,25 @@ class RoutingDecision:
     # B80: the quality-floor record (spec §4.4/§4.5) -- None when the request
     # had no floor or the mode is off. Content-free: names, numbers, enums.
     quality_floor: dict | None = None
+    # B70/B71: set when endpoint state -- a prior failure on this request or
+    # an open circuit -- moved the served tier BELOW the tier targeting
+    # picked: `{"from": tier, "to": tier, "cause": "prior_failure" |
+    # "circuit_open"}`. Only a complexity-raised tier is ever lowered this
+    # way, never below the hard floor (see `Router.select`). None otherwise.
+    # Content-free: tier names and a fixed cause enum.
+    tier_downgrade: dict | None = None
 
     def scoring_record(self) -> dict | None:
-        """`scoring.to_record()`, plus `quality_floor` beside it when set.
-        The ranking part is unchanged, so it stays recomputable offline."""
+        """`scoring.to_record()`, plus `quality_floor` and `tier_downgrade`
+        beside it when set. The ranking part is unchanged, so it stays
+        recomputable offline."""
         if self.scoring is None:
             return None
         record = self.scoring.to_record()
         if self.quality_floor is not None:
             record["quality_floor"] = self.quality_floor
+        if self.tier_downgrade is not None:
+            record["tier_downgrade"] = self.tier_downgrade
         return record
 
 
@@ -213,6 +223,11 @@ _FLOOR_CODES = {BELOW_QUALITY_FLOOR: "quality_floor",
 _UNMET_WORDS = {"unmet_no_qualifier": "no qualifying model",
                 "unmet_context": "context window too small",
                 "unmet_budget": OVER_BUDGET}
+# B70/B71: `RoutingDecision.tier_downgrade["cause"]` and its reason words.
+PRIOR_FAILURE_DOWNGRADE = "prior_failure"
+CIRCUIT_OPEN_DOWNGRADE = "circuit_open"
+_DOWNGRADE_WORDS = {PRIOR_FAILURE_DOWNGRADE: "prior failure",
+                    CIRCUIT_OPEN_DOWNGRADE: "circuit open"}
 
 
 class Router:
@@ -259,18 +274,36 @@ class Router:
         and failed on this request (lateral failover); `open_circuits` are
         models the step-7 breaker currently holds open.
 
-        **The breaker never changes the target tier.** Tier targeting -- the
-        complexity/risk-floor/escalation targets, the clamp to the best
-        allowed tier, the tier pick and the budget fallback -- is computed from
-        the POLICY-eligible set, with open circuits still in it. Only then are
-        open circuits dropped, and only among the chosen tier's final
-        (post-budget) candidates. If every one of those is open, the router
-        bypasses the breaker WITHIN that tier (`circuit_bypass`): trying an
-        endpoint that may have recovered is never worse than today's
-        no-breaker behaviour, whereas stepping down a tier would silently
-        undercut a risk floor or an escalation (CLAUDE.md rule 8). The bypass
-        can only restore candidates policy already admitted, in the tier
-        policy already chose."""
+        **Endpoint state never lowers a request below its hard floor.** Tier
+        targeting -- the complexity/risk-floor/escalation target, the HARD
+        FLOOR `max(risk floor, min_tier)`, and the clamp of both to the best
+        allowed tier (CLAUDE.md rule 8) -- is computed from the
+        POLICY-eligible set: every candidate policy admits, with prior
+        failures and open circuits still in it. Only policy (residency, app
+        scope, declarations, registry gates) may clamp the floor down; a
+        failure on this request or an open circuit is endpoint state and
+        never does.
+
+        Candidates are then drawn from what survives `exclude`. If the
+        target tier has none, the lowest surviving tier above it serves
+        (escalation on tier exhaustion, as before); failing that, a target
+        that only COMPLEXITY raised above the hard floor steps down, one tier
+        at a time, to the highest surviving tier at or above the hard floor
+        (`tier_downgrade`, cause `prior_failure`). If nothing survives at or
+        above the hard floor, `NoEligibleCandidate(below_floor=...)` -- the
+        gateway turns that into the exhausted 502.
+
+        **The breaker may lower a complexity-raised tier, never the hard
+        floor.** Open circuits are dropped only among the chosen tier's final
+        (post-budget) candidates. If every one of those is open and the tier
+        is above the hard floor, the highest lower tier at or above the hard
+        floor with a closed, in-budget, non-excluded candidate serves
+        (`tier_downgrade`, cause `circuit_open`). Otherwise -- the tier IS
+        the hard floor, or no lower qualifying tier has a closed candidate --
+        the router bypasses the breaker WITHIN the tier (`circuit_bypass`):
+        trying an endpoint that may have recovered is never worse than the
+        no-breaker behaviour. Neither path can restore a candidate policy did
+        not admit."""
         return self._select(ctx, tokens_after, complexity, min_tier, exclude,
                             output_tokens, open_circuits)
 
@@ -394,8 +427,13 @@ class Router:
         #    POLICY-eligible set, and every tier decision below reads it (see
         #    `select`). feasible_set's stage 7 stays the labelling authority for
         #    which of the chosen tier's final candidates are open (step 4b).
-        feasible = feasible_set(self._s, self._reg, ctx, tenant_id=ctx.tenant_id,
-                                exclude=exclude)
+        #    The POLICY-eligible set (B70) is the same computation with no
+        #    failure exclusions: tier targeting and the hard floor read it, so
+        #    a failure on this request can never clamp the floor down.
+        policy = feasible_set(self._s, self._reg, ctx, tenant_id=ctx.tenant_id)
+        feasible = (feasible_set(self._s, self._reg, ctx, tenant_id=ctx.tenant_id,
+                                 exclude=exclude)
+                    if exclude else policy)
         circuit_rejections: dict[str, RejectedCandidate] = {}
         if open_circuits:
             for r in feasible_set(self._s, self._reg, ctx, tenant_id=ctx.tenant_id,
@@ -406,6 +444,7 @@ class Router:
                         name=r.name, provider=r.provider, tier=r.tier,
                         display_name=r.display_name, reason=r.reason, code=r.code)
         allowed = list(feasible.eligible)
+        policy_allowed = list(policy.eligible)
         rejected: list[RejectedCandidate] = [
             RejectedCandidate(name=r.name, provider=r.provider, tier=r.tier,
                               display_name=r.display_name, reason=r.reason,
@@ -431,30 +470,88 @@ class Router:
         # mode shadow/enforce; otherwise today's tiered path, untouched.
         if (ctx.quality_floor is not None
                 and ctx.quality_floor_mode in ("shadow", "enforce")):
-            return self._select_floor(ctx, allowed, rejected, circuit_rejections,
-                                      tokens_after, complexity, min_tier, out_tokens)
-        return self._select_tiered(ctx, allowed, rejected, circuit_rejections,
-                                   tokens_after, complexity, min_tier, out_tokens)
+            return self._select_floor(ctx, policy_allowed, allowed, rejected,
+                                      circuit_rejections, tokens_after, complexity,
+                                      min_tier, out_tokens)
+        return self._select_tiered(ctx, policy_allowed, allowed, rejected,
+                                   circuit_rejections, tokens_after, complexity,
+                                   min_tier, out_tokens)
+
+    def _floor_kind(self, ctx: ExecutionPolicyContext, min_tier: str | None) -> str:
+        """Which requirement set the hard floor: the escalation's `min_tier`
+        when it is above the risk class's floor, else the risk floor."""
+        risk_floor = self._s.routing.risk_floors[ctx.risk_class]
+        if min_tier is not None and _ORDER[min_tier] > _ORDER[risk_floor]:
+            return "escalation floor"
+        return "risk floor"
+
+    def _hard_floor(self, ctx: ExecutionPolicyContext, min_tier: str | None,
+                    policy_allowed: list[PoolCandidate]) -> str:
+        """The HARD floor: `max(risk floor, min_tier)` clamped down to the best
+        tier in the POLICY-eligible set (rule 8). Only policy lowers it."""
+        tiers = [self._s.routing.risk_floors[ctx.risk_class]]
+        if min_tier:
+            tiers.append(min_tier)
+        return _clamp_to_best_allowed(max(tiers, key=lambda t: _ORDER[t]), policy_allowed)
+
+    def _below_floor(self, ctx: ExecutionPolicyContext, hard: str,
+                     min_tier: str | None, allowed: list[PoolCandidate],
+                     rejected: list[RejectedCandidate]) -> NoEligibleCandidate:
+        """Every candidate at or above the hard floor has failed on this
+        request; only lower tiers survive. Content-free: tier names only."""
+        kind = self._floor_kind(ctx, min_tier)
+        below = ", ".join(sorted({c.tier for c in allowed}, key=lambda t: _ORDER[t]))
+        return NoEligibleCandidate(
+            f"no failover candidate at or above the request's {kind} ({hard}): every "
+            f"eligible endpoint at or above it has already failed on this request, and "
+            f"the remaining candidates (tier {below}) are below that floor -- failover "
+            f"never lowers a request below its {kind}",
+            rejected=tuple((r.name, r.code) for r in rejected),
+            below_floor=hard)
 
     def _select_tiered(self, ctx: ExecutionPolicyContext,
+                       policy_allowed: list[PoolCandidate],
                        allowed: list[PoolCandidate],
                        rejected: list[RejectedCandidate],
                        circuit_rejections: dict[str, RejectedCandidate],
                        tokens_after: int, complexity: float,
                        min_tier: str | None, out_tokens: int) -> RoutingDecision:
         """Today's path, steps 2-5: tier targeting, budget, circuits, score.
-        `allowed` is the non-empty policy-eligible set; `rejected` (mutated)
-        already holds its eligibility rejections."""
-        # 2. target tier from complexity + risk floor + escalation, clamped to
-        #    the best residency-permitted tier
+        `policy_allowed` is the non-empty policy-eligible set (tier targeting
+        reads it); `allowed` is its non-empty subset that survives `exclude`
+        (candidates come from it). `rejected` (mutated) already holds the
+        eligibility rejections."""
+        # 2. target tier from complexity + risk floor + escalation, and the
+        #    hard floor from risk floor + escalation -- both clamped to the
+        #    best POLICY-permitted tier (rule 8), never to what survives a
+        #    failure (B70).
         targets = [self._complexity_tier(complexity),
                    self._s.routing.risk_floors[ctx.risk_class]]
         if min_tier:
             targets.append(min_tier)
-        target = _clamp_to_best_allowed(max(targets, key=lambda t: _ORDER[t]), allowed)
+        target = _clamp_to_best_allowed(max(targets, key=lambda t: _ORDER[t]),
+                                        policy_allowed)
+        hard = self._hard_floor(ctx, min_tier, policy_allowed)
+        policy_avail = sorted({c.tier for c in policy_allowed}, key=lambda t: _ORDER[t])
+        # the clamp above guarantees a match exists; [-1] is a defensive fallback
+        target_pick = next((t for t in policy_avail if _ORDER[t] >= _ORDER[target]),
+                           policy_avail[-1])
         avail = sorted({c.tier for c in allowed}, key=lambda t: _ORDER[t])
-        # the clamp above guarantees a match exists; avail[-1] is a defensive fallback
-        tier_pick = next((t for t in avail if _ORDER[t] >= _ORDER[target]), avail[-1])
+        # Same-tier peer first, then the lowest surviving tier above it (the
+        # tier escalates on exhaustion). With no failure exclusion this is
+        # `target_pick` itself.
+        tier_pick = next((t for t in avail if _ORDER[t] >= _ORDER[target_pick]), None)
+        tier_downgrade: dict | None = None
+        if tier_pick is None:
+            # Nothing survives at or above the target. Step DOWN only to a tier
+            # at or above the hard floor -- i.e. only what complexity alone
+            # raised the target over (B70 item 3 / B71 item 2).
+            lower = [t for t in avail if _ORDER[hard] <= _ORDER[t] < _ORDER[target_pick]]
+            if not lower:
+                raise self._below_floor(ctx, hard, min_tier, allowed, rejected)
+            tier_pick = lower[-1]
+            tier_downgrade = {"from": target_pick, "to": tier_pick,
+                              "cause": PRIOR_FAILURE_DOWNGRADE}
         picked_tier = tier_pick   # before any budget fallback moves it (P3b core)
 
         fallback_from: str | None = None
@@ -479,14 +576,12 @@ class Router:
                 eligible.append((c, est))
         if not eligible:
             # Budget fallback: step DOWN to the most capable cheaper allowed
-            # tier that fits the cap. Floor = risk floor / escalation min_tier
-            # (never undercut; complexity is the only thing budget may
+            # tier that fits the cap. Floor = the hard floor (risk floor /
+            # escalation min_tier, clamped against the POLICY-eligible set;
+            # never undercut -- complexity is the only thing budget may
             # override). Only `allowed` candidates are considered, so
             # residency and app scope are untouched (rules 3/8).
-            floor_tiers = [self._s.routing.risk_floors[ctx.risk_class]]
-            if min_tier:
-                floor_tiers.append(min_tier)
-            floor = max(floor_tiers, key=lambda t: _ORDER[t])
+            floor = hard
             lower = sorted((t for t in avail
                             if _ORDER[floor] <= _ORDER[t] < _ORDER[tier_pick]),
                            key=lambda t: -_ORDER[t])
@@ -530,9 +625,11 @@ class Router:
                 rejected=tuple((c.name, None) for c, _e in over),
                 core=core)
 
-        # 4b. drop open circuits among the chosen tier's final candidates. The
-        #     tier is already fixed; if every one of them is open, bypass the
-        #     breaker within it rather than change the tier (see `select`).
+        # 4b. drop open circuits among the chosen tier's final candidates. If
+        #     every one of them is open: a tier above the hard floor steps
+        #     down to the highest lower tier (>= hard floor) with a closed,
+        #     in-budget candidate; otherwise bypass the breaker within the
+        #     tier (see `select`).
         circuit_bypass = False
         if circuit_rejections:
             closed = [(c, e) for c, e in eligible if c.name not in circuit_rejections]
@@ -541,7 +638,28 @@ class Router:
                                 if c.name in circuit_rejections)
                 eligible = closed
             else:
-                circuit_bypass = True
+                step = self._circuit_step_down(ctx, allowed, avail, hard, tier_pick,
+                                               circuit_rejections, tokens_after,
+                                               out_tokens)
+                if step is None:
+                    circuit_bypass = True
+                else:
+                    t, fits = step
+                    fits_names = {c.name for c, _e in fits}
+                    relabel = {x for x in avail if _ORDER[t] <= _ORDER[x] < _ORDER[tier_pick]}
+                    rejected = [r for r in rejected
+                                if not (r.tier in relabel and r.reason == "below target tier")]
+                    rejected.extend(circuit_rejections[c.name] for c, _e in eligible)
+                    rejected.extend(
+                        circuit_rejections[c.name] if c.name in circuit_rejections
+                        else RejectedCandidate(name=c.name, provider=c.provider, tier=c.tier,
+                                               display_name=c.display_name,
+                                               reason="over budget")
+                        for c in allowed if c.tier in relabel and c.name not in fits_names)
+                    tier_downgrade = {
+                        "from": tier_downgrade["from"] if tier_downgrade else tier_pick,
+                        "to": t, "cause": CIRCUIT_OPEN_DOWNGRADE}
+                    tier_pick, eligible = t, fits
 
         # 5. score within the tier (chooses provider/model — cheaper on-prem
         #    wins). Delegated to the pluggable strategy (app/routing/strategy.py)
@@ -564,13 +682,39 @@ class Router:
                   if fallback_from else f"tier {chosen.tier} (target {target})")
         if circuit_bypass:
             reason += "; circuit bypass: every candidate in the target tier is open"
+        if tier_downgrade is not None:
+            reason += (f"; tier downgrade from {tier_downgrade['from']}: "
+                       f"{_DOWNGRADE_WORDS[tier_downgrade['cause']]}")
         return RoutingDecision(
             chosen=chosen, est_cost_usd=est,
             reason=reason,
             rejected=rejected,
             quality_score=chosen_q.value, quality_source=chosen_q.source,
             scoring=result, circuit_bypass=circuit_bypass,
-            tier_target=target)
+            tier_target=target, tier_downgrade=tier_downgrade)
+
+    def _circuit_step_down(self, ctx: ExecutionPolicyContext,
+                           allowed: list[PoolCandidate], avail: list[str],
+                           hard: str, tier: str,
+                           circuit_rejections: dict[str, RejectedCandidate],
+                           tokens_after: int, out_tokens: int,
+                           ) -> tuple[str, list[tuple[PoolCandidate, float]]] | None:
+        """B71 item 1: every final candidate in `tier` is open. When `tier` is
+        above the hard floor, the highest lower tier at or above it that has a
+        closed, in-budget, non-excluded candidate (`allowed` already excludes
+        prior failures) -- as `(tier, fits)`. None means bypass within `tier`."""
+        if _ORDER[tier] <= _ORDER[hard]:
+            return None
+        for t in sorted((x for x in avail if _ORDER[hard] <= _ORDER[x] < _ORDER[tier]),
+                        key=lambda x: -_ORDER[x]):
+            fits = [(c, e) for c, e in
+                    ((c, self._est_cost(c, tokens_after, out_tokens))
+                     for c in allowed
+                     if c.tier == t and c.name not in circuit_rejections)
+                    if e <= ctx.max_cost_usd]
+            if fits:
+                return t, fits
+        return None
 
     def _rank(self, eligible: list[tuple[PoolCandidate, float]],
               ctx: ExecutionPolicyContext, tokens_after: int) -> "RankResult":
@@ -617,21 +761,21 @@ class Router:
         return scored, result, open_dropped, bypass
 
     def _select_floor(self, ctx: ExecutionPolicyContext,
+                      policy_allowed: list[PoolCandidate],
                       allowed: list[PoolCandidate],
                       rejected: list[RejectedCandidate],
                       circuit_rejections: dict[str, RejectedCandidate],
                       tokens_after: int, complexity: float,
                       min_tier: str | None, out_tokens: int) -> RoutingDecision:
         """Mode shadow/enforce with a floor. Qualifiers are a subset of
-        `allowed` (rule 3) at or above the hard floor `max(risk_floor,
-        min_tier)` clamped to the best allowed tier exactly as today's target
-        is (rule 8). Enforce + met: the cheapest qualifier. Anything else:
-        today's decision, with the floor record attached."""
+        `allowed` -- what survives `exclude` (rule 3) -- at or above the hard
+        floor `max(risk_floor, min_tier)` clamped to the best POLICY-eligible
+        tier exactly as today's target is (rule 8; B70: never to what survives
+        a failure). Enforce + met: the cheapest qualifier. Anything else:
+        today's decision (which obeys the same hard floor), with the floor
+        record attached."""
         floor, mode, workload = ctx.quality_floor, ctx.quality_floor_mode, ctx.workload
-        hard_tiers = [self._s.routing.risk_floors[ctx.risk_class]]
-        if min_tier:
-            hard_tiers.append(min_tier)
-        hard = _clamp_to_best_allowed(max(hard_tiers, key=lambda t: _ORDER[t]), allowed)
+        hard = self._hard_floor(ctx, min_tier, policy_allowed)
         pick = qualify(
             allowed, floor=floor, workload=workload, hard_tier=hard,
             prompt_tokens=tokens_after, output_tokens=out_tokens,
@@ -680,8 +824,9 @@ class Router:
                 scoring=result, circuit_bypass=bypass, tier_target=chosen.tier,
                 quality_floor=record(chosen.name, "met"))
 
-        decision = self._select_tiered(ctx, allowed, list(rejected), circuit_rejections,
-                                       tokens_after, complexity, min_tier, out_tokens)
+        decision = self._select_tiered(ctx, policy_allowed, allowed, list(rejected),
+                                       circuit_rejections, tokens_after, complexity,
+                                       min_tier, out_tokens)
         if mode == "enforce":
             decision.reason = (f"quality floor {floor:.2f} unmet "
                                f"({_UNMET_WORDS[pick.status]}): {decision.reason}")

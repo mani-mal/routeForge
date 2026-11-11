@@ -398,7 +398,7 @@ Every error the inference endpoint can return:
 | `429` | `rate limit exceeded for this application` | `rate_limit_exceeded` | Over your `max_rpm`. |
 | `429` | `daily budget exceeded for this application` | `insufficient_quota` | Over your `max_spend_usd_per_day`. |
 | `500` | `internal error` | `internal_error` | Unexpected server-side failure. |
-| `502` | `no backend could serve this request: … (last error: <model>: <ErrorType>: <message>)` | `backend_unavailable` | Every candidate failed upstream; the last upstream error is included. A context-window refusal mixed with any other failure stays `502`. |
+| `502` | `no backend could serve this request: … (last error: <model>: <ErrorType>: <message>)` | `backend_unavailable` | Every candidate failed upstream; the last upstream error is included. A context-window refusal mixed with any other failure stays `502`. When the request's only eligible endpoint failed, the message adds `; no failover candidate: the only eligible endpoint … failed`; when only candidates below the request's risk or escalation floor remain, it adds `; no failover candidate at or above the request's <risk floor\|escalation floor> (<tier>): …` -- failover never serves a request below that floor (2026-11-11). |
 | `503` | `policy evaluation unavailable` | `policy_unavailable` | **Fail-closed:** the privacy gate itself errored. |
 
 **Which codes are whose.** `context_length_exceeded`, `invalid_api_key`,

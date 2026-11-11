@@ -283,6 +283,11 @@ class DecisionRecord(BaseModel):
     # Step-7 breaker: True when every candidate policy admitted was held open
     # and the router tried one anyway (app/routing/router.py::select).
     circuit_bypass: bool = False
+    # B70/B71: RoutingDecision.tier_downgrade -- `{"from", "to", "cause"}`
+    # when a prior failure or an open circuit moved the served tier below the
+    # one tier targeting picked (never below the hard floor). Tier names and
+    # a fixed cause enum only; None otherwise.
+    tier_downgrade: dict | None = None
 
 
 class VerificationRecord(BaseModel):

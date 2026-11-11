@@ -38,6 +38,7 @@ const REASON_LABEL: Record<string, string> = {
   quality_floor: "quality floor",
   length_tier: "request length",
   only_eligible: "only eligible model",
+  no_failover: "only eligible endpoint failed",
   other: "other",
 };
 

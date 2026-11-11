@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from typing import AsyncIterator
 
+from app.apps.outcomes import decision_trace
 from app.config.schema import Settings
 from app.errors import BackendUnavailable, ContextWindowExceeded, NoEligibleCandidate
 from app.gateway.backends.base import InferenceBackend, StreamChunk
@@ -101,7 +102,8 @@ def counts_as_endpoint_unhealth(exc: Exception) -> bool:
     return not (400 <= code < 500)
 
 def _exhausted(last_error: str, overflow_errors: list[str], failures: int,
-                attempted: list[str]) -> Exception:
+                attempted: list[str], records: list[DecisionRecord],
+                no_candidate: NoEligibleCandidate | None = None) -> Exception:
     """The error for a request every reachable candidate failed. When EVERY
     failure was a context-window refusal, the request itself is too large --
     the client's error, so it surfaces as `ContextWindowExceeded` (400) with
@@ -109,13 +111,35 @@ def _exhausted(last_error: str, overflow_errors: list[str], failures: int,
     so it is not cut to the 200-char log form). Any other failure in the mix
     keeps it an outage (502). Both carry `attempted_models` -- the candidates
     tried, in order (signal hardening, spec §4) -- so the route can meter the
-    last one on its `error` usage row and name them on the routing outcome."""
+    last one on its `error` usage row and name them on the routing outcome,
+    and `routing_trace` -- the content-free decision records so far -- so the
+    outcome row keeps its eligible set and tier target (B70 item 2).
+
+    `no_candidate` is the router's refusal when the loop ended because NO
+    candidate was left to fail over to (rather than the attempt cap). When
+    exactly one endpoint was ever tried, the request had a feasible set of
+    one (B70 item 1): the 502 says so and `no_failover` is set. When the
+    router refused because only candidates below the request's hard floor
+    survive (`below_floor`), its floor-naming reason is appended."""
+    trace = decision_trace(records)
     if overflow_errors and len(overflow_errors) == failures:
         return ContextWindowExceeded(overflow_errors[-1],
-                                     attempted_models=tuple(attempted))
-    return BackendUnavailable(
-        "backend failed on all reachable candidates for this request "
-        f"(last error: {last_error})", attempted_models=tuple(attempted))
+                                     attempted_models=tuple(attempted),
+                                     routing_trace=trace)
+    message = ("backend failed on all reachable candidates for this request "
+               f"(last error: {last_error})")
+    no_failover = no_candidate is not None and len(set(attempted)) == 1
+    below_floor = getattr(no_candidate, "below_floor", None)
+    if no_failover:
+        message += ("; no failover candidate: the only eligible endpoint"
+                    + (" at or above the request's floor" if below_floor else "")
+                    + " failed"
+                    + ("" if below_floor else
+                       ", and no other candidate fits this request's policy and budget"))
+    if below_floor:
+        message += f"; {no_candidate}"
+    return BackendUnavailable(message, attempted_models=tuple(attempted),
+                              routing_trace=trace, no_failover=no_failover)
 
 
 log = logging.getLogger("serving.gateway")
@@ -205,7 +229,8 @@ class Gateway:
                 # failures -> exhausted, not a genuine no-candidate reject.
                 if failed_models:
                     raise _exhausted(
-                        last_error, overflow_errors, failover_attempts, attempted) from exc
+                        last_error, overflow_errors, failover_attempts, attempted,
+                        records, no_candidate=exc) from exc
                 raise
             cand = decision.chosen
             attempted.append(cand.name)
@@ -240,6 +265,7 @@ class Gateway:
                     # request's first routing decision (app/apps/outcomes.py).
                     tier_target=decision.tier_target,
                     circuit_bypass=decision.circuit_bypass,
+                    tier_downgrade=decision.tier_downgrade,
                     # This hop's chosen field stays None (nothing was SERVED),
                     # but the scoring that led to picking `cand` is still real
                     # and otherwise permanently lost the instant this record
@@ -257,7 +283,8 @@ class Gateway:
                 failover_attempts += 1
                 if failover_attempts > max_failover:
                     raise _exhausted(
-                        last_error, overflow_errors, failover_attempts, attempted) from exc
+                        last_error, overflow_errors, failover_attempts, attempted,
+                        records) from exc
                 continue
 
             if self._signals is not None:
@@ -279,7 +306,8 @@ class Gateway:
                 quality_score=decision.quality_score,
                 quality_source=decision.quality_source,
                 scoring=decision.scoring_record(),
-                circuit_bypass=decision.circuit_bypass))
+                circuit_bypass=decision.circuit_bypass,
+                tier_downgrade=decision.tier_downgrade))
             metrics.observe_routing_decision(cand.tier, escalated=escalations > 0)
 
             # For onprem_only requests the router clamps an out-of-reach tier back
@@ -344,7 +372,8 @@ class Gateway:
             quality_score=decision.quality_score,
             quality_source=decision.quality_source,
             scoring=decision.scoring_record(),
-            circuit_bypass=decision.circuit_bypass)
+            circuit_bypass=decision.circuit_bypass,
+            tier_downgrade=decision.tier_downgrade)
         records: list[DecisionRecord] = [record]
         metrics.observe_routing_decision(cand.tier, escalated=False)
 

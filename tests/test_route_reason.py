@@ -19,7 +19,8 @@ def _d(**kw):
 
 def test_vocabulary():
     assert ROUTE_REASONS == ("failover", "escalation", "quality_floor", "placement",
-                             "risk_floor", "length_tier", "only_eligible", "other")
+                             "risk_floor", "length_tier", "only_eligible", "other",
+                             "no_failover")
 
 
 def test_cache_hit_is_null():
@@ -172,3 +173,10 @@ def test_build_ok_outcome_route_reason_reads_first_served_hop_floor_status():
                            routing_policy_version="v", workload="claims",
                            workload_source="client")
     assert row["route_reason"] == "risk_floor"
+
+
+def test_circuit_open_downgrade_reads_failover():
+    # B71: an open circuit moved the served tier below the targeted one -- the
+    # tier is explained by the diversion, even with no failed attempt.
+    assert _d(attempts=["m"], chosen_tier="mid", tier_target="frontier",
+              complexity_tier="frontier", tier_downgraded=True) == "failover"

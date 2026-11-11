@@ -33,13 +33,23 @@ class NoEligibleCandidate(ValueError):
     satisfies together, plus endpoint state. Content-free. Every
     `NoEligibleCandidate` the Router raises carries one; `None` for other
     raisers, and for the Router only if computing the core itself failed --
-    the core explains a rejection, it never decides one."""
+    the core explains a rejection, it never decides one.
+
+    `below_floor` (B70) is set, to the request's hard tier floor, only when
+    the Router refused because every candidate at or above that floor has
+    already failed on this request and the survivors are all below it --
+    failover never lowers a request below its risk/escalation floor. That
+    rejection is endpoint state, not policy, so it carries no core; it is
+    only ever raised with a non-empty `exclude`, which the gateway rewraps
+    into `BackendUnavailable` (502)."""
 
     def __init__(self, *args, rejected: tuple = (),
-                 core: "ConflictingCore | None" = None) -> None:
+                 core: "ConflictingCore | None" = None,
+                 below_floor: str | None = None) -> None:
         super().__init__(*args)
         self.rejected = tuple(rejected)
         self.core = core
+        self.below_floor = below_floor
 
 
 class BackendUnavailable(RuntimeError):
@@ -49,11 +59,23 @@ class BackendUnavailable(RuntimeError):
 
     `attempted_models` lists the candidates the gateway tried, in order
     (signal hardening, spec §4) -- the route meters the last one on its
-    `error` usage row."""
+    `error` usage row.
 
-    def __init__(self, *args, attempted_models: tuple[str, ...] = ()) -> None:
+    `routing_trace` (B70 item 2) is the content-free dump of the gateway's
+    decision records up to the failure (`app/apps/outcomes.py::
+    decision_trace`), so the `backend_failed` outcome row keeps its eligible
+    set, tier target and attempt chain. `no_failover` (B70 item 1) is True
+    when exactly one endpoint was eligible (at or above the request's
+    floor, within policy and budget) and it failed -- a feasible set of one,
+    not a generic outage."""
+
+    def __init__(self, *args, attempted_models: tuple[str, ...] = (),
+                 routing_trace: list[dict] | None = None,
+                 no_failover: bool = False) -> None:
         super().__init__(*args)
         self.attempted_models = tuple(attempted_models)
+        self.routing_trace = routing_trace
+        self.no_failover = no_failover
 
 
 class ContextWindowExceeded(ValueError):
@@ -66,8 +88,12 @@ class ContextWindowExceeded(ValueError):
 
     `attempted_models` (like `BackendUnavailable`'s) lists the candidates the
     gateway tried, in order, so the request's `context_overflow` routing
-    outcome names them. Empty when raised by a single backend call."""
+    outcome names them. Empty when raised by a single backend call.
+    `routing_trace` is as on `BackendUnavailable` (None when raised by a
+    single backend call)."""
 
-    def __init__(self, *args, attempted_models: tuple[str, ...] = ()) -> None:
+    def __init__(self, *args, attempted_models: tuple[str, ...] = (),
+                 routing_trace: list[dict] | None = None) -> None:
         super().__init__(*args)
         self.attempted_models = tuple(attempted_models)
+        self.routing_trace = routing_trace

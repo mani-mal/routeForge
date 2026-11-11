@@ -603,3 +603,22 @@ def test_export_omits_quality_floor_status_without_a_floor(mem_provider):
     otel._provider.force_flush()
     hop = next(s for s in mem_provider.get_finished_spans() if s.name == "serving.route")
     assert "sp.quality_floor_status" not in hop.attributes
+
+
+def test_export_stamps_tier_downgrade_on_the_hop_span(mem_provider):
+    """B70/B71: a hop served below its targeted tier carries `sp.tier_downgrade`
+    (JSON of tier names and a cause enum -- content-free)."""
+    sample = _cert_sample()
+    downgrade = {"from": "frontier", "to": "mid", "cause": "circuit_open"}
+    sample["trace"][0]["tier_downgrade"] = downgrade
+    export_mod.export_trace(**sample)
+    otel._provider.force_flush()
+    hop = next(s for s in mem_provider.get_finished_spans() if s.name == "serving.route")
+    assert json.loads(hop.attributes["sp.tier_downgrade"]) == downgrade
+
+
+def test_export_omits_tier_downgrade_without_one(mem_provider):
+    export_mod.export_trace(**_cert_sample())
+    otel._provider.force_flush()
+    hop = next(s for s in mem_provider.get_finished_spans() if s.name == "serving.route")
+    assert "sp.tier_downgrade" not in hop.attributes

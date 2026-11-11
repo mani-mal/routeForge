@@ -209,16 +209,23 @@ failures (a 4xx never trips it, nor does a local programming error such as `Type
 failures a model is open for `cooldown_s`. After that it is half-open and admitted to every
 request (no single-trial lease), and the first reported result closes it or reopens it with
 the cooldown doubled, up to `max_cooldown_s`. Rules to keep when touching it:
-- **The breaker never changes the target tier** (rule 8). `Router._select` computes the
-  targets, the clamp, the tier pick and the budget fallback from the POLICY-eligible set
-  (open circuits still in it), then drops open names only among the chosen tier's final
-  candidates, labelled by `feasible_set`'s **last** stage (`circuit_open`). The open set is
-  passed on every `Router.select`, failover and escalation re-selects included, in both
-  `Gateway.run` and `run_stream`. Never filter candidates post hoc in the gateway.
-- If every final candidate in the target tier is open, the router bypasses the breaker
-  WITHIN that tier (ranks them all, marks `circuit_bypass`). It never steps to another tier
-  to find a closed model, and it can only restore what policy admitted, so it can never
-  widen placement or undercut a risk floor.
+- **The breaker may lower a complexity-raised tier, never the hard floor** (rule 8; B71).
+  `Router._select` computes the targets, the HARD FLOOR (`max(risk floor, min_tier)`), the
+  clamp, the tier pick and the budget fallback from the POLICY-eligible set (open circuits
+  and prior failures still in it), then drops open names only among the chosen tier's
+  final candidates, labelled by `feasible_set`'s **last** stage (`circuit_open`). The open
+  set is passed on every `Router.select`, failover and escalation re-selects included, in
+  both `Gateway.run` and `run_stream`. Never filter candidates post hoc in the gateway.
+- If every final candidate in the chosen tier is open and that tier is above the hard
+  floor, the router steps down (highest first) to a lower tier >= the hard floor with a
+  closed, in-budget candidate and records `tier_downgrade` (cause `circuit_open`).
+  Otherwise it bypasses the breaker WITHIN the tier (ranks them all, marks
+  `circuit_bypass`). Either way it only restores what policy admitted, so it can never
+  widen placement or undercut a risk floor or an escalation.
+- **Failover obeys the same floor** (B70). A failure exclusion never lowers the target or
+  the hard floor; a same-tier peer, then a higher tier, serves; only a complexity-raised
+  tier may step down (`tier_downgrade`, cause `prior_failure`). Nothing at or above the
+  hard floor left -> `NoEligibleCandidate(below_floor=...)` -> the gateway's exhausted 502.
 - It is not a scoring term. `weights.availability` stays a bounded ranking preference; B45
   showed no weight keeps a cheaper dead endpoint out (research doc §9, §11, §12).
 - `enabled: false` must stay exactly the pre-breaker behaviour. Operator contract:
