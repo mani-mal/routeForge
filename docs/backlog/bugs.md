@@ -240,9 +240,12 @@ probe cost.
 > `app/apps/calibration_sets.py::validate_bounds` and `model_quality_bounds`; per-app
 > `quality_floors` / `quality_floor_mode` in `app/api/admin_routes.py`; offline arm in
 > `app/eval/floor_fit.py` and `scripts/floor_fit.py`. Docs:
-> `docs/reference/per-app-config.md`. Built as written in the Shape below, off by default
-> (modes `off | shadow | enforce`), not the `routing.tier_targeting` switch named in the
-> 2026-11-10 extension. B99 stays open.
+> `docs/reference/per-app-config.md`. Off by default (modes `off | shadow | enforce`).
+> It differs from the Shape below (kept as history): among eligible models that clear the
+> floor the **cheapest** wins and the usual score only breaks ties, and an unmet floor
+> **falls back to tier routing**, never to escalation or rejection (owner decisions of
+> 2026-11-10). The `routing.tier_targeting` switch of the extension was not built. B99
+> stays open.
 
 **Why.** Quality is one weighted term in step-6 scoring, so the router trades it against
 cost and never guarantees it. Measured (arXiv v1 §7): on a benchmark at ceiling the router

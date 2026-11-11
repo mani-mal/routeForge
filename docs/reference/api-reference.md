@@ -584,7 +584,7 @@ Quality-floor routing is off by default. Reference:
 
 - **Per-app policy.** `PUT /admin/applications/{id}/policy` accepts `quality_floors`
   (`{workload: number in (0, 1]}`) and `quality_floor_mode` (`off | shadow | enforce`);
-  `null` or `reset` means inherit. A malformed value is `422`. The policy read returns both.
+  A stored `null` means inherit (none). A `null` or omitted value in the PUT body leaves the stored value unchanged; to clear one, name it in `reset` (`reset: ["quality_floors"]`). A malformed value is `422`. The policy read returns both.
 - **`GET /admin/me`.** The `deployment` envelope gains `quality_floors`:
   `{"mode": "off", "workloads": {"claims": 0.8}}`, the deployment default mode and floors,
   so a client can show an app's value beside the one it can only raise.
