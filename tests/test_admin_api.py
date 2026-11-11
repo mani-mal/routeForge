@@ -365,7 +365,8 @@ def test_admin_app_carries_the_effective_block(client):
     eff = r.json()["effective"]
     assert set(eff) == {"model_input", "client_output", "telemetry_io",
                         "detection", "content_integrity",
-                        "allowed_regions", "require_no_retention"}
+                        "allowed_regions", "require_no_retention",
+                        "tool_args_min_score"}
     # Default app (no policy row, enforced): both data-handling axes redact.
     assert eff["model_input"] == "redact"
     assert eff["client_output"] == "redact"

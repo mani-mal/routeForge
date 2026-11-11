@@ -47,5 +47,6 @@ def dedupe(ents: list[Entity]) -> list[Entity]:
         # then longest span, as the tiebreak.
         best = max(cluster, key=lambda e: (_score(e), e.end - e.start))
         merged.append(Entity(type=best.type, start=start, end=end,
-                             value=best.value, score=best.score))
+                             value=best.value, score=best.score,
+                             source=best.source))
     return merged

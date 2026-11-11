@@ -85,6 +85,12 @@ policy:
   # meter and tracer only. Placement (residency/onprem_only) is unaffected.
   default_policy_mode: enforced  # enforced | passthrough
   allow_app_passthrough: true    # false = locked-down deployment: no app may be passthrough
+  # B69 tool-argument bar: inside tool-call arguments (a command channel the
+  # client executes) a detected span is rewritten only if its detector score
+  # is >= this. Weak context-free matches (Presidio's 0.3 US_DRIVER_LICENSE on
+  # `-n1`) pass through, counted on the trace. Never exempts US_SSN, regex or
+  # custom-recognizer matches. Detection and message text are unaffected.
+  tool_args_min_score: 0.5       # 0.0-1.0; per-app override: tool_args_min_score
   # sensitivity enum, default_sensitivity, budgets and residency: see policy.yaml
 
 observability:

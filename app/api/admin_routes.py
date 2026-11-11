@@ -83,6 +83,7 @@ def _policy_dict(p) -> dict | None:
             "pii_entity_denylist": p.pii_entity_denylist,
             "pii_score_threshold": p.pii_score_threshold,
             "pii_exempt_patterns": p.pii_exempt_patterns,
+            "tool_args_min_score": p.tool_args_min_score,
             "model_aliases": p.model_aliases}
 
 
@@ -162,6 +163,9 @@ def _effective_dict(app, settings) -> dict:
         "telemetry_io": eff.protection.telemetry_io,
         "detection": eff.protection.detection,
         "content_integrity": eff.protection.content_integrity,
+        # B69: the EFFECTIVE tool-argument bar (inherit + pii_score_threshold
+        # folded in), so the console never re-derives it.
+        "tool_args_min_score": eff.protection.tool_args_min_score,
         # P1b app-side data-handling requirements (design doc §3). Server-
         # resolved so the console never re-derives normalisation itself.
         "allowed_regions":
@@ -249,6 +253,9 @@ class PolicyIn(BaseModel):
     escalate_residency_on_detection: bool | None = None
     # B72: off | header | sticky (app/policy/trajectory.py). None = inherit (off).
     trajectory_mode: str | None = None
+    # B69: minimum detector score [0,1] for rewriting a span inside tool-call
+    # arguments. None = inherit serving.yaml policy.tool_args_min_score.
+    tool_args_min_score: float | None = None
     # P1b app-side data-handling requirements (design doc §3; types only here
     # -- shape/normalisation validation is app/policy/compile.py::
     # validate_effective, like every other axis). None = no constraint. No
@@ -641,6 +648,10 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
                 0.0 <= body.pii_score_threshold <= 1.0):
             raise HTTPException(
                 422, f"pii_score_threshold {body.pii_score_threshold!r} out of range [0.0, 1.0]")
+        if body.tool_args_min_score is not None and not (
+                0.0 <= body.tool_args_min_score <= 1.0):
+            raise HTTPException(
+                422, f"tool_args_min_score {body.tool_args_min_score!r} out of range [0.0, 1.0]")
         if body.max_cost_usd_per_request is not None and not body.max_cost_usd_per_request > 0:
             raise HTTPException(
                 422, "max_cost_usd_per_request must be > 0. Omit it, or name it in "
@@ -725,6 +736,8 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
             allowed_regions=_merged("allowed_regions"),
             require_no_retention=_merged("require_no_retention"),
             trajectory_mode=_merged("trajectory_mode"),
+            pii_score_threshold=_merged("pii_score_threshold"),
+            tool_args_min_score=_merged("tool_args_min_score"),
             model_aliases=alias_pairs(_merged("model_aliases")),
         )
         # An app's own provisioned Langfuse project is the one condition the

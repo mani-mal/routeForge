@@ -382,6 +382,13 @@ class ServingCfg(BaseModel):
     # gate always runs, regardless of an app's own policy_mode or the default
     # above. Defaulted (true) for the upgrade-safety reason given above.
     allow_app_passthrough: bool = True
+    # B69: deployment default for the tool-argument bar -- the minimum
+    # detector score a span inside tool-call `function.arguments` needs to be
+    # rewritten. Per-app `AppPolicy.tool_args_min_score` overrides it either
+    # way; range [0, 1] is checked by the config lint
+    # (TOOL_ARGS_MIN_SCORE_OUT_OF_RANGE). Defaulted for the upgrade-safety
+    # reason given above.
+    tool_args_min_score: float = 0.5
     reject_stream_requests: bool
     stream_keepalive_s: float = Field(5.0, gt=0)
     # Derive a stable per-conversation session id (auto-<24 hex>) when the

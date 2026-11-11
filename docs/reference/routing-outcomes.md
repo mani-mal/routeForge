@@ -110,6 +110,17 @@ rolling the image.
 ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS requested_alias VARCHAR(64);
 ```
 
+**Upgrade: tool-argument bar counts (B69, 2026-11-11).** Three nullable columns record what
+the tool-argument bar did — `tool_arg_redactions`, `tool_arg_skipped` and
+`tool_arg_skipped_types` (§3.2). Null on older rows. Same failure mode as above if the
+ALTERs are missed; run them (or `scripts/migrate_app_policies.py`) before rolling the image.
+
+```sql
+ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS tool_arg_redactions INTEGER;
+ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS tool_arg_skipped INTEGER;
+ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS tool_arg_skipped_types JSON;
+```
+
 **Upgrade: reply shape (B71 item 6, 2026-10-09).** Four nullable columns say what kind of
 reply the backend gave, without recording any of it: `finish_reason` (the backend's own:
 `stop` | `length` | `tool_calls` | `content_filter` | `function_call` | `other`; any other
@@ -277,6 +288,8 @@ filled on it exactly as on an `ok` row.
 | `prompt_tokens`, `completion_tokens` | int | The **backend's** billed counts, from the response `usage` (on `verify_failed`, the served attempt's). `0` on other failure rows: no backend answered, so nothing was billed. For how large such a request was, read `routing_tokens`. |
 | `verify_required`, `verify_performed`, `verify_passed` | bool, nullable | From the trace's `verify` record. On `verify_failed` rows `true`, `true`, `false`. Null on other failure rows. |
 | `verify_mode` | enum, nullable | See below. `failed` on `verify_failed` rows; null on other failure rows. |
+| `tool_arg_redactions`, `tool_arg_skipped` | int, nullable | What the **tool-argument bar** (B69, `tool_args_min_score` in `docs/reference/per-app-config.md`) did on this request, ingress (replayed tool calls) and egress (the model's tool calls) summed: spans rewritten inside `tool_calls[*].function.arguments`, and detected spans that passed through unredacted because they scored below the bar. `0` when nothing was rewritten or skipped (including every request without tool calls); written on every status from the gate on, so a failure row still records what was skipped on the way in. Null only on rows written before the columns existed. Counts, never text (§2). Added 2026-11-11. |
+| `tool_arg_skipped_types` | JSON list[str], nullable | The entity **types** of the skipped spans, sorted, de-duplicated (`["US_DRIVER_LICENSE"]`). Never values. These types are still in `detected_entity_types` — the bar changes rewriting, never detection. Added 2026-11-11 (B69). |
 | `conflicting_core` | JSON, nullable | A `no_eligible` row's minimal conflicting core (P3b): `ConflictingCore.to_record()` — requirement ids/`security`/`source`/`detail`, endpoint state, `candidates_considered`; no `label`, no `hints`. Content-free. Null on every other status, and null when the router's own core computation failed (`core=None`). See `docs/reference/conflicting-core.md`. Added 2026-09-25 (P3b). |
 
 **`verify_mode`** is derived from the `verify` record, checking the reason first:

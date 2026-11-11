@@ -210,6 +210,14 @@ def lint_settings(s: Settings) -> list[str]:
                 f"accepts_raw_sensitive={c.accepts_raw_sensitive!r} not in "
                 f"{sorted(RAW_SENSITIVE_VALUES)}")
 
+    # B69: the deployment's tool-argument bar is a score; outside [0, 1] it
+    # either rewrites nothing or everything, silently. Named boot failure.
+    bar = s.serving.tool_args_min_score
+    if isinstance(bar, bool) or not isinstance(bar, (int, float)) or not 0.0 <= bar <= 1.0:
+        errs.append(
+            f"TOOL_ARGS_MIN_SCORE_OUT_OF_RANGE serving.yaml policy.tool_args_min_score "
+            f"must be a number from 0.0 to 1.0; got {bar!r}")
+
     return errs
 
 

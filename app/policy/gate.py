@@ -10,6 +10,7 @@ from app.models import ChatRequest, Entity, ExecutionPolicyContext, Message
 from app.policy.compile import EffectivePolicy, apply_signals, compile_policy
 from app.policy.context import build_context, match_sensitivity_rule
 from app.policy.detectors import Detector, detection_ran
+from app.policy.effective import PROTECTED_ENTITIES
 from app.policy.merge import dedupe
 
 if TYPE_CHECKING:
@@ -38,12 +39,57 @@ def tool_call_arg_text(m: Message) -> str:
 
 
 @dataclass(frozen=True)
+class ToolArgStats:
+    """Content-free counts of what the tool-argument bar (B69) did: spans
+    rewritten, spans that passed through because they scored below the bar,
+    and the entity TYPES of the latter. Counts and types only -- never a
+    value -- so they may go on the trace, the outcome row and the response."""
+    redacted: int = 0
+    skipped: int = 0
+    skipped_types: frozenset[str] = frozenset()
+
+    def __add__(self, other: "ToolArgStats") -> "ToolArgStats":
+        return ToolArgStats(self.redacted + other.redacted,
+                            self.skipped + other.skipped,
+                            self.skipped_types | other.skipped_types)
+
+
+@dataclass(frozen=True)
 class ToolCallRedaction:
     """Result of `redact_tool_calls_with_entities`: the redacted COPY of the
     tool calls plus the entity TYPES detected in their arguments (types only,
-    never values -- safe for a `VerificationRecord`)."""
+    never values -- safe for a `VerificationRecord`), and the bar's counts
+    (`ToolArgStats`). `entity_types` is what was DETECTED, skipped spans
+    included: the bar changes rewriting, never detection."""
     tool_calls: list[dict] | None
     entity_types: frozenset[str]
+    redacted: int = 0
+    skipped: int = 0
+    skipped_types: frozenset[str] = frozenset()
+
+    @property
+    def stats(self) -> ToolArgStats:
+        return ToolArgStats(self.redacted, self.skipped, self.skipped_types)
+
+
+def below_tool_arg_bar(e: Entity, min_score: float) -> bool:
+    """True when the tool-argument bar lets `e` pass through unredacted
+    inside tool-call arguments (B69).
+
+    Only a SCORED match from a built-in recognizer can fall below the bar.
+    Never exempted, whatever the score:
+
+    * `PROTECTED_ENTITIES` (US_SSN) -- the same absolute guarantee no per-app
+      threshold, denylist or exemption can lift (CLAUDE.md rules 3/8); the
+      Presidio SSN backstop scores 1.0 anyway.
+    * an unscored match (`score is None`): every `RegexDetector` match, so no
+      `pii_detection: regex` match is ever dropped by the bar.
+    * an operator-declared custom recognizer (`source == "custom"`): the
+      operator wrote that pattern, and `pii_score_threshold` never culls one
+      either.
+    """
+    return (min_score > 0.0 and e.score is not None and e.score < min_score
+            and e.type not in PROTECTED_ENTITIES and e.source != "custom")
 
 
 # Characters a detector span over RAW JSON can swallow around a value (e.g.
@@ -65,6 +111,11 @@ class _Leaf:
     start: int = 0
     end: int = 0
     spans: list[Entity] = field(default_factory=list)
+    #: Spans the tool-argument bar let through (B69), for counting only.
+    skipped: list[Entity] = field(default_factory=list)
+
+    def add(self, e: Entity, min_score: float) -> None:
+        (self.skipped if below_tool_arg_bar(e, min_score) else self.spans).append(e)
 
 
 @dataclass
@@ -127,8 +178,18 @@ def _inert_placeholders(redacted: str, mapping: dict[str, str]) -> str:
     return redacted
 
 
+def _passed_through(leaf: _Leaf) -> set[tuple[int, int, str]]:
+    """The leaf's skipped spans that really passed through: de-duplicated
+    across the two detector passes, and excluding any span a redacted span
+    overlaps (it did not reach the client raw, so it is not "skipped")."""
+    kept = leaf.spans
+    return {(e.start, e.end, e.type) for e in leaf.skipped
+            if not any(k.start < e.end and e.start < k.end for k in kept)}
+
+
 def redact_tool_calls_with_entities(tool_calls: list[dict] | None,
-                                    det: Detector) -> ToolCallRedaction:
+                                    det: Detector,
+                                    min_score: float = 0.0) -> ToolCallRedaction:
     """Return a COPY of `tool_calls` with each `function.arguments` STRING
     redacted by `det`, plus the entity types detected. `id`, `type`,
     `function.name`, and every other key are preserved exactly; a non-dict
@@ -160,7 +221,20 @@ def redact_tool_calls_with_entities(tool_calls: list[dict] | None,
     Placeholders are numbered per value (`REDACTED_US_SSN_1` may repeat across
     values); the redaction map is not kept for tool calls. They are written
     in word characters only, not as `<US_SSN_1>` -- see `_inert_placeholders`
-    (B69)."""
+    (B69).
+
+    **The tool-argument bar (B69).** Arguments are a command channel the
+    client executes, so a span is rewritten only when it clears `min_score`
+    (the app's effective bar, `Protection.tool_args_min_score`): a weak,
+    context-free pattern match such as Presidio's 0.3 `US_DRIVER_LICENSE` on
+    `n1` in `xargs -0 -n1` passes through byte for byte. The raw-pass
+    guarantee above therefore holds for every span AT OR ABOVE the bar, and
+    unconditionally for what `below_tool_arg_bar` never exempts -- US_SSN
+    whatever its score, every unscored (regex) match, every custom-recognizer
+    match. Detection is unchanged: `entity_types` still reports every type
+    found, skipped ones included, so classification and the trace see them.
+    What was skipped is never silent: `redacted`/`skipped`/`skipped_types`
+    count it, content-free. `min_score=0.0` (the default) skips nothing."""
     if not tool_calls:
         return ToolCallRedaction(tool_calls, frozenset())
 
@@ -200,8 +274,9 @@ def redact_tool_calls_with_entities(tool_calls: list[dict] | None,
             if s < t:
                 found.add(e.type)
                 ls, lt = s - leaf.start, t - leaf.start
-                leaf.spans.append(Entity(type=e.type, start=ls, end=lt,
-                                         value=leaf.text[ls:lt], score=e.score))
+                leaf.add(Entity(type=e.type, start=ls, end=lt,
+                                value=leaf.text[ls:lt], score=e.score,
+                                source=e.source), min_score)
 
     # Pass 2: raw scan over the argument strings as the gate classifies them.
     raw = "\n".join(t.args for t in targets)
@@ -212,19 +287,25 @@ def redact_tool_calls_with_entities(tool_calls: list[dict] | None,
             continue
         for leaf in all_leaves:
             for s, t in _occurrences(value, leaf.text):
-                leaf.spans.append(Entity(type=e.type, start=s, end=t,
-                                         value=value, score=e.score))
+                leaf.add(Entity(type=e.type, start=s, end=t, value=value,
+                                score=e.score, source=e.source), min_score)
 
     out = list(tool_calls)
+    n_redacted = 0
+    skipped: set[tuple[int, int, int, str]] = set()
+    for li, leaf in enumerate(all_leaves):
+        skipped |= {(li, *k) for k in _passed_through(leaf)}
     for target in targets:
         changed = False
         for leaf in target.leaves:
             if not leaf.spans:
                 continue
-            redacted, mapping = det.anonymize(leaf.text, dedupe(leaf.spans))
+            spans = dedupe(leaf.spans)
+            redacted, mapping = det.anonymize(leaf.text, spans)
             if redacted == leaf.text:
                 continue
             redacted = _inert_placeholders(redacted, mapping)
+            n_redacted += len(spans)
             changed = True
             if leaf.parent is None:
                 target.root = redacted
@@ -236,15 +317,18 @@ def redact_tool_calls_with_entities(tool_calls: list[dict] | None,
                     else target.root)
         tc = tool_calls[target.index]
         out[target.index] = {**tc, "function": {**tc["function"], "arguments": new_args}}
-    return ToolCallRedaction(out, frozenset(found))
+    return ToolCallRedaction(out, frozenset(found), redacted=n_redacted,
+                             skipped=len(skipped),
+                             skipped_types=frozenset(k[3] for k in skipped))
 
 
-def redact_tool_calls(tool_calls: list[dict] | None, det: Detector) -> list[dict] | None:
+def redact_tool_calls(tool_calls: list[dict] | None, det: Detector,
+                      min_score: float = 0.0) -> list[dict] | None:
     """`redact_tool_calls_with_entities` without the entity types."""
-    return redact_tool_calls_with_entities(tool_calls, det).tool_calls
+    return redact_tool_calls_with_entities(tool_calls, det, min_score).tool_calls
 
 
-def redact_message(det: Detector, m: Message) -> Message:
+def redact_message(det: Detector, m: Message, min_score: float = 0.0) -> Message:
     """Redact one message's text with the request's effective detector,
     preserving role + tool-calling structure. Used on the tool-calling path so
     the full structured conversation reaches the model with every message's PII
@@ -255,16 +339,26 @@ def redact_message(det: Detector, m: Message) -> Message:
     call whose arguments carry an SSN must not forward it to the model
     untouched.
 
+    `min_score` is the tool-argument bar (B69) and applies to `tool_calls`
+    arguments ONLY: message `content` is prose, redacted exactly as before
+    whatever the score.
+
     Lives here, next to `redact_tool_calls`, rather than on `Pipeline`: it is
     how `Representations.redacted` below is built, and the gate owns every
     representation of a request.
     """
+    return _redact_message(det, m, min_score)[0]
+
+
+def _redact_message(det: Detector, m: Message,
+                    min_score: float) -> tuple[Message, ToolArgStats]:
+    """`redact_message` plus the tool-argument bar's counts for `m`."""
     content = m.content
     if content:
         content, _ = det.anonymize(content, det.analyze(content))
-    return Message(role=m.role, content=content,
-                   tool_calls=redact_tool_calls(m.tool_calls, det),
-                   tool_call_id=m.tool_call_id, name=m.name)
+    tcr = redact_tool_calls_with_entities(m.tool_calls, det, min_score)
+    return (Message(role=m.role, content=content, tool_calls=tcr.tool_calls,
+                    tool_call_id=m.tool_call_id, name=m.name), tcr.stats)
 
 
 @dataclass(frozen=True)
@@ -307,6 +401,9 @@ class Representations:
     detected_entity_types: tuple[str, ...]
     #: The detector that produced the redacted views; None when none ran.
     detector: Detector | None = None
+    #: The effective tool-argument bar (B69) the per-message view applies to
+    #: replayed tool-call arguments; `Protection.tool_args_min_score`.
+    tool_args_min_score: float = 0.0
     #: Memo for the lazily built per-message redacted view (see `redacted`).
     _redacted_msgs: dict = field(default_factory=dict, compare=False, repr=False)
 
@@ -323,9 +420,18 @@ class Representations:
         if self.text_redacted is None or self.detector is None:
             return None
         if "v" not in self._redacted_msgs:
-            self._redacted_msgs["v"] = tuple(
-                redact_message(self.detector, m) for m in self.raw)
+            pairs = [_redact_message(self.detector, m, self.tool_args_min_score)
+                     for m in self.raw]
+            self._redacted_msgs["v"] = tuple(m for m, _ in pairs)
+            self._redacted_msgs["stats"] = sum((st for _, st in pairs), ToolArgStats())
         return self._redacted_msgs["v"]
+
+    def tool_arg_stats(self) -> ToolArgStats:
+        """The tool-argument bar's counts (B69) over the per-message redacted
+        view -- zero when that view was never built (no tool conversation, or
+        the model was sent the raw view), because then nothing was rewritten
+        or skipped on the way in."""
+        return self._redacted_msgs.get("stats", ToolArgStats())
 
 
 def _scan_text(m: Message) -> str:
@@ -433,5 +539,6 @@ class Gate:
             text_redacted=redacted,
             detected_entity_types=tuple(sorted(etypes)),
             detector=det if ran else None,
+            tool_args_min_score=eff.protection.tool_args_min_score,
         )
         return ctx, reps, eff

@@ -22,7 +22,8 @@ from app.policy.context import pinned_model_reason
 from app.policy.feasible import feasible_set
 from app.policy.detectors import Detector, detection_ran, make_detector
 from app.policy.effective import EffectiveDetector, FilteredDetector
-from app.policy.gate import Gate, Representations, redact_tool_calls_with_entities
+from app.policy.gate import (Gate, Representations, ToolArgStats,
+                             redact_tool_calls_with_entities)
 from app.config.schema import PriceCfg
 from app.routing.pricing import Savings, price_call, split_savings
 from app.routing.router import client_output_cap, complexity_tier
@@ -293,7 +294,8 @@ class Pipeline:
     def _certificate(eff: EffectivePolicy, ctx: ExecutionPolicyContext,
                      det: Detector, endpoint_registry_version: str,
                      endpoint_data_handling: dict,
-                     chosen_scoring: dict | None = None) -> dict:
+                     chosen_scoring: dict | None = None,
+                     tool_args: ToolArgStats | None = None) -> dict:
         """The per-axis fields of the decision certificate (design P1a §6)
         common to every response shape. Reads straight off the already-
         compiled `eff` (placement + protection + the cross-axis rules that
@@ -348,8 +350,15 @@ class Pipeline:
         candidate's own scoring terms and provenance -- already narrowed to
         one candidate by the caller. The full eligible set never appears
         here: that stays on the trace only (`sp.scoring`), because this
-        certificate is on the response body of every chat completion."""
+        certificate is on the response body of every chat completion.
+
+        `tool_args` (B69) is what the tool-argument bar did on this request,
+        ingress and egress summed: spans rewritten inside tool-call arguments,
+        spans that passed through below the bar, and the latter's entity TYPES
+        -- counts and types, never a value. Stamped beside the effective bar
+        itself (`tool_args_min_score`) so a skipped match is never silent."""
         ran = detection_ran(det)
+        tool_args = tool_args or ToolArgStats()
         return {
             "placement": eff.placement.residency,
             "placement_sources": list(eff.placement.sources),
@@ -375,6 +384,12 @@ class Pipeline:
             # None when no router ran (e.g. a semantic-cache hit) or the
             # served hop carried no scoring record.
             "scoring": chosen_scoring,
+            # B69: the effective tool-argument bar and what it did. Rewriting
+            # only -- `detected_entity_types` above is unchanged by it.
+            "tool_args_min_score": eff.protection.tool_args_min_score,
+            "tool_arg_redactions": tool_args.redacted,
+            "tool_arg_skipped": tool_args.skipped,
+            "tool_arg_skipped_types": sorted(tool_args.skipped_types),
         }
 
     def _endpoint_registry_version(self) -> str:
@@ -789,6 +804,8 @@ class Pipeline:
                 ctx, max_tokens=client_output_cap(request.generation_params()),
                 trajectory_key=(trajectory.recorded_key(eff.trajectory_mode)
                                 if trajectory is not None else None))
+        # B69: zero until a tool-call argument is actually rewritten/skipped.
+        self._record_tool_arg_stats(internals, ToolArgStats())
         self._publish_telemetry_views(internals, reps)
         policy_mode = self._policy_mode_stamp(eff)
         # The egress axis, read once and handed to every consumer that returns
@@ -844,6 +861,7 @@ class Pipeline:
             # there is nothing to redact and the raw view IS the redacted one.
             san_messages = self._tool_turn_messages(reps, eff)
             recall = RecallResult([], None)
+            self._record_tool_arg_stats(internals, reps.tool_arg_stats())
         else:
             # Step 4 (task mode) always decides "direct" -- agent loops are
             # client-driven, so there is no internal multi-step mode to divert
@@ -1016,10 +1034,18 @@ class Pipeline:
         # same `egress_detector()` helper `verify()` itself uses -- a tool-call
         # argument must not be scrubbed for an app whose completion text is
         # returned verbatim, nor left raw for one whose text is redacted.
+        #
+        # B69: the same tool-argument bar ingress applies -- a span inside
+        # the model's tool-call arguments is rewritten only if it clears
+        # `tool_args_min_score`; what passed below it is counted, ingress and
+        # egress summed, on the certificate/trace and the outcome row.
         raw_tool_calls = result.tool_calls
         tc_redaction = redact_tool_calls_with_entities(
-            raw_tool_calls, egress_detector(det, client_output))
+            raw_tool_calls, egress_detector(det, client_output),
+            eff.protection.tool_args_min_score)
         redacted_tool_calls = tc_redaction.tool_calls
+        tool_args = reps.tool_arg_stats() + tc_redaction.stats
+        self._record_tool_arg_stats(internals, tool_args)
         if tc_redaction.entity_types:
             vrec = vrec.model_copy(update={
                 "entities_found": tuple(sorted(
@@ -1153,7 +1179,7 @@ class Pipeline:
                            eff, ctx, det, self._endpoint_registry_version(),
                            self._endpoint_declaration(
                                self._candidate_by_name(result.model)),
-                           self._served_scoring(records)),
+                           self._served_scoring(records), tool_args),
                        "checks": self._eligibility_checks(ctx, records)},
             "sanitized_prompt": sanitized,
             "raw_completion": result.text,
@@ -1163,6 +1189,20 @@ class Pipeline:
             # to the app's OWN Langfuse project (CLAUDE.md rule 2 exception).
             "raw_tool_calls": raw_tool_calls,
         }
+
+    @staticmethod
+    def _record_tool_arg_stats(internals: dict | None, stats: ToolArgStats) -> None:
+        """Put the tool-argument bar's counts (B69) on the outcome row's
+        context: two ints and sorted entity TYPES, never a value. Called once
+        the ingress view is built (so a request that fails later still records
+        what was skipped on the way in) and again after egress, with the sum."""
+        if internals is None or "outcome_ctx" not in internals:
+            return
+        internals["outcome_ctx"].update({
+            "tool_arg_redactions": stats.redacted,
+            "tool_arg_skipped": stats.skipped,
+            "tool_arg_skipped_types": sorted(stats.skipped_types),
+        })
 
     @staticmethod
     def _tool_turn_messages(reps: Representations, eff: EffectivePolicy) -> list[Message]:
@@ -1262,6 +1302,8 @@ class Pipeline:
                 ctx, max_tokens=client_output_cap(request.generation_params()),
                 trajectory_key=(trajectory.recorded_key(eff.trajectory_mode)
                                 if trajectory is not None else None))
+        # B69: zero until a tool-call argument is actually rewritten/skipped.
+        self._record_tool_arg_stats(internals, ToolArgStats())
         self._publish_telemetry_views(internals, reps)
         policy_mode = self._policy_mode_stamp(eff)
         # Same egress axis run() reads, selecting the detector `incremental_
@@ -1329,6 +1371,9 @@ class Pipeline:
             san_messages = self._tool_turn_messages(reps, eff)
             recall = RecallResult([], None)
             comp = self._tool_turn_compression(san_messages, tools)
+            # B69: ingress only -- a live tool turn's egress arguments are
+            # never rewritten (only `client_output: raw` streams them live).
+            self._record_tool_arg_stats(internals, reps.tool_arg_stats())
         else:
             san_messages = [Message(role=request.messages[-1].role, content=model_text)]
         # Memory READ only (Feature 5, Task 2) -- mirrors run()'s hook. NEVER
@@ -1392,7 +1437,8 @@ class Pipeline:
                 raise PipelineRejected("stream ended without a final result")
             meta.update(self._assemble_stream_meta(
                 request_id, ctx, sanitized, comp, records, result, eff,
-                det, recall.record, tool_mode=tool_mode))
+                det, recall.record, tool_mode=tool_mode,
+                tool_args=reps.tool_arg_stats()))
 
         def get_meta() -> dict:
             if not meta:
@@ -1428,7 +1474,8 @@ class Pipeline:
                               sanitized: str, comp, records, result: GenerationResult,
                               eff: EffectivePolicy, det: Detector,
                               mem_record: MemoryRecord | None = None,
-                              tool_mode: bool = False) -> dict:
+                              tool_mode: bool = False,
+                              tool_args: ToolArgStats | None = None) -> dict:
         """Assemble the final streaming metadata dict, mirroring run()'s record,
         two-lever cost, and quality assembly. Step-9 verification is WAIVED on
         this path: a VerificationRecord(performed=False, passed=True) is recorded
@@ -1490,7 +1537,7 @@ class Pipeline:
                            eff, ctx, det, self._endpoint_registry_version(),
                            self._endpoint_declaration(
                                self._candidate_by_name(result.model)),
-                           self._served_scoring(records)),
+                           self._served_scoring(records), tool_args),
                        "checks": self._eligibility_checks(ctx, records)},
             "sanitized_prompt": sanitized,
             "raw_completion": result.text,

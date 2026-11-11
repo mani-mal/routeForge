@@ -187,6 +187,13 @@ class AppPolicy(Base):
     # type-independent complement to pii_entity_denylist. US_SSN can never be
     # exempted (FilteredDetector.PROTECTED_ENTITIES). null/[] = no exemption.
     pii_exempt_patterns: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # B69: minimum detector score [0,1] for a span inside tool-call ARGUMENTS
+    # to be rewritten (the "tool-argument bar"). null = inherit serving.yaml
+    # policy.tool_args_min_score (0.5). Rewriting only -- detection,
+    # classification and message text are unchanged; US_SSN, unscored regex
+    # and custom-recognizer matches are never exempted. Added after the table
+    # shipped: a deployed DB needs the ALTER in docs/guides/admin-setup.md.
+    tool_args_min_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     # --- P1a data-handling axes. null = inherit (resolved by
     # app/policy/compile.py). `policy_mode` remains a PRESET over
     # model_input/client_output; an explicit value here beats the preset, and
@@ -411,6 +418,14 @@ class RoutingOutcome(Base):
     reply_has_text: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     reply_tool_calls: Mapped[int | None] = mapped_column(Integer, nullable=True)
     reasoning_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # B69: what the tool-argument bar did on this request (ingress + egress
+    # summed): spans rewritten inside tool-call arguments, spans that passed
+    # through below `tool_args_min_score`, and the latter's entity TYPES --
+    # never a value. Null on rows written before the columns existed.
+    # Deployed DBs need the three ALTERs in docs/reference/routing-outcomes.md.
+    tool_arg_redactions: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tool_arg_skipped: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tool_arg_skipped_types: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
 
 class OutcomeFeedback(Base):

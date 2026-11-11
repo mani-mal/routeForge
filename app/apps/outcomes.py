@@ -369,6 +369,13 @@ def _policy_features(outcome_ctx: dict) -> dict:
         "reply_has_text": outcome_ctx.get("reply_has_text"),
         "reply_tool_calls": outcome_ctx.get("reply_tool_calls"),
         "reasoning_tokens": outcome_ctx.get("reasoning_tokens"),
+        # B69: the tool-argument bar's counts -- two ints and entity TYPES.
+        # None on a row written before the gate ran.
+        "tool_arg_redactions": outcome_ctx.get("tool_arg_redactions"),
+        "tool_arg_skipped": outcome_ctx.get("tool_arg_skipped"),
+        "tool_arg_skipped_types": (list(outcome_ctx["tool_arg_skipped_types"])
+                                   if outcome_ctx.get("tool_arg_skipped_types")
+                                   is not None else None),
     }
 
 

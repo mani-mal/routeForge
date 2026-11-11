@@ -118,6 +118,13 @@ class Entity(BaseModel):
     # can break same-span/same-length ties deterministically (highest wins).
     # Built-in RegexDetector entities leave this None (longest-span-wins only).
     score: float | None = None
+    # Where the match came from, when that matters to a consumer: "custom" for
+    # an operator-declared CustomRecognizer. The tool-argument bar (B69,
+    # app/policy/gate.py) never drops a custom match whatever its score -- the
+    # operator declared that pattern, exactly as `pii_score_threshold` never
+    # culls one (FilteredDetector wraps only the base detector). None = a
+    # built-in recognizer.
+    source: str | None = None
 
 
 class ExecutionPolicyContext(BaseModel):

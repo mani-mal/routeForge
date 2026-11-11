@@ -69,7 +69,11 @@ def test_outcome_ctx_populated_on_success():
         "detected_entity_types", "app_policy_version", "complexity",
         "complexity_tier", "requested_model", "max_tokens", "routing_tokens",
         "trajectory_key", "inherited_entity_types",
-        "finish_reason", "reply_has_text", "reply_tool_calls", "reasoning_tokens"}
+        "finish_reason", "reply_has_text", "reply_tool_calls", "reasoning_tokens",
+        "tool_arg_redactions", "tool_arg_skipped", "tool_arg_skipped_types"}
+    # B69: no tool call in this request, so nothing rewritten or skipped.
+    assert (oc["tool_arg_redactions"], oc["tool_arg_skipped"],
+            oc["tool_arg_skipped_types"]) == (0, 0, [])
     assert isinstance(oc["complexity"], float)
     # B60: the count the router was given, set on the same line as the
     # complexity derived from it.
