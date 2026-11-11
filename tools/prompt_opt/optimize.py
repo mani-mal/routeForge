@@ -107,7 +107,11 @@ def resolve_lm(registry: Any, slug: str) -> LMSpec:
             "cloud pool entry, not an onboarded on-prem model) -- the DSPy "
             "LM must resolve to an onboarded model.")
     api_base, api_key_env = endpoint
-    api_key = os.environ.get(api_key_env, "sk-noauth") if api_key_env else "sk-noauth"
+    # B68: a key stored (encrypted) at onboarding wins over api_key_env.
+    key_for = getattr(registry, "api_key_for", None)
+    api_key = key_for(slug) if key_for is not None else None
+    if not api_key:
+        api_key = os.environ.get(api_key_env, "sk-noauth") if api_key_env else "sk-noauth"
     return LMSpec(model=f"openai/{slug}", api_base=api_base, api_key=api_key)
 
 

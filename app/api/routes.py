@@ -33,6 +33,7 @@ from app.api.streaming import (
 )
 from app.apps import store
 from app.apps.langfuse_provision import load_app_langfuse
+from app.apps.secret_box import scrub_secrets, scrubbed_exception
 from app.apps.outcomes import (
     build_failure_outcome, build_ok_outcome, feedback_values, parse_workload,
 )
@@ -266,7 +267,16 @@ def _error_status_detail(exc: BaseException) -> tuple[int, str, str | None] | No
     """The (status, detail, openai_code) the HTTP path returns for a serving
     exception. One mapping, used by the plain HTTP path and by the keepalive
     stream's error frame, so the two can never drift -- including the code the
-    client branches on (B49)."""
+    client branches on (B49). The detail is scrubbed of live endpoint keys
+    (B68) as a last line: it reaches the client and the logs."""
+    mapped = _raw_error_status_detail(exc)
+    if mapped is None:
+        return None
+    status, detail, code = mapped
+    return status, scrub_secrets(detail), code
+
+
+def _raw_error_status_detail(exc: BaseException) -> tuple[int, str, str | None] | None:
     if isinstance(exc, PipelineRejected):
         message = str(exc)
         rejected_model = _is_pinned_model_rejection(exc)
@@ -922,8 +932,8 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
     except Exception as e:
         mapped = _error_status_detail(e)
         if mapped is None:
-            logging.getLogger("serving.api").exception(
-                "unhandled error for %s", request_id)
+            logging.getLogger("serving.api").error(
+                "unhandled error for %s", request_id, exc_info=scrubbed_exception(e))
             metrics.observe_request("-", "error")
             raise ApiError(500, "internal error", code=CODE_INTERNAL_ERROR)
         if mapped[0] >= 500:
@@ -1411,8 +1421,9 @@ async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
         except Exception as e:
             mapped = _error_status_detail(e)
             if mapped is None:
-                logging.getLogger("serving.api").exception(
-                    "unhandled error for %s after stream opened", request_id)
+                logging.getLogger("serving.api").error(
+                    "unhandled error for %s after stream opened", request_id,
+                    exc_info=scrubbed_exception(e))
                 metrics.observe_request("-", "error")
                 mapped = (500, "internal error", CODE_INTERNAL_ERROR)
             else:
@@ -1578,7 +1589,8 @@ async def _prime_stream(deltas: AsyncIterator) -> AsyncIterator:
     except Exception as e:
         await deltas.aclose()
         logging.getLogger("serving.api").warning(
-            "live stream failed before first byte (%s); serving buffered", e)
+            "live stream failed before first byte (%s); serving buffered",
+            scrub_secrets(str(e)))
         raise StreamFallback("backend failed before the first chunk") from e
 
     async def _chained() -> AsyncIterator:
@@ -1658,7 +1670,8 @@ def _stream_unverified_response(
             mapped = _error_status_detail(e) or (500, "stream interrupted",
                                                  CODE_INTERNAL_ERROR)
             logging.getLogger("serving.api").warning(
-                "request %s stream failed after first byte: %s", request_id, e)
+                "request %s stream failed after first byte: %s", request_id,
+                scrub_secrets(str(e)))
             yield sse_error_frame(*mapped, extra=_error_extra(e))
             yield SSE_DONE
         finally:

@@ -1,14 +1,25 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
+
+from pydantic import SecretStr
 
 from app.config.schema import PoolCandidate, PriceCfg, Settings
 from app.apps import store
+from app.apps.secret_box import decrypt_or_none, register_secret
 
 _log = logging.getLogger("serving.registry")
+
+#: The bearer sent for a model whose key RouteForge cannot produce -- an
+#: api_key_env naming an unset variable, or a stored key that no longer
+#: decrypts. A placeholder, never a real credential: the endpoint answers
+#: 401 and the probe reports `unauthorized` (B61), which is the honest result.
+NO_AUTH_KEY = "sk-noauth"
 
 
 @dataclass(frozen=True)
@@ -44,6 +55,13 @@ class _OnboardedRow:
     # Read by /health only; eligibility keys on `enabled`, which the admin
     # routes AND with the probe. Anything but "healthy" is "known down".
     probe_status: str = "healthy"
+    # B68: "stored" (api_key_enc set), "env" (api_key_env set) or None.
+    api_key_source: str | None = None
+    # The decrypted stored key, wrapped so a repr/str/model_dump of the row
+    # shows `**********`, and excluded from the dataclass repr and equality.
+    # None when there is no stored key OR it no longer decrypts (key
+    # rotated/missing) -- `api_key_source` still says "stored" in that case.
+    stored_key: SecretStr | None = field(default=None, repr=False, compare=False)
 
 
 class ModelRegistry:
@@ -59,6 +77,19 @@ class ModelRegistry:
         # Bumped on every successful `refresh`, so derived caches (the shared
         # QualityResolver's tier/published maps) know the pool may have moved.
         self._generation = 0
+        # (slug, ciphertext) pairs already warned about as undecryptable, so a
+        # periodic refresh logs each broken stored key once, not every minute.
+        self._undecryptable_warned: set[tuple[str, str]] = set()
+        # Serialises refresh's DB read AND install, so a slow refresh that read
+        # before an admin write committed cannot finish after that write's own
+        # refresh and put the stale rows back (same rule as quality_lock).
+        self._refresh_lock = asyncio.Lock()
+        # Provider-level keys (serving.yaml `providers.<name>.api_key_env`)
+        # are scrubbed from upstream error text too (B68).
+        for cfg in settings.serving.providers.values():
+            env = getattr(cfg, "api_key_env", None)
+            if env:
+                register_secret(os.environ.get(env))
 
     @property
     def generation(self) -> int:
@@ -74,25 +105,62 @@ class ModelRegistry:
             await self.refresh(db)
 
     async def refresh(self, db) -> None:
-        try:
-            async with db.session() as session:
-                rows = await store.list_onboarded(session)
-            self._rows = {
-                r.slug: _OnboardedRow(
-                    slug=r.slug, display_name=r.display_name, provider=r.provider,
-                    tier=r.tier, quality=r.quality, price_input=r.price_input,
-                    price_output=r.price_output, endpoint=r.endpoint,
-                    api_key_env=r.api_key_env, enabled=bool(r.enabled),
-                    allowed_app_ids=tuple(r.allowed_app_ids) if r.allowed_app_ids else None,
-                    region=r.region, prompt_retention=r.prompt_retention,
-                    accepts_raw_sensitive=r.accepts_raw_sensitive,
-                    price_cached_input=r.price_cached_input,
-                    context_window=r.context_window,
-                    probe_status=r.probe_status or "unknown")
-                for r in rows}
-            self._generation += 1
-        except Exception:
-            _log.exception("registry refresh failed; keeping last-known-good")
+        async with self._refresh_lock:
+            try:
+                async with db.session() as session:
+                    rows = await store.list_onboarded(session)
+                self._rows = {r.slug: self._row(r) for r in rows}
+                self._generation += 1
+            except Exception:
+                _log.exception("registry refresh failed; keeping last-known-good")
+
+    def _row(self, r) -> _OnboardedRow:
+        cred = self._credential(r)
+        enabled, probe_status = bool(r.enabled), r.probe_status or "unknown"
+        if cred["api_key_source"] == "stored" and cred["stored_key"] is None:
+            # A stored key that no longer decrypts: take the model out of
+            # routing on this replica (it can only get 401s) and report it
+            # `unauthorized` on /health. Only ever narrows the pool -- an
+            # onprem_only request with no other on-prem model is rejected,
+            # never widened. The DB row is untouched; re-entering the key
+            # with a PUT re-probes and restores it.
+            enabled, probe_status = False, "unauthorized"
+        return _OnboardedRow(
+            slug=r.slug, display_name=r.display_name, provider=r.provider,
+            tier=r.tier, quality=r.quality, price_input=r.price_input,
+            price_output=r.price_output, endpoint=r.endpoint,
+            api_key_env=r.api_key_env, enabled=enabled,
+            allowed_app_ids=tuple(r.allowed_app_ids) if r.allowed_app_ids else None,
+            region=r.region, prompt_retention=r.prompt_retention,
+            accepts_raw_sensitive=r.accepts_raw_sensitive,
+            price_cached_input=r.price_cached_input,
+            context_window=r.context_window,
+            probe_status=probe_status, **cred)
+
+    def _credential(self, r) -> dict:
+        """`api_key_source` + decrypted `stored_key` for one DB row. Decrypted
+        here, on every refresh, so a key rotated on one replica is picked up
+        by every other replica on its next refresh (no restart). A stored key
+        that does not decrypt under the current ENCRYPTION_KEY is treated as
+        no key; a WARNING names the slug, never the value."""
+        enc = getattr(r, "api_key_enc", None)
+        if enc:
+            plain = decrypt_or_none(enc)
+            if plain is None:
+                if (r.slug, enc) not in self._undecryptable_warned:
+                    self._undecryptable_warned.add((r.slug, enc))
+                    _log.warning(
+                        "onboarded model %s has a stored API key that cannot be "
+                        "decrypted with the current ENCRYPTION_KEY; it is taken out "
+                        "of routing on this replica. Re-enter the key.", r.slug)
+                return {"api_key_source": "stored", "stored_key": None}
+            register_secret(plain)
+            return {"api_key_source": "stored", "stored_key": SecretStr(plain)}
+        if r.api_key_env:
+            # Env-held keys are scrubbed from upstream error text too.
+            register_secret(os.environ.get(r.api_key_env))
+            return {"api_key_source": "env", "stored_key": None}
+        return {"api_key_source": None, "stored_key": None}
 
     def _onboarded(self) -> dict[str, _OnboardedRow]:
         return self._rows or {}
@@ -228,6 +296,24 @@ class ModelRegistry:
     def endpoint_for(self, slug: str) -> tuple[str, str | None] | None:
         r = self._onboarded().get(slug)
         return (r.endpoint, r.api_key_env) if r is not None else None
+
+    def api_key_for(self, slug: str) -> str | None:
+        """The bearer key to send to onboarded model `slug`, or None when the
+        model declares no key of its own (the provider-level `api_key_env` in
+        serving.yaml then applies). A stored key wins; an undecryptable stored
+        key or an unset api_key_env yields `NO_AUTH_KEY`, so the endpoint
+        refuses the call rather than receiving some other credential.
+        Callers must never log the return value."""
+        r = self._onboarded().get(slug)
+        if r is None:
+            return None
+        if r.api_key_source == "stored":
+            return r.stored_key.get_secret_value() if r.stored_key else NO_AUTH_KEY
+        if r.api_key_env:
+            # Unset OR empty -> placeholder: a model that declares an env var
+            # never falls through to the provider-level key.
+            return os.environ.get(r.api_key_env) or NO_AUTH_KEY
+        return None
 
     def disabled_onboarded(self) -> tuple[str, ...]:
         """Sorted slugs of onboarded rows the admin has disabled. They are

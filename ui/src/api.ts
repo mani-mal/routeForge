@@ -769,6 +769,12 @@ function metricsQuery(p: MetricsParams): string {
 export type OnboardedModel = {
   slug: string; display_name: string; tier: string; provider: string;
   endpoint: string; api_key_env: string | null;
+  // B68: where this endpoint's key comes from -- "stored" (given at onboarding,
+  // encrypted at rest, write-only), "env" (api_key_env) or null (no key). The
+  // key itself is never returned; `api_key_hint` is its last 4 characters for
+  // a stored key of 12+ characters, else null.
+  api_key_source?: "stored" | "env" | null;
+  api_key_hint?: string | null;
   price_input: number; price_output: number;
   quality: number | null; context_window: number | null;
   // B50: where `context_window` came from — "operator" (a human typed it),
@@ -802,6 +808,11 @@ export type OnboardIn = {
   quality?: number | null; context_window?: number | null;
   allowed_app_ids?: string[] | null; notes?: string | null;
   enabled?: boolean;
+  // B68: the endpoint key itself (stored encrypted; needs ENCRYPTION_KEY on
+  // the server). Never together with api_key_env. OMITTED = keep the stored
+  // key (the console never has it to resubmit); null = remove it; a string =
+  // replace it (and clear api_key_env).
+  api_key?: string | null;
   // P1b endpoint data-handling declarations (design §2/§8), accepted by
   // POST/PUT /admin/infra/models (app/api/admin_routes.py::OnboardIn) and
   // passed through to store.upsert_onboarded. null/omitted = undeclared
