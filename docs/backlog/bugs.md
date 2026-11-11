@@ -381,7 +381,7 @@ per request vs about 65 on Postgres), and the Postgres was a WSL2 docker loopbac
   tests still pass. Note any change in the paper (`docs/research/paper/main.tex` §Overhead
   quotes "9–10 statements, 4–5 commits").
 
-## B87 — `is_disabled` treats only on-prem rows as disableable  🔴 OPEN
+## B87 — `is_disabled` treats only on-prem rows as disableable  ✅ RESOLVED (2026-11-11, fix/b90-config-lint)
 
 **Severity:** low (latent; no effect today).
 **Found:** 2026-11-06, matched-baseline state grid (`docs/research/data/paper-revision/matched_baseline.py`).
@@ -394,6 +394,11 @@ today only because `registry.effective_pool()` omits disabled rows, so they neve
 provider kind, a pool built another way), it would be eligible. **Wanted:** drop the provider
 condition (or state in the code why it is needed), and add a test that a disabled row of each
 provider kind is rejected by `candidate_rejection`.
+
+**Resolved:** `is_disabled` (`app/policy/feasible.py`) no longer checks `provider == "onprem"`; it
+asks the registry, which reports names with no onboarded row as enabled, so static cloud pool
+members are unaffected. `tests/test_is_disabled_any_provider.py` rejects a disabled onprem, azure
+and bedrock row through `candidate_rejection`.
 
 ## B88 — A streamed request whose client hangs up right after `[DONE]` is never metered  ✅ RESOLVED (2026-11-08)
 
@@ -478,7 +483,7 @@ extracts the rendered `serving.yaml`, and runs it through `load_settings()` + `e
 together with the shipped routing/policy/pricing configs. This is the pre-install lint that would have
 caught the boot failure.
 
-## B90 — Risk-class names are not linted, so a typo becomes a 500 on every affected request  🔴 OPEN
+## B90 — Risk-class names are not linted, so a typo becomes a 500 on every affected request  ✅ RESOLVED (2026-11-11, fix/b90-config-lint)
 
 **Severity:** medium (a config error surfaces at request time, not at boot; this goes against rule 5
 and the "drift is a boot failure" promise).
@@ -494,7 +499,11 @@ then raises `KeyError` at `app/routing/router.py:332` (also 393, 431) and return
 `risk_class ∈ RISK_CLASS`, with named errors (`RISK_FLOOR_CLASS_UNKNOWN`,
 `RISK_FLOOR_CLASS_MISSING`, `RULE_RISK_CLASS_UNKNOWN`). Add a test for each.
 
-## B91 — Config lint enforces less than CLAUDE.md says (canonical values, one owner per concern)  🔴 OPEN
+**Resolved:** `lint_settings` now emits `RISK_FLOOR_CLASS_UNKNOWN`, `RISK_FLOOR_CLASS_MISSING` and
+`RULE_RISK_CLASS_UNKNOWN` against `enums.RISK_CLASS`. The only `risk_class` in `policy.yaml` is on
+`sensitivity_rules`. One test per code in `tests/test_config_lint.py`.
+
+## B91 — Config lint enforces less than CLAUDE.md says (canonical values, one owner per concern)  ✅ RESOLVED (2026-11-11, fix/b90-config-lint)
 
 **Severity:** low–medium (it fails closed today, but on-prem routing can die with no boot signal; the
 docs overclaim what the lint checks).
@@ -515,6 +524,14 @@ docs overclaim what the lint checks).
 the sensitivity enum to `app/policy/enums.py`. Reject unknown top-level keys per file
 (`extra="forbid"`, or an explicit owned-keys table) so a value in the wrong file fails the boot.
 If any of these is left out on purpose, correct the CLAUDE.md "Config lint" section instead.
+
+**Resolved:** the lint now pins `onprem` declared in serving (`ONPREM_PROVIDER_MISSING`, constant
+`enums.ONPREM_PROVIDER`), the tier set to `enums.TIERS` (`TIER_SET_NONCANONICAL`) and the
+sensitivity enum to `enums.SENSITIVITY` (`SENSITIVITY_ENUM_NONCANONICAL`). One owner per concern uses an
+owned-top-level-keys table derived from the schema models, checked against the raw merged YAML
+(`Settings.config_keys`): a key in another file's lane fails (`CONCERN_IN_WRONG_FILE`); a key no
+file owns only warns (`UNKNOWN_CONFIG_KEY`) rather than `extra="forbid"`, so a stale key in a
+customer's file (e.g. the removed `policy.fail_closed`) does not stop their boot.
 
 ## B92 — Dead switches still in the deploy artifacts (`inference_backend`, `allowBackendFallback`, `fail_closed`, CCR PVC)  🔴 OPEN
 
