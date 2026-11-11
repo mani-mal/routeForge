@@ -165,6 +165,12 @@ class ExecutionPolicyContext(BaseModel):
     # router's quality term reads -- a RANKING input only. Eligibility
     # (`app/policy/feasible.py`), placement and residency never read it.
     workload: str | None = None
+    # B80: the effective quality floor and mode for this request's workload,
+    # resolved once by `app/routing/quality_floor.py::resolve_floor` in
+    # `build_context`. The router reads these two fields and never re-derives
+    # the floor. Content-free: a number and an enum.
+    quality_floor: float | None = None
+    quality_floor_mode: str = "off"
     max_cost_usd: float
     max_latency_ms: int
     risk_class: str
