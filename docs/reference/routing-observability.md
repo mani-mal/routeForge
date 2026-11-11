@@ -281,7 +281,7 @@ candidate's score) stays a trace-only property.
 | `peer_prior` | **latency only.** No usable measurement of this model (as for `tier_default`), but at least one other *eligible* candidate in the **same tier** is `measured`. The value is the median of those peers' measured latencies. `n` still reports this model's own true count. (B51) |
 | `tier_default` | **latency only.** No usable measurement — fewer than `min_samples` observations, or the newest one is older than `signals.staleness_s` — **and** no measured same-tier peer in the eligible set. The value is `signals.tier_latency_ms[tier]`. `n` still reports the true count, which may be non-zero. |
 | `neutral` | **availability only.** Fewer than `min_samples` observations; the value is `1.0`, which is exactly the pre-P2a hardcoded constant. |
-| `disabled` | `signals.enabled: false`. Tier default / `1.0`, and `n` is reported as `0` even when observations exist (see the caveat below). |
+| `disabled` | `signals.enabled: false`. Tier default / `1.0`; `n` still reports the true observation count (informational — it is what flipping `signals.enabled` back on would recover). |
 
 A stale latency falls back to the peer prior or the tier default **outright** rather than drifting
 toward it: a drifted number would be neither measured nor default and could not
@@ -364,9 +364,10 @@ escape hatch and restores the same numbers with `src: "disabled"`.
   and one `error` observation per failed attempt that
   `counts_as_endpoint_unhealth`; a request-shaped 4xx is metered as an `error`
   row but is not observed — see §4 below and `usage_summary.error_count`.
-- **`n` is `0` on the `disabled` path** even when the store holds observations,
-  unlike `tier_default`/`neutral`, which report the true count. Still
-  backlogged (B42) — unrelated to this slice.
+- **`n` on the `disabled` path is the true observation count (fixed
+  2026-11-11; was B42).** It used to be a hardcoded `0`; it now matches
+  `tier_default`/`neutral`. The count is informational — the value used is
+  still the default, so the recompute-from-record property is unchanged.
 - **A semantic-cache hit still never pollutes latency, by construction rather
   than by luck.** A cache hit never calls a backend, so `SignalStore`'s
   observation methods are never invoked for it and no `endpoint_observations`

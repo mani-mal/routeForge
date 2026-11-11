@@ -1935,10 +1935,10 @@ Related: B45 (the question), B46 (`counts_as_endpoint_unhealth` boundary coverag
 
 ---
 
-## B47 — a backend failure on a real-token stream after the client already disconnected writes no usage row at all
+## B47 — a backend failure on a real-token stream after the client already disconnected writes no usage row at all  ✅ RESOLVED (2026-11-11)
 
 **Severity:** low
-**Found:** 2026-09-21, signal hardening Task 7 self-review. **Open.**
+**Found:** 2026-09-21, signal hardening Task 7 self-review. **Resolved 2026-11-11 (fix/b31-batch-d).**
 
 On a real-token stream (`stream_unverified` / `incremental_verify`), a backend failure
 that happens **after** the client has already disconnected surfaces inside
@@ -1952,6 +1952,8 @@ deliberately left disconnect handling on the drain path unchanged.
 **Fix, if picked up.** Route that failure through `_record_failed` (or
 `_record_cancelled`, since the client is already gone) from within the drain's
 exception handler.
+
+**Resolved:** 2026-11-11. The drain-on-disconnect exception handler in `_finalize_stream` (`app/api/routes.py`) now meters the request `cancelled` through `_record_cancelled` inside `anyio.CancelScope(shield=True)`: one usage row, the `cancelled` routing outcome and the minimal failure trace, naming the streamed model as the attempt. `_finalize_stream` now takes `started` from both live generators. Test: `tests/test_error_metering.py::test_backend_failure_after_client_disconnect_writes_one_cancelled_row` (both modes).
 
 ---
 
@@ -2178,10 +2180,10 @@ identity.
 score-level pin, so a future reader does not retire the identity test believing the
 older oracle covers it.
 
-## B43 — the response `usage` object carries a flat `cached_prompt_tokens`, not OpenAI's nested shape
+## B43 — the response `usage` object carries a flat `cached_prompt_tokens`, not OpenAI's nested shape  ✅ RESOLVED (2026-11-11)
 
 **Severity:** low (API-surface decision, deliberately deferred; benign today)
-**Found:** 2026-09-19, P2a Task 2 ruling. **Open — needs a decision, not a fix.**
+**Found:** 2026-09-19, P2a Task 2 ruling. **Resolved 2026-11-11 (fix/b31-batch-d).**
 
 P2a threads the provider-reported cached prompt-token count through to the response so
 the meter can persist it. It is exposed as a **flat** key:
@@ -2206,10 +2208,12 @@ deprecated duplicate for one release), or document the flat key as intentional. 
 `consumer-contract-tests` skill — this is exactly the class of wire-shape drift it exists
 to catch.
 
-## B42 — `SignalStore` reports `samples: 0` on the `disabled` path even when observations exist
+**Resolved:** 2026-11-11. Decided: emit the nested shape and keep the flat key as a deprecated duplicate. `_wire_usage` (`app/api/routes.py`), the one chokepoint for the non-stream body and the stream terminal usage frame, now adds `usage.prompt_tokens_details.cached_tokens` when the provider reported a count, and omits `prompt_tokens_details` entirely when it did not (no null; B75). `cached_prompt_tokens` stays, documented as deprecated in `docs/reference/api-reference.md`, to be removed in a later release. `completion_tokens_details.reasoning_tokens` is not emitted: the count exists only on `GenerationResult` (it feeds the outcome row), not on the response `usage`, and the ruling was not to widen the plumbing. Consumer-contract tests (SDK-validated): `tests/test_openai_compat.py::test_usage_*`, `tests/test_stream_include_usage.py::test_terminal_usage_frame_*`.
+
+## B42 — `SignalStore` reports `samples: 0` on the `disabled` path even when observations exist  ✅ RESOLVED (2026-11-11)
 
 **Severity:** trivial (cosmetic honesty gap in the scoring record)
-**Found:** 2026-09-19, P2a Task 4 review. **Open.**
+**Found:** 2026-09-19, P2a Task 4 review. **Resolved 2026-11-11 (fix/b31-batch-d).**
 
 `app/routing/signals.py`'s `latency()` and `availability()` return early when
 `signals.enabled` is false:
@@ -2229,6 +2233,8 @@ Defensible as "zero signals were consulted", but it is inconsistent with the two
 sibling paths and slightly understates what an operator would recover by flipping
 `signals.enabled` back on. Either report the true count, or document the `0` as "consulted",
 in the type.
+
+**Resolved:** 2026-11-11. Report the true count. `latency()` / `availability()` on the `disabled` path now return the store's real `latency_n` / `availability_n`, matching `tier_default` / `neutral`. The value is still the default, so the count is informational and recomputing from `sp.scoring` is unaffected. Test: `tests/routing/test_signals.py::test_disabled_still_reports_the_true_sample_count`.
 
 ## B41 — streaming requests feed no routing-signal observations at all  ✅ RESOLVED (2026-09-21, `f582181`)
 
@@ -2603,11 +2609,11 @@ api container by every compose bundle) and set the field to that name. Related
 trap on the same form, already handled well: the slug must equal the endpoint's
 served model name, and the probe says so explicitly.
 
-## B31 — CLAUDE.md rule 2's "declared no-protection posture" isn't enforced for non-onprem_only apps
+## B31 — CLAUDE.md rule 2's "declared no-protection posture" isn't enforced for non-onprem_only apps  ✅ RESOLVED (2026-11-11)
 
 **Severity:** medium (spec/code mismatch — either the rule overstates what is enforced,
 or the `capture_io=full` clamp is missing a condition)
-**Found:** 2026-09-11, final whole-branch review of PR #39 (docs-reclassification). **Open.**
+**Found:** 2026-09-11, final whole-branch review of PR #39 (docs-reclassification). **Resolved 2026-11-11 (fix/b31-batch-d).**
 
 CLAUDE.md rule 2 says raw capture (`capture_io="full"`) requires "the app to be in a
 declared no-protection posture." `app/api/admin_routes.py`'s clamp (`~648-661`) enforces
@@ -2622,6 +2628,8 @@ enforces, or the clamp is missing a residency-independent posture check. This is
 *why* the `docs/guides/faq.md` line fixed elsewhere in this same review read as plausible
 before the fix — the code really does let an `enforced` app hold `capture_io=full` once
 it is not `onprem_only`.
+
+**Resolved:** 2026-11-11. Raw capture now needs a declared no-protection posture at every residency, defined once by `app/policy/compile.py::has_no_protection_posture`. `compile_policy` denies a `full` without it to `redacted` (`capture_full_refused`), and `validate_effective` refuses the write with `CAPTURE_FULL_NEEDS_NO_PROTECTION`, which replaces the onprem-only `CAPTURE_FULL_ONPREM_NEEDS_NO_PROTECTION` (the code was never on the wire). `_finalize` (`app/api/routes.py`) now reads capture from the compiled policy, so a row saved before this change is served as `redacted` until re-saved, never failed and never exported raw. B31 only tightens: for `onprem_only` the rule is unchanged (raw/raw only; `pii_detection: off` alone still refused, test `test_b31_onprem_pii_off_full_is_still_refused`); every other residency needs raw/raw or the app's own `pii_detection: off`. The compiled policy applies only the residency-independent half (placement never alters a compiled protection value); the `onprem_only` half is write-time, as before. Golden table contract updated. The console capture control uses the same predicate and flags a stored `full` served as `redacted`. Tests: `tests/test_admin_api.py::test_b31_*`, `tests/test_capture_io.py::test_b31_*`, `tests/test_policy_golden_table.py`.
 
 ## B26 — Catch-all exception handler in the request path logs nothing  ✅ RESOLVED (2026-11-05, fix/ops-batch-b62)
 

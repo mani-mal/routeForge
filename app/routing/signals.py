@@ -153,9 +153,12 @@ class SignalStore:
 
     def latency(self, model: str, tier: str, *, now: float | None = None) -> SignalValue:
         default = self._tier_default(tier)
-        if not self._cfg.enabled:
-            return SignalValue(default, "disabled", 0)
         st = self._state.get(model)
+        if not self._cfg.enabled:
+            # The default is used, but the count is the TRUE one -- consistent
+            # with tier_default/neutral, and what flipping signals back on
+            # would recover (B42). Informational only; it never moves `value`.
+            return SignalValue(default, "disabled", 0 if st is None else st.latency_n)
         if st is None or st.latency_n < self._cfg.min_samples:
             return SignalValue(default, "tier_default", 0 if st is None else st.latency_n)
         if self._now(now) - st.latency_ts > self._cfg.staleness_s:
@@ -167,9 +170,9 @@ class SignalStore:
         return SignalValue(st.latency_ms, "measured", st.latency_n)
 
     def availability(self, model: str, *, now: float | None = None) -> SignalValue:
-        if not self._cfg.enabled:
-            return SignalValue(1.0, "disabled", 0)
         st = self._state.get(model)
+        if not self._cfg.enabled:
+            return SignalValue(1.0, "disabled", 0 if st is None else st.availability_n)
         if st is None or st.availability_n < self._cfg.min_samples:
             return SignalValue(1.0, "neutral", 0 if st is None else st.availability_n)
         v = self._decayed_availability(st, self._now(now))

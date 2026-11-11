@@ -40,7 +40,9 @@ Two requirements to know about:
 
 - **`capture_io: "full"` needs the app's own provisioned Langfuse project.** Raw I/O is
   tenant-isolated — it never lands in the shared project. Attach one with
-  `PUT /admin/applications/{app_id}/langfuse` first, or the policy write is a 422.
+  `PUT /admin/applications/{app_id}/langfuse` first, or the policy write is a 422. It
+  also needs a declared no-protection posture at any residency — `passthrough`; or,
+  off-prem only, the app's own `pii_detection: "off"`.
 - **`capture_io: "redacted"` needs a detector.** It is rejected only when the app's
   effective `pii_detection` resolves to `off` — which is what a `passthrough` app that
   names no detector inherits. A `passthrough` app that *does* name
@@ -120,13 +122,12 @@ behaviour they needed — so it was replaced by an explicit `policy_mode` (CLAUD
 
 **What has not changed, and will not:**
 
-- An `onprem_only` app in `enforced` posture — one that has *not* declared a
-  no-protection posture — still cannot reach `capture_io=full`. Raw capture of a
-  protected, on-prem-confined app was never sensible. A non-`onprem_only` app in
-  `enforced` posture already can hold `capture_io=full` (own project required) — that
-  is exactly the side effect the next question walks through. Spelled on the axes, the
-  `onprem_only` condition is now `model_input: "raw"` **and** `client_output: "raw"`,
-  which is exactly what `policy_mode: "passthrough"` resolves to. See
+- An app in `enforced` posture — one that has *not* declared a no-protection posture —
+  still cannot reach `capture_io=full`, at any residency (since B31, 2026-11-11; before
+  that only `onprem_only` apps were checked). Raw capture of a protected app was never
+  sensible. Spelled on the axes, the posture is `model_input: "raw"` **and**
+  `client_output: "raw"` (exactly what `policy_mode: "passthrough"` resolves to); for a
+  non-`onprem_only` app the app's own `pii_detection: "off"` also qualifies. See
   [the full-capture rule](./choosing-app-settings.md#the-full-capture-rule) — one rule,
   same wording in every guide.
 - `capture_io=redacted` is still rejected when `pii_detection` resolves to `off`:
@@ -167,8 +168,10 @@ The valid residency values are `any`, `private_cloud_ok`, and `onprem_only`. Any
 other than `onprem_only` allows the enabled cloud providers into the routing pool. So
 moving off `onprem_only` does two things at once:
 
-1. ✅ Unlocks `capture_io=full`. (`pii_detection=off` never required this flip — it is
-   available while `onprem_only`, with `capture_io=off`.)
+1. ✅ Unlocks `capture_io=full` for a `pii_detection=off` app: off-prem, detection off
+   counts as a declared no-protection posture; at `onprem_only` only `passthrough` does.
+   (Since B31, 2026-11-11, an `enforced` app with a detector running gets no `full` at
+   any residency.)
 2. ⚠️ **Removes the on-prem lock.** If any cloud provider is enabled
    (`azure`/`bedrock` in `config/serving.yaml`), the router is now free to send that
    customer's traffic to cloud — off their infrastructure. That contradicts "on-prem

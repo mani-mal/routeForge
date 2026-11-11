@@ -48,6 +48,7 @@ from app.obs.redact import redacted_copy
 from app.obs.scores import SCORE_NAMES, ensure_score_config, post_score
 from app.output.streaming_verify import StreamingVerifier
 from app.pipeline import PipelineRejected, StreamFallback
+from app.policy.compile import compile_policy
 from app.policy.context import requestable_models
 from app.policy.enums import STREAM_MODES
 
@@ -657,12 +658,22 @@ def _opt_int(v: object) -> int | None:
 
 
 def _wire_usage(usage):
-    """B75: the client-facing usage keeps its pre-B75 wire value. An unreported
-    cached count (None, kept internally and in usage_records) goes out as 0 --
-    strict clients may reject null on a number field."""
-    if isinstance(usage, dict) and usage.get("cached_prompt_tokens", 0) is None:
+    """The client-facing `usage` object: the ONE place its wire shape is set,
+    for the non-stream body and the stream's terminal usage frame alike.
+
+    B43: a known provider prompt-cache count goes out in OpenAI's nested shape,
+    `prompt_tokens_details.cached_tokens` -- the shape RouteForge itself reads
+    upstream. The flat `cached_prompt_tokens` is still sent beside it,
+    DEPRECATED, to be removed in a later release. An unreported count (None,
+    B75: unknown is not 0) emits no `prompt_tokens_details` at all rather than
+    a null a strict client might reject, and the flat key keeps its pre-B75
+    wire value, 0."""
+    if not isinstance(usage, dict) or "cached_prompt_tokens" not in usage:
+        return usage
+    cached = usage["cached_prompt_tokens"]
+    if cached is None:
         return {**usage, "cached_prompt_tokens": 0}
-    return usage
+    return {**usage, "prompt_tokens_details": {"cached_tokens": int(cached)}}
 
 
 def _stream_usage(body: ChatRequest, usage: object) -> dict | None:
@@ -1095,7 +1106,11 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
         # The raw body prompt is redacted inside export_trace for `redacted`
         # mode — routes.py never decides what leaves; the exporter path does.
         # Per-app capture_io (B14) overrides the global default; null = inherit.
-        capture_io = app_policy.capture_io or s.serving.observability.langfuse.capture_io
+        # Read off the COMPILED policy, not the stored column: `compile_policy`
+        # denies a `full` the app has no declared no-protection posture for to
+        # `redacted` (B31), so a row saved before that rule applied at every
+        # residency is served redacted -- never failed, never exported raw.
+        capture_io = compile_policy(app_policy, s).protection.telemetry_io
         # NO residency clamp here any more (design §2.6, CE-1). It used to turn
         # `full` into `redacted` for ANY onprem_only app whatever its
         # policy_mode -- and the `redacted` path then re-exported the gate's
@@ -1104,7 +1119,7 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
         # that did not protect. Placement and protection are separate axes
         # (CLAUDE.md rule 2a); `residency` decides where compute may run and
         # nothing else. What `full` still requires -- the app's own Langfuse
-        # project, and a declared no-protection posture for an onprem_only app
+        # project, and a declared no-protection posture (at any residency, B31)
         # -- is checked once, at write time, by `validate_effective`
         # (app/policy/compile.py), and enforced again independently at the
         # export boundary by `export_trace`/`resolve_capture_io`, which is
@@ -1668,7 +1683,7 @@ def _stream_unverified_response(
                     get_meta=get_meta, meta=meta, body=body, tenant=tenant,
                     app_policy=app_policy, app_langfuse=app_langfuse,
                     profile=profile, session_id=session_id, s=s,
-                    internals=internals, started_ns=started_ns,
+                    internals=internals, started=started, started_ns=started_ns,
                     workload=workload, workload_source=workload_source,
                     outcome_session=outcome_session,
                     requested_alias=requested_alias)
@@ -1759,7 +1774,7 @@ def _incremental_verify_response(
                     internals=internals,
                     verify_performed=True, verify_reason="incremental",
                     client_text="".join(released),
-                    started_ns=started_ns,
+                    started=started, started_ns=started_ns,
                     workload=workload, workload_source=workload_source,
                     outcome_session=outcome_session,
                     requested_alias=requested_alias)
@@ -1776,6 +1791,7 @@ async def _finalize_stream(
         verify_performed: bool = False,
         verify_reason: str = "waived: stream_unverified",
         client_text: str | None = None,
+        started: float | None = None,
         started_ns: int | None = None,
         workload: str | None = None,
         workload_source: str = "none",
@@ -1798,6 +1814,8 @@ async def _finalize_stream(
     On a mid-stream disconnect `meta` is None (the generator never reached
     `get_meta`); we best-effort drain the remaining backend deltas so the final
     accounting (cost, tokens, decision) is recovered rather than silently lost.
+    If the backend fails during that drain, the request is metered `cancelled`
+    (B47) -- the client had already gone -- instead of writing nothing.
     run_stream only returns normally when the request is NOT onprem_only, NOT
     require_verification, and (if a tool conversation) only for the live-
     eligible shape (stream_unverified + client_output=raw), so
@@ -1811,8 +1829,25 @@ async def _finalize_stream(
                     pass
                 meta = get_meta()
             except Exception:
-                log.exception(
-                    "streaming: drain-on-disconnect failed (swallowed)")
+                # B47: the backend failed while the drain was recovering the
+                # accounting of a request whose client had ALREADY gone. That
+                # is `cancelled` (B78): nobody was left to receive an error.
+                # Meter it -- usage row, outcome row, failure trace -- rather
+                # than only log it. Shielded like the finalize below (B88).
+                log.warning("streaming: drain-on-disconnect failed for %s; "
+                            "metering it cancelled", request_id, exc_info=True)
+                chosen = getattr(get_meta, "chosen_model", None)
+                with anyio.CancelScope(shield=True):
+                    await _record_cancelled(
+                        request, tenant=tenant, request_id=request_id,
+                        started=started if started is not None else time.monotonic(),
+                        s=s, internals=internals,
+                        attempts=(chosen,) if chosen else (),
+                        workload=workload, workload_source=workload_source,
+                        outcome_session=outcome_session,
+                        requested_alias=requested_alias,
+                        app_langfuse=app_langfuse, session_id=session_id,
+                        started_ns=started_ns)
                 return
         resp = dict(meta)
         # The completion recorded/displayed == what the client actually
