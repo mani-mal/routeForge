@@ -4,7 +4,9 @@ image's baked-in copy at /app/config/serving.yaml via a subPath volume mount
 (see deployment-api.yaml) — routing.yaml/policy.yaml/pricing.yaml are left as
 shipped in the image since they aren't infra switches (see CLAUDE.md's config
 ownership table). Field names/shape must match app/config/loader.py's raw
-dict access exactly.
+dict access exactly. Each provider block carries litellm_prefix (the config
+lint's PROVIDER_NO_LITELLM_MAP fails the boot without it) and the *_env NAMES
+of the variables holding its endpoint/key (never the values).
 */}}
 apiVersion: v1
 kind: ConfigMap
@@ -14,18 +16,6 @@ metadata:
     {{- include "serving-plane.labels" . | nindent 4 }}
 data:
   serving.yaml: |
-    inference_backend: {{ .Values.servingPlane.inferenceBackend | quote }}
-    allow_backend_fallback: {{ .Values.servingPlane.allowBackendFallback }}
-
-    vllm:
-      base_url: {{ .Values.servingPlane.vllm.baseUrl | quote }}
-      timeout_s: {{ .Values.servingPlane.vllm.timeoutS }}
-
-    dynamo:
-      endpoint: {{ .Values.servingPlane.dynamo.endpoint | quote }}
-      router_mode: {{ .Values.servingPlane.dynamo.routerMode | quote }}
-      timeout_s: {{ .Values.servingPlane.dynamo.timeoutS }}
-
     context_optimization:
       enabled: {{ .Values.servingPlane.contextOptimization.enabled }}
       mode: {{ .Values.servingPlane.contextOptimization.mode | quote }}
@@ -44,7 +34,6 @@ data:
 
     policy:
       pii_detection: {{ .Values.servingPlane.policy.piiDetection | quote }}
-      fail_closed: {{ .Values.servingPlane.policy.failClosed }}
 
     observability:
       langfuse:
@@ -56,12 +45,20 @@ data:
         redact_on_export: true   # mandatory — never make this settable
 
     providers:
-      onprem:
-        enabled: {{ .Values.servingPlane.providers.onprem.enabled }}
-      azure:
-        enabled: {{ .Values.servingPlane.providers.azure.enabled }}
-      bedrock:
-        enabled: {{ .Values.servingPlane.providers.bedrock.enabled }}
+{{- range $name, $p := .Values.servingPlane.providers }}
+      {{ $name }}:
+        enabled: {{ $p.enabled }}
+        litellm_prefix: {{ required (printf "servingPlane.providers.%s.litellmPrefix is required" $name) $p.litellmPrefix | quote }}
+        {{- with $p.apiBaseEnv }}
+        api_base_env: {{ . | quote }}
+        {{- end }}
+        {{- with $p.apiKeyEnv }}
+        api_key_env: {{ . | quote }}
+        {{- end }}
+        {{- with $p.apiVersionEnv }}
+        api_version_env: {{ . | quote }}
+        {{- end }}
+{{- end }}
 
     server:
       host: {{ .Values.servingPlane.server.host | quote }}

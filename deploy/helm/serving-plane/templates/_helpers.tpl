@@ -87,3 +87,10 @@ ui image ref.
 {{- define "serving-plane.uiImage" -}}
 {{- printf "%s:%s" .Values.image.ui.repository (.Values.image.ui.tag | default .Chart.AppVersion) -}}
 {{- end -}}
+
+{{/*
+Name of the Secret holding the admin console login (ADMIN_EMAIL/ADMIN_PASSWORD).
+*/}}
+{{- define "serving-plane.adminSecretName" -}}
+{{- printf "%s-admin" (include "serving-plane.fullname" .) -}}
+{{- end -}}

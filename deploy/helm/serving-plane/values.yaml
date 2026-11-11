@@ -1,12 +1,13 @@
 # Default values for serving-plane.
-# This is the demo-safe / CPU-only default: mock inference backend, regex PII
-# detection, Headroom compression off, no GPU nodes required anywhere.
+# This is the demo-safe / CPU-only default: regex PII detection, Headroom
+# compression off, no GPU nodes required anywhere. On-prem models are onboarded
+# at runtime (docs/guides/onboarding-models.md); this chart deploys no inference.
 #
 # Everything under `servingPlane:` maps 1:1 onto config/serving.yaml (see
-# templates/configmap.yaml) so switching backends/PII/compression/providers
-# never requires an image rebuild:
+# templates/configmap.yaml) so switching PII/compression/providers never
+# requires an image rebuild:
 #   helm upgrade serving-plane deploy/helm/serving-plane --reuse-values \
-#     --set servingPlane.inferenceBackend=vllm
+#     --set servingPlane.policy.piiDetection=regex
 
 nameOverride: ""
 fullnameOverride: ""
@@ -31,6 +32,17 @@ imagePullSecrets: []
 # - name: my-registry-cred
 
 # ---------------------------------------------------------------------------
+# Admin console login. The api seeds this admin at first boot (ADMIN_EMAIL /
+# ADMIN_PASSWORD, stored in the chart's admin Secret). Leave password empty to
+# have the chart generate a random one on first install and REUSE it on every
+# upgrade (looked up from the existing Secret). The literal `changeme` is
+# refused. Read it back with the command printed in NOTES.txt.
+# ---------------------------------------------------------------------------
+admin:
+  email: admin@routeforge.local
+  password: ""
+
+# ---------------------------------------------------------------------------
 # servingPlane: every knob in config/serving.yaml, settable here. Rendered
 # verbatim into the ConfigMap (templates/configmap.yaml) which overlays
 # /app/config/serving.yaml in the api Pod via a subPath mount — routing.yaml,
@@ -39,21 +51,12 @@ imagePullSecrets: []
 # table).
 # ---------------------------------------------------------------------------
 servingPlane:
-  inferenceBackend: mock        # mock | vllm | dynamo | none (mock = demo default, no GPU)
-  allowBackendFallback: true    # false => api exits non-zero if backend unreachable
-
-  vllm:
-    baseUrl: http://vllm:8000/v1
-    timeoutS: 60
-
-  dynamo:
-    endpoint: http://dynamo-frontend:8080
-    routerMode: kv
-    timeoutS: 60
-
   policy:
-    piiDetection: presidio       # presidio | regex | off
-    failClosed: true             # never relax this (CLAUDE.md rule 5)
+    # regex | presidio | off. Default is regex because the default image build
+    # (EXTRAS="observability,postgres") does not contain Presidio. `presidio`
+    # needs an image built with EXTRAS=observability,postgres,presidio (see the
+    # Dockerfile), otherwise the api fails to start.
+    piiDetection: regex
 
   contextOptimization:
     enabled: false               # Headroom. Default OFF: demo shows before/after
@@ -69,16 +72,17 @@ servingPlane:
       residency: local_only      # NEVER external object store — hard rule 6
       ttlHours: 24
       exportToTelemetry: false   # must stay false
-      # Inside-cluster PVC sizing/class for the CCR store. Only provisioned
-      # when contextOptimization.enabled AND ccr.enabled are both true.
-      storageClassName: ""       # "" = cluster default; set explicitly on GreenLake
-      size: 20Gi
     cacheAlignment: true
 
+  # Provider availability plus the LiteLLM transport each one egresses through.
+  # Same shape and defaults as config/serving.yaml. litellmPrefix is required
+  # (the boot lint rejects an enabled provider without it); the *Env fields are
+  # the NAMES of env vars holding the endpoint/key -- set the values themselves
+  # via extraEnv (valueFrom.secretKeyRef), never here.
   providers:
-    onprem:  {enabled: true}
-    azure:   {enabled: false}
-    bedrock: {enabled: false}
+    onprem:  {enabled: true,  litellmPrefix: openai, apiKeyEnv: SP_ONPREM_API_KEY}
+    azure:   {enabled: false, litellmPrefix: azure, apiBaseEnv: AZURE_API_BASE, apiKeyEnv: AZURE_API_KEY, apiVersionEnv: AZURE_API_VERSION}
+    bedrock: {enabled: false, litellmPrefix: bedrock}
 
   server:
     host: 0.0.0.0
@@ -115,12 +119,12 @@ langfuse:
     secretKey: ""
 
 # ---------------------------------------------------------------------------
-# GPU gating. Only ever applied to a workload when servingPlane.inferenceBackend
-# is vllm or dynamo. The default (mock/none) path schedules on ordinary CPU
-# nodes — nothing in this chart requires a GPU node by default.
+# GPU gating. Only ever applied to the optional vllmStub workload below. The
+# default path schedules on ordinary CPU nodes — nothing in this chart requires
+# a GPU node by default.
 #
 # The api/ui Deployments never receive these — they're CPU services that talk
-# to vLLM/Dynamo over HTTP. This section only feeds the optional Phase-9 stub
+# to an operator-run vLLM/Dynamo endpoint over HTTP. This section only feeds the optional Phase-9 stub
 # Deployment below (and is documented here so a real vLLM/Dynamo Deployment
 # added later has the plumbing ready).
 # ---------------------------------------------------------------------------
@@ -141,8 +145,7 @@ gpuWorkload:
 # Values-gated PLACEHOLDER Deployment for the on-prem GPU serving path
 # (vLLM/Dynamo). Real workload arrives in Phase 9 — see the inference-backends
 # skill and NVIDIA's own Dynamo K8s recipes (don't hand-roll that Deployment).
-# Disabled by default; enabling it only makes sense once inferenceBackend is
-# vllm or dynamo, and it will need nodeSelector/tolerations from gpuWorkload
+# Disabled by default; it will need nodeSelector/tolerations from gpuWorkload
 # above set to match real GPU nodes before it can schedule.
 vllmStub:
   enabled: false
