@@ -17,6 +17,12 @@ Writes `matrix.jsonl`, `choices.jsonl`, `metrics.json`, `report.md` and
 adds `groups.json` and `groups.md`: every metric by placement, protection,
 application and workload.
 
+`--floor-bounds FILE` adds the `router_floor` arm (B80): the router with
+quality floors on `enforce` and the lower bounds `scripts/floor_fit.py`
+fitted on the calibration half of the suite; `--floor-split heldout` scores
+every arm on the other half only. Its comparison lands in `metrics.json`'s
+`router_floor` section and report.md -- a negative result included.
+
 `--candidate FILE` is the offline router-version check: it scores a candidate
 routing overlay beside the current routing config over the same sweep and
 writes `check.json` and `check.md`. It applies nothing and promotes nothing --
@@ -102,6 +108,16 @@ def _parser() -> argparse.ArgumentParser:
                    help="with --candidate: the range's level (default 0.90)")
     p.add_argument("--check-seed", type=int, default=None,
                    help="with --candidate: the resampling seed (default 0)")
+    p.add_argument("--floor-bounds", default=None,
+                   help="a routeforge.floor-bounds/v1 file (scripts/floor_fit.py): "
+                        "adds the router_floor arm -- the router with quality floors "
+                        "on enforce and these lower bounds")
+    p.add_argument("--floor-split", default=None, choices=("heldout",),
+                   help="with --floor-bounds: score only the held-out half of the "
+                        "seeded workload-stratified split (every arm)")
+    p.add_argument("--split-seed", type=int, default=None,
+                   help="with --floor-split: the split seed (default and required "
+                        "value: the bounds file's seed)")
     return p
 
 
@@ -171,7 +187,9 @@ def main(argv: list[str] | None = None) -> int:
         group_report=args.group_report,
         min_group_size=(DEFAULT_MIN_GROUP_SIZE if args.min_group_size is None
                         else args.min_group_size),
-        candidate_path=args.candidate, check_plan=check_plan))
+        candidate_path=args.candidate, check_plan=check_plan,
+        floor_bounds_path=args.floor_bounds, floor_split=args.floor_split,
+        split_seed=args.split_seed))
     if result.exit_code != 1:
         print(f"feasible_bench: results in {result.out_dir} (exit {result.exit_code})")
     if result.check is not None:
