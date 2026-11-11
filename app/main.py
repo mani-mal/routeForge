@@ -22,6 +22,8 @@ from app.api.bus import DecisionBus
 from app.api.openai_errors import CODE_INVALID_REQUEST, error_payload
 from app.api.pg_bridge import PgDecisionBridge
 from app.apps.admin_auth import SessionStore
+from app.apps.auth_cache import AuthCache
+from app.apps.snapshot_writer import SnapshotWriter
 from app.apps.bootstrap import seed_all
 from app.apps.db import Database, missing_schema_columns
 from app.apps.policy import RateLimiter
@@ -391,6 +393,27 @@ def create_app() -> FastAPI:
     app.state.replica_id = uuid.uuid4().hex
     app.state.bridge = PgDecisionBridge(
         app.state.db, app.state.bus, replica_id=app.state.replica_id)
+    # B86: the console snapshot write is off the response path -- buffered and
+    # written in batches, pruned every 100 writes, flushed on shutdown and
+    # before this process's own console reads (app/apps/snapshot_writer.py).
+    # It also sends the cross-replica NOTIFY, inside the write transaction.
+    app.state.snapshot_writer = SnapshotWriter(
+        app.state.db, capacity=apps_store.SNAPSHOT_CAPACITY, bridge=app.state.bridge)
+    # B86: per-process token cache (app/apps/auth_cache.py). Any committed
+    # write to an app, its policy or a token through this Database clears it.
+    app.state.auth_cache = AuthCache(settings.serving.auth_cache_ttl_s)
+    app.state.db.on_auth_change(app.state.auth_cache.clear)
+
+    @app.on_event("startup")
+    async def _start_snapshot_writer() -> None:
+        app.state.snapshot_writer.start()
+
+    @app.on_event("shutdown")
+    async def _stop_snapshot_writer() -> None:
+        """Flush every buffered snapshot before the process exits. Runs
+        before the bridge stops (shutdown handlers run in registration
+        order), so the final batch's NOTIFY still goes out."""
+        await app.state.snapshot_writer.stop()
 
     @app.on_event("shutdown")
     async def _stop_bridge() -> None:

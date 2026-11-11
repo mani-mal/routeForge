@@ -9,10 +9,13 @@ import datetime as dt
 import os
 import uuid
 
-from sqlalchemy import String, and_, case, cast, delete, exists, func, or_, select
+from sqlalchemy import (
+    String, and_, case, cast, delete, exists, func, or_, select, update,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.apps.db import AUTH_STAMP_OPTION
 from app.apps.models import (
     Application, AppPolicy, AppRecognizer, AppSensitivityRule, AppToken,
     EndpointObservation, ModelQuality, OnboardedModel, OutcomeFeedback,
@@ -31,17 +34,15 @@ from app.routing.observations import Observation
 _SERVED_ONPREM_PROVIDERS = ("onprem", "mock")
 
 
-async def resolve_application(session: AsyncSession, raw_token: str | None,
-                              session_id: str | None = None
-                              ) -> Application | None:
-    """Resolve a bearer token to its application, or None. **Fail closed:**
-    returns None for an empty/unknown/revoked/expired token, a token bound to a
-    session other than `session_id` (the call's sanitized
-    `x-routeforge-session`; a missing header never matches a binding), or a
-    disabled application — the caller rejects with 401. Never falls back to a
-    default tenant.
-
-    Side effect: stamps the token's `last_used_at` (caller commits)."""
+async def resolve_token(session: AsyncSession, raw_token: str | None,
+                        session_id: str | None = None) -> AppToken | None:
+    """Resolve a bearer token to its active `AppToken` (application and policy
+    eager-loaded), or None. **Fail closed:** returns None for an
+    empty/unknown/revoked/expired token, a token bound to a session other than
+    `session_id` (the call's sanitized `x-routeforge-session`; a missing header
+    never matches a binding), or a disabled application -- the caller rejects
+    with 401. Never falls back to a default tenant. No side effects: the
+    caller decides whether to stamp `last_used_at` (B86 throttles it)."""
     if not raw_token:
         return None
     token_hash = hash_token(raw_token)
@@ -61,15 +62,42 @@ async def resolve_application(session: AsyncSession, raw_token: str | None,
         return None
     if token.application.status != "active":
         return None
+    return token
+
+
+async def resolve_application(session: AsyncSession, raw_token: str | None,
+                              session_id: str | None = None
+                              ) -> Application | None:
+    """`resolve_token`'s application, or None (same fail-closed rules).
+
+    Side effect: stamps the token's `last_used_at` (caller commits)."""
+    token = await resolve_token(session, raw_token, session_id=session_id)
+    if token is None:
+        return None
     token.last_used_at = utcnow()
     return token.application
 
 
+async def stamp_token_used(session: AsyncSession, token_id: str) -> None:
+    """Set one token's `last_used_at` to now with a single UPDATE (caller
+    commits). Marked so it does not clear the auth cache (app/apps/db.py)."""
+    await session.execute(
+        update(AppToken).where(AppToken.id == token_id)
+        .values(last_used_at=utcnow())
+        .execution_options(**{AUTH_STAMP_OPTION: True}))
+
+
+def expired_at(expires_at: dt.datetime | None, now: dt.datetime | None = None) -> bool:
+    """True once `expires_at` (if any) has been reached. Reads `utcnow` at call
+    time, so the auth cache's per-hit expiry check uses the same clock."""
+    if expires_at is None:
+        return False
+    return (now or utcnow()) >= _to_utc(expires_at)
+
+
 def token_expired(token: AppToken, now: dt.datetime | None = None) -> bool:
     """True once a token with an `expires_at` has reached it."""
-    if token.expires_at is None:
-        return False
-    return (now or utcnow()) >= _to_utc(token.expires_at)
+    return expired_at(token.expires_at, now)
 
 
 async def resolve_service_credential(session: AsyncSession, raw: str | None
@@ -405,12 +433,16 @@ SNAPSHOT_CAPACITY = int(os.environ.get("SP_SNAPSHOT_CAPACITY", "500"))
 
 async def record_snapshot(session: AsyncSession, *, request_id: str,
                           application_id: str, summary_json: dict,
-                          full_json: dict) -> RequestSnapshot:
+                          full_json: dict,
+                          ts: dt.datetime | None = None) -> RequestSnapshot:
     """Upsert-by-write one request snapshot (caller commits). Newer writes for
-    the same request_id replace the row (merge on PK)."""
+    the same request_id replace the row (merge on PK). `ts` is when the request
+    was served; the buffered writer (B86) passes it so a batch written later
+    keeps each request's own time and order. None = now."""
     row = RequestSnapshot(
         request_id=request_id, application_id=application_id,
-        summary_json=summary_json, full_json=full_json)
+        summary_json=summary_json, full_json=full_json,
+        ts=ts or utcnow())
     await session.merge(row)
     return row
 

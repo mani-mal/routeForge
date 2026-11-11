@@ -98,6 +98,10 @@ def lint_settings(s: Settings) -> list[str]:
     if sig.max_seed_obs_per_model < 1:
         errs.append(f"SIGNALS_MAX_SEED_OBS_NOT_POSITIVE {sig.max_seed_obs_per_model}")
 
+    # B86: the auth-cache TTL may be 0 (disabled) but never negative.
+    if s.serving.auth_cache_ttl_s < 0:
+        errs.append(f"AUTH_CACHE_TTL_NEGATIVE {s.serving.auth_cache_ttl_s}")
+
     # Step-7 circuit breaker (routing.yaml `breaker`). Zero/negative values
     # would open a circuit on no failures or never let it recover.
     brk = s.routing.breaker

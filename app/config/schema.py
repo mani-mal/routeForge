@@ -389,6 +389,10 @@ class ServingCfg(BaseModel):
     # same upgrade-safety reason as stream_keepalive_s above: a mounted
     # serving.yaml that predates this feature has no such key.
     derive_session_id: bool = True
+    # B86: per-process token cache TTL, seconds (app/apps/auth_cache.py).
+    # 0 disables it. Defaulted for the upgrade-safety reason above; a negative
+    # value is a named lint error (AUTH_CACHE_TTL_NEGATIVE), not a load error.
+    auth_cache_ttl_s: float = 5.0
     context_optimization: ContextOptimizationCfg
     memory: MemoryCfg = MemoryCfg()
     # Optional/defaulted like `memory` and `context_optimization`: a mounted

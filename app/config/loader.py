@@ -187,6 +187,7 @@ def load_settings(config_dir: str = "config") -> Settings:
         reject_stream_requests=serving_raw["server"]["reject_stream_requests"],
         stream_keepalive_s=float(serving_raw["server"].get("stream_keepalive_s", 5.0)),
         derive_session_id=bool(serving_raw["server"].get("derive_session_id", True)),
+        auth_cache_ttl_s=float(serving_raw["server"].get("auth_cache_ttl_s", 5.0)),
         context_optimization=ContextOptimizationCfg(
             enabled=co_enabled,
             mode=co_raw["mode"],
