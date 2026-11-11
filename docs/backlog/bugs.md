@@ -2501,7 +2501,9 @@ cause.
 
 ---
 
-## B33 — Per-app Langfuse credentials form always looks like "add new", never "edit existing", and never checks what it saves
+## B33 — Per-app Langfuse credentials form always looks like "add new", never "edit existing", and never checks what it saves  ✅ RESOLVED (2026-11-11, fix/b33-langfuse-creds-form)
+
+**Resolved 2026-11-11 (fix/b33-langfuse-creds-form):** all four fix ideas shipped: non-secret read-back (`GET .../langfuse`), partial `PUT`, verify-on-save from the API process (`?verify=false` for air-gapped), `DELETE` (refused while `capture_io` resolves to `full`), and a summary/Edit/Remove console form. See `docs/guides/langfuse-per-app-projects.md`.
 
 **Severity:** low–medium (UX; no privacy impact — raw capture still only goes to
 the app's own project). Hit by every operator who sets per-app Langfuse credentials.

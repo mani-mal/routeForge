@@ -23,7 +23,7 @@ def _make_app_with_langfuse(client, app_id: str):
     r = client.post("/admin/applications", json={"id": app_id, "name": app_id})
     assert r.status_code == 200, r.text
     token = r.json()["token"]
-    lf = client.put(f"/admin/applications/{app_id}/langfuse", json={
+    lf = client.put(f"/admin/applications/{app_id}/langfuse?verify=false", json={
         "host": "http://airgap:3000", "public_key": "pk", "secret_key": "sk",
         "project_id": "proj_air"})
     assert lf.status_code == 200, lf.text

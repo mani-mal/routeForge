@@ -276,27 +276,28 @@ class PolicyIn(BaseModel):
 
 
 class LangfuseCredsIn(BaseModel):
-    # Every field is load-bearing for the capture_io='full' eligibility check
-    # (`load_app_langfuse(app) is not None`, `has_langfuse_keys`). A blank or
-    # whitespace-only value would still encrypt to a non-empty Fernet token and
-    # silently unlock 'full' capture with no valid sink — reject fail-closed.
-    host: str = Field(min_length=1)
-    public_key: str = Field(min_length=1)
-    secret_key: str = Field(min_length=1)
-    project_id: str = Field(min_length=1)
+    """Partial update (B33): any subset of the four fields; an omitted field
+    keeps its stored value, `secret_key` omitted = keep the stored secret.
+    A supplied value that is blank or whitespace-only is a 422 -- a blank would
+    still encrypt to a non-empty Fernet token and silently unlock 'full'
+    capture with no valid sink (fail closed)."""
+    host: str | None = None
+    public_key: str | None = None
+    secret_key: str | None = None
+    project_id: str | None = None
 
     @field_validator("host", "public_key", "secret_key", "project_id")
     @classmethod
-    def _not_blank(cls, v: str) -> str:
-        if not v.strip():
+    def _not_blank(cls, v: str | None) -> str | None:
+        if v is not None and not v.strip():
             raise ValueError("must not be blank")
         return v
 
     @field_validator("host")
     @classmethod
-    def _host_is_url(cls, v: str) -> str:
+    def _host_is_url(cls, v: str | None) -> str | None:
         # Mirror onboard_model's endpoint check (~admin_routes.py:431).
-        if not re.match(r"^https?://", v):
+        if v is not None and not re.match(r"^https?://", v):
             raise ValueError("host must be an http(s) URL")
         return v
 
@@ -561,26 +562,139 @@ async def update_application(app_id: str, body: UpdateAppIn, request: Request,
         return _app_dict(full, settings=request.app.state.settings)
 
 
+def _langfuse_http_client():
+    """Outbound client for verify-on-save. A seam so tests never touch the network."""
+    import httpx
+    return httpx.AsyncClient(timeout=5.0)
+
+
+async def _verify_langfuse_creds(host: str, public_key: str, secret_key: str,
+                                 project_id: str) -> None:
+    """Check the pair from THIS process (B33): reachable, accepted, and the
+    pair's project is `project_id`. Raises HTTPException(422). Messages are built
+    only from host / status / project ids -- never the secret."""
+    import httpx
+    url = host.rstrip("/") + "/api/public/projects"
+    try:
+        async with _langfuse_http_client() as c:
+            r = await c.get(url, auth=(public_key, secret_key))
+    except (httpx.HTTPError, OSError):
+        raise HTTPException(
+            422, f"host {host} is not reachable from the RouteForge API process "
+                 "(use the address the API container can reach, not the browser URL)")
+    if r.status_code in (401, 403):
+        raise HTTPException(422, "Langfuse rejected these keys")
+    if r.status_code != 200:
+        raise HTTPException(422, f"Langfuse returned HTTP {r.status_code}")
+    try:
+        ids = [str(x.get("id")) for x in (r.json().get("data") or [])]
+    except Exception:
+        raise HTTPException(422, "Langfuse returned HTTP 200 with an unreadable body")
+    if project_id not in ids:
+        found = ", ".join(ids) if ids else "no project"
+        raise HTTPException(
+            422, f"these keys belong to project {found}, not {project_id}")
+
+
+def _langfuse_summary(app) -> dict:
+    """Non-secret read-back (B33). The secret is never returned; its last 4
+    characters only when it is long enough (>= 12) that they reveal little."""
+    from app.apps.langfuse_provision import decrypt_secret
+    secret_set = bool(app.langfuse_secret_key_enc)
+    last4 = None
+    if secret_set:
+        try:
+            sk = decrypt_secret(app.langfuse_secret_key_enc)
+            if len(sk) >= 12:
+                last4 = sk[-4:]
+        except Exception:
+            last4 = None
+    return {"host": app.langfuse_host, "public_key": app.langfuse_public_key,
+            "project_id": app.langfuse_project_id, "secret_set": secret_set,
+            "secret_last4": last4}
+
+
+@admin_router.get("/applications/{app_id}/langfuse")
+async def get_langfuse_creds(app_id: str, request: Request,
+                             _: str = Depends(require_admin)) -> dict:
+    async with request.app.state.db.session() as session:
+        app = await store.get_application_with_policy(session, app_id)
+        if app is None:
+            raise HTTPException(404, "application not found")
+        return _langfuse_summary(app)
+
+
 @admin_router.put("/applications/{app_id}/langfuse")
 async def set_langfuse_creds(app_id: str, body: LangfuseCredsIn, request: Request,
+                             verify: bool = True,
                              _: str = Depends(require_admin)) -> dict:
     """Manual per-app Langfuse creds for an air-gapped operator who can't reach
     the org-scoped provisioning API (B15). Stored the same way auto-provisioning
     stores them (secret encrypted at rest via `encrypt_secret`), so once set,
     `load_app_langfuse(app)` returns non-None and the app becomes
     capture_io='full'-eligible under the existing Phase-B lint in `set_policy`.
+
+    Partial update; the merged set is verified against Langfuse from this
+    process before anything is stored (`?verify=false` skips that for
+    air-gapped setups and the response says `verified: false`).
     """
+    from app.apps.langfuse_provision import decrypt_secret
     async with request.app.state.db.session() as session:
-        app = await store.update_application(
-            session, app_id,
-            langfuse_host=body.host, langfuse_public_key=body.public_key,
-            langfuse_project_id=body.project_id,
-            langfuse_secret_key_enc=encrypt_secret(body.secret_key))
-        if app is None:
+        cur = await store.get_application_with_policy(session, app_id)
+        if cur is None:
             raise HTTPException(404, "application not found")
+        host = body.host or cur.langfuse_host
+        pub = body.public_key or cur.langfuse_public_key
+        pid = body.project_id or cur.langfuse_project_id
+        if body.secret_key:
+            sk = body.secret_key
+        elif cur.langfuse_secret_key_enc:
+            sk = decrypt_secret(cur.langfuse_secret_key_enc)
+        else:
+            sk = None
+        missing = [n for n, v in (("host", host), ("public_key", pub),
+                                  ("secret_key", sk), ("project_id", pid)) if not v]
+        if missing:
+            raise HTTPException(
+                422, "no stored value to keep for: " + ", ".join(missing))
+        if verify:
+            await _verify_langfuse_creds(host, pub, sk, pid)
+        await store.update_application(
+            session, app_id, langfuse_host=host, langfuse_public_key=pub,
+            langfuse_project_id=pid,
+            langfuse_secret_key_enc=(encrypt_secret(sk) if body.secret_key
+                                     else cur.langfuse_secret_key_enc))
         await session.commit()
         full = await store.get_application_with_policy(session, app_id)
-        return _app_dict(full, settings=request.app.state.settings)
+        out = _app_dict(full, settings=request.app.state.settings)
+        out["langfuse"] = _langfuse_summary(full)
+        out["verified"] = bool(verify)
+        return out
+
+
+@admin_router.delete("/applications/{app_id}/langfuse")
+async def delete_langfuse_creds(app_id: str, request: Request,
+                                _: str = Depends(require_admin)) -> dict:
+    """Remove the app's own Langfuse credential set. Refused while the app's
+    resolved capture_io is 'full': raw capture requires the own project
+    (CLAUDE.md rule 2) and removing it would strand that."""
+    settings = request.app.state.settings
+    async with request.app.state.db.session() as session:
+        app = await store.get_application_with_policy(session, app_id)
+        if app is None:
+            raise HTTPException(404, "application not found")
+        eff = compile_policy(policy_view_from(app), settings)
+        if eff.protection.telemetry_io == "full":
+            raise HTTPException(
+                422, "this app's capture_io resolves to 'full', which requires its own "
+                     "Langfuse project; set capture_io to redacted or off before "
+                     "removing the credentials")
+        await store.update_application(
+            session, app_id, langfuse_host=None, langfuse_public_key=None,
+            langfuse_project_id=None, langfuse_secret_key_enc=None)
+        await session.commit()
+        full = await store.get_application_with_policy(session, app_id)
+        return _app_dict(full, settings=settings)
 
 
 @admin_router.put("/applications/{app_id}/policy")

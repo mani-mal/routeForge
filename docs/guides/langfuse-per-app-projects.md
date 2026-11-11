@@ -214,6 +214,26 @@ Per application:
    The secret is encrypted at rest (`ENCRYPTION_KEY`). From then on that app's traces
    export to its own project; a request with no per-app creds still uses the shared one.
 
+   Details of the credential endpoint (B33):
+
+   - **Read back:** `GET /admin/applications/{app_id}/langfuse` returns `host`, `public_key`,
+     `project_id`, `secret_set` and `secret_last4` (only when the secret is at least 12
+     characters). The secret itself is never returned. The console shows this as a read-only
+     summary with **Edit** and **Remove**.
+   - **Partial update:** `PUT` accepts any subset of the four fields; an omitted field keeps its
+     stored value, and an omitted `secret_key` keeps the stored secret. A blank or
+     whitespace-only value is a 422.
+   - **Verified on save:** before storing, the API process calls
+     `GET {host}/api/public/projects` with the merged pair. A 422 names the failure: host not
+     reachable from the API process (use the address the API container can reach, not the browser
+     URL), keys rejected (401/403), keys belong to a different project, or another HTTP status.
+     Nothing is stored on failure. The response carries `verified: true`.
+   - **Air-gapped:** `PUT ...?verify=false` stores without checking (Langfuse not reachable at
+     save time); the response says `verified: false`.
+   - **Removal:** `DELETE /admin/applications/{app_id}/langfuse` removes the set. It is refused
+     with a 422 while the app's resolved `capture_io` is `full`, because raw capture requires the
+     app's own project (rule 2); set `capture_io` to `redacted` or `off` first.
+
 3. Verify: send one request as that app and confirm a trace lands in the project.
 
    ```bash
