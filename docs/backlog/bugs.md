@@ -2169,10 +2169,10 @@ deprecated duplicate for one release), or document the flat key as intentional. 
 `consumer-contract-tests` skill — this is exactly the class of wire-shape drift it exists
 to catch.
 
-## B42 — `SignalStore` reports `samples: 0` on the `disabled` path even when observations exist
+## B42 — `SignalStore` reports `samples: 0` on the `disabled` path even when observations exist  ✅ RESOLVED (2026-11-11)
 
 **Severity:** trivial (cosmetic honesty gap in the scoring record)
-**Found:** 2026-09-19, P2a Task 4 review. **Open.**
+**Found:** 2026-09-19, P2a Task 4 review. **Resolved 2026-11-11 (fix/b31-batch-d).**
 
 `app/routing/signals.py`'s `latency()` and `availability()` return early when
 `signals.enabled` is false:
@@ -2192,6 +2192,8 @@ Defensible as "zero signals were consulted", but it is inconsistent with the two
 sibling paths and slightly understates what an operator would recover by flipping
 `signals.enabled` back on. Either report the true count, or document the `0` as "consulted",
 in the type.
+
+**Resolved:** 2026-11-11. Report the true count. `latency()` / `availability()` on the `disabled` path now return the store's real `latency_n` / `availability_n`, matching `tier_default` / `neutral`. The value is still the default, so the count is informational and recomputing from `sp.scoring` is unaffected. Test: `tests/routing/test_signals.py::test_disabled_still_reports_the_true_sample_count`.
 
 ## B41 — streaming requests feed no routing-signal observations at all  ✅ RESOLVED (2026-09-21, `f582181`)
 
