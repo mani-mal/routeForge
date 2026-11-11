@@ -97,7 +97,7 @@ def test_default_render_generates_admin_password(name, chart, args, _key):
 
 
 def test_serving_plane_ui_nginx_points_at_api_service():
-    docs = _template(SERVING_PLANE)
+    docs = _template(SERVING_PLANE)  # _template renders with --namespace ns
     ui = next(d for d in _kind(docs, "Deployment")
               if d["metadata"]["name"].endswith("-ui"))
     pod = ui["spec"]["template"]["spec"]
@@ -108,9 +108,47 @@ def test_serving_plane_ui_nginx_points_at_api_service():
 
     cm = next(d for d in _kind(docs, "ConfigMap") if d["metadata"]["name"] == cm_names[0])
     conf = next(iter(cm["data"].values()))
-    api_svc = next(d for d in _kind(docs, "Service")
-                   if d["metadata"]["name"].endswith("-api"))["metadata"]["name"]
-    assert api_svc in conf
+    sub_paths = [m["subPath"] for m in mounts if m["mountPath"].startswith("/etc/nginx/conf.d/")]
+    assert sub_paths and all(sp in cm["data"] for sp in sub_paths)
+    svc = next(d for d in _kind(docs, "Service") if d["metadata"]["name"].endswith("-api"))
+    api_svc = svc["metadata"]["name"]
+    port = svc["spec"]["ports"][0]["port"]
+    assert f"{api_svc}.ns.svc.cluster.local:{port}" in conf
     assert "127.0.0.11" not in conf
     for loc in ("/api/stream", "/api/", "/v1/", "/admin/"):
         assert f"location {loc}" in conf
+
+
+# --reuse-values simulation. `helm upgrade --reuse-values` replaces the chart's
+# new defaults with the old release's stored values, so keys added in this
+# version (admin:, providers.*.litellmPrefix) are absent. `helm template` has
+# no such mode, so we null those keys out with --set (Helm deletes a key set to
+# null), which drives exactly the nil paths the templates must tolerate.
+REUSE_CASES = [
+    ("serving-plane", SERVING_PLANE,
+     ["--set", "admin=null"]),
+    ("hpe", HPE,
+     ["--set", "credentials.adminPassword=null", "--set", "credentials.adminEmail=null"]),
+]
+
+
+@pytest.mark.parametrize("name,chart,extra", REUSE_CASES, ids=[c[0] for c in REUSE_CASES])
+def test_renders_when_new_keys_are_missing_as_after_reuse_values(
+        name, chart, extra, tmp_path, monkeypatch):
+    args = [*extra]
+    for p in ("onprem", "azure", "bedrock"):
+        args += ["--set", f"servingPlane.providers.{p}.litellmPrefix=null"]
+    docs = _template(chart, *args)
+    cms = [d for d in _kind(docs, "ConfigMap") if "serving.yaml" in d.get("data", {})]
+    for f in ("routing.yaml", "policy.yaml", "pricing.yaml"):
+        shutil.copy(REPO / "config" / f, tmp_path / f)
+    (tmp_path / "serving.yaml").write_text(cms[0]["data"]["serving.yaml"])
+    import os
+    for var in list(os.environ):
+        if var.startswith(("SP_", "LANGFUSE_")):
+            monkeypatch.delenv(var)
+    settings = load_settings(str(tmp_path))
+    assert lint_settings(settings) == []
+    assert settings.serving.providers["onprem"].litellm_prefix == "openai"
+    assert any(len(d["stringData"]["ADMIN_PASSWORD"]) >= 20
+               for d in _kind(docs, "Secret") if "ADMIN_PASSWORD" in d.get("stringData", {}))

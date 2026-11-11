@@ -42,10 +42,13 @@ data:
         redact_on_export: true   # mandatory — never make this settable
 
     providers:
+{{- /* litellmPrefix defaults per known provider so a --reuse-values upgrade from an
+       older release (whose stored values lack it) still renders; unknown names must set it. */ -}}
+{{- $prefixDefaults := dict "onprem" "openai" "azure" "azure" "bedrock" "bedrock" }}
 {{- range $name, $p := .Values.servingPlane.providers }}
       {{ $name }}:
         enabled: {{ $p.enabled }}
-        litellm_prefix: {{ required (printf "servingPlane.providers.%s.litellmPrefix is required" $name) $p.litellmPrefix | quote }}
+        litellm_prefix: {{ required (printf "servingPlane.providers.%s.litellmPrefix is required" $name) ($p.litellmPrefix | default (get $prefixDefaults $name)) | quote }}
         {{- with $p.apiBaseEnv }}
         api_base_env: {{ . | quote }}
         {{- end }}

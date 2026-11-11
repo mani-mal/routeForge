@@ -40,10 +40,10 @@ set as container env vars (`SP_PII_DETECTION`, `SP_SERVER_PORT`,
 `SP_CONTEXT_OPT`), matching what `app/config/loader.py` reads from the environment.
 
 ```bash
-helm upgrade serving-plane deploy/helm/serving-plane --reuse-values \
+helm upgrade serving-plane deploy/helm/serving-plane --reset-then-reuse-values \
   --set servingPlane.policy.piiDetection=regex
 
-helm upgrade serving-plane deploy/helm/serving-plane --reuse-values \
+helm upgrade serving-plane deploy/helm/serving-plane --reset-then-reuse-values \
   --set servingPlane.contextOptimization.enabled=true \
   --set servingPlane.contextOptimization.ccr.enabled=true
 ```
@@ -54,7 +54,7 @@ whenever the rendered config changes.
 ## Admin login
 
 The api seeds an admin at first boot from `ADMIN_EMAIL` / `ADMIN_PASSWORD`, read from
-the chart's `<release>-serving-plane-admin` Secret. `admin.password` defaults to empty:
+the chart's `<fullname>-admin` Secret. `admin.password` defaults to empty:
 the chart generates a 24-character password on first install and reuses it on every
 upgrade. `changeme` is refused, including a `changeme` already stored in the Secret by an
 earlier install: set `--set admin.password=<new>` and also change the stored admin (the api
@@ -62,6 +62,15 @@ only seeds when no admin with that email exists), e.g. in the console. Read the 
 password with the command in NOTES.txt.
 
 ## Removed values (chart 0.2.0)
+
+Upgrading across this version: use `helm upgrade --reset-then-reuse-values` (Helm >= 3.14) or
+`-f` a fresh values file. Plain `--reuse-values` carries the old release's stored values, which
+lack the new `admin:` block and provider `litellmPrefix` keys (the chart tolerates both missing,
+but you would not get the new defaults, e.g. `piiDetection: regex`).
+
+GitOps / `helm template`-driven installs (ArgoCD) never see `lookup`, so a generated admin
+password would be regenerated on every sync and drift from the seeded login: set `admin.password`
+explicitly there.
 
 There is no changelog file; these keys were removed and no longer do anything. Delete them
 from your values files: `servingPlane.inferenceBackend`, `servingPlane.allowBackendFallback`,

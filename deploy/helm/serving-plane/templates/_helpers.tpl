@@ -89,6 +89,17 @@ ui image ref.
 {{- end -}}
 
 {{/*
+Nil-safe admin values: a `helm upgrade --reuse-values` from a release that
+predates the `admin:` block has no .Values.admin at all.
+*/}}
+{{- define "serving-plane.adminEmail" -}}
+{{- dig "admin" "email" "admin@routeforge.local" .Values.AsMap -}}
+{{- end -}}
+{{- define "serving-plane.adminPassword" -}}
+{{- dig "admin" "password" "" .Values.AsMap -}}
+{{- end -}}
+
+{{/*
 Name of the Secret holding the admin console login (ADMIN_EMAIL/ADMIN_PASSWORD).
 */}}
 {{- define "serving-plane.adminSecretName" -}}

@@ -6,7 +6,7 @@
 # Everything under `servingPlane:` maps 1:1 onto config/serving.yaml (see
 # templates/configmap.yaml) so switching PII/compression/providers never
 # requires an image rebuild:
-#   helm upgrade serving-plane deploy/helm/serving-plane --reuse-values \
+#   helm upgrade serving-plane deploy/helm/serving-plane --reset-then-reuse-values \
 #     --set servingPlane.policy.piiDetection=regex
 
 nameOverride: ""

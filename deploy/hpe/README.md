@@ -94,13 +94,19 @@ Edit these in `routeforge/values.yaml` (or in the wizard's Values step):
 | `imageCredentials.enabled` + `imageCredentials.password` | `true` + a `read:packages` **GHCR classic PAT** | always (GHCR is private) |
 | `image.registry` | `ghcr.io/mani-mal` (default) — or `harbor.ingress.<domain>/routeforge` for Harbor | only to switch off GHCR |
 | `global.storageClassName` | your PCAI StorageClass | if no cluster default |
-| `thirdPartyRegistry` | Harbor mirror prefix | **air-gapped** PCAI (no internet for langfuse/postgres/etc.) |
+| `thirdPartyRegistry` | Harbor mirror prefix | **air-gapped** PCAI (no internet for langfuse/postgres/etc.); re-mirror MinIO under the `quay.io/minio/*` path (images resolve to `<reg>/quay.io/minio/minio` and `.../mc`) |
 | `credentials.adminPassword` | a real password, or leave empty | optional: empty (default) => the chart generates one and keeps it across upgrades; `changeme` is refused |
 | `servingPlane.policy.piiDetection` | `regex` (default) or `presidio` | `presidio` needs an API image built with `EXTRAS=observability,postgres,presidio` |
 
 Everything else is demo-safe as shipped: CPU-only (no GPU), regex PII detection
 (the default image has no Presidio), compression off. No inference is deployed; onboard
 your own endpoint at runtime.
+
+**Upgrading across 0.3.0:** use `helm upgrade --reset-then-reuse-values` (Helm >= 3.14) or `-f`
+a fresh values file, not plain `--reuse-values` (the old stored values lack the new provider keys
+and defaults). Under GitOps / `helm template`-driven installs (ArgoCD) `lookup` is always empty,
+so set `credentials.adminPassword` (or `credentials.existingSecret`) explicitly, or every sync
+regenerates the Secret and it drifts from the seeded login.
 
 **Removed values (chart 0.3.0).** If your values file sets any of these, delete them (Helm
 ignores unknown keys, but they no longer do anything): `servingPlane.inferenceBackend`,
