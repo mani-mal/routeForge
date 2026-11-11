@@ -322,6 +322,8 @@ The message text is identical to what the HTTP error response would contain. Cli
 
 When a client disconnects while waiting for a complete answer, the backend work is cancelled and the usage row is recorded with `status: cancelled`.
 
+On a real-token stream (`stream_unverified` / `incremental_verify`), a mid-answer disconnect drains the remaining backend output to recover the request's normal accounting. If the backend fails during that drain, the request is recorded as `status: cancelled` (with its `cancelled` routing outcome), never left unmetered.
+
 For non-streamed requests (`stream: false`), a disconnected client receives:
 
 ```

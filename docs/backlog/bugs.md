@@ -1898,10 +1898,10 @@ Related: B45 (the question), B46 (`counts_as_endpoint_unhealth` boundary coverag
 
 ---
 
-## B47 — a backend failure on a real-token stream after the client already disconnected writes no usage row at all
+## B47 — a backend failure on a real-token stream after the client already disconnected writes no usage row at all  ✅ RESOLVED (2026-11-11)
 
 **Severity:** low
-**Found:** 2026-09-21, signal hardening Task 7 self-review. **Open.**
+**Found:** 2026-09-21, signal hardening Task 7 self-review. **Resolved 2026-11-11 (fix/b31-batch-d).**
 
 On a real-token stream (`stream_unverified` / `incremental_verify`), a backend failure
 that happens **after** the client has already disconnected surfaces inside
@@ -1915,6 +1915,8 @@ deliberately left disconnect handling on the drain path unchanged.
 **Fix, if picked up.** Route that failure through `_record_failed` (or
 `_record_cancelled`, since the client is already gone) from within the drain's
 exception handler.
+
+**Resolved:** 2026-11-11. The drain-on-disconnect exception handler in `_finalize_stream` (`app/api/routes.py`) now meters the request `cancelled` through `_record_cancelled` inside `anyio.CancelScope(shield=True)`: one usage row, the `cancelled` routing outcome and the minimal failure trace, naming the streamed model as the attempt. `_finalize_stream` now takes `started` from both live generators. Test: `tests/test_error_metering.py::test_backend_failure_after_client_disconnect_writes_one_cancelled_row` (both modes).
 
 ---
 

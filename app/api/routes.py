@@ -1673,7 +1673,7 @@ def _stream_unverified_response(
                     get_meta=get_meta, meta=meta, body=body, tenant=tenant,
                     app_policy=app_policy, app_langfuse=app_langfuse,
                     profile=profile, session_id=session_id, s=s,
-                    internals=internals, started_ns=started_ns,
+                    internals=internals, started=started, started_ns=started_ns,
                     workload=workload, workload_source=workload_source,
                     outcome_session=outcome_session,
                     requested_alias=requested_alias)
@@ -1764,7 +1764,7 @@ def _incremental_verify_response(
                     internals=internals,
                     verify_performed=True, verify_reason="incremental",
                     client_text="".join(released),
-                    started_ns=started_ns,
+                    started=started, started_ns=started_ns,
                     workload=workload, workload_source=workload_source,
                     outcome_session=outcome_session,
                     requested_alias=requested_alias)
@@ -1781,6 +1781,7 @@ async def _finalize_stream(
         verify_performed: bool = False,
         verify_reason: str = "waived: stream_unverified",
         client_text: str | None = None,
+        started: float | None = None,
         started_ns: int | None = None,
         workload: str | None = None,
         workload_source: str = "none",
@@ -1803,6 +1804,8 @@ async def _finalize_stream(
     On a mid-stream disconnect `meta` is None (the generator never reached
     `get_meta`); we best-effort drain the remaining backend deltas so the final
     accounting (cost, tokens, decision) is recovered rather than silently lost.
+    If the backend fails during that drain, the request is metered `cancelled`
+    (B47) -- the client had already gone -- instead of writing nothing.
     run_stream only returns normally when the request is NOT onprem_only, NOT
     require_verification, and (if a tool conversation) only for the live-
     eligible shape (stream_unverified + client_output=raw), so
@@ -1816,8 +1819,25 @@ async def _finalize_stream(
                     pass
                 meta = get_meta()
             except Exception:
-                log.exception(
-                    "streaming: drain-on-disconnect failed (swallowed)")
+                # B47: the backend failed while the drain was recovering the
+                # accounting of a request whose client had ALREADY gone. That
+                # is `cancelled` (B78): nobody was left to receive an error.
+                # Meter it -- usage row, outcome row, failure trace -- rather
+                # than only log it. Shielded like the finalize below (B88).
+                log.warning("streaming: drain-on-disconnect failed for %s; "
+                            "metering it cancelled", request_id, exc_info=True)
+                chosen = getattr(get_meta, "chosen_model", None)
+                with anyio.CancelScope(shield=True):
+                    await _record_cancelled(
+                        request, tenant=tenant, request_id=request_id,
+                        started=started if started is not None else time.monotonic(),
+                        s=s, internals=internals,
+                        attempts=(chosen,) if chosen else (),
+                        workload=workload, workload_source=workload_source,
+                        outcome_session=outcome_session,
+                        requested_alias=requested_alias,
+                        app_langfuse=app_langfuse, session_id=session_id,
+                        started_ns=started_ns)
                 return
         resp = dict(meta)
         # The completion recorded/displayed == what the client actually
