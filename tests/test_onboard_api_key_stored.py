@@ -377,3 +377,269 @@ def test_key_never_in_logs_snapshot_traces_or_outcomes(monkeypatch, caplog):
         assert "api_key" not in snapshot.text
         assert "<redacted-key>" in r2.json()["probe_error"]
         assert "key <redacted-key> rejected" in caplog.text     # scrubbed, not dropped
+
+
+# ============================================================================
+# Fix round 1 (security review)
+# ============================================================================
+
+from app.apps import secret_box  # noqa: E402
+from app.apps.secret_box import (SHORT_KEY_MESSAGE, UpstreamError,  # noqa: E402
+                                 register_secret, scrub_secrets, scrubbed_exception)
+from tests._litellm_fake import _FakeStreamChunk  # noqa: E402
+from tests.onboarding.harness import onboard, set_policy_direct  # noqa: E402
+
+
+# --- I-1: a stored key never follows the endpoint to a new origin ----------
+
+@pytest.mark.parametrize("new_endpoint", [
+    "http://attacker/v1", "https://keyed/v1", "http://keyed:8001/v1"])
+def test_endpoint_origin_change_without_key_is_422_and_sends_nothing(monkeypatch, new_endpoint):
+    up = _Upstream(monkeypatch, accepted=KEY)
+    with _client() as c:
+        assert c.post("/admin/infra/models", json={**BODY, "api_key": KEY}).status_code == 200
+        before = _db_row(c)
+        up.seen.clear()
+        r = c.put(f"/admin/infra/models/{SLUG}", json={**BODY, "endpoint": new_endpoint})
+        assert r.status_code == 422
+        assert "changing the endpoint requires re-entering api_key" in r.json()["detail"]
+        assert up.seen == []                                  # nothing probed
+        after = _db_row(c)
+        assert (after.endpoint, after.api_key_enc) == (before.endpoint, before.api_key_enc)
+
+
+def test_endpoint_change_ok_with_new_key_null_or_same_origin(monkeypatch):
+    up = _Upstream(monkeypatch, accepted=KEY)
+    with _client() as c:
+        assert c.post("/admin/infra/models", json={**BODY, "api_key": KEY}).status_code == 200
+        # same origin, different path (and explicit default port): key preserved
+        up.seen.clear()
+        r = c.put(f"/admin/infra/models/{SLUG}",
+                  json={**BODY, "endpoint": "http://keyed:80/other/v1"})
+        assert r.status_code == 200 and up.seen == [f"Bearer {KEY}"]
+        # new origin with the key re-entered
+        r = c.put(f"/admin/infra/models/{SLUG}",
+                  json={**BODY, "endpoint": "http://new-host/v1", "api_key": KEY})
+        assert r.status_code == 200 and _db_row(c).api_key_enc
+        # new origin with the key removed
+        up.seen.clear()
+        r = c.put(f"/admin/infra/models/{SLUG}",
+                  json={**BODY, "endpoint": "http://third/v1", "api_key": None})
+        assert r.status_code == 200 and up.seen == [None]
+        assert _db_row(c).api_key_enc is None
+
+
+def test_repost_over_disabled_row_never_inherits_the_stored_key(monkeypatch):
+    up = _Upstream(monkeypatch, accepted=KEY)
+    with _client() as c:
+        assert c.post("/admin/infra/models",
+                      json={**BODY, "api_key": KEY, "enabled": False}).status_code == 200
+        assert _db_row(c).api_key_enc and _db_row(c).enabled is False
+        up.seen.clear()
+        r = c.post("/admin/infra/models", json={**BODY, "endpoint": "http://attacker/v1"})
+        assert r.status_code == 200
+        assert up.seen == [None]                              # no key sent anywhere
+        assert _db_row(c).api_key_enc is None
+        assert _listed(c)["api_key_source"] is None
+
+
+# --- I-2: keys with control characters / spaces ------------------------------
+
+@pytest.mark.parametrize("bad", ["sk-abcdef\nINJECT-1234567", "sk-abc def-123456",
+                                 "sk-abc\tdef-123456", "sk-abc\x7fdef-123456",
+                                 "sk-ünïcode-123456"])
+def test_key_with_control_chars_or_spaces_is_422(monkeypatch, bad):
+    up = _Upstream(monkeypatch, accepted=None)
+    with _client() as c:
+        r = c.post("/admin/infra/models", json={**BODY, "api_key": bad})
+        assert r.status_code == 422 and "printable ASCII" in r.json()["detail"]
+        assert up.seen == []
+        assert not any(m["slug"] == SLUG for m in c.get("/admin/infra/models").json())
+
+
+def test_scrub_removes_escaped_forms_of_a_secret():
+    secret = "sk-abcdef\nINJECT-1234567"
+    register_secret(secret)
+    text = ("Illegal header value b'Bearer sk-abcdef\\nINJECT-1234567' / "
+            '"sk-abcdef\\nINJECT-1234567" / ' + secret)
+    out = scrub_secrets(text)
+    assert "INJECT-1234567" not in out and out.count("<redacted-key>") == 3
+
+
+# --- M-1: streaming error paths ---------------------------------------------
+
+class _OpaqueError(Exception):
+    """An exception whose text is NOT built from args/message."""
+
+    def __init__(self, key: str) -> None:
+        super().__init__("opaque")
+        self._k = key
+
+    def __str__(self) -> str:
+        return f"opaque failure with {self._k}"
+
+
+def test_scrubbed_exception_keeps_type_or_replaces_opaque_ones():
+    register_secret(KEY)
+    e = RuntimeError(f"bad key {KEY}")
+    e.status_code = 401
+    assert scrubbed_exception(e) is e and KEY not in str(e)
+    cause = ValueError(f"inner {KEY}")
+    outer = RuntimeError("outer")
+    outer.__cause__ = cause
+    assert scrubbed_exception(outer) is outer and KEY not in str(cause)
+    opaque = _OpaqueError(KEY)
+    opaque.status_code = 403
+    clean = scrubbed_exception(opaque)
+    assert isinstance(clean, UpstreamError) and clean.status_code == 403
+    assert KEY not in str(clean) and "<redacted-key>" in str(clean)
+
+
+@pytest.mark.parametrize("when", ["before_first_byte", "after_first_byte"])
+def test_stream_failures_never_leak_the_key(monkeypatch, caplog, when):
+    caplog.set_level(logging.DEBUG)
+    _Upstream(monkeypatch, accepted=KEY)
+
+    async def _call(**kwargs):
+        CALLS.append(kwargs)
+        if not kwargs.get("stream"):
+            raise RuntimeError(f"key {kwargs['api_key']} rejected {kwargs!r}")
+        if when == "before_first_byte":
+            raise _OpaqueError(kwargs["api_key"])
+
+        async def _gen():
+            yield _FakeStreamChunk(content="partial ")
+            raise RuntimeError(f"key {kwargs['api_key']} rejected mid-stream {kwargs!r}")
+        return _gen()
+    monkeypatch.setattr(litellm_backend, "acompletion", _call)
+
+    with _client() as c:
+        assert c.post("/admin/infra/models", json={**BODY, "api_key": KEY}).status_code == 200
+        disable_seeded_models(c)
+        app = onboard(c, "b68-stream", stream_mode="stream_unverified",
+                      policy_mode="passthrough")
+        set_policy_direct(c, "b68-stream", stream_mode="stream_unverified")
+        r = c.post("/v1/chat/completions", headers=app.headers,
+                   json={**HELLO, "stream": True})
+        assert any(call.get("stream") for call in CALLS)     # streamed for real
+        assert CALLS[-1]["api_key"] == KEY
+        outcomes = json.dumps([_columns(o) for o in _outcomes(c)], default=str)
+        for surface in (r.text, caplog.text, outcomes):
+            _no_key_in(surface, KEY)
+        assert "<redacted-key>" in caplog.text
+        assert ("before first byte" if when == "before_first_byte"
+                else "after first byte") in caplog.text      # the path under test
+
+
+# --- M-2: refresh read+install is serialised ---------------------------------
+
+def test_registry_refresh_is_serialised(monkeypatch):
+    """A slow refresh that read BEFORE a write must not install AFTER the
+    write's own refresh (lost update)."""
+    from contextlib import asynccontextmanager
+    from app.apps import registry as registry_mod
+    from app.config.loader import load_settings
+
+    def _row(display):
+        return SimpleNamespace(
+            slug="m", display_name=display, provider="onprem", tier="cheap",
+            quality=None, price_input=0.0, price_output=0.0, endpoint="http://m/v1",
+            api_key_env=None, api_key_enc=None, enabled=True, allowed_app_ids=None,
+            region=None, prompt_retention=None, accepts_raw_sensitive=None,
+            price_cached_input=None, context_window=None, probe_status="healthy")
+
+    state = {"display": "old"}
+    first_read = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _list(session):
+        snapshot = state["display"]
+        if not first_read.is_set():
+            first_read.set()
+            await release.wait()          # the slow, stale reader
+        return [_row(snapshot)]
+    monkeypatch.setattr(registry_mod.store, "list_onboarded", _list)
+
+    class _DB:
+        @asynccontextmanager
+        async def session(self):
+            yield None
+
+    async def go():
+        reg = ModelRegistry(load_settings())
+        slow = asyncio.create_task(reg.refresh(_DB()))
+        await first_read.wait()
+        state["display"] = "new"          # the admin write commits
+        fast = asyncio.create_task(reg.refresh(_DB()))
+        await asyncio.sleep(0.01)
+        release.set()
+        await asyncio.gather(slow, fast)
+        return reg._onboarded()["m"].display_name
+
+    assert asyncio.run(go()) == "new"
+
+
+# --- M-3: empty env value never falls through to the provider key -----------
+
+def test_empty_env_value_sends_placeholder_not_provider_key(monkeypatch):
+    monkeypatch.setenv("RF_B68_EMPTY", "")
+    monkeypatch.setenv("SP_ONPREM_API_KEY", "provider-level-key-999")
+    _Upstream(monkeypatch, accepted=None)
+
+    async def _call(**kwargs):
+        CALLS.append(kwargs)
+        return make_response(content="ok")
+    monkeypatch.setattr(litellm_backend, "acompletion", _call)
+    with _client() as c:
+        assert c.post("/admin/infra/models",
+                      json={**BODY, "api_key_env": "RF_B68_EMPTY"}).status_code == 200
+        assert c.app.state.registry.api_key_for(SLUG) == NO_AUTH_KEY
+        disable_seeded_models(c)
+        assert c.post("/v1/chat/completions", headers=DEMO, json=HELLO).status_code == 200
+        assert CALLS[-1]["api_key"] == NO_AUTH_KEY
+
+
+# --- M-4: a short ENCRYPTION_KEY is refused for endpoint keys ---------------
+
+@pytest.mark.parametrize("weak", ["changeme", "ab" * 31])   # 8 bytes; 31 bytes of hex
+def test_short_encryption_key_refuses_endpoint_keys(monkeypatch, weak):
+    monkeypatch.setenv("ENCRYPTION_KEY", weak)
+    up = _Upstream(monkeypatch, accepted=None)
+    with _client() as c:
+        r = c.post("/admin/infra/models", json={**BODY, "api_key": KEY})
+        assert r.status_code == 422 and r.json()["detail"] == SHORT_KEY_MESSAGE
+        assert up.seen == []
+        assert not any(m["slug"] == SLUG for m in c.get("/admin/infra/models").json())
+    with pytest.raises(secret_box.EncryptionUnavailable):
+        secret_box.encrypt_required("x")
+    # The Langfuse path keeps its behaviour: still encrypts under a short key.
+    from app.apps.langfuse_provision import decrypt_secret, encrypt_secret
+    blob = encrypt_secret("lf-secret")
+    assert blob != b"lf-secret" and decrypt_secret(blob) == "lf-secret"
+
+
+# --- M-5: an undecryptable key takes the model out of routing ---------------
+
+def test_undecryptable_key_takes_model_out_of_routing(monkeypatch):
+    _Upstream(monkeypatch, accepted=KEY)
+    with _client() as c:
+        assert c.post("/admin/infra/models", json={**BODY, "api_key": KEY}).status_code == 200
+        assert SLUG in {p.name for p in c.app.state.registry.effective_pool()}
+        monkeypatch.setenv("ENCRYPTION_KEY", "b" * 64)
+        c.portal.call(c.app.state.registry.refresh, c.app.state.db)
+        reg = c.app.state.registry
+        assert SLUG not in {p.name for p in reg.effective_pool()}
+        assert reg.probe_not_healthy().get(SLUG) == "unauthorized"
+        assert _db_row(c).enabled is True                     # DB untouched
+
+
+# --- M-6: provider-level keys are scrubbed too -------------------------------
+
+def test_provider_level_key_is_registered_for_scrubbing(monkeypatch):
+    from app.config.loader import load_settings
+    settings = load_settings()
+    env = settings.serving.providers["onprem"].api_key_env
+    assert env
+    monkeypatch.setenv(env, "provider-secret-B68-xyz")
+    ModelRegistry(settings)
+    assert scrub_secrets("err provider-secret-B68-xyz") == "err <redacted-key>"

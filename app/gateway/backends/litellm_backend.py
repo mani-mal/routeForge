@@ -14,6 +14,7 @@ from typing import AsyncIterator
 
 from litellm import ContextWindowExceededError, acompletion
 
+from app.apps.secret_box import scrub_secrets, scrubbed_exception
 from app.config.schema import PriceCfg, Settings
 from app.errors import ContextWindowExceeded
 from app.gateway.backends.base import BackendHealth, StreamChunk
@@ -34,8 +35,30 @@ async def _acompletion(model: str, call: dict):
     try:
         return await acompletion(**call)
     except ContextWindowExceededError as exc:
+        exc = scrubbed_exception(exc)
         raise ContextWindowExceeded(
-            f"{model}: {_LITELLM_PREFIX.sub('', str(exc))}") from exc
+            f"{model}: {_LITELLM_PREFIX.sub('', scrub_secrets(str(exc)))}") from None
+    except Exception as exc:
+        # B68: an upstream error may echo the request kwargs or the bearer
+        # token. Scrub it here, at the source, so no later log line, traceback,
+        # client error or DB field can carry a live endpoint key.
+        clean = scrubbed_exception(exc)
+        if clean is exc:
+            raise
+        raise clean from None
+
+
+async def _scrubbed_stream(stream):
+    """Iterate a LiteLLM stream, scrubbing any exception raised mid-stream the
+    same way `_acompletion` does."""
+    try:
+        async for chunk in stream:
+            yield chunk
+    except Exception as exc:
+        clean = scrubbed_exception(exc)
+        if clean is exc:
+            raise
+        raise clean from None
 
 
 _FINISH_REASONS = frozenset({"stop", "length", "tool_calls", "content_filter",
@@ -328,7 +351,7 @@ class LiteLLMBackend:
         usage: dict = {}
         finish = None
         assembler = _ToolCallAssembler()
-        async for chunk in await _acompletion(model, call):
+        async for chunk in _scrubbed_stream(await _acompletion(model, call)):
             choices = getattr(chunk, "choices", None)
             content = None
             if choices:

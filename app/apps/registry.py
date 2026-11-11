@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -79,6 +80,16 @@ class ModelRegistry:
         # (slug, ciphertext) pairs already warned about as undecryptable, so a
         # periodic refresh logs each broken stored key once, not every minute.
         self._undecryptable_warned: set[tuple[str, str]] = set()
+        # Serialises refresh's DB read AND install, so a slow refresh that read
+        # before an admin write committed cannot finish after that write's own
+        # refresh and put the stale rows back (same rule as quality_lock).
+        self._refresh_lock = asyncio.Lock()
+        # Provider-level keys (serving.yaml `providers.<name>.api_key_env`)
+        # are scrubbed from upstream error text too (B68).
+        for cfg in settings.serving.providers.values():
+            env = getattr(cfg, "api_key_env", None)
+            if env:
+                register_secret(os.environ.get(env))
 
     @property
     def generation(self) -> int:
@@ -94,26 +105,37 @@ class ModelRegistry:
             await self.refresh(db)
 
     async def refresh(self, db) -> None:
-        try:
-            async with db.session() as session:
-                rows = await store.list_onboarded(session)
-            self._rows = {
-                r.slug: _OnboardedRow(
-                    slug=r.slug, display_name=r.display_name, provider=r.provider,
-                    tier=r.tier, quality=r.quality, price_input=r.price_input,
-                    price_output=r.price_output, endpoint=r.endpoint,
-                    api_key_env=r.api_key_env, enabled=bool(r.enabled),
-                    allowed_app_ids=tuple(r.allowed_app_ids) if r.allowed_app_ids else None,
-                    region=r.region, prompt_retention=r.prompt_retention,
-                    accepts_raw_sensitive=r.accepts_raw_sensitive,
-                    price_cached_input=r.price_cached_input,
-                    context_window=r.context_window,
-                    probe_status=r.probe_status or "unknown",
-                    **self._credential(r))
-                for r in rows}
-            self._generation += 1
-        except Exception:
-            _log.exception("registry refresh failed; keeping last-known-good")
+        async with self._refresh_lock:
+            try:
+                async with db.session() as session:
+                    rows = await store.list_onboarded(session)
+                self._rows = {r.slug: self._row(r) for r in rows}
+                self._generation += 1
+            except Exception:
+                _log.exception("registry refresh failed; keeping last-known-good")
+
+    def _row(self, r) -> _OnboardedRow:
+        cred = self._credential(r)
+        enabled, probe_status = bool(r.enabled), r.probe_status or "unknown"
+        if cred["api_key_source"] == "stored" and cred["stored_key"] is None:
+            # A stored key that no longer decrypts: take the model out of
+            # routing on this replica (it can only get 401s) and report it
+            # `unauthorized` on /health. Only ever narrows the pool -- an
+            # onprem_only request with no other on-prem model is rejected,
+            # never widened. The DB row is untouched; re-entering the key
+            # with a PUT re-probes and restores it.
+            enabled, probe_status = False, "unauthorized"
+        return _OnboardedRow(
+            slug=r.slug, display_name=r.display_name, provider=r.provider,
+            tier=r.tier, quality=r.quality, price_input=r.price_input,
+            price_output=r.price_output, endpoint=r.endpoint,
+            api_key_env=r.api_key_env, enabled=enabled,
+            allowed_app_ids=tuple(r.allowed_app_ids) if r.allowed_app_ids else None,
+            region=r.region, prompt_retention=r.prompt_retention,
+            accepts_raw_sensitive=r.accepts_raw_sensitive,
+            price_cached_input=r.price_cached_input,
+            context_window=r.context_window,
+            probe_status=probe_status, **cred)
 
     def _credential(self, r) -> dict:
         """`api_key_source` + decrypted `stored_key` for one DB row. Decrypted
@@ -129,8 +151,8 @@ class ModelRegistry:
                     self._undecryptable_warned.add((r.slug, enc))
                     _log.warning(
                         "onboarded model %s has a stored API key that cannot be "
-                        "decrypted with the current ENCRYPTION_KEY; sending no key "
-                        "(the endpoint will answer 401). Re-enter the key.", r.slug)
+                        "decrypted with the current ENCRYPTION_KEY; it is taken out "
+                        "of routing on this replica. Re-enter the key.", r.slug)
                 return {"api_key_source": "stored", "stored_key": None}
             register_secret(plain)
             return {"api_key_source": "stored", "stored_key": SecretStr(plain)}
@@ -288,7 +310,9 @@ class ModelRegistry:
         if r.api_key_source == "stored":
             return r.stored_key.get_secret_value() if r.stored_key else NO_AUTH_KEY
         if r.api_key_env:
-            return os.environ.get(r.api_key_env, NO_AUTH_KEY)
+            # Unset OR empty -> placeholder: a model that declares an env var
+            # never falls through to the provider-level key.
+            return os.environ.get(r.api_key_env) or NO_AUTH_KEY
         return None
 
     def disabled_onboarded(self) -> tuple[str, ...]:

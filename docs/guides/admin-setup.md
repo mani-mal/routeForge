@@ -21,7 +21,7 @@ onboarding-relevant ones:
 |---|---|---|
 | `DATABASE_URL` | Application/token/policy/usage store | Unset → local SQLite `./routeforge.db`. In a real deploy point at the shared Postgres. |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Seeds the first admin login on first boot | Defaults `admin@routeforge.local` / `changeme` — **override these**. |
-| `ENCRYPTION_KEY` | Fernet key encrypting per-app Langfuse secrets and onboarded endpoint API keys at rest | 32-byte / 64-hex. Unset → Langfuse secrets stored as plaintext (dev only); an endpoint `api_key` is **refused** (`422`), never stored in clear. Changing it makes stored endpoint keys undecryptable (re-enter them). |
+| `ENCRYPTION_KEY` | Fernet key encrypting per-app Langfuse secrets and onboarded endpoint API keys at rest | 32-byte / 64-hex. Unset → Langfuse secrets stored as plaintext (dev only); an endpoint `api_key` is **refused** (`422`), never stored in clear — also when the key decodes to fewer than 32 bytes. Changing it makes stored endpoint keys undecryptable (re-enter them). |
 | `LANGFUSE_HOST` | Langfuse ingestion host | Needed for any Langfuse feature. |
 | `LANGFUSE_ORG_PUBLIC_KEY` / `LANGFUSE_ORG_SECRET_KEY` | Org-scoped keys that enable **per-app Langfuse project auto-provisioning** | Optional. Absent → all apps share the default project. |
 

@@ -167,28 +167,42 @@ two ways to give it, and a model uses **exactly one** (sending both is `422`):
 With neither, the provider-level `providers.onprem.api_key_env` in
 `config/serving.yaml` is the fallback, exactly as before.
 
-**`ENCRYPTION_KEY` is required for a stored key.** Without a usable one the
-write is refused — `422 set ENCRYPTION_KEY to store endpoint keys, or use
-api_key_env` — and nothing is stored. A stored key is never kept in clear (this
-is stricter than the per-app Langfuse secret, which falls back to plaintext in
-dev). An empty or whitespace-only `api_key` is `422`; surrounding whitespace is
-stripped.
+**`ENCRYPTION_KEY` is required for a stored key**, and it must decode to at
+least 32 bytes (64 hex characters). Without one the write is refused — `422 set
+ENCRYPTION_KEY to store endpoint keys, or use api_key_env` — and a shorter one
+(e.g. `changeme`) is refused with a `422` naming the 32-byte requirement; nothing
+is stored and nothing is probed. A stored key is never kept in clear (this is
+stricter than the per-app Langfuse secret, which falls back to plaintext in dev
+and accepts a short key). Surrounding whitespace is stripped; what remains must
+be printable ASCII with no spaces or control characters (`422` otherwise —
+including an empty key).
 
 **Write-only.** No admin read returns the key or its ciphertext. `GET
 /admin/infra/models` (and the `POST`/`PUT` acks) say only `api_key_source`:
 `"stored"`, `"env"` or `null`; a stored key of at least 12 characters also gets
 `api_key_hint`, its last 4 characters. The key is not in the config snapshot
 (`GET /admin/config-snapshot`), traces, outcome rows, decision records or logs.
-Upstream error text (a probe failure, a backend error that echoes the request)
-has any live endpoint key replaced with `<redacted-key>` before it is logged or
-returned. A `422` for a malformed onboarding body does not echo the body.
+Upstream error text (a probe failure, a backend error that echoes the request,
+a stream that fails before or after its first byte) has any live endpoint key —
+stored, from a model's `api_key_env`, or the provider-level key — replaced with
+`<redacted-key>`, including its repr/JSON-escaped forms, before it is logged,
+stored or returned. A `422` for a malformed onboarding body does not echo the body.
 
 **Switching and clearing.** One `PUT` switches modes: sending `api_key` clears
 `api_key_env`, and sending `api_key_env` removes the stored key. `api_key: null`
-(with no `api_key_env`) removes the stored key. **Omitting `api_key` keeps the
-stored key** — the console cannot resubmit a write-only value, so an unrelated
-edit (a price, a display name) must not wipe it. (`api_key_env` itself still
-full-replaces, as before.)
+(with no `api_key_env`) removes the stored key. **Omitting `api_key` on a `PUT`
+keeps the stored key** — the console cannot resubmit a write-only value, so an
+unrelated edit (a price, a display name) must not wipe it. (`api_key_env` itself
+still full-replaces, as before.)
+
+**A stored key never follows the endpoint to a new host.** A `PUT` that changes
+the endpoint's scheme, host or port with `api_key` omitted is `422 changing the
+endpoint requires re-entering api_key, or sending api_key: null to remove it` —
+nothing is probed or saved. (A path-only change keeps the key.) Otherwise an
+admin session could repoint a model at a host it controls and read the key off
+the probe, and a model moved to another vendor would ship the old vendor's key.
+A `POST` never inherits a stored key either: re-onboarding over a disabled row
+(B19) starts with no stored key unless the body gives one.
 
 **Rotation.** `PUT` the new `api_key`. The endpoint is re-probed with the new key
 (`401`/`403` → `probe_status: "unauthorized"`, saved disabled — B61). The
@@ -199,11 +213,19 @@ overrides also reloads onboarded models, so no restart is needed. Until then a
 replica may still send the old key; rotate the key at the endpoint after that
 window if the old one must keep working in between.
 
-**If `ENCRYPTION_KEY` changes.** A stored key that no longer decrypts is treated
-as no key: requests to that model are sent with a placeholder and the endpoint
-answers `401`; the next probe reports `unauthorized`. Each replica logs one
-WARNING naming the model's slug (never the value). `api_key_source` stays
-`"stored"` with no hint. Re-enter the key with a `PUT` to fix it.
+**If `ENCRYPTION_KEY` changes.** Nothing probes periodically, so the stored
+`probe_status` and `enabled` do not change. Instead, each replica, on its next
+registry reload (≤ `routing.quality_refresh_s`), finds the key no longer
+decrypts, logs one WARNING naming the model's slug (never the value) and **takes
+the model out of routing on that replica**; `/health` lists it as
+`unauthorized`. This only narrows the pool — an `onprem_only` request with no
+other healthy on-prem model is rejected, never sent to cloud. Until that reload,
+a replica still routing to it sends a placeholder key; the endpoint answers
+`401`, which does not trip the circuit breaker (a 4xx is the request's fault,
+B36), so the request fails over to a peer or ends in `502`. `GET
+/admin/infra/models` still shows the DB row (`enabled`, `api_key_source:
+"stored"`, no hint). Re-enter the key with a `PUT`: it re-probes and the model
+returns to routing.
 
 Existing deployments need the column first:
 `ALTER TABLE onboarded_models ADD COLUMN IF NOT EXISTS api_key_enc TEXT;`

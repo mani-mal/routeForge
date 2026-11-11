@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from typing import AsyncIterator
 
-from app.apps.secret_box import scrub_secrets
+from app.apps.secret_box import scrub_secrets, scrubbed_exception
 from app.config.schema import Settings
 from app.errors import BackendUnavailable, ContextWindowExceeded, NoEligibleCandidate
 from app.gateway.backends.base import InferenceBackend, StreamChunk
@@ -376,6 +376,11 @@ class Gateway:
                 error = _format_upstream_error(cand.name, exc)
                 log.warning("backend stream failed request=%s model=%s: %s",
                             ctx.request_id, cand.name, error)
-                raise
+                # B68: the re-raised exception reaches the HTTP layer's logs
+                # and error frames, so it is scrubbed too (type kept).
+                clean = scrubbed_exception(exc)
+                if clean is exc:
+                    raise
+                raise clean from None
 
         return _agen(), records

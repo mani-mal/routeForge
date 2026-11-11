@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import time
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
@@ -24,7 +25,8 @@ from app.apps.langfuse_provision import LangfuseProvisioner, encrypt_secret
 from app.apps.models import AppToken, OutcomeFeedback, RoutingOutcome
 from app.apps.policy_lint import price_warnings
 from app.apps.probe import probe_endpoint
-from app.apps.secret_box import decrypt_or_none, encrypt_required, fernet
+from app.apps.secret_box import (decrypt_or_none, encrypt_required,
+                                  endpoint_key_encryption_problem)
 from app.apps.policy import AppPolicyView, alias_pairs, policy_view_from
 from app.apps.snapshot import build_config_snapshot
 from app.apps.tokens import new_service_credential, new_token
@@ -1152,6 +1154,23 @@ def _source_of(api_key_enc: str | None, api_key_env: str | None) -> str | None:
     return "stored" if api_key_enc else ("env" if api_key_env else None)
 
 
+_KEY_CHARS_RE = re.compile(r"[\x21-\x7e]+")
+
+
+def _origin(url: str | None) -> tuple[str, str, int | None] | None:
+    """(scheme, host, port) of an endpoint URL, default ports filled in, so
+    `http://h/v1` and `http://h:80/v2` are the same origin."""
+    if not url:
+        return None
+    try:
+        u = urlsplit(url.strip())
+        scheme = (u.scheme or "").lower()
+        port = u.port or {"http": 80, "https": 443}.get(scheme)
+        return scheme, (u.hostname or "").lower(), port
+    except ValueError:
+        return None
+
+
 def _static_validate_api_key(body: OnboardIn) -> None:
     """B68 rulings, checked before anything touches the DB or the network:
     exactly one of api_key / api_key_env; no empty key; and a key is refused
@@ -1162,15 +1181,29 @@ def _static_validate_api_key(body: OnboardIn) -> None:
         raise HTTPException(
             422, "give either api_key (stored encrypted) or api_key_env (name of an "
             "environment variable), not both")
-    if not body.api_key.get_secret_value().strip():
+    key = body.api_key.get_secret_value().strip()
+    if not key:
         raise HTTPException(422, "api_key must not be empty; send null to remove a stored key")
-    if fernet() is None:
+    # Printable ASCII, no spaces or control characters: anything else is not a
+    # valid bearer token, and an HTTP client that rejects it echoes it back in
+    # its error text, escaped -- which would land in probe_error (I-2).
+    if not _KEY_CHARS_RE.fullmatch(key):
         raise HTTPException(
-            422, "set ENCRYPTION_KEY to store endpoint keys, or use api_key_env")
+            422, "api_key must be printable ASCII with no spaces or control characters")
+    problem = endpoint_key_encryption_problem()
+    if problem is not None:
+        raise HTTPException(422, problem)
 
 
-def _resolved_api_key(body: OnboardIn, existing) -> tuple[str | None, str | None, str | None]:
+def _resolved_api_key(body: OnboardIn, existing, *, preserve: bool
+                      ) -> tuple[str | None, str | None, str | None]:
     """(api_key_enc, api_key_env, key_to_probe_with) to store for this write.
+
+    `preserve` is True only for PUT (edit). A POST -- including a re-POST over
+    a disabled row (B19) -- never inherits a prior row's stored key. And a
+    stored key never follows an endpoint to a new origin: a PUT that changes
+    scheme, host or port with `api_key` omitted is 422, so neither an admin
+    session nor a repointed model can send a write-only key to a new host.
 
     - api_key given -> encrypt it; api_key_env is cleared (one call switches
       env -> stored);
@@ -1188,7 +1221,11 @@ def _resolved_api_key(body: OnboardIn, existing) -> tuple[str | None, str | None
         return None, body.api_key_env, None
     if "api_key" in body.model_fields_set:
         return None, None, None
-    enc = existing.api_key_enc if existing is not None else None
+    enc = existing.api_key_enc if (preserve and existing is not None) else None
+    if enc and _origin(body.endpoint) != _origin(existing.endpoint):
+        raise HTTPException(
+            422, "changing the endpoint requires re-entering api_key, or sending "
+            "api_key: null to remove it")
     return enc, None, decrypt_or_none(enc)
 
 
@@ -1315,7 +1352,8 @@ async def onboard_model(body: OnboardIn, request: Request,
             for aid in body.allowed_app_ids:
                 if await store.get_application(session, aid) is None:
                     raise HTTPException(422, f"unknown application {aid!r}")
-        api_key_enc, api_key_env, probe_key = _resolved_api_key(body, existing)
+        api_key_enc, api_key_env, probe_key = _resolved_api_key(
+            body, existing, preserve=False)
         _probe = await probe_endpoint(body.endpoint, body.slug, api_key_env,
                                       **_probe_key_kwargs(probe_key))
         ok, detail = _probe.ok, _probe.detail
@@ -1381,7 +1419,8 @@ async def edit_onboarded_model(slug: str, body: OnboardIn, request: Request,
             for aid in body.allowed_app_ids:
                 if await store.get_application(session, aid) is None:
                     raise HTTPException(422, f"unknown application {aid!r}")
-        api_key_enc, api_key_env, probe_key = _resolved_api_key(body, existing)
+        api_key_enc, api_key_env, probe_key = _resolved_api_key(
+            body, existing, preserve=True)
         _probe = await probe_endpoint(body.endpoint, slug, api_key_env,
                                       **_probe_key_kwargs(probe_key))
         ok, detail = _probe.ok, _probe.detail
