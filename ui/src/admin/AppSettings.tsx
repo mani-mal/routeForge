@@ -480,6 +480,12 @@ function LangfuseCredsForm({ app, onSaved }: { app: AdminApp; onSaved: () => voi
   }
   useEffect(() => { void load(); }, [app.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  function resetForm() {
+    setHost(""); setPublicKey(""); setSecretKey(""); setProjectId("");
+    setSkipVerify(false);
+    setEditing(false);
+  }
+
   function startEdit() {
     setHost(saved?.host ?? "");
     setPublicKey(saved?.public_key ?? "");
@@ -503,8 +509,7 @@ function LangfuseCredsForm({ app, onSaved }: { app: AdminApp; onSaved: () => voi
       if (secretKey) body.secret_key = secretKey;
       const r = await adminApi.setLangfuseCreds(app.id, body, !skipVerify);
       setSaved(r.langfuse);
-      setSecretKey("");
-      setEditing(false);
+      resetForm();
       setNote(r.verified ? "verified" : "saved without verification");
       onSaved();
     } catch (e) {
@@ -522,7 +527,7 @@ function LangfuseCredsForm({ app, onSaved }: { app: AdminApp; onSaved: () => voi
     try {
       await adminApi.deleteLangfuseCreds(app.id);
       await load();
-      setEditing(false);
+      resetForm();
       onSaved();
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Could not remove credentials.");
@@ -557,7 +562,7 @@ function LangfuseCredsForm({ app, onSaved }: { app: AdminApp; onSaved: () => voi
 
       {loaded && hasCreds && !editing && (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-300">
-          <span>host <code className="font-mono text-gray-100">{saved?.host}</code></span>
+          <span>host <code className="font-mono text-gray-100">{saved?.host}</code>{saved?.host_source === "deployment" && " (deployment default)"}</span>
           <span>public key <code className="font-mono text-gray-100">{saved?.public_key}</code></span>
           <span>project id <code className="font-mono text-gray-100">{saved?.project_id}</code></span>
           <span>secret <code className="font-mono text-gray-100">{secretShown}</code></span>
@@ -1694,7 +1699,7 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
           sit ~1000px apart with the dependency invisible. */}
       <Step n={4} title="Telemetry" summary={telemetrySummary(p, app, effCapture)} dirty={dirty[4]}
         open={open.has(4)} onToggle={() => toggle(4)}>
-        <LangfuseCredsForm app={app} onSaved={onSaved} />
+        <LangfuseCredsForm key={app.id} app={app} onSaved={onSaved} />
 
         <Row label="eval capture" htmlFor={`${uid}-capture`}
           hint="raw (full) goes only to this app's own project"

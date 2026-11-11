@@ -289,16 +289,30 @@ class LangfuseCredsIn(BaseModel):
     @field_validator("host", "public_key", "secret_key", "project_id")
     @classmethod
     def _not_blank(cls, v: str | None) -> str | None:
-        if v is not None and not v.strip():
+        if v is None:
+            return v
+        v = v.strip()
+        if not v:
             raise ValueError("must not be blank")
         return v
 
     @field_validator("host")
     @classmethod
     def _host_is_url(cls, v: str | None) -> str | None:
-        # Mirror onboard_model's endpoint check (~admin_routes.py:431).
-        if v is not None and not re.match(r"^https?://", v):
+        # Mirror onboard_model's endpoint check (~admin_routes.py:431), and
+        # refuse userinfo (`user:pass@host`) and anything urlparse rejects.
+        if v is None:
+            return v
+        from urllib.parse import urlparse
+        try:
+            u = urlparse(v)
+            u.port  # noqa: B018 -- raises ValueError on a bad port
+        except ValueError:
+            raise ValueError("host is not a valid URL")
+        if u.scheme not in ("http", "https") or not u.hostname:
             raise ValueError("host must be an http(s) URL")
+        if "@" in u.netloc:
+            raise ValueError("host must not contain credentials (user:pass@)")
         return v
 
 
@@ -563,9 +577,40 @@ async def update_application(app_id: str, body: UpdateAppIn, request: Request,
 
 
 def _langfuse_http_client():
-    """Outbound client for verify-on-save. A seam so tests never touch the network."""
+    """Outbound client for verify-on-save. A seam so tests never touch the network.
+
+    Private / in-cluster hosts are deliberately NOT blocked: the normal Langfuse
+    address is `http://langfuse-web:3000`, so an SSRF allow-list of public
+    ranges would break the main use case. The admin is trusted to point at
+    internal services; the mitigations are no redirects, a hard total timeout,
+    a capped body, and never sending a stored secret to a changed host."""
     import httpx
-    return httpx.AsyncClient(timeout=5.0)
+    return httpx.AsyncClient(timeout=5.0, follow_redirects=False)
+
+
+_VERIFY_MAX_BODY = 64 * 1024
+
+
+def _norm_origin(host: str | None) -> tuple | None:
+    """scheme + host + port, normalised, for 'is this the same Langfuse'."""
+    if not host:
+        return None
+    from urllib.parse import urlparse
+    try:
+        u = urlparse(host.strip())
+        port = u.port or (443 if u.scheme == "https" else 80)
+    except ValueError:
+        return None
+    return (u.scheme.lower(), (u.hostname or "").lower(), port)
+
+
+def _effective_langfuse_host(app) -> tuple[str | None, str]:
+    """(host, source): the app's own host, else the deployment LANGFUSE_HOST
+    that `load_app_langfuse` falls back to (auto-provisioned apps)."""
+    if app.langfuse_host:
+        return app.langfuse_host, "app"
+    env = os.environ.get("LANGFUSE_HOST") or None
+    return env, "deployment"
 
 
 async def _verify_langfuse_creds(host: str, public_key: str, secret_key: str,
@@ -573,25 +618,38 @@ async def _verify_langfuse_creds(host: str, public_key: str, secret_key: str,
     """Check the pair from THIS process (B33): reachable, accepted, and the
     pair's project is `project_id`. Raises HTTPException(422). Messages are built
     only from host / status / project ids -- never the secret."""
+    import asyncio
     import httpx
+    unreachable = HTTPException(
+        422, f"host {host} is not reachable from the RouteForge API process "
+             "(use the address the API container can reach, not the browser URL)")
     url = host.rstrip("/") + "/api/public/projects"
+    body = b""
     try:
-        async with _langfuse_http_client() as c:
-            r = await c.get(url, auth=(public_key, secret_key))
-    except (httpx.HTTPError, OSError):
-        raise HTTPException(
-            422, f"host {host} is not reachable from the RouteForge API process "
-                 "(use the address the API container can reach, not the browser URL)")
-    if r.status_code in (401, 403):
+        async with asyncio.timeout(5):          # total, not per phase
+            async with _langfuse_http_client() as c:
+                async with c.stream("GET", url, auth=(public_key, secret_key)) as r:
+                    status = r.status_code
+                    if status == 200:
+                        async for chunk in r.aiter_bytes():
+                            body += chunk
+                            if len(body) > _VERIFY_MAX_BODY:
+                                raise HTTPException(
+                                    422, "Langfuse returned HTTP 200 with an oversized body")
+    except HTTPException:
+        raise
+    except (httpx.HTTPError, httpx.InvalidURL, OSError, TimeoutError):
+        raise unreachable
+    if status in (401, 403):
         raise HTTPException(422, "Langfuse rejected these keys")
-    if r.status_code != 200:
-        raise HTTPException(422, f"Langfuse returned HTTP {r.status_code}")
+    if status != 200:
+        raise HTTPException(422, f"Langfuse returned HTTP {status}")
     try:
-        ids = [str(x.get("id")) for x in (r.json().get("data") or [])]
+        ids = [str(x.get("id")) for x in (json.loads(body).get("data") or [])]
     except Exception:
         raise HTTPException(422, "Langfuse returned HTTP 200 with an unreadable body")
     if project_id not in ids:
-        found = ", ".join(ids) if ids else "no project"
+        found = ", ".join(i[:64] for i in ids[:5]) if ids else "no project"
         raise HTTPException(
             422, f"these keys belong to project {found}, not {project_id}")
 
@@ -609,7 +667,9 @@ def _langfuse_summary(app) -> dict:
                 last4 = sk[-4:]
         except Exception:
             last4 = None
-    return {"host": app.langfuse_host, "public_key": app.langfuse_public_key,
+    host, source = _effective_langfuse_host(app)
+    return {"host": host, "host_source": source,
+            "public_key": app.langfuse_public_key,
             "project_id": app.langfuse_project_id, "secret_set": secret_set,
             "secret_last4": last4}
 
@@ -639,31 +699,42 @@ async def set_langfuse_creds(app_id: str, body: LangfuseCredsIn, request: Reques
     air-gapped setups and the response says `verified: false`).
     """
     from app.apps.langfuse_provision import decrypt_secret
+    # Read, then close the session BEFORE the outbound call so no DB
+    # connection is held open for up to 5 s of network wait.
     async with request.app.state.db.session() as session:
         cur = await store.get_application_with_policy(session, app_id)
         if cur is None:
             raise HTTPException(404, "application not found")
-        host = body.host or cur.langfuse_host
-        pub = body.public_key or cur.langfuse_public_key
-        pid = body.project_id or cur.langfuse_project_id
-        if body.secret_key:
-            sk = body.secret_key
-        elif cur.langfuse_secret_key_enc:
-            sk = decrypt_secret(cur.langfuse_secret_key_enc)
-        else:
-            sk = None
-        missing = [n for n, v in (("host", host), ("public_key", pub),
-                                  ("secret_key", sk), ("project_id", pid)) if not v]
-        if missing:
+        stored_host, _src = _effective_langfuse_host(cur)
+        stored_pub = cur.langfuse_public_key
+        stored_pid = cur.langfuse_project_id
+        stored_enc = cur.langfuse_secret_key_enc
+        stored_sk = decrypt_secret(stored_enc) if stored_enc else None
+        own_host = cur.langfuse_host
+    host = body.host or stored_host
+    pub = body.public_key or stored_pub
+    pid = body.project_id or stored_pid
+    sk = body.secret_key or stored_sk
+    missing = [n for n, v in (("host", host), ("public_key", pub),
+                              ("secret_key", sk), ("project_id", pid)) if not v]
+    if missing:
+        raise HTTPException(
+            422, "no stored value to keep for: " + ", ".join(missing))
+    if not body.secret_key:
+        # The stored secret must only ever go to the host/key it was saved with.
+        if (_norm_origin(host) != _norm_origin(stored_host)
+                or pub != stored_pub):
             raise HTTPException(
-                422, "no stored value to keep for: " + ", ".join(missing))
-        if verify:
-            await _verify_langfuse_creds(host, pub, sk, pid)
+                422, "changing the host or public key requires re-entering the secret key")
+    if verify:
+        await _verify_langfuse_creds(host, pub, sk, pid)
+    async with request.app.state.db.session() as session:
         await store.update_application(
-            session, app_id, langfuse_host=host, langfuse_public_key=pub,
-            langfuse_project_id=pid,
+            session, app_id,
+            langfuse_host=(body.host if body.host else own_host),
+            langfuse_public_key=pub, langfuse_project_id=pid,
             langfuse_secret_key_enc=(encrypt_secret(sk) if body.secret_key
-                                     else cur.langfuse_secret_key_enc))
+                                     else stored_enc))
         await session.commit()
         full = await store.get_application_with_policy(session, app_id)
         out = _app_dict(full, settings=request.app.state.settings)

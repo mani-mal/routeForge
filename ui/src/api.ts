@@ -345,6 +345,7 @@ export interface AdminEffectivePolicy {
 
 export interface LangfuseSummary {
   host: string | null;
+  host_source?: "app" | "deployment";
   public_key: string | null;
   project_id: string | null;
   secret_set: boolean;

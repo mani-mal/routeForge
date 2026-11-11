@@ -45,7 +45,7 @@ def test_save_verifies_and_get_shows_non_secret_fields(lf, caplog):
     assert req.headers["authorization"].startswith("Basic ")
     g = lf.get(URL)
     assert g.status_code == 200
-    assert g.json() == {"host": "http://lf:3000", "public_key": "pk-lf-1",
+    assert g.json() == {"host": "http://lf:3000", "host_source": "app", "public_key": "pk-lf-1",
                         "project_id": "proj1", "secret_set": True,
                         "secret_last4": SECRET[-4:]}
     assert SECRET not in r.text and SECRET not in g.text
@@ -122,8 +122,8 @@ def test_delete_removes_credentials(lf):
     r = lf.delete(URL)
     assert r.status_code == 200, r.text
     assert r.json()["has_langfuse_keys"] is False
-    assert lf.get(URL).json() == {"host": None, "public_key": None, "project_id": None,
-                                  "secret_set": False, "secret_last4": None}
+    assert lf.get(URL).json() == {"host": None, "host_source": "deployment", "public_key": None,
+                                  "project_id": None, "secret_set": False, "secret_last4": None}
     assert lf.delete("/admin/applications/nope/langfuse").status_code == 404
 
 
@@ -137,3 +137,65 @@ def test_delete_refused_while_capture_io_full(lf):
     assert lf.get(URL).json()["secret_set"] is True
     lf.put("/admin/applications/b33/policy", json={"capture_io": "redacted"})
     assert lf.delete(URL).status_code == 200
+
+
+def test_changed_host_or_public_key_without_secret_is_422_and_no_call(lf):
+    lf.put(URL, json=FULL)
+    n = len(lf.state["calls"])
+    for body in ({"host": "http://attacker:9"}, {"host": "https://lf:3000"},
+                 {"public_key": "pk-other"}):
+        r = lf.put(URL, json=body)
+        assert r.status_code == 422, body
+        assert "re-entering the secret key" in r.json()["detail"]
+    assert len(lf.state["calls"]) == n
+    # same host spelled differently is the same origin; re-entering the secret is fine
+    assert lf.put(URL, json={"host": "HTTP://LF:3000/"}).status_code == 200
+    assert lf.put(URL, json={**FULL, "host": "http://other:3000"}).status_code == 200
+
+
+def test_host_validation(lf):
+    for h in ("http://u:p@lf:3000", "http://lf:notaport", "ftp://lf", "http://"):
+        assert lf.put(URL, json={**FULL, "host": h}).status_code == 422, h
+    assert lf.state["calls"] == []
+
+
+def test_fields_are_stripped(lf):
+    lf.put(URL, json={**FULL, "host": " http://lf:3000 ", "project_id": " proj1 "})
+    g = lf.get(URL).json()
+    assert g["host"] == "http://lf:3000" and g["project_id"] == "proj1"
+
+
+def test_mismatch_message_caps_ids(lf):
+    lf.state["handler"] = lambda req: httpx.Response(
+        200, json={"data": [{"id": f"p{i}" + "x" * 100} for i in range(9)]})
+    d = lf.put(URL, json=FULL).json()["detail"]
+    assert "p4" in d and "p5" not in d and len(d) < 500
+
+
+def test_redirect_is_not_followed(lf):
+    lf.state["handler"] = lambda req: httpx.Response(302, headers={"location": "http://evil/"})
+    assert lf.put(URL, json=FULL).status_code == 422
+    assert len(lf.state["calls"]) == 1
+
+
+def test_oversized_body_rejected(lf):
+    lf.state["handler"] = lambda req: httpx.Response(200, content=b"x" * 70000)
+    assert lf.put(URL, json=FULL).status_code == 422
+
+
+def test_deployment_host_fallback_allows_partial_edit(lf, monkeypatch):
+    # auto-provisioned shape: langfuse_host NULL, host comes from LANGFUSE_HOST
+    monkeypatch.setenv("LANGFUSE_HOST", "http://lf:3000")
+    lf.put(URL, json=FULL)
+    import asyncio
+    from app.apps import store
+    async def _null_host():
+        async with lf.app.state.db.session() as s:
+            await store.update_application(s, "b33", langfuse_host=None)
+            await s.commit()
+    asyncio.run(_null_host())
+    g = lf.get(URL).json()
+    assert g["host"] == "http://lf:3000" and g["host_source"] == "deployment"
+    assert lf.put(URL, json={"project_id": "proj1"}).status_code == 200
+    # a different host still needs the secret re-entered
+    assert lf.put(URL, json={"host": "http://attacker:9"}).status_code == 422

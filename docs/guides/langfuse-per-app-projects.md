@@ -228,6 +228,11 @@ Per application:
      reachable from the API process (use the address the API container can reach, not the browser
      URL), keys rejected (401/403), keys belong to a different project, or another HTTP status.
      Nothing is stored on failure. The response carries `verified: true`.
+   - **Secret safety:** the stored secret is only ever sent to the host and public key it was saved
+     with. Changing `host` or `public_key` without re-entering `secret_key` is a 422, and verification
+     does not follow redirects, is capped at 5 s total and 64 KB. Private and in-cluster hosts are
+     allowed (that is the normal Langfuse address). For an auto-provisioned app the host shown is the
+     deployment `LANGFUSE_HOST` (`host_source: "deployment"`).
    - **Air-gapped:** `PUT ...?verify=false` stores without checking (Langfuse not reachable at
      save time); the response says `verified: false`.
    - **Removal:** `DELETE /admin/applications/{app_id}/langfuse` removes the set. It is refused
